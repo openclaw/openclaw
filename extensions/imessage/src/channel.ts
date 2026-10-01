@@ -1,7 +1,5 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-// Imessage plugin module implements channel behavior.
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
-import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { formatTrimmedAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
@@ -54,7 +52,6 @@ import {
   imessageSecurityAdapter,
   imessageSetupWizard,
 } from "./shared.js";
-import { probeIMessageStatusAccount } from "./status-core.js";
 import { isIMessagePhoneLikeHandle } from "./target-identifiers.js";
 import {
   inferIMessageTargetChatType,
@@ -69,6 +66,44 @@ type IMessageMessageContextExtras = {
   deps?: { [channelId: string]: unknown };
   conversationReadOrigin?: "delegated" | "direct-operator";
 };
+
+type IMessageOutboundContext = Omit<
+  Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0],
+  "onDeliveryResult"
+>;
+type IMessageOutboundOptions = Pick<
+  Parameters<Awaited<ReturnType<typeof loadIMessageChannelRuntime>>["sendIMessageOutbound"]>[0],
+  "conversationReadOrigin" | "onDeliveryResult"
+>;
+
+async function sendIMessageOutbound(
+  ctx: IMessageOutboundContext,
+  kind: "text" | "media",
+  options: IMessageOutboundOptions = {},
+) {
+  return await (
+    await loadIMessageChannelRuntime()
+  ).sendIMessageOutbound({
+    cfg: ctx.cfg,
+    to: ctx.to,
+    text: ctx.text,
+    accountId: ctx.accountId ?? undefined,
+    deps: ctx.deps,
+    replyToId: ctx.replyToId ?? undefined,
+    assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
+    onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+    ...options,
+    ...(kind === "media"
+      ? {
+          mediaUrl: ctx.mediaUrl,
+          mediaAccess: ctx.mediaAccess,
+          mediaLocalRoots: ctx.mediaLocalRoots,
+          mediaReadFile: ctx.mediaReadFile,
+          audioAsVoice: ctx.audioAsVoice,
+        }
+      : {}),
+  });
+}
 
 function toIMessageMessageSendResult(
   result: {
@@ -100,43 +135,6 @@ const loadIMessageQuestionReactionsModule = createLazyRuntimeModule(
   () => import("./question-reactions.js"),
 );
 
-async function prepareForwardedIMessageApprovalPayload(params: {
-  payload: Parameters<NonNullable<ChannelOutboundAdapter["beforeDeliverPayload"]>>[0]["payload"];
-  approvalKind: ChannelApprovalKind;
-}): Promise<void> {
-  const prepared = (
-    await loadIMessageApprovalReactionsModule()
-  ).addIMessageApprovalReactionHintToStructuredPayload(params);
-  if (prepared) {
-    Object.assign(params.payload, prepared);
-  }
-}
-
-async function registerDeliveredIMessageApprovalPayload(
-  params: Parameters<NonNullable<ChannelOutboundAdapter["afterDeliverPayload"]>>[0],
-): Promise<void> {
-  const accountId = resolveIMessageAccount({
-    cfg: params.cfg,
-    accountId: params.target.accountId,
-  }).accountId;
-  (
-    await loadIMessageQuestionReactionsModule()
-  ).registerIMessageQuestionReactionTargetForDeliveredPayload({
-    accountId,
-    target: params.target,
-    payload: params.payload,
-    results: params.results,
-  });
-  await (
-    await loadIMessageApprovalReactionsModule()
-  ).registerIMessageApprovalReactionTargetForDeliveredPayload({
-    accountId,
-    target: params.target,
-    payload: params.payload,
-    results: params.results,
-  });
-}
-
 const imessageMessageAdapter = defineChannelMessageAdapter({
   id: "imessage",
   durableFinal: {
@@ -149,39 +147,14 @@ const imessageMessageAdapter = defineChannelMessageAdapter({
   },
   send: {
     text: async (ctx) => {
-      const result = await (
-        await loadIMessageChannelRuntime()
-      ).sendIMessageOutbound({
-        cfg: ctx.cfg,
-        to: ctx.to,
-        text: ctx.text,
-        accountId: ctx.accountId ?? undefined,
-        deps: (ctx as typeof ctx & IMessageMessageContextExtras).deps,
-        replyToId: ctx.replyToId ?? undefined,
-        assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
-        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+      const result = await sendIMessageOutbound(ctx, "text", {
         conversationReadOrigin: (ctx as typeof ctx & IMessageMessageContextExtras)
           .conversationReadOrigin,
       });
       return toIMessageMessageSendResult(result, "text", ctx.replyToId);
     },
     media: async (ctx) => {
-      const result = await (
-        await loadIMessageChannelRuntime()
-      ).sendIMessageOutbound({
-        cfg: ctx.cfg,
-        to: ctx.to,
-        text: ctx.text,
-        mediaUrl: ctx.mediaUrl,
-        mediaAccess: ctx.mediaAccess,
-        mediaLocalRoots: ctx.mediaLocalRoots,
-        mediaReadFile: ctx.mediaReadFile,
-        audioAsVoice: ctx.audioAsVoice,
-        accountId: ctx.accountId ?? undefined,
-        deps: (ctx as typeof ctx & IMessageMessageContextExtras).deps,
-        replyToId: ctx.replyToId ?? undefined,
-        assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
-        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+      const result = await sendIMessageOutbound(ctx, "media", {
         conversationReadOrigin: (ctx as typeof ctx & IMessageMessageContextExtras)
           .conversationReadOrigin,
         ...(ctx.onDeliveryResult
@@ -207,15 +180,6 @@ const imessageMessageAdapter = defineChannelMessageAdapter({
   },
 });
 
-function buildIMessageBaseSessionKey(params: {
-  cfg: Parameters<typeof resolveIMessageAccount>[0]["cfg"];
-  agentId: string;
-  accountId?: string | null;
-  peer: RoutePeer;
-}) {
-  return buildOutboundBaseSessionKey({ ...params, channel: "imessage" });
-}
-
 function isCanonicalIMessageDirectHandle(raw: string, normalized: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed || !normalized) {
@@ -236,6 +200,10 @@ function resolveIMessageOutboundSessionRoute(params: {
   target: string;
 }) {
   const parsed = parseIMessageTarget(params.target);
+  let peer: RoutePeer;
+  let from: string;
+  let to: string;
+  let recipientSessionExact = false;
   if (parsed.kind === "handle") {
     const handle = normalizeIMessageHandle(parsed.to);
     if (!handle) {
@@ -246,55 +214,38 @@ function resolveIMessageOutboundSessionRoute(params: {
       resolveIMessageDirectChatService(
         parsed.serviceExplicit ? parsed.service : account.config.service,
       ) ?? "auto";
-    const directTarget = `${service}:${handle}`;
-    const peer: RoutePeer = { kind: "direct", id: handle };
-    const baseSessionKey = buildIMessageBaseSessionKey({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      accountId: params.accountId,
-      peer,
-    });
-    return {
-      sessionKey: baseSessionKey,
-      baseSessionKey,
-      recipientSessionExact: isCanonicalIMessageDirectHandle(parsed.to, handle),
-      peer,
-      chatType: "direct" as const,
-      from: directTarget,
-      to: directTarget,
-    };
+    from = to = `${service}:${handle}`;
+    peer = { kind: "direct", id: handle };
+    recipientSessionExact = isCanonicalIMessageDirectHandle(parsed.to, handle);
+  } else {
+    const peerId =
+      parsed.kind === "chat_id"
+        ? String(parsed.chatId)
+        : parsed.kind === "chat_guid"
+          ? parsed.chatGuid
+          : parsed.chatIdentifier;
+    if (!peerId) {
+      return null;
+    }
+    peer = { kind: "group", id: peerId };
+    from = `imessage:group:${peerId}`;
+    to = `${parsed.kind}:${peerId}`;
   }
-
-  const peerId =
-    parsed.kind === "chat_id"
-      ? String(parsed.chatId)
-      : parsed.kind === "chat_guid"
-        ? parsed.chatGuid
-        : parsed.chatIdentifier;
-  if (!peerId) {
-    return null;
-  }
-  const peer: RoutePeer = { kind: "group", id: peerId };
-  const baseSessionKey = buildIMessageBaseSessionKey({
+  const baseSessionKey = buildOutboundBaseSessionKey({
     cfg: params.cfg,
+    channel: "imessage",
     agentId: params.agentId,
     accountId: params.accountId,
     peer,
   });
-  const toPrefix =
-    parsed.kind === "chat_id"
-      ? "chat_id"
-      : parsed.kind === "chat_guid"
-        ? "chat_guid"
-        : "chat_identifier";
   return {
     sessionKey: baseSessionKey,
     baseSessionKey,
-    recipientSessionExact: false,
+    recipientSessionExact,
     peer,
-    chatType: "group" as const,
-    from: `imessage:group:${peerId}`,
-    to: `${toPrefix}:${peerId}`,
+    chatType: peer.kind,
+    from,
+    to,
   };
 }
 
@@ -392,11 +343,13 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             dbPath: snapshot.dbPath ?? null,
           }),
         probeAccount: async ({ account, timeoutMs }) =>
-          await probeIMessageStatusAccount({
-            account,
+          await (
+            await loadIMessageChannelRuntime()
+          ).probeIMessageAccount({
             timeoutMs,
-            probeIMessageAccount: async (params) =>
-              await (await loadIMessageChannelRuntime()).probeIMessageAccount(params),
+            cliPath: account.config.cliPath,
+            dbPath: account.config.dbPath,
+            ...(account.config.remoteHost ? { remoteHost: account.config.remoteHost } : {}),
           }),
         resolveAccountSnapshot: ({ account, runtime }) => ({
           accountId: account.accountId,
@@ -490,15 +443,28 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
           if (hint?.kind !== "approval-pending") {
             return;
           }
-          await prepareForwardedIMessageApprovalPayload({
+          const prepared = (
+            await loadIMessageApprovalReactionsModule()
+          ).addIMessageApprovalReactionHintToStructuredPayload({
             payload,
             approvalKind: hint.approvalKind,
           });
+          if (prepared) {
+            Object.assign(payload, prepared);
+          }
         },
         renderPresentation: ({ payload, presentation }) =>
           questionGatewayRuntime.prepareReactionPayloadForDelivery({ payload, presentation }),
-        afterDeliverPayload: async (params) =>
-          await registerDeliveredIMessageApprovalPayload(params),
+        afterDeliverPayload: async ({ cfg, target, payload, results }) => {
+          const accountId = resolveIMessageAccount({ cfg, accountId: target.accountId }).accountId;
+          const delivery = { accountId, target, payload, results };
+          (
+            await loadIMessageQuestionReactionsModule()
+          ).registerIMessageQuestionReactionTargetForDeliveredPayload(delivery);
+          await (
+            await loadIMessageApprovalReactionsModule()
+          ).registerIMessageApprovalReactionTargetForDeliveredPayload(delivery);
+        },
         deliveryCapabilities: {
           durableFinal: {
             text: true,
@@ -510,76 +476,27 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
       },
       attachedResults: {
         channel: "imessage",
-        sendText: async ({
-          cfg,
-          to,
-          text,
-          accountId,
-          deps,
-          replyToId,
-          assertDirectAdapterHandoff,
-          onPlatformSendDispatch,
-        }) =>
-          await (
-            await loadIMessageChannelRuntime()
-          ).sendIMessageOutbound({
-            cfg,
-            to,
-            text,
-            accountId: accountId ?? undefined,
-            deps,
-            replyToId: replyToId ?? undefined,
-            assertDirectAdapterHandoff,
-            onPlatformSendDispatch,
-          }),
-        sendMedia: async ({
-          cfg,
-          to,
-          text,
-          mediaUrl,
-          mediaAccess,
-          mediaLocalRoots,
-          mediaReadFile,
-          audioAsVoice,
-          accountId,
-          deps,
-          replyToId,
-          onDeliveryResult,
-          assertDirectAdapterHandoff,
-          onPlatformSendDispatch,
-        }) =>
-          await (
-            await loadIMessageChannelRuntime()
-          ).sendIMessageOutbound({
-            cfg,
-            to,
-            text,
-            mediaUrl,
-            mediaAccess,
-            mediaLocalRoots,
-            mediaReadFile,
-            audioAsVoice,
-            accountId: accountId ?? undefined,
-            deps,
-            replyToId: replyToId ?? undefined,
-            assertDirectAdapterHandoff,
-            onPlatformSendDispatch,
-            ...(onDeliveryResult
+        sendText: (ctx) => sendIMessageOutbound(ctx, "text"),
+        sendMedia: (ctx) =>
+          sendIMessageOutbound(
+            ctx,
+            "media",
+            ctx.onDeliveryResult
               ? {
                   onDeliveryResult: async (result) => {
-                    await onDeliveryResult({
+                    await ctx.onDeliveryResult?.({
                       channel: "imessage",
                       ...toIMessageMessageSendResult(
                         result,
-                        audioAsVoice ? "voice" : "media",
-                        replyToId,
+                        ctx.audioAsVoice ? "voice" : "media",
+                        ctx.replyToId,
                       ),
                       messageId: result.messageId,
                     });
                   },
                 }
-              : {}),
-          }),
+              : {},
+          ),
       },
     },
   });

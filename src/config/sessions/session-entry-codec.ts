@@ -142,10 +142,6 @@ export function assertCurrentSessionTranscriptHeader(header: SessionHeader | und
   }
 }
 
-function isSessionEntryType(type: unknown): boolean {
-  return sessionEntryTypeSchema.safeParse(type).success;
-}
-
 export function isIndexedSessionEntry(entry: unknown): entry is SessionEntry {
   return indexedSessionEntrySchema.safeParse(entry).success;
 }
@@ -154,19 +150,15 @@ function isReadableContent(value: unknown): boolean {
   return readableContentSchema.safeParse(value).success;
 }
 
-function isReadableMessage(value: unknown): boolean {
-  return readableMessageSchema.safeParse(value).success;
-}
-
 function isReadableLegacySessionEntry(value: unknown): value is FileEntry {
   const message = isRecord(value) && value.type === "message" ? value.message : undefined;
   return (
     isRecord(value) &&
-    isSessionEntryType(value.type) &&
+    sessionEntryTypeSchema.safeParse(value.type).success &&
     (value.type !== "message" ||
       (isRecord(message) && message.role === "hookMessage"
         ? isReadableContent(message.content)
-        : isReadableMessage(message)))
+        : readableMessageSchema.safeParse(message).success))
   );
 }
 
@@ -227,7 +219,7 @@ export function classifySessionFileEntry(rawEntry: unknown, sourceVersion: numbe
   return { entry, recognized: false as const };
 }
 
-export function partitionSessionFileEntries(entries: readonly FileEntry[]): {
+export function partitionSessionFileEntries(entries: readonly unknown[]): {
   fileEntries: FileEntry[];
   opaqueEntries: Array<{ index: number; record: unknown }>;
   fileEntriesByOriginalIndex: Array<FileEntry | undefined>;
@@ -239,9 +231,9 @@ export function partitionSessionFileEntries(entries: readonly FileEntry[]): {
   const sourceVersion = header?.version ?? 1;
   let hasHeader = false;
   for (const [originalIndex, rawEntry] of entries.entries()) {
-    if (!hasHeader && sessionHeaderSchema.safeParse(rawEntry).success) {
-      fileEntries.push(rawEntry);
-      fileEntriesByOriginalIndex[originalIndex] = rawEntry;
+    if (!hasHeader && header !== undefined && rawEntry === header) {
+      fileEntries.push(header);
+      fileEntriesByOriginalIndex[originalIndex] = header;
       hasHeader = true;
       continue;
     }

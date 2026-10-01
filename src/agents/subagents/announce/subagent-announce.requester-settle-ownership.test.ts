@@ -1,13 +1,31 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { publishSystemEventStoreResolver } from "../../../infra/system-event-ownership.js";
+import { settleRequesterTurnAfterSessionSpawns } from "../registry/subagent-registry-requester-yield.js";
+import {
+  createRequesterInitialTransferFixture,
+  markRequesterTurnYieldedWithAuthority,
+} from "../registry/subagent-registry-requester-yield.test-support.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
+import type { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
+
+const readDescendantFacts = vi.hoisted(() =>
+  vi.fn<
+    (
+      params: Parameters<typeof createRequesterDescendantReader>[0],
+    ) => ReturnType<ReturnType<typeof createRequesterDescendantReader>>
+  >(async () => ({ unsettled: false, active: 0 })),
+);
+
+vi.mock("./subagent-announce.requester-settle-descendants.js", () => ({
+  createRequesterDescendantReader:
+    (params: Parameters<typeof createRequesterDescendantReader>[0]) => () =>
+      readDescendantFacts(params),
+}));
 
 const { registryRuntimeMock, deliverSpy } = vi.hoisted(() => ({
   registryRuntimeMock: {
-    countActiveDescendantRuns: vi.fn(() => 0),
-    hasDescendantRunAwaitingSettle: vi.fn(() => false),
     listSubagentRunsForRequester: vi.fn<() => SubagentRunRecord[]>(() => []),
     getLatestSubagentRunByChildSessionKey: vi.fn(() => undefined),
     getLatestLiveSubagentRunByChildSessionKey: vi.fn(() => undefined),
@@ -27,10 +45,8 @@ vi.mock("./subagent-announce-delivery.js", () => ({
   }),
 }));
 
-import {
-  maybeWakeRequesterAfterAllChildrenSettled,
-  type RequesterSettleWakeBatchState,
-} from "./subagent-announce.requester-settle-wake.js";
+import type { RequesterSettleWakeBatchState } from "./subagent-announce.requester-settle-state.js";
+import { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
 
 const REQUESTER = "agent:main:main";
 
@@ -83,14 +99,70 @@ function wakeParams() {
   if (!settledEntry) {
     throw new Error("The control requires its registered run-b fixture.");
   }
-  return { requesterSessionKey: REQUESTER, settledEntry, transitionBatch, completeBatch };
+  return {
+    requesterSessionKey: REQUESTER,
+    settledEntry,
+    transitionBatch,
+    completeBatch,
+    isSourceCurrent: () => true,
+  };
 }
 
 beforeEach(() => {
+  readDescendantFacts.mockReset().mockResolvedValue({ unsettled: false, active: 0 });
   registryRuntimeMock.listSubagentRunsForRequester.mockReset().mockReturnValue([]);
   deliverSpy.mockReset().mockResolvedValue({ delivered: true, path: "direct" });
 });
 afterEach(() => publishSystemEventStoreResolver(undefined));
+
+it("holds an adopted child's old wake until its current requester turn yields", async () => {
+  const requesterTurnRunId = "watched-steer-requester";
+  const child = makeSettledChild({
+    runId: "run-b",
+    requesterTurnRunId,
+    delivery: { status: "pending" },
+    completion: { required: true, resultText: "watched steer result" },
+    requesterSettleWake: {
+      status: "pending",
+      attemptCount: 0,
+      rearmGeneration: 1,
+    },
+  });
+  const oldWake = structuredClone(child.requesterSettleWake);
+  registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
+  expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
+  expect(deliverSpy).not.toHaveBeenCalled();
+  expect(child.requesterSettleWake).toEqual(oldWake);
+
+  const runs = new Map([[child.runId, child]]);
+  const requester = {
+    requesterSessionKey: REQUESTER,
+    requesterTurnRunId,
+    runs,
+    transfer: createRequesterInitialTransferFixture(runs, vi.fn()),
+  };
+  expect(await markRequesterTurnYieldedWithAuthority(requester)).toBe(1);
+  expect(
+    await settleRequesterTurnAfterSessionSpawns({
+      ...requester,
+      requesterYielded: true,
+      acceptedSessionSpawns: [
+        {
+          runId: child.runId,
+          childSessionKey: child.childSessionKey,
+          expectsCompletionMessage: true,
+        },
+      ],
+      schedule: vi.fn(),
+    }),
+  ).toBe(true);
+  // Settlement rearms the adopted wake for the new turn's complete child batch.
+  expect(child.requesterSettleWake?.rearmGeneration).toBe(2);
+  expect(child.requesterTurnRunId).toBeUndefined();
+  expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
+  expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
+  expect(deliverSpy).toHaveBeenCalledOnce();
+});
 
 it.each(["same", "before admission", "during admission"] as const)(
   "keeps yielded requester wakes in their captured store: %s",

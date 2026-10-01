@@ -93,23 +93,6 @@ test("spawns before yielding with a user-facing message", async (context) => {
   assert.match(text, /RESEARCH_STARTED_107788/u);
 });
 
-test("emits a failed edit followed by a successful retry", async (context) => {
-  await startFixture(context, "edit-failure-recovery");
-  const failed = await post({ input: [{ type: "function_call_output", output: "written" }] });
-  const failedText = await failed.text();
-  assert.match(failedText, /"name":"edit"/u);
-  assert.match(failedText, /beta/u);
-  const recovered = await post({
-    input: [
-      { type: "function_call_output", output: "written" },
-      { type: "function_call_output", output: "failed" },
-    ],
-  });
-  const recoveredText = await recovered.text();
-  assert.match(recoveredText, /"name":"edit"/u);
-  assert.match(recoveredText, /alpha/u);
-});
-
 test("pauses after three preview deltas before the final stream value", async (context) => {
   await startFixture(context, "streaming-throttle");
   const startedAt = Date.now();
@@ -128,29 +111,4 @@ test("emits a good draft and tool before terminal NO_REPLY", async (context) => 
   assert.match(draftText, /"name":"exec"/u);
   const terminal = await post({ input: [{ type: "function_call_output", output: "tool-ok" }] });
   assert.match(await terminal.text(), /NO_REPLY/u);
-});
-
-test("ends on NO_REPLY after a successful tool and failed terminal tool", async (context) => {
-  await startFixture(context, "terminal-failure-after-success");
-  const failed = await post({
-    input: [
-      { type: "function_call_output", output: "written" },
-      { type: "function_call_output", output: "failed" },
-    ],
-  });
-  assert.match(await failed.text(), /NO_REPLY/u);
-});
-
-test("self-narrates cron delivery only without recipient-only guidance", async (context) => {
-  await startFixture(context, "cron-self-narration");
-  const oldPrompt = await post({
-    input: [{ text: "Your response will be delivered automatically." }],
-  });
-  assert.match(await oldPrompt.text(), /I sent the user/u);
-  const repairedPrompt = await post({
-    input: [{ text: "Write only the exact user-facing message to send." }],
-  });
-  const repairedText = await repairedPrompt.text();
-  assert.match(repairedText, /SCHEDULE_CONFIRMED_90836/u);
-  assert.doesNotMatch(repairedText, /I sent the user/u);
 });

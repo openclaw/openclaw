@@ -24,16 +24,6 @@ export function installPathsEqual(left: string, right: string): boolean {
   return path.resolve(left) === path.resolve(right);
 }
 
-export function resolveNpmPackageInstallPath(params: {
-  packageName: string;
-  npmRoot: string;
-}): string {
-  return resolvePluginNpmPackageDir({
-    npmDir: params.npmRoot,
-    packageName: params.packageName,
-  });
-}
-
 export function resolveLegacyNpmPackageInstallPath(params: {
   packageName: string;
   npmRoot: string;
@@ -137,9 +127,9 @@ export function resolveSafeBrokenOfficialInstallRemovalPath(params: {
   }
   const npmRoot = resolveDefaultPluginNpmDir(params.env);
   const expectedNpmPaths = [
-    resolveNpmPackageInstallPath({
+    resolvePluginNpmPackageDir({
       packageName: parsedNpmSpec.name,
-      npmRoot,
+      npmDir: npmRoot,
     }),
     resolveLegacyNpmPackageInstallPath({
       packageName: parsedNpmSpec.name,

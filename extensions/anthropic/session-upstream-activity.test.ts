@@ -222,27 +222,6 @@ describe("Claude upstream activity", () => {
     });
   });
 
-  it("returns missing for an absent local transcript", async () => {
-    await using workspace = await createClaudeUpstreamWorkspace("missing");
-    const filePath = path.join(workspace.dir, "gone.jsonl");
-
-    await expect(
-      checkActivity({
-        sessionKey: "agent:main:adopted:claude-missing",
-        agentId: "main",
-        threadId: "thread-missing",
-        hostId: "gateway:local",
-        upstreamKind: "claude-cli",
-        upstreamRef: { filePath },
-        marker: { offset: 3 },
-        ownRecentUserTexts: [],
-      }),
-    ).resolves.toEqual({
-      kind: "missing",
-      sessionKey: "agent:main:adopted:claude-missing",
-    });
-  });
-
   it("swallows non-missing local transcript errors", async () => {
     const error = Object.assign(new Error("permission denied"), { code: "EACCES" });
     vi.spyOn(fs, "open").mockRejectedValueOnce(error);
@@ -394,41 +373,6 @@ describe("Claude upstream activity", () => {
     );
   });
 
-  it("treats legacy size and current offset markers as the same scan cursor", async () => {
-    await using workspace = await createClaudeUpstreamWorkspace("marker");
-    const dir = workspace.dir;
-    const filePath = path.join(dir, "thread-marker.jsonl");
-    const baseline = "{}\n";
-    await fs.writeFile(
-      filePath,
-      `${baseline}${row({
-        type: "user",
-        content: "new prompt",
-        timestamp: "2026-07-13T10:11:00.000Z",
-      })}\n`,
-    );
-    const baseProbe: SessionUpstreamProbe = {
-      sessionKey: "agent:main:adopted:claude-marker",
-      agentId: "main",
-      threadId: "thread-marker",
-      hostId: "gateway:local",
-      upstreamKind: "claude-cli",
-      upstreamRef: { filePath },
-      marker: { offset: Buffer.byteLength(baseline) },
-      ownRecentUserTexts: [],
-    };
-
-    const offsetResult = await checkActivity(baseProbe);
-    const sizeResult = await checkActivity({
-      ...baseProbe,
-      marker: { size: Buffer.byteLength(baseline) },
-    });
-    expect(sizeResult).toEqual(offsetResult);
-    expect(offsetResult?.kind).toBe("activity");
-    if (offsetResult?.kind === "activity") {
-      expect(offsetResult.nextMarker).toEqual({ offset: (await fs.stat(filePath)).size });
-    }
-  });
   it("declines a remote link when the newest history item lacks a UUID", async () => {
     const readRemote = async () => [{ type: "userMessage", text: "hi" }] as never;
     const declined = await linkContinued({

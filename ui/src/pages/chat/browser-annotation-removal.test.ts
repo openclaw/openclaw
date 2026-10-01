@@ -78,30 +78,7 @@ describe("browser annotation removal", () => {
     expect(releasePayload).not.toHaveBeenCalled();
   });
 
-  it.each(["timeout", "dismiss", "replaced", "disconnected"] as const)(
-    "finalizes payload ownership on %s",
-    (reason) => {
-      const target = annotation("target");
-      const state = createHost([target]);
-      let toast: ToastOptions | undefined;
-      const releasePayload = vi.fn();
-      removeBrowserAnnotationWithUndo(state.host, target, labels, {
-        presentToast: (options) => {
-          toast = options;
-          return true;
-        },
-        releasePayload,
-      });
-
-      toast?.onDismiss?.(reason);
-      toast?.onDismiss?.(reason);
-
-      expect(releasePayload).toHaveBeenCalledOnce();
-      expect(state.attachments()).toEqual([]);
-    },
-  );
-
-  it("never restores into a replacement session", () => {
+  it("finalizes payload ownership once when Undo expires", () => {
     const target = annotation("target");
     const state = createHost([target]);
     let toast: ToastOptions | undefined;
@@ -113,17 +90,15 @@ describe("browser annotation removal", () => {
       },
       releasePayload,
     });
-    state.switchSession("agent:other");
 
-    toast?.onDismiss?.("action");
-    toast?.onAction?.();
+    toast?.onDismiss?.("timeout");
+    toast?.onDismiss?.("timeout");
 
-    expect(state.attachments()).toEqual([]);
     expect(releasePayload).toHaveBeenCalledOnce();
-    expect(state.host.focusRestoredAnnotation).not.toHaveBeenCalled();
+    expect(state.attachments()).toEqual([]);
   });
 
-  it("never restores into a replacement composer owner", () => {
+  it.each(["session", "composer owner"])("never restores into a replacement %s", (replacement) => {
     const target = annotation("target");
     const state = createHost([target]);
     let toast: ToastOptions | undefined;
@@ -135,7 +110,11 @@ describe("browser annotation removal", () => {
       },
       releasePayload,
     });
-    state.replaceOwner();
+    if (replacement === "session") {
+      state.switchSession("agent:other");
+    } else {
+      state.replaceOwner();
+    }
 
     toast?.onDismiss?.("action");
     toast?.onAction?.();

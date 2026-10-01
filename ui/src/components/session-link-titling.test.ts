@@ -14,7 +14,10 @@ function sessionContext(rows: GatewaySessionRow[] = []): ApplicationContext {
     basePath: "",
     sessions: { state: { result: { count: rows.length, sessions: rows } } },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
-    gateway: { snapshot: { hello: null } },
+    gateway: {
+      connectionRevision: 0,
+      snapshot: { hello: null, phase: "connected", selfUser: { id: "first-profile" } },
+    },
   } as unknown as ApplicationContext;
 }
 
@@ -77,6 +80,28 @@ describe("SessionLinkTitler", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("decorates disclosure labels without making them navigation targets", async () => {
+    const { host, request, titler } = createTitler([
+      { key: SESSION_KEY, kind: "direct", displayName: "Cached research", updatedAt: Date.now() },
+    ]);
+    const label = document.createElement("span");
+    label.dataset.sessionTitleOnly = "";
+    label.dataset.sessionKey = SESSION_KEY;
+    label.innerHTML = '<span class="session-label"></span>';
+    host.append(label);
+    titler.refresh();
+    expect(label.textContent).toBe("Cached research");
+    expect(label.parentElement).toBe(host);
+    expect(label.matches("a, [href], [tabindex], .markdown-session-link")).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+    titler.context = sessionContext([
+      { key: SESSION_KEY, kind: "direct", displayName: "Current research", updatedAt: Date.now() },
+    ]);
+    await titler.decorate(label);
+    expect(label.textContent).toBe("Current research");
+    expect(label.matches("a, [href], [tabindex], .markdown-session-link")).toBe(false);
+  });
+
   it("loads an unseeded title from the preview RPC and reuses its cache", async () => {
     const request = vi.fn().mockResolvedValue(previewResponse());
     const { titler } = createTitler([], request);
@@ -111,6 +136,58 @@ describe("SessionLinkTitler", () => {
     expect(label.textContent).toBe("Research plan");
     label.textContent = "Updated by the producer";
     expect(anchor.textContent).toBe("Updated by the producer");
+
+    titler.context = sessionContext([
+      {
+        key: SESSION_KEY,
+        kind: "direct",
+        displayName: "Replacement Gateway",
+        updatedAt: Date.now(),
+      },
+    ]);
+    await titler.decorate(anchor, true);
+
+    expect(anchor.firstElementChild).toBe(label);
+    expect(anchor.textContent).toBe("Updated by the producer");
+  });
+
+  it.each(
+    ["cached", "pending"].flatMap((state) =>
+      ["replacement", "reconnect", "profile", "client ABA"].map((change) => ({ state, change })),
+    ),
+  )("retires $state titles after $change", async ({ state, change }) => {
+    const oldPreview = Promise.withResolvers<ReturnType<typeof previewResponse>>();
+    const request = vi.fn().mockImplementation(() => oldPreview.promise);
+    const { titler } = createTitler([], request);
+    const previous = sessionAnchor();
+    const decorating = titler.decorate(previous, true);
+    await Promise.resolve();
+    if (state === "cached") {
+      oldPreview.resolve(previewResponse({ title: "Previous Gateway" }));
+      await decorating;
+    }
+    request.mockResolvedValue(previewResponse({ title: "Current Gateway" }));
+    if (change === "replacement") {
+      const replacement = createTitler([], request);
+      titler.client = replacement.titler.client;
+      titler.context = replacement.titler.context;
+    } else if (change === "reconnect") {
+      Object.assign(titler.context!.gateway, { connectionRevision: 1 });
+    } else if (change === "profile") {
+      Object.assign(titler.context!.gateway.snapshot, { selfUser: { id: "next-profile" } });
+    } else {
+      const client = titler.client;
+      titler.client = null;
+      titler.client = client;
+    }
+    oldPreview.resolve(previewResponse({ title: "Previous Gateway" }));
+    await decorating;
+    expect(previous.textContent).toBe(state === "cached" ? "Previous Gateway" : SESSION_KEY);
+    const current = state === "cached" ? previous : sessionAnchor();
+    await titler.decorate(current, true);
+
+    expect(current.textContent).toBe("Current Gateway");
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("expires successful and failed cache entries at their separate TTLs", async () => {
@@ -130,6 +207,34 @@ describe("SessionLinkTitler", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     await titler.decorate(sessionAnchor(), true);
     expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it("retires a retained URL title when the replacement roster cannot resolve it", async () => {
+    const key = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";
+    const { host, titler, request } = createTitler([
+      { key, kind: "direct", displayName: "Previous Gateway", updatedAt: Date.now() },
+    ]);
+    host.innerHTML = toSanitizedMarkdownHtml(
+      "[Contract](/chat/main/d0effac9?view=details#latest)",
+      {
+        sessionLinks: true,
+      },
+    );
+    const link = host.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
+    await titler.decorate(link);
+    const label = link.firstElementChild;
+    expect(link.textContent).toBe("Previous Gateway");
+
+    titler.context = sessionContext();
+    await titler.decorate(link, true);
+
+    expect(link.textContent).toBe(key);
+    expect(link.firstElementChild).toBe(label);
+    expect(link.classList.contains("markdown-session-link--titled")).toBe(false);
+    expect(link.hasAttribute("title")).toBe(false);
+    expect(link.dataset.sessionKey).toBeUndefined();
+    expect(link.getAttribute("href")).toBe("/chat/main/d0effac9?view=details#latest");
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("resolves short references only from the loaded roster", async () => {
@@ -218,6 +323,52 @@ describe("SessionLinkTitler", () => {
     titler.refresh();
     expect(link.dataset.sessionKey).toBeUndefined();
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("keeps unchanged session links free of mutations across roster refreshes", () => {
+    const key = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";
+    const rows: GatewaySessionRow[] = [
+      { key, kind: "direct", displayName: "Shared contract", updatedAt: Date.now() },
+    ];
+    const { host, titler, request } = createTitler(rows);
+    host.innerHTML = toSanitizedMarkdownHtml(
+      "[First](/chat/main/d0effac9?view=details#first) " +
+        "[Second](/chat/main/d0effac9?view=details#second) " +
+        "[Unknown](/chat/main/aabbccdd)",
+      { sessionLinks: true },
+    );
+    titler.refresh();
+    const links = [...host.querySelectorAll<HTMLAnchorElement>("a.markdown-session-link")];
+    const observer = new MutationObserver(() => undefined);
+    observer.observe(host, { attributes: true, childList: true, subtree: true });
+    try {
+      rows[0] = { ...rows[0]!, updatedAt: Date.now() + 1 };
+      titler.refresh();
+      expect(observer.takeRecords()).toEqual([]);
+      expect(links.map((link) => link.getAttribute("href"))).toEqual([
+        "/chat/main/d0effac9?view=details#first",
+        "/chat/main/d0effac9?view=details#second",
+        "/chat/main/aabbccdd",
+      ]);
+
+      rows.push({ key: key.replace("3211", "4322"), kind: "direct", updatedAt: Date.now() });
+      titler.refresh();
+      expect(links.map((link) => link.dataset.sessionKey)).toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+      observer.takeRecords();
+      titler.refresh();
+      expect(observer.takeRecords()).toEqual([]);
+
+      rows.pop();
+      titler.refresh();
+      expect(links.map((link) => link.dataset.sessionKey)).toEqual([key, key, undefined]);
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      observer.disconnect();
+    }
   });
 
   it("leaves remote links and code spans plain", () => {

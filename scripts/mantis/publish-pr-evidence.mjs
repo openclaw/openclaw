@@ -467,9 +467,6 @@ function laneLine(label, lane) {
   }
   return pieces.join("");
 }
-function publicSummary(manifest) {
-  return manifest.summary ?? "Mantis captured QA evidence for this scenario.";
-}
 function overallStatus(manifest) {
   const outcome = manifest.comparison?.outcome;
   if (outcome === "blocked" || outcome === "fail" || outcome === "pass") {
@@ -477,13 +474,6 @@ function overallStatus(manifest) {
   }
   const pass = manifest.comparison?.pass;
   return typeof pass === "boolean" ? String(pass) : "";
-}
-/**
- * @param {EvidenceManifest} manifest
- * @param {{ requestSource?: string }} [options]
- */
-export function shouldPublishPrComment() {
-  return true;
 }
 /** @param {RenderEvidenceCommentOptions} options */
 export function renderEvidenceComment({
@@ -511,7 +501,7 @@ export function renderEvidenceComment({
     marker,
     `## ${manifest.title}`,
     "",
-    `Summary: ${publicSummary(manifest)}`,
+    `Summary: ${manifest.summary ?? "Mantis captured QA evidence for this scenario."}`,
     "",
     `- Scenario: \`${manifest.scenario}\``,
   ];
@@ -542,8 +532,7 @@ export function renderEvidenceComment({
     lines.push(`- Overall: \`${overall}\``);
   }
   lines.push("");
-  const pairedSections = pairs.map((pair) => renderPairTable({ pair, rawBase }));
-  lines.push(...pairedSections);
+  lines.push(...pairs.map((pair) => renderPairTable({ pair, rawBase })));
   const singleTables = renderSingleImageTables({
     artifacts: manifest.artifacts,
     pairedKeys,
@@ -552,23 +541,14 @@ export function renderEvidenceComment({
   if (singleTables) {
     lines.push(singleTables);
   }
-  const motionClips = renderLinkList({
-    artifacts: manifest.artifacts,
-    kind: "motionClip",
-    rawBase,
-    title: "Motion-trimmed clips",
-  });
-  if (motionClips) {
-    lines.push(motionClips);
-  }
-  const fullVideos = renderLinkList({
-    artifacts: manifest.artifacts,
-    kind: "fullVideo",
-    rawBase,
-    title: "Full videos",
-  });
-  if (fullVideos) {
-    lines.push(fullVideos);
+  for (const [kind, title] of [
+    ["motionClip", "Motion-trimmed clips"],
+    ["fullVideo", "Full videos"],
+  ]) {
+    const links = renderLinkList({ artifacts: manifest.artifacts, kind, rawBase, title });
+    if (links) {
+      lines.push(links);
+    }
   }
   lines.push(`Raw QA files: ${treeUrl ?? rawBase}`);
   return `${lines.join("\n").replace(/\n{3,}/gu, "\n\n")}\n`;
@@ -769,10 +749,6 @@ export async function publishEvidence(rawArgs = process.argv.slice(2)) {
     runUrl: args.run_url,
     treeUrl: published.treeUrl,
   });
-  if (!shouldPublishPrComment(manifest, { requestSource: args.request_source })) {
-    console.log("Skipped Mantis QA evidence PR comment because the run did not capture proof.");
-    return;
-  }
   upsertPrComment({
     body,
     createMissing: args.create_missing !== "false",

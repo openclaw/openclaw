@@ -266,15 +266,12 @@ suite.define(() => {
           .poll(() => retriesRow.getByRole("spinbutton").getAttribute("placeholder"))
           .toBe("Default: 3");
 
-        const configGetsBeforeReload = (await gateway.getRequests("config.get")).length;
         await gateway.resolveDeferred("config.set");
         await expect
           .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
           .toContain("Saved");
         expect((await page.reload())?.status()).toBe(200);
-        await expect
-          .poll(async () => (await gateway.getRequests("config.get")).length)
-          .toBe(configGetsBeforeReload + 1);
+        await gateway.waitForRequest("config.get");
 
         const reloadedPanel = page.locator("#config-section-panel");
         const reloadedModeRow = settingsRow(page, "Mode");

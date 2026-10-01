@@ -28,14 +28,13 @@ export function disposeCodeModeResults(owner: ToolSearchCatalogRef): void {
 
 export type CodeModeResultsAccess = ReturnType<typeof createCodeModeResultsAccess>;
 
-/** Capture cell authority now; never let an old cell adopt a replacement catalog. */
+/** Capture the result-store lifetime; an old cell must never adopt its replacement. */
 export function createCodeModeResultsAccess(
   ctx: ToolSearchToolContext,
   config: Pick<CodeModeConfig, "memoryLimitBytes" | "maxSnapshotBytes">,
 ) {
   const owner = ctx.catalogRef;
   const catalog = owner?.current;
-  const entries = catalog?.entries;
   const scope = JSON.stringify([
     ctx.agentId,
     ctx.runId,
@@ -44,12 +43,37 @@ export function createCodeModeResultsAccess(
     catalog?.counterScope,
   ]);
   const maxBytes = Math.min(config.memoryLimitBytes, config.maxSnapshotBytes);
-  const currentStore = (create = false): ResultsStore => {
+  let initialStore = owner ? stores.get(owner) : undefined;
+  if (owner && catalog && !initialStore && !ctx.abortSignal?.aborted) {
+    const signal = ctx.abortSignal;
+    const created: ResultsStore = {
+      scope,
+      maxBytes,
+      bytes: 0,
+      entries: new Map(),
+      close: () => {
+        created.entries.clear();
+        created.bytes = 0;
+        signal?.removeEventListener("abort", created.close);
+        if (stores.get(owner) === created) {
+          stores.delete(owner);
+        }
+      },
+    };
+    stores.set(owner, created);
+    signal?.addEventListener("abort", created.close, { once: true });
+    initialStore = created;
+  }
+  // Appending clients changes descriptors, not saved data. The existing disposal
+  // owner invalidates this exact store on restriction, replacement, or teardown.
+  const capturedStore = initialStore;
+  const currentStore = (): ResultsStore => {
     ctx.abortSignal?.throwIfAborted();
     if (
       !owner?.current ||
+      !capturedStore ||
       owner.current.counterScope !== catalog?.counterScope ||
-      owner.current.entries !== entries
+      stores.get(owner) !== capturedStore
     ) {
       throw new ToolInputError(
         "Code Mode results are unavailable after the run catalog changed or closed.",
@@ -62,36 +86,10 @@ export function createCodeModeResultsAccess(
       ctx.sessionKey,
       owner.current.counterScope,
     ]);
-    let store = stores.get(owner);
-    if (currentScope !== scope || (store && store.scope !== scope)) {
+    if (currentScope !== scope || capturedStore.scope !== scope) {
       throw new ToolInputError("Code Mode results belong to a different run or session.");
     }
-    if (!store && create) {
-      const signal = ctx.abortSignal;
-      const created: ResultsStore = {
-        scope,
-        maxBytes,
-        bytes: 0,
-        entries: new Map(),
-        close: () => {
-          created.entries.clear();
-          created.bytes = 0;
-          signal?.removeEventListener("abort", created.close);
-          if (stores.get(owner) === created) {
-            stores.delete(owner);
-          }
-        },
-      };
-      stores.set(owner, created);
-      signal?.addEventListener("abort", created.close, { once: true });
-      store = created;
-    }
-    if (!store) {
-      throw new ToolInputError(
-        "Code Mode result is unavailable or expired; fetch fresh data if needed.",
-      );
-    }
-    return store;
+    return capturedStore;
   };
   const find = (id: unknown) => {
     if (typeof id !== "string" || !id) {
@@ -108,7 +106,7 @@ export function createCodeModeResultsAccess(
   };
   const retainJson = (json: string, networkContent: boolean): CodeModeValueRetention => {
     const bytes = Buffer.byteLength(json, "utf8");
-    const store = currentStore(true);
+    const store = currentStore();
     const allowance = Math.min(store.maxBytes, maxBytes);
     if (bytes > allowance) {
       return { reason: "Not retained: result exceeds the data allowance. Return less data." };

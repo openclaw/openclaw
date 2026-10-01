@@ -1,48 +1,55 @@
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import {
   formatSqliteErrorCodeSuffix,
   formatSqliteReadOnlyInspectionFailure,
+  isSqliteLockError,
 } from "./sqlite-error-diagnostics.js";
 import { encodeSqliteAuthTransferFrame } from "./sqlite-readonly-auth-transfer.js";
-import { releaseSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup.js";
+import {
+  releaseSnapshotTempDirectory,
+  retireSqliteSnapshotPayload,
+} from "./sqlite-readonly-location-cleanup.js";
 import {
   createOnlineReadOnlyBackup,
   prepareSqliteReadOnlyLocationInProcess,
-  prepareSqliteReadOnlyLocationSyncFallbackInProcess,
-  prepareSqliteReadOnlyLocationSyncInProcess,
+  prepareSqliteReadOnlyCopyInProcess,
+  SqliteSourceChangedError,
 } from "./sqlite-readonly-location.js";
+import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import {
   SQLITE_READONLY_WORKER_MAX_BUFFER,
+  SQLITE_INSPECTION_CONTENTION_PREFIX,
+  SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX,
   isSqliteSnapshotStagingMode,
   type SqliteReadOnlyWorkerResult,
 } from "./sqlite-readonly-worker-protocol.js";
+import { beginSqliteSnapshotRetirement } from "./sqlite-snapshot-retirement.js";
 import {
   createSqliteSnapshotStagingTokenSync,
   reclaimAbandonedSqliteSnapshots,
   reconcileSqliteSnapshotRetirement,
 } from "./sqlite-snapshot-staging.js";
-import { assertExistingDatabaseIdentity } from "./sqlite-worker-identity.js";
-import { createSqliteWorkerTransferOwner } from "./sqlite-worker-transfer.js";
+import type { SqliteStagingToken } from "./sqlite-staging-token.js";
 import {
-  acquireStateDatabaseHandleLease,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "./state-database-coordinator.js";
+  assertExistingDatabaseIdentity,
+  readDatabaseFileIdentity,
+} from "./sqlite-worker-identity.js";
+import { createSqliteWorkerTransferOwner } from "./sqlite-worker-transfer.js";
 
-const stagingTokens = new Map<string, (retiring?: boolean) => void>();
+const stagingTokens = new Map<string, SqliteStagingToken>();
 
-// The sync strategy raw-copies without attaching SQLite to the source, so sync
-// callers stay byte-neutral on the live family; the async strategy holds a read
-// transaction on the source and may update its WAL index.
+// Artifact-preserving sync requests must not open SQLite on the source. Live
+// async backups pin committed pages with a read transaction and may update SHM.
 async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
   const mode = args[0];
   const pathname = args[1];
-  const stagingRoot = args[2];
+  const stagingRoot = args[2] || undefined;
   if (
     (mode !== "sync" &&
-      mode !== "sync-fallback" &&
       mode !== "async" &&
       mode !== "consolidated" &&
       mode !== "reclaim" &&
@@ -55,6 +62,13 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
     };
   }
   try {
+    if (args.length > 4 || (args[3] !== undefined && mode !== "sync")) {
+      throw new Error(
+        "SQLite source identity is supported only for artifact-preserving sync copies",
+      );
+    }
+    const expectedSourceIdentity =
+      args[3] === undefined ? undefined : readDatabaseFileIdentity(JSON.parse(args[3]));
     if (mode === "staging-reconcile") {
       reconcileSqliteSnapshotRetirement(pathname);
       return { ok: true, location: pathname };
@@ -72,8 +86,13 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       if (!token) {
         throw new Error("SQLite snapshot token is not owned by this worker");
       }
-      token(true);
-      stagingTokens.delete(pathname);
+      const retirement = beginSqliteSnapshotRetirement(pathname, { token });
+      try {
+        retireSqliteSnapshotPayload(retirement);
+        stagingTokens.delete(pathname);
+      } finally {
+        retirement.release();
+      }
       return { ok: true, location: pathname };
     }
     if (mode === "reclaim") {
@@ -108,6 +127,7 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       }
       return { ok: true, warnings };
     }
+    let prepared: PreparedSqliteReadOnlyLocation;
     if (mode === "consolidated") {
       if (!stagingRoot || path.dirname(path.resolve(pathname)) !== path.resolve(stagingRoot)) {
         throw new Error(
@@ -116,20 +136,27 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       }
       // The backup owner admits a child staging token before reading the private
       // WAL family. Parent loss cannot let reclamation race its native backup.
-      const prepared = await createOnlineReadOnlyBackup(pathname, stagingRoot);
-      releaseSnapshotTempDirectory(prepared.cleanupRoot ?? path.dirname(prepared.location));
-      return { ok: true, location: prepared.location };
-    }
-    const prepared =
-      mode === "sync"
-        ? prepareSqliteReadOnlyLocationSyncInProcess(pathname, stagingRoot)
-        : mode === "sync-fallback"
-          ? await prepareSqliteReadOnlyLocationSyncFallbackInProcess(pathname, stagingRoot)
+      prepared = await createOnlineReadOnlyBackup(pathname, stagingRoot);
+    } else {
+      prepared =
+        mode === "sync"
+          ? await prepareSqliteReadOnlyCopyInProcess(pathname, stagingRoot, expectedSourceIdentity)
           : await prepareSqliteReadOnlyLocationInProcess(pathname, stagingRoot);
+    }
     releaseSnapshotTempDirectory(prepared.cleanupRoot ?? path.dirname(prepared.location));
     return { ok: true, location: prepared.location };
   } catch (error) {
-    return { ok: false, message: formatSqliteReadOnlyInspectionFailure(error) };
+    const contention = error instanceof SqliteSourceChangedError || isSqliteLockError(error);
+    const allocationRefused =
+      (mode === "staging-create" || mode === "staging-create-legacy") &&
+      isPrivateDirectoryCreationRefused(error);
+    const prefix =
+      (contention ? SQLITE_INSPECTION_CONTENTION_PREFIX : "") +
+      (allocationRefused ? SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX : "");
+    return {
+      ok: false,
+      message: `${prefix}${formatSqliteReadOnlyInspectionFailure(error)}`,
+    };
   }
 }
 
@@ -137,7 +164,6 @@ function runSession(): void {
   let busy = false;
   let closeRequested = false;
   const transfers = createSqliteWorkerTransferOwner();
-  const sourceLeases = new Set<ReturnType<typeof acquireStateDatabaseHandleLease>>();
   let activeTransfer: { requestId: number; transferId: number } | undefined;
   const send = (id: number, result: unknown, failed = false) => {
     process.send?.({ id, result }, (error) => {
@@ -214,36 +240,17 @@ function runSession(): void {
         if (
           !isRecord(auth) ||
           typeof auth.expectedIdentity !== "string" ||
-          !auth.expectedIdentity.startsWith("file:") ||
-          !isRecord(auth.coordinatorRuntime) ||
-          typeof auth.coordinatorRuntime.directory !== "string" ||
-          typeof auth.coordinatorRuntime.keepAlive !== "boolean"
+          !auth.expectedIdentity.startsWith("file:")
         ) {
           throw new Error("Auth profile read requires captured physical ownership");
         }
         const { expectedIdentity } = auth;
-        const runtime = {
-          directory: auth.coordinatorRuntime.directory,
-          keepAlive: auth.coordinatorRuntime.keepAlive,
-        };
         // Domain code stays child-only; importing it from the host would reverse storage ownership.
         const { readAuthProfileRowsReadOnly } =
           await import("../agents/auth-profiles/sqlite-json.js");
-        const rows = withStateDatabaseCoordinatorRuntimeDirectory(runtime, () => {
-          const lease = acquireStateDatabaseHandleLease({
-            databasePath: pathname,
-            busyTimeoutMs: 0,
-          });
-          sourceLeases.add(lease);
-          assertExistingDatabaseIdentity(pathname, expectedIdentity);
-          const result = readAuthProfileRowsReadOnly(pathname);
-          assertExistingDatabaseIdentity(pathname, expectedIdentity);
-          // Parent loss cannot retire admission during a synchronous query. A failed
-          // kernel close retains this child's lease until its existing error exit.
-          lease.release();
-          sourceLeases.delete(lease);
-          return result;
-        });
+        assertExistingDatabaseIdentity(pathname, expectedIdentity);
+        const rows = readAuthProfileRowsReadOnly(pathname);
+        assertExistingDatabaseIdentity(pathname, expectedIdentity);
         const handle = transfers.start(
           [
             { kind: "store", value: rows.store },
@@ -266,9 +273,7 @@ function runSession(): void {
       !Number.isSafeInteger(message.id) ||
       !("args" in message) ||
       !Array.isArray(message.args) ||
-      (message.args[0] !== "sync" &&
-        message.args[0] !== "sync-fallback" &&
-        !isSqliteSnapshotStagingMode(message.args[0])) ||
+      (message.args[0] !== "sync" && !isSqliteSnapshotStagingMode(message.args[0])) ||
       !message.args.every((arg): arg is string => typeof arg === "string")
     ) {
       process.exit(1);
@@ -283,7 +288,7 @@ function runSession(): void {
           : inspected;
       process.send?.({ id, result }, (error) => {
         if (error || (!result.ok && !staging)) {
-          // A failed inspection may still own a native handle and admission.
+          // Failed private recovery can retain a native handle until process exit.
           process.exit(1);
           return;
         }

@@ -9,6 +9,7 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import { discoverConfiguredPluginLoadPaths } from "../plugins/discovery.js";
+import * as manifestRegistry from "../plugins/manifest-registry.js";
 import { resetPluginCache } from "../plugins/plugin-cache.js";
 import * as exec from "../process/exec.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -24,6 +25,76 @@ afterEach(() => {
   clearHealthChecksForTest();
   vi.restoreAllMocks();
 });
+
+it.each([
+  { pluginApi: "=2026.9.5", phase: "discovery" },
+  { pluginApi: 20260905, phase: "discovery" },
+  { pluginApi: "=2026.9.5", phase: "manifest registry" },
+])(
+  "preserves configured plugin selection when $phase rejects plugin API $pluginApi",
+  async ({ pluginApi, phase }) => {
+    const root = tempDirs.make("openclaw-plugin-compatibility-");
+    const pluginPath = path.join(root, "local-plugin");
+    const pluginId = "compatibility-fixture";
+    fs.mkdirSync(pluginPath);
+    fs.writeFileSync(
+      path.join(pluginPath, "package.json"),
+      JSON.stringify({
+        name: pluginId,
+        version: "1.0.0",
+        type: "module",
+        openclaw: { extensions: ["./index.js"], compat: { pluginApi } },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginPath, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: pluginId,
+        configSchema: { type: "object", properties: { retained: { type: "string" } } },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginPath, "index.js"), "throw new Error('must not execute');\n");
+    const config: OpenClawConfig = {
+      plugins: {
+        allow: [pluginId],
+        load: { paths: [pluginPath] },
+        entries: { [pluginId]: { enabled: true, config: { retained: "authored" } } },
+      },
+    };
+    await withEnvAsync(
+      {
+        OPENCLAW_STATE_DIR: path.join(root, "state"),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.9.6",
+        OPENCLAW_UPDATE_IN_PROGRESS: "0",
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+      },
+      async () => {
+        const discovery = discoverConfiguredPluginLoadPaths({ loadPaths: [pluginPath] });
+        expect(discovery.candidates).toEqual([]);
+        let diagnostics = discovery.diagnostics;
+        if (phase === "manifest registry") {
+          const previous = discoverConfiguredPluginLoadPaths({
+            loadPaths: [pluginPath],
+            env: { ...process.env, OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.9.5" },
+          });
+          expect(previous.candidates).toHaveLength(1);
+          const registry = manifestRegistry.loadPluginManifestRegistryCore({
+            candidates: previous.candidates,
+            installRecords: {},
+          });
+          expect(registry.plugins).toEqual([]);
+          vi.spyOn(manifestRegistry, "loadPluginManifestRegistryCore").mockReturnValue(registry);
+          diagnostics = registry.diagnostics;
+        }
+        expect(maybeRepairStalePluginConfig(config)).toEqual({ config, changes: [] });
+        expect(diagnostics).toContainEqual(
+          expect.objectContaining({ pluginId, level: "warn", configDisposition: "preserve" }),
+        );
+      },
+    );
+  },
+);
 
 it.skipIf(process.platform === "win32").each([false, true])(
   "preserves chmod-000 plugin config through Doctor and readiness (blocked ancestor: %s)",
@@ -103,7 +174,14 @@ it.skipIf(process.platform === "win32").each([false, true])(
               fixHint: `Fix permissions on ${pluginPath}, then run \`openclaw doctor --fix\`.`,
             }),
           );
-          vi.spyOn(exec, "runExec").mockResolvedValue({ stdout: reportText, stderr: "" });
+          vi.spyOn(exec, "runUtf8CommandWithTimeout").mockResolvedValue({
+            stdout: reportText,
+            stderr: "",
+            code: 0,
+            signal: null,
+            killed: false,
+            termination: "exit",
+          });
           const readiness = await applyPostPluginUpdateReadiness({
             root,
             entryPath: path.join(root, "openclaw.mjs"),

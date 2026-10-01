@@ -1,15 +1,22 @@
-// File Transfer plugin module implements file fetch behavior.
 import crypto from "node:crypto";
 import path from "node:path";
 import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
+import type { OpenClawPluginNodeHostCommandIo } from "openclaw/plugin-sdk/node-host";
+import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { FsSafeError, root } from "openclaw/plugin-sdk/security-runtime";
+import {
+  FILE_FETCH_DEFAULT_MAX_BYTES,
+  FILE_FETCH_HARD_MAX_BYTES,
+  readFileFetchBinaryMaxBytes,
+} from "../shared/file-fetch-protocol.js";
 import {
   fileIdentity,
   matchesFileIdentity,
   readPathBinding,
   type PathBinding,
 } from "../shared/path-binding.js";
+import { streamFetchedFile } from "./file-fetch-stream.js";
 import {
   classifyFsSafeReadError,
   readAbsolutePath,
@@ -17,8 +24,6 @@ import {
   resolveCanonicalReadPath,
 } from "./path-errors.js";
 
-const FILE_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
-const FILE_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 const TEXT_SNIFF_MAX_BYTES = 8192;
 
 type FileFetchParams = {
@@ -26,6 +31,7 @@ type FileFetchParams = {
   /** Optional canonical root: follow parent aliases within it, never the final file. */
   rootPath?: unknown;
   maxBytes?: unknown;
+  transport?: unknown;
   followSymlinks?: unknown;
   preflightOnly?: unknown;
   expectedCanonicalPath?: unknown;
@@ -40,11 +46,13 @@ type FileFetchOk = {
   base64: string;
   sha256: string;
   preflightOnly?: boolean;
+  transport?: "binary";
   binding: PathBinding;
 };
 
 type FileFetchErrCode =
   | "INVALID_PATH"
+  | "INVALID_PARAMS"
   | "NOT_FOUND"
   | "PERMISSION_DENIED"
   | "IS_DIRECTORY"
@@ -63,13 +71,6 @@ type FileFetchErr = {
 
 type FileFetchResult = FileFetchOk | FileFetchErr;
 
-function clampMaxBytes(input: unknown): number {
-  if (typeof input !== "number" || !Number.isFinite(input) || input <= 0) {
-    return FILE_FETCH_DEFAULT_MAX_BYTES;
-  }
-  return Math.min(Math.floor(input), FILE_FETCH_HARD_MAX_BYTES);
-}
-
 function classifyFsError(err: unknown): FileFetchErrCode {
   if (err instanceof FsSafeError && err.code === "too-large") {
     return "FILE_TOO_LARGE";
@@ -79,6 +80,9 @@ function classifyFsError(err: unknown): FileFetchErrCode {
     return safeCode;
   }
   const code = (err as { code?: string } | null)?.code;
+  if (code === "FILE_TOO_LARGE") {
+    return code;
+  }
   if (code === "not-file") {
     return "IS_DIRECTORY";
   }
@@ -127,13 +131,27 @@ async function detectFetchedFileMime(params: {
   return isLikelyPlainText(params.buffer) ? "text/plain" : "application/octet-stream";
 }
 
-export async function handleFileFetch(params: FileFetchParams): Promise<FileFetchResult> {
+export async function handleFileFetch(
+  params: FileFetchParams,
+  io?: OpenClawPluginNodeHostCommandIo,
+): Promise<FileFetchResult> {
   const requestedPath = readAbsolutePath(params.path);
   if (typeof requestedPath !== "string") {
     return requestedPath;
   }
 
-  const maxBytes = clampMaxBytes(params.maxBytes);
+  let binaryMax: number | undefined;
+  try {
+    binaryMax = readFileFetchBinaryMaxBytes(params);
+  } catch (error) {
+    return { ok: false, code: "INVALID_PARAMS", message: String(error) };
+  }
+  const maxBytes =
+    binaryMax ??
+    Math.min(
+      Math.floor(asPositiveFiniteNumber(params.maxBytes) ?? FILE_FETCH_DEFAULT_MAX_BYTES),
+      FILE_FETCH_HARD_MAX_BYTES,
+    );
   const followSymlinks = params.followSymlinks === true;
   const preflightOnly = params.preflightOnly === true;
 
@@ -215,6 +233,26 @@ export async function handleFileFetch(params: FileFetchParams): Promise<FileFetc
         base64: "",
         sha256: "",
         preflightOnly: true,
+        binding: { kind: "existing", ...identity },
+      };
+    }
+
+    if (binaryMax !== undefined) {
+      if (!io?.frames || expectedBinding?.kind !== "existing") {
+        return {
+          ok: false,
+          code: "INVALID_PARAMS",
+          message: "binary file.fetch requires duplex IO and an authorized filesystem binding",
+        };
+      }
+      const receipt = await streamFetchedFile(opened.handle, maxBytes, io);
+      return {
+        ok: true,
+        path: opened.realPath,
+        ...receipt,
+        transport: "binary",
+        mimeType: "",
+        base64: "",
         binding: { kind: "existing", ...identity },
       };
     }

@@ -1,4 +1,3 @@
-// Matrix tests cover sync cache plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -102,7 +101,7 @@ describe("SqliteBackedMatrixSyncStore", () => {
 
     const firstStore = await SqliteBackedMatrixSyncStore.create(storageRoot);
     expect(firstStore.hasSavedSync()).toBe(false);
-    await firstStore.setSyncData(syncResponse);
+    await firstStore.setSyncData(structuredClone(syncResponse));
     await firstStore.flush();
     expect(fs.existsSync(path.join(storageRoot, "bot-storage.json"))).toBe(false);
 
@@ -117,29 +116,8 @@ describe("SqliteBackedMatrixSyncStore", () => {
       roomsData: {
         join: {
           "!room:example.org": {
-            summary: {
-              "m.heroes": [],
-            },
-            state: { events: [] },
+            ...syncResponse.rooms.join["!room:example.org"],
             "org.matrix.msc4222.state_after": { events: [] },
-            timeline: {
-              events: [
-                {
-                  content: {
-                    body: "hello",
-                    msgtype: "m.text",
-                  },
-                  event_id: "$message",
-                  origin_server_ts: 1,
-                  sender: "@user:example.org",
-                  type: "m.room.message",
-                },
-              ],
-              prev_batch: "t0",
-            },
-            ephemeral: { events: [] },
-            account_data: { events: [] },
-            unread_notifications: {},
           },
         },
         invite: {},
@@ -152,7 +130,7 @@ describe("SqliteBackedMatrixSyncStore", () => {
 
   it("loads, persists, deletes and closes the sync cache without host SQLite", async () => {
     const storageRoot = createStorageRoot();
-    const observation = observeHostDataSql(openMatrixSyncCacheStoreOptions(storageRoot).env);
+    const observation = observeHostDataSql();
     const sql = observation.calls;
     const timings: Record<string, number> = {};
     try {

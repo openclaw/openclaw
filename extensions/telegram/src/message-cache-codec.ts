@@ -54,7 +54,7 @@ type TelegramCachedMessageObservation = {
 };
 
 export function retainedMessageId(messageId: string): string | undefined {
-  const id = parseSafeMessageId(messageId);
+  const id = parseStrictPositiveInteger(messageId);
   return id !== undefined && id <= 9_999_999_999 ? String(id).padStart(10, "0") : undefined;
 }
 
@@ -243,10 +243,6 @@ export function normalizeMessageNodes(
   return observations;
 }
 
-export function parseSafeMessageId(value: string | undefined): number | undefined {
-  return value === undefined ? undefined : parseStrictPositiveInteger(value);
-}
-
 export function parsePersistedCacheValue(key: string, value: unknown) {
   if (
     !isRecord(value) ||
@@ -386,8 +382,8 @@ export function compareCachedMessageNodes(
   left: TelegramCachedMessageNode,
   right: TelegramCachedMessageNode,
 ) {
-  const leftId = parseSafeMessageId(left.messageId);
-  const rightId = parseSafeMessageId(right.messageId);
+  const leftId = parseStrictPositiveInteger(left.messageId);
+  const rightId = parseStrictPositiveInteger(right.messageId);
   if (leftId !== undefined && rightId !== undefined) {
     return leftId - rightId;
   }

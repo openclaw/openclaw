@@ -94,17 +94,6 @@ function migrateLegacyDynamicToolProfile(value: unknown): {
   };
 }
 
-async function readProfileFile(packageRoot: string, path: string): Promise<Buffer> {
-  const packageFiles = await fsSafeRoot(packageRoot);
-  const read = await packageFiles.read(path, {
-    hardlinks: "reject",
-    maxBytes: MAX_PROFILE_BYTES,
-    nonBlockingRead: true,
-    symlinks: "reject",
-  });
-  return read.buffer;
-}
-
 /**
  * Resolves the OpenClaw profile for a package.
  *
@@ -180,7 +169,14 @@ export async function readClawOpenClawProfile(params: {
 
   let raw: Buffer;
   try {
-    raw = await readProfileFile(params.packageRoot, declaredPath);
+    const profileFiles = await fsSafeRoot(params.packageRoot);
+    const read = await profileFiles.read(declaredPath, {
+      hardlinks: "reject",
+      maxBytes: MAX_PROFILE_BYTES,
+      nonBlockingRead: true,
+      symlinks: "reject",
+    });
+    raw = read.buffer;
   } catch (error) {
     const unsafe =
       error instanceof FsSafeError &&

@@ -1,6 +1,7 @@
 // Restores one verified whole-archive backup into a fresh staging directory.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isPathInside } from "@openclaw/fs-safe/path";
 import * as tar from "tar";
 import { readConfigFileSnapshot, resolveStateDir } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -13,8 +14,7 @@ import {
   resolveRequiredBackupPath,
 } from "./backup-shared.js";
 import { prepareBackupArchive } from "./backup-verify.js";
-import { isPathWithin } from "./cleanup-utils.js";
-import { resolveStartupConfigSnapshot } from "./doctor/shared/automatic-startup-config-repair.js";
+import { resolveLegacyConfigSnapshotForBackup } from "./doctor/shared/automatic-config-repair.js";
 
 const BACKUP_RESTORE_WARNINGS = [
   "Restoring an archive is time travel: every restored state surface rolls back to the archive timestamp.",
@@ -40,19 +40,19 @@ async function assertTargetOutsideLiveState(targetPath: string): Promise<void> {
     canonicalizePathForContainment(targetPath),
     canonicalizePathForContainment(resolveStateDir()),
   ]);
-  if (isPathWithin(canonicalTarget, canonicalStateDir)) {
+  if (isPathInside(canonicalStateDir, canonicalTarget)) {
     throw new Error(
       `Backup restore target must be outside the live OpenClaw state directory: ${targetPath}`,
     );
   }
   const configSnapshot = await readConfigFileSnapshot({ observe: false });
-  const discoverySnapshot = resolveStartupConfigSnapshot(configSnapshot);
+  const discoverySnapshot = resolveLegacyConfigSnapshotForBackup(configSnapshot);
   if (!discoverySnapshot) {
     return;
   }
   const agentRoots = await resolveBackupAgentRoots(discoverySnapshot.config);
   for (const { sourcePath } of agentRoots) {
-    if (isPathWithin(canonicalTarget, sourcePath)) {
+    if (isPathInside(sourcePath, canonicalTarget)) {
       throw new Error(
         `Backup restore target must be outside the live OpenClaw agent directory: ${targetPath}`,
       );

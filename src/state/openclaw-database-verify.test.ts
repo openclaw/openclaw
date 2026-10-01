@@ -2,8 +2,10 @@ import { spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { readMainDatabasePosixLocks } from "../infra/sqlite-posix-locks.test-support.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
@@ -18,6 +20,7 @@ import {
   openOpenClawAgentDatabase,
   recordOpenClawAgentDatabaseOpenFailure,
 } from "./openclaw-agent-db.js";
+import { databaseVerifyHostRuntimeEntrypoint } from "./openclaw-database-verify-runtime.test-support.js";
 import {
   applyOpenClawDatabaseVerificationResults,
   runDatabaseVerifyWorker,
@@ -28,10 +31,13 @@ import {
   verifyOpenClawDatabases,
 } from "./openclaw-database-verify.worker.js";
 import {
+  clearOpenClawAgentIntegrityVerification,
   clearOpenClawDatabaseQuarantine,
-  readOpenClawDatabaseQuarantine,
+  readOpenClawAgentIntegrityVerification,
+  readOpenClawDatabaseQuarantineFailure,
   recordOpenClawDatabaseQuarantine,
 } from "./openclaw-quarantine-store.js";
+import { readPersistedQuarantineRow } from "./openclaw-quarantine-store.test-support.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -135,37 +141,32 @@ function preparedVerificationResults(
 }
 
 describe("OpenClaw database integrity verifier", () => {
-  it.each(["absent", "installed"])(
-    "verifies the %s additive transcript eligibility projection",
-    async (shape) => {
-      const stateDir = tempDirs.make("openclaw-database-verify-eligibility-");
-      const agent = openOpenClawAgentDatabase({
-        agentId: "worker-1",
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      });
-      if (shape === "absent") {
-        agent.db.exec(
-          "DROP INDEX idx_agent_transcript_context_pending; ALTER TABLE session_transcript_active_events DROP COLUMN context_eligible;",
-        );
-      }
-      const targets: OpenClawDatabaseVerifyTarget[] = [
-        { kind: "agent", label: "transcript eligibility", path: agent.path },
-      ];
-      await expect(runDatabaseVerifyWorker(targets)).resolves.toEqual([
-        { path: agent.path, ok: true },
-      ]);
-      expect(
-        agent.db
-          .prepare(
-            "SELECT name FROM pragma_table_info('session_transcript_active_events') WHERE name = 'context_eligible'",
-          )
-          .get(),
-      ).toEqual(shape === "absent" ? undefined : { name: "context_eligible" });
-    },
-  );
+  it("verifies an absent additive transcript eligibility projection without installing it", async () => {
+    const stateDir = tempDirs.make("openclaw-database-verify-eligibility-");
+    const agent = openOpenClawAgentDatabase({
+      agentId: "worker-1",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    agent.db.exec(
+      "DROP INDEX idx_agent_transcript_context_pending; ALTER TABLE session_transcript_active_events DROP COLUMN context_eligible;",
+    );
+    const targets: OpenClawDatabaseVerifyTarget[] = [
+      { kind: "agent", label: "transcript eligibility", path: agent.path, check: "quick" },
+    ];
+    await expect(runDatabaseVerifyWorker(targets)).resolves.toEqual([
+      { path: agent.path, ok: true },
+    ]);
+    expect(
+      agent.db
+        .prepare(
+          "SELECT name FROM pragma_table_info('session_transcript_active_events') WHERE name = 'context_eligible'",
+        )
+        .get(),
+    ).toBeUndefined();
+  });
 
   it.skipIf(process.platform === "win32")(
-    "preserves live WAL ownership while snapshotting an open database",
+    "preserves live WAL ownership during an open database quick check",
     async () => {
       const stateDir = tempDirs.make("openclaw-database-verify-live-locks-");
       const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -185,11 +186,16 @@ describe("OpenClaw database integrity verifier", () => {
         ]);
       }
       const targets: OpenClawDatabaseVerifyTarget[] = [
-        { kind: "agent", label: "OpenClaw agent database worker-1", path: agent.path },
+        {
+          kind: "agent",
+          label: "OpenClaw agent database worker-1",
+          path: agent.path,
+          check: "quick",
+        },
       ];
 
       await expect(runDatabaseVerifyWorker(targets)).resolves.toEqual([
-        { path: agent.path, ok: true },
+        expect.objectContaining({ path: agent.path, ok: true }),
       ]);
       if (process.platform === "linux") {
         // SQLite 3.51 can preserve visible WAL files after a lock is lost, so
@@ -226,50 +232,95 @@ describe("OpenClaw database integrity verifier", () => {
     },
   );
 
-  it("detects corruption off-thread, quarantines it, and latches later opens", async () => {
-    const stateDir = tempDirs.make("openclaw-database-verify-");
+  it("relays a late restart-receipt Worker open to the parent verifier after native opening settles", async () => {
+    const result = await runNodeScript(
+      resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(databaseVerifyHostRuntimeEntrypoint)),
+      process.env,
+      30_000,
+      { requireProcessTreeExit: true },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+  }, 35_000);
+
+  it.each(["present", "cleared"] as const)(
+    "leaves full-check proof unchanged when its receipt is %s",
+    async (receipt) => {
+      const stateDir = tempDirs.make("openclaw-database-quick-receipt-");
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+      const before = readOpenClawAgentIntegrityVerification(agent.path, env);
+      expect(before).toBeDefined();
+      const targets: OpenClawDatabaseVerifyTarget[] = [
+        { kind: "agent", label: "synthetic agent", path: agent.path, check: "quick" },
+      ];
+      const results = await runDatabaseVerifyWorker(targets);
+      expect(results).toMatchObject([{ path: agent.path, ok: true }]);
+      if (receipt === "cleared") {
+        clearOpenClawAgentIntegrityVerification(agent.path, env);
+      }
+      const verifiedAt = (before?.verified_at ?? 0) + 100;
+      const now = vi.spyOn(Date, "now").mockReturnValue(verifiedAt);
+      try {
+        await applyOpenClawDatabaseVerificationResults({ env, results, targets });
+      } finally {
+        now.mockRestore();
+      }
+      expect(readOpenClawAgentIntegrityVerification(agent.path, env)).toEqual(
+        receipt === "cleared" ? undefined : before,
+      );
+    },
+  );
+
+  it("quarantines a quick-check foreign-key failure across close and reopen", async () => {
+    const stateDir = tempDirs.make("openclaw-database-quick-verify-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
-    createUnsafeIndexDrift(agentPath);
+    const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    agent.db.exec(`
+      CREATE TABLE quick_parent (id INTEGER PRIMARY KEY);
+      CREATE TABLE quick_child (parent_id INTEGER REFERENCES quick_parent(id));
+      PRAGMA foreign_keys = OFF;
+      INSERT INTO quick_child VALUES (123);
+      PRAGMA foreign_keys = ON;
+    `);
     const targets: OpenClawDatabaseVerifyTarget[] = [
-      { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath },
+      { kind: "agent", label: "synthetic agent", path: agent.path, check: "quick" },
     ];
 
     const results = await runDatabaseVerifyWorker(targets);
     expect(results).toEqual([
       {
-        path: agentPath,
+        path: agent.path,
         ok: false,
-        error: expect.stringMatching(/missing from index unsafe_index_records_value/iu),
+        error: expect.stringContaining("foreign_key_check failed"),
         terminal: true,
       },
     ]);
-
-    await applyOpenClawDatabaseVerificationResults({
-      env,
-      results,
-      targets,
-    });
-    const quarantine = readOpenClawDatabaseQuarantine(agentPath, { env });
-    expect(quarantine).toEqual({
-      kind: "agent",
-      quarantinedAt: expect.any(Number),
-      reason: expect.stringMatching(/missing from index unsafe_index_records_value/iu),
-    });
-
+    await applyOpenClawDatabaseVerificationResults({ env, results, targets });
+    expect(readPersistedQuarantineRow(agent.path, { env })?.reason).toContain(
+      "foreign_key_check failed",
+    );
+    expect(readOpenClawAgentIntegrityVerification(agent.path, env)).toBeUndefined();
     expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
       expect.objectContaining({ name: "SqliteIntegrityError" }),
     );
+    if (process.platform !== "win32") {
+      const alias = `${agent.path}.alias`;
+      fs.symlinkSync(agent.path, alias);
+      expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env, path: alias })).toThrow(
+        expect.objectContaining({ name: "SqliteIntegrityError" }),
+      );
+    }
 
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
       expect.objectContaining({
         name: "SqliteIntegrityError",
-        message: expect.stringContaining(quarantine?.reason ?? ""),
+        message: expect.stringContaining("foreign_key_check failed"),
       }),
     );
-    clearOpenClawAgentDatabaseOpenFailure(agentPath, { env });
+    clearOpenClawAgentDatabaseOpenFailure(agent.path, { env });
     expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
       expect.objectContaining({ name: "SqliteIntegrityError" }),
     );
@@ -287,7 +338,7 @@ describe("OpenClaw database integrity verifier", () => {
     fs.copyFileSync(agentPath, healthyReplacementPath);
     createUnsafeIndexDrift(agentPath);
     const targets: OpenClawDatabaseVerifyTarget[] = [
-      { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath },
+      { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath, check: "quick" },
     ];
     const results = preparedVerificationResults(targets);
 
@@ -295,7 +346,7 @@ describe("OpenClaw database integrity verifier", () => {
     fs.renameSync(healthyReplacementPath, agentPath);
     await applyOpenClawDatabaseVerificationResults({ env, results, targets });
 
-    expect(readOpenClawDatabaseQuarantine(agentPath, { env })).toBeUndefined();
+    expect(readPersistedQuarantineRow(agentPath, { env })).toBeUndefined();
     expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
   });
 
@@ -310,7 +361,12 @@ describe("OpenClaw database integrity verifier", () => {
       await copyHealthyDatabase(agent.path, healthyReplacementPath);
       createUnsafeIndexDrift(agent.path);
       const targets: OpenClawDatabaseVerifyTarget[] = [
-        { kind: "agent", label: "OpenClaw agent database worker-1", path: agent.path },
+        {
+          kind: "agent",
+          label: "OpenClaw agent database worker-1",
+          path: agent.path,
+          check: "quick",
+        },
       ];
       const results = preparedVerificationResults(targets);
 
@@ -319,7 +375,7 @@ describe("OpenClaw database integrity verifier", () => {
       await applyOpenClawDatabaseVerificationResults({ env, results, targets });
 
       expect(agent.db.isOpen).toBe(false);
-      expect(readOpenClawDatabaseQuarantine(agent.path, { env })).toBeUndefined();
+      expect(readPersistedQuarantineRow(agent.path, { env })).toBeUndefined();
       expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
     },
   );
@@ -335,7 +391,7 @@ describe("OpenClaw database integrity verifier", () => {
       await copyHealthyDatabase(state.path, healthyReplacementPath);
       createUnsafeIndexDrift(state.path);
       const targets: OpenClawDatabaseVerifyTarget[] = [
-        { kind: "state", label: "OpenClaw state database", path: state.path },
+        { kind: "state", label: "OpenClaw state database", path: state.path, check: "quick" },
       ];
       const results = preparedVerificationResults(targets);
 
@@ -344,7 +400,7 @@ describe("OpenClaw database integrity verifier", () => {
       await applyOpenClawDatabaseVerificationResults({ env, results, targets });
 
       expect(state.db.isOpen).toBe(false);
-      expect(readOpenClawDatabaseQuarantine(state.path, { env })).toBeUndefined();
+      expect(readPersistedQuarantineRow(state.path, { env })).toBeUndefined();
       expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
     },
   );
@@ -357,7 +413,7 @@ describe("OpenClaw database integrity verifier", () => {
     closeOpenClawStateDatabaseForTest();
     createUnsafeIndexDrift(agentPath);
     const targets: OpenClawDatabaseVerifyTarget[] = [
-      { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath },
+      { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath, check: "quick" },
     ];
     const results = preparedVerificationResults(targets);
 
@@ -387,7 +443,7 @@ describe("OpenClaw database integrity verifier", () => {
           verification.then(() => "completed"),
         ]),
       ).toBe("closing");
-      expect(readOpenClawDatabaseQuarantine(agentPath, { env })).toBeUndefined();
+      expect(readPersistedQuarantineRow(agentPath, { env })).toBeUndefined();
     } finally {
       releaseClose.resolve();
       await verification;
@@ -395,7 +451,7 @@ describe("OpenClaw database integrity verifier", () => {
       await closeOpenClawAgentDatabaseByPathAsync(agentPath);
     }
 
-    expect(readOpenClawDatabaseQuarantine(agentPath, { env })?.reason).toMatch(
+    expect(readPersistedQuarantineRow(agentPath, { env })?.reason).toMatch(
       /missing from index unsafe_index_records_value/iu,
     );
     expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
@@ -411,7 +467,7 @@ describe("OpenClaw database integrity verifier", () => {
     closeOpenClawStateDatabaseForTest();
     createUnsafeIndexDrift(agentPath);
     const targets: OpenClawDatabaseVerifyTarget[] = [
-      { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath },
+      { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath, check: "quick" },
     ];
     const results = preparedVerificationResults(targets);
 
@@ -421,7 +477,7 @@ describe("OpenClaw database integrity verifier", () => {
     ]);
     await applyOpenClawDatabaseVerificationResults({ env, results, targets });
 
-    expect(readOpenClawDatabaseQuarantine(agentPath, { env })).toBeUndefined();
+    expect(readPersistedQuarantineRow(agentPath, { env })).toBeUndefined();
     expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
   });
 
@@ -431,8 +487,13 @@ describe("OpenClaw database integrity verifier", () => {
     const state = openOpenClawStateDatabase({ env });
     const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
     const targets: OpenClawDatabaseVerifyTarget[] = [
-      { kind: "state", label: "OpenClaw state database", path: state.path },
-      { kind: "agent", label: "OpenClaw agent database worker-1", path: agent.path },
+      { kind: "state", label: "OpenClaw state database", path: state.path, check: "quick" },
+      {
+        kind: "agent",
+        label: "OpenClaw agent database worker-1",
+        path: agent.path,
+        check: "quick",
+      },
     ];
 
     await applyOpenClawDatabaseVerificationResults({
@@ -446,8 +507,8 @@ describe("OpenClaw database integrity verifier", () => {
       targets,
     });
 
-    expect(readOpenClawDatabaseQuarantine(state.path, { env })).toBeUndefined();
-    expect(readOpenClawDatabaseQuarantine(agent.path, { env })).toBeUndefined();
+    expect(readPersistedQuarantineRow(state.path, { env })).toBeUndefined();
+    expect(readPersistedQuarantineRow(agent.path, { env })).toBeUndefined();
     expect(state.db.isOpen).toBe(false);
     expect(agent.db.isOpen).toBe(false);
     expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
@@ -466,7 +527,12 @@ describe("OpenClaw database integrity verifier", () => {
     fs.rmSync(agent.path);
     fs.renameSync(replacementPath, agent.path);
     const targets: OpenClawDatabaseVerifyTarget[] = [
-      { kind: "agent", label: "OpenClaw agent database worker-1", path: agent.path },
+      {
+        kind: "agent",
+        label: "OpenClaw agent database worker-1",
+        path: agent.path,
+        check: "quick",
+      },
     ];
 
     await applyOpenClawDatabaseVerificationResults({
@@ -545,14 +611,29 @@ describe("OpenClaw database integrity verifier", () => {
     expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
   });
 
-  it("keeps healthy opens on the missing-store fast path", () => {
+  it("keeps state opens and quarantine reads noncreating while agent opens record verification", () => {
     const stateDir = tempDirs.make("openclaw-database-verify-clean-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
-
-    openOpenClawStateDatabase({ env });
-    openOpenClawAgentDatabase({ agentId: "worker-1", env });
-
+    const state = openOpenClawStateDatabase({ env });
+    expect(readPersistedQuarantineRow(state.path, { env })).toBeUndefined();
     expect(fs.existsSync(quarantineStorePath(stateDir))).toBe(false);
+
+    const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    expect(readOpenClawAgentIntegrityVerification(agent.path, env)).toMatchObject({
+      path: agent.path,
+      clean_close: 0,
+    });
+    expect(readPersistedQuarantineRow(agent.path, { env })).toBeUndefined();
+    const raw = new (requireNodeSqlite().DatabaseSync)(quarantineStorePath(stateDir), {
+      readOnly: true,
+    });
+    try {
+      expect(raw.prepare("SELECT COUNT(*) AS count FROM quarantined_databases").get()).toEqual({
+        count: 0,
+      });
+    } finally {
+      raw.close();
+    }
   });
 
   it("records and clears dedicated quarantine rows with rollback journaling", () => {
@@ -570,7 +651,7 @@ describe("OpenClaw database integrity verifier", () => {
         reason: "corrupt index",
       }),
     ).toBe(true);
-    expect(readOpenClawDatabaseQuarantine(databasePath, { env })).toEqual({
+    expect(readPersistedQuarantineRow(databasePath, { env })).toEqual({
       kind: "agent",
       quarantinedAt: expect.any(Number),
       reason: "corrupt index",
@@ -591,7 +672,7 @@ describe("OpenClaw database integrity verifier", () => {
     }
     expect(clearOpenClawDatabaseQuarantine(databasePath, { env })).toBe(true);
     expect(clearOpenClawDatabaseQuarantine(databasePath, { env })).toBe(true);
-    expect(readOpenClawDatabaseQuarantine(databasePath, { env })).toBeUndefined();
+    expect(readPersistedQuarantineRow(databasePath, { env })).toBeUndefined();
   });
 
   it("expires a persisted quarantine when the verified database generation changes", () => {
@@ -616,9 +697,11 @@ describe("OpenClaw database integrity verifier", () => {
         reason: "corrupt generation",
       }),
     ).toBe(true);
-    expect(readOpenClawDatabaseQuarantine(databasePath, { env })?.reason).toBe(
-      "corrupt generation",
-    );
+    const quarantineBefore = readPersistedQuarantineRow(databasePath, { env });
+    expect(quarantineBefore?.reason).toBe("corrupt generation");
+    expect(readOpenClawDatabaseQuarantineFailure("agent", databasePath, { env })).toMatchObject({
+      name: "SqliteIntegrityError",
+    });
 
     const changed = new DatabaseSync(databasePath);
     try {
@@ -626,7 +709,8 @@ describe("OpenClaw database integrity verifier", () => {
     } finally {
       changed.close();
     }
-    expect(readOpenClawDatabaseQuarantine(databasePath, { env })).toBeUndefined();
+    expect(readOpenClawDatabaseQuarantineFailure("agent", databasePath, { env })).toBeUndefined();
+    expect(readPersistedQuarantineRow(databasePath, { env })).toEqual(quarantineBefore);
   });
 
   it("reads schema-v1 quarantine rows and migrates them on the next write", () => {
@@ -657,10 +741,13 @@ describe("OpenClaw database integrity verifier", () => {
       legacy.close();
     }
 
-    expect(readOpenClawDatabaseQuarantine(databasePath, { env })).toEqual({
+    expect(readPersistedQuarantineRow(databasePath, { env })).toEqual({
       kind: "agent",
       quarantinedAt: 1,
       reason: "legacy quarantine",
+    });
+    expect(readOpenClawDatabaseQuarantineFailure("agent", databasePath, { env })).toMatchObject({
+      name: "SqliteIntegrityError",
     });
     expect(
       recordOpenClawDatabaseQuarantine({
@@ -692,7 +779,7 @@ describe("OpenClaw database integrity verifier", () => {
     fs.mkdirSync(path.dirname(storePath), { recursive: true });
     fs.writeFileSync(storePath, "", { mode: 0o600 });
 
-    expect(readOpenClawDatabaseQuarantine(databasePath, { env })).toBeUndefined();
+    expect(readOpenClawDatabaseQuarantineFailure("agent", databasePath, { env })).toBeUndefined();
     expect(
       recordOpenClawDatabaseQuarantine({
         env,
@@ -701,7 +788,7 @@ describe("OpenClaw database integrity verifier", () => {
         reason: "corrupt index",
       }),
     ).toBe(true);
-    expect(readOpenClawDatabaseQuarantine(databasePath, { env })?.reason).toBe("corrupt index");
+    expect(readPersistedQuarantineRow(databasePath, { env })?.reason).toBe("corrupt index");
   });
 
   it.skipIf(process.platform === "win32")(
@@ -720,6 +807,8 @@ describe("OpenClaw database integrity verifier", () => {
         }),
       ).toBe(true);
 
+      const quarantineBefore = readPersistedQuarantineRow(databasePath, { env });
+      expect(quarantineBefore?.reason).toBe("committed reason");
       const crashed = spawnSync(
         process.execPath,
         [
@@ -739,9 +828,10 @@ describe("OpenClaw database integrity verifier", () => {
       expect(crashed.signal).toBe("SIGKILL");
       expect(fs.existsSync(`${storePath}-journal`)).toBe(true);
 
-      expect(readOpenClawDatabaseQuarantine(databasePath, { env })?.reason).toBe(
-        "committed reason",
-      );
+      expect(readOpenClawDatabaseQuarantineFailure("agent", databasePath, { env })).toMatchObject({
+        name: "SqliteIntegrityError",
+      });
+      expect(readPersistedQuarantineRow(databasePath, { env })).toEqual(quarantineBefore);
     },
   );
 
@@ -752,7 +842,7 @@ describe("OpenClaw database integrity verifier", () => {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     const targets: OpenClawDatabaseVerifyTarget[] = [
-      { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath },
+      { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath, check: "quick" },
     ];
 
     await applyOpenClawDatabaseVerificationResults({

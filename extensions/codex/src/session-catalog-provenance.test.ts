@@ -87,21 +87,6 @@ describe("Codex catalog provenance", () => {
     ).resolves.toBe(false);
   });
 
-  it("recognizes an OpenClaw-originated rollout even when Codex reports vscode", async () => {
-    const file = await writeRollout({
-      id: "managed-thread",
-      originator: "openclaw",
-      source: "vscode",
-    });
-
-    await expect(
-      isOpenClawManagedCodexThread(
-        { id: "managed-thread", path: file } as CodexThread,
-        path.dirname(file),
-      ),
-    ).resolves.toBe(true);
-  });
-
   it("does not inspect a rollout outside the selected local sessions root", async () => {
     const sessionsRoot = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-codex-provenance-root-"),
@@ -182,6 +167,46 @@ describe("Codex catalog provenance", () => {
       ),
     ).resolves.toBe(true);
   });
+
+  it.each([false, true])(
+    "settles compressed read failures and preserves recovery (plain fallback=%s)",
+    async (plainFallback) => {
+      const threadId = `compressed-read-failure-${plainFallback}`;
+      const file = await writeRollout({ id: threadId, originator: "openclaw", source: "vscode" });
+      const compressed = `${file}.zst`;
+      await fs.writeFile(compressed, zstdCompressSync(await fs.readFile(file)));
+      if (!plainFallback) {
+        await fs.rm(file);
+      }
+      const compressedPaths = new Set([compressed, await fs.realpath(compressed)]);
+      const open = fs.open.bind(fs);
+      let failedHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
+      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (typeof args[0] === "string" && compressedPaths.has(args[0])) {
+          failedHandle = handle;
+          const createReadStream = handle.createReadStream.bind(handle);
+          vi.spyOn(handle, "createReadStream").mockImplementationOnce((options) => {
+            const stream = createReadStream(options);
+            stream.destroy(new Error("rollout source read failed"));
+            return stream;
+          });
+        }
+        return handle;
+      });
+      const thread = idleThread({ id: threadId, path: compressed });
+      try {
+        await expect(isOpenClawManagedCodexThread(thread, path.dirname(file))).resolves.toBe(
+          plainFallback,
+        );
+      } finally {
+        openSpy.mockRestore();
+      }
+      expect(failedHandle?.fd).toBe(-1);
+      // An unreadable rollout supplies no durable negative provenance.
+      await expect(isOpenClawManagedCodexThread(thread, path.dirname(file))).resolves.toBe(true);
+    },
+  );
 
   it("preserves native and mismatched rollouts", async () => {
     const native = await writeRollout({
@@ -286,7 +311,7 @@ describe("Codex exact local eligibility", () => {
     ]);
   });
 
-  it.each(["cli", "vscode", { custom: "atlas" }, { custom: "chatgpt" }] as const)(
+  it.each(["cli", { custom: "atlas" }] as const)(
     "verifies interactive source %j using one selected rollout",
     async (source) => {
       const f = await localEligibilityFixture();

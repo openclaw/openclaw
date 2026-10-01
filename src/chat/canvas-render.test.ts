@@ -118,6 +118,14 @@ describe("extractCanvasShortcodes", () => {
     expect(previews[0]?.url).toBe("https://b.com");
     expect(text).toBe("see  end");
   });
+
+  it.each([
+    ["indented code", '    [embed url="https://example.com/image.png"]\n    example\n    [/embed]'],
+    ["inline code", '`[embed url="https://example.com/image.png" /]`'],
+  ])("preserves literal embed examples in %s", (_kind, example) => {
+    const input = `Before the example.\n\n${example}\n\nAfter the example.`;
+    expect(extractCanvasShortcodes(input)).toEqual({ text: input, previews: [] });
+  });
 });
 
 it("removes a shortcode without rewriting surrounding literal whitespace", () => {

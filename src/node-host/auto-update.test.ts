@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("./auto-update-compatibility.js").assertNodeRuntimeUpdateCompatible>(),
   launcherChild: vi.fn(() => true),
   restart: vi.fn<typeof import("./launcher-client.js").requestNodeHostLauncherRestart>(),
+  exec: vi.fn<typeof import("../process/exec.js").runCommandWithTimeout>(),
+  fetch: vi.fn<typeof fetch>(),
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -35,6 +37,10 @@ vi.mock("../infra/update-check.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-check.js")>()),
   resolveNpmChannelTag: mocks.discover,
   resolveUpdateInstallKind: mocks.installKind,
+}));
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  runCommandWithTimeout: mocks.exec,
 }));
 vi.mock("../version.js", () => ({ VERSION: "2026.9.17" }));
 vi.mock("./auto-update-install.js", () => ({ prepareNodeRuntimeUpdate: mocks.prepare }));
@@ -66,7 +72,7 @@ function hold<T>(value: T) {
 function start(busy = false) {
   const abort = new AbortController();
   const runtime = {
-    tryPauseForUpdate: vi.fn(() => !busy),
+    tryPauseForUpdate: vi.fn(async () => !busy),
     resumeAfterUpdate: vi.fn(),
   };
   const onRestartAccepted = vi.fn();
@@ -153,6 +159,7 @@ describe("node auto-update controller", () => {
   it.each([
     { label: "unmanaged process", launcher: false, kind: "package" },
     { label: "source checkout", launcher: true, kind: "git" },
+    { label: "host-owned installation", launcher: true, kind: "host" },
     { label: "unknown installation", launcher: true, kind: "unknown" },
   ])("does not schedule package updates for $label", async ({ launcher, kind }) => {
     mocks.launcherChild.mockReturnValue(launcher);
@@ -214,7 +221,7 @@ describe("node auto-update controller", () => {
       host.log.mock.calls.filter(([message]) => message.includes("waiting for active work")),
     ).toHaveLength(1);
 
-    host.runtime.tryPauseForUpdate.mockReturnValue(true);
+    host.runtime.tryPauseForUpdate.mockResolvedValue(true);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(mocks.restart).toHaveBeenCalledOnce();
     expect(host.onRestartAccepted).not.toHaveBeenCalled();
@@ -302,6 +309,22 @@ describe("node auto-update controller", () => {
     },
   );
 
+  it("joins a pending idle check and resumes the node when stopped before admission", async () => {
+    const idle = hold(true);
+    const host = start();
+    host.runtime.tryPauseForUpdate.mockImplementationOnce(async () => await idle.promise);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(host.runtime.tryPauseForUpdate).toHaveBeenCalledOnce();
+    expect(mocks.compatible).not.toHaveBeenCalled();
+    expect(mocks.restart).not.toHaveBeenCalled();
+    const stopping = host.controller.stop();
+    idle.resolve(true);
+    await stopping;
+    expect(mocks.compatible).not.toHaveBeenCalled();
+    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(host.runtime.resumeAfterUpdate).toHaveBeenCalledOnce();
+  });
+
   it.each(["download", "preflight", "restart"] as const)(
     "keeps the running node available after a $stage failure and retries hourly",
     async (stage) => {
@@ -325,4 +348,100 @@ describe("node auto-update controller", () => {
       expect(host.onRestartAccepted).toHaveBeenCalledOnce();
     },
   );
+});
+
+describe("node auto-update discovery runtime", () => {
+  const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
+  const useRuntime = (runtime: "bun" | "node") => {
+    if (runtime === "bun") {
+      Object.defineProperty(process.versions, "bun", { value: "1.4.3", configurable: true });
+    } else {
+      Reflect.deleteProperty(process.versions, "bun");
+    }
+  };
+
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import("../infra/update-check.js")>(
+      "../infra/update-check.js",
+    );
+    mocks.discover.mockImplementation(actual.resolveNpmChannelTag);
+    vi.stubGlobal("fetch", mocks.fetch);
+  });
+
+  afterEach(() => {
+    if (bunVersion) {
+      Object.defineProperty(process.versions, "bun", bunVersion);
+    } else {
+      Reflect.deleteProperty(process.versions, "bun");
+    }
+    vi.unstubAllGlobals();
+  });
+
+  it.each(["https://registry.npmjs.org/", "http://127.0.0.1:4873/"])(
+    "reads %s in-process on Bun instead of spawning npm",
+    async (registryUrl) => {
+      useRuntime("bun");
+      vi.stubEnv("OPENCLAW_UPDATE_PACKAGE_SPEC", "openclaw");
+      vi.stubEnv("NPM_CONFIG_REGISTRY", registryUrl);
+      mocks.fetch.mockResolvedValue(new Response(JSON.stringify({ version: candidate.version })));
+      start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mocks.exec).not.toHaveBeenCalled();
+      expect(mocks.fetch).toHaveBeenCalledWith(
+        `${registryUrl}openclaw/latest`,
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+      expect(mocks.prepare).toHaveBeenCalledWith(
+        expect.objectContaining({ targetVersion: candidate.version }),
+      );
+    },
+  );
+
+  it("keeps npm registry discovery on Node", async () => {
+    useRuntime("node");
+    mocks.exec.mockResolvedValue({
+      stdout: JSON.stringify({ version: candidate.version }),
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+    start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(mocks.exec).toHaveBeenCalledWith(
+      [
+        "npm",
+        "view",
+        "openclaw@latest",
+        "version",
+        "engines.node",
+        "openclaw.schemaVersions",
+        "--json",
+        "--global",
+      ],
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(mocks.prepare).toHaveBeenCalledWith(
+      expect.objectContaining({ targetVersion: candidate.version }),
+    );
+  });
+
+  it("cancels an in-flight Bun registry read when the node stops", async () => {
+    useRuntime("bun");
+    mocks.fetch.mockImplementation(
+      async (_url, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("registry aborted")), {
+            once: true,
+          });
+        }),
+    );
+    const host = start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.fetch).toHaveBeenCalledOnce();
+    await host.controller.stop();
+    expect(mocks.prepare).not.toHaveBeenCalled();
+  });
 });

@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
 import { resolveModelContextTokenProjection } from "../agents/context.js";
@@ -35,7 +38,7 @@ import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.j
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
 import { runSynchronousWork } from "../shared/synchronous-work.js";
-import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { resolveActiveFallbackState } from "../status/fallback-notice-state.js";
 import { readSessionFallbackModel } from "../status/session-fallback-model.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
@@ -50,6 +53,7 @@ import {
   projectSessionParticipants,
 } from "./session-identity-projection.js";
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
+import { projectSessionProviderReview } from "./session-provider-review-projection.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
@@ -61,11 +65,9 @@ import {
   deriveSessionTitle,
   prepareSessionTitleRead,
   resolveEstimatedSessionCostUsd,
-  resolvePositiveNumber,
   buildStoreChildSessionLinksWork,
   type SessionChildLink,
   resolveSessionChildOwners,
-  resolveSessionCompactionSummary,
 } from "./session-utils-core.js";
 import {
   resolveGatewaySessionDisplayName,
@@ -73,7 +75,6 @@ import {
   resolveGatewaySessionKind,
   resolveGatewaySessionGoal,
 } from "./session-utils-display.js";
-import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
 import {
   buildSessionListRowMetadataContext,
   resolveTranscriptUsageFallbacks,
@@ -93,6 +94,8 @@ export function readSessionRowInputs(params: {
   modelSource?: GatewaySessionModelSource;
   key: string;
   entry?: InternalSessionEntry;
+  preparedAcpMeta?: SessionEntry["acp"] | null;
+  preparedRepositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
   includeDerivedTitles?: boolean;
@@ -119,6 +122,7 @@ export function readSessionRowInputs(params: {
       cfg,
       key,
       entry,
+      preparedAcpMeta: params.preparedAcpMeta,
       source: params.modelSource ?? { entry, readSourceEntry: (parentKey) => store[parentKey] },
       agentId,
       rowContext,
@@ -190,13 +194,14 @@ export function readSessionRowInputs(params: {
     modelContextWindow: contextWindowProfile.contextTokens,
     allowAsyncLoad: false,
   });
-  const resolvedModelContextTokens = resolvePositiveNumber(modelContext.contextTokens);
+  const resolvedModelContextTokens = asPositiveFiniteNumber(modelContext.contextTokens);
 
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
-  const repositoryWorkspace = entry?.repositoryWorkspaceId
-    ? getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId)
-    : undefined;
+  if (entry?.repositoryWorkspaceId && params.preparedRepositoryWorkspace === undefined) {
+    throw new Error("Repository workspace facts must be prepared before presenting the session");
+  }
+  const repositoryWorkspace = params.preparedRepositoryWorkspace;
 
   return {
     inputs: {
@@ -212,7 +217,9 @@ export function readSessionRowInputs(params: {
       ),
       permissionModePending: isSessionPermissionChangePending(entry?.sessionId),
       repository:
-        repositoryWorkspace?.agentId === agentId && repositoryWorkspace.sessionKey === key
+        repositoryWorkspace?.workspaceId === entry?.repositoryWorkspaceId &&
+        repositoryWorkspace?.agentId === agentId &&
+        repositoryWorkspace.sessionKey === key
           ? {
               url: repositoryWorkspace.url,
               ...(repositoryWorkspace.requestedRef
@@ -252,7 +259,7 @@ export function readSessionRowInputs(params: {
               contextWindowProfile.contextTokens,
             )
           : resolvedModelContextTokens,
-        authoredContextTokens: resolvePositiveNumber(modelContext.authoredContextTokens),
+        authoredContextTokens: asPositiveFiniteNumber(modelContext.authoredContextTokens),
       }),
       pluginExtensions,
       includeSwarmSummary: params.rowContext !== undefined,
@@ -297,23 +304,19 @@ export function buildGatewaySessionRow(
   return presentSessionRow(materializeSessionRow(inputs), presentation);
 }
 
-function resolveGatewaySessionActiveModel(params: {
+export function resolveGatewaySessionActiveModel(params: {
   cfg: OpenClawConfig;
   active?: boolean;
   activeModel?: { provider: string; model: string } | null;
-  agentId?: string;
+  agentId: string;
   storeAgentId?: string;
   sessionId?: string;
   sessionKey: string;
   projectedAgentRuns: ProjectedAgentRunIndex;
-  selectedModel?: { provider: string; model: string };
-  modelSource?: GatewaySessionModelSource;
+  selectedModel: { provider: string; model: string };
   entry?: InternalSessionEntry;
-  storePath?: string;
+  storePath: string;
 }): { provider: string; model: string } | undefined {
-  if (!params.agentId) {
-    return undefined;
-  }
   const liveModel = resolveProjectedAgentRunModel({
     agentId: params.agentId,
     sessionId: params.sessionId,
@@ -322,22 +325,10 @@ function resolveGatewaySessionActiveModel(params: {
   if (params.active ?? (liveModel !== undefined || params.entry?.status === "running")) {
     return liveModel ?? undefined;
   }
-  if (!params.entry?.fallbackNotice || params.storePath === undefined) {
+  if (!params.entry?.fallbackNotice) {
     return undefined;
   }
-  const selectedModel =
-    params.selectedModel ??
-    (params.modelSource
-      ? resolveSessionSelectedModelRef({
-          cfg: params.cfg,
-          source: params.modelSource,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-        })
-      : undefined);
-  if (!selectedModel) {
-    return undefined;
-  }
+  const { selectedModel } = params;
 
   const fallbackEntry =
     params.activeModel === undefined
@@ -431,11 +422,9 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
   const storedOrigin = deliveryFields.origin;
   const avatar = normalizeOptionalString(storedOrigin?.avatar);
   const controlUiBasePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
-  const pinnedAt =
-    entry?.pinnedAt !== undefined && isPinnableSessionEntry(key, entry)
-      ? entry.pinnedAt
-      : undefined;
-  const compactionSummary = resolveSessionCompactionSummary(entry);
+  // Snooze shares the pin root-session rule.
+  const pinnable = isPinnableSessionEntry(key, entry);
+  const pinnedAt = pinnable ? entry?.pinnedAt : undefined;
 
   // Reserve temporal fields in wire order; presentation fills a fresh copy.
   const row: GatewaySessionRow = {
@@ -452,6 +441,8 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     workspaceDir: entry?.spawnedCwd ?? entry?.spawnedWorkspaceDir,
     projectId: entry?.projectId,
     permissionMode: entry?.permissionMode,
+    sandboxMode: entry?.sandboxMode,
+    nativeRuntimeConsent: entry?.nativeRuntimeConsent,
     permissionModePending: input.permissionModePending,
     ...(entry?.permissionMode !== undefined && entry.sessionRoot !== undefined
       ? { sessionRoot: entry.sessionRoot }
@@ -499,6 +490,8 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     archiveReason: entry?.archiveReason,
     pinned: pinnedAt !== undefined,
     pinnedAt,
+    snoozedUntil: pinnable ? entry?.snoozedUntil : undefined,
+    snoozedAt: pinnable ? entry?.snoozedAt : undefined,
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
     markedUnreadAt: entry?.markedUnreadAt,
@@ -548,7 +541,8 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     startedAt: undefined,
     endedAt: undefined,
     runtimeMs: undefined,
-    lastRunError: entry?.lastRunError,
+    lastRunError: undefined,
+    providerReview: projectSessionProviderReview(entry, key),
     lastRunId: entry?.lastRunId,
     hasAutomation: input.hasAutomation,
     // Navigation lineage is persisted; runtime control is exposed separately above.
@@ -590,8 +584,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     lastTo: deliveryFields.lastTo,
     lastAccountId: deliveryFields.lastAccountId,
     lastThreadId: deliveryFields.lastThreadId,
-    compactionCheckpointCount: compactionSummary.compactionCheckpointCount,
-    latestCompactionCheckpoint: compactionSummary.latestCompactionCheckpoint,
     pluginExtensions: input.pluginExtensions.length > 0 ? input.pluginExtensions : undefined,
   };
   return { row, source: input };

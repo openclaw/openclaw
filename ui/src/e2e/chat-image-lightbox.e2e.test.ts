@@ -425,6 +425,117 @@ describeControlUiE2e("Control UI image lightbox", () => {
     }
   });
 
+  it("navigates local MEDIA images in their message after history reload", async () => {
+    const context = await newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    const names = ["before", "after", "hover"];
+    const images = await page.evaluate(
+      (labels) =>
+        labels.map((label, index) => {
+          const canvas = document.createElement("canvas");
+          canvas.width = 800;
+          canvas.height = 480;
+          const drawing = canvas.getContext("2d")!;
+          drawing.fillStyle = ["#314b69", "#315a49", "#655035"][index]!;
+          drawing.fillRect(0, 0, canvas.width, canvas.height);
+          drawing.fillStyle = "white";
+          drawing.font = "40px sans-serif";
+          drawing.fillText("Image gallery regression", 48, 100);
+          drawing.fillText(label, 48, 200);
+          drawing.font = "24px sans-serif";
+          drawing.fillText("Synthetic local image attachment", 48, 360);
+          return canvas.toDataURL("image/png").split(",")[1]!;
+        }),
+      names,
+    );
+    const sources = names.map((name) => "/workspace/" + name + ".png");
+    await page.route("**/__openclaw__/assistant-media?**", async (route) => {
+      const url = new URL(route.request().url());
+      const index = sources.indexOf(url.searchParams.get("source") ?? "");
+      expect(index).toBeGreaterThanOrEqual(0);
+      if (url.searchParams.get("meta") === "1") {
+        await route.fulfill({
+          json: {
+            available: true,
+            mediaTicket: "gallery-proof",
+            mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
+          },
+        });
+      } else {
+        expect(url.searchParams.get("mediaTicket")).toBe("gallery-proof");
+        await route.fulfill({
+          contentType: "image/png",
+          body: Buffer.from(images[index]!, "base64"),
+        });
+      }
+    });
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text:
+                "Three image attachments in one reply.\n\n" +
+                sources.map((source) => "MEDIA:" + source).join("\n"),
+            },
+          ],
+          timestamp: 1_800_000_000_000,
+        },
+      ],
+    });
+    await page.goto(server.baseUrl + "chat");
+    await gateway.waitForRequest("chat.startup");
+    const trigger = page.getByRole("button", { name: "Open image before.png", exact: true });
+    const lightbox = page.locator("openclaw-image-lightbox");
+    const image = lightbox.locator(".image");
+    for (const reloaded of [false, true]) {
+      if (reloaded) {
+        await page.reload();
+      }
+      await trigger.click();
+      await lightbox.getByRole("dialog").waitFor({ state: "visible" });
+      await expect
+        .poll(() =>
+          image.evaluate(
+            (element) =>
+              element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0,
+          ),
+        )
+        .toBe(true);
+      if (captureUiProofEnabled && !reloaded) {
+        await lightbox.locator("wa-dialog dialog").evaluate(finishElementAnimations);
+        await writeFile(
+          path.join(proofDir, "media-gallery-open.png"),
+          await takeControlUiViewportScreenshot(page, image, [image]),
+        );
+      }
+      await page.keyboard.press("ArrowRight");
+      await expect.poll(() => image.getAttribute("alt")).toBe("after.png");
+      await expect
+        .poll(() => lightbox.locator(".gallery-counter").textContent())
+        .toContain("2 / 3");
+      if (captureUiProofEnabled && !reloaded) {
+        await writeFile(
+          path.join(proofDir, "media-gallery-next.png"),
+          await takeControlUiViewportScreenshot(page, image, [image]),
+        );
+      }
+      await page.keyboard.press("ArrowRight");
+      await expect.poll(() => image.getAttribute("alt")).toBe("hover.png");
+      await page.keyboard.press("ArrowLeft");
+      await expect.poll(() => image.getAttribute("alt")).toBe("after.png");
+      await page.keyboard.press("Escape");
+      await expect.poll(() => lightbox.count()).toBe(0);
+      await expect.poll(() => trigger.evaluate((element) => element.matches(":focus"))).toBe(true);
+    }
+  });
+
   it("navigates only the opened message gallery and restores its original tile focus", async () => {
     const context = await newContext({
       locale: "en-US",

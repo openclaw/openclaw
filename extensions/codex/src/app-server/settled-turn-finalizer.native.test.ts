@@ -1,23 +1,37 @@
 import fs from "node:fs/promises";
-import http from "node:http";
 import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   appendSessionTranscriptMessageByIdentity,
   readVisibleSessionTranscriptMessageEntries,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { describe, expect, it, vi, type MockInstance } from "vitest";
+import {
+  HOST_KEY,
+  HOST_MODEL,
+  HOST_PROFILE,
+  LIVE,
+  NATIVE_KEY,
+  NATIVE_MODEL,
+  OTHER_PROFILE,
+  SUMMARY,
+  withNativeFixture,
+  type Cleanup,
+  type NativeFixture,
+} from "../test-support/settled-turn-finalizer.native.js";
 import * as authBridge from "./auth-bridge.js";
 import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
 import { CodexAppServerClient } from "./client.js";
-import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
+import {
+  resolveCodexAppServerRuntimeOptions,
+  resolveCodexSupervisionAppServerRuntimeOptions,
+} from "./config.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
-import { createCodexNativeTestState } from "./native-app-server.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { assertCodexThreadStartResponse } from "./protocol-validators.js";
-import { isJsonObject, type JsonObject } from "./protocol.js";
+import { isJsonObject } from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   createCodexRuntimePlanFixture,
@@ -42,198 +56,10 @@ import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 setupRunAttemptTestHooks();
 
-// Same native multi-agent generation keeps model-selection proof separate from migration.
-const NATIVE_MODEL = "gpt-5.6-sol";
-const HOST_MODEL = "gpt-5.6-terra";
-const NATIVE_KEY = "synthetic-native-account";
-const HOST_KEY = "synthetic-host-account";
-const HOST_PROFILE = "openai:host-fixture";
-const OTHER_PROFILE = "openai:other-fixture";
-const SUMMARY = "The action completed once.";
-
-type NativeFixture = Awaited<ReturnType<typeof createNativeFixture>>;
 type NativeRunParams = ReturnType<typeof createNativeRunParams>;
-type Cleanup = () => Promise<void>;
-type NativePhase = "probe" | "action" | "side" | "hold" | "summary" | "health";
 
 async function closeNativeClient(client: CodexAppServerClient): Promise<void> {
   expect(await client.closeAndWait()).toMatchObject({ exited: true });
-}
-
-async function createNativeFixture(cleanups: Cleanup[], failures: unknown[]) {
-  const root = await fs.realpath(tempDir);
-  const native = await createCodexNativeTestState(root);
-  for (const [name, value] of Object.entries(native.env)) {
-    if (value !== undefined) {
-      vi.stubEnv(name, value);
-    }
-  }
-  const requests: Array<{ body: JsonObject; account: string | undefined }> = [];
-  let requestReceived = createDeferred<void>();
-  let phase: NativePhase = "probe";
-  let actionRequests = 0;
-  const server = http.createServer((request, response) => {
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (chunk: string) => {
-      body += chunk;
-    });
-    request.on("end", () => {
-      try {
-        if (request.url !== "/v1/responses" || request.method !== "POST") {
-          response.writeHead(404).end();
-          return;
-        }
-        const parsed: unknown = JSON.parse(body);
-        if (!isJsonObject(parsed)) {
-          response.writeHead(400).end();
-          return;
-        }
-        const account = request.headers.authorization;
-        requests.push({ body: parsed, account });
-        requestReceived.resolve();
-        if (account !== `Bearer ${NATIVE_KEY}` && account !== `Bearer ${HOST_KEY}`) {
-          response.writeHead(401).end();
-          return;
-        }
-        if (parsed.model !== NATIVE_MODEL && parsed.model !== HOST_MODEL) {
-          response.writeHead(400).end();
-          return;
-        }
-        if (phase === "hold") {
-          response.writeHead(200, { "Content-Type": "text/event-stream" });
-          response.write(
-            `event: response.created\ndata: ${JSON.stringify({ type: "response.created", response: { id: `response-${requests.length}` } })}\n\n`,
-          );
-          return;
-        }
-        if (phase === "action" || phase === "side") {
-          actionRequests += 1;
-        }
-        const item =
-          phase === "action" || (phase === "side" && actionRequests === 1)
-            ? actionRequests === 1
-              ? {
-                  type: "function_call",
-                  call_id: "completed-action",
-                  name: "exec_command",
-                  arguments: JSON.stringify({
-                    cmd: "printf 'completed-once\\n' >> completed-actions.txt; cat completed-actions.txt",
-                    shell: "/bin/sh",
-                    login: false,
-                    max_output_tokens: 1000,
-                  }),
-                }
-              : undefined
-            : {
-                type: "message",
-                role: "assistant",
-                id: `answer-${requests.length}`,
-                content: [
-                  {
-                    type: "output_text",
-                    text: phase === "summary" || phase === "side" ? SUMMARY : "Ready.",
-                  },
-                ],
-              };
-        const events = [
-          { type: "response.created", response: { id: `response-${requests.length}` } },
-          ...(item ? [{ type: "response.output_item.done", item }] : []),
-          {
-            type: "response.completed",
-            response: {
-              id: `response-${requests.length}`,
-              usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-            },
-          },
-        ];
-        response.writeHead(200, { "Content-Type": "text/event-stream" });
-        response.end(
-          events
-            .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-            .join(""),
-        );
-      } catch (error) {
-        failures.push(error);
-        response.writeHead(500).end();
-      }
-    });
-  });
-  cleanups.push(async () => {
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.removeListener("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Loopback provider has no TCP address");
-  }
-  const baseUrl = `http://127.0.0.1:${address.port}/v1`;
-  const agentDir = path.join(root, "agent");
-  const authProfileStore: AuthProfileStore = {
-    version: 1,
-    profiles: {
-      [HOST_PROFILE]: { type: "api_key", provider: "openai", key: HOST_KEY },
-      [OTHER_PROFILE]: { type: "api_key", provider: "openai", key: NATIVE_KEY },
-    },
-  };
-  const pluginConfig = {
-    supervision: { enabled: true },
-    appServer: {
-      command: native.command,
-      args: ["app-server", "-c", `openai_base_url=${JSON.stringify(baseUrl)}`],
-      homeScope: "user" as const,
-    },
-  };
-  return {
-    native,
-    root,
-    agentDir,
-    baseUrl,
-    pluginConfig,
-    authProfileStore,
-    requests,
-    marker: path.join(native.cwd, "completed-actions.txt"),
-    waitForRequest: () => requestReceived.promise,
-    setPhase(next: NativePhase) {
-      phase = next;
-      requests.length = 0;
-      requestReceived = createDeferred<void>();
-      actionRequests = 0;
-    },
-  };
-}
-
-async function withNativeFixture(
-  run: (fixture: NativeFixture, cleanups: Cleanup[]) => Promise<void>,
-): Promise<void> {
-  const cleanups: Cleanup[] = [];
-  const failures: unknown[] = [];
-  try {
-    await run(await createNativeFixture(cleanups, failures), cleanups);
-  } catch (error) {
-    failures.push(error);
-  } finally {
-    // Join children before the shared harness afterEach removes their homes.
-    for (const cleanup of cleanups.toReversed()) {
-      try {
-        await cleanup();
-      } catch (error) {
-        failures.push(error);
-      }
-    }
-  }
-  if (failures.length) {
-    throw new AggregateError(failures, "Native finalization proof or cleanup failed");
-  }
 }
 
 async function writeNativeConfig(
@@ -403,7 +229,7 @@ function trackSharedClient(cleanups: Cleanup[]) {
 
 // Admission and binding seeding are fixtures, not Gateway/catalog or live OAuth
 // proof. Native execution, host auth, settlement, and transcript writes are real;
-// every model HTTP response comes from the isolated loopback provider.
+// Model responses are scripted unless the explicit live fault-injection case is selected.
 // This fixture executes /bin/sh; the owner-boundary unit tests are platform-independent.
 describe.skipIf(process.platform === "win32")(
   "stock Codex settled-turn finalization ownership",
@@ -412,7 +238,7 @@ describe.skipIf(process.platform === "win32")(
       "settles a bounded turn when the native process closes %s",
       { timeout: 60_000 },
       async (closure) => {
-        await withNativeFixture(async (fixture, cleanups) => {
+        await withNativeFixture(tempDir, async (fixture, cleanups) => {
           const pluginConfig = {
             ...fixture.pluginConfig,
             appServer: { ...fixture.pluginConfig.appServer, homeScope: "agent" },
@@ -423,7 +249,28 @@ describe.skipIf(process.platform === "win32")(
             "openai",
           );
           fixture.setPhase(closure === "before completion" ? "hold" : "probe");
-          const admittedClient = createDeferred<CodexAppServerClient>();
+          // Process/auth startup is setup for the close-event contract below.
+          const client = await sharedClients.createIsolatedCodexAppServerClient({
+            startOptions: resolveCodexAppServerRuntimeOptions({ pluginConfig }).start,
+            authProfileId: HOST_PROFILE,
+            authProfileStore: fixture.authProfileStore,
+            agentDir: fixture.agentDir,
+            timeoutMs: 15_000,
+          });
+          let settled: Promise<unknown> = Promise.resolve();
+          cleanups.push(async () => {
+            await closeNativeClient(client);
+            await settled;
+          });
+          if (closure === "after completion") {
+            client.addNotificationHandler((notification) => {
+              if (notification.method === "turn/completed") {
+                // The router receives this native frame synchronously; close before
+                // its asynchronous projections run to exercise terminal precedence.
+                queueMicrotask(() => client.close());
+              }
+            });
+          }
           const run = runBoundedCodexAppServerTurn({
             model: { mode: "required", id: HOST_MODEL },
             profile: HOST_PROFILE,
@@ -438,30 +285,10 @@ describe.skipIf(process.platform === "win32")(
             requireNoExternalCapabilities: true,
             options: {
               pluginConfig,
-              clientFactory: async (options) => {
-                const client = await sharedClients.createIsolatedCodexAppServerClient({
-                  ...options,
-                  authProfileStore: fixture.authProfileStore,
-                });
-                if (closure === "after completion") {
-                  client.addNotificationHandler((notification) => {
-                    if (notification.method === "turn/completed") {
-                      // The router receives this native frame synchronously; close before
-                      // its asynchronous projections run to exercise terminal precedence.
-                      queueMicrotask(() => client.close());
-                    }
-                  });
-                }
-                admittedClient.resolve(client);
-                cleanups.push(async () => {
-                  await closeNativeClient(client);
-                  await settled;
-                });
-                return client;
-              },
+              clientFactory: async () => client,
             },
           });
-          const settled = run.then(
+          settled = run.then(
             () => undefined,
             (error: unknown) => error,
           );
@@ -471,7 +298,6 @@ describe.skipIf(process.platform === "win32")(
               throw new Error("Bounded turn ended before provider admission", { cause: error });
             }),
           ]);
-          const client = await admittedClient.promise;
           if (closure === "before completion") {
             client.close();
             await expect(run).rejects.toThrow("closed");
@@ -487,7 +313,7 @@ describe.skipIf(process.platform === "win32")(
       "runs and cancels ephemeral side forks without changing the parent",
       { timeout: 60_000 },
       async () => {
-        await withNativeFixture(async (fixture, cleanups) => {
+        await withNativeFixture(tempDir, async (fixture, cleanups) => {
           const pluginConfig = {
             ...fixture.pluginConfig,
             appServer: { ...fixture.pluginConfig.appServer, homeScope: "agent" },
@@ -629,7 +455,7 @@ describe.skipIf(process.platform === "win32")(
       "refuses supervised finalization even when different host credentials and model work",
       { timeout: 60_000 },
       async () => {
-        await withNativeFixture(async (fixture, cleanups) => {
+        await withNativeFixture(tempDir, async (fixture, cleanups) => {
           const { native, pluginConfig, agentDir, requests, authProfileStore } = fixture;
           await writeNativeConfig(fixture, native.codexHome, "settled-fixture");
           // A successful private turn makes wrong-account fallback an available path,
@@ -844,181 +670,300 @@ describe.skipIf(process.platform === "win32")(
         prepared: true,
         priorCount: 201,
       },
+      {
+        label: "hidden background notification",
+        homeScope: "agent" as const,
+        preserveNativeModel: false,
+        prepared: true,
+        priorCount: 0,
+        hidden: true,
+      },
+      ...(LIVE
+        ? [
+            {
+              label: "hidden background notification with live provider",
+              homeScope: "agent" as const,
+              preserveNativeModel: false,
+              prepared: true,
+              priorCount: 0,
+              hidden: true,
+              live: true,
+            },
+          ]
+        : []),
     ])(
       "persists a host-authorized summary with the actual native selection ($label)",
-      { timeout: 60_000 },
+      { timeout: LIVE ? 360_000 : 60_000 },
       async (scenario) => {
-        await withNativeFixture(async (fixture, cleanups) => {
-          const pluginConfig = {
-            ...fixture.pluginConfig,
-            appServer: { ...fixture.pluginConfig.appServer, homeScope: scenario.homeScope },
-          };
-          const sourceHome =
-            scenario.homeScope === "user"
-              ? fixture.native.codexHome
-              : authBridge.resolveCodexAppServerHomeDir(fixture.agentDir);
-          await writeNativeConfig(fixture, sourceHome, "openai", scenario.homeScope === "user");
-          const nativeAuthBefore =
-            scenario.homeScope === "user"
-              ? await fs.readFile(path.join(sourceHome, "auth.json"), "utf8")
-              : undefined;
-          const params = await createRunParams(fixture);
-          if (scenario.prepared) {
-            // The prepared key wins over a usable, differently authenticated profile.
-            params.authProfileId = OTHER_PROFILE;
-            usePreparedApiKey(params, fixture.baseUrl);
-          }
-          const shared = trackSharedClient(cleanups);
-          const runOptions = {
-            pluginConfig,
-            clientFactory: shared.factory,
-            nativeHookRelay: { enabled: false },
-          };
-          const initialized = await runCodexAppServerAttempt(
-            { ...params, prompt: "Initialize the source." },
-            runOptions,
-          );
-          expect(initialized.terminal).toEqual({ kind: "ok" });
-          const initialBinding = await readCodexAppServerBinding(params.sessionFile);
-          if (!initialBinding) {
-            throw new Error("The ordinary native turn did not commit its binding");
-          }
-          expect(initialBinding.model).toBe(NATIVE_MODEL);
-          expect(initialBinding.connectionScope).not.toBe("supervision");
-          if (scenario.preserveNativeModel) {
-            seedCodexTestBinding(params.sessionFile, {
-              ...initialBinding,
-              preserveNativeModel: true,
+        const live = "live" in scenario && scenario.live;
+        const hidden = "hidden" in scenario && scenario.hidden;
+        await withNativeFixture(
+          tempDir,
+          async (fixture, cleanups) => {
+            const pluginConfig = {
+              ...fixture.pluginConfig,
+              appServer: { ...fixture.pluginConfig.appServer, homeScope: scenario.homeScope },
+            };
+            const sourceHome =
+              scenario.homeScope === "user"
+                ? fixture.native.codexHome
+                : authBridge.resolveCodexAppServerHomeDir(fixture.agentDir);
+            await writeNativeConfig(fixture, sourceHome, "openai", scenario.homeScope === "user");
+            const nativeAuthBefore =
+              scenario.homeScope === "user"
+                ? await fs.readFile(path.join(sourceHome, "auth.json"), "utf8")
+                : undefined;
+            const params = await createRunParams(fixture);
+            if (live) {
+              params.timeoutMs = 120_000;
+              params.thinkLevel = "low";
+            }
+            if (scenario.prepared) {
+              // The prepared key wins over a usable, differently authenticated profile.
+              params.authProfileId = OTHER_PROFILE;
+              usePreparedApiKey(params, fixture.baseUrl);
+            }
+            const shared = trackSharedClient(cleanups);
+            const runOptions = {
+              pluginConfig,
+              clientFactory: shared.factory,
+              nativeHookRelay: { enabled: false },
+            };
+            const initialized = await runCodexAppServerAttempt(
+              { ...params, prompt: "Initialize the source." },
+              runOptions,
+            );
+            expect(initialized.terminal).toEqual({ kind: "ok" });
+            const initialBinding = await readCodexAppServerBinding(params.sessionFile);
+            if (!initialBinding) {
+              throw new Error("The ordinary native turn did not commit its binding");
+            }
+            expect(initialBinding.model).toBe(NATIVE_MODEL);
+            expect(initialBinding.connectionScope).not.toBe("supervision");
+            if (scenario.preserveNativeModel) {
+              seedCodexTestBinding(params.sessionFile, {
+                ...initialBinding,
+                preserveNativeModel: true,
+              });
+              params.modelId = HOST_MODEL;
+              params.model = { ...params.model, id: HOST_MODEL };
+            }
+            for (let index = 0; index < scenario.priorCount; index += 1) {
+              await appendSessionTranscriptMessageByIdentity({
+                ...transcriptTarget(params),
+                message: {
+                  role: "user",
+                  content: `Earlier synthetic request ${index}.`,
+                  timestamp: index + 1,
+                },
+              });
+            }
+            fixture.setPhase("action");
+            params.runId = "run-settled-action";
+            if (hidden) {
+              params.agentId = "main";
+              params.prompt =
+                "Background task completed. Use exec_command exactly once to run " +
+                "`printf 'completed-once\\n' >> completed-actions.txt; cat completed-actions.txt`, " +
+                "then report the command output. Do not run any other command.";
+              const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+              params.userTurnTranscriptRecorder = createRecorder({
+                input: {
+                  text: params.prompt,
+                  display: false,
+                  provenance: {
+                    kind: "inter_session",
+                    sourceChannel: "internal",
+                    sourceTool: "agent_harness_task",
+                  },
+                  idempotencyKey: "announce:completed-action:user",
+                },
+                target: { ...transcriptTarget(params), sessionEntry: undefined },
+                beforeMessageWrite: ({ message }) => message,
+              });
+              await params.userTurnTranscriptRecorder.persistApproved();
+            }
+            const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+            cleanups.push(async () => closeHost());
+            const settledAttempt = await runCodexAppServerAttempt(params, runOptions);
+            expect(settledAttempt.terminal).toEqual({ kind: "ok" });
+            const context = settledAttempt.settledTurnFinalizationContext;
+            if (!(context instanceof settledContext.CodexSettledTurnContext)) {
+              throw new Error("Native turn lost its settled-tool evidence");
+            }
+            expect(Object.isFrozen(context)).toBe(true);
+            if (hidden) {
+              expect(context.data).toEqual(
+                expect.arrayContaining([
+                  expect.objectContaining({
+                    role: "user",
+                    content: expect.arrayContaining([
+                      expect.objectContaining({ text: expect.stringContaining(params.prompt) }),
+                    ]),
+                  }),
+                  expect.objectContaining({ type: "function_call" }),
+                  expect.objectContaining({ type: "function_call_output" }),
+                ]),
+              );
+              expect(params.userTurnTranscriptRecorder?.getPersistedMessage?.()).toMatchObject({
+                display: false,
+                __openclaw: { mirrorIdentity: expect.any(String) },
+              });
+            }
+            expect(() => params.hostCapabilities.assertActive()).not.toThrow();
+            closeHost();
+            expect(() => params.hostCapabilities.assertActive()).toThrow();
+            const sourceKey = scenario.homeScope === "user" ? NATIVE_KEY : HOST_KEY;
+            expect(fixture.requests.length).toBeGreaterThan(0);
+            for (const { body, account } of fixture.requests) {
+              expect({ model: body.model, account }).toEqual({
+                model: NATIVE_MODEL,
+                account: `Bearer ${sourceKey}`,
+              });
+            }
+            if (!live) {
+              expect(fixture.requests).toHaveLength(2);
+            }
+            expect(await fs.readFile(fixture.marker, "utf8")).toBe("completed-once\n");
+            const bindingBefore = structuredClone(
+              await readCodexAppServerBinding(params.sessionFile),
+            );
+            const transcriptBefore = await readVisibleSessionTranscriptMessageEntries(
+              transcriptTarget(params),
+            );
+            if (hidden) {
+              expect(
+                transcriptBefore.filter(
+                  (entry) =>
+                    entry.message.role === "user" && entry.message.content === params.prompt,
+                ),
+              ).toEqual([
+                expect.objectContaining({
+                  message: expect.objectContaining({
+                    display: false,
+                    idempotencyKey: "announce:completed-action:user",
+                    __openclaw: expect.objectContaining({
+                      mirrorIdentity: expect.any(String),
+                      runId: params.runId,
+                    }),
+                  }),
+                }),
+              ]);
+            }
+            const sourceClient = shared.client();
+            const sourceRequests = vi.spyOn(sourceClient, "request");
+            const realCreateClient = sharedClients.createIsolatedCodexAppServerClient;
+            let summaryClient: CodexAppServerClient | undefined;
+            let summaryRequests: MockInstance<CodexAppServerClient["request"]> | undefined;
+            const createClient = vi
+              .spyOn(sharedClients, "createIsolatedCodexAppServerClient")
+              .mockImplementation(async (options) =>
+                realCreateClient({
+                  ...options,
+                  onStartedClient(client) {
+                    summaryClient = client;
+                    summaryRequests = vi.spyOn(client, "request");
+                    cleanups.push(() => closeNativeClient(client));
+                    options?.onStartedClient?.(client);
+                  },
+                }),
+              );
+            fixture.setPhase("summary");
+            const { hostCapabilities: _hostCapabilities, ...attempt } = params;
+            const finalization = await runCodexSettledTurnFinalization(
+              {
+                attempt: {
+                  ...attempt,
+                  prompt: live
+                    ? "Report the completed command's output. Do not repeat the action."
+                    : "Summarize the completed action.",
+                },
+                settledAttempt,
+              },
+              { pluginConfig },
+            );
+            expect(createClient).toHaveBeenCalledOnce();
+            expect(summaryClient).not.toBe(sourceClient);
+            expect(summaryClient?.getRuntimeIdentity()?.serverVersion).toBe(
+              CODEX_APP_SERVER_VERSION,
+            );
+            expect(sourceRequests).not.toHaveBeenCalled();
+            expect(sourceClient.getCloseError()).toBeUndefined();
+            expect(
+              fixture.requests.map(({ body, account }) => ({ model: body.model, account })),
+            ).toEqual([{ model: NATIVE_MODEL, account: `Bearer ${HOST_KEY}` }]);
+            expect(fixture.requests[0]?.body.input).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({
+                  role: "developer",
+                  content: expect.arrayContaining([
+                    expect.objectContaining({
+                      type: "input_text",
+                      text: expect.stringContaining(
+                        "Earlier conversation may be omitted; do not infer missing earlier facts.",
+                      ),
+                    }),
+                  ]),
+                }),
+              ]),
+            );
+            expect(
+              summaryRequests?.mock.calls
+                .filter(([method]) => method === "account/login/start")
+                .map(([, request]) => request),
+            ).toEqual([{ type: "apiKey", apiKey: HOST_KEY }]);
+            const startCall = summaryRequests?.mock.calls.find(
+              ([method]) => method === "thread/start",
+            );
+            expect(startCall?.[1]).toMatchObject({
+              model: NATIVE_MODEL,
+              ephemeral: true,
+              environments: [],
+              dynamicTools: [],
             });
-            params.modelId = HOST_MODEL;
-            params.model = { ...params.model, id: HOST_MODEL };
-          }
-          for (let index = 0; index < scenario.priorCount; index += 1) {
-            await appendSessionTranscriptMessageByIdentity({
-              ...transcriptTarget(params),
-              message: {
-                role: "user",
-                content: `Earlier synthetic request ${index}.`,
-                timestamp: index + 1,
+            expect(
+              summaryRequests?.mock.calls.filter(([method]) => method === "thread/inject_items"),
+            ).toHaveLength(1);
+            const turns = summaryRequests?.mock.calls.filter(([method]) => method === "turn/start");
+            expect(turns).toHaveLength(1);
+            expect(finalization).toMatchObject({
+              assistantTranscriptOwned: true,
+              assistant: {
+                provider: "openai",
+                model: NATIVE_MODEL,
+                api: "openai-responses",
+                content: [
+                  {
+                    type: "text",
+                    text: live ? expect.stringContaining("completed-once") : SUMMARY,
+                  },
+                ],
               },
             });
-          }
-          fixture.setPhase("action");
-          params.runId = "run-settled-action";
-          const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
-          cleanups.push(async () => closeHost());
-          const settledAttempt = await runCodexAppServerAttempt(params, runOptions);
-          expect(settledAttempt.terminal).toEqual({ kind: "ok" });
-          const context = settledAttempt.settledTurnFinalizationContext;
-          expect(context).toBeInstanceOf(settledContext.CodexSettledTurnContext);
-          expect(Object.isFrozen(context)).toBe(true);
-          expect(() => params.hostCapabilities.assertActive()).not.toThrow();
-          closeHost();
-          expect(() => params.hostCapabilities.assertActive()).toThrow();
-          const sourceKey = scenario.homeScope === "user" ? NATIVE_KEY : HOST_KEY;
-          expect(
-            fixture.requests.map(({ body, account }) => ({ model: body.model, account })),
-          ).toEqual([
-            { model: NATIVE_MODEL, account: `Bearer ${sourceKey}` },
-            { model: NATIVE_MODEL, account: `Bearer ${sourceKey}` },
-          ]);
-          expect(await fs.readFile(fixture.marker, "utf8")).toBe("completed-once\n");
-          const bindingBefore = structuredClone(
-            await readCodexAppServerBinding(params.sessionFile),
-          );
-          const transcriptBefore = await readVisibleSessionTranscriptMessageEntries(
-            transcriptTarget(params),
-          );
-          const sourceClient = shared.client();
-          const sourceRequests = vi.spyOn(sourceClient, "request");
-          const realCreateClient = sharedClients.createIsolatedCodexAppServerClient;
-          let summaryClient: CodexAppServerClient | undefined;
-          let summaryRequests: MockInstance<CodexAppServerClient["request"]> | undefined;
-          const createClient = vi
-            .spyOn(sharedClients, "createIsolatedCodexAppServerClient")
-            .mockImplementation(async (options) =>
-              realCreateClient({
-                ...options,
-                onStartedClient(client) {
-                  summaryClient = client;
-                  summaryRequests = vi.spyOn(client, "request");
-                  cleanups.push(() => closeNativeClient(client));
-                  options?.onStartedClient?.(client);
-                },
-              }),
+            const transcript = await readVisibleSessionTranscriptMessageEntries(
+              transcriptTarget(params),
             );
-          fixture.setPhase("summary");
-          const { hostCapabilities: _hostCapabilities, ...attempt } = params;
-          const finalization = await runCodexSettledTurnFinalization(
-            { attempt: { ...attempt, prompt: "Summarize the completed action." }, settledAttempt },
-            { pluginConfig },
-          );
-          expect(createClient).toHaveBeenCalledOnce();
-          expect(summaryClient).not.toBe(sourceClient);
-          expect(summaryClient?.getRuntimeIdentity()?.serverVersion).toBe(CODEX_APP_SERVER_VERSION);
-          expect(sourceRequests).not.toHaveBeenCalled();
-          expect(sourceClient.getCloseError()).toBeUndefined();
-          expect(
-            fixture.requests.map(({ body, account }) => ({ model: body.model, account })),
-          ).toEqual([{ model: NATIVE_MODEL, account: `Bearer ${HOST_KEY}` }]);
-          expect(fixture.requests[0]?.body.input).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                role: "developer",
-                content: expect.arrayContaining([
-                  expect.objectContaining({
-                    type: "input_text",
-                    text: expect.stringContaining(
-                      "Earlier conversation may be omitted; do not infer missing earlier facts.",
-                    ),
-                  }),
-                ]),
-              }),
-            ]),
-          );
-          expect(
-            summaryRequests?.mock.calls
-              .filter(([method]) => method === "account/login/start")
-              .map(([, request]) => request),
-          ).toEqual([{ type: "apiKey", apiKey: HOST_KEY }]);
-          const startCall = summaryRequests?.mock.calls.find(
-            ([method]) => method === "thread/start",
-          );
-          expect(startCall?.[1]).toMatchObject({
-            model: NATIVE_MODEL,
-            ephemeral: true,
-            environments: [],
-            dynamicTools: [],
-          });
-          expect(
-            summaryRequests?.mock.calls.filter(([method]) => method === "thread/inject_items"),
-          ).toHaveLength(1);
-          const turns = summaryRequests?.mock.calls.filter(([method]) => method === "turn/start");
-          expect(turns).toHaveLength(1);
-          expect(finalization).toMatchObject({
-            assistantTranscriptOwned: true,
-            assistant: {
-              provider: "openai",
-              model: NATIVE_MODEL,
-              api: "openai-responses",
-              content: [{ type: "text", text: SUMMARY }],
-            },
-          });
-          const transcript = await readVisibleSessionTranscriptMessageEntries(
-            transcriptTarget(params),
-          );
-          expect(transcript.slice(0, transcriptBefore.length)).toEqual(transcriptBefore);
-          expect(transcript.slice(transcriptBefore.length).map((entry) => entry.message)).toEqual([
-            finalization.assistant,
-          ]);
-          expect(await readCodexAppServerBinding(params.sessionFile)).toEqual(bindingBefore);
-          expect(await fs.readFile(fixture.marker, "utf8")).toBe("completed-once\n");
-          if (nativeAuthBefore !== undefined) {
-            expect(await fs.readFile(path.join(sourceHome, "auth.json"), "utf8")).toBe(
-              nativeAuthBefore,
+            expect(transcript.slice(0, transcriptBefore.length)).toEqual(transcriptBefore);
+            expect(transcript.slice(transcriptBefore.length).map((entry) => entry.message)).toEqual(
+              [finalization.assistant],
             );
-          }
-        });
+            expect(await readCodexAppServerBinding(params.sessionFile)).toEqual(bindingBefore);
+            expect(await fs.readFile(fixture.marker, "utf8")).toBe("completed-once\n");
+            if (live) {
+              expect(fixture.injectedEmptyTerminals()).toBe(1);
+              expect(new Set(fixture.livePhases)).toEqual(new Set(["probe", "action", "summary"]));
+              for (const { body } of fixture.requests) {
+                expect(body.tools ?? []).toEqual([]);
+              }
+            }
+            if (nativeAuthBefore !== undefined) {
+              expect(await fs.readFile(path.join(sourceHome, "auth.json"), "utf8")).toBe(
+                nativeAuthBefore,
+              );
+            }
+          },
+          live,
+        );
       },
     );
   },

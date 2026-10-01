@@ -58,6 +58,7 @@ export function addSessionSuggestion(
         expectedSessionId: params.expectedSessionId,
       }),
     options,
+    { operationLabel: "session.suggestion.add" },
   );
   return suggestion;
 }
@@ -81,6 +82,7 @@ export function claimSessionSuggestionDispatch(
   return runOpenClawAgentWriteTransaction(
     (database) => claimSessionSuggestionDispatchInDatabase(database, sessionKey, params),
     options,
+    { operationLabel: "session.suggestion.claim" },
   );
 }
 
@@ -93,6 +95,7 @@ export function releaseSessionSuggestionDispatch(
   return runOpenClawAgentWriteTransaction(
     (database) => releaseSessionSuggestionDispatchInDatabase(database, sessionKey, params),
     options,
+    { operationLabel: "session.suggestion.release" },
   );
 }
 
@@ -105,5 +108,6 @@ export function finalizeSessionSuggestionClaim(
   return runOpenClawAgentWriteTransaction(
     (database) => finalizeSessionSuggestionClaimInDatabase(database, sessionKey, params),
     options,
+    { operationLabel: "session.suggestion.finalize" },
   );
 }

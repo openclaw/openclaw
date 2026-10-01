@@ -8,6 +8,7 @@ import {
   isLikelyContextOverflowError,
 } from "../../agents/embedded-agent-helpers.js";
 import { findCliTimeoutError, isFailoverError } from "../../agents/failover-error.js";
+import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
@@ -32,7 +33,6 @@ import {
   markAgentRunFailureReplyPayload,
   resolveAgentRunFailureText,
   resolveReplyFailureSummary,
-  resolveReplyFailoverFacts,
 } from "./agent-runner-failure-reply.js";
 import type { AgentFallbackCycleState } from "./agent-runner-fallback-cycle.js";
 import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
@@ -177,9 +177,10 @@ export async function handleAgentExecutionError(params: {
         isHeartbeat: turn.isHeartbeat,
       },
     );
-    const text = params.shouldSurfaceToControlUi
-      ? renderControlUiAgentFailureCopy(message)
-      : externalReply.text;
+    const text =
+      params.shouldSurfaceToControlUi && err.userMessage === undefined
+        ? renderControlUiAgentFailureCopy(message)
+        : externalReply.text;
     return await settleFailure({ text }, externalReply.isGenericRunnerFailure);
   }
   const failoverFacts = resolveReplyFailoverFacts(err, message);
@@ -231,8 +232,6 @@ export async function handleAgentExecutionError(params: {
       kind: "final",
       payload: markAgentRunFailureReplyPayload({
         text: buildContextOverflowRecoveryText({
-          duringCompaction: true,
-          preserveSessionMapping: true,
           cfg: params.runtimeConfig,
           agentId: turn.followupRun.run.agentId,
           primaryProvider: turn.followupRun.run.provider,

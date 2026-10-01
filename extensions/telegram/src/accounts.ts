@@ -80,11 +80,6 @@ export function listTelegramAccountIds(cfg: OpenClawConfig): string[] {
 
 let emittedMissingDefaultWarn = false;
 
-/** @internal Reset the once-per-process warning flag. Exported for tests only. */
-export function resetMissingDefaultWarnFlag(): void {
-  emittedMissingDefaultWarn = false;
-}
-
 export function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
   const selection = resolveDefaultTelegramAccountSelection(cfg);
   if (selection.shouldWarnMissingDefault && !emittedMissingDefaultWarn) {

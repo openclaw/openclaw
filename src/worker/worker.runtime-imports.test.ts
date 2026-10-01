@@ -4,15 +4,22 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { workerImportRuntimeEntrypoints } from "./worker-import-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
+const runtimeUrl = resolveRuntimeWorkerUrl(workerImportRuntimeEntrypoints.runtime);
 
 describe("worker runtime imports during admission", () => {
   it.each([
-    ["rejected", "preserves rejected hello and joins both imports after one rejects"],
-    ["cancelled", "preserves cancellation and joins both imports after one rejects"],
-    ["import-error", "surfaces import failure after accepted hello and joins the pending import"],
+    [
+      "rejected",
+      "preserves rejected hello and joins imports and workspace reads after one rejects",
+    ],
+    ["cancelled", "preserves cancellation and joins imports and workspace reads after one rejects"],
+    ["import-error", "surfaces import failure after accepted hello and joins pending preparation"],
     ["accepted", "waits for accepted hello before constructing the stream or running the turn"],
   ])("%s: %s", async (mode) => {
     const root = tempDirs.make("worker-runtime-imports-");
@@ -21,11 +28,14 @@ describe("worker runtime imports during admission", () => {
     const result = await runNodeScript(
       [
         "--unhandled-rejections=strict",
-        "--import",
-        path.join(repoRoot, "scripts/tsx.mjs"),
+        ...resolveRuntimeWorkerArgv(runtimeUrl, resolveTestNodeExecPath()).slice(0, -1),
         fileURLToPath(new URL("./worker.runtime-imports.test-support.mjs", import.meta.url)),
         mode,
         workspace,
+        runtimeUrl.href,
+        resolveRuntimeWorkerUrl(workerImportRuntimeEntrypoints.launchDescriptor).href,
+        resolveRuntimeWorkerUrl(workerImportRuntimeEntrypoints.admission).href,
+        resolveRuntimeWorkerUrl(workerImportRuntimeEntrypoints.websocketData).href,
       ],
       {
         PATH: process.env.PATH,

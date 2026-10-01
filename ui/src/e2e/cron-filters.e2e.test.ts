@@ -2,11 +2,13 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
+import type { CronJob } from "../api/types.ts";
 import {
   installMockGateway,
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { openPicker } from "../test-helpers/select-picker-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -20,7 +22,12 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-function cronJob(id: string, name: string, schedule: Record<string, unknown>, state = {}) {
+function cronJob(
+  id: string,
+  name: string,
+  schedule: CronJob["schedule"],
+  state: CronJob["state"] = {},
+): CronJob {
   return {
     id,
     configRevision: `config-revision-${id}`,
@@ -36,7 +43,7 @@ function cronJob(id: string, name: string, schedule: Record<string, unknown>, st
   };
 }
 
-function cronListResponse(jobs: unknown[], total = jobs.length) {
+function cronListResponse(jobs: CronJob[], total = jobs.length) {
   return {
     jobs,
     snapshotRevision: "cron-filters-fixture",
@@ -200,18 +207,16 @@ suite.define(() => {
       page.on("console", (msg) => consoleMessages.push(`${msg.type()}: ${msg.text()}`));
       const gateway = await installMockGateway(page, {
         methodResponses: {
-          "cron.list": {
-            cases: [
-              {
-                match: { scheduleKind: "cron", lastRunStatus: "unknown" },
-                response: cronListResponse([cronUnknown]),
-              },
-              {
-                match: {},
-                response: cronListResponse([everyOk, cronUnknown], 2),
-              },
-            ],
-          },
+          "cron.list": cronListResponseFixture([
+            {
+              match: { scheduleKind: "cron", lastRunStatus: "unknown" },
+              response: cronListResponse([cronUnknown]),
+            },
+            {
+              match: {},
+              response: cronListResponse([everyOk, cronUnknown], 2),
+            },
+          ]),
           "cron.runs": {
             entries: [],
             total: 0,
@@ -273,13 +278,17 @@ suite.define(() => {
   });
 
   it("creates a cron-scheduled task and renders the refreshed row", async () => {
-    const schedule = { kind: "cron", expr: "0 9 * * 1-5", tz: "UTC" };
+    const schedule = {
+      kind: "cron",
+      expr: "0 9 * * 1-5",
+      tz: "UTC",
+    } satisfies CronJob["schedule"];
     const createdJob = {
       ...cronJob("weekday-report", "Weekday report", schedule),
       sessionTarget: "isolated",
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "Prepare the weekday report" },
-    };
+    } satisfies CronJob;
     await suite.withPage(
       {
         locale: "en-US",
@@ -303,7 +312,10 @@ suite.define(() => {
         await page.locator('[data-test-id="cron-schedule-kind-cron"]').click();
         await page.locator("#cron-cron-expr").fill(schedule.expr);
         await page.locator("#cron-cron-tz").fill(schedule.tz);
-        await gateway.setMethodResponse("cron.list", cronListResponse([createdJob]));
+        await gateway.setMethodResponse(
+          "cron.list",
+          cronListResponseFixture(cronListResponse([createdJob])),
+        );
         await page.locator('[data-test-id="cron-submit"]').click();
 
         const addRequest = await gateway.waitForRequest("cron.add");
@@ -337,7 +349,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           operatorScopes: ["operator.read"],
           methodResponses: {
-            "cron.list": cronListResponse([readOnlyJob]),
+            "cron.list": cronListResponseFixture(cronListResponse([readOnlyJob])),
             "cron.runs": cronRunsResponse([
               {
                 ts: 1,
@@ -694,7 +706,7 @@ suite.define(() => {
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
-            "cron.list": cronListResponse([selectedJob]),
+            "cron.list": cronListResponseFixture(cronListResponse([selectedJob])),
             "cron.runs": {
               cases: [
                 {
@@ -771,12 +783,12 @@ suite.define(() => {
       sessionTarget: "isolated",
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "Use the configured model", model: configuredModel },
-    };
+    } satisfies CronJob;
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "cron.add": { id: "quick-created-model-job" },
-          "cron.list": cronListResponse([existingJob]),
+          "cron.list": cronListResponseFixture(cronListResponse([existingJob])),
           "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
           "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
         },
@@ -835,7 +847,7 @@ suite.define(() => {
         message: "Continue until the existing task finishes",
         timeoutSeconds: 0,
       },
-    };
+    } satisfies CronJob;
     await suite.withPage(
       {
         locale: "en-US",
@@ -847,7 +859,7 @@ suite.define(() => {
           methodResponses: {
             "cron.add": { id: "created-no-timeout" },
             "cron.update": { id: existingJob.id },
-            "cron.list": cronListResponse([existingJob]),
+            "cron.list": cronListResponseFixture(cronListResponse([existingJob])),
             "cron.runs": cronRunsResponse([]),
             "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
           },
@@ -910,7 +922,7 @@ suite.define(() => {
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
-            "cron.list": cronListResponse([existingJob]),
+            "cron.list": cronListResponseFixture(cronListResponse([existingJob])),
             "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
             "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
             "cron.update": { id: existingJob.id },
@@ -969,7 +981,7 @@ suite.define(() => {
         page.on("pageerror", (error) => pageErrors.push(String(error)));
         const gateway = await installMockGateway(page, {
           methodResponses: {
-            "cron.list": cronListResponse([existingJob]),
+            "cron.list": cronListResponseFixture(cronListResponse([existingJob])),
             "cron.run": { ok: true, ran: false, reason: "already-running" },
             "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
             "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },

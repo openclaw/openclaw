@@ -1,4 +1,3 @@
-// Support log redaction helpers scrub sensitive fields from diagnostic log payloads.
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -7,7 +6,6 @@ import {
   type SupportRedactionContext,
 } from "./diagnostic-support-redaction.js";
 
-// Sanitizes JSON log records before they enter support bundles.
 const LOG_STRING_FIELD_RE =
   /^(?:action|channel|code|component|endpoint|event|handshake|kind|level|localAddr|logger|method|model|module|msg|name|outcome|phase|pluginId|provider|reason|remoteAddr|requestId|runId|service|source|status|subsystem|surface|target|time|traceId|type)$/iu;
 const LOG_SCALAR_FIELD_RE =
@@ -17,21 +15,12 @@ const OMITTED_LOG_FIELD_RE =
 const UNSAFE_LOG_MESSAGE_RE =
   /(?:\blastAssistant\s*=|\b(?:ai response|assistant said|chat text|message contents|prompt|raw webhook body|tool output|tool result|transcript|user said|webhook body)\b|auto-responding\b.*:\s*["']|partial for\b.*:)/iu;
 const MAX_LOG_STRING_LENGTH = 240;
-const LOGTAPE_META_FIELD = "_meta";
 const LOGTAPE_ARG_FIELD_RE = /^\d+$/u;
 
 const LOGTAPE_META_STRING_FIELDS = new Map([
   ["logLevelName", "level"],
   ["name", "logger"],
 ]);
-
-function byteLength(content: string): number {
-  return Buffer.byteLength(content, "utf8");
-}
-
-function createLogRecord(): Record<string, unknown> {
-  return Object.create(null) as Record<string, unknown>;
-}
 
 /** Parses and sanitizes one log line into safe support-bundle metadata. */
 export function sanitizeSupportLogRecord(
@@ -44,7 +33,7 @@ export function sanitizeSupportLogRecord(
   } catch {
     return {
       omitted: "unparsed",
-      bytes: byteLength(line),
+      bytes: Buffer.byteLength(line, "utf8"),
     };
   }
 
@@ -52,12 +41,12 @@ export function sanitizeSupportLogRecord(
   if (!source) {
     return {
       omitted: "non-object",
-      bytes: byteLength(line),
+      bytes: Buffer.byteLength(line, "utf8"),
     };
   }
 
-  const sanitized = createLogRecord();
-  addNamedLogFields(sanitized, source, redaction);
+  const sanitized: Record<string, unknown> = Object.create(null);
+  addLogObjectFields(sanitized, source, redaction);
   addLogTapeMetaFields(sanitized, source, redaction);
   addLogTapeArgFields(sanitized, source, redaction);
 
@@ -65,21 +54,8 @@ export function sanitizeSupportLogRecord(
     ? sanitized
     : {
         omitted: "no-safe-fields",
-        bytes: byteLength(line),
+        bytes: Buffer.byteLength(line, "utf8"),
       };
-}
-
-function addNamedLogFields(
-  sanitized: Record<string, unknown>,
-  source: Record<string, unknown>,
-  redaction: SupportRedactionContext,
-): void {
-  for (const [key, value] of Object.entries(source)) {
-    if (key === LOGTAPE_META_FIELD || LOGTAPE_ARG_FIELD_RE.test(key)) {
-      continue;
-    }
-    addSafeLogField(sanitized, key, value, redaction);
-  }
 }
 
 function addLogTapeMetaFields(
@@ -87,7 +63,7 @@ function addLogTapeMetaFields(
   source: Record<string, unknown>,
   redaction: SupportRedactionContext,
 ): void {
-  const meta = asOptionalRecord(source[LOGTAPE_META_FIELD]);
+  const meta = asOptionalRecord(source._meta);
   if (!meta) {
     return;
   }
@@ -148,7 +124,7 @@ function addLogTapeMessageField(
 function addOmittedLogMessageMetadata(sanitized: Record<string, unknown>, value: string): void {
   sanitized.omitted = "log-message";
   sanitized.omittedLogMessageBytes =
-    numericLogMetadata(sanitized.omittedLogMessageBytes) + byteLength(value);
+    numericLogMetadata(sanitized.omittedLogMessageBytes) + Buffer.byteLength(value, "utf8");
   sanitized.omittedLogMessageCount = numericLogMetadata(sanitized.omittedLogMessageCount) + 1;
 }
 
@@ -170,34 +146,25 @@ function addLogObjectFields(
   redaction: SupportRedactionContext,
 ): void {
   for (const [key, value] of Object.entries(source)) {
-    addSafeLogField(sanitized, key, value, redaction);
-  }
-}
-
-function addSafeLogField(
-  sanitized: Record<string, unknown>,
-  key: string,
-  value: unknown,
-  redaction: SupportRedactionContext,
-): void {
-  if (OMITTED_LOG_FIELD_RE.test(key)) {
-    return;
-  }
-  if (isBlockedObjectKey(key)) {
-    return;
-  }
-  if (!isSafeLogField(key, value)) {
-    return;
-  }
-  if (typeof value === "string") {
-    const message = sanitizeLogString(value, redaction);
-    if (key === "msg" && (!message || UNSAFE_LOG_MESSAGE_RE.test(message))) {
-      addOmittedLogMessageMetadata(sanitized, value);
-      return;
+    if (OMITTED_LOG_FIELD_RE.test(key) || isBlockedObjectKey(key)) {
+      continue;
     }
-    sanitized[key] = message;
-  } else if (typeof value === "number" || typeof value === "boolean" || value === null) {
-    sanitized[key] = value;
+    if (typeof value === "string") {
+      if (!LOG_STRING_FIELD_RE.test(key)) {
+        continue;
+      }
+      const message = sanitizeLogString(value, redaction);
+      if (key === "msg" && (!message || UNSAFE_LOG_MESSAGE_RE.test(message))) {
+        addOmittedLogMessageMetadata(sanitized, value);
+        continue;
+      }
+      sanitized[key] = message;
+    } else if (
+      (LOG_STRING_FIELD_RE.test(key) || LOG_SCALAR_FIELD_RE.test(key)) &&
+      (typeof value === "number" || typeof value === "boolean" || value === null)
+    ) {
+      sanitized[key] = value;
+    }
   }
 }
 
@@ -206,11 +173,4 @@ function sanitizeLogString(value: string, redaction: SupportRedactionContext): s
     maxLength: MAX_LOG_STRING_LENGTH,
     truncationSuffix: "",
   });
-}
-
-function isSafeLogField(key: string, value: unknown): boolean {
-  if (typeof value === "string") {
-    return LOG_STRING_FIELD_RE.test(key);
-  }
-  return LOG_STRING_FIELD_RE.test(key) || LOG_SCALAR_FIELD_RE.test(key);
 }

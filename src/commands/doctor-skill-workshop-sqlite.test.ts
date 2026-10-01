@@ -93,7 +93,7 @@ describe("doctor Skill Workshop SQLite migration", () => {
       `skill-workshop/proposals/${record.id}/${record.draftFile}`,
       skillContent,
     );
-    importLegacySkillProposal({
+    await importLegacySkillProposal({
       record,
       ownerAgentId: "main",
       store: { env: testState.env },

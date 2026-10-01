@@ -1,4 +1,5 @@
 import type { Result } from "@openclaw/normalization-core/result";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import {
   MAX_HUMAN_MENTIONS,
   type HumanMention,
@@ -11,16 +12,6 @@ function splitsSurrogate(text: string, offset: number): boolean {
   const before = text.charCodeAt(offset - 1);
   const after = text.charCodeAt(offset);
   return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff;
-}
-
-function hasAsciiControlCharacter(text: string): boolean {
-  for (const character of text) {
-    const code = character.charCodeAt(0);
-    if (code < 32 || code === 127) {
-      return true;
-    }
-  }
-  return false;
 }
 
 /** Normalize raw selected spans against the request boundary's sanitized message. */
@@ -50,7 +41,7 @@ export function normalizeChatHumanMentions(
       token.length > 257 ||
       token[0] !== "@" ||
       !token.slice(1).trim() ||
-      hasAsciiControlCharacter(token) ||
+      containsAsciiControlCharacter(token) ||
       splitsSurrogate(text, mention.start) ||
       splitsSurrogate(text, mention.end)
     ) {

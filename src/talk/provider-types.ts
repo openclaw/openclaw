@@ -1,7 +1,7 @@
-// Talk provider types describe realtime voice provider configuration and APIs.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { RealtimeVoiceAudioOutputPort } from "./audio-output-port.js";
 import type { TalkTransport } from "./talk-events.js";
 
 export type RealtimeVoiceProviderId = string;
@@ -189,7 +189,13 @@ export type RealtimeVoiceBridgeCallbacks = {
   onClearAudio: (reason?: RealtimeVoiceAudioClearReason) => void;
   /** Scoped acknowledgments are valid only for the provider connection that emitted the mark. */
   onMark?: (markName: string, acknowledge?: () => void) => void;
-  onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
+  /** Snapshot metadata replaces provisional text; omission retains incremental deltas. */
+  onTranscript?: (
+    role: RealtimeVoiceRole,
+    text: string,
+    isFinal: boolean,
+    metadata?: { textMode: "snapshot" },
+  ) => void;
   /** Synchronously admits native control; only consult permits task fallthrough. Respond is call-bound. */
   handleDelegationInput?: (
     text: string,
@@ -304,49 +310,40 @@ export type RealtimeVoiceBrowserAudioContract = {
   outputSampleRateHz: number;
 };
 
-type RealtimeVoiceBrowserWebRtcSdpSession = {
+type RealtimeVoiceBrowserSessionBase = {
   provider: RealtimeVoiceProviderId;
-  transport: "webrtc";
-  clientSecret: string;
-  offerUrl?: string;
-  offerHeaders?: Record<string, string>;
-  offerResponseMaxBytes?: number;
   model?: string;
   voice?: string;
   expiresAt?: number;
 };
 
-type RealtimeVoiceBrowserJsonPcmWebSocketSession = {
-  provider: RealtimeVoiceProviderId;
+type RealtimeVoiceBrowserWebRtcSdpSession = RealtimeVoiceBrowserSessionBase & {
+  transport: "webrtc";
+  clientSecret: string;
+  offerUrl?: string;
+  offerHeaders?: Record<string, string>;
+  offerResponseMaxBytes?: number;
+};
+
+type RealtimeVoiceBrowserJsonPcmWebSocketSession = RealtimeVoiceBrowserSessionBase & {
   transport: "provider-websocket";
   protocol: string;
   clientSecret: string;
   websocketUrl: string;
   audio: RealtimeVoiceBrowserAudioContract;
   initialMessage?: unknown;
-  model?: string;
-  voice?: string;
-  expiresAt?: number;
 };
 
-type RealtimeVoiceBrowserGatewayRelaySession = {
-  provider: RealtimeVoiceProviderId;
+type RealtimeVoiceBrowserGatewayRelaySession = RealtimeVoiceBrowserSessionBase & {
   transport: "gateway-relay";
   relaySessionId: string;
   audio: RealtimeVoiceBrowserAudioContract;
-  model?: string;
-  voice?: string;
-  expiresAt?: number;
 };
 
-type RealtimeVoiceBrowserManagedRoomSession = {
-  provider: RealtimeVoiceProviderId;
+type RealtimeVoiceBrowserManagedRoomSession = RealtimeVoiceBrowserSessionBase & {
   transport: "managed-room";
   roomUrl: string;
   token?: string;
-  model?: string;
-  voice?: string;
-  expiresAt?: number;
 };
 
 export type RealtimeVoiceBrowserSession =
@@ -356,6 +353,9 @@ export type RealtimeVoiceBrowserSession =
   | RealtimeVoiceBrowserManagedRoomSession;
 
 export type RealtimeVoiceBridge = {
+  /** Bind before connect: continuous PCM and interruption go to this call-bound worker sink,
+   * not onAudio/onClearAudio. Transcripts, delegation and lifecycle stay on the host. */
+  setAudioOutputPort?(output: RealtimeVoiceAudioOutputPort): void;
   /** Continuous audio has no response boundaries; the provider owns interruption. */
   outputAudioMode?: "response" | "continuous";
   /** Buffers input at its sample rate and supplies silence between microphone writes. */

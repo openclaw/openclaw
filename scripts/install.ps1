@@ -725,14 +725,31 @@ function Install-Node {
 
     # Try winget first (Windows 11 / Windows 10 with App Installer)
     if (Get-Command winget -ErrorAction SilentlyContinue) {
+        # Share the exit code across the callback scope; Check-Node can overwrite LASTEXITCODE.
+        $wingetAttempt = @{ ExitCode = $null }
         $installed = Invoke-NodePackageManagerInstall -Name "winget" -DiscoverProgramFilesNode -InstallCommand {
             winget install OpenJS.NodeJS.LTS --source winget --accept-package-agreements --accept-source-agreements | Out-Host
+            $wingetAttempt.ExitCode = $LASTEXITCODE
             if ($LASTEXITCODE -ne 0) {
                 throw "winget exited with code $LASTEXITCODE"
             }
         }
         if ($installed) {
             return $true
+        }
+        if ($wingetAttempt.ExitCode -eq -1978335189) { # 0x8A15002B
+            Write-Host "  Repairing the existing winget Node.js registration..." -ForegroundColor Gray
+            winget repair --id OpenJS.NodeJS.LTS --exact --source winget --accept-package-agreements --accept-source-agreements | Out-Host
+            $wingetRepairExitCode = $LASTEXITCODE
+            Refresh-ProcessPath
+            Add-InstalledNodeToProcessPath | Out-Null
+            $nodeReady = Check-Node
+            if ($wingetRepairExitCode -eq 0 -and $nodeReady) {
+                Write-Host "[OK] Node.js repaired via winget" -ForegroundColor Green
+                return $true
+            }
+            # Repair failed; an independently validated fallback may still install Node.js.
+            Write-Host "[!] winget could not repair a supported Node.js runtime" -ForegroundColor Yellow
         }
     }
 
@@ -2389,8 +2406,9 @@ function Main {
     }
 
     if (-not (Ensure-OpenClawOnPath)) {
-        Write-Host "Install completed, but OpenClaw is not on PATH yet." -ForegroundColor Yellow
+        Write-Host "OpenClaw was installed, but its command is not on PATH." -ForegroundColor Yellow
         Write-Host "Open a new terminal, then run: openclaw doctor" -ForegroundColor Cyan
+        Fail-Install
         return
     }
 

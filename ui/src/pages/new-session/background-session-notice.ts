@@ -1,3 +1,4 @@
+import type { AgentWaitResult } from "../../../../src/agents/run-wait.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -15,15 +16,7 @@ import {
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-
-type AgentWaitResult = {
-  status?: "error" | "ok" | "pending" | "timeout";
-  endedAt?: number;
-  error?: string;
-  pendingError?: boolean;
-  providerStarted?: boolean;
-  stopReason?: string;
-};
+import { captureSessionNoticeOwner } from "./session-notice-owner.ts";
 
 const RETRY_DELAY_MS = 1_000;
 
@@ -38,11 +31,12 @@ async function notifyWhenBackgroundSessionEnds(params: {
   context: ApplicationContext;
   key: string;
   runId: string;
+  isCurrentOwner: () => boolean;
 }): Promise<void> {
-  let result: AgentWaitResult | undefined;
+  let result: Partial<AgentWaitResult> | undefined;
   while (!result) {
     try {
-      const observed = await params.client.request<AgentWaitResult>(
+      const observed = await params.client.request<Partial<AgentWaitResult>>(
         "agent.wait",
         { runId: params.runId, timeoutMs: 30_000 },
         { timeoutMs: null },
@@ -83,14 +77,11 @@ async function notifyWhenBackgroundSessionEnds(params: {
     }
   }
 
+  if (!params.isCurrentOwner()) {
+    return;
+  }
   const gateway = params.context.gateway.snapshot;
-  if (
-    uiSessionEventMatches(
-      { ...gateway, sessionKey: gateway.sessionKey },
-      params.key,
-      params.agentId,
-    )
-  ) {
+  if (uiSessionEventMatches(gateway, params.key, params.agentId)) {
     return;
   }
   const row = params.context.sessions.state.result?.sessions.find((session) =>
@@ -120,6 +111,9 @@ async function notifyWhenBackgroundSessionEnds(params: {
     message: `${resolveSessionDisplayName(params.key, row)}: ${status}`,
     actionLabel: t("sessionsView.openSession"),
     onAction: () => {
+      if (!params.isCurrentOwner()) {
+        return;
+      }
       selectApplicationSession({
         selection: params.context.agentSelection,
         gateway: params.context.gateway,
@@ -145,6 +139,7 @@ export function prepareBackgroundSessionCompletion(params: {
   client: GatewayBrowserClient;
   context: ApplicationContext;
 }): (key: string, runId?: string) => boolean {
+  const isCurrentOwner = captureSessionNoticeOwner(params.context);
   return (key, runId) => {
     const normalizedRunId = runId?.trim();
     if (!params.enabled) {
@@ -160,6 +155,7 @@ export function prepareBackgroundSessionCompletion(params: {
       context: params.context,
       key,
       runId: normalizedRunId,
+      isCurrentOwner,
     });
     return true;
   };

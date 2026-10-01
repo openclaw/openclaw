@@ -40,18 +40,16 @@ async function makeFixture() {
   const configPath = path.join(root, "copied-openclaw.json");
   fs.mkdirSync(homeDir, { recursive: true });
   fs.mkdirSync(stateDir, { recursive: true });
-  fs.symlinkSync(
-    path.resolve("extensions"),
-    path.join(root, "extensions"),
-    process.platform === "win32" ? "junction" : "dir",
-  );
+  // Profile workspace ownership has no plugin-owned migration inputs.
+  const bundledRoot = path.join(root, "extensions");
+  fs.mkdirSync(bundledRoot);
   fs.writeFileSync(configPath, "{}\n");
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     HOME: homeDir,
     OPENCLAW_HOME: homeDir,
     OPENCLAW_PROFILE: "work",
-    OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",

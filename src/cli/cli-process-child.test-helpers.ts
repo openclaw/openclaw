@@ -5,7 +5,7 @@ import { once } from "node:events";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { onTestFinished } from "vitest";
+import { onTestFinished, type TestContext } from "vitest";
 import {
   collectNodeDiagnosticReport,
   NODE_DIAGNOSTIC_REPORT_GRACE_MS as REPORT_GRACE_MS,
@@ -196,6 +196,8 @@ export async function runCliProcessChild(params: {
   input?: string;
   interact?: (child: ChildProcessWithoutNullStreams) => Promise<void> | void;
   onStdout?: (stdout: string) => void;
+  /** Concurrent callers bind diagnostic cleanup to their own test context. */
+  onTestFinished?: TestContext["onTestFinished"];
   timeoutMs?: number;
   maxBuffer?: number;
 }): Promise<CliProcessChildResult> {
@@ -205,7 +207,7 @@ export async function runCliProcessChild(params: {
   const reports = supportsDiagnostics ? createFixtureLifetime() : undefined;
   let unjoinedWork = false;
   if (reports) {
-    onTestFinished(async () => {
+    (params.onTestFinished ?? onTestFinished)(async () => {
       if (!unjoinedWork) {
         await reports.cleanup();
       }
@@ -223,7 +225,7 @@ export async function runCliProcessChild(params: {
                 "--require",
                 diagnosticPreload,
                 "--report-on-signal",
-                "--report-signal=SIGUSR2",
+                "--report-signal=SIGQUIT",
                 `--report-directory=${reportDir}`,
                 "--report-filename=diagnostic.json",
                 "--report-exclude-env",
@@ -340,12 +342,12 @@ export async function runCliProcessChild(params: {
           );
         };
         void processTree.then(() => {
-          // An unhandled SIGUSR2 would terminate Node before we could inspect it.
+          // An unhandled SIGQUIT would terminate Node before we could inspect it.
           if (reportDir && stderr.includes(`[cli-process-diagnostics] ready pid=${child.pid}\n`)) {
-            diagnosticRequest = "SIGUSR2 was not delivered";
+            diagnosticRequest = "SIGQUIT was not delivered";
             try {
-              if (child.kill("SIGUSR2")) {
-                diagnosticRequest = `SIGUSR2 requested; report grace<=${REPORT_GRACE_MS}ms`;
+              if (child.kill("SIGQUIT")) {
+                diagnosticRequest = `SIGQUIT requested; report grace<=${REPORT_GRACE_MS}ms`;
                 // Preserve the child's JS diagnostic and trailing pipe output grace.
                 void collectNodeDiagnosticReport(
                   path.join(reportDir, "diagnostic.json"),

@@ -1,4 +1,6 @@
+import type { UserProfile } from "../../../packages/gateway-protocol/src/index.ts";
 import { BUILTIN_THEMES } from "../../../packages/gateway-protocol/src/theme.js";
+import type { ControlUiMockPresenceUser } from "./control-ui-e2e-contract.ts";
 
 export const defaultControlUiFeatureMethods = [
   "chat.abort",
@@ -14,13 +16,13 @@ export const defaultControlUiFeatureMethods = [
   "session.members.list",
   "session.members.listEvidence",
   "session.members.remove",
+  "session.reactions.list",
+  "session.reactions.set",
   "session.visibility.set",
   "sessions.abort",
   "sessions.patchMany",
   "sessions.branches.switch",
   "sessions.compact",
-  "sessions.compaction.branch",
-  "sessions.compaction.restore",
   "sessions.create",
   "sessions.delete",
   "sessions.dispatch",
@@ -61,12 +63,33 @@ export const defaultControlUiFeatureMethods = [
   "worktrees.branches",
 ] as const;
 
-export function createControlUiThemeResponses() {
+export function createControlUiDefaultResponses(scenario: {
+  presenceUsers?: ControlUiMockPresenceUser[];
+}) {
+  const user = scenario.presenceUsers?.find((entry) => entry.self);
+  const profile: UserProfile | null = user
+    ? {
+        id: user.id,
+        displayName: user.name ?? null,
+        emails: user.email ? [user.email] : [],
+        avatarMime: null,
+        hasAvatar: Boolean(user.avatarUrl),
+        githubIdentity: null,
+        mergedInto: null,
+        createdAt: 1,
+        updatedAt: 1,
+      }
+    : null;
   const selection = {
     theme: BUILTIN_THEMES[0],
     current: { id: "claw", mode: "system", scope: "gateway", overrides: {} },
   };
   return {
+    "users.self": profile
+      ? { profile }
+      : {
+          __mockError: { code: "FORBIDDEN", message: "users.self requires an authenticated user" },
+        },
     "themes.list": { ...selection, themes: BUILTIN_THEMES },
     "themes.get": selection,
   };

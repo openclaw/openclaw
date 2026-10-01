@@ -76,6 +76,27 @@ const credentialHost: Parameters<typeof createBuzzQaTransportAdapter>[0]["creden
   startHeartbeat: startQaCredentialLeaseHeartbeat,
 };
 
+type AdapterContext = Parameters<typeof createBuzzQaTransportAdapter>[0];
+
+function createAdapter(
+  adapterOptions: AdapterContext["adapterOptions"],
+  messages: Partial<AdapterContext["messages"]> = {},
+) {
+  return createBuzzQaTransportAdapter({
+    adapterOptions,
+    channelId: "buzz",
+    credentials: credentialHost,
+    driver: "live",
+    messages: {
+      addInboundMessage: vi.fn(),
+      addOutboundMessage: vi.fn(),
+      editMessage: vi.fn(),
+      ...messages,
+    },
+    outputDir: ".artifacts/qa-e2e/buzz",
+  });
+}
+
 describe("Buzz QA transport adapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -88,20 +109,9 @@ describe("Buzz QA transport adapter", () => {
   });
 
   it("uses private file credentials by default", async () => {
-    await createBuzzQaTransportAdapter({
-      adapterOptions: {
-        credentialFile: "private/buzz-qa.json",
-        repoRoot: "/repo",
-      },
-      channelId: "buzz",
-      credentials: credentialHost,
-      driver: "live",
-      messages: {
-        addInboundMessage: vi.fn(),
-        addOutboundMessage: vi.fn(),
-        editMessage: vi.fn(),
-      },
-      outputDir: ".artifacts/qa-e2e/buzz",
+    await createAdapter({
+      credentialFile: "private/buzz-qa.json",
+      repoRoot: "/repo",
     });
 
     expect(readBuzzQaCredentialFile).toHaveBeenCalledWith({
@@ -114,18 +124,7 @@ describe("Buzz QA transport adapter", () => {
   });
 
   it("delegates the profile credential source to the shared manager", async () => {
-    const adapter = await createBuzzQaTransportAdapter({
-      adapterOptions: {},
-      channelId: "buzz",
-      credentials: credentialHost,
-      driver: "live",
-      messages: {
-        addInboundMessage: vi.fn(),
-        addOutboundMessage: vi.fn(),
-        editMessage: vi.fn(),
-      },
-      outputDir: ".artifacts/qa-e2e/buzz",
-    });
+    const adapter = await createAdapter({});
 
     try {
       expect(readBuzzQaCredentialFile).not.toHaveBeenCalled();
@@ -145,18 +144,10 @@ describe("Buzz QA transport adapter", () => {
       direction: "inbound" as const,
       timestamp: input.timestamp ?? 1_750_000_000_000,
     }));
-    const adapter = await createBuzzQaTransportAdapter({
-      adapterOptions: { credentialSource: "convex", sutAccountId: "sut" },
-      channelId: "buzz",
-      credentials: credentialHost,
-      driver: "live",
-      messages: {
-        addInboundMessage,
-        addOutboundMessage: vi.fn(),
-        editMessage: vi.fn(),
-      },
-      outputDir: ".artifacts/qa-e2e/buzz",
-    });
+    const adapter = await createAdapter(
+      { credentialSource: "convex", sutAccountId: "sut" },
+      { addInboundMessage },
+    );
 
     const message = await adapter.sendInbound({
       accountId: "sut",
@@ -216,18 +207,10 @@ describe("Buzz QA transport adapter", () => {
     sendMessage
       .mockResolvedValueOnce({ eventId: "native-root", timestamp: 1_750_000_000_000 })
       .mockResolvedValueOnce({ eventId: "native-follow-up", timestamp: 1_750_000_001_000 });
-    const adapter = await createBuzzQaTransportAdapter({
-      adapterOptions: { credentialSource: "convex", sutAccountId: "sut" },
-      channelId: "buzz",
-      credentials: credentialHost,
-      driver: "live",
-      messages: {
-        addInboundMessage,
-        addOutboundMessage,
-        editMessage: vi.fn(),
-      },
-      outputDir: ".artifacts/qa-e2e/buzz",
-    });
+    const adapter = await createAdapter(
+      { credentialSource: "convex", sutAccountId: "sut" },
+      { addInboundMessage, addOutboundMessage },
+    );
 
     const root = await adapter.sendInbound({
       accountId: "sut",
@@ -301,18 +284,10 @@ describe("Buzz QA transport adapter", () => {
       direction: "outbound" as const,
       conversation: { id: "main", kind: "group" as const },
     }));
-    const adapter = await createBuzzQaTransportAdapter({
-      adapterOptions: { credentialSource: "convex", sutAccountId: "sut" },
-      channelId: "buzz",
-      credentials: credentialHost,
-      driver: "live",
-      messages: {
-        addInboundMessage,
-        addOutboundMessage,
-        editMessage: vi.fn(),
-      },
-      outputDir: ".artifacts/qa-e2e/buzz",
-    });
+    const adapter = await createAdapter(
+      { credentialSource: "convex", sutAccountId: "sut" },
+      { addInboundMessage, addOutboundMessage },
+    );
 
     const inboundPromise = adapter.sendInbound({
       accountId: "sut",
@@ -347,18 +322,7 @@ describe("Buzz QA transport adapter", () => {
   });
 
   it("closes relay observation before stopping and releasing the credential lease", async () => {
-    const adapter = await createBuzzQaTransportAdapter({
-      adapterOptions: { credentialSource: "convex" },
-      channelId: "buzz",
-      credentials: credentialHost,
-      driver: "live",
-      messages: {
-        addInboundMessage: vi.fn(),
-        addOutboundMessage: vi.fn(),
-        editMessage: vi.fn(),
-      },
-      outputDir: ".artifacts/qa-e2e/buzz",
-    });
+    const adapter = await createAdapter({ credentialSource: "convex" });
 
     await adapter.cleanup?.();
     await adapter.cleanupAfterGatewayStop?.();

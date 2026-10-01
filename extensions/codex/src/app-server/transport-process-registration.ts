@@ -1,7 +1,10 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { z } from "zod";
 import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
 import {
@@ -32,6 +35,11 @@ const childIdentity = processIdentity.extend({
 const registrationSchema = z.object({ parent: processIdentity, child: childIdentity }).strict();
 type ProcessRegistration = z.infer<typeof registrationSchema>;
 const registrationCleanup = new WeakMap<object, Promise<void>>();
+// Source and dist copies must not stop or resume the same orphan concurrently.
+const processReaper = resolveGlobalSingleton(
+  Symbol.for("openclaw.codexAppServerProcessReaper"),
+  () => new KeyedAsyncQueue(),
+);
 
 /** Join bookkeeping after the transport owner has observed physical exit. */
 export async function waitForCodexAppServerProcessRegistrationCleanup(
@@ -45,6 +53,7 @@ function fingerprintProcessCommand(command: string): string {
 }
 
 async function openProcessRegistrationStore() {
+  const env = { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() };
   const { createPluginStateKeyedStore } =
     await import("openclaw/plugin-sdk/plugin-state-store-runtime");
   return createPluginStateKeyedStore<ProcessRegistration>("codex", {
@@ -52,11 +61,21 @@ async function openProcessRegistrationStore() {
     maxEntries: 512,
     // Expiration or eviction could forget a child that still owns a native turn.
     overflowPolicy: "reject-new",
+    env,
   });
 }
 
-async function reapRegisteredCodexAppServerOrphans(): Promise<void> {
+async function reapRegisteredCodexAppServerOrphans() {
   const store = await openProcessRegistrationStore();
+  // Reread each caller's store after prior cleanup settles; never cache success
+  // across registration changes or let a failed boot sweep poison a new turn.
+  await processReaper.enqueue("orphans", () => sweepRegisteredCodexAppServerOrphans(store));
+  return store;
+}
+
+async function sweepRegisteredCodexAppServerOrphans(
+  store: Awaited<ReturnType<typeof openProcessRegistrationStore>>,
+): Promise<void> {
   // Loading durable registrations can include cold database-worker startup.
   const entries = await store.entries();
   const deadline = Date.now() + PROCESS_REGISTRATION_INSPECTION_MS;
@@ -147,8 +166,7 @@ export async function prepareCodexAppServerProcessRegistration(): Promise<
       await once(child, "spawn");
     };
   }
-  await reapRegisteredCodexAppServerOrphans();
-  const store = await openProcessRegistrationStore();
+  const store = await reapRegisteredCodexAppServerOrphans();
   return async (child) => {
     await once(child, "spawn");
     if (!child.pid) {

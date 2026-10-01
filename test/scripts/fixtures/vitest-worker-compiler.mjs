@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { performance as processPerformance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
+import { isMainThread } from "node:worker_threads";
 import { hashVitestWorkerArtifact } from "../../../scripts/lib/vitest-worker-artifacts.mts";
 
 // Lifecycle fixtures publish real immutable files without compiling unrelated runtime code.
@@ -57,6 +59,9 @@ export async function runWorkerFixtureCompiler(directory, input, receipt) {
     receipt,
     JSON.stringify({
       pid: process.pid,
+      // A compiler call must not mint a new identity within a reused process.
+      processStartTime: processPerformance.timeOrigin,
+      isMainThread,
       directory,
       inputs: Object.keys(manifest.inputs).length,
       outputs: Object.keys(manifest.outputs).length,

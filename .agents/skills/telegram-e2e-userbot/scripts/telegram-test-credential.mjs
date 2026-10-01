@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { acquireQaLease } from "./qa-credential-lease.mjs";
+import { createTelegramRuntimeEnvironment } from "./telegram-runtime.mjs";
 
 const TELEGRAM_TEST_CREDENTIAL_KIND = "telegram-test-userbot";
 
@@ -50,7 +51,7 @@ export function parseTelegramTestCredential(value) {
   }
   const tdlibArchiveBase64 = requireString(payload, "tdlibArchiveBase64");
   decodeBase64(tdlibArchiveBase64);
-  return {
+  const credential = {
     schemaVersion: 1,
     environment: "test",
     groupId: requireIntegerString(payload, "groupId", /^-?\d+$/u),
@@ -62,6 +63,49 @@ export function parseTelegramTestCredential(value) {
     tdlibArchiveSha256,
     tdlibVersion: requireString(payload, "tdlibVersion"),
   };
+  if (payload.forumGroupId !== undefined) {
+    credential.forumGroupId = requireIntegerString(payload, "forumGroupId", /^-\d+$/u);
+  }
+  if (payload.forumTopicId !== undefined) {
+    if (!Number.isSafeInteger(payload.forumTopicId) || payload.forumTopicId <= 0) {
+      throw new Error("Telegram QA forumTopicId must be a positive integer.");
+    }
+    credential.forumTopicId = payload.forumTopicId;
+  }
+  if (payload.participants !== undefined) {
+    if (!Array.isArray(payload.participants)) {
+      throw new Error("Telegram QA participants must be an array.");
+    }
+    const identities = new Set([credential.testerUserId]);
+    const aliases = new Set(["primary"]);
+    credential.participants = payload.participants.map((value) => {
+      const participant = requireObject(value, "Telegram QA participant");
+      const alias = requireString(participant, "alias");
+      if (!/^[a-z][a-z0-9-]*$/u.test(alias) || aliases.has(alias)) {
+        throw new Error("Telegram QA participants require distinct lowercase aliases.");
+      }
+      const parsed = parseTelegramTestCredential({
+        ...credential,
+        testerUserId: participant.testerUserId,
+        tdlibArchiveBase64: participant.tdlibArchiveBase64,
+        tdlibArchiveSha256: participant.tdlibArchiveSha256,
+        tdlibVersion: participant.tdlibVersion,
+      });
+      if (identities.has(parsed.testerUserId)) {
+        throw new Error("Telegram QA mixed participants require distinct leased user identities.");
+      }
+      aliases.add(alias);
+      identities.add(parsed.testerUserId);
+      return {
+        alias,
+        testerUserId: parsed.testerUserId,
+        tdlibArchiveBase64: parsed.tdlibArchiveBase64,
+        tdlibArchiveSha256: parsed.tdlibArchiveSha256,
+        tdlibVersion: parsed.tdlibVersion,
+      };
+    });
+  }
+  return credential;
 }
 
 function normalizeArchiveEntry(entry) {
@@ -148,6 +192,7 @@ export function restoreTelegramTestCredential(payloadValue, stateRoot) {
     credentialsPath,
     userDriverDir,
     driverEnv: {
+      ...createTelegramRuntimeEnvironment(root),
       TELEGRAM_E2E_STATE_DIR: root,
       TELEGRAM_USER_DRIVER_STATE_DIR: userDriverDir,
       TELEGRAM_USER_DRIVER_SUT_ID: payload.sutBotId,

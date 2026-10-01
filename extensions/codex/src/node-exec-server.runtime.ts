@@ -194,10 +194,7 @@ export async function runCodexNodeExecServer(params: {
     }
   };
   let close = releaseResources;
-  let rejectDisconnected!: (error: Error) => void;
-  const disconnected = new Promise<never>((_resolve, reject) => {
-    rejectDisconnected = reject;
-  });
+  const { promise: disconnected, reject: rejectDisconnected } = createDeferred<never>();
   void disconnected.catch(() => {});
   const onAbort = () => {
     const error = nodeExecServerAbortError(io.signal);

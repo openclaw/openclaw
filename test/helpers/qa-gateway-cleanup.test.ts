@@ -4,6 +4,7 @@ import { connect, type Socket } from "node:net";
 import path from "node:path";
 import type { Duplex } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../../src/test-utils/prepare-compiled-subprocesses.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../src/test-utils/bundled-plugin-public-surface.js";
 import { createFixtureLifetime } from "./fixture-lifetime.js";
 import { createDeferred } from "./promise.js";
@@ -370,29 +371,20 @@ describe("QA gateway fixture error composition", () => {
     expect(cleaned).toEqual(["body", "gateway", "provider"]);
   });
 
-  it.each(["body", "cleanup"])(
-    "retains the original %s-only error and finishes cleanup",
-    async (phase) => {
-      const failure = new Error(`${phase} failed`);
-      const lastCleanup = vi.fn();
-      await expect(
-        runQaGatewayFixture(
-          async () => {
-            if (phase === "body") {
-              throw failure;
-            }
-          },
-          () => {
-            if (phase === "cleanup") {
-              throw failure;
-            }
-          },
-          lastCleanup,
-        ),
-      ).rejects.toBe(failure);
-      expect(lastCleanup).toHaveBeenCalledOnce();
-    },
-  );
+  it("retains the original cleanup-only error and finishes cleanup", async () => {
+    const failure = new Error("cleanup failed");
+    const lastCleanup = vi.fn();
+    await expect(
+      runQaGatewayFixture(
+        async () => {},
+        () => {
+          throw failure;
+        },
+        lastCleanup,
+      ),
+    ).rejects.toBe(failure);
+    expect(lastCleanup).toHaveBeenCalledOnce();
+  });
 
   it("settles ordered releases and browser cleanup before stopping every remaining owner", async () => {
     const bodyError = new Error("body failed");

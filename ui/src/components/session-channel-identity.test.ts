@@ -189,6 +189,16 @@ describe("sidebar linked conversation identity", () => {
       },
     },
     {
+      name: "constructor channel from an explicit session key",
+      row: { key: "agent:main:constructor:direct:42" },
+      expected: { channelLabel: "Constructor", kind: "direct" },
+    },
+    {
+      name: "__proto__ channel from an explicit session key",
+      row: { key: "agent:main:__proto__:channel:example" },
+      expected: { channelLabel: "__proto__", kind: "channel" },
+    },
+    {
       name: "canonical peer instead of conflicting last-delivery metadata",
       row: {
         key: "agent:main:whatsapp:direct:15555550123",

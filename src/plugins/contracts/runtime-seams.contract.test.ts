@@ -51,6 +51,7 @@ function createInstalledRuntimePluginDir(
     JSON.stringify({
       name: `@openclaw/${pluginId}`,
       version: "0.0.0",
+      type: "module",
       openclaw: {
         extensions: ["./runtime-api.js"],
         channel: { id: pluginId },

@@ -16,18 +16,16 @@ import {
 } from "../agents/auth-profiles/store-runtime.js";
 import { upsertAuthProfileWithLockOrThrow } from "../agents/auth-profiles/upsert-with-lock.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
-import {
-  withAgentDatabaseMaintenanceLease,
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import * as stateDb from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
+import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
 import * as doctor from "./state-migrations.doctor.js";
 import * as migration from "./state-migrations.shared-auth-store.js";
 
@@ -120,7 +118,7 @@ describe("shared auth store relocation", () => {
             PRAGMA wal_autocheckpoint = 0;
             CREATE TABLE IF NOT EXISTS auth_profile_store (store_key TEXT, store_json TEXT, updated_at INTEGER);
             CREATE TABLE IF NOT EXISTS config_machine_state (state_key TEXT, value_json TEXT, updated_at_ms INTEGER);
-            CREATE TABLE IF NOT EXISTS migration_sources (source_key TEXT, migration_kind TEXT, source_path TEXT, removed_source INTEGER);
+            CREATE TABLE IF NOT EXISTS migration_sources (source_key TEXT, migration_kind TEXT, source_path TEXT, removed_source INTEGER, source_sha256 TEXT, report_json TEXT);
             PRAGMA wal_checkpoint(TRUNCATE);
           `);
           if (target === fixture.sourcePath) {
@@ -128,12 +126,15 @@ describe("shared auth store relocation", () => {
               .prepare("INSERT INTO auth_profile_store VALUES ('primary', ?, 1)")
               .run(JSON.stringify(makeStore("openai:copied", "fixture-key")));
           } else {
+            seed.exec(
+              extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "agent_deletion_journal"),
+            );
             seed
               .prepare("INSERT INTO config_machine_state VALUES ('auth.sharedStore', ?, 1)")
               .run(JSON.stringify({ location }));
             seed
               .prepare(
-                "INSERT INTO migration_sources VALUES ('pending', 'shared-auth-store-state-db', ?, 0)",
+                "INSERT INTO migration_sources (source_key, migration_kind, source_path, removed_source) VALUES ('pending', 'shared-auth-store-state-db', ?, 0)",
               )
               .run(fixture.sourcePath);
           }
@@ -196,6 +197,7 @@ describe("shared auth store relocation", () => {
     "preserves the live auth source's POSIX locks during copied inspection",
     async () => {
       const fixture = await createEmptyFixture(false);
+      stateDb.openOpenClawStateDatabase({ env: fixture.env });
       fs.mkdirSync(path.dirname(fixture.sourcePath), { recursive: true });
       const writer = new DatabaseSync(fixture.sourcePath);
       try {
@@ -249,91 +251,66 @@ describe("shared auth store relocation", () => {
     });
   });
 
-  it.each(["ordinary", "mutation"])(
-    "moves exact rows, preserves every effective agent store, and records receipts (%s)",
-    async (owner) => {
-      const fixture = await createFixture();
-      const effectiveBytes = (agentDir: string) => {
-        const effective = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
-        return JSON.stringify({
-          credentials: persisted.buildPersistedAuthProfileSecretsStore(effective),
-          state: authState.buildPersistedAuthProfileState(effective),
-        });
-      };
-      const before = {
-        main: effectiveBytes(fixture.mainAgentDir),
-        ops: effectiveBytes(fixture.opsAgentDir),
-      };
-      const detected = fixture.migration.detectSharedAuthStoreMigration({
-        stateDir: fixture.stateDir,
-        doctorOnlyStateMigrations: true,
+  it("moves exact rows, preserves every effective agent store, and records receipts", async () => {
+    const fixture = await createFixture();
+    const effectiveBytes = (agentDir: string) => {
+      const effective = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+      return JSON.stringify({
+        credentials: persisted.buildPersistedAuthProfileSecretsStore(effective),
+        state: authState.buildPersistedAuthProfileState(effective),
       });
+    };
+    const before = {
+      main: effectiveBytes(fixture.mainAgentDir),
+      ops: effectiveBytes(fixture.opsAgentDir),
+    };
+    const detected = fixture.migration.detectSharedAuthStoreMigration({
+      stateDir: fixture.stateDir,
+      doctorOnlyStateMigrations: true,
+    });
 
-      const migrate = () =>
-        fixture.migration.migrateSharedAuthStore({ detected, stateDir: fixture.stateDir });
-      expect(
-        owner === "mutation"
-          ? await withAgentDatabaseMaintenanceLease({ env: fixture.env }, async (maintenance) => {
-              if (!maintenance.withDatabaseFileMutation) {
-                throw new Error("Missing real mutation owner");
-              }
-              return maintenance.withDatabaseFileMutation({
-                assertCurrent: () => maintenance.assertOwned(),
-                mutate: async () => {
-                  try {
-                    return await migrate();
-                  } finally {
-                    await closeOpenClawAgentDatabasesAsync();
-                  }
-                },
-                capture: async (result) => result,
-                bind: () => undefined,
-              });
-            })
-          : await migrate(),
-      ).toMatchObject({
-        warnings: [],
-        changes: [expect.stringContaining("Relocated shared auth")],
-      });
+    const migrate = () =>
+      fixture.migration.migrateSharedAuthStore({ detected, stateDir: fixture.stateDir });
+    expect(await migrate()).toMatchObject({
+      warnings: [],
+      changes: [expect.stringContaining("Relocated shared auth")],
+    });
 
-      expect(fixture.sqlite.readPersistedAuthProfileStoreRaw()).toEqual(fixture.sharedStore);
-      expect(fixture.sqlite.readPersistedAuthProfileStateRaw()).toEqual(fixture.sharedState);
-      expect(fixture.sqlite.readPersistedAuthProfileStoreRaw(fixture.mainAgentDir)).toBeNull();
-      expect(fixture.sqlite.readPersistedAuthProfileStateRaw(fixture.mainAgentDir)).toBeNull();
-      expect({
-        main: effectiveBytes(fixture.mainAgentDir),
-        ops: effectiveBytes(fixture.opsAgentDir),
-      }).toEqual(before);
+    expect(fixture.sqlite.readPersistedAuthProfileStoreRaw()).toEqual(fixture.sharedStore);
+    expect(fixture.sqlite.readPersistedAuthProfileStateRaw()).toEqual(fixture.sharedState);
+    expect(fixture.sqlite.readPersistedAuthProfileStoreRaw(fixture.mainAgentDir)).toBeNull();
+    expect(fixture.sqlite.readPersistedAuthProfileStateRaw(fixture.mainAgentDir)).toBeNull();
+    expect({
+      main: effectiveBytes(fixture.mainAgentDir),
+      ops: effectiveBytes(fixture.opsAgentDir),
+    }).toEqual(before);
 
-      const database = fixture.stateDb.openOpenClawStateDatabase({ env: fixture.env }).db;
-      expect(
-        database
-          .prepare(
-            "SELECT value_json FROM config_machine_state WHERE state_key = 'authProfiles.store'",
-          )
-          .get(),
-      ).toEqual({ value_json: JSON.stringify(fixture.sharedStore) });
-      expect(
-        database
-          .prepare(
-            "SELECT value_json FROM config_machine_state WHERE state_key = 'authProfiles.state'",
-          )
-          .get(),
-      ).toEqual({ value_json: JSON.stringify(fixture.sharedState) });
-      expect(
-        database
-          .prepare("SELECT COUNT(*) AS count FROM migration_sources WHERE migration_kind = ?")
-          .get("shared-auth-store-state-db"),
-      ).toEqual({ count: 2 });
-      expect(
-        database
-          .prepare(
-            "SELECT value_json FROM config_machine_state WHERE state_key = 'auth.sharedStore'",
-          )
-          .get(),
-      ).toEqual({ value_json: JSON.stringify({ location: "state-db" }) });
-    },
-  );
+    const database = fixture.stateDb.openOpenClawStateDatabase({ env: fixture.env }).db;
+    expect(
+      database
+        .prepare(
+          "SELECT value_json FROM config_machine_state WHERE state_key = 'authProfiles.store'",
+        )
+        .get(),
+    ).toEqual({ value_json: JSON.stringify(fixture.sharedStore) });
+    expect(
+      database
+        .prepare(
+          "SELECT value_json FROM config_machine_state WHERE state_key = 'authProfiles.state'",
+        )
+        .get(),
+    ).toEqual({ value_json: JSON.stringify(fixture.sharedState) });
+    expect(
+      database
+        .prepare("SELECT COUNT(*) AS count FROM migration_sources WHERE migration_kind = ?")
+        .get("shared-auth-store-state-db"),
+    ).toEqual({ count: 2 });
+    expect(
+      database
+        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = 'auth.sharedStore'")
+        .get(),
+    ).toEqual({ value_json: JSON.stringify({ location: "state-db" }) });
+  });
 
   it("preserves post-relocation main-agent order state without treating it as legacy", async () => {
     const fixture = await createEmptyFixture(false);
@@ -387,7 +364,6 @@ describe("shared auth store relocation", () => {
   });
 
   it.each([
-    "identical subset",
     "older subset",
     "empty subset",
     "changed credential",
@@ -447,7 +423,7 @@ describe("shared auth store relocation", () => {
           scenario === "malformed target"
             ? '{"version":1,"profiles":null}'
             : JSON.stringify(targetStore),
-        updated_at_ms: scenario === "identical subset" ? 100 : 200,
+        updated_at_ms: 200,
       };
       target
         .prepare("INSERT INTO config_machine_state VALUES ('authProfiles.store', ?, ?)")

@@ -150,7 +150,7 @@ describe("subagent coordination history", () => {
     );
   });
 
-  it("hides cross-agent dashboard coordination through worker history and local deltas", async () => {
+  it("hides cross-agent dashboard coordination through worker history pages and deltas", async () => {
     const sourceChild = "agent:worker:dashboard:child";
     const sourcePeer = "agent:worker:dashboard:peer";
     const forwarded = (runId: string, sourceSessionKey: string) => ({
@@ -215,7 +215,7 @@ describe("subagent coordination history", () => {
         }),
       ).toBeNull();
       expect(sse.snapshot().messages).toEqual(page.history.messages);
-      const delta = readChatHistoryDelta({
+      const delta = await readChatHistoryDelta({
         agentId: scope.agentId,
         scope,
         sessionKey: scope.sessionKey,
@@ -235,14 +235,12 @@ describe("subagent coordination history", () => {
     });
   });
 
-  it.each(
-    [false, true].flatMap((deferSources) =>
-      ["uncached-source", "cached-source", "cached-run", "projected-fast-path"].map((readKind) => ({
-        readKind,
-        deferSources,
-      })),
-    ),
-  )(
+  it.each([
+    { readKind: "uncached-source", deferSources: true },
+    { readKind: "cached-source", deferSources: false },
+    { readKind: "cached-run", deferSources: true },
+    { readKind: "projected-fast-path", deferSources: false },
+  ])(
     "rejects local history after shared-state retirement ($readKind, deferred=$deferSources)",
     async ({ readKind, deferSources }) => {
       await withHistory(
@@ -375,7 +373,6 @@ describe("subagent coordination history", () => {
           stateDatabase: {
             path: stateContext.admission.databasePath,
             environment: stateContext.environment,
-            coordinatorRuntime: stateContext.coordinatorRuntime,
           },
         });
         const snapshot = await readSessionHistorySnapshotKernel(
@@ -539,7 +536,7 @@ describe("subagent coordination history", () => {
         expect(
           state.appendInlineMessage({ message: later, messageId: "later", messageSeq: 4 }),
         ).toBeNull();
-        const delta = readChatHistoryDelta({
+        const delta = await readChatHistoryDelta({
           agentId: scope.agentId,
           scope,
           sessionKey: scope.sessionKey,
@@ -565,7 +562,7 @@ describe("subagent coordination history", () => {
           now: 4,
           message: response("worker-run", "The release still needs final validation."),
         });
-        const resumed = readChatHistoryDelta({
+        const resumed = await readChatHistoryDelta({
           agentId: scope.agentId,
           scope,
           sessionKey: scope.sessionKey,

@@ -61,6 +61,14 @@ Source trust determines which providers are allowed. It does not select one.
 - Never untrusted code on credential-hydrated Testbox.
 - Never run untrusted repo wrapper/config locally.
 - No speculative warmup. Acquire when first heavy command ready. Reuse id. Stop.
+- Use the consumer's smallest proven remote profile. Large/high-memory profiles
+  are explicit exceptions for a named command with measured memory need or a
+  controlled total-cost benefit. Record the reason before allocation; a generic
+  failure, queue delay, or timeout is not a reason to upsize. Do not raise worker
+  counts to compensate for a smaller machine.
+- For delegated Testbox sizing, select a documented workflow through
+  `--blacksmith-workflow`; direct-provider `--class`/`--type` flags do not choose
+  the Testbox runner. Change profiles with a fresh lease.
 
 Test size, expected duration, and hydration failure do not authorize a provider
 override. Omit `--provider` for normal work. Add it only when the user requests
@@ -121,6 +129,10 @@ Several commands: warm once, save id, reuse, stop.
 Rules:
 
 - One lease, one active command. No sync/reclaim during run.
+- Compound payloads: prefer `bash -c`, not `bash -lc`. Bash syntax support does
+  not require login startup; login profiles can change directories. Before
+  validation, assert the exact physical checkout and expected source/patch
+  inside the shell that runs it. A matching HEAD alone cannot prove dirty sync.
 - Native Testbox runs own sync, including reused `--id` runs. Never rely on
   `--no-sync` to preserve a remote baseline: Blacksmith has no native bypass,
   and released Crabbox versions can silently ignore the flag. An unchanged

@@ -2,6 +2,7 @@ import { parseControlUiFocusLocation } from "@openclaw/session-url-contract";
 import { render } from "lit";
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import type {
   GatewayBrowserClient,
   GatewayBrowserClientOptions,
@@ -20,11 +21,9 @@ import {
   createComposerProps,
   resetComposerFixture,
 } from "../pages/chat/chat-composer.test-support.ts";
+import { chatOutboxOwner } from "../pages/chat/chat-outbox-owner.ts";
 import { createTestChatPane } from "../pages/chat/chat-pane.test-support.ts";
-import {
-  admitQueuedMessageForSession,
-  subscribeChatOutboxProjection,
-} from "../pages/chat/chat-queue.ts";
+import { admitQueuedMessageForSession } from "../pages/chat/chat-queue.ts";
 import { handleSendChat } from "../pages/chat/chat-send-submit.ts";
 import { renderChatComposer } from "../pages/chat/components/chat-composer.ts";
 import { listStoredChatOutboxes } from "../pages/chat/composer-persistence.ts";
@@ -102,7 +101,7 @@ function createGatewayContext(gateway: ApplicationGateway): ApplicationContext {
     basePath: "",
     agentSelection: { state: { selectedId: null } },
     config: { current: { terminalEnabled: false } },
-    theme: { resolvedMode: "dark" },
+    theme: { resolvedMode: "dark", branding: resolveThemeBranding(undefined) },
   } as unknown as ApplicationContext;
 }
 
@@ -249,7 +248,7 @@ describe("Control UI Gateway target lineage", () => {
       } as unknown as ApplicationContext;
       pane.applyGatewaySnapshot(gateway.snapshot);
       const releasePane = gateway.subscribe(pane.applyGatewaySnapshot.bind(pane));
-      const releaseOutbox = subscribeChatOutboxProjection(state);
+      const releaseOutbox = chatOutboxOwner(state).subscribe(state);
       const app = document.createElement("openclaw-app") as unknown as {
         runtime: Pick<ApplicationRuntime, "context" | "documentMode">;
         synchronizeGateway: (gateway: ApplicationGateway) => void;

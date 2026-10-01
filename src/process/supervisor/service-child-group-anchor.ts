@@ -1,10 +1,11 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { closeSync, createReadStream, createWriteStream, type WriteStream } from "node:fs";
+import { closeSync, createWriteStream } from "node:fs";
 import { Socket } from "node:net";
 import { pipeline, type Readable } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
 import type { SpawnStdioEntry } from "../spawn-secret-input.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
 import { hasLiveOwnedProcessGroupMembers } from "./service-child-group-ownership.js";
@@ -18,6 +19,7 @@ import {
 import { reserveStdioEntry, setStdioEntry } from "./service-child-stdio.js";
 
 type AnchorState = "starting" | "active" | "closing" | "closed";
+type BunFdSocket = Socket & { connect(options: { fd: number }): Socket };
 declare const WORKER_DEPLOY_BUILD: boolean;
 
 function commandStdio(start: ServiceChildStart): {
@@ -44,22 +46,32 @@ function commandStdio(start: ServiceChildStart): {
   return { stdio, lineageFd, inheritedLineageFds };
 }
 
-function delay(ms: number): Promise<void> {
+function delay(ms: number, retainOwner = false): Promise<void> {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, ms);
-    timer.unref?.();
+    if (!retainOwner) {
+      timer.unref?.();
+    }
   });
 }
 
 export function runServiceChildGroupAnchor(): void {
   let start: ServiceChildStart | undefined;
+  let subreaper:
+    | ReturnType<typeof import("./linux-child-subreaper.js").acquireLinuxChildSubreaper>
+    | undefined;
+  let descendantsReaped = false;
   let state: AnchorState = "starting";
   let sequence = 0;
   let lastHostSequence = 0;
   let command: ChildProcess | undefined;
+  let lineageCompletion:
+    | typeof import("../../node-host/node-worker-lineage-completion.js")
+    | undefined;
+  let inheritedLineageClosed = false;
   let workerStarted = false;
   let workerLineageFds: number[] = [];
-  let control: Socket | WriteStream | undefined;
+  let control: Socket | undefined;
   let rootSettlementStarted = false;
   let rootResultDelivery: Promise<void> | undefined;
   let rootExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
@@ -103,6 +115,29 @@ export function runServiceChildGroupAnchor(): void {
     if (!start || state === "closed") {
       return;
     }
+    if (start.treeOwnership === "linux-subreaper") {
+      // Never exchange owner death for descendant extinction. Startup failure
+      // before admission has no application root; every admitted scope must drain.
+      if (command && !descendantsReaped) {
+        throw new Error("native owner cannot close before descendant extinction");
+      }
+      state = "closed";
+      for (const fd of new Set(start.parentLineageFds ?? [])) {
+        closeSync(fd);
+      }
+      closingSequence = sequence + 1;
+      await send({
+        type: "closing",
+        reason,
+        ...(descendantsReaped ? { descendantsReaped: true } : {}),
+      });
+      const acknowledged = await Promise.race([
+        retirementReady.promise,
+        delay(Math.max(0, deadline - Date.now())).then(() => false),
+      ]);
+      control?.end(() => process.exit(acknowledged ? 0 : 1));
+      return;
+    }
     state = "closed";
     // Retained hosts have no observer outside this group. Killing the local
     // reader with unresolved lineage must not certify escaped descendants gone.
@@ -139,12 +174,25 @@ export function runServiceChildGroupAnchor(): void {
     control?.end(() => process.exit(0));
   };
 
-  const reportStartupFailure = async (error: string) => {
+  const closeInheritedLineage = () => {
+    if (start?.lineageFd !== undefined && !inheritedLineageClosed) {
+      inheritedLineageClosed = true;
+      closeSync(start.lineageFd);
+    }
+  };
+
+  const reportStartupFailure = async (error: string, hardKill = false) => {
+    closeInheritedLineage();
     await send({ type: "startup-error", error });
     // A write callback only proves kernel acceptance. Keep the exact anchor alive until the
     // host records the authoritative spawn failure and acknowledges it on this same channel.
-    await startupErrorAcknowledged.promise;
-    await closeAuthority("lineage-lost", false);
+    await Promise.race([startupErrorAcknowledged.promise, retirementReady.promise]);
+    if (subreaper) {
+      while (!(descendantsReaped = subreaper.drain("SIGKILL"))) {
+        await delay(10, true);
+      }
+    }
+    await closeAuthority("lineage-lost", hardKill);
   };
 
   const requestCleanup = async (
@@ -163,13 +211,56 @@ export function runServiceChildGroupAnchor(): void {
     }
     state = "closing";
     forceCleanup = signal === "SIGKILL";
-    // Group TERM can stop a source loader's compiler. Resolve the host-only
-    // writer first; a failed import must still allow process cleanup to run.
-    const lineageCompletion =
-      start.ownedWorker && (typeof WORKER_DEPLOY_BUILD !== "boolean" || !WORKER_DEPLOY_BUILD)
-        ? await import("../../node-host/node-worker-lineage-completion.js").catch(() => undefined)
-        : undefined;
+    if (!command) {
+      await reportStartupFailure("command startup cancelled before spawn", true);
+      return;
+    }
     const cleanupDeadline = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS;
+    if (subreaper) {
+      try {
+        while (
+          !subreaper.drain(forceCleanup || Date.now() >= cleanupDeadline ? "SIGKILL" : "SIGTERM")
+        ) {
+          // Yield so libuv can consume its one direct root. Adopted children stay
+          // with the native wait owner even after the caller gives up waiting.
+          await delay(10, true);
+        }
+        descendantsReaped = true;
+        await rootExited.promise;
+        await rootResultDelivery;
+        await rootSettledDone.promise;
+        await lineageDone.promise;
+        if (!lineageClosed) {
+          throw new Error("native owner lost lineage observation before EOF");
+        }
+        if (start.ownedWorker && lineageCompletion) {
+          let recorded = false;
+          try {
+            recorded = lineageCompletion.recordNodeWorkerDescendantsReaped(start.cleanupBinding);
+          } catch {
+            // The live host can still consume this exact kernel proof. A new
+            // supervisor must retain custody without the separate durable fact.
+          }
+          if (!recorded) {
+            await send({
+              type: "output",
+              stream: "stderr",
+              chunk:
+                "node worker descendant extinction was not recorded; restart recovery retains capacity\n",
+            });
+          }
+        }
+        await closeAuthority(reason, false);
+      } catch (error) {
+        // Failed native custody remains owned and unknown. Transport closure must
+        // not turn a denied signal or failed durable write into a closing receipt.
+        await send({
+          type: "result-error",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
     const termGraceDone = delay(GRACEFUL_CANCEL_TIMEOUT_MS);
     if (start.ownedWorker) {
       if (!forceCleanup) {
@@ -291,7 +382,9 @@ export function runServiceChildGroupAnchor(): void {
       return;
     }
     if (message.type === "worker-close") {
-      if (start.ownedWorker && command?.connected) {
+      if (start.ownedWorker && !command) {
+        void requestCleanup("cancel");
+      } else if (start.ownedWorker && command?.connected) {
         command.disconnect();
       }
       return;
@@ -305,37 +398,37 @@ export function runServiceChildGroupAnchor(): void {
         return;
       }
       workerStarted = true;
-      command.send({ type: "openclaw-worker-start-v1", lineageFds: workerLineageFds }, (error) => {
-        if (error) {
-          void requestCleanup("parent-lost");
-        }
-      });
+      command.send(
+        {
+          type: "openclaw-worker-start-v1",
+          lineageFds: workerLineageFds,
+          ...(start.nativeProcessOwner ? { nativeProcessOwner: start.nativeProcessOwner } : {}),
+        },
+        (error) => {
+          if (error) {
+            void requestCleanup("parent-lost");
+          }
+        },
+      );
       return;
     }
     void requestCleanup("cancel", message.signal);
   };
 
   const startCommand = async (next: ServiceChildStart) => {
-    if (next.controlFd === undefined) {
+    const controlFd = next.controlFd;
+    if (controlFd === undefined) {
       process.exitCode = 1;
       return;
     }
     start = next;
-    let controlInput: Readable;
-    if (process.versions.bun) {
-      // Bun cannot wrap a duplex inherited fd in Socket. The anchor process owns
-      // this shared descriptor until exit; neither stream may close the other direction.
-      controlInput = createReadStream("", { fd: start.controlFd, autoClose: false });
-      control = createWriteStream("", { fd: start.controlFd, autoClose: false });
-    } else {
-      // Node must use nonblocking socket IO: a pending fs read prevents process exit.
-      const socket = new Socket({ fd: start.controlFd, readable: true, writable: true });
-      controlInput = socket;
-      control = socket;
-    }
-    controlInput.setEncoding("utf8");
+    const socket = process.versions.bun
+      ? new Socket({ readable: true, writable: true })
+      : new Socket({ fd: controlFd, readable: true, writable: true });
+    control = socket;
+    socket.setEncoding("utf8");
     let pending = "";
-    controlInput.on("data", (chunk: string) => {
+    socket.on("data", (chunk: string) => {
       pending += chunk;
       for (;;) {
         const newline = pending.indexOf("\n");
@@ -358,17 +451,52 @@ export function runServiceChildGroupAnchor(): void {
         void requestCleanup("parent-lost");
       }
     };
-    controlInput.once("end", onControlLoss);
-    controlInput.once("close", onControlLoss);
-    controlInput.once("error", onControlLoss);
-    if (controlInput !== control) {
-      control.once("error", onControlLoss);
+    socket.once("end", onControlLoss);
+    socket.once("close", onControlLoss);
+    socket.once("error", onControlLoss);
+    if (process.versions.bun) {
+      // Attach readers before adoption; end() must shut down the transport after the ACK.
+      // SAFETY: Bun 1.4+ uses this fd overload for its own inherited stdio.
+      (socket as BunFdSocket).connect({ fd: controlFd });
     }
 
+    // Prepare before launch: loading this writer during TERM consumes cleanup grace
+    // and can race a source loader's compiler receiving the same group signal.
+    lineageCompletion =
+      next.ownedWorker && (typeof WORKER_DEPLOY_BUILD !== "boolean" || !WORKER_DEPLOY_BUILD)
+        ? await import("../../node-host/node-worker-lineage-completion.js").catch(() => undefined)
+        : undefined;
+    if (next.treeOwnership === "linux-subreaper") {
+      try {
+        const nativeOwner =
+          typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD
+            ? undefined
+            : await import("./linux-child-subreaper.js");
+        if (!nativeOwner) {
+          throw new Error("portable workers require their admitted host-native process owner");
+        }
+        subreaper = nativeOwner.acquireLinuxChildSubreaper();
+      } catch (error) {
+        await reportStartupFailure(error instanceof Error ? error.message : String(error));
+        return;
+      }
+    }
+    if (
+      start !== next ||
+      control !== socket ||
+      state !== "starting" ||
+      socket.destroyed ||
+      socket.readableEnded ||
+      socket.writableEnded ||
+      !process.connected
+    ) {
+      await requestCleanup("parent-lost");
+      return;
+    }
     const { stdio, lineageFd, inheritedLineageFds } = commandStdio(start);
     workerLineageFds = inheritedLineageFds;
     try {
-      command = spawn(start.command, start.args, {
+      command = spawnWithInheritedOomScore(start.command, start.args, {
         cwd: start.cwd,
         env: start.env,
         argv0: start.argv0,
@@ -376,12 +504,12 @@ export function runServiceChildGroupAnchor(): void {
         detached: false,
         windowsHide: true,
       });
+      if (command.pid) {
+        subreaper?.retainLibuvChild(command.pid, command);
+      }
       // Failed Bun spawns have no stdio. Preserve the spawn error before checking lineage.
       await once(command, "spawn");
     } catch (error) {
-      if (start.lineageFd !== undefined) {
-        closeSync(start.lineageFd);
-      }
       await reportStartupFailure(error instanceof Error ? error.message : String(error));
       return;
     }
@@ -415,7 +543,7 @@ export function runServiceChildGroupAnchor(): void {
       // Install the notification consumer before releasing the duplicate writer;
       // actual EOF is observed by the host even when this group is killed.
       markHostLineageClosed = markLineageClosed;
-      closeSync(start.lineageFd);
+      closeInheritedLineage();
     } else {
       // Retained --no-restart hosts still delegate observation to the anchor.
       // SAFETY: without a host descriptor, commandStdio reserves this entry as a pipe.
@@ -511,6 +639,7 @@ export function runServiceChildGroupAnchor(): void {
         type: "ready",
         commandPid: command.pid,
         anchorPid: process.pid,
+        ...(subreaper ? { treeOwnership: "linux-subreaper" as const } : {}),
       });
     }
     command.once("exit", (code, signal) => {
@@ -520,19 +649,21 @@ export function runServiceChildGroupAnchor(): void {
       rootResultDelivery = send({ type: "root-result", code, signal });
       rootExited.resolve();
       void settleRoot();
+      // Worker death retires its scope, but an ordinary command may deliberately
+      // leave background descendants. Their lineage still owns natural completion.
+      if (subreaper && start?.ownedWorker && state === "active") {
+        void requestCleanup("lineage-lost");
+      }
     });
   };
 
-  process.on("SIGTERM", () => {
-    if (state === "active") {
+  const onParentSignal = () => {
+    if (state === "active" || (start && state === "starting")) {
       void requestCleanup("parent-lost");
     }
-  });
-  process.on("SIGINT", () => {
-    if (state === "active") {
-      void requestCleanup("parent-lost");
-    }
-  });
+  };
+  process.on("SIGTERM", onParentSignal);
+  process.on("SIGINT", onParentSignal);
   process.once("disconnect", () => {
     retirementReady.resolve(false);
     if (state !== "closed") {
@@ -542,7 +673,7 @@ export function runServiceChildGroupAnchor(): void {
   process.on("message", (raw: unknown) => {
     // SAFETY: the spawned relay is the sole sender on this private IPC channel.
     const message = raw as ServiceChildStart | { type: "parent-loss"; generation?: string };
-    if (message.type === "start" && state === "starting") {
+    if (message.type === "start" && !start && state === "starting") {
       if (
         isRecord(raw) &&
         raw.acknowledgeClosing !== undefined &&
@@ -552,6 +683,7 @@ export function runServiceChildGroupAnchor(): void {
       }
       void startCommand(message);
     } else if (message.type === "parent-loss" && message.generation === start?.generation) {
+      retirementReady.resolve(false);
       void requestCleanup("parent-lost");
     }
   });

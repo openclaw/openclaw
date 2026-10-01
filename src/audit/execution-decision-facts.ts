@@ -1,8 +1,8 @@
 /** Immutable decision facts for action boundaries without an owner-native record. */
 import type { DatabaseSync } from "node:sqlite";
 import { sql, type Selectable } from "kysely";
-import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
-import { validateDecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
+import { validateDecisionReceiptV1 } from "../../packages/gateway-protocol/src/audit-run-validators.js";
+import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/schema/audit-run.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,

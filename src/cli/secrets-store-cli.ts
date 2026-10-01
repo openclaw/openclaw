@@ -1,6 +1,4 @@
 import type { Command } from "commander";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
 import { isRedactedSecretValue } from "../config/redact-sentinel.js";
 import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
 import { danger } from "../globals.js";
@@ -11,6 +9,7 @@ import type {
   SecretStoreEntryMetadata,
   SecretStoreValidationError,
 } from "../secrets/store/secret-store.js";
+import { formatDocsHelp } from "./help-format.js";
 import { runSecretsCommand } from "./secrets-cli-output.js";
 
 type OutputOptions = { json?: boolean; plain?: boolean; scope?: string };
@@ -165,11 +164,7 @@ export function registerSecretStoreCli(secrets: Command): void {
   const store = secrets
     .command("store")
     .description("Manage the team-scoped SQLite secret and environment store")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/secrets", "docs.openclaw.ai/cli/secrets")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/secrets"));
 
   store
     .command("list")
@@ -294,7 +289,7 @@ export function registerSecretStoreCli(secrets: Command): void {
           ...(allowedHosts !== undefined ? { allowedHosts } : {}),
           updatedBy: "cli",
         });
-        storeModule.purgeExpiredSecretStoreEntries();
+        await storeModule.purgeExpiredSecretStoreEntries();
         defaultRuntime.log(`Stored ${name} (${kind}).`);
         await noteGatewayReload();
       }),
@@ -371,7 +366,7 @@ export function registerSecretStoreCli(secrets: Command): void {
         for (const name of names) {
           deleteSecretStoreEntry({ scope, name });
         }
-        purgeExpiredSecretStoreEntries();
+        await purgeExpiredSecretStoreEntries();
         defaultRuntime.log(
           `Removed ${names.length} team store entr${names.length === 1 ? "y" : "ies"}.`,
         );
@@ -429,7 +424,7 @@ export function registerSecretStoreCli(secrets: Command): void {
         for (const entry of writable) {
           storeModule.writeSecretStoreEntry({ scope, ...entry, updatedBy: "cli" });
         }
-        storeModule.purgeExpiredSecretStoreEntries();
+        await storeModule.purgeExpiredSecretStoreEntries();
         defaultRuntime.log(`Imported ${writable.length} team store entries.`);
         await noteGatewayReload();
       }),

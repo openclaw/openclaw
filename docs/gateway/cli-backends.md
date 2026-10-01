@@ -72,9 +72,9 @@ the model ref canonical and select the CLI runtime per model:
 {
   agents: {
     defaults: {
-      model: "anthropic/claude-opus-5",
+      model: "anthropic/claude-opus-5-5",
       models: {
-        "anthropic/claude-opus-5": {
+        "anthropic/claude-opus-5-5": {
           agentRuntime: { id: "claude-cli" },
         },
       },
@@ -119,6 +119,12 @@ OpenClaw keeps the turn active until Claude processes the completion and returns
 Follow-up tools still require the current turn's host permissions. Commands started explicitly
 in the background do not hold the turn open. If the turn fails or is cancelled while one of these
 commands still needs a follow-up, OpenClaw closes that subprocess and starts a fresh one for the next turn.
+
+While native background agents or workflows continue, a completed Claude answer can reach the
+channel through the normal reply pipeline without waiting for the continuation to finish.
+This also works with raw previews and block streaming disabled. Already delivered answer segments
+are not sent again at final settlement; failed deliveries remain eligible for retry. Delivering
+an answer does not end the admitted turn or grant its background work another turn's permissions.
 
 The `openclaw agent` command also has its own request deadline. Its 600-second fallback default applies to that command invocation, not to ordinary Gateway turns. See [`openclaw agent`](/cli/agent).
 
@@ -436,14 +442,24 @@ When bundle MCP is enabled, OpenClaw:
 - loads enabled bundle-MCP servers for the current workspace and merges them with any existing backend MCP config or settings shape
 - rewrites the launch config using the backend-owned integration mode from the owning plugin.
 
+The loopback bridge sends keepalive bytes while a tool response or notification
+stream is idle, so HTTP idle timeouts do not interrupt long-running tools. These
+bytes are not tool results or agent progress; client request deadlines and the
+overall agent turn timeout still apply.
+
+After plugin replacement, new CLI turns resolve bridge tools against the current
+plugin generation without restarting the listener. Retired plugin instances remain
+unavailable, and each turn still needs its own active context grant.
+
 With the Gateway's MCP bridge, channel-origin CLI turns can use the `message`
 tool for permitted reads and same-conversation actions, including reactions. The
 bridge retains the admitted sender, account, and conversation; channel access and
 write permissions still apply. That authority ends with the turn or its
 cancellation, including when a warm CLI process is reused for a later turn.
 
-Automations created through the bridge inherit its final permitted tool set and
-supported native tool capabilities. When Claude's native `Bash` supplies `exec`,
+Automations created through the bridge without a finite `toolsAllow` list follow the
+owner session's tool policy at run time. A finite list is capped to the bridge's final
+permitted tools and supported native capabilities. When Claude's native `Bash` supplies `exec`,
 the saved automation retains its Gateway host target, including with an explicit
 `toolsAllow: ["exec"]` cap. Current account, tool, sandbox, and approval restrictions
 still apply; capturing the target does not grant broader execution permission.

@@ -43,7 +43,6 @@ export function createBeamTestCatalog(
     id?: string;
     sessions?: BeamTestSession[] | (() => BeamTestSession[]);
     items?: SessionCatalogTranscriptItem[] | ((threadId: string) => SessionCatalogTranscriptItem[]);
-    nextCursor?: string;
     hostCursor?: string;
     hostKind?: SessionCatalogHost["kind"];
     onList?: () => unknown;
@@ -93,7 +92,6 @@ export function createBeamTestCatalog(
           { type: "agentMessage", text: "Done." },
           { type: "userMessage", text: "Fix the flow." },
         ],
-        ...(params.nextCursor ? { nextCursor: params.nextCursor } : {}),
       };
     },
   };

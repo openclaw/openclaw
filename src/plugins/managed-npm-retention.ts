@@ -10,7 +10,7 @@ import {
   resolvePluginNpmProjectsDir,
 } from "./install-paths.js";
 import { RETAINED_MANAGED_NPM_KEEP_FILES_REASON } from "./managed-npm-retention-contract.js";
-import { listManagedPluginNpmRootsSync } from "./npm-project-roots.js";
+import { listPluginNpmProjectCandidatesSync } from "./npm-project-roots.js";
 
 const RETAINED_MANAGED_NPM_INSTALL_MARKER_DIR = ".openclaw-retained-npm-installs";
 
@@ -240,7 +240,9 @@ export async function cleanupRetainedManagedNpmInstallGenerations(
     path.resolve(installPath),
   );
   let removed = 0;
-  for (const projectRoot of listManagedPluginNpmRootsSync(npmDir)) {
+  // Retention markers own cleanup even when a retired project's manifest is gone.
+  // Publication admission is stricter and must not hide these cleanup candidates.
+  for (const projectRoot of [npmDir, ...listPluginNpmProjectCandidatesSync(npmDir)]) {
     if (path.resolve(projectRoot) === path.resolve(npmDir)) {
       removed += await cleanupRetainedLegacyNpmPackages({
         npmRoot: projectRoot,

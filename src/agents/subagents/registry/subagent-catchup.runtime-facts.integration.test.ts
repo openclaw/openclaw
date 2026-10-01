@@ -1,3 +1,9 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  makeRestartRecoveryRun,
+  useSubagentRestartRecoveryFixture,
+} from "./subagent-restart-recovery.test-support.js";
 // Parent catch-up reads retained obligations, not a recent-execution window.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../../config/config.js";
@@ -24,16 +30,12 @@ import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
 import {
   loadSubagentRegistryFromSqlite,
   loadSubagentRunsForSessionFromSqlite,
-  saveSubagentRegistryToSqlite,
 } from "./subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.test-support.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
-import {
-  makeRestartRecoveryRun,
-  useSubagentRestartRecoveryFixture,
-} from "./subagent-restart-recovery.test-support.js";
 
 const PARENT = "agent:main:main";
 const CHILD = "agent:main:subagent:catchup-child";
@@ -221,7 +223,7 @@ describe("parent runtime facts from retained completion obligations", () => {
         }),
       );
     }
-    persistSubagentRunsToDiskOrThrow(subagentRuns);
+    persistSubagentRunsToDiskOrThrow(subagentRuns, [...subagentRuns.keys()]);
     const before = loadSubagentRegistryFromSqlite();
     expect(
       scenario === "fallback result"

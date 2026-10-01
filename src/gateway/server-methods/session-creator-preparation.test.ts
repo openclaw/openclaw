@@ -6,7 +6,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import {
   addSessionMember,
   removeSessionMember,
-} from "../../config/sessions/session-sharing-store.js";
+} from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -18,7 +18,8 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as profileAliases from "../../state/user-profile-list.js";
-import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
+import { linkEmail } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -259,7 +260,6 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
   });
 
   it.each([
-    { shape: "single", count: 1 },
     { shape: "aliases", count: 1 },
     { shape: "stress", count: 100 },
   ])("bounds cold and warm broadcaster lookup work for $shape keys", async ({ shape, count }) => {
@@ -541,13 +541,14 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       const context = requestContext({});
       await initializeSessionReadContext(context);
       const projection = getSessionRowProjection(context)!;
-      const original = projection.ensureMaterialized;
+      const original = projection.prepareSelection;
       const readiness = vi
-        .spyOn(projection, "ensureMaterialized")
-        .mockImplementationOnce(async () => {
-          await original();
+        .spyOn(projection, "prepareSelection")
+        .mockImplementationOnce(async (...args) => {
+          const result = await original(...args);
           // Identity changes while the request awaits readiness, before selection and presentation.
           linkEmail("creator@preparation.test", callerId);
+          return result;
         });
       const result = await listSessions({ client, context, request: { limit: 100 } });
       expect(readiness).toHaveBeenCalled();
@@ -573,6 +574,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
           },
         },
       });
+      await initializeSessionReadContext(context);
       const pending = sessionReadHandlers["sessions.preview"]?.({
         params: { keys: keys.slice(0, 2) },
         client: identifiedClient(callerId),

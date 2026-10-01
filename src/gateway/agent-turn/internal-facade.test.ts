@@ -294,6 +294,66 @@ describe("createInternalAgentTurnFacade", () => {
     },
   );
 
+  it.each(["aborted", "closed", "revoked", "rejected"])(
+    "settles source preparation without starting an %s turn",
+    async (outcome) => {
+      const entered = createDeferred();
+      const prepared = createDeferred();
+      const executions = new AsyncWorkScope();
+      const entries = new GatewayRequestEntryLifetime();
+      const context = Object.assign(createContext(), {
+        trackExecution: <T>(run: () => Promise<T>) => executions.track(run),
+        requestEntryLifetime: entries,
+      });
+      const controller = new AbortController();
+      let current = true;
+      const request = createFacade(context).dispatchRaw(
+        { message: "prepared source", idempotencyKey: "prepared-source" },
+        {
+          signal: controller.signal,
+          prepareDispatchCurrent: () => {
+            entered.resolve();
+            return prepared.promise;
+          },
+          assertAdmissionCurrent: () => {
+            if (!current) {
+              throw new Error("source revoked");
+            }
+          },
+        },
+      );
+      const rejected = expect(request).rejects.toThrow(
+        outcome === "closed"
+          ? "Gateway request entry is closed"
+          : outcome === "aborted"
+            ? "source aborted"
+            : outcome === "revoked"
+              ? "source revoked"
+              : "source preparation failed",
+      );
+      await entered.promise;
+      expect(startTurn).not.toHaveBeenCalled();
+      if (outcome === "aborted") {
+        controller.abort(new Error("source aborted"));
+        await rejected;
+      } else if (outcome === "closed") {
+        entries.beginClose();
+      } else if (outcome === "revoked") {
+        current = false;
+      }
+      if (outcome === "rejected") {
+        prepared.reject(new Error("source preparation failed"));
+      } else {
+        prepared.resolve();
+      }
+      await rejected;
+      await executions.drain();
+      await entries.waitForPendingEntries();
+      expect(startTurn).not.toHaveBeenCalled();
+      expect(executions.hasPendingWork).toBe(false);
+    },
+  );
+
   it("keeps selected wait session facts private", async () => {
     const result = { runId: "completed-run", status: "ok" };
     waitForTurn.mockResolvedValue({

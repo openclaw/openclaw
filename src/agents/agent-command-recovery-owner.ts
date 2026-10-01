@@ -24,7 +24,7 @@ import {
 
 const log = createSubsystemLogger("agents/agent-command");
 
-type PreparedRecoveryOwnerTarget = object & {
+type PreparedRecoveryOwnerTarget = {
   sessionAgentId: string;
   isNewSession: boolean;
   previousSessionId?: string;

@@ -1,3 +1,4 @@
+import { composedParent } from "../lib/navigation-click.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 
 const CARD_GAP = 10;
@@ -91,6 +92,26 @@ export class PortaledHovercardController {
     this.dismiss();
     this.returnFocus(trigger);
   };
+
+  renderContents(card: HTMLDivElement, update: () => void): void {
+    const focused = card.contains(document.activeElement) ? document.activeElement : null;
+    update();
+    if (focused && !card.contains(document.activeElement)) {
+      // Live session links can move between sections or disappear after a roster update.
+      const replacement =
+        focused instanceof HTMLAnchorElement
+          ? this.focusables().find(
+              (link) => link instanceof HTMLAnchorElement && link.href === focused.href,
+            )
+          : undefined;
+      if (replacement) {
+        replacement.focus({ preventScroll: true });
+      } else {
+        this.returnFocus(this.trigger);
+        this.focusInside = document.activeElement === this.trigger;
+      }
+    }
+  }
 
   returnFocus(trigger: HTMLElement | null): void {
     this.restoringFocus = true;
@@ -234,7 +255,9 @@ export class PortaledHovercardController {
     this.clearCard();
     this.anchor = anchor;
     this.card = card;
-    this.attachCardHoldListeners(card);
+    card.addEventListener("pointerenter", this.handleCardPointerEnter);
+    card.addEventListener("focusin", this.handleCardFocusIn);
+    card.addEventListener("focusout", this.handleCardFocusOut);
     this.placement = placement;
     this.unmountContents = unmountContents ?? null;
     this.stopPositioning = mountPortaledHovercard({
@@ -244,12 +267,6 @@ export class PortaledHovercardController {
       placement,
       observeVisualViewport,
     });
-  }
-
-  private attachCardHoldListeners(card: HTMLDivElement): void {
-    card.addEventListener("pointerenter", this.handleCardPointerEnter);
-    card.addEventListener("focusin", this.handleCardFocusIn);
-    card.addEventListener("focusout", this.handleCardFocusOut);
   }
 
   clearCard(exitDurationMs = 0): void {
@@ -264,7 +281,11 @@ export class PortaledHovercardController {
     if (!card) {
       return;
     }
-    if (exitDurationMs <= 0 || !card.isConnected) {
+    if (
+      exitDurationMs <= 0 ||
+      !card.isConnected ||
+      globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    ) {
       unmountContents?.();
       card.remove();
       return;
@@ -349,36 +370,61 @@ function mountPortaledHovercard(params: {
 }): () => void {
   // A modal drawer makes body siblings inert. Keep its card inside the same
   // dialog, then use the existing menu top layer to escape clipping and stacking.
-  let ancestor: Element | null = params.anchor;
   let owner: Element = document.body;
-  while (ancestor) {
+  for (
+    let ancestor: Element | null = params.anchor;
+    ancestor;
+    ancestor = composedParent(ancestor)
+  ) {
     if (ancestor.localName === "openclaw-modal-dialog") {
       owner = ancestor;
       break;
     }
-    const root = ancestor.getRootNode();
-    ancestor =
-      ancestor.assignedSlot ??
-      ancestor.parentElement ??
-      (root instanceof ShadowRoot ? root.host : null);
   }
   owner.append(params.card);
   promoteToPopoverTopLayer(params.card);
   params.trigger.setAttribute("aria-controls", params.card.id);
   params.trigger.setAttribute("aria-expanded", "true");
   const position = () => positionPortaledHovercard(params.anchor, params.card, params.placement);
-  window.addEventListener("resize", position);
-  window.addEventListener("scroll", position, true);
+  let frame: number | null = null;
+  const schedulePosition = () => {
+    if (frame === null) {
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        position();
+      });
+    }
+  };
+  const handleScroll = (event: Event) => {
+    const source = event.composedPath()[0];
+    if (source === window || source === document) {
+      schedulePosition();
+      return;
+    }
+    // Transcript auto-scroll and scrolling inside the card cannot move a
+    // sidebar trigger. Only a scroll in its rendered ancestry needs geometry.
+    for (let node: Element | null = params.anchor; node; node = composedParent(node)) {
+      if (node === source) {
+        schedulePosition();
+        return;
+      }
+    }
+  };
+  window.addEventListener("resize", schedulePosition);
+  window.addEventListener("scroll", handleScroll, true);
   if (params.observeVisualViewport !== false) {
-    window.visualViewport?.addEventListener("resize", position);
-    window.visualViewport?.addEventListener("scroll", position);
+    window.visualViewport?.addEventListener("resize", schedulePosition);
+    window.visualViewport?.addEventListener("scroll", schedulePosition);
   }
   position();
   return () => {
-    window.removeEventListener("resize", position);
-    window.removeEventListener("scroll", position, true);
-    window.visualViewport?.removeEventListener("resize", position);
-    window.visualViewport?.removeEventListener("scroll", position);
+    if (frame !== null) {
+      cancelAnimationFrame(frame);
+    }
+    window.removeEventListener("resize", schedulePosition);
+    window.removeEventListener("scroll", handleScroll, true);
+    window.visualViewport?.removeEventListener("resize", schedulePosition);
+    window.visualViewport?.removeEventListener("scroll", schedulePosition);
   };
 }
 
@@ -392,15 +438,20 @@ function positionPortaledHovercard(
   const cardHeight = card.offsetHeight;
   const maxLeft = Math.max(VIEWPORT_PADDING, innerWidth - cardWidth - VIEWPORT_PADDING);
   const maxTop = Math.max(VIEWPORT_PADDING, innerHeight - cardHeight - VIEWPORT_PADDING);
+  const fitsBelow = anchorRect.bottom + CARD_GAP + cardHeight + VIEWPORT_PADDING <= innerHeight;
   if (placement === "horizontal") {
     const fitsRight = anchorRect.right + CARD_GAP + cardWidth + VIEWPORT_PADDING <= innerWidth;
-    const left = fitsRight ? anchorRect.right + CARD_GAP : anchorRect.left - cardWidth - CARD_GAP;
-    card.dataset.side = fitsRight ? "right" : "left";
-    card.style.left = `${Math.min(Math.max(VIEWPORT_PADDING, left), maxLeft)}px`;
-    card.style.top = `${Math.min(Math.max(VIEWPORT_PADDING, anchorRect.top), maxTop)}px`;
-    return;
+    const fitsLeft = anchorRect.left - CARD_GAP - cardWidth >= VIEWPORT_PADDING;
+    const fitsAbove = anchorRect.top - CARD_GAP - cardHeight >= VIEWPORT_PADDING;
+    // Keep the existing clamp when neither axis has room; switch axes only to clear the trigger.
+    if (fitsRight || fitsLeft || (!fitsBelow && !fitsAbove)) {
+      const left = fitsRight ? anchorRect.right + CARD_GAP : anchorRect.left - cardWidth - CARD_GAP;
+      card.dataset.side = fitsRight ? "right" : "left";
+      card.style.left = `${Math.min(Math.max(VIEWPORT_PADDING, left), maxLeft)}px`;
+      card.style.top = `${Math.min(Math.max(VIEWPORT_PADDING, anchorRect.top), maxTop)}px`;
+      return;
+    }
   }
-  const fitsBelow = anchorRect.bottom + CARD_GAP + cardHeight + VIEWPORT_PADDING <= innerHeight;
   const side = fitsBelow ? "bottom" : "top";
   const top = fitsBelow ? anchorRect.bottom + CARD_GAP : anchorRect.top - cardHeight - CARD_GAP;
   card.dataset.side = side;

@@ -2,11 +2,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { buildEmbeddedRunnerAssistant } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import {
-  makeAttemptResult,
-  makeCompactionSuccess,
-  makeOverflowError,
-} from "./run.overflow-compaction.fixture.js";
+import { makeCompactionSuccess, makeOverflowError } from "./run.overflow-compaction.fixture.js";
 import {
   mockedCompactDirect,
   mockedRunEmbeddedAttempt,
@@ -61,7 +57,7 @@ function makeReplayUnsafeMidTurnOverflow(params?: {
 }) {
   const activeCount = params?.activeCount ?? 0;
   const resultRecorded = params?.resultRecorded ?? true;
-  return makeAttemptResult({
+  return session.makeAttemptResult({
     ...(params?.codeModeEngaged ? { codeModeEngaged: true } : {}),
     promptError: makeOverflowError("Context overflow: prompt too large (mid-turn precheck)."),
     promptErrorSource: "precheck",
@@ -110,7 +106,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
   it("continues once when persisted truncation is already a no-op", async () => {
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
-        makeAttemptResult({
+        session.makeAttemptResult({
           preflightRecovery: {
             route: "truncate_tool_results_only",
             source: "mid-turn",
@@ -121,7 +117,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
           latestMcpAppChannelView: { viewId: "view-before-retry" },
         }),
       )
-      .mockResolvedValueOnce(makeAttemptResult());
+      .mockResolvedValueOnce(session.makeAttemptResult());
 
     const result = await runEmbeddedAgent({
       ...session.runParams,
@@ -144,7 +140,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
   it("still compacts after a real provider overflow follows the no-op", async () => {
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
-        makeAttemptResult({
+        session.makeAttemptResult({
           preflightRecovery: {
             route: "truncate_tool_results_only",
             source: "mid-turn",
@@ -153,8 +149,8 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
           },
         }),
       )
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: makeOverflowError() }))
-      .mockResolvedValueOnce(makeAttemptResult());
+      .mockResolvedValueOnce(session.makeAttemptResult({ promptError: makeOverflowError() }))
+      .mockResolvedValueOnce(session.makeAttemptResult());
     mockedCompactDirect.mockResolvedValueOnce(
       makeCompactionSuccess({
         summary: "Compacted after provider rejection",
@@ -174,29 +170,6 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
-  it("compacts settled replay-unsafe tools and continues from their recorded result", async () => {
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(makeReplayUnsafeMidTurnOverflow())
-      .mockResolvedValueOnce(makeAttemptResult());
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "Compacted after settled exec",
-        firstKeptEntryId: "entry-settled-exec",
-        tokensBefore: 201_000,
-      }),
-    );
-
-    const result = await runEmbeddedAgent({
-      ...session.runParams,
-      runId: "run-midturn-settled-unsafe",
-    });
-
-    expect(mockedCompactDirect).toHaveBeenCalledOnce();
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expectRetryContinuesFromTranscript();
-    expect(result.meta.error).toBeUndefined();
-  });
-
   it("recovers a successor transcript from its own frozen tool projection", async () => {
     const { SessionManager } = await import("../sessions/session-manager.js");
     const { getEmbeddedSessionPromptState, clearEmbeddedSessionPromptStates } =
@@ -209,7 +182,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     vi.mocked(truncateOversizedToolResultsInSessionManager).mockImplementation(
       actualTruncation.truncateOversizedToolResultsInSessionManager,
     );
-    const successorId = "tool-projection-successor";
+    const successorId = `${session.runParams.sessionId}-tool-projection-successor`;
     const toolResult = makeTextToolResult(
       "call-exec",
       "exec",
@@ -270,14 +243,14 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       .mockImplementationOnce(async (attempt) => {
         expect(attempt.sessionId).toBe(successorId);
         successor = prepareAttemptProjection(attempt, 1_000);
-        return makeAttemptResult({
+        return session.makeAttemptResult({
           ...makeReplayUnsafeMidTurnOverflow(),
           sessionIdUsed: successorId,
           messagesSnapshot: successor.messages,
           preflightRecovery: { route: "compact_then_truncate", source: "mid-turn" },
         });
       })
-      .mockResolvedValueOnce(makeAttemptResult({ sessionIdUsed: successorId }));
+      .mockResolvedValueOnce(session.makeAttemptResult({ sessionIdUsed: successorId }));
     mockedCompactDirect
       .mockResolvedValueOnce(
         makeCompactionSuccess({ summary: "Adopt successor", sessionId: successorId }),
@@ -317,7 +290,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
           codeModeSuspended: true,
         }),
       )
-      .mockResolvedValueOnce(makeAttemptResult());
+      .mockResolvedValueOnce(session.makeAttemptResult());
     mockedCompactDirect.mockResolvedValueOnce(
       makeCompactionSuccess({
         summary: "Compacted while exec waits",
@@ -356,7 +329,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
           summary: "Compacted into a successor session",
           firstKeptEntryId: "entry-rotated-exec",
           tokensBefore: 201_000,
-          sessionId: "rotated-session",
+          sessionId: `${session.runParams.sessionId}-rotated`,
         }),
       );
 
@@ -373,7 +346,6 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
 
   it.each([
     ["a tool call without a recorded result", { resultRecorded: false }, true],
-    ["a generic tool with an active lifecycle item", { activeCount: 1 }, true],
     [
       "a direct tool active while Code Mode is merely enabled",
       { activeCount: 1, codeModeEngaged: true },

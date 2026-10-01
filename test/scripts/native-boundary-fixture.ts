@@ -5,12 +5,42 @@ import path from "node:path";
 
 const require = createRequire(import.meta.url);
 
+export function copyNativeCompilerPackage(source: string, destination: string) {
+  fs.cpSync(source, destination, {
+    recursive: true,
+    dereference: true,
+    mode: fs.constants.COPYFILE_FICLONE,
+    // Sibling Vitest threads may fork during this copy. Keep files on libuv's
+    // close-on-exec path so children cannot inherit writable executable descriptors.
+    filter: () => true,
+  });
+}
+
+/** Availability only; integration assertions still verify the actual kernel scope. */
+export function hasSemanticTestBackend(): boolean {
+  if (process.platform !== "linux") {
+    return false;
+  }
+  try {
+    return (
+      fs
+        .readFileSync("/sys/fs/cgroup/cgroup.controllers", "utf8")
+        .split(/\s+/u)
+        .includes("memory") &&
+      spawnSync("systemctl", ["--user", "show", "--property=Version"], { timeout: 5_000 })
+        .status === 0
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Native receipts and default libraries must belong to the fixture's own install. */
 export function materializeNativeCompiler(rootDir: string) {
   const root = fs.realpathSync.native(rootDir);
   const platformPackage = `@typescript/typescript-${process.platform}-${process.arch}`;
   // The platform binary belongs to the native compiler's optional dependencies.
-  const nativeRequire = createRequire(require.resolve("typescript-native/package.json"));
+  const nativeRequire = createRequire(require.resolve("typescript/package.json"));
   const modules = path.join(root, "node_modules");
   fs.mkdirSync(modules, { recursive: true });
   if (fs.realpathSync.native(modules) !== modules) {
@@ -18,29 +48,24 @@ export function materializeNativeCompiler(rootDir: string) {
   }
   // Shared declaration fixtures start with tool links. Detach those fixture-owned
   // links before copying so no write can follow them back into the real install.
-  for (const name of [".bin", "@typescript", "typescript", "typescript-native", platformPackage]) {
+  for (const name of [".bin", "@typescript", "typescript", platformPackage]) {
     const target = path.join(root, "node_modules", name);
     if (fs.lstatSync(target, { throwIfNoEntry: false })?.isSymbolicLink()) {
       fs.unlinkSync(target);
     }
   }
-  for (const name of ["typescript", "typescript-native", platformPackage]) {
+  for (const name of ["typescript", platformPackage]) {
     const owner = name === platformPackage ? nativeRequire : require;
     const source = path.dirname(owner.resolve(`${name}/package.json`));
     const destination = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(destination), { recursive: true });
-    fs.cpSync(source, destination, {
-      recursive: true,
-      mode: fs.constants.COPYFILE_FICLONE,
-      // Keep file copies on libuv's close-on-exec path on Node 24.19.
-      filter: () => true,
-    });
+    copyNativeCompilerPackage(source, destination);
   }
   const bin = path.join(root, "node_modules/.bin/tsgo");
   fs.mkdirSync(path.dirname(bin), { recursive: true });
-  fs.symlinkSync("../typescript-native/bin/tsc", bin, "file");
+  fs.symlinkSync("../typescript/bin/tsc", bin, "file");
   if (process.platform === "win32") {
-    fs.writeFileSync(`${bin}.cmd`, '@node "%~dp0..\\typescript-native\\bin\\tsc" %*\r\n');
+    fs.writeFileSync(`${bin}.cmd`, '@node "%~dp0..\\typescript\\bin\\tsc" %*\r\n');
   }
   return path.join(
     root,
@@ -53,7 +78,7 @@ export function materializeNativeCompiler(rootDir: string) {
 
 /** Intercept a fixture compiler process without changing the production resolver. */
 export function overrideNativeFixtureExecutable(root: string, executable: string) {
-  const nativeRoot = path.join(root, "node_modules/typescript-native");
+  const nativeRoot = path.join(root, "node_modules/typescript");
   fs.mkdirSync(path.join(nativeRoot, "lib"), { recursive: true });
   if (!fs.existsSync(path.join(nativeRoot, "package.json"))) {
     fs.writeFileSync(path.join(nativeRoot, "package.json"), '{"type":"module"}\n');

@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import { DOMParser } from "linkedom";
 import { expect, it, vi } from "vitest";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
+import * as pidAlive from "../shared/pid-alive.js";
 import { installLaunchAgent } from "./launchd-install.js";
 import { restoreGatewayServiceDefinitionBackup } from "./service-definition-backup.js";
 import { fixture, native, readRetainedReceipt } from "./service-definition-backup.test-support.js";
@@ -14,6 +16,12 @@ import {
   withGatewayServiceRebindCapture,
 } from "./service-rebind.js";
 import { reconcileGatewayServiceDefinition } from "./service-reconciliation.js";
+import { readServiceFileState } from "./service-stage.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  GatewayServiceAuthorityError,
+  withGatewayServiceUpdateAuthority,
+} from "./service-update-authority.js";
 import { stageSystemdService } from "./systemd-install.js";
 import * as systemdScope from "./systemd-scope.js";
 
@@ -207,6 +215,8 @@ it.each(["publication", "activation"])(
     const f = await fixture("darwin");
     let candidate: Buffer | undefined;
     let loaded = false;
+    // Fixture bootout ends PID 42 with its job; never consult the host process table.
+    vi.spyOn(pidAlive, "isPidDefinitelyDead").mockImplementation((pid) => pid === 42 && !loaded);
     native.launchctl.mockImplementation(async (args) => {
       if (args[0] === "bootstrap") {
         loaded = true;
@@ -216,7 +226,12 @@ it.each(["publication", "activation"])(
         loaded = false;
       }
       if (args[0] !== "print" || loaded) {
-        return { code: 0, stdout: "state = running\npid = 42", stderr: "", termination: "exit" };
+        return {
+          code: 0,
+          stdout: `${args[1]} = {\n\tstate = running\n\tpid = 42\n}`,
+          stderr: "",
+          termination: "exit",
+        };
       }
       return { code: 113, stdout: "", stderr: "Could not find service", termination: "exit" };
     });
@@ -296,4 +311,126 @@ it("settles a failed activation receipt after the real definition transaction re
     expect(after).not.toBe(rewritten);
     expect(currentGatewayServiceRebindReceipt()).toEqual({ before, after, mutated: true });
   });
+});
+
+it.each([
+  "before-publication",
+  "after-publication",
+  "updater-revoked",
+  "cleanup-uncertain",
+] as const)("retains central receipt recovery custody after %s", async (phase) => {
+  const f = await fixture("linux");
+  const warnings: string[] = [];
+  const cleanup = new CommandProcessCleanupError();
+  let updaterCurrent = true;
+  let candidate: Buffer | undefined;
+  const before = await readServiceFileState(f.sourcePath);
+  native.identity.mockClear();
+  const result = await withGatewayServiceUpdateAuthority(
+    () => {
+      if (!updaterCurrent) {
+        throw new Error("original updater authority expired");
+      }
+    },
+    () =>
+      reconcileGatewayServiceDefinition({
+        env: f.env,
+        root: "/old",
+        command: f.command,
+        expectedCommand: f.command,
+        install: async (hooks) => {
+          let callerCurrent = true;
+          await withGatewayServiceUpdateAuthority(
+            () => {
+              if (!callerCurrent) {
+                throw new Error("installation caller authority expired");
+              }
+            },
+            async () => {
+              if (phase !== "before-publication") {
+                await f.install(hooks);
+                candidate = await fs.readFile(f.sourcePath);
+              }
+              if (phase === "cleanup-uncertain") {
+                throw cleanup;
+              }
+              if (phase === "updater-revoked") {
+                updaterCurrent = false;
+              } else {
+                callerCurrent = false;
+              }
+              assertGatewayServiceUpdateCurrent();
+            },
+          );
+        },
+        warn: (message) => warnings.push(message),
+      }),
+  ).catch((error: unknown) => error);
+  if (phase === "cleanup-uncertain") {
+    expect(result).toBe(cleanup);
+  } else {
+    expect(result).toBeInstanceOf(GatewayServiceAuthorityError);
+    expect(result).toMatchObject({
+      outcome:
+        phase === "before-publication"
+          ? "unchanged"
+          : phase === "after-publication"
+            ? "restored"
+            : "recovery-pending",
+    });
+  }
+  const reloads = native.identity.mock.calls.filter(([, args]) => args.includes("daemon-reload"));
+  if (phase === "before-publication") {
+    expect(await readServiceFileState(f.sourcePath)).toEqual(before);
+    expect(reloads).toHaveLength(0);
+  } else if (phase === "after-publication") {
+    expect(reloads).toHaveLength(1);
+  } else {
+    expect(await fs.readFile(f.sourcePath)).toEqual(candidate);
+    expect(reloads).toHaveLength(0);
+    expect(warnings).toContainEqual(expect.stringContaining("backups retained"));
+    return;
+  }
+  expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+});
+
+it("preserves typed pre-publication authority failure during central inspection", async () => {
+  const f = await fixture("linux");
+  f.env.OPENCLAW_PROFILE = "receipt-test";
+  const warn = vi.fn();
+  const before = await readServiceFileState(f.sourcePath);
+  let current = true;
+  const command = native.command.getMockImplementation()!;
+  native.command.mockImplementation(async () => {
+    const result = await command();
+    current = false;
+    return result;
+  });
+  const install = vi.fn();
+  await expect(
+    withGatewayServiceUpdateAuthority(
+      () => {
+        if (!current) {
+          throw new Error("original updater authority expired during inspection");
+        }
+      },
+      () =>
+        reconcileGatewayServiceDefinition({
+          env: f.env,
+          root: "/old",
+          command: f.command,
+          expectedCommand: f.command,
+          install,
+          warn,
+        }),
+    ),
+  ).rejects.toMatchObject({ name: "GatewayServiceAuthorityError", outcome: "unchanged" });
+  expect(install).not.toHaveBeenCalled();
+  expect(warn).toHaveBeenCalledWith(
+    expect.stringMatching(
+      /skipped;.*left unchanged.*openclaw --profile receipt-test gateway status --deep/u,
+    ),
+  );
+  expect(await readServiceFileState(f.sourcePath)).toEqual(before);
+  expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
 });

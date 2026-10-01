@@ -28,15 +28,10 @@
 
   .chat-controls__model {
     grid-area: model;
-  }
-
-  .chat-controls__session,
-  .chat-controls__model {
     min-width: 0;
     max-width: none;
   }
 
-  .chat-controls__session select,
   .chat-controls__inline-select-trigger {
     width: 100%;
     max-width: none;
@@ -64,7 +59,6 @@
 html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
   .shell--mobile-nav.shell--merged-chat-chrome {
   --shell-topbar-height: 0px;
-  grid-template-rows: 0px minmax(0, 1fr);
 }
 
 html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
@@ -73,21 +67,30 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   display: none;
 }
 
+.shell--mobile-nav.shell--connection-status {
+  grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
+  grid-template-areas:
+    "topbar"
+    "connection"
+    "content";
+}
+
 .shell--mobile-nav .shell-nav,
 .shell--mobile-nav.shell--nav-collapsed .shell-nav {
   position: fixed;
-  top: max(8px, var(--safe-area-top, 0px));
-  bottom: max(8px, var(--safe-area-bottom, 0px));
-  left: 0;
+  top: calc(8px + var(--safe-area-top));
+  height: calc(var(--shell-content-height) - 16px);
+  left: var(--safe-area-left);
   z-index: 70;
-  width: min(86vw, 320px);
+  width: min(90vw, 336px);
+  max-width: calc(100vw - var(--safe-area-left) - var(--safe-area-right));
   min-width: 0;
   min-height: 0;
   border-inline-end: none;
   overflow: hidden;
   overscroll-behavior: contain;
   border-radius: 0 22px 22px 0;
-  box-shadow: 0 16px 48px color-mix(in srgb, black 30%, transparent);
+  box-shadow: var(--shadow-xl);
   transform: translateX(-100%);
   opacity: 0;
   pointer-events: none;
@@ -217,7 +220,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 }
 
 .shell--mobile-nav .sidebar-shell {
-  --sidebar-pad-x: 16px;
+  --sidebar-pad-x: 8px;
   --sidebar-pad-bottom: 14px;
   padding: 18px var(--sidebar-pad-x) var(--sidebar-pad-bottom);
   border-radius: 0;
@@ -299,55 +302,15 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 
   /* Topbar */
   .shell--mobile-nav .topbar {
-    display: flex;
     padding: 10px 12px;
     min-height: auto;
-  }
-
-  .shell--mobile-nav .topnav-shell {
-    gap: 10px;
-  }
-
-  .shell--mobile-nav .topnav-shell__actions {
-    min-width: 0;
-    justify-content: flex-end;
-  }
-
-  .shell--mobile-nav .topnav-shell__content {
-    display: flex;
-    justify-content: center;
-  }
-
-  .shell--mobile-nav .topbar-brand {
-    display: flex;
-  }
-
-  .shell--mobile-nav .topbar .topbar-nav-toggle {
-    display: inline-flex;
-  }
-
-  .shell--mobile-nav .topbar-search {
-    display: inline-flex;
-    justify-content: center;
-    width: 38px;
-    min-width: 38px;
-    height: 38px;
-    min-height: 38px;
-    padding: 0;
   }
 
   .shell--mobile-nav .sidebar-mode-switch {
     display: block;
   }
 
-  .shell--mobile-nav .shell-nav,
-  .shell--mobile-nav.shell--nav-collapsed .shell-nav {
-    width: min(86vw, 320px);
-    box-shadow: 0 16px 48px color-mix(in srgb, black 30%, transparent);
-  }
-
   .shell--mobile-nav .sidebar-shell {
-    --sidebar-pad-x: 14px;
     --sidebar-pad-bottom: 10px;
     padding: 8px var(--sidebar-pad-x) var(--sidebar-pad-bottom);
   }
@@ -424,11 +387,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   /* Chat */
-  .chat-session {
-    min-width: unset;
-    width: 100%;
-  }
-
   .chat-thread {
     margin-top: 0;
     /* Horizontal inset lives on .chat-thread-inner (see layout.css): padding
@@ -442,7 +400,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .agent-chat__input {
-    margin: 0 8px calc(10px + var(--safe-area-bottom));
+    margin: 0 8px 10px;
   }
 
   .agent-chat__input-btn,
@@ -464,12 +422,12 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     max-height: 380px;
   }
 
-  .content:has(openclaw-logs-page) {
+  main.content:where(.content--logs-page) {
     display: block;
     overflow-y: auto;
   }
 
-  .content:has(openclaw-logs-page) > openclaw-router-outlet,
+  main.content:where(.content--logs-page) > openclaw-router-outlet,
   .content openclaw-logs-page,
   .content .settings-workspace--fill-height,
   .content .settings-workspace--fill-height > .settings-workspace__body,
@@ -494,15 +452,15 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .log-time {
-    font-size: 12px; /* was 10px */
+    font-size: 12px;
   }
 
   .log-level {
-    font-size: 12px; /* was 9px */
+    font-size: 12px;
   }
 
   .log-subsystem {
-    font-size: 12px; /* was 11px */
+    font-size: 12px;
   }
 
   .log-message {
@@ -518,7 +476,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   .code-block {
     padding: 8px;
     border-radius: var(--radius-md);
-    font-size: 12px; /* was 11px */
+    font-size: 12px;
   }
 }
 
@@ -534,7 +492,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 
   .nav-item {
     padding: 6px 8px;
-    font-size: var(--control-ui-text-sm); /* was 11px */
+    font-size: var(--control-ui-text-sm);
   }
 
   .content {
@@ -560,13 +518,9 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 
   .btn {
     padding: 6px 10px;
-    font-size: 12px; /* was 11px */
+    font-size: 12px;
   }
 }
-
-/* ===========================================
-   Sessions table – responsive column hiding
-   =========================================== */
 
 /* nth-child is 1-based and includes the checkbox column (col 1). The optional
    Group column in category mode shifts later indexes; grouping is a desktop
@@ -700,7 +654,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   .data-table th,
   .data-table td {
     padding: 6px 4px;
-    font-size: 12px; /* was 11px */
+    font-size: 12px;
   }
 
   .session-key-cell {

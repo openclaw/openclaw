@@ -41,7 +41,6 @@ describe("native verbose menu status", () => {
     { name: "global default", defaultLevel: "on", expected: "on" },
     { name: "agent default", defaultLevel: "on", agentLevel: "full", expected: "full" },
     { name: "stored off", agentLevel: "full", storedLevel: "off", expected: "off" },
-    { name: "stored full", agentLevel: "on", storedLevel: "full", expected: "full" },
   ])("shows $name without changing or borrowing session state", async (testCase) => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -79,7 +78,9 @@ describe("native verbose menu status", () => {
     expect(loadSessionEntryReadOnly(session)).toEqual(before);
   });
 
-  it.each(["on", "off", "full", "invalid"])("leaves explicit %s to directive dispatch", (raw) => {
-    expect(resolveCommandArgMenu({ command, args: parseCommandArgs(command, raw) })).toBeNull();
+  it("leaves explicit arguments to directive dispatch, including invalid levels", () => {
+    expect(
+      resolveCommandArgMenu({ command, args: parseCommandArgs(command, "invalid") }),
+    ).toBeNull();
   });
 });

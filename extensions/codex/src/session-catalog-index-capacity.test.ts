@@ -165,19 +165,6 @@ describe("resident Codex catalog restore bounds", () => {
       expect(index.get("archived-middle")).toBeUndefined();
       expect(index.get("archived-new")?.archived).toBe(true);
       expect(index.get("active-19998")).toBeDefined();
-      const admitted = rows.flatMap((entry) => {
-        const value = index.get(entry.threadId);
-        return value ? [value] : [];
-      });
-      console.info(
-        "resident row payload measurements",
-        JSON.stringify(
-          [490, 20_000].map((count) => ({
-            rows: count,
-            serializedBytes: Buffer.byteLength(JSON.stringify(admitted.slice(0, count))),
-          })),
-        ),
-      );
     } finally {
       await index.close();
     }

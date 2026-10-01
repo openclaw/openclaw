@@ -1,5 +1,5 @@
 import type { APIChannel, APIMessage } from "discord-api-types/v10";
-import { ChannelType } from "discord-api-types/v10";
+import { ChannelType, Routes } from "discord-api-types/v10";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createThread,
@@ -7,14 +7,10 @@ import {
   editChannelMessage,
   getChannel,
   getChannelMessage,
-  listChannelArchivedThreads,
-  listGuildActiveThreads,
-  listChannelMessages,
-  listChannelPins,
   pinChannelMessage,
-  searchGuildMessages,
   unpinChannelMessage,
 } from "./internal/discord.js";
+import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { parseDiscordRetryAfterBodySeconds } from "./retry-after.js";
 import {
   classifyDiscordDeliveryFailure,
@@ -153,7 +149,7 @@ export async function readMessagesDiscord(
     params.around = messageQuery.around;
   }
   return assertDiscordResponseArray<APIMessage>(
-    await listChannelMessages(rest, channelId, params),
+    await rest.get(Routes.channelMessages(channelId), params),
     "message read",
   );
 }
@@ -218,14 +214,16 @@ export async function listPinsDiscord(
   opts: DiscordReactOpts,
 ): Promise<APIMessage[]> {
   const rest = resolveDiscordRest(opts);
-  return await listChannelPins(rest, channelId);
+  // SAFETY: Discord's pinned-message route returns an array of API messages.
+  return (await rest.get(Routes.channelPins(channelId))) as APIMessage[];
 }
 
 export async function createThreadDiscord(
   channelId: string,
   payload: DiscordThreadCreate,
-  opts: DiscordReactOpts,
+  opts: DiscordReactOpts & { assertCreateAllowed?: () => void },
 ): Promise<DiscordThreadCreateResult> {
+  const assertCreateAllowed = opts.assertCreateAllowed;
   const { rest, request } = createDiscordClient(opts);
   const body: Record<string, unknown> = { name: payload.name };
   if (!payload.messageId && payload.type !== undefined) {
@@ -248,12 +246,10 @@ export async function createThreadDiscord(
   }
   const isForumLike =
     channel?.type === ChannelType.GuildForum || channel?.type === ChannelType.GuildMedia;
-  const initialMessageContent = isForumLike
-    ? payload.content?.trim()
-      ? payload.content
-      : payload.name
-    : payload.content?.trim()
-      ? payload.content
+  const initialMessageContent = payload.content?.trim()
+    ? payload.content
+    : isForumLike
+      ? payload.name
       : "";
   const initialMessageChunks = buildDiscordTextChunks(initialMessageContent, {
     maxLinesPerMessage: DISCORD_THREAD_TRANSPORT_ONLY_MAX_LINES,
@@ -271,7 +267,10 @@ export async function createThreadDiscord(
   if (!payload.messageId && !isForumLike && body.type === undefined) {
     body.type = ChannelType.PublicThread;
   }
-  const thread = await createThread(rest, channelId, { body }, payload.messageId);
+  const thread = await withDiscordRequestAuthority(assertCreateAllowed, () => {
+    assertCreateAllowed?.();
+    return createThread(rest, channelId, { body }, payload.messageId);
+  });
 
   // Forum creation accepts exactly one starter message, so keep the first chunk in the
   // create request and deliver any remainder after Discord returns the new thread.
@@ -355,31 +354,27 @@ export async function listThreadsDiscord(payload: DiscordThreadList, opts: Disco
     if (payload.limit) {
       params.limit = payload.limit;
     }
-    return await listChannelArchivedThreads(rest, payload.channelId, params);
+    return await rest.get(Routes.channelThreads(payload.channelId, "public"), params);
   }
-  return await listGuildActiveThreads(rest, payload.guildId);
+  return await rest.get(Routes.guildActiveThreads(payload.guildId));
 }
 
 export async function searchMessagesDiscord(query: DiscordSearchQuery, opts: DiscordReactOpts) {
   const rest = resolveDiscordRest(opts);
   const params = new URLSearchParams();
   params.set("content", query.content);
-  if (query.channelIds?.length) {
-    for (const channelId of query.channelIds) {
-      params.append("channel_id", channelId);
-    }
+  for (const channelId of query.channelIds ?? []) {
+    params.append("channel_id", channelId);
   }
-  if (query.authorIds?.length) {
-    for (const authorId of query.authorIds) {
-      params.append("author_id", authorId);
-    }
+  for (const authorId of query.authorIds ?? []) {
+    params.append("author_id", authorId);
   }
   if (query.limit) {
     const limit = Math.min(Math.max(Math.floor(query.limit), 1), 25);
     params.set("limit", String(limit));
   }
   const result = assertDiscordResponseObject(
-    await searchGuildMessages(rest, query.guildId, params),
+    await rest.get(`/guilds/${query.guildId}/messages/search?${params.toString()}`),
     "message search",
   );
   // Discord returns HTTP 202 with code 110000 while the guild search index is warming.

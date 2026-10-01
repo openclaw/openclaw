@@ -8,9 +8,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/agent-hooks/compaction-safeguard.ts": Symbol.for(
     "openclaw.compactionSafeguardTestApi",
   ),
-  "src/agents/agent-tools.before-tool-call.wrapper.ts": Symbol.for(
-    "openclaw.beforeToolCallBlockedErrorTestApi",
-  ),
   "src/agents/apply-patch.ts": Symbol.for("openclaw.applyPatchTestApi"),
   "src/agents/auth-profiles/external-auth.ts": Symbol.for("openclaw.externalAuthTestApi"),
   "src/agents/auth-profiles/oauth.ts": Symbol.for("openclaw.oauthTestApi"),
@@ -23,14 +20,9 @@ const publications: Record<string, string | symbol> = {
   "src/agents/cli-auth-epoch.ts": Symbol.for("openclaw.cliAuthEpochTestApi"),
   "src/agents/cli-backends.ts": Symbol.for("openclaw.cliBackendsTestApi"),
   "src/agents/cli-runner/prepare.ts": Symbol.for("openclaw.cliRunnerPrepareTestApi"),
-  "src/agents/command/attempt-execution.helpers.ts": Symbol.for(
-    "openclaw.attemptExecutionHelpersTestApi",
-  ),
   "src/agents/embedded-agent-runner/context-engine-maintenance.ts": Symbol.for(
     "openclaw.contextEngineMaintenanceTestApi",
   ),
-  "src/agents/embedded-agent-runner/runs.ts": Symbol.for("openclaw.embeddedRunsTestApi"),
-  "src/agents/embedded-agent-tool-media.ts": Symbol.for("openclaw.embeddedSubscribeToolsTestApi"),
   "src/agents/mcp-ui-resource.ts": Symbol.for("openclaw.mcpUiResourceTestApi"),
   "src/agents/media-generation-task-status-shared.ts": Symbol.for(
     "openclaw.mediaGenerationDuplicateGuardTestApi",
@@ -47,18 +39,11 @@ const publications: Record<string, string | symbol> = {
   "src/agents/subagents/registry/subagent-registry.ts": Symbol.for(
     "openclaw.subagentRegistryTestApi",
   ),
-  "src/agents/subagents/spawn/subagent-spawn.ts": Symbol.for("openclaw.subagentSpawnTestApi"),
   "src/agents/subagents/swarm/swarm-scheduler.ts": Symbol.for("openclaw.swarmSchedulerTestApi"),
-  "src/agents/tool-search.ts": Symbol.for("openclaw.toolSearchTestApi"),
-  "src/agents/tools/agent-step.ts": Symbol.for("openclaw.agentStepTestApi"),
   "src/agents/tools/ask-user-tool.ts": Symbol.for("openclaw.askUserToolTestApi"),
   "src/agents/tools/image-tool.ts": Symbol.for("openclaw.imageToolTestApi"),
-  "src/agents/utils/tools-manager.ts": Symbol.for("openclaw.toolsManagerTestApi"),
   "src/agents/workspace-legacy-state.ts": Symbol.for("openclaw.workspaceLegacyStateTestApi"),
   "src/agents/worktrees/run-lease.ts": Symbol.for("openclaw.worktreeRunLeaseTestApi"),
-  "src/auto-reply/reply/agent-runner-session-reset.ts": Symbol.for(
-    "openclaw.agentRunnerSessionResetTestApi",
-  ),
   "src/auto-reply/reply/commands-login.ts": Symbol.for("openclaw.commandsLoginTestApi"),
   "src/auto-reply/reply/queue/enqueue.ts": Symbol.for("openclaw.queueEnqueueTestApi"),
   "src/auto-reply/reply/reply-run-registry.registry.ts": Symbol.for(
@@ -102,15 +87,8 @@ const publications: Record<string, string | symbol> = {
   "src/skills/lifecycle/upload-store.ts": Symbol.for("openclaw.skillUploadStoreTestApi"),
   "src/skills/runtime/remote-skills.ts": Symbol.for("openclaw.remoteNodeSkillsTestApi"),
   "src/system-agent/agent-turn.ts": Symbol.for("openclaw.systemAgentTurnTestApi"),
-  "src/system-agent/assistant-timeout.ts": Symbol.for("openclaw.systemAgentTimeoutTestApi"),
   "src/talk/client-voice-confirmation.ts": Symbol.for("openclaw.clientVoiceConfirmationTestApi"),
   "src/talk/client-voice-session.ts": Symbol.for("openclaw.clientVoiceSessionTestApi"),
-  "src/tasks/generated-media-task-activity.ts": Symbol.for(
-    "openclaw.generatedMediaTaskActivityTestApi",
-  ),
-  "src/tasks/task-flow-registry.store.ts": Symbol.for("openclaw.taskFlowRegistryStoreTestApi"),
-  "src/tasks/task-flow-registry.ts": Symbol.for("openclaw.taskFlowRegistryTestApi"),
-  "src/tasks/task-registry.ts": Symbol.for("openclaw.taskRegistryTestApi"),
 };
 
 // Vite's EvaluatedModuleNode.file is a normalized, query-free filesystem path.

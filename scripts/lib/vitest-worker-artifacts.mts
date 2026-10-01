@@ -10,6 +10,7 @@ export type VitestWorkerManifest = {
   inputs: Record<string, string>;
   outputs: Record<string, string>;
   durationMs: number;
+  cacheSignature?: string;
 };
 const root = fileURLToPath(new URL("../../", import.meta.url));
 export const hashVitestWorkerArtifact = (bytes: string | Buffer) =>
@@ -28,6 +29,7 @@ export const VITEST_WORKER_PREPARE_REPLY = "openclaw:test-subprocesses-prepared"
 export async function verifyVitestWorkerArtifacts(
   directory: string,
   manifest?: VitestWorkerManifest,
+  { inputsChangedAfter }: { inputsChangedAfter?: number } = {},
 ) {
   const completed: VitestWorkerManifest =
     manifest ??
@@ -54,6 +56,13 @@ export async function verifyVitestWorkerArtifacts(
         entries.slice(offset, offset + batchSize).map(async ([name, expected]) => {
           const filename = baseDir ? path.join(baseDir, name) : name;
           if (hashVitestWorkerArtifact(await fs.promises.readFile(filename)) !== expected) {
+            throw new Error(`${changed}: ${name}`);
+          }
+          if (
+            !baseDir &&
+            inputsChangedAfter !== undefined &&
+            (await fs.promises.stat(filename)).ctimeMs >= inputsChangedAfter
+          ) {
             throw new Error(`${changed}: ${name}`);
           }
         }),

@@ -3,6 +3,7 @@ import {
   readSessionMessageIdentity,
 } from "@openclaw/gateway-client/browser";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { escapeRegExp } from "../../../../src/shared/regexp.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
 import {
   accumulatedStreamText,
@@ -19,20 +20,13 @@ import {
 import {
   hasAssistantStreamPartReplacement,
   visibleAssistantStreamParts,
+  type ToolStreamReconciliationState,
 } from "./stream-reconciliation.ts";
 import {
   extractToolMessageRefs,
   resolveLiveToolStreamRefs,
   resolveMatchingLiveToolIdentity,
 } from "./tool-stream-identity.ts";
-
-type StreamSegmentPruningState = StreamCausalBoundaryState & {
-  chatStream: string | null;
-  chatStreamStartedAt: number | null;
-  chatToolMessages?: unknown[];
-  toolStreamById?: Map<string, unknown>;
-  toolStreamOrder?: unknown[];
-};
 
 type AssistantMessageVisibility = (message: unknown) => boolean;
 type StreamVisibility = (stream: string) => boolean;
@@ -72,7 +66,32 @@ export function discardStreamSegmentIndexes(
   );
 }
 
-export function reconcilePersistedAssistantStream(state: StreamSegmentPruningState): void {
+// Published history arrays and messages are immutable. Keep only the latest run
+// per array, and let replaced histories be collected along with their derivation.
+const persistedAssistantRuns = new WeakMap<unknown[], { runId: string; messages: unknown[] }>();
+
+function persistedAssistantRunMessages(history: unknown[] | undefined, runId: string): unknown[] {
+  const cached = history && persistedAssistantRuns.get(history);
+  if (cached?.runId === runId) {
+    return cached.messages;
+  }
+  const messages = (history ?? []).filter((message) => {
+    const identity = readSessionMessageIdentity(message);
+    return (
+      identity?.role === "assistant" &&
+      identity.id &&
+      !identity.isImported &&
+      identity.runId === runId &&
+      !readAssistantStreamSegmentIdentity(message)
+    );
+  });
+  if (history) {
+    persistedAssistantRuns.set(history, { runId, messages });
+  }
+  return messages;
+}
+
+export function reconcilePersistedAssistantStream(state: ToolStreamReconciliationState): void {
   const runId = state.chatRunId;
   if (!runId) {
     return;
@@ -99,16 +118,7 @@ export function reconcilePersistedAssistantStream(state: StreamSegmentPruningSta
   if (!stream) {
     return;
   }
-  const messages = (state.chatMessages ?? []).filter((message) => {
-    const identity = readSessionMessageIdentity(message);
-    return (
-      identity?.role === "assistant" &&
-      identity.id &&
-      !identity.isImported &&
-      identity.runId === runId &&
-      !readAssistantStreamSegmentIdentity(message)
-    );
-  });
+  const messages = persistedAssistantRunMessages(state.chatMessages, runId);
   const tail = resolveCumulativeAssistantTail(messages, stream, runId);
   const prefix = stream.slice(0, stream.length - (tail?.length ?? 0));
   if (!prefix) {
@@ -118,7 +128,7 @@ export function reconcilePersistedAssistantStream(state: StreamSegmentPruningSta
 }
 
 function retireCumulativePrefix(
-  state: StreamSegmentPruningState,
+  state: ToolStreamReconciliationState,
   runId: string,
   prefix: string,
   timestamp: number,
@@ -165,7 +175,7 @@ function retireCumulativePrefix(
 }
 
 function completePendingCommentary(
-  state: StreamSegmentPruningState,
+  state: ToolStreamReconciliationState,
   retired: ChatStreamSegment,
 ): { text: string } | null {
   const pending = retired.pendingCommentary;
@@ -185,10 +195,7 @@ function completePendingCommentary(
   } else {
     // Match only this already-owned occurrence. A coalesced delta may also
     // contain new output, including another identical commentary paragraph.
-    const pattern = expectedText
-      .split(/\s+/u)
-      .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-      .join("\\s+");
+    const pattern = expectedText.split(/\s+/u).map(escapeRegExp).join("\\s+");
     const match = new RegExp(`^\\s*${pattern}`, "u").exec(delivered);
     if (!match) {
       return null;
@@ -223,7 +230,7 @@ function completePendingCommentary(
 
 /** Transfer one cumulative occurrence to its first keyed owner. */
 export function retireCommentaryStream(
-  state: StreamSegmentPruningState,
+  state: ToolStreamReconciliationState,
   commentary: {
     runId: string;
     itemId: string;
@@ -328,7 +335,7 @@ export function prunePersistedAssistantStreamSegments(
 
 export function pruneHistoryReplacedStreamSegments(
   messages: unknown[],
-  state: StreamSegmentPruningState,
+  state: ToolStreamReconciliationState,
   opts: {
     isHiddenAssistantMessage: AssistantMessageVisibility;
     isHiddenStreamText: StreamVisibility;
@@ -371,7 +378,7 @@ export function pruneHistoryReplacedStreamSegments(
 }
 
 export function prunePersistedToolStreamMessages(
-  state: StreamSegmentPruningState,
+  state: ToolStreamReconciliationState,
   persistedToolIds: Set<string>,
 ) {
   if (persistedToolIds.size === 0) {

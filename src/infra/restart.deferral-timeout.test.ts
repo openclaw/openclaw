@@ -9,10 +9,10 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import {
-  consumeGatewaySigusr1RestartIntent,
+  consumeGatewayRestartIntent,
   deferGatewayRestartUntilIdle,
   resetGatewayRestartStateForInProcessRestart,
-  scheduleGatewaySigusr1Restart,
+  scheduleGatewayRestart,
   setPreRestartDeferralCheck,
 } from "./restart.js";
 
@@ -20,7 +20,7 @@ type RestartDeferralHooks = NonNullable<
   Parameters<typeof deferGatewayRestartUntilIdle>[0]["hooks"]
 >;
 
-const sigusr1Handler = () => {};
+const restartSignalHandler = () => {};
 
 describe("deferGatewayRestartUntilIdle timeout", () => {
   beforeEach(() => {
@@ -28,7 +28,7 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     resetGatewayRestartStateForInProcessRestart();
     resetGatewayWorkAdmission();
     // A listener makes restart emission use process.emit instead of process.kill.
-    process.on("SIGUSR1", sigusr1Handler);
+    process.on("SIGUSR2", restartSignalHandler);
   });
 
   afterEach(() => {
@@ -37,7 +37,7 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     vi.restoreAllMocks();
     resetGatewayRestartStateForInProcessRestart();
     resetGatewayWorkAdmission();
-    process.removeListener("SIGUSR1", sigusr1Handler);
+    process.removeListener("SIGUSR2", restartSignalHandler);
   });
 
   it("waits indefinitely when maxWaitMs is not specified", () => {
@@ -111,8 +111,9 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     vi.advanceTimersByTime(1_000);
 
     expect(hooks.onTimeout).toHaveBeenCalledOnce();
-    expect(consumeGatewaySigusr1RestartIntent()).toEqual({
+    expect(consumeGatewayRestartIntent()).toEqual({
       force: true,
+      drainBudgetExhausted: true,
       reason: "gateway.restart.deferral-timeout",
     });
   });
@@ -222,7 +223,7 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     const countEmission = () => {
       emissions += 1;
     };
-    process.on("SIGUSR1", countEmission);
+    process.on("SIGUSR2", countEmission);
     try {
       const hooks: RestartDeferralHooks = { onCheckError: vi.fn(), onReady: vi.fn() };
       let call = 0;
@@ -248,7 +249,7 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
       expect(emissions).toBe(1);
       expect(hooks.onReady).toHaveBeenCalledOnce();
     } finally {
-      process.removeListener("SIGUSR1", countEmission);
+      process.removeListener("SIGUSR2", countEmission);
     }
   });
 
@@ -257,7 +258,7 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     const countEmission = () => {
       emissions += 1;
     };
-    process.on("SIGUSR1", countEmission);
+    process.on("SIGUSR2", countEmission);
     try {
       const hooks: RestartDeferralHooks = { onCheckError: vi.fn(), onReady: vi.fn() };
       const counts: Array<number | "throw"> = [1, "throw", 0];
@@ -284,7 +285,7 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
       expect(emissions).toBe(1);
       expect(hooks.onReady).toHaveBeenCalledOnce();
     } finally {
-      process.removeListener("SIGUSR1", countEmission);
+      process.removeListener("SIGUSR2", countEmission);
     }
   });
 
@@ -293,7 +294,7 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     const countEmission = () => {
       emissions += 1;
     };
-    process.on("SIGUSR1", countEmission);
+    process.on("SIGUSR2", countEmission);
     try {
       const hooks: RestartDeferralHooks = { onCheckError: vi.fn(), onReady: vi.fn() };
       const counts: Array<number | "throw"> = ["throw", 0, "throw"];
@@ -318,7 +319,7 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
       await vi.advanceTimersByTimeAsync(10);
       expect(emissions).toBe(1);
     } finally {
-      process.removeListener("SIGUSR1", countEmission);
+      process.removeListener("SIGUSR2", countEmission);
     }
   });
 
@@ -364,8 +365,9 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     await vi.advanceTimersByTimeAsync(100);
 
     expect(hooks.onTimeout).toHaveBeenCalledOnce();
-    expect(consumeGatewaySigusr1RestartIntent()).toEqual({
+    expect(consumeGatewayRestartIntent()).toEqual({
       force: true,
+      drainBudgetExhausted: true,
       reason: "gateway.restart.deferral-timeout",
     });
   });
@@ -544,11 +546,11 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     setPreRestartDeferralCheck(() => {
       throw new Error("pending-work store unavailable");
     });
-    scheduleGatewaySigusr1Restart({ delayMs: 0 });
+    scheduleGatewayRestart({ delayMs: 0 });
     await vi.advanceTimersByTimeAsync(0);
-    expect(emit).not.toHaveBeenCalledWith("SIGUSR1");
+    expect(emit).not.toHaveBeenCalledWith("SIGUSR2");
     await vi.advanceTimersByTimeAsync(300_000);
-    expect(emit.mock.calls.filter(([event]) => event === "SIGUSR1")).toHaveLength(1);
-    expect(consumeGatewaySigusr1RestartIntent()).toEqual({ force: true });
+    expect(emit.mock.calls.filter(([event]) => event === "SIGUSR2")).toHaveLength(1);
+    expect(consumeGatewayRestartIntent()).toEqual({ force: true, drainBudgetExhausted: true });
   });
 });

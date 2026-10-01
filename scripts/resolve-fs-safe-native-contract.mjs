@@ -13,7 +13,18 @@ const LEGACY_PYTHON_ONLY_CONTRACTS = new Set([
   "2026.7.33:0.4.1",
   // 2026.7.34 retains the same Python-only dependency and runtime contract.
   "2026.7.34:0.4.1",
+  // 2026.7.35 retains the same Python-only dependency and runtime contract.
+  "2026.7.35:0.4.1",
 ]);
+
+function hasBundledNativeBinding(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/u.exec(version ?? "");
+  if (!match) {
+    return false;
+  }
+  const [, major, minor, patch] = match.map(Number);
+  return major === 0 && (minor === 5 || (minor === 4 && patch >= 2));
+}
 
 function listContainingBranches(ref) {
   try {
@@ -59,19 +70,24 @@ export function resolveFsSafeNativeContract({
   const packageJson = JSON.parse(packageSource);
   const fsSafeVersion = packageJson.dependencies?.["@openclaw/fs-safe"];
   const contractKey = `${packageJson.version ?? ""}:${fsSafeVersion ?? ""}`;
-  if (
-    !LEGACY_PYTHON_ONLY_CONTRACTS.has(`*:${fsSafeVersion ?? ""}`) &&
-    !LEGACY_PYTHON_ONLY_CONTRACTS.has(contractKey)
-  ) {
+  const legacyPythonOnly =
+    LEGACY_PYTHON_ONLY_CONTRACTS.has(`*:${fsSafeVersion ?? ""}`) ||
+    LEGACY_PYTHON_ONLY_CONTRACTS.has(contractKey);
+  const bundledNative = hasBundledNativeBinding(fsSafeVersion);
+  if (!legacyPythonOnly && !bundledNative) {
     return "required";
   }
   const defaults = readSource("src/infra/fs-safe-defaults.ts");
   if (defaults === null) {
     throw new Error("missing fs-safe defaults source");
   }
+  if (bundledNative && NATIVE_MARKER.test(defaults)) {
+    return "bundled";
+  }
   // fs-safe 0.3.0's public config module exports Python/lock controls only;
   // a built package on this exact dependency cannot consume native controls.
-  return defaults.includes('import { configureFsSafePython } from "@openclaw/fs-safe/config";') &&
+  return legacyPythonOnly &&
+    defaults.includes('import { configureFsSafePython } from "@openclaw/fs-safe/config";') &&
     !NATIVE_MARKER.test(defaults)
     ? "not-applicable"
     : "required";

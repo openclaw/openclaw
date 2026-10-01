@@ -187,7 +187,9 @@ async function withMatrixFixture(
 }
 
 describe("registered Matrix sender currentness", () => {
-  for (const registration of ["outbound", "message"] as const) {
+  // The message adapter delegates to outbound; only receipt projection needs both surfaces.
+  describe("shared outbound path", () => {
+    const registration = "message";
     it.each([false, true])(
       `${registration} media preparation with canceled=%s`,
       async (canceled) => {
@@ -270,99 +272,105 @@ describe("registered Matrix sender currentness", () => {
       });
     });
 
-    it(`${registration} preserves an accepted final receipt after caller cancellation`, async () => {
-      await withMatrixFixture(registration, async ({ senders, context, handlers, timeline }) => {
-        const caller = new AbortController();
-        const cancellation = new Error("Matrix caller canceled after request acceptance");
-        handlers.timeline = ({ response }) => {
-          caller.abort(cancellation);
-          respondJson(response, { event_id: "$accepted" });
-        };
-        const delivered: unknown[] = [];
-        const result = await senders.sendText({
-          ...context,
-          text: "accepted final body",
-          signal: caller.signal,
-          assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-          onPlatformSendDispatch: async () => caller.signal.throwIfAborted(),
-          onDeliveryResult: (value: unknown) => {
-            delivered.push(value);
-          },
-        });
-        const accepted = {
-          messageId: "$accepted",
-          receipt: {
-            primaryPlatformMessageId: "$accepted",
-            platformMessageIds: ["$accepted"],
-            parts: [{ platformMessageId: "$accepted", kind: "text" }],
-          },
-        };
-        expect(result).toMatchObject(accepted);
-        expect(delivered).toMatchObject([accepted]);
-        if (registration === "outbound") {
-          expect(result).toMatchObject({ content: "accepted final body" });
-          expect(delivered).toMatchObject([{ content: "accepted final body" }]);
-        }
-        expect(timeline).toHaveLength(1);
-      });
-    });
-
-    it(`${registration} preserves the first attachment result and rejects the remaining payload`, async () => {
-      await withMatrixFixture(
-        registration,
-        async ({ senders, context, handlers, uploads, timeline }) => {
+    it.each(["outbound", "message"] as const)(
+      "%s preserves an accepted final receipt after caller cancellation",
+      async (surface) => {
+        await withMatrixFixture(surface, async ({ senders, context, handlers, timeline }) => {
           const caller = new AbortController();
-          const cancellation = new Error("Matrix caller canceled after the first attachment");
-          const firstPath = `${MEDIA_ROOT}/first.txt`;
-          const secondPath = `${MEDIA_ROOT}/second.txt`;
-          const reads: string[] = [];
-          const delivered: unknown[] = [];
+          const cancellation = new Error("Matrix caller canceled after request acceptance");
           handlers.timeline = ({ response }) => {
             caller.abort(cancellation);
-            respondJson(response, { event_id: "$first-attachment" });
+            respondJson(response, { event_id: "$accepted" });
           };
-          const result = await settle(
-            senders.sendPayload({
-              ...context,
-              text: "first attachment caption",
-              payload: {
-                text: "first attachment caption",
-                mediaUrls: [firstPath, secondPath],
-              },
-              mediaReadFile: async (path) => {
-                reads.push(path);
-                return MEDIA_BYTES;
-              },
-              signal: caller.signal,
-              assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-              onPlatformSendDispatch: async () => caller.signal.throwIfAborted(),
-              onDeliveryResult: (value: unknown) => {
-                delivered.push(value);
-              },
-            }),
-          );
-          expect(result.value).toBeUndefined();
-          expect(result.error).toMatchObject({
-            message: expect.stringContaining(cancellation.message),
-          });
-          expect(reads).toEqual([firstPath]);
-          expect(uploads).toHaveLength(1);
-          expect(timeline).toHaveLength(1);
-          expect(delivered).toMatchObject([
-            {
-              messageId: "$first-attachment",
-              receipt: {
-                platformMessageIds: ["$first-attachment"],
-                parts: [{ platformMessageId: "$first-attachment", kind: "media" }],
-              },
+          const delivered: unknown[] = [];
+          const result = await senders.sendText({
+            ...context,
+            text: "accepted final body",
+            signal: caller.signal,
+            assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+            onPlatformSendDispatch: async () => caller.signal.throwIfAborted(),
+            onDeliveryResult: (value: unknown) => {
+              delivered.push(value);
             },
-          ]);
-          if (registration === "outbound") {
-            expect(delivered).toMatchObject([{ content: "first attachment caption" }]);
+          });
+          const accepted = {
+            messageId: "$accepted",
+            receipt: {
+              primaryPlatformMessageId: "$accepted",
+              platformMessageIds: ["$accepted"],
+              parts: [{ platformMessageId: "$accepted", kind: "text" }],
+            },
+          };
+          expect(result).toMatchObject(accepted);
+          expect(delivered).toMatchObject([accepted]);
+          if (surface === "outbound") {
+            expect(result).toMatchObject({ content: "accepted final body" });
+            expect(delivered).toMatchObject([{ content: "accepted final body" }]);
           }
-        },
-      );
-    });
+          expect(timeline).toHaveLength(1);
+        });
+      },
+    );
+
+    it.each(["outbound", "message"] as const)(
+      "%s preserves the first attachment result and rejects the remaining payload",
+      async (surface) => {
+        await withMatrixFixture(
+          surface,
+          async ({ senders, context, handlers, uploads, timeline }) => {
+            const caller = new AbortController();
+            const cancellation = new Error("Matrix caller canceled after the first attachment");
+            const firstPath = `${MEDIA_ROOT}/first.txt`;
+            const secondPath = `${MEDIA_ROOT}/second.txt`;
+            const reads: string[] = [];
+            const delivered: unknown[] = [];
+            handlers.timeline = ({ response }) => {
+              caller.abort(cancellation);
+              respondJson(response, { event_id: "$first-attachment" });
+            };
+            const result = await settle(
+              senders.sendPayload({
+                ...context,
+                text: "first attachment caption",
+                payload: {
+                  text: "first attachment caption",
+                  mediaUrls: [firstPath, secondPath],
+                },
+                mediaReadFile: async (path) => {
+                  reads.push(path);
+                  return MEDIA_BYTES;
+                },
+                signal: caller.signal,
+                assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+                onPlatformSendDispatch: async () => caller.signal.throwIfAborted(),
+                onDeliveryResult: (value: unknown) => {
+                  delivered.push(value);
+                },
+              }),
+            );
+            expect(result.value).toBeUndefined();
+            expect(result.error).toMatchObject({
+              message: expect.stringContaining(cancellation.message),
+            });
+            expect(reads).toEqual([firstPath]);
+            expect(uploads).toHaveLength(1);
+            expect(timeline).toHaveLength(1);
+            expect(delivered).toMatchObject([
+              {
+                messageId: "$first-attachment",
+                receipt: {
+                  platformMessageIds: ["$first-attachment"],
+                  parts: [{ platformMessageId: "$first-attachment", kind: "media" }],
+                },
+              },
+            ]);
+            if (surface === "outbound") {
+              expect(delivered).toMatchObject([{ content: "first attachment caption" }]);
+            }
+          },
+        );
+      },
+    );
 
     it(`${registration} retries a canceled DM mapping repair on the same client`, async () => {
       await withMatrixFixture(registration, async ({ senders, context, handlers, timeline }) => {
@@ -783,5 +791,5 @@ describe("registered Matrix sender currentness", () => {
         });
       },
     );
-  }
+  });
 });

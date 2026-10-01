@@ -440,7 +440,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
   });
 
   it.each([
-    { name: "default silence", cfg: emptyConfig, required: false },
+    { name: "default required reply", cfg: emptyConfig, required: true },
     { name: "allowed silence", cfg: groupSilenceConfig("allow"), required: false },
     { name: "disallowed silence", cfg: groupSilenceConfig("disallow"), required: true },
     {

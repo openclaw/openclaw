@@ -1,14 +1,6 @@
-/**
- * Bash command execution with streaming support and cancellation.
- */
-
 import { createStreamingBinaryOutputSanitizer } from "../shell-utils.js";
 import type { BashOperations } from "./tools/bash-operations.js";
 import { OutputAccumulator } from "./tools/output-accumulator.js";
-
-// ============================================================================
-// Types
-// ============================================================================
 
 export interface BashExecutorOptions {
   /** Callback for streaming output chunks (already sanitized) */
@@ -29,10 +21,6 @@ export interface BashResult {
   /** Path to temp file containing full output (if output exceeded truncation threshold) */
   fullOutputPath?: string;
 }
-
-// ============================================================================
-// Implementation
-// ============================================================================
 
 /**
  * Execute a bash command using custom BashOperations.

@@ -11,6 +11,7 @@ import type {
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { projectProviderError, type ProviderErrorProjection } from "../utils/provider-error.js";
+import { createZeroUsage } from "../utils/usage.js";
 
 type ProviderStreams<TApi extends Api, TOptions extends StreamOptions> = {
   stream: StreamFunction<TApi, TOptions>;
@@ -43,14 +44,7 @@ function createLazyLoadErrorMessage<TApi extends Api>(
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
     ...projectProviderError(error, signal),
     timestamp: Date.now(),
   };
@@ -139,6 +133,14 @@ const registerBuiltIns: RegisterBuiltIn[] = [
     "google-generative-ai",
     () => import("./google.js"),
     (module) => ({ stream: module.streamGoogle, streamSimple: module.streamSimpleGoogle }),
+  ),
+  createLazyRegistration(
+    "google-interactions",
+    () => import("./google-interactions.js"),
+    (module) => ({
+      stream: module.streamGoogleInteractions,
+      streamSimple: module.streamSimpleGoogleInteractions,
+    }),
   ),
   createLazyRegistration(
     "google-vertex",

@@ -372,27 +372,14 @@ describe("secrets audit", () => {
   });
 
   it("does not inspect or mutate legacy auth.json during audit", async () => {
-    await writeJsonFile(fixture.authJsonPath, {
-      openai: {
-        type: "api_key",
-        key: "sk-legacy-auth-json",
-      },
-    });
-
-    const report = await runSecretsAudit({ env: fixture.env });
-    expectFindingCode(report, "LEGACY_RESIDUE");
-    expect(report.filesScanned).not.toContain(fixture.authJsonPath);
-    const authJsonStat = await fs.stat(fixture.authJsonPath);
-    expect(authJsonStat.isFile()).toBe(true);
-    await expectPathMissing(fixture.authStorePath);
-  });
-
-  it("ignores malformed legacy auth JSON instead of reading it", async () => {
     await fs.writeFile(fixture.authJsonPath, "{invalid-json", "utf8");
 
     const report = await runSecretsAudit({ env: fixture.env });
     expectFindingCode(report, "LEGACY_RESIDUE");
     expectFindingFile(report, fixture.authJsonPath);
+    expect(report.filesScanned).not.toContain(fixture.authJsonPath);
+    await expect(fs.readFile(fixture.authJsonPath, "utf8")).resolves.toBe("{invalid-json");
+    await expectPathMissing(fixture.authStorePath);
   });
 
   it("reports Doctor-created auth archives without reading their contents", async () => {
@@ -545,16 +532,23 @@ describe("secrets audit", () => {
     expect(callCount).toBe(1);
   });
 
-  it("scans agent models.json files for plaintext provider apiKey values", async () => {
-    await writeModelsProvider({ apiKey: "sk-models-plaintext" }); // pragma: allowlist secret
+  it.each(["regular", "hardlinked"] as const)(
+    "scans %s agent models.json files for plaintext provider apiKey values",
+    async (kind) => {
+      await writeModelsProvider({ apiKey: "sk-models-plaintext" }); // pragma: allowlist secret
+      if (kind === "hardlinked") {
+        await fs.link(fixture.modelsPath, path.join(fixture.rootDir, "models-alias.json"));
+      }
 
-    const report = await runSecretsAudit({ env: fixture.env });
-    expectModelsFinding(report, {
-      code: "PLAINTEXT_FOUND",
-      jsonPath: "providers.openai.apiKey",
-    });
-    expect(report.filesScanned).toContain(fixture.modelsPath);
-  });
+      const report = await runSecretsAudit({ env: fixture.env });
+      expectModelsFinding(report, {
+        code: "PLAINTEXT_FOUND",
+        jsonPath: "providers.openai.apiKey",
+      });
+      expectModelsFinding(report, { code: "REF_UNRESOLVED", present: false });
+      expect(report.filesScanned).toContain(fixture.modelsPath);
+    },
+  );
 
   it("scans agent models.json files for plaintext provider header values", async () => {
     await writeModelsProvider({
@@ -649,9 +643,26 @@ describe("secrets audit", () => {
   });
 
   it("reports malformed models.json as unresolved findings", async () => {
-    await fs.writeFile(fixture.modelsPath, "{bad-json", "utf8");
+    const payloadMarker = "audit-raw";
+    await fs.writeFile(fixture.modelsPath, payloadMarker, "utf8");
     const report = await runSecretsAudit({ env: fixture.env });
     expectModelsFinding(report, { code: "REF_UNRESOLVED" });
+    expect(JSON.stringify(report)).not.toContain(payloadMarker);
+  });
+
+  it.each([null, 42])("ignores models.json with a %j root", async (value) => {
+    await writeJsonFile(fixture.modelsPath, value);
+    const report = await runSecretsAudit({ env: fixture.env });
+    expectModelsFinding(report, { code: "REF_UNRESOLVED", present: false });
+    expectModelsFinding(report, { code: "PLAINTEXT_FOUND", present: false });
+    expect(report.filesScanned).toContain(fixture.modelsPath);
+  });
+
+  it("skips initially missing models.json", async () => {
+    const report = await runSecretsAudit({ env: fixture.env });
+    expectModelsFinding(report, { code: "REF_UNRESOLVED", present: false });
+    expectModelsFinding(report, { code: "PLAINTEXT_FOUND", present: false });
+    expect(report.filesScanned).not.toContain(fixture.modelsPath);
   });
 
   it("reports non-regular models.json files as unresolved findings", async () => {
@@ -660,6 +671,24 @@ describe("secrets audit", () => {
     const report = await runSecretsAudit({ env: fixture.env });
     expectModelsFinding(report, { code: "REF_UNRESOLVED" });
   });
+
+  it.runIf(process.platform !== "win32").each(["present", "missing"] as const)(
+    "reports symlinked models.json with a %s target as unresolved findings",
+    async (targetState) => {
+      await writeModelsProvider({ apiKey: "linked-models-fixture" });
+      const target = path.join(fixture.rootDir, "models-target.json");
+      await fs.rename(fixture.modelsPath, target);
+      if (targetState === "missing") {
+        await fs.unlink(target);
+      }
+      await fs.symlink(target, fixture.modelsPath);
+
+      const report = await runSecretsAudit({ env: fixture.env });
+      expectModelsFinding(report, { code: "REF_UNRESOLVED" });
+      expectModelsFinding(report, { code: "PLAINTEXT_FOUND", present: false });
+      expect(report.filesScanned).toContain(fixture.modelsPath);
+    },
+  );
 
   it("reports oversized models.json as unresolved findings", async () => {
     // The audit rejects by stat before reading, so a sparse file proves the size bound cheaply.

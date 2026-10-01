@@ -23,7 +23,7 @@ extension LocationServiceCommon {
     }
 
     public func accuracyAuthorization() -> CLAccuracyAuthorization {
-        LocationServiceSupport.accuracyAuthorization(manager: self.locationManager)
+        self.locationManager.accuracyAuthorization
     }
 }
 
@@ -45,8 +45,14 @@ extension ConcurrentLocationServiceCommon {
         let requestID = UUID()
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
-            return try await LocationServiceSupport.requestLocation(manager: self.locationManager) { continuation in
+            let manager = self.locationManager
+            return try await withCheckedThrowingContinuation { continuation in
+                guard !Task.isCancelled else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
                 self.locationRequestContinuations[requestID] = continuation
+                manager.requestLocation()
             }
         } onCancel: {
             Task { @MainActor [weak self] in
@@ -62,30 +68,6 @@ extension ConcurrentLocationServiceCommon {
                 }
                 continuation.resume(throwing: CancellationError())
             }
-        }
-    }
-}
-
-enum LocationServiceSupport {
-    static func accuracyAuthorization(manager: CLLocationManager) -> CLAccuracyAuthorization {
-        if #available(iOS 14.0, macOS 11.0, *) {
-            return manager.accuracyAuthorization
-        }
-        return .fullAccuracy
-    }
-
-    @MainActor
-    static func requestLocation(
-        manager: CLLocationManager,
-        setContinuation: @escaping (CheckedContinuation<CLLocation, Error>) -> Void) async throws -> CLLocation
-    {
-        try await withCheckedThrowingContinuation { continuation in
-            guard !Task.isCancelled else {
-                continuation.resume(throwing: CancellationError())
-                return
-            }
-            setContinuation(continuation)
-            manager.requestLocation()
         }
     }
 }

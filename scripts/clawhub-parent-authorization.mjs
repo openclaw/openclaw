@@ -239,7 +239,19 @@ export function clawHubParentArtifactName(identity) {
   validateClawHubIdentity(identity);
   return `openclaw-clawhub-parent-authorization-v2-${identity.parentRunId}-${identity.parentRunAttempt}-${identity.runId}-${identity.runAttempt}`;
 }
+function rejectAlphaTransactions(transactions) {
+  if (transactions.packages.some((entry) => entry.version.includes("-alpha."))) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
+}
+
 export function createClawHubParentAuthorization(transactions, authorizationRoute) {
+  validateClawHubTransactions(transactions);
+  rejectAlphaTransactions(transactions);
+  return parentAuthorizationRecord(transactions, authorizationRoute);
+}
+
+function parentAuthorizationRecord(transactions, authorizationRoute) {
   const { identity: i, packages } = validateClawHubTransactions(transactions);
   if (!["automated-awaited", "automated-detached"].includes(authorizationRoute)) {
     throw new Error("Unsupported ClawHub authorization route.");
@@ -374,7 +386,7 @@ export function createClawHubRecoveryApproval(env, runGhJson = api) {
 }
 
 export function validateClawHubParentAuthorization(receipt, transactions) {
-  const expected = createClawHubParentAuthorization(transactions, receipt?.authorizationRoute);
+  const expected = parentAuthorizationRecord(transactions, receipt?.authorizationRoute);
   exactKeys(receipt, Object.keys(expected), "ClawHub parent authorization");
   for (const key of Object.keys(expected)) {
     same(receipt[key], expected[key], `Parent authorization ${key}`);
@@ -562,6 +574,7 @@ async function main() {
       )
       .toSorted((a, b) => a.name.localeCompare(b.name));
     result = validateClawHubTransactions({ schemaVersion: 1, identity, packages });
+    rejectAlphaTransactions(result);
     appendFileSync(
       process.env.GITHUB_OUTPUT,
       `identity=${JSON.stringify(identity)}\nartifact_name=${clawHubTransactionsArtifactName(identity)}\n`,

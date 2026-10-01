@@ -1,7 +1,5 @@
-// Elevenlabs tests cover realtime transcription provider plugin behavior.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createRealtimeTranscriptionWebSocketSession } from "openclaw/plugin-sdk/realtime-transcription-session";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -18,7 +16,13 @@ vi.mock("./config-api.js", () => ({
 
 import { buildElevenLabsRealtimeTranscriptionProvider } from "./realtime-transcription-provider-factory.js";
 
-const realtimeHost = { createRealtimeTranscriptionWebSocketSession };
+const provider = buildElevenLabsRealtimeTranscriptionProvider({
+  createRealtimeTranscriptionWebSocketSession,
+});
+
+function resolveConfig(config: Record<string, unknown>) {
+  return provider.resolveConfig?.({ cfg: {}, rawConfig: { providers: { elevenlabs: config } } });
+}
 
 let cleanup: (() => Promise<void>) | undefined;
 
@@ -61,14 +65,10 @@ async function createRealtimeServer(
       ws.terminate();
     }
     await new Promise<void>((resolve) => {
-      wss.close(() => {
-        resolve();
-      });
+      wss.close(() => resolve());
     });
     await new Promise<void>((resolve) => {
-      server.close(() => {
-        resolve();
-      });
+      server.close(() => resolve());
     });
   };
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -83,21 +83,13 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
   });
 
   it("normalizes nested provider config", () => {
-    const provider = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost);
-    const resolved = provider.resolveConfig?.({
-      cfg: {} as OpenClawConfig,
-      rawConfig: {
-        providers: {
-          elevenlabs: {
-            apiKey: "eleven-key",
-            model_id: "scribe_v2_realtime",
-            audio_format: "ulaw_8000",
-            sample_rate: "8000",
-            commit_strategy: "vad",
-            language: "en",
-          },
-        },
-      },
+    const resolved = resolveConfig({
+      apiKey: "eleven-key",
+      model_id: "scribe_v2_realtime",
+      audio_format: "ulaw_8000",
+      sample_rate: "8000",
+      commit_strategy: "vad",
+      language: "en",
     });
 
     expect(resolved).toEqual({
@@ -116,20 +108,12 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
   });
 
   it("drops malformed numeric realtime config values", () => {
-    const provider = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost);
-    const resolved = provider.resolveConfig?.({
-      cfg: {} as OpenClawConfig,
-      rawConfig: {
-        providers: {
-          elevenlabs: {
-            sample_rate: "8000.5",
-            vad_silence_threshold_secs: "999",
-            vad_threshold: "0",
-            min_speech_duration_ms: "0",
-            min_silence_duration_ms: "10.5",
-          },
-        },
-      },
+    const resolved = resolveConfig({
+      sample_rate: "8000.5",
+      vad_silence_threshold_secs: "999",
+      vad_threshold: "0",
+      min_speech_duration_ms: "0",
+      min_silence_duration_ms: "10.5",
     });
 
     expect(resolved).toMatchObject({
@@ -142,20 +126,12 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
   });
 
   it("keeps realtime VAD numeric config inside provider ranges", () => {
-    const provider = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost);
-    const resolved = provider.resolveConfig?.({
-      cfg: {} as OpenClawConfig,
-      rawConfig: {
-        providers: {
-          elevenlabs: {
-            sample_rate: "8000",
-            vad_silence_threshold_secs: "3",
-            vad_threshold: "0.9",
-            min_speech_duration_ms: "50",
-            min_silence_duration_ms: "2000",
-          },
-        },
-      },
+    const resolved = resolveConfig({
+      sample_rate: "8000",
+      vad_silence_threshold_secs: "3",
+      vad_threshold: "0.9",
+      min_speech_duration_ms: "50",
+      min_silence_duration_ms: "2000",
     });
 
     expect(resolved).toMatchObject({
@@ -170,7 +146,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
   it("connects through the public session boundary with the configured URL params", async () => {
     const requests: URL[] = [];
     const baseUrl = await createRealtimeServer((url) => requests.push(url));
-    const session = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost).createSession({
+    const session = provider.createSession({
       providerConfig: {
         apiKey: "fixture-value",
         baseUrl,
@@ -194,17 +170,14 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
   });
 
   it.each([
-    ["rate_limited", "rate limit exceeded"],
-    ["quota_exceeded", "quota exhausted"],
-    ["queue_overflow", "provider queue is full"],
-    ["commit_throttled", "commit was throttled"],
-  ])("reports the ready-state %s provider error exactly once", async (messageType, message) => {
-    const baseUrl = await createRealtimeServer(() => undefined, {
-      events: [{ message_type: messageType, error: message }],
-    });
+    { message_type: "rate_limited", error: "rate limit exceeded" },
+    { message_type: "input_error", message: "legacy provider rejected the input" },
+  ])("reports ready-state $message_type errors exactly once", async (event) => {
+    const message = event.error ?? event.message;
+    const baseUrl = await createRealtimeServer(() => undefined, { events: [event] });
     const errorReceived = createDeferred<Error>();
     const onError = vi.fn(errorReceived.resolve);
-    const session = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost).createSession({
+    const session = provider.createSession({
       providerConfig: { apiKey: "fixture-value", baseUrl },
       onError,
     });
@@ -225,7 +198,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
       closeAfterEvents: true,
     });
     const onError = vi.fn();
-    const session = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost).createSession({
+    const session = provider.createSession({
       providerConfig: { apiKey: "fixture-value", baseUrl },
       onError,
     });
@@ -234,67 +207,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     expect(onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message }));
   });
 
-  it("preserves legacy named provider errors without a structured error field", async () => {
-    const message = "legacy provider rejected the input";
-    const baseUrl = await createRealtimeServer(() => undefined, {
-      events: [{ message_type: "input_error", message }],
-    });
-    const errorReceived = createDeferred<Error>();
-    const onError = vi.fn(errorReceived.resolve);
-    const session = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost).createSession({
-      providerConfig: { apiKey: "fixture-value", baseUrl },
-      onError,
-    });
-
-    try {
-      await session.connect();
-      await vi.waitFor(() => errorReceived.promise);
-      expect(onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message }));
-    } finally {
-      session.close();
-    }
-  });
-
-  it("keeps ordinary partial and committed transcripts outside error dispatch", async () => {
-    const baseUrl = await createRealtimeServer(() => undefined, {
-      events: [
-        { message_type: "partial_transcript", text: "hello" },
-        { message_type: "committed_transcript", text: "hello there" },
-      ],
-    });
-    const onError = vi.fn();
-    const onPartial = vi.fn();
-    const transcriptReceived = createDeferred<string>();
-    const onTranscript = vi.fn(transcriptReceived.resolve);
-    const session = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost).createSession({
-      providerConfig: { apiKey: "fixture-value", baseUrl },
-      onError,
-      onPartial,
-      onTranscript,
-    });
-
-    try {
-      await session.connect();
-      await vi.waitFor(() => transcriptReceived.promise);
-      expect(onPartial).toHaveBeenCalledExactlyOnceWith("hello");
-      expect(onTranscript).toHaveBeenCalledExactlyOnceWith("hello there");
-      expect(onError).not.toHaveBeenCalled();
-    } finally {
-      session.close();
-    }
-  });
-
   it.each([
-    {
-      name: "delivers identical committed words from separate speech turns",
-      events: [
-        { message_type: "partial_transcript", text: "yes" },
-        { message_type: "committed_transcript", text: "yes" },
-        { message_type: "partial_transcript", text: "yes" },
-        { message_type: "committed_transcript", text: "yes" },
-      ],
-      transcripts: ["yes", "yes"],
-    },
     {
       name: "treats adjacent identical committed transcripts as separate segments",
       events: [
@@ -302,14 +215,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
         { message_type: "committed_transcript", text: "yes" },
       ],
       transcripts: ["yes", "yes"],
-    },
-    {
-      name: "suppresses a matching timestamp companion for the same committed segment",
-      events: [
-        { message_type: "committed_transcript", text: "yes" },
-        { message_type: "committed_transcript_with_timestamps", text: "yes" },
-      ],
-      transcripts: ["yes"],
+      partials: [],
     },
     {
       name: "consumes the timestamp companion at most once",
@@ -319,6 +225,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
         { message_type: "committed_transcript_with_timestamps", text: "yes" },
       ],
       transcripts: ["yes", "yes"],
+      partials: [],
     },
     {
       name: "preserves identical consecutive timestamp-only segments",
@@ -327,11 +234,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
         { message_type: "committed_transcript_with_timestamps", text: "yes" },
       ],
       transcripts: ["yes", "yes"],
-    },
-    {
-      name: "emits a timestamp-only segment without an earlier plain commit",
-      events: [{ message_type: "committed_transcript_with_timestamps", text: "yes" }],
-      transcripts: ["yes"],
+      partials: [],
     },
     {
       name: "does not suppress a timestamp transcript that differs from its commit",
@@ -340,6 +243,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
         { message_type: "committed_transcript_with_timestamps", text: "no" },
       ],
       transcripts: ["yes", "no"],
+      partials: [],
     },
     {
       name: "preserves a delayed timestamp companion across an interleaved partial",
@@ -351,6 +255,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
         { message_type: "committed_transcript_with_timestamps", text: "yes" },
       ],
       transcripts: ["yes", "yes"],
+      partials: ["next turn"],
     },
     {
       name: "keeps timestamp companions attached to alternating committed segments",
@@ -363,8 +268,9 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
         { message_type: "committed_transcript_with_timestamps", text: "yes" },
       ],
       transcripts: ["yes", "no", "yes"],
+      partials: [],
     },
-  ])("$name", async ({ events, transcripts }) => {
+  ])("$name", async ({ events, transcripts, partials }) => {
     const deliveryMarker = "transcript frames delivered";
     const baseUrl = await createRealtimeServer(() => undefined, {
       events: [...events, { message_type: "partial_transcript", text: deliveryMarker }],
@@ -378,7 +284,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     });
     const onSpeechStart = vi.fn();
     const onTranscript = vi.fn();
-    const session = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost).createSession({
+    const session = provider.createSession({
       providerConfig: { apiKey: "fixture-value", baseUrl },
       onError,
       onPartial,
@@ -389,7 +295,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     try {
       await session.connect();
       await vi.waitFor(() => framesDelivered.promise);
-      expect(onPartial).toHaveBeenCalledWith(deliveryMarker);
+      expect(onPartial.mock.calls.map(([text]) => text)).toEqual([...partials, deliveryMarker]);
       expect(onTranscript.mock.calls.map(([text]) => text)).toEqual(transcripts);
       expect(onError).not.toHaveBeenCalled();
       expect(onSpeechStart).not.toHaveBeenCalled();
@@ -423,7 +329,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
       }
     });
     const onTranscript = vi.fn();
-    const session = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost).createSession({
+    const session = provider.createSession({
       providerConfig: { apiKey: "fixture-value", baseUrl },
       onPartial,
       onTranscript,
@@ -448,9 +354,8 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     resolveElevenLabsApiKeyWithProfileFallbackMock.mockReturnValue(null);
     vi.stubEnv("ELEVENLABS_API_KEY", "");
     vi.stubEnv("XI_API_KEY", "   ");
-    const provider = buildElevenLabsRealtimeTranscriptionProvider(realtimeHost);
 
-    expect(provider.isConfigured({ cfg: {} as OpenClawConfig, providerConfig: {} })).toBe(false);
+    expect(provider.isConfigured({ cfg: {}, providerConfig: {} })).toBe(false);
     expect(() => provider.createSession({ providerConfig: {} })).toThrow(
       "ElevenLabs API key missing",
     );

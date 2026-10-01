@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { createSandboxBrowserTestHarness } from "./browser.create.test-helpers.js";
 import { SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH } from "./config-hash.js";
 import {
@@ -557,16 +558,34 @@ describe("ensureSandboxBrowser create args", () => {
 
   it("keeps a stalled CDP request inside the browser startup deadline", async () => {
     const sockets = new Set<Socket>();
+    const requestReceived = createDeferredCore();
+    const responseClosed = createDeferredCore();
+    const probeAdmitted = createDeferredCore();
+    const realSetTimeout = setTimeout;
+    const realClearTimeout = clearTimeout;
+    const waitForNetwork = async <T>(pending: Promise<T>, message: string): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          pending,
+          new Promise<never>((_resolve, reject) => {
+            timer = realSetTimeout(() => reject(new Error(message)), 2_000);
+            timer.unref();
+          }),
+        ]);
+      } finally {
+        if (timer) {
+          realClearTimeout(timer);
+        }
+      }
+    };
     let requestPath: string | undefined;
-    let resolveRequestReceived: (() => void) | undefined;
-    const requestReceived = new Promise<void>((resolve) => {
-      resolveRequestReceived = resolve;
-    });
-    const server = createServer((req, _res) => {
+    const server = createServer((req, res) => {
       requestPath = req.url;
       req.resume();
-      resolveRequestReceived?.();
-      // Accept the CDP request but never send response headers.
+      res.on("close", () => responseClosed.resolve());
+      requestReceived.resolve();
+      // Accept the actual CDP request but never send response headers.
     });
     server.on("connection", (socket) => {
       sockets.add(socket);
@@ -587,33 +606,58 @@ describe("ensureSandboxBrowser create args", () => {
       return null;
     });
     bridgeMocks.startBrowserBridgeServer.mockImplementationOnce(async (params) => {
+      probeAdmitted.resolve();
       await params.onEnsureAttachTarget?.({});
       throw new Error("expected CDP startup to time out before bridge creation");
     });
 
     const cfg = buildConfig(false);
     cfg.browser.autoStartTimeoutMs = 250;
-
+    let settled = false;
+    const errors: unknown[] = [];
+    let startupResult: Promise<{ ok: true } | { ok: false; error: unknown }> | undefined;
     try {
+      // Keep the production deadline clock still while native HTTP establishes
+      // the fixture's stalled request. Advance that same 250ms deadline only
+      // after real request admission; never replace fetch or its abort signal.
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const startup = ensureTestSandboxBrowser({
         scopeKey: "session:test",
         workspaceDir: harness.testWorkspaceDir,
         agentWorkspaceDir: harness.testWorkspaceDir,
         cfg,
       });
-      const startupResult = startup.then(
-        () => ({ ok: true as const }),
-        (error: unknown) => ({ ok: false as const, error }),
+      startupResult = startup.then(
+        () => {
+          settled = true;
+          return { ok: true as const };
+        },
+        (error: unknown) => {
+          settled = true;
+          return { ok: false as const, error };
+        },
       );
-      await Promise.race([
-        requestReceived,
-        new Promise<never>((_resolve, reject) => {
-          setTimeout(() => reject(new Error("CDP request was not received")), 2_000).unref();
-        }),
-      ]);
+      const earlySettlement = startupResult.then((result) => {
+        throw result.ok
+          ? new Error("Sandbox browser startup completed before the stalled request")
+          : result.error;
+      });
+      // Do not charge mount/container preparation to the network-admission
+      // guard, or hide an actual startup error behind an absent request.
+      await Promise.race([probeAdmitted.promise, earlySettlement]);
+      await waitForNetwork(
+        Promise.race([requestReceived.promise, earlySettlement]),
+        "CDP request was not received",
+      );
 
       expect(requestPath).toBe("/json/version");
-      const result = await startupResult;
+      await vi.advanceTimersByTimeAsync(cfg.browser.autoStartTimeoutMs - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await waitForNetwork(
+        startupResult,
+        "CDP startup did not settle at its deadline",
+      );
       expect(result.ok).toBe(false);
       if (result.ok) {
         throw new Error("expected stalled CDP startup to fail");
@@ -622,13 +666,35 @@ describe("ensureSandboxBrowser create args", () => {
       expect((result.error as Error).message).toContain(
         `within ${cfg.browser.autoStartTimeoutMs}ms. The hung container has been forcefully removed.`,
       );
+      await waitForNetwork(responseClosed.promise, "Aborted CDP response did not close");
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      if (startupResult && !settled) {
+        await vi.advanceTimersByTimeAsync(cfg.browser.autoStartTimeoutMs);
+        await waitForNetwork(startupResult, "CDP startup did not settle during fixture cleanup");
+      }
+    } catch (error) {
+      errors.push(error);
     } finally {
+      vi.useRealTimers();
       for (const socket of sockets) {
         socket.destroy();
       }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      try {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "CDP test and fixture cleanup failed");
     }
   });
 

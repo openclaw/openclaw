@@ -36,6 +36,107 @@ afterEach(() => {
   vi.resetModules();
 });
 
+it.each([false, true])(
+  "preserves native argv through the reader, WMIC fallback=%s",
+  async (fallback) => {
+    const { readWindowsProcessArgsResultSync } = await import("./windows-port-pids.js");
+    const command =
+      String.raw`"C:\Program Files\node.exe" "C:\Team Notes\\" "Office \"A\"" "" "%%PATH%% ^!value!"` +
+      ' "first\r\nsecond"';
+    if (fallback) {
+      mocks.spawn.mockReturnValueOnce({ status: 1, stdout: "" });
+    }
+    mocks.spawn.mockReturnValueOnce({
+      status: 0,
+      stdout: fallback ? `CommandLine=${command}\r\n` : command,
+    });
+
+    expect(readWindowsProcessArgsResultSync(424242, 1_000, routing)).toEqual({
+      ok: true,
+      args: [
+        "C:\\Program Files\\node.exe",
+        "C:\\Team Notes\\",
+        'Office "A"',
+        "",
+        "%%PATH%% ^!value!",
+        "first\r\nsecond",
+      ],
+    });
+  },
+);
+
+it.each([false, true])(
+  "keeps malformed native argv unavailable, WMIC fallback=%s",
+  async (fallback) => {
+    const { readWindowsProcessArgsResultSync } = await import("./windows-port-pids.js");
+    if (fallback) {
+      mocks.spawn.mockReturnValueOnce({ status: 1, stdout: "" });
+    }
+    mocks.spawn.mockReturnValueOnce({
+      status: 0,
+      stdout: fallback ? "CommandLine=node\0 gateway\r\n" : "node\0 gateway",
+    });
+
+    expect(readWindowsProcessArgsResultSync(424242, 1_000, routing)).toEqual({
+      ok: false,
+      permanent: false,
+    });
+  },
+);
+
+it("does not start the argv fallback after the ownership inspection deadline", async () => {
+  const { readWindowsProcessArgsSync } = await import("./windows-port-pids.js");
+  let elapsedMs = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+  mocks.spawn.mockImplementation((_file, _args, options) => {
+    elapsedMs += Number(options?.timeout ?? 0);
+    return { error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }), status: null };
+  });
+
+  expect(readWindowsProcessArgsSync(424242, 1_000, routing, 125)).toBeNull();
+  expect(elapsedMs).toBe(125);
+  expect(mocks.spawn).toHaveBeenCalledOnce();
+});
+
+it.each(["exhausted", "partial"] as const)(
+  "includes the %s cold-registry lookup in the argv allowance",
+  async (registryBudget) => {
+    const { readWindowsProcessArgsSync } = await import("./windows-port-pids.js");
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    let elapsedMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+    const registryRoot = "SystemRoot    REG_SZ    D:\\RegistryWindows\r\n";
+    mocks.exec.mockImplementation((_file, _args, options) => {
+      if (registryBudget === "exhausted") {
+        elapsedMs += Number(options?.timeout ?? 0);
+        throw Object.assign(new Error("registry timed out"), { code: "ETIMEDOUT" });
+      }
+      elapsedMs += 40;
+      return registryRoot;
+    });
+    mocks.spawn.mockImplementation((_file, _args, options) => {
+      elapsedMs += Number(options?.timeout ?? 0);
+      return { error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }), status: null };
+    });
+
+    await withSyntheticDiagnosticEnv(routing, async () => {
+      expect(readWindowsProcessArgsSync(424242, 1_000, process.env, 125)).toBeNull();
+      expect.soft(elapsedMs).toBe(125);
+      expect.soft(mocks.exec).toHaveBeenCalledOnce();
+      expect.soft(mocks.spawn).toHaveBeenCalledTimes(registryBudget === "exhausted" ? 0 : 1);
+
+      // A short observation must not cache its unverified environment fallback.
+      mocks.exec.mockReturnValue(registryRoot);
+      mocks.spawn.mockReturnValue({ status: 0, stdout: "node fixture-server" });
+      expect(readWindowsProcessArgsSync(424242)).toEqual(["node", "fixture-server"]);
+      expect(mocks.spawn.mock.lastCall?.[0]).toBe(
+        "D:\\RegistryWindows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      );
+    });
+  },
+);
+
 async function withWindowsDiagnostics(
   fallback: boolean,
   run: (modules: {

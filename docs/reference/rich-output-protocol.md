@@ -21,6 +21,8 @@ Remote attachments must be public `https:` URLs. `http:`, loopback, link-local, 
 
 Local attachments accept absolute paths, workspace-relative paths, or home-relative `~/` paths. They still pass the agent file-read policy and media type checks before delivery.
 
+Stored inbound attachments also accept `media://inbound/<id>` references from conversation history. Use the reference in a structured attachment field or a standalone `MEDIA:` line. The Gateway resolves it to the stored file and applies the same file-read and sandbox checks as an explicit local path.
+
 In Control UI chat, relative local references resolve against the session's working directory, including a selected project or worktree. They use the same authenticated media route as absolute paths; a missing file shows an attachment error instead of a literal `MEDIA:` line. Files on another execution host must first be delivered as managed attachments.
 
 <Warning>
@@ -38,7 +40,9 @@ For `message(action=send)`, use `media` for one attachment or `attachments: [{me
 In automatic visible-reply mode, final assistant replies can still attach media
 with a plain standalone `MEDIA:` line. WebChat also supports the committed
 commentary compatibility path described below. The parser only recognizes lines
-whose trimmed text starts with `MEDIA:` outside Markdown wrappers and code fences.
+whose trimmed text starts with `MEDIA:` outside Markdown wrappers and fenced or
+indented code blocks. Up to three leading spaces are accepted; four-space or tab
+indentation follows CommonMark code-block rules.
 
 Valid automatic-mode assistant output:
 

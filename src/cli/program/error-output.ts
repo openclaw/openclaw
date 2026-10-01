@@ -84,15 +84,7 @@ export function createCliParseError(
   const message = stripCommanderErrorPrefix(raw);
   const unknownCommand = message.match(/^unknown command ['"`](.+?)['"`]/i);
   if (unknownCommand) {
-    const command = unknownCommand[1] ?? "";
-    const commandPath = options.commandPath ?? [];
-    const humanOutput = formatCliUnknownCommandOutput(command, options);
-    return new ExpectedCliError({
-      message: formatUnknownCommandMessage(command, commandPath),
-      humanOutput,
-      humanOutputWritten: errorOptions.humanOutputWritten,
-      machineOutput: formatCliMachineOutput(humanOutput),
-    });
+    return createCliUnknownCommandError(unknownCommand[1] ?? "", options, errorOptions);
   }
   const humanOutput = formatCliParseErrorOutput(raw, options);
   return new ExpectedCliError({
@@ -106,12 +98,14 @@ export function createCliParseError(
 export function createCliUnknownCommandError(
   command: string,
   options: FormatCliParseErrorOptions = {},
+  errorOptions: { humanOutputWritten?: boolean } = {},
 ): ExpectedCliError {
   const commandPath = options.commandPath ?? [];
   const humanOutput = formatCliUnknownCommandOutput(command, options);
   return new ExpectedCliError({
     message: formatUnknownCommandMessage(command, commandPath),
     humanOutput,
+    humanOutputWritten: errorOptions.humanOutputWritten,
     machineOutput: formatCliMachineOutput(humanOutput),
   });
 }

@@ -24,6 +24,15 @@ afterEach(async () => {
   await stateWorkspace.cleanup();
 });
 
+function detectMigrations(stateDir: string) {
+  return detectDiscordLegacyStateMigrations({
+    cfg: {},
+    env: {},
+    oauthDir: path.join(stateDir, "credentials"),
+    stateDir,
+  });
+}
+
 describe("Discord model picker preference migration", () => {
   it("plans legacy command deployment cache deletion without importing hashes", async () => {
     const stateDir = stateWorkspace.dir;
@@ -31,14 +40,7 @@ describe("Discord model picker preference migration", () => {
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, "{malformed cache", "utf8");
 
-    const plans = await Promise.resolve(
-      detectDiscordLegacyStateMigrations({
-        cfg: {},
-        env: {},
-        oauthDir: path.join(stateDir, "credentials"),
-        stateDir,
-      }),
-    );
+    const plans = await detectMigrations(stateDir);
 
     expect(plans).toHaveLength(1);
     const plan = plans?.[0];
@@ -73,14 +75,7 @@ describe("Discord model picker preference migration", () => {
       }),
     );
 
-    const plans = await Promise.resolve(
-      detectDiscordLegacyStateMigrations({
-        cfg: {},
-        env: {},
-        oauthDir: path.join(stateDir, "credentials"),
-        stateDir,
-      }),
-    );
+    const plans = await detectMigrations(stateDir);
 
     if (!plans) {
       throw new Error("expected migration plans");
@@ -103,45 +98,6 @@ describe("Discord model picker preference migration", () => {
     });
   });
 
-  it("plans legacy JSON import with max Date timestamps", async () => {
-    const stateDir = stateWorkspace.dir;
-    const sourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");
-    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fs.writeFile(
-      sourcePath,
-      JSON.stringify({
-        version: 1,
-        entries: {
-          "discord:default:dm:user:max-date": {
-            recent: ["openai/gpt-5", "openai/gpt-4.1"],
-            updatedAt: "+275760-09-13T00:00:00.000Z",
-          },
-        },
-      }),
-    );
-
-    const plans = await Promise.resolve(
-      detectDiscordLegacyStateMigrations({
-        cfg: {},
-        env: {},
-        oauthDir: path.join(stateDir, "credentials"),
-        stateDir,
-      }),
-    );
-
-    const plan = plans?.[0];
-    if (plan?.kind !== "plugin-state-import") {
-      throw new Error("expected plugin-state import plan");
-    }
-    const entries = await plan.readEntries();
-    expect(
-      entries.map((entry) => {
-        const value = entry.value as { updatedAt?: unknown };
-        return value.updatedAt;
-      }),
-    ).toEqual(["+275760-09-13T00:00:00.000Z", "+275760-09-12T23:59:59.999Z"]);
-  });
-
   it("keeps legacy JSON import order near max Date", async () => {
     const stateDir = stateWorkspace.dir;
     const sourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");
@@ -159,14 +115,7 @@ describe("Discord model picker preference migration", () => {
       }),
     );
 
-    const plans = await Promise.resolve(
-      detectDiscordLegacyStateMigrations({
-        cfg: {},
-        env: {},
-        oauthDir: path.join(stateDir, "credentials"),
-        stateDir,
-      }),
-    );
+    const plans = await detectMigrations(stateDir);
 
     const plan = plans?.[0];
     if (plan?.kind !== "plugin-state-import") {
@@ -213,14 +162,7 @@ describe("Discord model picker preference migration", () => {
       }),
     );
 
-    const plans = await Promise.resolve(
-      detectDiscordLegacyStateMigrations({
-        cfg: {},
-        env: {},
-        oauthDir: path.join(stateDir, "credentials"),
-        stateDir,
-      }),
-    );
+    const plans = await detectMigrations(stateDir);
 
     expect(plans).toHaveLength(1);
     const plan = plans?.[0];
@@ -265,14 +207,7 @@ describe("Discord model picker preference migration", () => {
       JSON.stringify({ version: 1, bindings: {} }),
     );
 
-    const plans = await Promise.resolve(
-      detectDiscordLegacyStateMigrations({
-        cfg: {},
-        env: {},
-        oauthDir: path.join(stateDir, "credentials"),
-        stateDir,
-      }),
-    );
+    const plans = await detectMigrations(stateDir);
     if (!plans) {
       throw new Error("expected migration plans");
     }
@@ -325,14 +260,7 @@ describe("Discord model picker preference migration", () => {
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, JSON.stringify({ version: 1, bindings: {} }));
 
-    const plans = await Promise.resolve(
-      detectDiscordLegacyStateMigrations({
-        cfg: {},
-        env: {},
-        oauthDir: path.join(stateDir, "credentials"),
-        stateDir,
-      }),
-    );
+    const plans = await detectMigrations(stateDir);
 
     const plan = plans?.[0];
     if (plan?.kind !== "plugin-state-import") {
@@ -348,14 +276,7 @@ describe("Discord model picker preference migration", () => {
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, JSON.stringify({ version: 2, bindings: {} }));
 
-    const plans = await Promise.resolve(
-      detectDiscordLegacyStateMigrations({
-        cfg: {},
-        env: {},
-        oauthDir: path.join(stateDir, "credentials"),
-        stateDir,
-      }),
-    );
+    const plans = await detectMigrations(stateDir);
 
     const plan = plans?.[0];
     if (plan?.kind !== "plugin-state-import") {

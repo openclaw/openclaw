@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements lint behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -56,10 +55,6 @@ type LintMemoryWikiResult = {
   issuesByCategory: Record<MemoryWikiLintIssue["category"], MemoryWikiLintIssue[]>;
   reportPath: string;
 };
-
-function toExpectedPageType(page: WikiPageSummary): string {
-  return page.kind;
-}
 
 function isUnmanagedRawSourcePage(
   page: WikiPageSummary,
@@ -250,13 +245,13 @@ function collectPageIssues(
           message: "Missing `pageType` frontmatter.",
         });
       }
-    } else if (page.pageType !== toExpectedPageType(page)) {
+    } else if (page.pageType !== page.kind) {
       issues.push({
         severity: "error",
         category: "structure",
         code: "page-type-mismatch",
         path: page.relativePath,
-        message: `Expected pageType \`${toExpectedPageType(page)}\`, found \`${page.pageType}\`.`,
+        message: `Expected pageType \`${page.kind}\`, found \`${page.pageType}\`.`,
       });
     }
 

@@ -12,11 +12,12 @@ const OUTPUT_LOOPBACK_SHORT_CORRELATION_THRESHOLD = 0.98;
 const OUTPUT_LOOPBACK_RMS_THRESHOLD = 8;
 const OUTPUT_LOOPBACK_PEAK_THRESHOLD = 32;
 
-type MeetingOutputLoopbackHealth = {
+export type MeetingOutputLoopbackHealth = {
   lastOutputLoopbackAt?: string;
   lastOutputLoopbackCorrelation?: number;
   lastOutputLoopbackPeak?: number;
   lastOutputLoopbackRms?: number;
+  /** Non-silent sink audio observed again on the meeting microphone capture path. */
   outputLoopbackSignalBytes: number;
   outputGeneration: number;
   verifiedOutputGeneration?: number;

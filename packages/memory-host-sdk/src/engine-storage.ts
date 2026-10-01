@@ -1,11 +1,13 @@
 // Real workspace contract for memory engine storage/index helpers.
-export type { MemoryWorkspaceWatchRequest } from "./host/workspace-files.js";
+export type { MemoryWorkspaceFiles, MemoryWorkspaceWatchRequest } from "./host/workspace-files.js";
 
 export {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
   cosineSimilarity,
+  encodeMemoryEmbedding,
+  decodeMemoryEmbedding,
   extractProjectKeysFromCuratedEntry,
   ensureDir,
   hashText,

@@ -1,7 +1,9 @@
 // Gateway shared-auth generation enforcement.
 // Disconnects clients when config writes invalidate shared credentials.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { captureGatewayAuthPolicy, isGatewayAuthGrantCurrent } from "./auth-policy.js";
+import type { GatewayAuthPolicy } from "./auth-policy.types.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
 import {
   invalidateGatewayPolicyClient,
@@ -12,12 +14,12 @@ import {
 export type SharedGatewayAuthClient = GatewayPolicyClient & {
   usesSharedGatewayAuth?: boolean;
   sharedGatewaySessionGeneration?: string;
+  authPolicy?: GatewayAuthPolicy;
 };
 
-/** Mutable shared auth generation state. */
-export type SharedGatewaySessionGenerationState = {
-  current: string | undefined;
-  required: string | undefined | null;
+type SharedAuthConfigTransition = {
+  previous: OpenClawConfig;
+  next: OpenClawConfig;
 };
 
 export type SharedGatewaySessionGenerationOwnership = {
@@ -26,195 +28,258 @@ export type SharedGatewaySessionGenerationOwnership = {
   revision: number;
 };
 
-const stateRevisions = new WeakMap<SharedGatewaySessionGenerationState, number>();
+type SharedAuthInvalidation =
+  | { kind: "generation"; generation: string | undefined }
+  | { kind: "policy"; config: OpenClawConfig }
+  | { kind: "all" };
 
-const generationReaderStates = resolveGlobalSingleton(
-  Symbol.for("openclaw.sharedGatewaySessionGenerationReaders"),
-  () => new WeakMap<() => string | undefined, SharedGatewaySessionGenerationState>(),
-);
-
-/** Retain the actual generation owner for request admission across an awaited write. */
-export function createRequiredSharedGatewaySessionGenerationReader(
-  state: SharedGatewaySessionGenerationState,
-): () => string | undefined {
-  const read = () => getRequiredSharedGatewaySessionGeneration(state);
-  generationReaderStates.set(read, state);
-  return read;
+function isProxyPolicyTransition(transition: SharedAuthConfigTransition | undefined): boolean {
+  return Boolean(
+    transition?.previous.gateway?.auth?.mode === "trusted-proxy" &&
+    transition.previous.gateway.auth.trustedProxy &&
+    transition.next.gateway?.auth?.mode === "trusted-proxy" &&
+    transition.next.gateway.auth.trustedProxy,
+  );
 }
 
-/** Only readers created by this owner provide transaction-safe generation facts. */
-export function getSharedGatewaySessionGenerationReaderState(
-  read: (() => string | undefined) | undefined,
-): SharedGatewaySessionGenerationState | undefined {
-  return read ? generationReaderStates.get(read) : undefined;
+function resolveSharedAuthInvalidation(
+  generation: string | undefined | null,
+  transition?: SharedAuthConfigTransition,
+): SharedAuthInvalidation | undefined {
+  if (generation === null) {
+    return { kind: "all" };
+  }
+  // Proxy runs can outlive several handshake generations without losing their grant.
+  if (transition && isProxyPolicyTransition(transition)) {
+    const allowUsers = (config: OpenClawConfig) =>
+      JSON.stringify([...new Set(config.gateway?.auth?.trustedProxy?.allowUsers ?? [])].toSorted());
+    const fallbackGrant = (config: OpenClawConfig) =>
+      captureGatewayAuthPolicy(config, { role: "operator", authMethod: "password" })
+        .grantGeneration;
+    return allowUsers(transition.previous) === allowUsers(transition.next) &&
+      fallbackGrant(transition.previous) === fallbackGrant(transition.next)
+      ? undefined
+      : { kind: "policy", config: transition.next };
+  }
+  return { kind: "generation", generation };
 }
 
-function advanceStateRevision(state: SharedGatewaySessionGenerationState): number {
-  const revision = (stateRevisions.get(state) ?? 0) + 1;
-  stateRevisions.set(state, revision);
-  return revision;
+/** One Gateway owns its generation fields, revision and read-only admission capability. */
+export class SharedGatewaySessionGenerationState {
+  #current: string | undefined;
+  #required: string | undefined | null;
+  #revision = 0;
+  readonly #reader: GenerationReader;
+  readonly #invalidationListeners = new Set<(event: SharedAuthInvalidation) => void>();
+
+  constructor(initial: { current: string | undefined; required: string | undefined | null }) {
+    this.#current = initial.current;
+    this.#required = initial.required;
+    this.#reader = () => (this.#required === null ? this.#current : this.#required);
+    Object.defineProperty(this.#reader, generationReaderStateKey, {
+      value: new GenerationReaderBinding(this.#reader, this),
+    });
+  }
+
+  get current(): string | undefined {
+    return this.#current;
+  }
+
+  get required(): string | undefined | null {
+    return this.#required;
+  }
+
+  get requiredGeneration(): string | undefined {
+    return this.#required === null ? this.#current : this.#required;
+  }
+
+  get reader(): GenerationReader {
+    return this.#reader;
+  }
+
+  static fromReader(
+    read: GenerationReader | undefined,
+  ): SharedGatewaySessionGenerationState | undefined {
+    const binding: unknown =
+      read && Object.getOwnPropertyDescriptor(read, generationReaderStateKey)?.value;
+    return read ? GenerationReaderBinding.read(binding, read) : undefined;
+  }
+
+  /** Follow committed policy even after the originating client leaves the socket set. */
+  onInvalidated(
+    generation: string | undefined,
+    listener: () => void,
+    authPolicy?: GatewayAuthPolicy,
+  ): () => void {
+    return registerListener(this.#invalidationListeners, (event) => {
+      if (
+        event.kind === "policy"
+          ? !authPolicy || !isGatewayAuthGrantCurrent(authPolicy, event.config)
+          : event.kind === "all" || event.generation !== generation
+      ) {
+        listener();
+      }
+    });
+  }
+
+  publishInvalidation(event: SharedAuthInvalidation): void {
+    notifyListeners(this.#invalidationListeners, event);
+  }
+
+  capture(): SharedGatewaySessionGenerationOwnership {
+    return {
+      generation: this.#current,
+      previousGeneration: this.#current,
+      revision: this.#revision,
+    };
+  }
+
+  owns(ownership: SharedGatewaySessionGenerationOwnership): boolean {
+    return this.#revision === ownership.revision;
+  }
+
+  claim(
+    ownership: SharedGatewaySessionGenerationOwnership,
+    generation: string | undefined,
+  ): SharedGatewaySessionGenerationOwnership | null {
+    if (!this.owns(ownership)) {
+      return null;
+    }
+    const previousGeneration = this.#current;
+    this.#current = generation;
+    return { generation, previousGeneration, revision: ++this.#revision };
+  }
+
+  publish(next: { current: string | undefined; required: string | undefined | null }): void {
+    this.#current = next.current;
+    this.#required = next.required;
+    this.#revision++;
+  }
+
+  replace(
+    ownership: SharedGatewaySessionGenerationOwnership,
+    next: { current: string | undefined; required: string | undefined | null },
+  ): boolean {
+    if (!this.owns(ownership)) {
+      return false;
+    }
+    this.publish(next);
+    return true;
+  }
+
+  restoreCurrent(
+    ownership: SharedGatewaySessionGenerationOwnership,
+    current: string | undefined,
+  ): boolean {
+    if (!this.owns(ownership)) {
+      return false;
+    }
+    this.#current = current;
+    this.#revision++;
+    return true;
+  }
+
+  setRequired(
+    ownership: SharedGatewaySessionGenerationOwnership,
+    required: string | undefined | null,
+  ): SharedGatewaySessionGenerationOwnership | null {
+    if (!this.owns(ownership)) {
+      return null;
+    }
+    this.#required = required;
+    this.#revision++;
+    return this.capture();
+  }
+
+  finalize(
+    ownership: SharedGatewaySessionGenerationOwnership,
+    transition?: SharedAuthConfigTransition,
+  ): boolean {
+    if (!this.owns(ownership)) {
+      return false;
+    }
+    this.#current = ownership.generation;
+    if (
+      this.#required === ownership.generation ||
+      (this.#required !== null && ownership.previousGeneration !== ownership.generation)
+    ) {
+      this.#required = null;
+    }
+    this.#revision++;
+    const invalidation = resolveSharedAuthInvalidation(this.requiredGeneration, transition);
+    if (invalidation) {
+      this.publishInvalidation(invalidation);
+    }
+    return true;
+  }
 }
 
-/** Capture current generation-state ownership without mutating it. */
-export function captureSharedGatewaySessionGenerationOwnership(
-  state: SharedGatewaySessionGenerationState,
-): SharedGatewaySessionGenerationOwnership {
-  return {
-    generation: state.current,
-    previousGeneration: state.current,
-    revision: stateRevisions.get(state) ?? 0,
-  };
+const generationReaderStateKey = Symbol("sharedGatewaySessionGenerationReaderState");
+type GenerationReader = () => string | undefined;
+
+class GenerationReaderBinding {
+  readonly #owner: GenerationReader;
+  readonly #state: SharedGatewaySessionGenerationState;
+
+  constructor(owner: GenerationReader, state: SharedGatewaySessionGenerationState) {
+    this.#owner = owner;
+    this.#state = state;
+    Object.setPrototypeOf(this, null);
+    Object.freeze(this);
+  }
+
+  static read(
+    value: unknown,
+    owner: GenerationReader,
+  ): SharedGatewaySessionGenerationState | undefined {
+    return typeof value === "object" && value !== null && #owner in value && value.#owner === owner
+      ? value.#state
+      : undefined;
+  }
 }
 
-/** Disconnect shared-auth clients whose generation no longer matches the expected one. */
+/** Disconnect stale shared-auth clients; null revokes every generation. */
 export function disconnectStaleSharedGatewayAuthClients(params: {
   clients: Iterable<SharedGatewayAuthClient>;
-  expectedGeneration: string | undefined;
+  expectedGeneration: string | undefined | null;
+  state?: SharedGatewaySessionGenerationState;
+  revokeSource?: boolean;
+  transition?: SharedAuthConfigTransition;
 }): void {
+  const proxyPolicyTransition =
+    params.expectedGeneration !== null && isProxyPolicyTransition(params.transition);
   for (const gatewayClient of params.clients) {
     if (!gatewayClient.usesSharedGatewayAuth) {
       continue;
     }
-    if (gatewayClient.sharedGatewaySessionGeneration === params.expectedGeneration) {
+    const grantRevoked =
+      proxyPolicyTransition &&
+      gatewayClient.authPolicy !== undefined &&
+      !isGatewayAuthGrantCurrent(gatewayClient.authPolicy, params.transition?.next);
+    if (
+      gatewayClient.sharedGatewaySessionGeneration === params.expectedGeneration &&
+      !grantRevoked
+    ) {
       continue;
     }
     invalidateGatewayPolicyClient(gatewayClient, {
       reason: "gateway-auth-changed",
       code: 4001,
       message: "gateway auth changed",
+      revokeSource:
+        params.revokeSource !== false &&
+        (!proxyPolicyTransition || !gatewayClient.authPolicy || grantRevoked),
     });
   }
-}
-
-/** Disconnect every shared-auth client regardless of generation. */
-export function disconnectAllSharedGatewayAuthClients(
-  clients: Iterable<SharedGatewayAuthClient>,
-): void {
-  for (const gatewayClient of clients) {
-    if (!gatewayClient.usesSharedGatewayAuth) {
-      continue;
+  if (params.revokeSource !== false) {
+    const invalidation = resolveSharedAuthInvalidation(
+      params.expectedGeneration,
+      params.transition,
+    );
+    if (invalidation) {
+      params.state?.publishInvalidation(invalidation);
     }
-    invalidateGatewayPolicyClient(gatewayClient, {
-      reason: "gateway-auth-changed",
-      code: 4001,
-      message: "gateway auth changed",
-    });
   }
-}
-
-/** Resolve the generation clients must use, treating null as "current is required". */
-export function getRequiredSharedGatewaySessionGeneration(
-  state: SharedGatewaySessionGenerationState,
-): string | undefined {
-  return state.required === null ? state.current : state.required;
-}
-
-/** Claim current generation while preserving required until its transaction commits. */
-function claimSharedGatewaySessionGeneration(
-  state: SharedGatewaySessionGenerationState,
-  generation: string | undefined,
-): SharedGatewaySessionGenerationOwnership {
-  const previousGeneration = state.current;
-  state.current = generation;
-  return { generation, previousGeneration, revision: advanceStateRevision(state) };
-}
-
-/** Claim current only while no later generation-state writer has run. */
-export function claimSharedGatewaySessionGenerationIfOwned(
-  state: SharedGatewaySessionGenerationState,
-  ownership: SharedGatewaySessionGenerationOwnership,
-  generation: string | undefined,
-): SharedGatewaySessionGenerationOwnership | null {
-  if (!isSharedGatewaySessionGenerationOwnershipCurrent(state, ownership)) {
-    return null;
-  }
-  return claimSharedGatewaySessionGeneration(state, generation);
-}
-
-/** Check whether a transaction still owns all generation-state mutations. */
-export function isSharedGatewaySessionGenerationOwnershipCurrent(
-  state: SharedGatewaySessionGenerationState,
-  ownership: SharedGatewaySessionGenerationOwnership,
-): boolean {
-  return (stateRevisions.get(state) ?? 0) === ownership.revision;
-}
-
-/** Replace both generation fields as one ownership-changing mutation. */
-function replaceSharedGatewaySessionGenerationState(
-  state: SharedGatewaySessionGenerationState,
-  next: Pick<SharedGatewaySessionGenerationState, "current" | "required">,
-): void {
-  state.current = next.current;
-  state.required = next.required;
-  advanceStateRevision(state);
-}
-
-/** Replace both fields only while the caller still owns generation state. */
-export function replaceOwnedSharedGatewaySessionGenerationState(
-  state: SharedGatewaySessionGenerationState,
-  ownership: SharedGatewaySessionGenerationOwnership,
-  next: Pick<SharedGatewaySessionGenerationState, "current" | "required">,
-): boolean {
-  if (!isSharedGatewaySessionGenerationOwnershipCurrent(state, ownership)) {
-    return false;
-  }
-  replaceSharedGatewaySessionGenerationState(state, next);
-  return true;
-}
-
-/** Restore current only while preserving the required marker owned by the transaction. */
-export function restoreOwnedCurrentSharedGatewaySessionGeneration(
-  state: SharedGatewaySessionGenerationState,
-  ownership: SharedGatewaySessionGenerationOwnership,
-  current: string | undefined,
-): boolean {
-  if (!isSharedGatewaySessionGenerationOwnershipCurrent(state, ownership)) {
-    return false;
-  }
-  state.current = current;
-  advanceStateRevision(state);
-  return true;
-}
-
-/** Update the required marker as one ownership-changing mutation. */
-function setRequiredSharedGatewaySessionGeneration(
-  state: SharedGatewaySessionGenerationState,
-  required: string | undefined | null,
-): void {
-  state.required = required;
-  advanceStateRevision(state);
-}
-
-/** Update required only while no later generation-state writer has run. */
-export function setRequiredSharedGatewaySessionGenerationIfOwned(
-  state: SharedGatewaySessionGenerationState,
-  ownership: SharedGatewaySessionGenerationOwnership,
-  required: string | undefined | null,
-): SharedGatewaySessionGenerationOwnership | null {
-  if (!isSharedGatewaySessionGenerationOwnershipCurrent(state, ownership)) {
-    return null;
-  }
-  setRequiredSharedGatewaySessionGeneration(state, required);
-  return captureSharedGatewaySessionGenerationOwnership(state);
-}
-
-/** Finalize only while no later generation-state writer has replaced this owner. */
-export function finalizeOwnedSharedGatewaySessionGeneration(
-  state: SharedGatewaySessionGenerationState,
-  ownership: SharedGatewaySessionGenerationOwnership,
-): boolean {
-  if (!isSharedGatewaySessionGenerationOwnershipCurrent(state, ownership)) {
-    return false;
-  }
-  state.current = ownership.generation;
-  if (
-    state.required === ownership.generation ||
-    (state.required !== null && ownership.previousGeneration !== ownership.generation)
-  ) {
-    state.required = null;
-  }
-  advanceStateRevision(state);
-  return true;
 }
 
 /** Enforce shared auth generation behavior after a config write. */
@@ -223,26 +288,18 @@ export function enforceSharedGatewaySessionGenerationForConfigWrite(params: {
   nextConfig: OpenClawConfig;
   resolveRuntimeSnapshotGeneration: () => string | undefined;
   clients: Iterable<SharedGatewayAuthClient>;
+  transition?: SharedAuthConfigTransition;
 }): void {
   const reloadMode = resolveGatewayReloadSettings(params.nextConfig).mode;
   const nextSharedGatewaySessionGeneration = params.resolveRuntimeSnapshotGeneration();
-  if (reloadMode === "off") {
-    replaceSharedGatewaySessionGenerationState(params.state, {
-      current: nextSharedGatewaySessionGeneration,
-      required: nextSharedGatewaySessionGeneration,
-    });
-    disconnectStaleSharedGatewayAuthClients({
-      clients: params.clients,
-      expectedGeneration: nextSharedGatewaySessionGeneration,
-    });
-    return;
-  }
-  replaceSharedGatewaySessionGenerationState(params.state, {
+  params.state.publish({
     current: nextSharedGatewaySessionGeneration,
-    required: null,
+    required: reloadMode === "off" ? nextSharedGatewaySessionGeneration : null,
   });
   disconnectStaleSharedGatewayAuthClients({
+    state: params.state,
     clients: params.clients,
     expectedGeneration: nextSharedGatewaySessionGeneration,
+    transition: params.transition,
   });
 }

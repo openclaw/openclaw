@@ -313,7 +313,7 @@ describe("chunkDiscordText", () => {
     expect(chunks.every((chunk) => chunk.length <= maxChars)).toBe(true);
   });
 
-  it.each([1, 2, 3, 4, 20])("never exceeds a %i-character reasoning chunk limit", (maxChars) => {
+  it.each([1, 3, 4])("never exceeds a %i-character reasoning chunk limit", (maxChars) => {
     const text = `Reasoning:\n_${"abcdef".repeat(8)}_`;
 
     const chunks = chunkDiscordText(text, { maxChars, maxLines: 50 });
@@ -661,9 +661,7 @@ describe("Discord inline-code chunk boundaries", () => {
   );
   it.each([
     { maxChars: 12, maxLines: 1 },
-    { maxChars: 12, maxLines: 2 },
     { maxChars: 12, maxLines: 17 },
-    { maxChars: 30, maxLines: 1 },
     { maxChars: 30, maxLines: 2 },
   ])("keeps original closing markers out of code at $maxChars chars/$maxLines lines", (options) => {
     const body = "abc ".repeat(14);

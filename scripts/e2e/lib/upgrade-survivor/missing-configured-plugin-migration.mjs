@@ -5,6 +5,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { readJson, write, writeJson } from "../fixtures/common.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 
 const [command, ...args] = process.argv.slice(2);
@@ -18,19 +19,6 @@ const fixturePath = path.join(evidenceRoot, "fixture.json");
 const requestPath = path.join(evidenceRoot, "registry-requests.jsonl");
 const migrationId = "deferred-plugin-migration:codex";
 const bindingNamespace = "app-server-thread-bindings";
-
-function write(file, contents) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, contents);
-}
-
-function writeJson(file, value) {
-  write(file, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
 
 function digest(file) {
   return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
@@ -106,7 +94,7 @@ function withDatabase(read) {
 }
 
 function isPendingWarning(text) {
-  return /Plugin "codex" (?:state )?migration is (?:pending|deferred)/iu.test(
+  return /Plugin "codex" (?:(?:state )?migration is (?:pending|deferred)|data\/settings upgrade is unfinished)/iu.test(
     text.replaceAll('\\"', '"'),
   );
 }

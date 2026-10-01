@@ -1,317 +1,145 @@
-/**
- * Gateway server session-key routing tests.
- */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { create as createSessionRow } from "./session-row-projection-record.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 
 const hoisted = vi.hoisted(() => ({
   loadConfigMock: vi.fn<() => OpenClawConfig>(),
   loadCombinedSessionStoreForGatewayMock: vi.fn(),
 }));
-
-vi.mock("../config/io.js", () => ({
-  getRuntimeConfig: () => hoisted.loadConfigMock(),
+vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => hoisted.loadConfigMock() }));
+vi.mock("./session-utils.js", () => ({
+  loadCombinedSessionStoreForGatewayCore: (...args: unknown[]) =>
+    hoisted.loadCombinedSessionStoreForGatewayMock(...args),
 }));
+const { resolveSessionKeyForRun } = await import("./server-session-key.js");
 
-vi.mock("./session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
+function indexedProjection(store: Record<string, SessionEntry>) {
+  const index = new Map<string, ReturnType<SessionRowProjection["findBySessionId"]>>();
+  for (const [key, entry] of Object.entries(store)) {
+    const rows = index.get(entry.sessionId) ?? [];
+    rows.push({
+      ...createSessionRow({
+        key,
+        agentId: "main",
+        storeTarget: { agentId: "main", storePath: "fixture" },
+      }),
+      entry,
+    });
+    index.set(entry.sessionId, rows);
+  }
   return {
-    ...actual,
-    loadCombinedSessionStoreForGatewayCore: (
-      cfg: OpenClawConfig,
-      opts?: { agentId?: string; configuredAgentsOnly?: boolean },
-    ) => hoisted.loadCombinedSessionStoreForGatewayMock(cfg, opts),
+    findBySessionId: vi.fn<SessionRowProjection["findBySessionId"]>(
+      (query) => index.get(query.sessionId) ?? [],
+    ),
   };
-});
-
-const { resolveSessionKeyForRun, resetResolvedSessionKeyForRunCacheForTest } =
-  await import("./server-session-key.js");
-
-function mockCombinedSessionStore(cfg: OpenClawConfig, store: Record<string, unknown>) {
-  hoisted.loadConfigMock.mockReturnValue(cfg);
-  hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-    storePath: "(multiple)",
-    store,
-  });
 }
 
 describe("resolveSessionKeyForRun", () => {
   beforeEach(() => {
-    hoisted.loadConfigMock.mockReset();
+    hoisted.loadConfigMock.mockReturnValue({});
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReset();
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockImplementation(() => {
+      throw new Error("run lookup must not load a complete store");
+    });
     resetAgentEventsForTest();
-    resetResolvedSessionKeyForRunCacheForTest();
   });
-
   afterEach(() => {
     vi.useRealTimers();
     resetAgentEventsForTest();
-    resetResolvedSessionKeyForRunCacheForTest();
   });
 
-  it("resolves run ids from the combined gateway store and caches the result", () => {
-    const cfg: OpenClawConfig = {
-      session: {
-        store: "/custom/root/agents/{agentId}/sessions/sessions.json",
-      },
-    };
-    mockCombinedSessionStore(cfg, {
-      "agent:main:acp:run-1": { sessionId: "run-1", updatedAt: 123 },
-    });
-
-    expect(resolveSessionKeyForRun("run-1")).toBe("acp:run-1");
-    expect(resolveSessionKeyForRun("run-1")).toBe("acp:run-1");
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(1);
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
-      agentId: "main",
-    });
+  it.each([
+    { agentId: "main", key: "agent:main:acp:run-1", expected: "acp:run-1" },
+    { agentId: "retired", key: "agent:retired:acp:run-1", expected: "acp:run-1" },
+    { agentId: "main", key: "agent:work:acp:run-1", expected: undefined },
+  ])("keeps caller-facing keys scoped to $agentId for $key", ({ agentId, key, expected }) => {
+    const projection = indexedProjection({ [key]: { sessionId: "run-1", updatedAt: 123 } });
+    expect(resolveSessionKeyForRun("run-1", { agentId, projection })).toBe(expected);
   });
 
-  it("uses the requested agent scope for run lookups", () => {
-    const cfg: OpenClawConfig = {
-      session: {
-        store: "/custom/root/agents/{agentId}/sessions/sessions.json",
-      },
-    };
-    mockCombinedSessionStore(cfg, {
-      "agent:retired:acp:run-1": { sessionId: "run-1", updatedAt: 123 },
-    });
-
-    expect(resolveSessionKeyForRun("run-1", { agentId: "retired" })).toBe("acp:run-1");
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
-      agentId: "retired",
-    });
-  });
-
-  it("defaults run id lookups without explicit agent scope to the default agent", () => {
-    const cfg: OpenClawConfig = {
-      session: {
-        store: "/custom/root/agents/{agentId}/sessions/sessions.json",
-      },
-    };
-    mockCombinedSessionStore(cfg, {
-      "agent:retired:acp:run-1": { sessionId: "run-1", updatedAt: 123 },
-    });
-
-    expect(resolveSessionKeyForRun("run-1")).toBeUndefined();
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
-      agentId: "main",
-    });
-  });
-
-  it("filters same-run matches by requested agent for shared stores", () => {
-    const cfg: OpenClawConfig = {
-      session: {
-        store: "/custom/root/sessions/sessions.json",
-      },
-    };
-    hoisted.loadConfigMock.mockReturnValue(cfg);
-    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "/custom/root/sessions/sessions.json",
-      store: {
-        "agent:work:acp:run-1": { sessionId: "run-1", updatedAt: 123 },
-      },
-    });
-
-    expect(resolveSessionKeyForRun("run-1", { agentId: "main" })).toBeUndefined();
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
-      agentId: "main",
-    });
-  });
-
-  it("allows literal global session keys for scoped lookups when session scope is global", () => {
-    const cfg: OpenClawConfig = {
-      session: {
-        scope: "global",
-      },
-    };
-    mockCombinedSessionStore(cfg, {
-      global: { sessionId: "run-global", updatedAt: 123 },
-    });
-
-    expect(resolveSessionKeyForRun("run-global", { agentId: "work" })).toBe("global");
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
+  it("defaults an unscoped persisted lookup to the configured default agent", () => {
+    hoisted.loadConfigMock.mockReturnValue({ agents: { list: [{ id: "work", default: true }] } });
+    const projection = indexedProjection({ main: { sessionId: "run-1", updatedAt: 1 } });
+    expect(resolveSessionKeyForRun("run-1", { projection })).toBe("main");
+    expect(projection.findBySessionId).toHaveBeenCalledWith({
+      sessionId: "run-1",
       agentId: "work",
+      federated: true,
     });
   });
 
-  it("keeps qualified global main run ownership before collapsing its key", () => {
-    mockCombinedSessionStore(
-      {
-        session: { scope: "global" },
-        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-      },
-      {},
-    );
-    registerAgentRunContext("qualified-global-run", { sessionKey: "agent:research:main" });
-
-    expect(resolveSessionKeyForRun("qualified-global-run", { agentId: "research" })).toBe("main");
-    expect(resolveSessionKeyForRun("qualified-global-run", { agentId: "ops" })).toBeUndefined();
-  });
-
-  it("does not overwrite active run context when a scoped lookup finds another agent store entry", () => {
-    hoisted.loadConfigMock.mockReturnValue({});
-    registerAgentRunContext("run-1", { sessionKey: "agent:retired:acp:run-1" });
-    hoisted.loadCombinedSessionStoreForGatewayMock.mockImplementation(
-      (_cfg: OpenClawConfig, opts?: { agentId?: string }) => ({
-        storePath: "(multiple)",
-        store:
-          opts?.agentId === "main"
-            ? {
-                "agent:main:acp:run-1": { sessionId: "run-1", updatedAt: 123 },
-              }
-            : {},
-      }),
-    );
-
-    expect(resolveSessionKeyForRun("run-1", { agentId: "main" })).toBe("acp:run-1");
-    expect(resolveSessionKeyForRun("run-1", { agentId: "retired" })).toBe("acp:run-1");
-  });
-
-  it("keeps run lookup cache entries scoped by agent", () => {
-    hoisted.loadConfigMock.mockReturnValue({});
-    hoisted.loadCombinedSessionStoreForGatewayMock.mockImplementation(
-      (_cfg: OpenClawConfig, opts?: { agentId?: string }) => ({
-        storePath: "(multiple)",
-        store:
-          opts?.agentId === "retired"
-            ? {
-                "agent:retired:acp:run-1": { sessionId: "run-1", updatedAt: 123 },
-              }
-            : {},
-      }),
-    );
-
-    expect(resolveSessionKeyForRun("run-1", { agentId: "retired" })).toBe("acp:run-1");
-    expect(resolveSessionKeyForRun("run-1", { agentId: "main" })).toBeUndefined();
-    expect(resolveSessionKeyForRun("run-1")).toBeUndefined();
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(2);
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenNthCalledWith(
-      2,
-      {},
-      {
-        agentId: "main",
-      },
-    );
-  });
-
-  it("uses active legacy run contexts for the main agent", () => {
-    hoisted.loadConfigMock.mockReturnValue({});
-    registerAgentRunContext("run-live-main", { sessionKey: "main" });
-
-    expect(resolveSessionKeyForRun("run-live-main")).toBe("main");
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).not.toHaveBeenCalled();
-  });
-
-  it("uses active legacy run contexts for the configured default agent", () => {
+  it("keeps literal global and qualified global-main ownership", () => {
     hoisted.loadConfigMock.mockReturnValue({
-      agents: { list: [{ id: "work", default: true }] },
+      session: { scope: "global" },
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
     });
-    registerAgentRunContext("run-live-work", { sessionKey: "main" });
-
-    expect(resolveSessionKeyForRun("run-live-work")).toBe("main");
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).not.toHaveBeenCalled();
+    const projection = indexedProjection({ global: { sessionId: "global-run", updatedAt: 1 } });
+    expect(resolveSessionKeyForRun("global-run", { agentId: "research", projection })).toBe(
+      "global",
+    );
+    registerAgentRunContext("qualified-run", { sessionKey: "agent:research:main" });
+    expect(resolveSessionKeyForRun("qualified-run", { agentId: "research", projection })).toBe(
+      "main",
+    );
+    expect(
+      resolveSessionKeyForRun("qualified-run", { agentId: "ops", projection }),
+    ).toBeUndefined();
   });
 
-  it("uses non-default active run contexts without an explicit agent scope", () => {
-    hoisted.loadConfigMock.mockReturnValue({});
-    registerAgentRunContext("run-live-work", { sessionKey: "agent:work:main" });
+  it.each(["main", "agent:work:main"])(
+    "uses active context %s without any persisted lookup",
+    (sessionKey) => {
+      registerAgentRunContext("live", { sessionKey });
+      const projection = indexedProjection({});
+      expect(resolveSessionKeyForRun("live", { projection })).toBe(sessionKey);
+      expect(projection.findBySessionId).not.toHaveBeenCalled();
+    },
+  );
 
-    expect(resolveSessionKeyForRun("run-live-work")).toBe("agent:work:main");
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).not.toHaveBeenCalled();
+  it("does not infer a stored parent for intentionally keyless internal runs", () => {
+    const projection = indexedProjection({
+      "agent:main:main": { sessionId: "hidden", updatedAt: 1 },
+    });
+    registerAgentRunContext("hidden", { isControlUiVisible: false });
+    expect(resolveSessionKeyForRun("hidden", { projection })).toBeUndefined();
+    expect(projection.findBySessionId).not.toHaveBeenCalled();
   });
 
-  it("uses legacy store entries for the configured default agent", () => {
-    const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "work", default: true }] },
-    };
-    hoisted.loadConfigMock.mockReturnValue(cfg);
-    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(multiple)",
-      store: {
-        main: { sessionId: "run-legacy-default", updatedAt: 123 },
-      },
+  it("lets a scoped lookup find another agent without overwriting the live context", () => {
+    const projection = indexedProjection({
+      "agent:main:acp:run-1": { sessionId: "run-1", updatedAt: 1 },
     });
-
-    expect(resolveSessionKeyForRun("run-legacy-default")).toBe("main");
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
-      agentId: "work",
-    });
+    registerAgentRunContext("run-1", { sessionKey: "agent:retired:acp:run-1" });
+    expect(resolveSessionKeyForRun("run-1", { agentId: "main", projection })).toBe("acp:run-1");
+    expect(resolveSessionKeyForRun("run-1", { projection })).toBe("agent:retired:acp:run-1");
   });
 
-  it("lets active run context override a cached miss", () => {
-    hoisted.loadConfigMock.mockReturnValue({});
-    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(multiple)",
-      store: {},
-    });
-
-    expect(resolveSessionKeyForRun("run-race")).toBeUndefined();
-    registerAgentRunContext("run-race", { sessionKey: "agent:main:main" });
-
-    expect(resolveSessionKeyForRun("run-race")).toBe("agent:main:main");
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("caches misses briefly before re-checking the combined store", () => {
+  it("never reloads the store when orphan events outlive the old miss TTL", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-12T15:00:00Z"));
-    hoisted.loadConfigMock.mockReturnValue({});
-    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(multiple)",
-      store: {},
-    });
-
-    expect(resolveSessionKeyForRun("missing-run")).toBeUndefined();
-    expect(resolveSessionKeyForRun("missing-run")).toBeUndefined();
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(1);
-
-    vi.advanceTimersByTime(1_001);
-
-    expect(resolveSessionKeyForRun("missing-run")).toBeUndefined();
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(2);
+    const projection = indexedProjection({});
+    for (let second = 0; second < 10; second++) {
+      for (let run = 0; run < 20; run++) {
+        expect(resolveSessionKeyForRun(`orphan-${run}`, { projection })).toBeUndefined();
+      }
+      vi.advanceTimersByTime(1000);
+    }
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).not.toHaveBeenCalled();
+    registerAgentRunContext("orphan-0", { sessionKey: "agent:main:main" });
+    expect(resolveSessionKeyForRun("orphan-0", { projection })).toBe("agent:main:main");
   });
 
-  it("does not cache misses when miss expiry would exceed Date range", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-    hoisted.loadConfigMock.mockReturnValue({});
-    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(multiple)",
-      store: {},
+  it("prefers a structural ID match and refuses a tied ambiguous match", () => {
+    const projection = indexedProjection({
+      "agent:main:acp:run-dup": { sessionId: "run-dup", updatedAt: 100 },
+      "agent:main:other": { sessionId: "run-dup", updatedAt: 999 },
+      "agent:main:first": { sessionId: "run-tied", updatedAt: 100 },
+      "agent:main:second": { sessionId: "run-tied", updatedAt: 100 },
     });
-
-    expect(resolveSessionKeyForRun("missing-overflow")).toBeUndefined();
-    expect(resolveSessionKeyForRun("missing-overflow")).toBeUndefined();
-
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("prefers the structurally matching session key when duplicate session ids exist", () => {
-    hoisted.loadConfigMock.mockReturnValue({});
-    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(multiple)",
-      store: {
-        "agent:main:acp:run-dup": { sessionId: "run-dup", updatedAt: 100 },
-        "agent:main:other": { sessionId: "run-dup", updatedAt: 999 },
-      },
-    });
-
-    expect(resolveSessionKeyForRun("run-dup")).toBe("acp:run-dup");
-  });
-
-  it("refuses ambiguous duplicate session ids without a clear best match", () => {
-    hoisted.loadConfigMock.mockReturnValue({});
-    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(multiple)",
-      store: {
-        "agent:main:first": { sessionId: "run-ambiguous", updatedAt: 100 },
-        "agent:main:second": { sessionId: "run-ambiguous", updatedAt: 100 },
-      },
-    });
-
-    expect(resolveSessionKeyForRun("run-ambiguous")).toBeUndefined();
+    expect(resolveSessionKeyForRun("run-dup", { projection })).toBe("acp:run-dup");
+    expect(resolveSessionKeyForRun("run-tied", { projection })).toBeUndefined();
   });
 });

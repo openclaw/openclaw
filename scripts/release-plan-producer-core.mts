@@ -70,9 +70,9 @@ const REPOSITORY = "openclaw/openclaw";
 const VALIDATION_WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
 const PUBLICATION_WORKFLOW_PATH = ".github/workflows/openclaw-release-publish.yml";
 const NPM_CORE_PACKAGE_POLICY_PATH = "scripts/lib/npm-core-release-packages.json";
-const YAML_PACKAGE_VERSION = "2.9.0";
+const YAML_PACKAGE_VERSION = "2.9.1";
 const YAML_PACKAGE_INTEGRITY =
-  "sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA==";
+  "sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw==";
 function git(repoRoot: string, args: string[]): string {
   return execFileSync("git", args, {
     cwd: repoRoot,
@@ -642,13 +642,6 @@ function collectVerifiedInventory(
   const parsed = parseReleaseVersion(candidate.version);
   if (!parsed || parsed.version !== candidate.version) {
     throw new Error(`unsupported release version: ${candidate.version}`);
-  }
-  if (
-    source.verifiedTooling.route === "prevalidated-branch" &&
-    source.verifiedTooling.ref.startsWith("tideclaw/alpha/") &&
-    parsed.channel !== "alpha"
-  ) {
-    throw new Error("Tideclaw inventory requires an alpha candidate");
   }
   const inventory = {
     packages: candidate.packages,

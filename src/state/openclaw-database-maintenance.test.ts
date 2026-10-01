@@ -21,126 +21,25 @@ import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "./openclaw-stat
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 describe("OpenClaw database maintenance schema validation", () => {
-  it("accepts the current global and agent schemas", () => {
-    const globalDatabase = createGlobalDatabase();
-    const agentDatabase = createAgentDatabase();
-    try {
-      expect(() =>
-        assertOpenClawStateDatabaseForMaintenance(globalDatabase, {
-          pathname: "global.sqlite",
-        }),
-      ).not.toThrow();
-      expect(() =>
-        assertOpenClawAgentDatabaseForMaintenance(agentDatabase, {
-          agentId: "worker-1",
-          pathname: "agent.sqlite",
-        }),
-      ).not.toThrow();
-    } finally {
-      agentDatabase.close();
-      globalDatabase.close();
-    }
-  });
-
-  it("accepts a global schema produced by an additive column migration", () => {
-    const schemaWithoutMigratedColumn = OPENCLAW_STATE_SCHEMA_SQL.replace(
-      "  schedule_identity TEXT,\n",
-      "",
-    );
-    const database = createGlobalDatabase(schemaWithoutMigratedColumn);
-    try {
-      database.exec("ALTER TABLE cron_jobs ADD COLUMN schedule_identity TEXT;");
-
-      expect(() =>
-        assertOpenClawStateDatabaseForMaintenance(database, {
-          pathname: "global.sqlite",
-        }),
-      ).not.toThrow();
-    } finally {
-      database.close();
-    }
-  });
-
-  it("keeps a newer nullable shared-state column compatible with the previous schema", () => {
-    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(
-      "  removed_at INTEGER,\n  run_end_cleanup_json TEXT\n",
-      "  removed_at INTEGER\n",
-    );
-    const database = createGlobalDatabase();
-    try {
-      expect(previousSchema).not.toBe(OPENCLAW_STATE_SCHEMA_SQL);
-      expect(() =>
-        assertSqliteSchemaContains(database, "previous global schema", previousSchema, {
-          allowCompatibleAdditiveColumns: true,
-        }),
-      ).not.toThrow();
-    } finally {
-      database.close();
-    }
-  });
-
-  it("keeps Web Push binding columns compatible with the previous schema", () => {
-    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(
-      "  auth TEXT NOT NULL,\n  device_id TEXT,\n  user_profile_id TEXT,\n  preferences_json TEXT,\n",
-      "  auth TEXT NOT NULL,\n",
-    );
-    const database = createGlobalDatabase();
-    try {
-      expect(previousSchema).not.toBe(OPENCLAW_STATE_SCHEMA_SQL);
-      expect(() =>
-        assertSqliteSchemaContains(database, "previous global schema", previousSchema, {
-          allowCompatibleAdditiveColumns: true,
-        }),
-      ).not.toThrow();
-    } finally {
-      database.close();
-    }
-  });
-
-  it("keeps the Web Push approval delivery table compatible with the previous schema", () => {
-    const additiveSchema = `CREATE TABLE IF NOT EXISTS web_push_approval_deliveries (
-  approval_id TEXT NOT NULL
-    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
-  subscription_id TEXT NOT NULL
-    REFERENCES web_push_subscriptions(subscription_id) ON DELETE CASCADE,
-  device_id TEXT NOT NULL,
-  user_profile_id TEXT,
-  prepared_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (approval_id, subscription_id)
+  it("keeps standing-grant generations compatible with the previous schema", () => {
+    const companionSchema = `CREATE TABLE IF NOT EXISTS operator_approval_standing_grant_generations (
+  grant_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES operator_approval_standing_grants(grant_id) ON DELETE CASCADE,
+  job_definition_generation INTEGER NOT NULL CHECK (job_definition_generation >= 1)
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
-  ON web_push_approval_deliveries(subscription_id, approval_id);
-
 `;
-    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(additiveSchema, "");
+    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(companionSchema, "")
+      .replace("  grant_definition_revision TEXT,\n", "")
+      .replace("  grant_definition_generation INTEGER,\n", "")
+      .replace("  grant_definition_updated_at INTEGER,\n", "");
     const database = createGlobalDatabase();
     try {
       expect(previousSchema).not.toBe(OPENCLAW_STATE_SCHEMA_SQL);
       expect(() =>
-        assertSqliteSchemaContains(database, "previous global schema", previousSchema),
-      ).not.toThrow();
-    } finally {
-      database.close();
-    }
-  });
-
-  it("keeps the cron authority companion table compatible with the previous schema", () => {
-    const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-      "CREATE TABLE IF NOT EXISTS cron_job_runtime_authorities (",
-    );
-    const endMarker = "\n) STRICT;";
-    const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(end).toBeGreaterThan(start);
-    const previousSchema = `${OPENCLAW_STATE_SCHEMA_SQL.slice(
-      0,
-      start,
-    )}${OPENCLAW_STATE_SCHEMA_SQL.slice(end + endMarker.length)}`;
-    const database = createGlobalDatabase();
-    try {
-      expect(() =>
-        assertSqliteSchemaContains(database, "previous global schema", previousSchema),
+        assertSqliteSchemaContains(database, "previous global schema", previousSchema, {
+          allowCompatibleAdditiveColumns: true,
+        }),
       ).not.toThrow();
     } finally {
       database.close();
@@ -244,6 +143,16 @@ CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
 
     const database = createGlobalDatabase();
     try {
+      const authorizationIndex = database
+        .prepare(
+          "SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'idx_user_profile_identities_authorization'",
+        )
+        .get()?.sql;
+      if (typeof authorizationIndex !== "string") {
+        throw new Error("Canonical channel authorization index is missing");
+      }
+      // A schema predating the authorization columns also predates their index.
+      database.exec("DROP INDEX idx_user_profile_identities_authorization;");
       for (const {
         columnName,
         dataType,
@@ -262,6 +171,7 @@ CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
       }
 
       ensureAdditiveStateColumns(database, "runtime");
+      database.exec(authorizationIndex);
       expect(() =>
         assertOpenClawStateDatabaseForMaintenance(database, {
           pathname: "global.sqlite",

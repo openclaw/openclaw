@@ -1,3 +1,5 @@
+import { bytesToBase64 } from "../../lib/bytes-base64.ts";
+
 const MAX_PROFILE_AVATAR_EDGE = 512;
 const MAX_PROFILE_AVATAR_BYTES = 512 * 1024;
 const MAX_PROFILE_AVATAR_BASE64_CHARS = 700_000;
@@ -53,14 +55,6 @@ function canvasBlob(
   return new Promise((resolve) => {
     canvas.toBlob(resolve, mime, quality);
   });
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  const chunks: string[] = [];
-  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 0x8000)));
-  }
-  return btoa(chunks.join(""));
 }
 
 async function encodeAvatarBlob(

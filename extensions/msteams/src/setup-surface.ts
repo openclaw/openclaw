@@ -12,6 +12,7 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
+import { saveMSTeamsDelegatedTokens } from "./delegated-state.js";
 import { formatUnknownError } from "./errors.js";
 import {
   parseMSTeamsTeamEntry,
@@ -19,7 +20,7 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { createMSTeamsSetupWizardBase } from "./setup-core.js";
-import { resolveMSTeamsCredentials, saveDelegatedTokens } from "./token.js";
+import { resolveMSTeamsCredentials } from "./token.js";
 
 const t = createSetupTranslator();
 
@@ -240,13 +241,7 @@ const msteamsSetupWizardBase = createMSTeamsSetupWizardBase();
 
 export const msteamsSetupWizard: ChannelSetupWizard = {
   ...msteamsSetupWizardBase,
-  // Override finalize to layer on the optional delegated-auth bootstrap after
-  // the base wizard collects app credentials. This preserves main's shared
-  // setup-core flow while keeping the delegated OAuth step from this PR.
   finalize: async (params) => {
-    // setup-core always provides a finalize; the type is optional only because
-    // ChannelSetupWizard.finalize is generally optional. Fall back to the
-    // incoming cfg if the base ever returns void for forward-compat.
     const baseFinalize = msteamsSetupWizardBase.finalize;
     const baseResult = baseFinalize ? await baseFinalize(params) : undefined;
     let next = baseResult?.cfg ?? params.cfg;
@@ -310,7 +305,7 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
           progress.stop();
           throw err;
         }
-        await saveDelegatedTokens(tokens);
+        await saveMSTeamsDelegatedTokens(tokens);
         progress.stop(t("wizard.msteams.delegatedAuthConfigured"));
       }
     }

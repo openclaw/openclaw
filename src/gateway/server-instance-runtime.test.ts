@@ -49,6 +49,43 @@ function createRegistry(handlers: GatewayRequestHandlers) {
 }
 
 describe("createGatewayInstanceRuntime", () => {
+  it.each([false, true])(
+    "revalidates recovery authority across admission (dedicated principal=%s)",
+    async (dedicatedPrincipal) => {
+      const context = createContext();
+      const payload = { runId: "bound-recovery", status: "ok", summary: "completed" };
+      context.dedupe.set("agent:bound-recovery", { ts: Date.now(), ok: true, payload });
+      const runtime = createGatewayInstanceRuntime({
+        getContext: () => context,
+        getMethodRegistry: () => createRegistry({}),
+        isDispatchAvailable: () => true,
+      });
+      let requesterCurrent = true;
+      const options = {
+        expectFinal: true,
+        ...(dedicatedPrincipal
+          ? { internalDeliveryMediaUrls: ["https://example.test/media"] }
+          : {}),
+        assertAdmissionCurrent: () => {
+          if (!requesterCurrent) {
+            throw new Error("Recovery requester retired");
+          }
+        },
+      };
+      const request = { message: "completed media", idempotencyKey: "bound-recovery" };
+      try {
+        await expect(runtime.recovery.dispatchAgent(request, undefined, options)).resolves.toEqual(
+          payload,
+        );
+        const pending = runtime.recovery.dispatchAgent(request, undefined, options);
+        requesterCurrent = false;
+        await expect(pending).rejects.toThrow("Recovery requester retired");
+      } finally {
+        runtime.close();
+      }
+    },
+  );
+
   it("uses the typed recovery path and fails closed when the owning instance closes", async () => {
     let available = false;
     const rawAgent = vi.fn<NonNullable<GatewayRequestHandlers["agent"]>>(({ respond }) => {
@@ -227,7 +264,9 @@ describe("createGatewayInstanceRuntime", () => {
         await runtime.recovery.sendRecoveryNotice(notice);
         await runtime.recovery.sendRecoveryNotice(notice);
 
-        expect(findDeliveryIntentOwner(idempotencyKey)).toMatchObject({ status: "completed" });
+        expect(await findDeliveryIntentOwner(idempotencyKey)).toMatchObject({
+          status: "completed",
+        });
         expect(visibleSend).toHaveBeenCalledOnce();
 
         let ownerCurrent = true;
@@ -241,7 +280,7 @@ describe("createGatewayInstanceRuntime", () => {
           isCurrent: () => ownerCurrent,
         });
         await vi.waitFor(() => expect(sendText).toHaveBeenCalledTimes(2));
-        const queuedResumption = findDeliveryIntentOwner(
+        const queuedResumption = await findDeliveryIntentOwner(
           "main-session-restart-recovery:run-2:failed-notice",
         );
         ownerCurrent = false;
@@ -269,12 +308,12 @@ describe("createGatewayInstanceRuntime", () => {
           isCurrent: () => true,
         };
         await runtime.recovery.sendRecoveryNotice(guardedDurableNotice);
-        expect(findDeliveryIntentOwner(guardedDurableNotice.idempotencyKey)).toMatchObject({
+        expect(await findDeliveryIntentOwner(guardedDurableNotice.idempotencyKey)).toMatchObject({
           status: "completed",
         });
         await runtime.recovery.sendRecoveryNotice(guardedDurableNotice);
         expect(visibleSend).toHaveBeenCalledTimes(2);
-        expect(findDeliveryIntentOwner(guardedDurableNotice.idempotencyKey)).toMatchObject({
+        expect(await findDeliveryIntentOwner(guardedDurableNotice.idempotencyKey)).toMatchObject({
           status: "completed",
         });
       } finally {

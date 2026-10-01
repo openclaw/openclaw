@@ -374,7 +374,15 @@ export type OpenClawPluginServiceContext = {
   logger: PluginLogger;
   serviceHealth?: OpenClawPluginServiceHealth;
   /** Gateway-owned scheduler access, revoked when this service stops. */
-  getCron?: () => import("./hook-gateway.types.js").PluginHookGatewayCronService | undefined;
+  getCron?: () =>
+    | (import("./hook-gateway.types.js").PluginHookGatewayCronService & {
+        /** Admit service-owned work through the scheduler's normal run queue. */
+        enqueueRun?: (
+          id: string,
+          mode?: import("../cron/service/state.js").CronRunMode,
+        ) => Promise<import("../cron/service-contract.js").CronServiceRunResult>;
+      })
+    | undefined;
   /** Service-owned node calls for this plugin's commands; normal node policy still applies. */
   invokeNode?: (
     params: Omit<
@@ -382,6 +390,13 @@ export type OpenClawPluginServiceContext = {
       "scopes"
     >,
   ) => Promise<unknown>;
+  /** Service-owned binary transport for this plugin's duplex node commands. */
+  openNodeDuplex?: (
+    params: Omit<
+      Parameters<import("./runtime/types.js").PluginRuntime["nodes"]["openDuplex"]>[0],
+      "scopes"
+    > & { assertCurrent?: () => void },
+  ) => ReturnType<import("./runtime/types.js").PluginRuntime["nodes"]["openDuplex"]>;
   gatewayEvents?: import("./gateway-events.js").OpenClawPluginGatewayEvents;
   startupTrace?: {
     detail?: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;

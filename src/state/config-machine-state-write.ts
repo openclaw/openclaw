@@ -22,6 +22,23 @@ function serializeStateValue(value: unknown): string {
   return serialized;
 }
 
+function upsertConfigMachineState(
+  database: DatabaseSync,
+  stateKey: string,
+  valueJson: string,
+  now: number,
+): void {
+  executeSqliteQuerySync(
+    database,
+    getNodeSqliteKysely<ConfigMachineStateDatabase>(database)
+      .insertInto("config_machine_state")
+      .values({ state_key: stateKey, value_json: valueJson, updated_at_ms: now })
+      .onConflict((conflict) =>
+        conflict.column("state_key").doUpdateSet({ value_json: valueJson, updated_at_ms: now }),
+      ),
+  );
+}
+
 export function writeConfigMachineState(
   key: string,
   value: unknown,
@@ -31,18 +48,7 @@ export function writeConfigMachineState(
   const valueJson = serializeStateValue(value);
   const now = Date.now();
   runOpenClawStateWriteTransaction(
-    (database) => {
-      const db = getNodeSqliteKysely<ConfigMachineStateDatabase>(database.db);
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .insertInto("config_machine_state")
-          .values({ state_key: stateKey, value_json: valueJson, updated_at_ms: now })
-          .onConflict((conflict) =>
-            conflict.column("state_key").doUpdateSet({ value_json: valueJson, updated_at_ms: now }),
-          ),
-      );
-    },
+    ({ db }) => upsertConfigMachineState(db, stateKey, valueJson, now),
     options,
     { operationLabel: "config-machine-state.write" },
   );
@@ -109,16 +115,7 @@ export function updateConfigMachineStateInDatabase<T>(
     }
     return undefined;
   }
-  const valueJson = serializeStateValue(value);
-  executeSqliteQuerySync(
-    database,
-    db
-      .insertInto("config_machine_state")
-      .values({ state_key: stateKey, value_json: valueJson, updated_at_ms: now })
-      .onConflict((conflict) =>
-        conflict.column("state_key").doUpdateSet({ value_json: valueJson, updated_at_ms: now }),
-      ),
-  );
+  upsertConfigMachineState(database, stateKey, serializeStateValue(value), now);
   return value;
 }
 

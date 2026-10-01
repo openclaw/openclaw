@@ -462,6 +462,11 @@ describe("file links", () => {
 
   it.each([
     ["README.md", "markdown"],
+    ["SKILL.md", "skill"],
+    ["skills/review/skill.MD", "skill"],
+    ["C:\\skills\\review\\SKILL.md", "skill"],
+    ["skills/review/SKILL.markdown", "markdown"],
+    ["skills/review/other-skill.md", "markdown"],
     ["package.json", "package"],
     ["src/components/Button.tsx", "component"],
     ["src/index.ts", "code"],
@@ -476,6 +481,43 @@ describe("file links", () => {
     const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
     expect(link?.dataset.filePath).toBe(path);
     expect(link?.dataset.fileKind).toBe(kind);
+  });
+
+  it.each(["constructor", "__proto__", "notes.constructor", "notes.__proto__"])(
+    "uses the generic file glyph for the prototype-shaped filename %s",
+    (name) => {
+      const path = `/tmp/${name}`;
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(`[Read file](${path})`, { fileLinks: true }),
+      );
+      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
+      expect(link?.dataset.filePath).toBe(path);
+      expect(link?.dataset.fileKind).toBe("file");
+    },
+  );
+
+  it.each([
+    "skills/review/SKILL.md:12",
+    "`skills/review/SKILL.md:12`",
+    "[Review skill](skills/review/SKILL.md:12)",
+  ])("uses the skill kind without changing file navigation for %s", (input) => {
+    const fragment = htmlFragment(toSanitizedMarkdownHtml(input, { fileLinks: true }));
+    const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
+    expect(link?.dataset.fileKind).toBe("skill");
+    expect(link?.dataset.filePath).toBe("skills/review/SKILL.md");
+    expect(link?.dataset.fileLine).toBe("12");
+    expect(link?.getAttribute("role")).toBe("button");
+    expect(link?.getAttribute("tabindex")).toBe("0");
+    expect(link?.hasAttribute("href")).toBe(false);
+  });
+
+  it("keeps GitHub-hosted skill files owned by the external-link renderer", () => {
+    const url = "https://github.com/openclaw/openclaw/blob/main/skills/github/SKILL.md";
+    const fragment = htmlFragment(toSanitizedMarkdownHtml(`[Skill](${url})`, { fileLinks: true }));
+    const link = fragment.querySelector<HTMLAnchorElement>("a");
+    expect(link?.classList.contains("markdown-github-link")).toBe(true);
+    expect(link?.hasAttribute("data-file-kind")).toBe(false);
+    expect(link?.getAttribute("href")).toBe(url);
   });
 
   it.each([

@@ -90,8 +90,8 @@ for provider examples and precedence.
 - `subagents.allowAgents`: allowlist of configured agent ids for explicit `sessions_spawn.agentId` targets (`["*"]` = any configured target; default: same agent only). Include the requester id when self-targeted `agentId` calls should be allowed. Stale entries whose agent config was deleted are rejected by `sessions_spawn` and omitted from `agents_list`; run `openclaw doctor --fix` to clean them up, or add a minimal `agents.entries.*` entry if that target should remain spawnable while inheriting defaults.
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
 - `subagents.requireAgentId`: when true, block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection; default: false).
-- `subagents.maxConcurrent`: max concurrent child-agent runs across subagent execution. Default: `8`.
-- `subagents.maxChildrenPerAgent`: max active children a single agent session can spawn. Default: `5`.
+- `subagents.maxConcurrent`: max concurrent child-agent runs per immediate spawning/controller session. Default: `8`; independent sessions have independent budgets. Codex-native subagents use Codex's separate scheduler and limits.
+- `subagents.maxChildrenPerAgent`: separate admission limit on active children a single agent session can spawn. Default: `5`.
 - `subagents.maxSpawnDepth`: max nesting depth for sub-agent spawning (`1`-`5`). Default: `5`; set `1` to make direct children leaves.
 - `subagents.archiveAfterMinutes`: age before completed subagent state is archived. Default: `60`.
 

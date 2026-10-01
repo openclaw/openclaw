@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { buildAssistantText } from "./providers/mock-openai/mock-openai-assistant-text.js";
@@ -94,6 +95,11 @@ function rawCompletionInput(result: string, status = "completed; ready for paren
 type EvidenceCase =
   | "inherited"
   | "code-mode"
+  | "settled-batch"
+  | "settled-wrong-run"
+  | "settled-wrong-requester"
+  | "settled-wrong-result"
+  | "settled-wrong-parent"
   | "plain-parent"
   | "wrong-plain-parent"
   | "projected-tool"
@@ -108,10 +114,17 @@ type EvidenceCase =
   | "missing-completion"
   | "wrong-parent";
 
-async function runForkEvidence(evidence: EvidenceCase) {
+async function runForkEvidence(
+  evidence: EvidenceCase,
+  receiptWire: "direct" | "catalog" | "other-catalog-tool" | "unmatched-catalog-call" = "direct",
+) {
   const state = createQaBusState();
+  const settledBatch = evidence.startsWith("settled-");
   const usesPlainReply =
-    evidence === "plain-parent" || evidence === "projected" || evidence === "wrong-plain-parent";
+    settledBatch ||
+    evidence === "plain-parent" ||
+    evidence === "projected" ||
+    evidence === "wrong-plain-parent";
   let parentPrompt = prompt;
   let parentKey = "agent:qa:forked-context";
   const start = async (_env: unknown, params: { message: string; sessionKey: string }) => {
@@ -128,9 +141,28 @@ async function runForkEvidence(evidence: EvidenceCase) {
         mock: { baseUrl: "http://mock.test" },
       },
       normalizeLowercaseStringOrEmpty,
+      extractQaToolPayload,
       runAgentPrompt: start,
       startAgentRun: start,
+      readNativeQaSubagentRuns: async (_env: unknown, requesterSessionKey: string) => {
+        expect(requesterSessionKey).toBe(parentKey);
+        return [
+          {
+            runId: evidence === "settled-wrong-run" ? "another-run" : "child-run",
+            childSessionKey: childKey,
+            requesterSessionKey:
+              evidence === "settled-wrong-requester" ? "another-parent" : parentKey,
+            execution: { status: "terminal", outcome: { status: "ok" } },
+            delivery: { status: "delivered" },
+          },
+        ];
+      },
       readSessionTranscriptSummary: async (_env: unknown, sessionKey: string) => {
+        if (sessionKey === childKey) {
+          return {
+            finalText: evidence === "settled-wrong-result" ? "another result" : childResult,
+          };
+        }
         expect(sessionKey).toBe(parentKey);
         return {
           finalText: usesPlainReply && evidence !== "wrong-plain-parent" ? childResult : "NO_REPLY",
@@ -154,23 +186,43 @@ async function runForkEvidence(evidence: EvidenceCase) {
         }
         const parent = {
           cursor: 11,
+          sessionId: "parent-session",
           prompt: `[Mon 2026-08-31 12:00 UTC] ${parentPrompt}`,
           allInputText: parentPrompt,
           toolOutput: "",
           plannedToolName: "sessions_spawn",
+          ...(receiptWire !== "direct" ? { plannedWireToolName: "tool_call" } : {}),
           plannedToolCallId: "spawn-call",
           plannedToolArgs: { context: "fork", mode: "run", task },
           body: { input: [userInput(parentPrompt)] },
         };
+        const accepted = {
+          status: "accepted",
+          context: "fork",
+          childSessionKey: childKey,
+          runId: "child-run",
+        };
         const receipt = {
           cursor: 12,
           prompt: parentPrompt,
-          toolOutputCallId: "spawn-call",
-          toolOutput: JSON.stringify({
-            status: "accepted",
-            context: "fork",
-            childSessionKey: childKey,
-          }),
+          toolOutputCallId: receiptWire === "unmatched-catalog-call" ? "other-call" : "spawn-call",
+          // Captured tool_call wire contract: target identity plus unchanged
+          // AgentToolResult content/details, rather than a flat spawn receipt.
+          toolOutput: JSON.stringify(
+            receiptWire === "direct"
+              ? accepted
+              : {
+                  tool: {
+                    id: "openclaw:core:sessions_spawn",
+                    name: receiptWire === "other-catalog-tool" ? "sessions_send" : "sessions_spawn",
+                    source: "openclaw",
+                  },
+                  result: {
+                    content: [{ type: "text", text: JSON.stringify(accepted) }],
+                    details: accepted,
+                  },
+                },
+          ),
         };
         const currentTask =
           evidence === "task-leak" ? childTask.replace(task, `${task} ${code}`) : childTask;
@@ -202,7 +254,19 @@ async function runForkEvidence(evidence: EvidenceCase) {
         };
         const completion = {
           cursor: 14,
-          prompt: settledInput(childResult).content[0].text,
+          sessionId:
+            evidence === "settled-wrong-parent" ? "another-parent-session" : "parent-session",
+          // Current OpenClaw settled batches omit the model-facing source header.
+          prompt: settledBatch
+            ? settledInput(childResult)
+                .content[0].text.split("\n")
+                .slice(1)
+                .join("\n")
+                .replace(
+                  "Every subagent spawned from this session has now settled.",
+                  "Every subagent in this batch has now settled, including its descendants.",
+                )
+            : settledInput(childResult).content[0].text,
           allInputText: parentPrompt,
           ...(!usesPlainReply
             ? {
@@ -226,6 +290,121 @@ async function runForkEvidence(evidence: EvidenceCase) {
 }
 
 describe("subagent forked-context evidence", () => {
+  it.each([
+    { name: "catalog dispatcher alone", tools: ["tool_call"], delivery: undefined },
+    ...(["system", "developer", "instructions"] as const).map((carrier) => ({
+      name: `ordinary message prose in ${carrier}`,
+      // Reduced from the failed maintained canary: shell exec plus catalog
+      // controls, with no named message definition. The prose is not a tool list.
+      tools: ["exec", "tool_call", "tool_describe", "tool_search", "sessions_yield"],
+      instructions:
+        "Keep internal details private, and continue the request without waiting for another message.\n" +
+        "## Messaging\n- Current-session final text normally routes to source.\n" +
+        "- Cross-session: `sessions_send(sessionKey, message)`.\n" +
+        "## Tools\n- message: a local note does not grant availability.",
+      carrier,
+      delivery: undefined,
+    })),
+    { name: "similarly named tool", tools: ["tool_call", "message_preview"], delivery: undefined },
+    { name: "direct message", tools: ["tool_call", "message"], delivery: "message" },
+    {
+      name: "named catalog message",
+      tools: ["tool_call"],
+      instructions: "## Messaging\n### message tool\n- Proactive send/channel action: `message`.",
+      delivery: "tool_call",
+    },
+    {
+      name: "policy-filtered message list",
+      tools: ["tool_call"],
+      instructions:
+        "## Tooling\nTools policy-filtered. Names case-sensitive; call exact.\n- message: Message/channel actions\n## Safety\nFollow tool policy.",
+      delivery: "tool_call",
+    },
+    {
+      name: "Code Mode message",
+      tools: ["exec", "wait"],
+      instructions: "## Messaging\n### message tool\n- Proactive send/channel action: `message`.",
+      delivery: "exec",
+    },
+    {
+      name: "message declaration without an invocation surface",
+      tools: ["tool_search"],
+      instructions: "## Messaging\n### message tool\n- Proactive send/channel action: `message`.",
+      delivery: undefined,
+    },
+  ])(
+    "finishes fork completion with $name",
+    async ({ tools, instructions, delivery, ...testCase }) => {
+      const server = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
+      try {
+        const response = await fetch(`${server.baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            stream: false,
+            instructions:
+              "carrier" in testCase && testCase.carrier !== "instructions"
+                ? undefined
+                : instructions,
+            tools: tools.map((name) => ({
+              type: "function",
+              name,
+              ...(name === "exec"
+                ? {
+                    parameters: {
+                      type: "object",
+                      properties:
+                        delivery === "exec"
+                          ? { code: { type: "string" } }
+                          : { command: { type: "string" } },
+                      required: [delivery === "exec" ? "code" : "command"],
+                    },
+                  }
+                : {}),
+            })),
+            input: [
+              ...("carrier" in testCase && testCase.carrier !== "instructions"
+                ? [
+                    {
+                      role: testCase.carrier,
+                      content: [{ type: "input_text", text: instructions }],
+                    },
+                  ]
+                : []),
+              userInput(prompt),
+              settledInput(childResult),
+            ],
+          }),
+        });
+        expect(response.status).toBe(200);
+        const output = (await response.json()).output;
+        if (delivery) {
+          expect(output).toHaveLength(1);
+          expect(output[0]).toMatchObject({ type: "function_call", name: delivery });
+          const args = { action: "send", message: childResult, final: true };
+          const actual = JSON.parse(output[0].arguments);
+          if (delivery === "exec") {
+            const debug = await (await fetch(`${server.baseUrl}/debug/last-request`)).json();
+            expect(debug).toMatchObject({
+              plannedToolName: "message",
+              plannedToolArgs: args,
+              plannedWireToolName: "exec",
+            });
+          } else {
+            expect(actual).toEqual(delivery === "tool_call" ? { id: "message", args } : args);
+          }
+        } else {
+          expect(output).toMatchObject([
+            { type: "message", content: [{ type: "output_text", text: childResult }] },
+          ]);
+          expect(output).toHaveLength(1);
+        }
+      } finally {
+        await server.stop();
+      }
+    },
+  );
+
   it("does not dispatch a new spawn or completion from projected historical requests", async () => {
     const server = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
     try {
@@ -367,6 +546,44 @@ describe("subagent forked-context evidence", () => {
       await expect(runForkEvidence(evidence)).resolves.toMatchObject({ status: "pass" });
     },
   );
+
+  it("accepts the catalog-dispatched fork receipt and exact direct parent final", async () => {
+    await expect(runForkEvidence("plain-parent", "catalog")).resolves.toMatchObject({
+      status: "pass",
+    });
+  });
+
+  it("binds a header-free settled batch to the accepted native run and child result", async () => {
+    await expect(runForkEvidence("settled-batch", "catalog")).resolves.toMatchObject({
+      status: "pass",
+    });
+  });
+
+  it.each([
+    "settled-wrong-run",
+    "settled-wrong-requester",
+    "settled-wrong-result",
+    "settled-wrong-parent",
+  ] as const)("rejects %s despite matching completion text", async (evidence) => {
+    await expect(runForkEvidence(evidence, "catalog")).rejects.toThrow(
+      /parent completion request/i,
+    );
+  });
+
+  it.each(["other-catalog-tool", "unmatched-catalog-call"] as const)(
+    "rejects %s despite otherwise valid child evidence",
+    async (receiptWire) => {
+      await expect(runForkEvidence("plain-parent", receiptWire)).rejects.toThrow(
+        /successful fork receipt/i,
+      );
+    },
+  );
+
+  it("rejects another child's history after accepting a catalog receipt", async () => {
+    await expect(runForkEvidence("wrong-child", "catalog")).rejects.toThrow(
+      /child provider request/i,
+    );
+  });
 
   it.each([
     "missing-child",

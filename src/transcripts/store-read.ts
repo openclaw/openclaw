@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -289,6 +290,11 @@ export type TranscriptReadOptions = Omit<TranscriptsListParams, "cursor"> & {
 };
 
 const dateReaders = new WeakSet<DatabaseSync>();
+const dateParser = new AsyncLocalStorage<typeof parseDateStringTimestampMs>();
+
+function parseTranscriptDate(value: unknown): number | undefined {
+  return (dateParser.getStore() ?? parseDateStringTimestampMs)(value);
+}
 
 function registerTranscriptDateReader(database: DatabaseSync): void {
   if (dateReaders.has(database)) {
@@ -296,10 +302,7 @@ function registerTranscriptDateReader(database: DatabaseSync): void {
   }
   // Canonical database reopen creates a new handle. Date parsing is not
   // deterministic because timezone-free strings depend on the process timezone.
-  database.function(
-    "openclaw_transcript_date_ms",
-    (value) => parseDateStringTimestampMs(value) ?? null,
-  );
+  database.function("openclaw_transcript_date_ms", (value) => parseTranscriptDate(value) ?? null);
   dateReaders.add(database);
 }
 
@@ -353,16 +356,16 @@ export function* iterateTranscriptReadEntries(
     );
   }
   if (options.startedAfter) {
-    const startedAfter = parseDateStringTimestampMs(options.startedAfter) ?? null;
+    const startedAfter = parseTranscriptDate(options.startedAfter) ?? null;
     query = query.where((eb) => eb(transcriptStartTime(eb.ref("started_at")), ">=", startedAfter));
   }
   if (options.startedBefore) {
-    const startedBefore = parseDateStringTimestampMs(options.startedBefore) ?? null;
+    const startedBefore = parseTranscriptDate(options.startedBefore) ?? null;
     query = query.where((eb) => eb(transcriptStartTime(eb.ref("started_at")), "<", startedBefore));
   }
   if (options.after) {
     const after = options.after;
-    const afterTime = parseDateStringTimestampMs(after.startedAt);
+    const afterTime = parseTranscriptDate(after.startedAt);
     query = query.where((eb) => {
       const time = transcriptStartTime(eb.ref("started_at"));
       const afterIdentity = eb(
@@ -509,7 +512,15 @@ export function readLatestTranscriptEntry(database: DatabaseSync) {
   return row ? transcriptReadEntryFromRow(row) : undefined;
 }
 
-export function queryTranscriptReadEntries(database: DatabaseSync, options: TranscriptReadOptions) {
+export function queryTranscriptReadEntries(
+  database: DatabaseSync,
+  options: TranscriptReadOptions,
+  parseDate = parseDateStringTimestampMs,
+) {
+  return dateParser.run(parseDate, () => collectTranscriptReadEntries(database, options));
+}
+
+function collectTranscriptReadEntries(database: DatabaseSync, options: TranscriptReadOptions) {
   const entries: TranscriptReadEntry[] = [];
   let bytes = 0;
   for (const entry of iterateTranscriptReadEntries(database, options)) {

@@ -4,51 +4,28 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { embeddedAgentLog, type AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { CURRENT_SESSION_VERSION, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { readCodexSessionContext } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
 import { readCodexNativeHistory } from "./session-history-read.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
+import { setupSessionHistoryFixtures, settledFixture } from "./session-history.test-support.js";
 import {
   captureCodexSettledTurnFinalizationContext,
   CodexSettledTurnContext,
 } from "./settled-turn-context.js";
 import {
   attachCodexMirrorIdentity,
-  attachUpstreamUserText,
   readMirrorIdentity,
   readUpstreamUserText,
 } from "./upstream-prompt-provenance.js";
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  for (const dir of tempDirs.splice(0)) {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
-});
-
-async function writeSession(records: unknown[]): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-"));
-  tempDirs.push(dir);
-  const sessionFile = path.join(dir, "session.jsonl");
-  const header = {
-    type: "session",
-    version: CURRENT_SESSION_VERSION,
-    id: "codex-session",
-    timestamp: "2026-06-15T00:00:00.000Z",
-    cwd: dir,
-  };
-  await fs.writeFile(
-    sessionFile,
-    [header, ...records].map((record) => JSON.stringify(record)).join("\n") + "\n",
-  );
-  return sessionFile;
-}
+const { tempDirs, writeSession, writeSqliteSession } = setupSessionHistoryFixtures();
 
 // Fixtures keep legacy string content on purpose: session ingest normalizes
 // assistant strings into [{ type: "text" }] blocks, so expectations below
@@ -102,88 +79,6 @@ function mirroredTarget(sessionFile: string) {
     sessionId: "codex-session",
     sessionKey: "codex-session",
   };
-}
-
-async function writeSqliteSession(
-  params: { storedSessionFile?: string; incognito?: boolean } = {},
-): Promise<{
-  marker: string;
-  sessionKey: string;
-  sessionTarget: {
-    agentId: string;
-    sessionId: string;
-    sessionKey: string;
-    storePath: string;
-  };
-}> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-sqlite-"));
-  tempDirs.push(dir);
-  const storePath = path.join(dir, "openclaw-agent.sqlite");
-  const sessionId = params.incognito
-    ? `codex-sqlite-${path.basename(dir)}`
-    : "codex-sqlite-session";
-  const sessionKey = params.incognito
-    ? `agent:main:dashboard:incognito-${path.basename(dir)}`
-    : "agent:main:codex-sqlite";
-  const marker = `sqlite:main:${sessionId}:${storePath}`;
-  const scope = {
-    agentId: "main",
-    sessionId,
-    sessionKey,
-    storePath,
-  };
-  await upsertSessionEntry({
-    ...scope,
-    entry: {
-      sessionFile: params.storedSessionFile ?? marker,
-      ...(params.incognito ? { incognito: true } : {}),
-      sessionId,
-      updatedAt: 1,
-    },
-  });
-  await appendSessionTranscriptMessageByIdentity({
-    ...scope,
-    message: { role: "user", content: "sqlite prompt", timestamp: 1 },
-  });
-  await appendSessionTranscriptMessageByIdentity({
-    ...scope,
-    message: { role: "assistant", content: "sqlite answer", timestamp: 2 },
-  });
-  return { marker, sessionKey, sessionTarget: scope };
-}
-
-function settledFixture() {
-  const upstreamPrompt = "Native context\nSend the synthetic update.";
-  const settledMessages = [
-    attachUpstreamUserText(
-      attachCodexMirrorIdentity(
-        { role: "user", content: "Send the synthetic update.", timestamp: 206 },
-        "settled:prompt",
-      ),
-      upstreamPrompt,
-    ),
-    attachCodexMirrorIdentity(
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "sent", name: "message", arguments: {} }],
-        timestamp: 207,
-      } as AgentMessage,
-      "settled:tool:sent:call",
-    ),
-    attachCodexMirrorIdentity(
-      {
-        role: "toolResult",
-        toolCallId: "sent",
-        toolName: "message",
-        isError: false,
-        content: [{ type: "text", text: "Synthetic update sent." }],
-        timestamp: 208,
-      },
-      "settled:tool:sent:result",
-    ),
-  ];
-
-  return { upstreamPrompt, settledMessages };
 }
 
 describe("readCodexMirroredSessionHistoryMessages", () => {
@@ -925,9 +820,59 @@ it.each([false, true])(
     });
     await expect(
       readCodexMirroredSessionHistoryMessages(target, undefined, undefined, 128),
-    ).rejects.toThrow(/model-context limit/);
+    ).rejects.toThrow(/session's context limit/);
     expect(
       readCodexSessionContext(fixture.sessionTarget, (messages) => Array.from(messages)),
     ).toHaveLength(34);
   },
 );
+
+it("prepares an oversized mirrored tool frame without losing the incoming request or native evidence", async () => {
+  const fixture = await writeSqliteSession();
+  const { settledMessages } = settledFixture();
+  const oversized = "completed-tool-evidence:" + "x".repeat(32_768);
+  for (const message of settledMessages) {
+    if (message.role === "toolResult") {
+      message.content = [{ type: "text", text: oversized }];
+    }
+    await appendSessionTranscriptMessageByIdentity({ ...fixture.sessionTarget, message });
+  }
+  const nativeBefore = readCodexSessionContext(fixture.sessionTarget, (messages) =>
+    JSON.stringify(Array.from(messages)),
+  );
+  const prepared = await readCodexMirroredSessionHistoryMessages(
+    {
+      sessionFile: fixture.marker,
+      sessionId: fixture.sessionTarget.sessionId,
+      sessionKey: fixture.sessionKey,
+      sessionTarget: fixture.sessionTarget,
+    },
+    undefined,
+    undefined,
+    512,
+  );
+  expect(prepared).toMatchObject([
+    { role: "user", content: "Send the synthetic update." },
+    { role: "assistant", content: [{ type: "toolCall", id: "sent", name: "message" }] },
+    {
+      role: "toolResult",
+      toolCallId: "sent",
+      content: [{ type: "text", text: expect.stringMatching(/omitted.*\d+ bytes/u) }],
+    },
+  ]);
+  const currentRequest = "Newest request: report the earlier operation without repeating it.";
+  const projection = await projectContextEngineAssemblyForCodex({
+    assembledMessages: prepared ?? [],
+    prompt: currentRequest,
+    toolPayloadMode: "preserve",
+  });
+  expect(projection.promptText).toContain("Send the synthetic update.");
+  expect(projection.promptText).toContain("body omitted");
+  expect(projection.promptText.endsWith(currentRequest)).toBe(true);
+  expect(
+    readCodexSessionContext(fixture.sessionTarget, (messages) =>
+      JSON.stringify(Array.from(messages)),
+    ),
+  ).toBe(nativeBefore);
+  expect(nativeBefore).toContain(oversized);
+});

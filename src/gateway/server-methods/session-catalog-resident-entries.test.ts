@@ -137,6 +137,87 @@ it("reads clean local catalog entries from the resident owner without SQLite", a
   });
 });
 
+it("reuses unchanged agent selections across catalog polls and refreshes published rows", async () => {
+  await withCatalog(
+    async ({ list, setList, projection }) => {
+      const workKey = "agent:work:adopted";
+      const workEntry = {
+        ...original,
+        sessionId: "work-instance",
+        label: "Work",
+        createdActor: { type: "system" as const, id: "work-owner" },
+      };
+      replaceSessionEntrySync({ agentId: "main", sessionKey: key }, { ...original, label: "Main" });
+      replaceSessionEntrySync({ agentId: "work", sessionKey: workKey }, workEntry);
+      setList(async ({ sessionEntries }) => [
+        {
+          hostId: "gateway:fixture",
+          label: "Fixture",
+          kind: "gateway",
+          connected: true,
+          sessions: (sessionEntries?.entriesForCatalog?.() ?? []).map(
+            ({ agentId, sessionKey, entry }) => ({
+              threadId: `${agentId}:${entry.sessionId}`,
+              sessionKey,
+              title: entry.label,
+              status: "stored",
+              archived: false,
+              canContinue: true,
+              canArchive: false,
+            }),
+          ),
+        },
+      ]);
+      const mainSession = {
+        threadId: `main:${original.sessionId}`,
+        sessionKey: key,
+        title: "Main",
+        createdActor: original.createdActor,
+      };
+      const workSession = {
+        threadId: `work:${workEntry.sessionId}`,
+        sessionKey: workKey,
+        title: "Work",
+        createdActor: workEntry.createdActor,
+      };
+      const first = await list();
+      expect(first.mock.calls[0]?.[1]).toMatchObject({
+        catalogs: [{ hosts: [{ sessions: [mainSession, workSession] }] }],
+      });
+      const selectEntries = projection.selectEntries.bind(projection);
+      let broadRowsRead = 0;
+      vi.spyOn(projection, "selectEntries").mockImplementation((query) => {
+        const rows = selectEntries(query);
+        if (!query?.key && !query?.sessionIdOrKey) {
+          broadRowsRead += rows.length;
+        }
+        return rows;
+      });
+      const second = await list();
+      expect(second.mock.calls[0]?.[1]).toEqual(first.mock.calls[0]?.[1]);
+      expect(broadRowsRead).toBe(0);
+
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: key },
+        { ...original, updatedAt: 2, label: "Updated main" },
+      );
+      const updated = await list();
+      expect(updated.mock.calls[0]?.[1]).toMatchObject({
+        catalogs: [
+          { hosts: [{ sessions: [{ ...mainSession, title: "Updated main" }, workSession] }] },
+        ],
+      });
+      expect(broadRowsRead).toBeGreaterThan(0);
+      broadRowsRead = 0;
+
+      const repeated = await list();
+      expect(repeated.mock.calls[0]?.[1]).toEqual(updated.mock.calls[0]?.[1]);
+      expect(broadRowsRead).toBe(0);
+    },
+    { agents: { ownership: "explicit", entries: { main: {}, work: {} } } },
+  );
+});
+
 it("bounds catalog result delivery to returned adoption keys", async () => {
   await withCatalog(
     async ({ list, setList, projection }) => {

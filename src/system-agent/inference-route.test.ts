@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { selectAgentHarness } from "../agents/harness/selection.js";
@@ -79,26 +79,35 @@ afterEach(() => {
 });
 
 describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
-  it("retains a literal catalog @ suffix on a legacy implicit primary route", async () => {
-    const config = utilityConfig();
-    delete config.meta;
-    delete config.models?.providers?.openai;
-    const provider = config.models?.providers?.["local-utility"];
-    if (!provider?.models[0]) {
-      throw new Error("Missing local utility fixture");
-    }
-    provider.models[0].id = "tiny@experimental";
+  it.each([false, true])(
+    "retains a literal catalog @ suffix on a native implicit route (ACP=%s)",
+    async (acp) => {
+      const config = utilityConfig();
+      const agent = config.agents?.entries?.dev;
+      assert(agent);
+      if (acp) {
+        agent.model = "harness-only";
+        agent.runtime = { type: "acp" };
+      }
+      delete config.meta;
+      delete config.models?.providers?.openai;
+      const provider = config.models?.providers?.["local-utility"];
+      if (!provider?.models[0]) {
+        throw new Error("Missing local utility fixture");
+      }
+      provider.models[0].id = "tiny@experimental";
 
-    const route = await resolveSystemAgentConfiguredRouteFromConfig(config);
+      const route = await resolveSystemAgentConfiguredRouteFromConfig(config);
 
-    expect(route).toMatchObject({
-      provider: "local-utility",
-      model: "tiny@experimental",
-      modelLabel: "local-utility/tiny@experimental",
-    });
-    expect(route?.authProfileId).toBeUndefined();
-    expect(route?.modelTarget).toBeUndefined();
-  });
+      expect(route).toMatchObject({
+        provider: "local-utility",
+        model: "tiny@experimental",
+        modelLabel: "local-utility/tiny@experimental",
+      });
+      expect(route?.authProfileId).toBeUndefined();
+      expect(route?.modelTarget).toBeUndefined();
+    },
+  );
 
   it("invalidates the inherited primary verification when only utility separation changes", async () => {
     const legacy = utilityConfig();

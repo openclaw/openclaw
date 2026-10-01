@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { fetchWithZaloSendContext } from "./send-context.js";
+import type { ZaloEventMessage } from "./types.js";
 
 type ZcaJsRuntime = Pick<typeof import("zca-js"), "Zalo">;
 
@@ -114,19 +115,17 @@ type Listener = {
   stop(): void;
 };
 
-type DeliveryEventMessage = {
-  msgId: string;
-  cliMsgId: string;
-  uidFrom: string;
-  idTo: string;
-  msgType: string;
-  st: number;
-  at: number;
-  cmd: number;
-  ts: string | number;
-};
-
-type DeliveryEventMessages = DeliveryEventMessage | DeliveryEventMessage[];
+type AttachmentSource =
+  | string
+  | {
+      data: Buffer;
+      filename: `${string}.${string}`;
+      metadata: {
+        totalSize: number;
+        width?: number;
+        height?: number;
+      };
+    };
 
 export type API = {
   listener: Listener;
@@ -170,29 +169,7 @@ export type API = {
     attachment?: Array<{ msgId?: string | number }>;
   }>;
   uploadAttachment(
-    sources:
-      | string
-      | {
-          data: Buffer;
-          filename: `${string}.${string}`;
-          metadata: {
-            totalSize: number;
-            width?: number;
-            height?: number;
-          };
-        }
-      | Array<
-          | string
-          | {
-              data: Buffer;
-              filename: `${string}.${string}`;
-              metadata: {
-                totalSize: number;
-                width?: number;
-                height?: number;
-              };
-            }
-        >,
+    sources: AttachmentSource | AttachmentSource[],
     threadId: string,
     type?: number,
   ): Promise<
@@ -231,10 +208,10 @@ export type API = {
   ): Promise<unknown>;
   sendDeliveredEvent(
     isSeen: boolean,
-    messages: DeliveryEventMessages,
+    messages: ZaloEventMessage | ZaloEventMessage[],
     type?: number,
   ): Promise<unknown>;
-  sendSeenEvent(messages: DeliveryEventMessages, type?: number): Promise<unknown>;
+  sendSeenEvent(messages: ZaloEventMessage | ZaloEventMessage[], type?: number): Promise<unknown>;
 };
 
 type ZaloCtor = new (options?: {

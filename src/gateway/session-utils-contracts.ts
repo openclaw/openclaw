@@ -5,6 +5,7 @@ import {
 import type {
   SessionOwner,
   SessionParticipant,
+  SessionPerson,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { findModelCatalogEntry } from "../agents/model-catalog-lookup.js";
 import type { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
@@ -16,7 +17,11 @@ import type {
   listThinkingLevelOptions,
   resolveThinkingProfile,
 } from "../auto-reply/thinking.js";
-import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
+import type {
+  InternalSessionEntry,
+  SessionEntry,
+  SessionProfileInvolvement,
+} from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProjectedAgentRunIndex } from "../infra/agent-run-registry.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
@@ -37,6 +42,12 @@ export type SessionActorProfileIdentity = Extract<CurrentUserProfileDisplay, { k
 
 export type SessionIdentityProjection = {
   invalidate(): void;
+  involvement(
+    this: void,
+    entry: InternalSessionEntry,
+    profileId: string,
+    identities: Map<string, SessionActorProfileIdentity | undefined>,
+  ): SessionProfileInvolvement | undefined;
   owner(
     this: void,
     entry: InternalSessionEntry | undefined,
@@ -50,6 +61,12 @@ export type SessionIdentityProjection = {
     identities: Map<string, SessionActorProfileIdentity | undefined> | undefined,
     cfg: OpenClawConfig,
   ): ReadonlyMap<string, SessionParticipant>;
+  people(
+    this: void,
+    entry: InternalSessionEntry,
+    identities: Map<string, SessionActorProfileIdentity | undefined>,
+    owner?: SessionOwnerFacetIdentity,
+  ): readonly SessionPerson[];
 };
 
 export type GatewaySessionModelSource = {

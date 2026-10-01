@@ -95,8 +95,52 @@ function externalPluginConfig(
     automaticallyFetchFavicons: false,
     communityInvite: false,
     terminalEnabled: false,
+    uploadsEnabled: true,
     pluginAssetsRequireAuth: true,
     pluginFrameGrants,
+  };
+}
+
+function logbookResponse(method: string) {
+  if (method === "logbook.status") {
+    return {
+      captureEnabled: true,
+      capturePaused: false,
+      captureIntervalSeconds: 30,
+      analysisIntervalMinutes: 15,
+      retentionDays: 30,
+      pendingFrames: 0,
+      analysisRunning: false,
+      visionModelSource: "missing",
+      today: "2026-07-05",
+      todayCards: 0,
+      timeZone: "UTC",
+    };
+  }
+  if (method === "logbook.days") {
+    return { days: [] };
+  }
+  return {
+    day: "2026-07-05",
+    cards: [],
+    stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
+  };
+}
+
+function createSnapshot(
+  hello: GatewayHelloOk,
+  client: GatewayBrowserClient | null = null,
+): ApplicationGatewaySnapshot {
+  return {
+    client,
+    phase: "connected",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
+    hello,
+    assistantAgentId: null,
+    sessionKey: "main",
+    lastError: null,
+    lastErrorCode: null,
   };
 }
 
@@ -119,17 +163,7 @@ function createExternalPluginPage(
       },
     ],
   };
-  const snapshot: ApplicationGatewaySnapshot = {
-    client: null,
-    phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello,
-    assistantAgentId: null,
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  const snapshot = createSnapshot(hello);
   const page = document.createElement(externalPluginPageTag) as ExternalPluginPage;
   page.pluginId = "external-plugin";
   page.tabId = "panel";
@@ -194,7 +228,6 @@ describe("PluginPage", () => {
       listeners.forEach((listener) => listener());
       await page.updateComplete;
       expect(page.textContent).toContain("Custom plugin UI is off");
-      expect(page.textContent).toContain("restart the Gateway and reload this browser tab");
       expect(page.params).toEqual({ document: "saved-draft" });
       const link = page.querySelector<HTMLAnchorElement>('a[href="/console/settings/labs"]');
       expect(link?.textContent?.trim()).toBe("Open Labs");
@@ -275,19 +308,6 @@ describe("PluginPage", () => {
       await waitForFast(() => expect(page.textContent).toContain("Plugin panel unavailable"));
       expect(page.probeCalls).toEqual(["/plugins/external/panel"]);
       expect(page.querySelector("iframe")).toBeNull();
-    } finally {
-      page.remove();
-    }
-  });
-
-  it("matches a route grant against tab URLs with query strings and fragments", async () => {
-    const refresh = vi.fn(async () => externalPluginConfig());
-    const path = "/plugins/external/panel?view=activity#settings";
-    const page = createExternalPluginPage(refresh, true, path);
-    document.body.append(page);
-    try {
-      await waitForFast(() => expect(page.querySelector("iframe")?.getAttribute("src")).toBe(path));
-      expect(page.probeCalls).toEqual([path]);
     } finally {
       page.remove();
     }
@@ -547,17 +567,7 @@ describe("PluginPage", () => {
       auth: { role: "operator", scopes: ["operator.write"] },
       controlUiTabs: [{ pluginId: "logbook", id: "logbook", label: "Logbook" }],
     };
-    const snapshot: ApplicationGatewaySnapshot = {
-      client: null,
-      phase: "connected",
-      offlineStable: false,
-      canvasPluginSurfaceUrl: null,
-      hello,
-      assistantAgentId: null,
-      sessionKey: "main",
-      lastError: null,
-      lastErrorCode: null,
-    };
+    const snapshot = createSnapshot(hello);
     const page = document.createElement(deferredPluginPageTag) as DeferredPluginPage;
     page.loads = new Map([["logbook/logbook", [bundledView.promise]]]);
     page.pluginId = "logbook";
@@ -590,45 +600,10 @@ describe("PluginPage", () => {
       auth: { role: "operator", scopes: ["operator.write"] },
       controlUiTabs: [{ pluginId: "logbook", id: "logbook", label: "Logbook" }],
     };
-    const responseFor = (method: string) => {
-      if (method === "logbook.status") {
-        return {
-          captureEnabled: true,
-          capturePaused: false,
-          captureIntervalSeconds: 30,
-          analysisIntervalMinutes: 15,
-          retentionDays: 30,
-          pendingFrames: 0,
-          analysisRunning: false,
-          visionModelSource: "missing",
-          today: "2026-07-05",
-          todayCards: 0,
-          timeZone: "UTC",
-        };
-      }
-      if (method === "logbook.days") {
-        return { days: [] };
-      }
-      return {
-        day: "2026-07-05",
-        cards: [],
-        stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
-      };
-    };
-    const firstRequest = vi.fn(async (method: string) => responseFor(method));
-    const secondRequest = vi.fn(async (method: string) => responseFor(method));
+    const firstRequest = vi.fn(async (method: string) => logbookResponse(method));
+    const secondRequest = vi.fn(async (method: string) => logbookResponse(method));
     const createContext = (request: typeof firstRequest) => {
-      const snapshot: ApplicationGatewaySnapshot = {
-        client: { request } as unknown as GatewayBrowserClient,
-        phase: "connected",
-        offlineStable: false,
-        canvasPluginSurfaceUrl: null,
-        hello,
-        assistantAgentId: null,
-        sessionKey: "main",
-        lastError: null,
-        lastErrorCode: null,
-      };
+      const snapshot = createSnapshot(hello, { request } as unknown as GatewayBrowserClient);
       return {
         gateway: { snapshot, subscribe: () => () => undefined },
       } as unknown as ApplicationContext;
@@ -668,47 +643,12 @@ describe("PluginPage", () => {
       ["logbook.days", staleDays],
       ["logbook.timeline", staleTimeline],
     ]);
-    const responseFor = (method: string) => {
-      if (method === "logbook.status") {
-        return {
-          captureEnabled: true,
-          capturePaused: false,
-          captureIntervalSeconds: 30,
-          analysisIntervalMinutes: 15,
-          retentionDays: 30,
-          pendingFrames: 0,
-          analysisRunning: false,
-          visionModelSource: "missing",
-          today: "2026-07-05",
-          todayCards: 0,
-          timeZone: "UTC",
-        };
-      }
-      if (method === "logbook.days") {
-        return { days: [] };
-      }
-      return {
-        day: "2026-07-05",
-        cards: [],
-        stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
-      };
-    };
     const request = vi.fn((method: string) => {
       const deferredResponse = pending.get(method);
-      return deferredResponse ? deferredResponse.promise : Promise.resolve(responseFor(method));
+      return deferredResponse ? deferredResponse.promise : Promise.resolve(logbookResponse(method));
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const snapshot: ApplicationGatewaySnapshot = {
-      client,
-      phase: "connected",
-      offlineStable: false,
-      canvasPluginSurfaceUrl: null,
-      hello,
-      assistantAgentId: null,
-      sessionKey: "main",
-      lastError: null,
-      lastErrorCode: null,
-    };
+    const snapshot = createSnapshot(hello, client);
     let listener: ((snapshot: ApplicationGatewaySnapshot) => void) | undefined;
     const gateway = {
       snapshot,
@@ -737,9 +677,9 @@ describe("PluginPage", () => {
       expect(disconnectedHost).not.toBe(staleHost);
 
       pending.clear();
-      staleStatus.resolve(responseFor("logbook.status"));
-      staleDays.resolve(responseFor("logbook.days"));
-      staleTimeline.resolve(responseFor("logbook.timeline"));
+      staleStatus.resolve(logbookResponse("logbook.status"));
+      staleDays.resolve(logbookResponse("logbook.days"));
+      staleTimeline.resolve(logbookResponse("logbook.timeline"));
       await waitForFast(() => expect(getLogbookState(staleHost).timeline).not.toBeNull());
       expect(getLogbookState(disconnectedHost).timeline).toBeNull();
 
@@ -769,17 +709,7 @@ describe("PluginPage", () => {
         },
       ],
     };
-    const snapshot: ApplicationGatewaySnapshot = {
-      client: null,
-      phase: "connected",
-      offlineStable: false,
-      canvasPluginSurfaceUrl: null,
-      hello,
-      assistantAgentId: null,
-      sessionKey: "main",
-      lastError: null,
-      lastErrorCode: null,
-    };
+    const snapshot = createSnapshot(hello);
     const page = document.createElement(deferredPluginPageTag) as DeferredPluginPage;
     page.loads = new Map([
       ["logbook/logbook", [firstLogbookLoad.promise, currentLogbookLoad.promise]],

@@ -10,7 +10,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "single fullscreen widget chrome" });
+const suite = createControlUiE2eSuite({ name: "single widget chrome" });
 const sessionKey = "agent:main:dashboard:42d71fe0-1234-4567-8901-234567890abc";
 const chrome =
   ".board-widget__bar, .board-widget__drag-handle, .board-widget__resize-handle, .board-widget__grant-dot";
@@ -91,9 +91,27 @@ async function openDashboard(page: Page, source: BoardSnapshot, readOnly = false
   return { gateway, board };
 }
 
-async function showHeaderMenu(page: Page) {
-  await page.locator(".chat-header-session-menu__trigger").click();
+async function showHeaderMenu(page: Page, input: "pointer" | "keyboard" = "pointer") {
   const menu = page.locator(menuSelector);
+  const dropdown = menu.locator("wa-dropdown");
+  // The heading is visible before the menu finishes scaling. Observe this opening,
+  // not a previous one, before Playwright chooses an action's click coordinates.
+  await dropdown.evaluate((element) => {
+    element.removeAttribute("data-e2e-after-show");
+    element.addEventListener(
+      "wa-after-show",
+      () => element.setAttribute("data-e2e-after-show", ""),
+      { once: true },
+    );
+  });
+  const trigger = page.locator(".chat-header-session-menu__trigger");
+  if (input === "keyboard") {
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+  } else {
+    await trigger.click();
+  }
+  await expect.poll(() => dropdown.getAttribute("data-e2e-after-show")).not.toBeNull();
   await menu.locator(".board-widget__page-menu-heading").waitFor();
   return menu;
 }
@@ -104,7 +122,7 @@ async function updateBoard(gateway: MockGatewayControls, board: BoardSnapshot) {
 }
 
 suite.define(() => {
-  it("relocates real widget actions, retains the frame, and restores split and multi-widget controls", async () => {
+  it("retains page controls in split view and restores multi-widget controls without reloading", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
       async ({ page }) => {
@@ -117,20 +135,9 @@ suite.define(() => {
         await widget.focus();
         expect(await widget.locator(chrome).count()).toBe(0);
         await page.screenshot({ path: path.join(suite.artifactDir, "candidate-expanded.png") });
-        const menu = await showHeaderMenu(page);
+        await showHeaderMenu(page);
         await page.keyboard.press("Escape");
-        await page.locator(".chat-header-session-menu__trigger").focus();
-        await menu.locator("wa-dropdown").evaluate((dropdown) => {
-          dropdown.addEventListener(
-            "wa-after-show",
-            () => dropdown.setAttribute("data-e2e-after-show", ""),
-            { once: true },
-          );
-        });
-        await page.keyboard.press("Enter");
-        await expect
-          .poll(() => menu.locator("wa-dropdown").getAttribute("data-e2e-after-show"))
-          .not.toBeNull();
+        const menu = await showHeaderMenu(page, "keyboard");
         const capabilities = menu.getByRole("note", { name: "Active widget capabilities" });
         await capabilities.waitFor({ state: "visible" });
         expect(await capabilities.textContent()).toContain("Tool: health");
@@ -165,16 +172,12 @@ suite.define(() => {
         );
         expect(await note.inputValue()).toBe("Keep this local draft");
         await page.getByRole("button", { name: "Restore split", exact: true }).click();
-        await widget.locator(".board-widget__menu-trigger").waitFor({ state: "attached" });
+        await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
         await widget.focus();
-        await expect
-          .poll(() =>
-            widget
-              .locator(".board-widget__bar")
-              .evaluate((element) => getComputedStyle(element).visibility),
-          )
-          .toBe("visible");
-        expect(await page.locator(menuSelector + ' [value^="board-widget:"]').count()).toBe(0);
+        expect(await widget.locator(chrome).count()).toBe(0);
+        const splitMenu = await showHeaderMenu(page);
+        await splitMenu.locator('[value="board-widget:resize:xl"]').waitFor();
+        await page.keyboard.press("Escape");
         await page.screenshot({ path: path.join(suite.artifactDir, "candidate-split.png") });
         await page
           .locator(".chat-pane__header")

@@ -3,15 +3,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { createAgentRegistry, createFileSessionStore } from "acpx/runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { acpxOperationScope } from "./runtime-session-store.js";
-import { AcpxRuntime, createAgentRegistry, createFileSessionStore } from "./runtime.js";
+import { AcpxRuntime } from "./runtime.js";
 
 const gc = globalThis.gc;
 assert.ok(gc, "The retention child requires --expose-gc");
 const scenario = process.argv[2];
 assert.ok(scenario === "initial" || scenario === "after-reset");
-const peer = fileURLToPath(new URL("../test/fixtures/owner-agent.mjs", import.meta.url));
+const peer = fileURLToPath(new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url));
 
 function unownedControl() {
   return new WeakRef({ unowned: true });

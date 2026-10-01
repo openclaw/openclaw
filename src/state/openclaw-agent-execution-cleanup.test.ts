@@ -21,9 +21,9 @@ const edge = vi.hoisted(() => ({
 }));
 
 vi.mock("node:sqlite", () => ({ DatabaseSync: edge.forbidden }));
-vi.mock("node:worker_threads", () => ({ Worker: edge.forbidden }));
-vi.mock("../infra/runtime-worker-url.js", () => ({
-  resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
+  Worker: edge.forbidden,
 }));
 vi.mock("../infra/sqlite-worker-identity.js", () => ({
   readDatabasePathIdentity: async (canonicalPath: string) => ({
@@ -31,15 +31,15 @@ vi.mock("../infra/sqlite-worker-identity.js", () => ({
     canonicalPath,
   }),
 }));
-vi.mock("../infra/sqlite-worker-store.js", () => ({
-  openSharedStateSqliteWorkerStore: async (
-    options: { databasePath: string },
+vi.mock("./openclaw-state-worker-store.js", () => ({
+  openOpenClawStateWorkerCleanupStore: async (
+    databasePath: string,
     context: SqliteWorkerStateContext,
   ) => {
-    runWithSqliteWorkerStateContext(context, () =>
-      inspectRepairPolicy("open", options.databasePath),
-    );
-    const store: SqliteWorkerStore<OpenClawStateWorkerCleanupOperations> = {
+    runWithSqliteWorkerStateContext(context, () => inspectRepairPolicy("open", databasePath));
+    const store: SqliteWorkerStore<
+      Pick<OpenClawStateWorkerCleanupOperations, "agentDatabases.releaseExitedLease">
+    > = {
       async execute(command) {
         inspectRepairPolicy("cleanup", command.input.sharedStatePath);
       },
@@ -47,9 +47,17 @@ vi.mock("../infra/sqlite-worker-store.js", () => ({
     };
     return store;
   },
+}));
+vi.mock("../infra/sqlite-worker-store.js", () => ({
   runSqliteWorkerStoreOperation: async (
-    store: SqliteWorkerStore<OpenClawStateWorkerCleanupOperations>,
-    operation: (scope: SqliteWorkerStore<OpenClawStateWorkerCleanupOperations>) => Promise<void>,
+    store: SqliteWorkerStore<
+      Pick<OpenClawStateWorkerCleanupOperations, "agentDatabases.releaseExitedLease">
+    >,
+    operation: (
+      scope: SqliteWorkerStore<
+        Pick<OpenClawStateWorkerCleanupOperations, "agentDatabases.releaseExitedLease">
+      >,
+    ) => Promise<void>,
     context: SqliteWorkerStateContext,
   ) => runWithSqliteWorkerStateContext(context, () => operation(store)),
 }));
@@ -74,9 +82,9 @@ it("retains installed-schema repair ownership through retired agent lease cleanu
   const databasePath = "/synthetic/state/openclaw.sqlite";
   const context: OpenClawStateWorkerContext = {
     environment: { OPENCLAW_STATE_DIR: "/synthetic" },
-    coordinatorRuntime: { directory: "/synthetic/coordinators", keepAlive: true },
     existingSchemaPath: databasePath,
     admission: {
+      coordinationKey: "file:synthetic-state",
       databasePath,
       identity: { key: "file:synthetic-state", canonicalPath: databasePath },
       assertCurrent() {},

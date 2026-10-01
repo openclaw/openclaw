@@ -14,7 +14,8 @@ import { generateUUID } from "../uuid.ts";
 
 export type GitHubPublicationOptions = Static<typeof SessionGitHubOptionsResultSchema>;
 type GitHubPublicationPresentation = {
-  canWrite: boolean;
+  canPublishShared: boolean;
+  canPublishPersonal: boolean;
   personalReady: boolean;
   isPresented: () => boolean;
   isCurrent: () => boolean;
@@ -42,7 +43,8 @@ type GitHubPublicationActivity = "read" | "publish" | "confirm";
 
 export type GitHubPublicationView = {
   activity: GitHubPublicationActivity | null;
-  canWrite: boolean;
+  canPublishShared: boolean;
+  canPublishPersonal: boolean;
   locked: boolean;
   options: GitHubPublicationOptions | null;
   selection: GitHubPublicationSelection | null;
@@ -67,6 +69,15 @@ export function selectedGitHubPublisher(
   return selection?.source === "personal"
     ? { source: "personal", ...selection.account }
     : selection?.expected;
+}
+
+export function personalGitHubPublicationSelection(
+  options: GitHubPublicationOptions | null,
+): Extract<GitHubPublicationSelection, { source: "personal" }> | null {
+  const personal = options?.personal;
+  return personal?.state === "connected" && personal.account && personal.generation
+    ? { source: "personal", account: personal.account, generation: personal.generation }
+    : null;
 }
 
 /** Owns one session's explicit publication; connection/access changes retire every response. */
@@ -211,6 +222,13 @@ export class GitHubPublicationController {
     return this.attempt !== null || (this.result !== null && !terminal(this.result));
   }
 
+  private canPublish(presentation: Presentation, source: "shared" | "personal"): boolean {
+    return source === "personal"
+      ? presentation.scope?.canPublishPersonal === true
+      : presentation.scope?.canPublishShared === true &&
+          (this.attempt?.selection.source === "shared" || Boolean(this.options?.shared));
+  }
+
   private choose(presentation: Presentation, source: "shared" | "personal"): void {
     const options = this.options;
     if (
@@ -218,19 +236,16 @@ export class GitHubPublicationController {
       this.locked ||
       this.busy ||
       !this.presented(presentation) ||
-      !presentation.scope?.canWrite
+      !this.canPublish(presentation, source)
     ) {
       return;
     }
-    const personal = options.personal;
     this.selection =
       source === "shared"
         ? options.shared
           ? { source, expected: options.shared }
           : null
-        : personal?.state === "connected" && personal.account && personal.generation
-          ? { source, account: personal.account, generation: personal.generation }
-          : null;
+        : personalGitHubPublicationSelection(options);
     this.version += 1;
     this.changed();
   }
@@ -319,6 +334,20 @@ export class GitHubPublicationController {
         return;
       }
       this.options = options;
+      if (
+        this.result?.status === "failed" &&
+        this.result.publisher?.source !== "personal" &&
+        options.latestShared === null
+      ) {
+        // The authoritative discovery owner can retire a failure after its work
+        // is published elsewhere. Do not keep the stale browser copy as recovery.
+        this.result = null;
+        this.selection = null;
+        this.owner.release();
+        if (!current()) {
+          return;
+        }
+      }
       let recovered = !this.locked && !this.result ? options.pendingPersonal : null;
       if (
         !recovered &&
@@ -356,12 +385,17 @@ export class GitHubPublicationController {
     });
   }
   private async publish(presentation: Presentation): Promise<void> {
+    // With no shared account, the labeled Publish as button is the explicit
+    // personal choice. Discovery itself still never selects personal credentials.
+    if (!this.selection && this.options && !this.options.shared) {
+      this.choose(presentation, "personal");
+    }
     const selection = this.attempt?.selection ?? this.selection;
     if (
-      !presentation.scope?.canWrite ||
       !selection ||
+      !this.canPublish(presentation, selection.source) ||
       terminal(this.result) ||
-      (selection.source === "personal" && !presentation.scope.personalReady) ||
+      (selection.source === "personal" && !presentation.scope?.personalReady) ||
       (this.locked && !this.attempt)
     ) {
       return;
@@ -408,7 +442,7 @@ export class GitHubPublicationController {
     if (
       !confirmation ||
       !requestId ||
-      !presentation.scope?.canWrite ||
+      !presentation.scope?.canPublishPersonal ||
       !presentation.scope.personalReady
     ) {
       return;
@@ -439,6 +473,11 @@ export class GitHubPublicationController {
       return undefined;
     }
     const version = this.version;
+    const selection = this.attempt?.selection ?? this.selection;
+    const canPublish = this.canPublish(
+      presentation,
+      selection?.source ?? (this.options?.shared ? "shared" : "personal"),
+    );
     // Each callback belongs to the displayed operation state, not whichever
     // publication or confirmation happens to occupy this session later.
     const invoke = (action: () => void) => {
@@ -448,24 +487,25 @@ export class GitHubPublicationController {
     };
     return {
       activity: this.activity,
-      canWrite: scope.canWrite,
+      canPublishShared: scope.canPublishShared,
+      canPublishPersonal: scope.canPublishPersonal,
       locked: this.locked,
       options: this.options,
-      selection: this.attempt?.selection ?? this.selection,
+      selection,
       result: this.result,
       confirmation: this.confirmation,
       error: this.error,
       personalReady: scope.personalReady,
       onSelect:
-        scope.canWrite && !this.result && !this.locked
+        scope.canPublishPersonal && !this.result && !this.locked
           ? (source) => invoke(() => this.choose(presentation, source))
           : undefined,
       onPublish:
-        scope.canWrite && (!this.locked || this.attempt !== null) && !terminal(this.result)
+        canPublish && (!this.locked || this.attempt !== null) && !terminal(this.result)
           ? () => invoke(() => void this.publish(presentation))
           : undefined,
       onConfirm:
-        scope.canWrite && this.confirmation
+        scope.canPublishPersonal && this.confirmation
           ? () => invoke(() => void this.confirm(presentation))
           : undefined,
       onRefresh: () => invoke(() => void this.refresh(presentation)),

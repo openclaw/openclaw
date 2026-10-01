@@ -26,7 +26,7 @@ import {
   type GatewayCallOptions,
 } from "./gateway.js";
 import { getInProcessGatewayToolContext } from "./in-process-gateway.js";
-import { listNodes, type NodeListNode } from "./nodes-utils.js";
+import { invokeAgentNodeCommand, listNodes, type NodeListNode } from "./nodes-utils.js";
 
 export type ComputerBinding = {
   host: ComputerHost;
@@ -52,39 +52,6 @@ const COMPUTER_NODE_MESSAGES: EligibleNodeMessages<NodeListNode> = {
       .map((node) => node.nodeId)
       .join(", ")}`,
 };
-
-async function resolveComputerNode(
-  gatewayOpts: GatewayCallOptions,
-  query?: string,
-  signal?: AbortSignal,
-): Promise<NodeListNode> {
-  const nodes = await listNodes(gatewayOpts, signal);
-  return resolveEligibleNodeFromList(nodes, query, isEligibleComputerNode, COMPUTER_NODE_MESSAGES);
-}
-
-async function invokeNodeCommand(params: {
-  gatewayOpts: GatewayCallOptions;
-  nodeId: string;
-  command: string;
-  commandParams: Record<string, unknown>;
-  timeoutMs?: number;
-  idempotencyKey?: string;
-  signal?: AbortSignal;
-}): Promise<unknown> {
-  const raw = await callGatewayTool<{ payload: unknown }>(
-    "node.invoke",
-    params.gatewayOpts,
-    {
-      nodeId: params.nodeId,
-      command: params.command,
-      params: params.commandParams,
-      timeoutMs: params.timeoutMs,
-      idempotencyKey: params.idempotencyKey ?? crypto.randomUUID(),
-    },
-    { signal: params.signal },
-  );
-  return raw && typeof raw === "object" && Object.hasOwn(raw, "payload") ? raw.payload : raw;
-}
 
 export async function resolveComputerBinding(params: {
   executionId: string;
@@ -118,7 +85,9 @@ export async function resolveComputerBinding(params: {
       }
       service.assertSessionAttachment(attachment);
     };
-    service.touchSessionAttachment(attachment);
+    await service.touchSessionAttachment(attachment);
+    assertCaller();
+    assertCurrent();
     const prepared = await service.prepareAttachedComputer({
       ...attachment,
       runId: run.runId,
@@ -159,13 +128,17 @@ export async function resolveComputerBinding(params: {
             throw new Error("Attached computer invocation lost its admitted caller");
           }
           assertInvocation();
-          service.touchSessionAttachment(attachment);
+          await service.touchSessionAttachment(attachment);
+          assertInvocation();
+          assertCurrent();
           const result = await transport.invoke(
             { ...request, nodeId: node.nodeId },
             assertInvocation,
           );
           assertInvocation();
-          service.touchSessionAttachment(attachment);
+          await service.touchSessionAttachment(attachment);
+          assertInvocation();
+          assertCurrent();
           return result;
         },
       };
@@ -259,12 +232,17 @@ export async function resolveComputerBinding(params: {
       );
     }
   }
-  const node = await resolveComputerNode(params.gatewayOpts, params.node, params.signal);
+  const node = resolveEligibleNodeFromList(
+    await listNodes(params.gatewayOpts, params.signal),
+    params.node,
+    isEligibleComputerNode,
+    COMPUTER_NODE_MESSAGES,
+  );
   return {
     host: { host: "node", nodeId: node.nodeId },
     gatewayOpts: params.gatewayOpts,
     capabilities: node.computerUse,
     invoke: (request) =>
-      invokeNodeCommand({ ...request, nodeId: node.nodeId, gatewayOpts: params.gatewayOpts }),
+      invokeAgentNodeCommand({ ...request, nodeId: node.nodeId, gatewayOpts: params.gatewayOpts }),
   };
 }

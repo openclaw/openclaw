@@ -75,6 +75,10 @@ console.log(JSON.stringify({ value: first.value, evaluations: globalThis.pluginE
 export async function withShimFixture<T>(
   wrapper:
     | (typeof TSX_SHIM_WRAPPERS)[number]
+    | "scripts/check-changed.mjs"
+    | "scripts/run-tsgo.mjs"
+    | "scripts/run-oxlint.mjs"
+    | "scripts/run-tsgo-core-test-shards.mjs"
     | "scripts/run-node.mjs"
     | "scripts/crabbox-wrapper.mjs",
   run: (paths: {

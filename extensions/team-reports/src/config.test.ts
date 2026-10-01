@@ -1,10 +1,15 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import fs, { open, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buildJsonPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
-import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import { parseTeamReportsConfig, resolveTeamReportsConfig } from "./config.js";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, open: vi.fn(actual.open) };
+});
 
 const minimal = { github: { token: "fixture-token", orgs: ["acme"] } };
 const documented = {
@@ -48,11 +53,13 @@ const documented = {
 };
 
 const manifestSchema = buildJsonPluginConfigSchema(manifest.configSchema);
-const temporaryDirectories: string[] = [];
-afterEach(async () => {
-  await Promise.all(
-    temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
-  );
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.mocked(open).mockReset();
+});
+afterAll(() => {
+  vi.doUnmock("node:fs/promises");
 });
 
 describe("Team Reports configuration", () => {
@@ -130,8 +137,7 @@ describe("Team Reports configuration", () => {
   });
 
   it("loads a bounded people artifact only when resolving startup configuration", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "team-reports-config-"));
-    temporaryDirectories.push(directory);
+    const directory = tempDirs.make("team-reports-config-");
     const peopleFile = join(directory, "people.json");
     const people = [
       { github: ["alice", "alice-work"], status: "archived", archivedAt: "2026-08-01" },
@@ -145,5 +151,27 @@ describe("Team Reports configuration", () => {
     await expect(resolveTeamReportsConfig(config, {})).rejects.toThrow();
     await writeFile(peopleFile, " ".repeat(2 * 1024 * 1024 + 1));
     await expect(resolveTeamReportsConfig(config, {})).rejects.toThrow("at most 2 MiB");
+  });
+
+  it("rejects a people file that grows beyond 2 MiB after inspection", async () => {
+    const peopleFile = join(tempDirs.make("team-reports-growing-people-"), "people.json");
+    await writeFile(peopleFile, JSON.stringify({ people: [{ github: ["alice"] }] }));
+    vi.mocked(open).mockImplementationOnce(async (...args) => {
+      const handle = await fs.open(...args);
+      const stat = handle.stat.bind(handle);
+      vi.spyOn(handle, "stat").mockImplementationOnce(async () => {
+        const inspected = await stat();
+        await fs.appendFile(peopleFile, " ".repeat(2 * 1024 * 1024));
+        return inspected;
+      });
+      return handle;
+    });
+
+    const config = parseTeamReportsConfig({ ...minimal, peopleFile });
+    const result = await resolveTeamReportsConfig(config, {}).catch((error: unknown) => error);
+    expect((await fs.stat(peopleFile)).size).toBeGreaterThan(2 * 1024 * 1024);
+    expect(result).toMatchObject({
+      message: "team-reports.peopleFile must be a regular JSON file of at most 2 MiB.",
+    });
   });
 });

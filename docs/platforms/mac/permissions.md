@@ -19,7 +19,14 @@ when you return to the app after changing a grant in System Settings, focus the
 Dashboard, or complete a permission request. Open Dashboard windows do not start
 background permission polling.
 
-Enabling camera access, Computer Control, Keep computer awake, the Peekaboo bridge, browser cookie
+Screen Recording and Accessibility show **Not granted** until access is confirmed;
+macOS's binary checks do not distinguish a first request from a denial. Click
+**Grant** to request access before looking for OpenClaw in System Settings.
+If access was denied or the prompt no longer appears, use the adjacent
+**Open System Settings** action. Permissions with a confirmed denial offer
+that action instead of **Grant**.
+
+Enabling camera access, Computer Control, Desktop sharing, Keep computer awake, the Peekaboo bridge, browser cookie
 sync, or continuous Voice Wake listening requires a native confirmation with
 **Cancel** selected by default. Increasing location access (from Off to While
 Using or Always, or from While Using to Always) and enabling precise location
@@ -65,7 +72,7 @@ macOS TCC grants Accessibility to the code identity of the process it sees. If a
 
 Treat a `node` entry in System Settings as broad permission for that Node runtime, not as permission for one npm package. Avoid granting Accessibility to `node` unless you trust every script and package launched through that exact Node install.
 
-Accessibility approval does not enable activity sharing. **Dashboard → Settings → This Mac → Permissions → Active computer presence** is a separate, off-by-default control for sharing bounded idle duration with your Gateway. Turning it off clears retained activity without revoking Accessibility or disconnecting the node.
+Basic presence comes from interaction with OpenClaw and needs no Accessibility grant. **Dashboard → Settings → This Mac → Permissions → System-wide presence detection** is a separate, off-by-default control that includes physical activity in other apps. Accessibility approval alone does not enable it. Turning it off clears the system-wide sample and falls back to app-local activity, without revoking Accessibility or disconnecting the node.
 
 If you accidentally granted Accessibility to `node`, remove that entry from System Settings -> Privacy & Security -> Accessibility. Then grant the signed app or helper that should own UI automation.
 
@@ -122,7 +129,6 @@ Example resets (using OpenClaw's bundle ID, `ai.openclaw.mac`):
 ```bash
 sudo tccutil reset Accessibility ai.openclaw.mac
 sudo tccutil reset ScreenCapture ai.openclaw.mac
-sudo tccutil reset AppleEvents
 ```
 
 ## Files and folders permissions (Desktop/Documents/Downloads)

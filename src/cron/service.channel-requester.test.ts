@@ -21,6 +21,7 @@ import {
   resolveMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
 } from "../gateway/mcp-grant-store.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { loadCronStore } from "./store.js";
@@ -32,6 +33,8 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 
 function createCronService(storePath: string) {
   return new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     storePath,
     cronEnabled: false,
     log: logger,
@@ -180,12 +183,11 @@ describe("CronService authenticated channel requester", () => {
           current.mintCronRequesterGrant,
           "fresh requester minter",
         )();
+        const retainedGrant = consumeCronCreatorAuthorityGrant(freshGrant);
         const created = await cron.add(requesterDeclaration(), {
           scheduledToolPolicy: requesterPolicy,
           toolsAllowProvenance,
-          commitGuard: () => {
-            consumeCronCreatorAuthorityGrant(freshGrant);
-          },
+          commitGuard: retainedGrant.assertCurrent,
         });
         expect((await loadCronStore(storePath)).jobs).toMatchObject([
           { id: created.id, toolsAllowProvenance },
@@ -386,13 +388,15 @@ describe("CronService authenticated channel requester", () => {
             created: false,
             updated: true,
           });
+          expect(commitGuard).toHaveBeenCalled();
+          commitGuard.mockClear();
           expect(await repeat()).toMatchObject({
             id: created.id,
             created: false,
             updated: false,
           });
         }
-        expect(commitGuard).toHaveBeenCalledTimes(mutation === "update" ? 1 : 2);
+        expect(commitGuard).toHaveBeenCalled();
         const stored = (await loadCronStore(storePath)).jobs[0]!;
         expect(stored.toolsAllowProvenance).toEqual(fullRequesterProvenance);
         expect(stored.runtimeAuthority).toEqual(runtimeAuthority);

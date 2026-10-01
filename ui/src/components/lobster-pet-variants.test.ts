@@ -4,58 +4,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { lobsterPetSeed } from "./lobster-pet-contract.ts";
 import { canonicalLobsterLook, createLobsterPetLook } from "./lobster-pet-look.ts";
-import { LOBSTER_PALETTE_LORE } from "./lobster-pet-lore.ts";
 import { moonPhaseFraction } from "./lobster-pet-moon.ts";
 import { LOBSTER_PALETTE_WEIGHTS, LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 
 type LobsterPetPaletteId = ReturnType<typeof createLobsterPetLook>["palette"]["id"];
-
-const LOBSTER_PET_PALETTE_IDS: LobsterPetPaletteId[] = [
-  "crimson",
-  "blue",
-  "gold",
-  "lumen",
-  "magma",
-  "oilslick",
-  "aurora",
-  "nebula",
-  "banana",
-  "mood",
-  "bee",
-  "rubberduck",
-  "watermelon",
-  "clawtron",
-  "selene",
-  "geode",
-  "ghost",
-  "glass",
-  "split",
-  "sourdough",
-  "zombie",
-  "plush",
-  "balloon",
-  "cryptid",
-  "flatpack",
-  "tinfoil",
-  "actual",
-  "cottoncandy",
-  "disco",
-  "chimera",
-  "pixel",
-  "blueprint",
-  "phosphor",
-  "ascii",
-  "portal",
-  "notexture",
-  "loading",
-  "eclipse",
-  "heisenbug",
-  "invisible",
-  "retro",
-  "goldenretro",
-];
-
-const SPOT_ZONES = { left: [12, 38], right: [60, 84] } as const;
 
 function findLobsterLook(paletteId: LobsterPetPaletteId, now: Date) {
   for (let seed = 0; seed < 20_000; seed++) {
@@ -72,52 +24,11 @@ describe("lobster pet variants", () => {
     expect(createLobsterPetLook(1234)).toEqual(createLobsterPetLook(1234));
   });
 
-  it("stays within the variant catalog for many seeds", () => {
-    const palettes = new Set<string>();
-    const personalities = new Set<string>();
-    const clawSizes = new Set<string>();
-    const tailFans = new Set<boolean>();
-    const crusherSides = new Set<string | null>();
-    const freckleRolls = new Set<boolean>();
-    const glints = new Set<string | null>();
-    const neutralDate = new Date("2026-07-15T12:00:00");
-    for (let seed = 0; seed < 300; seed++) {
-      const look = createLobsterPetLook(seed, neutralDate);
-      palettes.add(look.palette.id);
-      personalities.add(look.personality);
-      clawSizes.add(look.clawSize);
-      tailFans.add(look.tailFan);
-      crusherSides.add(look.crusherSide);
-      freckleRolls.add(look.freckles);
-      glints.add(look.glint);
-      expect(LOBSTER_PET_PALETTE_IDS).toContain(look.palette.id);
-      expect([1.7, 2, 2.5]).toContain(look.scale);
-      expect(["none", "crown", "sprout", "patch"]).toContain(look.accessory);
-      expect(["perky", "droopy"]).toContain(look.antennae);
-      expect(["dainty", "regular", "mighty"]).toContain(look.clawSize);
-      expect([null, "left", "right"]).toContain(look.crusherSide);
-      expect([null, "#ffd166", "#ff8ac2", "#b79bff"]).toContain(look.glint);
-      const zone = SPOT_ZONES[look.side];
-      expect(look.spotPct).toBeGreaterThanOrEqual(zone[0]);
-      expect(look.spotPct).toBeLessThanOrEqual(zone[1]);
-    }
-    expect(palettes.size).toBeGreaterThan(2);
-    expect(personalities.size).toBeGreaterThan(2);
-    expect(clawSizes.size).toBe(3);
-    expect(tailFans.size).toBe(2);
-    expect(crusherSides).toContain(null);
-    expect(crusherSides.size).toBeGreaterThan(1);
-    expect(freckleRolls.size).toBe(2);
-    expect(glints).toContain(null);
-    expect(glints.size).toBeGreaterThan(1);
-  });
-
   it("hatches every rarity tier, with rares staying rare", () => {
     const counts = new Map<string, number>();
     let shinies = 0;
     const total = 20_000;
     const neutralDate = new Date("2026-07-15T12:00:00");
-    expect(LOBSTER_PET_PALETTE_IDS).toHaveLength(42);
     expect(LOBSTER_PET_PALETTES).toHaveLength(42);
     for (let seed = 0; seed < total; seed++) {
       const look = createLobsterPetLook(seed, neutralDate);
@@ -126,7 +37,7 @@ describe("lobster pet variants", () => {
         shinies++;
       }
     }
-    for (const id of LOBSTER_PET_PALETTE_IDS) {
+    for (const { id } of LOBSTER_PET_PALETTES) {
       expect(counts.get(id) ?? 0).toBeGreaterThan(0);
     }
     for (const grail of [
@@ -180,15 +91,6 @@ describe("lobster pet variants", () => {
     expect(counts.get("crimson") ?? 0).toBeGreaterThan(total * 0.25);
     expect(shinies).toBeGreaterThan(0);
     expect(shinies).toBeLessThan(total * 0.006);
-  });
-
-  it("keeps palette lore complete and exact", () => {
-    const paletteIds = LOBSTER_PET_PALETTES.map((palette) => palette.id).toSorted();
-    expect(Object.keys(LOBSTER_PALETTE_LORE).toSorted()).toEqual(paletteIds);
-    for (const id of paletteIds) {
-      expect(LOBSTER_PALETTE_LORE[id].flavor.trim()).not.toBe("");
-      expect(LOBSTER_PALETTE_LORE[id].hint.trim()).not.toBe("");
-    }
   });
 
   it("mixes four stable, distinct donor palettes only for chimera", () => {

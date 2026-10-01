@@ -104,6 +104,8 @@ export function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWor
     updatedAtMs: 1_000,
     stateChangedAtMs: 1_000,
     idleSinceAtMs: null,
+    destroyRequestedAtMs: null,
+    preparation: null,
     lastError: null,
     tunnelStatus: "stopped",
     desktopAvailable: false,
@@ -113,6 +115,11 @@ export function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWor
 }
 
 export const workerService = (overrides: Partial<TestWorkerService> = {}) => ({
+  getDedicatedNodeLeaseSignal: vi.fn(() => undefined),
+  captureSessionAttachment: vi.fn(() => {
+    throw new Error("No conversation attachment fixture");
+  }),
+  readProviderDisplayId: vi.fn(() => undefined),
   getSessionAttachment: vi.fn(() => undefined),
   findSessionAttachment: vi.fn(() => undefined),
   getSessionAttachmentStatus: vi.fn(() => undefined),
@@ -129,6 +136,8 @@ export const workerService = (overrides: Partial<TestWorkerService> = {}) => ({
     throw new Error("No attached portal fixture");
   }),
   list: vi.fn(() => []),
+  readPreparedPoolSummary: vi.fn(() => ({ maxTotal: 4, reservedEnvironmentIds: [] })),
+  readReadyWorkerTarget: vi.fn(() => 1),
   get: vi.fn(() => undefined),
   inventoryVersion: vi.fn(() => 0),
   readMachineShape: () => undefined,
@@ -172,12 +181,14 @@ export async function callEnvironmentMethod(
       onCleanupError?: (error: unknown) => void,
     ) => Promise<TestWorkerRecord>;
     connectedNodes?: unknown[];
+    scopes?: string[];
   } = {},
 ) {
   const respond = vi.fn();
   await environmentsHandlers[method]?.({
     params: params as Record<string, unknown>,
     respond,
+    ...(options.scopes ? { client: { connect: { scopes: options.scopes } } } : {}),
     context: mockContext(
       options.service,
       options.reconcileActive,

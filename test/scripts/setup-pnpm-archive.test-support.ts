@@ -1,19 +1,20 @@
-import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { create } from "tar";
+import type { CommandFixture } from "../helpers/command-fixture.js";
 
 const owner = ".github/actions/setup-pnpm-store-cache/seed-pnpm-from-image.mjs";
 const wrapperAnchor =
-  "37536c26ed40ab4134b6511e09f6b27f3ebb45687468f2406ca3805279a4e5ca158c1931350ad9774d6ab2108d71b3dbaeb39943159294375e4d053e8e05685c";
+  "e3f305bc784a2bc89f5ad3b6138889470fae8d2af5f36b61216ec91c2c3d64089775f9de38aac331044ea40f245cb0d5666392dfdf65824e1907ef6a2c62de5f";
 const nativeAnchor =
-  "490560464711e17caa7fcf9535bb58d2bb5c1277c3ab8f11847df41d6a36fd47ea2847e57b6ace3321993a63750db330e19cc6e66598a02f353bb66a1c565c3f";
+  "dcf914058a39cf8760b659d3348163ed01a9703500baa5f3f561958a03c309e71c127846891916980e75d364e66091edc093f72df984f9917d3c6796867f29f5";
 
 export function createPnpmArchiveFixture(
-  tempDirs: { make(prefix: string): string },
-  options: { platform?: string; arch?: string; glibc?: boolean } = {},
+  command: CommandFixture,
+  options: { platform?: string; arch?: string; glibc?: boolean; registryUrl?: string } = {},
 ) {
-  const root = tempDirs.make("pnpm-verified-download-");
+  const root = command.createTempDir("pnpm-verified-download-");
   const image = path.join(root, "image");
   const registry = path.join(root, "registry");
   const runner = path.join(root, "runner");
@@ -26,14 +27,14 @@ export function createPnpmArchiveFixture(
   function archive(name: string, native: boolean) {
     const stage = path.join(root, native ? "native" : "wrapper");
     fs.mkdirSync(stage);
-    fs.writeFileSync(path.join(stage, "package.json"), JSON.stringify({ version: "12.4.0" }));
+    fs.writeFileSync(path.join(stage, "package.json"), JSON.stringify({ version: "12.5.1" }));
     fs.writeFileSync(path.join(stage, "pnpm"), native ? "native-fixture\n" : "wrapper-fixture\n");
     const dest = path.join(registry, name);
-    execFileSync("tar", ["-czf", dest, "-C", root, path.basename(stage)]);
+    create({ cwd: root, file: dest, gzip: true, sync: true }, [path.basename(stage)]);
     return createHash("sha512").update(fs.readFileSync(dest)).digest("hex");
   }
-  const wrapperHash = archive("pnpm-12.4.0.tgz", false);
-  const nativeHash = archive("exe.linux-x64-12.4.0.tgz", true);
+  const wrapperHash = archive("pnpm-12.5.1.tgz", false);
+  const nativeHash = archive("exe.linux-x64-12.5.1.tgz", true);
   const calls = path.join(root, "curl-calls");
   const curl = path.join(bin, "curl");
   fs.writeFileSync(
@@ -49,16 +50,23 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 case "$url" in
-  https://registry.npmjs.org/pnpm/-/pnpm-12.4.0.tgz) name=pnpm-12.4.0.tgz ;;
-  https://registry.npmjs.org/@pnpm/exe.linux-x64/-/exe.linux-x64-12.4.0.tgz) name=exe.linux-x64-12.4.0.tgz ;;
+  https://registry.npmjs.org/pnpm/-/pnpm-12.5.1.tgz) name=pnpm-12.5.1.tgz ;;
+  https://registry.npmjs.org/@pnpm/exe.linux-x64/-/exe.linux-x64-12.5.1.tgz) name=exe.linux-x64-12.5.1.tgz ;;
   *) exit 91 ;;
 esac
 cp "$FIXTURE_REGISTRY/$name" "$out"
 `,
     { mode: 0o755 },
   );
+  if (options.registryUrl) {
+    fs.unlinkSync(curl);
+  }
   const script = fs
     .readFileSync(owner, "utf8")
+    .replace(
+      'const registry = "https://registry.npmjs.org";',
+      `const registry = ${JSON.stringify(options.registryUrl ?? "https://registry.npmjs.org")};`,
+    )
     .replaceAll("/opt/crabbox/toolchain-archives", image)
     .replaceAll("process.platform", JSON.stringify(options.platform ?? "linux"))
     .replaceAll("process.arch", JSON.stringify(options.arch ?? "x64"))
@@ -70,7 +78,7 @@ cp "$FIXTURE_REGISTRY/$name" "$out"
     .replaceAll(nativeAnchor, nativeHash);
   const scriptPath = path.join(root, "seed.mjs");
   fs.writeFileSync(scriptPath, script);
-  const spec = `pnpm@12.4.0+sha512.${wrapperHash}`;
+  const spec = `pnpm@12.5.1+sha512.${wrapperHash}`;
   return {
     root,
     image,
@@ -79,18 +87,23 @@ cp "$FIXTURE_REGISTRY/$name" "$out"
     store,
     calls,
     spec,
-    run(extraEnv: NodeJS.ProcessEnv = {}, selected = spec) {
-      return spawnSync(process.execPath, [scriptPath, selected], {
+    async run(extraEnv: NodeJS.ProcessEnv = {}, selected = spec) {
+      const result = await command.run(process.execPath, [scriptPath, selected], {
         encoding: "utf8",
         env: {
           PATH: `${bin}${path.delimiter}${process.env.PATH}`,
           RUNNER_TEMP: runner,
+          CURL_HOME: root,
           CURL_CALLS: calls,
           FIXTURE_REGISTRY: registry,
           PNPM_CONFIG_STORE_DIR: store,
           ...extraEnv,
         },
       });
+      if (result.error) {
+        throw new Error("Pinned pnpm archive fixture subprocess failed", { cause: result.error });
+      }
+      return result;
     },
   };
 }

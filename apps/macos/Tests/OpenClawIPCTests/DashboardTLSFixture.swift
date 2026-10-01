@@ -1,32 +1,33 @@
 import Foundation
 import Security
 import Testing
+@testable import OpenClaw
 
 /// Synthetic listener identity; Security keeps the import in memory, never Keychain.
 struct DashboardTLSFixture {
     let identity: sec_identity_t
     let certificate: Data
 
-    init() throws {
+    @MainActor
+    init() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        func openssl(_ arguments: [String]) throws {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/openssl")
-            process.currentDirectoryURL = directory
-            process.arguments = arguments
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
-            try process.run()
-            process.waitUntilExit()
-            try #require(process.terminationStatus == 0)
+        func openssl(_ arguments: [String]) async throws {
+            let result = try await BoundedProcess.run(
+                path: "/usr/bin/openssl",
+                arguments: arguments,
+                workingDirectory: directory.path,
+                timeout: 60)
+            try #require(
+                result.terminationStatus == 0,
+                Comment(rawValue: String(decoding: result.output, as: UTF8.self)))
         }
-        try openssl([
+        try await openssl([
             "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
             "-subj", "/CN=localhost", "-keyout", "key.pem", "-out", "cert.pem",
         ])
-        try openssl([
+        try await openssl([
             "pkcs12", "-export", "-inkey", "key.pem", "-in", "cert.pem", "-out", "identity.p12",
             "-passout", "pass:fixture", "-keypbe", "PBE-SHA1-3DES", "-certpbe", "PBE-SHA1-3DES",
             "-macalg", "sha1",

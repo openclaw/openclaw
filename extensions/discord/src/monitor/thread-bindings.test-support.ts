@@ -1,6 +1,6 @@
 // Discord test support resets the intentionally cross-loader thread-binding registry.
 type ThreadBindingsTestState = {
-  managersByAccountId: Map<string, { stop(): void }>;
+  managersByAccountId: Map<string, { stop(): Promise<void> }>;
   bindingsByThreadId: Map<string, unknown>;
   bindingsBySessionKey: Map<string, Set<string>>;
   tokensByAccountId: Map<string, string>;
@@ -11,19 +11,24 @@ type ThreadBindingsTestState = {
   loadedPersistentBindings: boolean;
   persistenceAvailable: boolean;
   lastPersistedAtMs: number;
+  mutationTail: Promise<void>;
+  revision: number;
+  activePersistence?: unknown;
 };
 
 const THREAD_BINDINGS_STATE_KEY = Symbol.for("openclaw.discordThreadBindingsState");
 
-export function resetThreadBindingsForTests() {
+export async function resetThreadBindingsForTests() {
   const globalStore = globalThis as Record<PropertyKey, unknown>;
   const state = globalStore[THREAD_BINDINGS_STATE_KEY] as ThreadBindingsTestState | undefined;
   if (!state) {
     return;
   }
   for (const manager of state.managersByAccountId.values()) {
-    manager.stop();
+    await manager.stop();
   }
+  await state.loadingBindings;
+  await state.mutationTail;
   state.managersByAccountId.clear();
   state.bindingsByThreadId.clear();
   state.bindingsBySessionKey.clear();
@@ -35,4 +40,7 @@ export function resetThreadBindingsForTests() {
   state.loadedPersistentBindings = false;
   state.persistenceAvailable = true;
   state.lastPersistedAtMs = 0;
+  state.mutationTail = Promise.resolve();
+  state.revision += 1;
+  delete state.activePersistence;
 }

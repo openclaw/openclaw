@@ -4,6 +4,7 @@ import { selectedChatSessionRow } from "../chat-state-route.ts";
 import type { ChatProps } from "../chat-view.ts";
 import { openSlot } from "../sidebar-layout.ts";
 import "./chat-sidebar.ts";
+import "./chat-tool-output.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import { selectSessionWorkspacePreview } from "./chat-session-workspace-state.ts";
 import { openSessionWorkspaceFile, revealSessionWorkspaceFile } from "./chat-session-workspace.ts";
@@ -15,6 +16,14 @@ export function renderChatDetailSlot(params: {
   host: ChatPageHost;
 }): TemplateResult {
   const { content, host } = params;
+  if (content.kind === "tool-output") {
+    return html`<openclaw-chat-tool-output
+      class="chat-sidebar"
+      .content=${content}
+      .loadFullMessage=${params.chat.loadFullAssistantMessage ?? null}
+      .connectionEpoch=${params.chat.connectionEpoch}
+    ></openclaw-chat-tool-output>`;
+  }
   return html`<openclaw-chat-detail-panel
     class="chat-sidebar"
     .content=${content}

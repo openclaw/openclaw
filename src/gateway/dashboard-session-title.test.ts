@@ -185,29 +185,35 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     );
   });
 
-  it("preserves the configured primary auth profile for explicit utility models", async () => {
-    const profiledCfg = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.5@personal" },
-          utilityModel: "openai/gpt-5.6-luna",
+  it.each([false, true])(
+    "preserves the native primary auth profile for utility models (ACP=%s)",
+    async (acp) => {
+      const profiledCfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5@personal" },
+            utilityModel: "openai/gpt-5.6-luna",
+          },
+          entries: {
+            main: acp ? { model: "harness-only@harness-profile", runtime: { type: "acp" } } : {},
+          },
         },
-      },
-    } as OpenClawConfig;
-    resolveUtilityModelRefForAgent.mockReturnValue("openai/gpt-5.6-luna");
+      } as OpenClawConfig;
+      resolveUtilityModelRefForAgent.mockReturnValue("openai/gpt-5.6-luna");
 
-    await expect(
-      maybeGenerateDashboardSessionTitle({ ...titleParams(), cfg: profiledCfg }),
-    ).resolves.toBe(true);
+      await expect(
+        maybeGenerateDashboardSessionTitle({ ...titleParams(), cfg: profiledCfg }),
+      ).resolves.toBe(true);
 
-    expect(generateConversationLabelWithFallback).toHaveBeenCalledWith(
-      expect.objectContaining({
-        utilityModelRef: "openai/gpt-5.6-luna",
-        regularModelRef: "openai/gpt-5.5@personal",
-        preferredProfile: "personal",
-      }),
-    );
-  });
+      expect(generateConversationLabelWithFallback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          utilityModelRef: "openai/gpt-5.6-luna",
+          regularModelRef: "openai/gpt-5.5@personal",
+          preferredProfile: "personal",
+        }),
+      );
+    },
+  );
 
   it("goes directly to the regular model when utility routing is disabled", async () => {
     resolveUtilityModelRefForAgent.mockReturnValue(undefined);
@@ -361,16 +367,23 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     );
   });
 
-  it("persists a deterministic goal title when model labeling fails", async () => {
-    generateConversationLabelWithFallback.mockRejectedValueOnce(new Error("route unavailable"));
+  it.each(["failure", "empty"])(
+    "persists a two-word name after model labeling %s",
+    async (outcome) => {
+      if (outcome === "failure") {
+        generateConversationLabelWithFallback.mockRejectedValueOnce(new Error("route unavailable"));
+      } else {
+        generateConversationLabelWithFallback.mockResolvedValueOnce(null);
+      }
 
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
-    expect(generateConversationLabelWithFallback).toHaveBeenCalledTimes(1);
-    const update = updateSessionEntry.mock.calls[0]?.[1];
-    expect(await update?.({ ...baseEntry })).toEqual({
-      displayName: "Help me plan the release",
-    });
-  });
+      await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
+      expect(generateConversationLabelWithFallback).toHaveBeenCalledTimes(1);
+      const update = updateSessionEntry.mock.calls[0]?.[1];
+      expect(await update?.({ ...baseEntry })).toEqual({
+        displayName: expect.stringMatching(/^[a-z]+-[a-z]+$/),
+      });
+    },
+  );
 
   it("does not persist a deterministic title when utility-only speculation fails", async () => {
     generateConversationLabelWithFallback.mockRejectedValueOnce(new Error("route unavailable"));
@@ -483,7 +496,8 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       await vi.advanceTimersByTimeAsync(0);
 
       expect(loadSessionEntry()).toMatchObject({
-        displayName: outcome === "generated" ? "Release Planning" : "Help me plan the release",
+        displayName:
+          outcome === "generated" ? "Release Planning" : expect.stringMatching(/^[a-z]+-[a-z]+$/),
       });
       expect(onPersisted).toHaveBeenCalledOnce();
       expect(updateSessionEntry).toHaveBeenCalledOnce();
@@ -565,6 +579,9 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     await expect(duplicate).resolves.toBe(false);
 
     expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
+    expect(updateSessionEntry).toHaveBeenCalledOnce();
+    expect(loadSessionEntry).toHaveBeenCalledOnce();
+    expect(readSessionTitleFieldsFromTranscript).toHaveBeenCalledOnce();
   });
 });
 

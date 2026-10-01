@@ -163,25 +163,30 @@ export function prepareLegacySessionSurfaces(params: {
   const manifestRecords = (context.manifestRegistry?.plugins ?? []).filter(
     (record) => record.packageManifest?.setupFeatures?.legacySessionSurfaces === true,
   );
-  const selectedPluginIds = new Set(
-    resolveConfiguredChannelPluginIds({
-      config: context.config,
-      activationSourceConfig: context.activationSourceConfig,
-      workspaceDir: context.workspaceDir,
-      env: context.env,
-      manifestRecords,
-    }),
-  );
   const normalizedConfig = normalizePluginsConfig(context.activationSourceConfig.plugins);
-  const declaringRecords = manifestRecords.filter(
-    (record) =>
-      selectedPluginIds.has(record.id) ||
+  let selectedPluginIds: Set<string> | undefined;
+  const declaringRecords = manifestRecords.filter((record) => {
+    if (
       isEnabledLegacySurfaceOwner({
         record,
         config: context.activationSourceConfig,
         normalizedConfig,
+      })
+    ) {
+      return true;
+    }
+    // Already eligible migration owners do not need persisted-auth presence probes.
+    selectedPluginIds ??= new Set(
+      resolveConfiguredChannelPluginIds({
+        config: context.config,
+        activationSourceConfig: context.activationSourceConfig,
+        workspaceDir: context.workspaceDir,
+        env: context.env,
+        manifestRecords,
       }),
-  );
+    );
+    return selectedPluginIds.has(record.id);
+  });
   if (declaringRecords.length === 0) {
     return EMPTY_LEGACY_SESSION_SURFACES;
   }

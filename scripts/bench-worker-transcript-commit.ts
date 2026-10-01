@@ -240,17 +240,15 @@ async function runSample(shape: typeof fixture, profilePath?: string) {
           const outcome = await committer.commit({
             identity,
             request,
+            sessionTarget: target,
             assertCurrent: () => undefined,
           });
           durationsMs.push(performance.now() - start);
-          assert.equal(
+          assert.equal<true>(
             outcome.ok,
             true,
             `commit ${index + 1} rejected: ${JSON.stringify(outcome)}`,
           );
-          if (!outcome.ok) {
-            throw new Error("unreachable rejected commit");
-          }
           assert.equal(outcome.result.entryIds.length, 4);
           assert.equal(outcome.result.newLeafId, outcome.result.entryIds.at(-1));
           entryIds.push(...outcome.result.entryIds);
@@ -282,6 +280,7 @@ async function runSample(shape: typeof fixture, profilePath?: string) {
           await committer.commit({
             identity,
             request: lastRequest,
+            sessionTarget: target,
             assertCurrent: () => undefined,
           }),
           lastOutcome,

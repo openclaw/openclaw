@@ -2,9 +2,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
+import { consumeRootCommandOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { readPackageName, readPackageVersion } from "../infra/package-json.js";
-import type { GatewayServiceCommandConfig } from "./service-types.js";
+import { isPathInside } from "../infra/path-guards.js";
+import { isBunRuntime, resolveRuntimeScriptPosition } from "./runtime-binary.js";
+import {
+  hasGatewayServiceLauncherOverride,
+  resolveManagedGatewayServiceProcessEnv,
+  type GatewayServiceCommandConfig,
+  type GatewayServiceState,
+} from "./service-types.js";
 
 /** Summary of the installed gateway service command and package layout. */
 export type GatewayServiceLayoutSummary = {
@@ -20,15 +29,80 @@ export type GatewayServiceLayoutSummary = {
   entrypointSourceCheckout?: boolean;
 };
 
-function shellQuoteArg(value: string): string {
-  if (/^[A-Za-z0-9_./:@%+=,-]+$/u.test(value)) {
-    return value;
+export type GatewayServiceInstallationDrift = {
+  serviceRoot: string;
+  activeRoot: string;
+  serviceVersion?: string;
+  activeVersion?: string;
+};
+
+/** Shared admission for moving a verified packaged launcher onto the active CLI. */
+export async function resolveGatewayServiceInstallationRefreshRoot(params: {
+  root: string | undefined;
+  state: GatewayServiceState;
+}): Promise<string | undefined> {
+  const { root, state } = params;
+  const { command } = state;
+  const managerUid = state.runtime?.systemd?.managerUid;
+  if (
+    !root ||
+    !command ||
+    isBunRuntime(command.programArguments[0] ?? "") ||
+    state.loadState.status === "unknown" ||
+    (state.runtime?.status !== "running" && state.runtime?.status !== "stopped") ||
+    (process.platform === "linux" &&
+      (managerUid === undefined ||
+        !Number.isInteger(managerUid) ||
+        managerUid < 0 ||
+        managerUid >= 0xffffffff)) ||
+    (state.definitionMutationCapability?.kind ?? "writable") !== "writable" ||
+    hasGatewayServiceLauncherOverride(command) ||
+    resolveManagedGatewayServiceProcessEnv(command, state.env) === null ||
+    (await readPackageName(root)) !== "openclaw" ||
+    (await isGatewayServiceSourceCheckoutRoot(root))
+  ) {
+    return undefined;
   }
-  return `'${value.replaceAll("'", "'\\''")}'`;
+  const layout = await summarizeGatewayServiceLayout(command);
+  return layout?.entrypointSourceCheckout ? undefined : layout?.packageRootReal;
 }
 
-function formatExecStart(programArguments: readonly string[]): string {
-  return programArguments.map(shellQuoteArg).join(" ");
+export function resolveManagedServiceNodeRunner(
+  command: GatewayServiceCommandConfig | null,
+): string | undefined {
+  const args = command?.programArguments ?? [];
+  // Native heap flags and dev loaders separate the executable from the entrypoint.
+  const runner = args.indexOf("gateway") > 1 ? args[0] : undefined;
+  const executable = normalizeOptionalString(runner ? path.basename(runner) : undefined);
+  return ["node", "node.exe"].includes(executable?.toLowerCase() ?? "") ? runner : undefined;
+}
+
+/** Local package evidence remains available when the Gateway cannot answer a probe. */
+export async function inspectGatewayServiceInstallationDrift(
+  layout: Pick<GatewayServiceLayoutSummary, "packageRootReal" | "packageVersion"> | undefined,
+  activeRoot: string,
+): Promise<GatewayServiceInstallationDrift | undefined> {
+  const serviceRoot = layout?.packageRootReal;
+  const activeRootReal = await tryRealpath(activeRoot);
+  if (!serviceRoot || !activeRootReal || serviceRoot === activeRootReal) {
+    return undefined;
+  }
+  const [serviceStat, activeStat] = await Promise.all(
+    [serviceRoot, activeRootReal].map((root) => fs.stat(root).catch(() => undefined)),
+  );
+  // A deployment can expose the same package through two bind mounts.
+  if (
+    serviceStat &&
+    activeStat &&
+    serviceStat.dev === activeStat.dev &&
+    serviceStat.ino === activeStat.ino
+  ) {
+    return undefined;
+  }
+  const activeVersion = (await readPackageVersion(activeRootReal)) ?? undefined;
+  const serviceVersion =
+    layout.packageVersion ?? (await readPackageVersion(serviceRoot)) ?? undefined;
+  return { serviceRoot, activeRoot: activeRootReal, serviceVersion, activeVersion };
 }
 
 function resolveSystemdScopeFromServicePath(
@@ -51,18 +125,42 @@ function resolveSystemdScopeFromServicePath(
 export function resolveServiceEntrypointIndex(
   programArguments: readonly string[],
 ): number | undefined {
-  // Managed commands put the entrypoint immediately before the subcommand.
-  // A subcommand name following a native option is its value, not this boundary.
-  const commandIndex = programArguments.findIndex(
-    (arg, index, args) =>
-      index > 0 &&
-      !args[index - 1]?.startsWith("-") &&
-      (arg === "gateway" || (arg === "node" && args[index + 1] === "run")),
-  );
-  return commandIndex > 0 ? commandIndex - 1 : undefined;
+  const args = [...programArguments];
+  const { position: script } = resolveRuntimeScriptPosition(args);
+  if (typeof script !== "number" && script.kind === "other") {
+    return undefined;
+  }
+  // Runtime flags belong before the script; CLI root options belong after it.
+  // File launchers and custom runtimes retain their original argv indices.
+  const first = typeof script === "number" ? script : 0;
+  const last = typeof script === "number" ? script : args.length - 1;
+  for (let entrypoint = first; entrypoint <= last; entrypoint++) {
+    const argument = args[entrypoint];
+    if (!argument || argument.startsWith("-")) {
+      continue;
+    }
+    let command = entrypoint + 1;
+    while (command < args.length) {
+      if (args[command] === FLAG_TERMINATOR) {
+        command++;
+        break;
+      }
+      const consumed = consumeRootCommandOptionToken(args, command);
+      if (!consumed) {
+        break;
+      }
+      command += consumed;
+    }
+    if (args[command] === "gateway" || (args[command] === "node" && args[command + 1] === "run")) {
+      return entrypoint;
+    }
+  }
+  return undefined;
 }
 
-export function resolveServiceEntrypoint(command: GatewayServiceCommandConfig): string | undefined {
+export function resolveServiceEntrypoint(
+  command: Pick<GatewayServiceCommandConfig, "programArguments" | "workingDirectory">,
+): string | undefined {
   const entrypointIndex = resolveServiceEntrypointIndex(command.programArguments);
   if (entrypointIndex === undefined) {
     return undefined;
@@ -103,7 +201,7 @@ async function tryRealpath(value: string | undefined): Promise<string | undefine
   }
 }
 
-async function isSourceCheckoutRoot(candidate: string): Promise<boolean> {
+async function isGatewayServiceSourceCheckoutRoot(candidate: string): Promise<boolean> {
   const hasRepoMarker =
     (await pathExists(path.join(candidate, ".git"))) ||
     (await pathExists(path.join(candidate, "pnpm-workspace.yaml")));
@@ -138,7 +236,10 @@ async function resolveOpenClawPackageRoot(entrypoint: string): Promise<string | 
 }
 
 export async function summarizeGatewayServiceLayout(
-  command: GatewayServiceCommandConfig | null,
+  command: Pick<
+    GatewayServiceCommandConfig,
+    "programArguments" | "workingDirectory" | "sourcePath"
+  > | null,
 ): Promise<GatewayServiceLayoutSummary | undefined> {
   if (!command) {
     return undefined;
@@ -155,11 +256,11 @@ export async function summarizeGatewayServiceLayout(
     ? ((await readPackageVersion(packageRoot)) ?? undefined)
     : undefined;
   const entrypointSourceCheckout = packageRootReal
-    ? await isSourceCheckoutRoot(packageRootReal)
+    ? await isGatewayServiceSourceCheckoutRoot(packageRootReal)
     : undefined;
 
   return {
-    execStart: formatExecStart(command.programArguments),
+    execStart: command.programArguments.map(quoteCliArg).join(" "),
     ...(sourcePath ? { sourcePath } : {}),
     ...(sourcePathReal ? { sourcePathReal } : {}),
     ...(sourcePath ? { sourceScope: resolveSystemdScopeFromServicePath(sourcePath) } : {}),
@@ -170,6 +271,30 @@ export async function summarizeGatewayServiceLayout(
     ...(packageVersion ? { packageVersion } : {}),
     ...(entrypointSourceCheckout !== undefined ? { entrypointSourceCheckout } : {}),
   };
+}
+
+/** Physical installation overlap only; deployment current/releases names are not evidence. */
+export async function gatewayServiceCommandOverlapsPhysicalInstallation(
+  root: string,
+  command: GatewayServiceCommandConfig | null,
+): Promise<boolean | null> {
+  const layout = await summarizeGatewayServiceLayout(command);
+  if (!layout?.packageRootReal || !layout.entrypointReal) {
+    return null;
+  }
+  const [destination, serving] = await Promise.all(
+    [root, layout.packageRootReal].map((directory) => fs.realpath(directory).catch(() => null)),
+  );
+  if (!destination || !serving) {
+    return null;
+  }
+  if (isPathInside(destination, serving) || isPathInside(serving, destination)) {
+    return true;
+  }
+  const [left, right] = await Promise.all(
+    [destination, serving].map((directory) => fs.stat(directory).catch(() => null)),
+  );
+  return Boolean(left && right && left.dev === right.dev && left.ino === right.ino);
 }
 
 /** Compare an already inspected launcher with one installation; no service discovery or effects. */

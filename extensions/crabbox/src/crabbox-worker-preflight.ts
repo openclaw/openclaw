@@ -1,9 +1,15 @@
 import { WorkerProviderError } from "openclaw/plugin-sdk/plugin-entry";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { crabboxCommandError } from "./crabbox-worker-command-error.js";
-import { type CrabboxCommandRunner, runCrabboxCommand } from "./crabbox-worker-command.js";
-import { nonEmptyString } from "./crabbox-worker-profile.js";
-import { CRABBOX_LIFECYCLE_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
+import {
+  isRecord,
+  normalizeOptionalString as nonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  crabboxCommandOutput,
+  parseCrabboxJson,
+  type CrabboxCommandRunner,
+  runCrabboxCommand,
+} from "./crabbox-worker-command.js";
+import { CRABBOX_CONFIG_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 async function loadCrabboxConfigShow(params: {
   binary: string;
@@ -16,16 +22,9 @@ async function loadCrabboxConfigShow(params: {
     binary: params.binary,
     runCommand: params.runCommand,
     signal: params.signal,
-    timeoutMs: CRABBOX_LIFECYCLE_TIMEOUT_MS,
+    timeoutMs: CRABBOX_CONFIG_TIMEOUT_MS,
   });
-  if (result.termination !== "exit" || result.code !== 0) {
-    throw crabboxCommandError("config show", result);
-  }
-  try {
-    return JSON.parse(result.stdout) as unknown;
-  } catch {
-    throw new Error("Crabbox config show returned invalid JSON");
-  }
+  return parseCrabboxJson(crabboxCommandOutput("config show", result), "config show");
 }
 
 export async function assertAwsWorkerHasNoInstanceProfile(params: {

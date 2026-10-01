@@ -32,7 +32,8 @@ import { prepareSessionCreateFilesystemRoot } from "./server-methods/session-cre
 import type {
   PrepareGatewaySessionLifecycle,
   PreparedGatewaySessionLifecycle,
-} from "./session-lifecycle-preparation.js";
+} from "./session-create-service.types.js";
+import { invalidSessionRequest } from "./session-request-error.js";
 import { resolveExplicitSessionName } from "./session-title-state.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 
@@ -355,23 +356,15 @@ export async function prepareSessionWorktree(params: {
     }
     if (existing && existingDirectory) {
       if (repository && existing.repoRoot !== repository.canonicalRoot) {
-        return err(
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "session worktree belongs to a different repository",
-          ),
-        );
+        return invalidSessionRequest("session worktree belongs to a different repository");
       }
       // Replaying the recorded selection reuses the checkout; changing it must not rebase it.
       if (
         (params.name && existing.name !== params.name) ||
         (params.baseRef && existing.baseRef !== params.baseRef)
       ) {
-        return err(
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `session is already bound to worktree ${existing.name} (${existing.branch})`,
-          ),
+        return invalidSessionRequest(
+          `session is already bound to worktree ${existing.name} (${existing.branch})`,
         );
       }
     }
@@ -502,15 +495,14 @@ export async function prepareSessionWorktreeCreation(params: {
   if (acceptedPending && !acceptedPending.workspace) {
     if (lifecycleTarget.entry?.pendingProjectGitUrl) {
       // The admitted first-turn owner materializes this child's recorded clone intent.
-      return { ok: true, value: {} };
+      return ok({});
     }
-    return {
-      ok: false,
-      error: errorShape(
+    return err(
+      errorShape(
         ErrorCodes.UNAVAILABLE,
         "Saved worktree workspace is invalid; select the repository and retry.",
       ),
-    };
+    );
   }
   const inheritedSource =
     params.inheritParentKey && !acceptedWorktree && !acceptedPending
@@ -544,10 +536,7 @@ export async function prepareSessionWorktreeCreation(params: {
   }
   // Git discovery permits subdirectory workspaces with an ancestor .git entry.
   if (typeof workspace === "string" && !params.projectGitUrl && !insideGitCheckout(workspace)) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, "agent workspace is not a git checkout"),
-    };
+    return invalidSessionRequest("agent workspace is not a git checkout");
   }
   // Reuse validates the binding, not a selected ref that may have since disappeared.
   const resolvedBase =
@@ -616,7 +605,7 @@ export async function prepareSessionWorktreeCreation(params: {
     name,
     baseRef,
     checkoutCommit: baseCommit,
-    label: params.label ?? title ?? resolveExplicitSessionName(lifecycleTarget.entry) ?? source,
+    label: params.label ?? title ?? resolveExplicitSessionName(lifecycleTarget.entry),
     runSetupScript: params.runSetupScript,
     signal,
     commitGuard,
@@ -624,7 +613,7 @@ export async function prepareSessionWorktreeCreation(params: {
     withRollback: inheritedSource?.withRollback,
   });
   if (prepared.ok) {
-    return { ok: true, value: { ...prepared.value, ...(withCommit ? { withCommit } : {}) } };
+    return ok({ ...prepared.value, ...(withCommit ? { withCommit } : {}) });
   }
   return prepared;
 }

@@ -1,3 +1,4 @@
+import { createDeferredCore } from "../../shared/deferred.js";
 import type {
   AgentTerminalOwner,
   AgentTerminalSessionDrain,
@@ -19,13 +20,6 @@ export function agentTerminalOwnerMatches(
   );
 }
 
-type TaskBoundAgentOwner = Extract<TerminalOwner, { kind: "agent" }> & { taskId?: string };
-
-export function terminalTaskOwnerMatches(owner: TerminalOwner | null, taskId: string): boolean {
-  // SAFETY: taskId is manager-private metadata added only to host-minted agent owners.
-  return owner?.kind === "agent" && (owner as TaskBoundAgentOwner).taskId === taskId;
-}
-
 function drainKey(owner: AgentTerminalOwner): string {
   return JSON.stringify([owner.agentSessionKey, owner.agentSessionId, owner.agentId]);
 }
@@ -38,17 +32,14 @@ export class AgentTerminalSessionDrainTracker {
   begin(owner: AgentTerminalOwner, hasWork: () => boolean): AgentTerminalSessionDrain {
     const key = drainKey(owner);
     this.active.add(key);
-    let resolveDrain!: () => void;
-    const drained = new Promise<void>((resolve) => {
-      resolveDrain = resolve;
-      const waiters = this.waiters.get(key) ?? new Set();
-      waiters.add(resolve);
-      this.waiters.set(key, waiters);
-    });
+    const drained = createDeferredCore();
+    const waiters = this.waiters.get(key) ?? new Set();
+    waiters.add(drained.resolve);
+    this.waiters.set(key, waiters);
     this.resolveIfIdle(owner, hasWork);
     let released = false;
     return {
-      drained,
+      drained: drained.promise,
       hasWork,
       release: () => {
         if (released) {
@@ -56,9 +47,9 @@ export class AgentTerminalSessionDrainTracker {
         }
         released = true;
         this.active.delete(key);
-        const waiters = this.waiters.get(key);
-        waiters?.delete(resolveDrain);
-        if (waiters?.size === 0) {
+        const pendingWaiters = this.waiters.get(key);
+        pendingWaiters?.delete(drained.resolve);
+        if (pendingWaiters?.size === 0) {
           this.waiters.delete(key);
         }
       },

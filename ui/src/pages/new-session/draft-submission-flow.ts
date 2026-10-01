@@ -9,6 +9,7 @@ import {
 } from "../../lib/session-method-access.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import type { SessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
+import { assertUploadsEnabled, uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "../chat/composer-persistence.ts";
 import type { buildLocalUserMessage } from "../chat/user-message-content.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
@@ -122,6 +123,7 @@ export class DraftSubmissionFlow {
       () => this.setError(CHAT_COMPOSER_DRAFT_STORAGE_ERROR),
     );
     this.attachmentDraft = new NewSessionAttachmentDraft(callbacks.requestUpdate, () => {
+      this.rejectedPromptError = null;
       this.startedSession.current = null;
       this.draftPersistence.noteUserMutation();
     });
@@ -299,27 +301,9 @@ export class DraftSubmissionFlow {
     ) {
       return this.activeSubmission ? { gate: "submitting" } : undefined;
     }
-    return resolveNewSessionSubmitBlock({
-      gatewayState: this.gateway,
-      placeState: this.place,
-      pendingPlacement: this.pendingPlacement,
-      submitting: this.activeSubmission !== null,
-      message: this.messageValue,
-      submissionOutcomeUnknown: this.submissionOutcomeUnknown,
-      pendingAttachmentReads: this.attachmentDraft.pendingReads,
-      hasDraftAttachments: this.attachmentDraft.attachments.length > 0,
-      hasCapabilityOverrides: this.capabilities.toolOverrides !== null,
-      mentions: this.mentionsValue,
-      visibility: this.visibilityValue,
-      submissionSnapshot: () => this.read(),
-      requiresModelSetup: () => this.requiresModelSetup(),
-      submissionAccess: () => this.submissionAccess(),
-      placementTargetForSubmission: () => this.placement().target,
-      cloudRuntimeUnsupportedReason: () =>
-        this.place.modelControl.cloudRuntimeUnsupportedReason(
-          this.gateway.cloudProfiles.find((profile) => profile.id === this.place.cloudProfileId),
-        ),
-    });
+    return this.activeSubmission
+      ? { gate: "submitting" }
+      : resolveNewSessionSubmitBlock(this.gateway, this.place, this, this.read());
   }
 
   requiresModelSetup = (): boolean =>
@@ -402,12 +386,22 @@ export class DraftSubmissionFlow {
       this.noteBlockedSubmitAttempt();
       return;
     }
-    const preparedTitle = this.callbacks.takePreparedTitle?.();
+    if (
+      !uploadsEnabled(context.config) &&
+      (this.attachmentDraft.attachments.length ||
+        this.pendingPlacement.attachments?.length ||
+        startup?.params.attachments?.length)
+    ) {
+      this.error = uploadsDisabledMessage();
+      this.callbacks.requestUpdate();
+      return;
+    }
     this.blockedSubmitGate = null;
     const input = prepareDraftSubmission(context, this, this.place, startup, background);
     if (!input) {
       return;
     }
+    const preparedTitle = this.callbacks.takePreparedTitle?.();
     const requestId = ++this.submitRequestToken;
     const submittedDraft = this.draftPersistence.captureSubmission();
     const submittedAt = startup?.startedAt ?? Date.now();
@@ -437,7 +431,9 @@ export class DraftSubmissionFlow {
         return;
       }
       this.startedSession.current = null;
-      const placementTarget = startup ? null : this.placement().target;
+      const placementTarget = startup
+        ? null
+        : resolveDraftSessionPlacement(this.pendingPlacement, this.place).target;
       promptNewSessionNotifications(
         context,
         input.message,
@@ -500,6 +496,7 @@ export class DraftSubmissionFlow {
         ? readSessionMethodAccess(context.gateway.snapshot, {
             method: "sessions.create",
             params: createParams,
+            sessionScope: true,
           })
         : this.submissionAccess(placementCreateParams ?? createParams);
       if (!requestAccess.allowed) {
@@ -509,8 +506,11 @@ export class DraftSubmissionFlow {
       }
       const submissionPlacementRecovery = placementTarget ? this.pendingPlacement.capture() : null;
       if (placementTarget && !submissionPlacementRecovery) {
-        this.setPlacementRecoveryUnavailable();
+        this.setPlacementRecoveryUnavailable("creating");
         return;
+      }
+      if (input.apiAttachments?.length) {
+        assertUploadsEnabled(context.config);
       }
       const createRequest =
         input.pendingPlacement && this.pendingPlacement.phase !== "creating"
@@ -567,7 +567,7 @@ export class DraftSubmissionFlow {
             this.gateway.recoveryScope === input.recoveryScope,
           clearRecovery: () => this.clearPendingPlacementRecovery(),
           setError: (error) => this.setError(error),
-          onRecoveryUnavailable: () => this.setPlacementRecoveryUnavailable(),
+          onRecoveryUnavailable: () => this.setPlacementRecoveryUnavailable("created"),
           clearDraft: () => {
             retainSubmittedSession(result.key);
             return this.clearSubmittedDraft(true, submittedDraft);
@@ -685,12 +685,13 @@ export class DraftSubmissionFlow {
     this.composerTextarea.disconnect();
   }
 
-  private placement = () => resolveDraftSessionPlacement(this.pendingPlacement, this.place);
-
-  private setPlacementRecoveryUnavailable() {
-    this.error = t("newSession.placementStartFailed", {
-      error: "placement recovery storage is unavailable",
-    });
+  private setPlacementRecoveryUnavailable(phase: "creating" | "created") {
+    this.error =
+      phase === "creating"
+        ? t("newSession.placementCreateFailed")
+        : t("newSession.placementStartFailed", {
+            error: "placement recovery storage is unavailable",
+          });
   }
 
   private applyRecoveryDraft(recovery: SessionPlacementRecovery | null) {

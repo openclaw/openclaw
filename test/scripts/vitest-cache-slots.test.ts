@@ -1,8 +1,16 @@
+import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createVitestCacheSlots } from "../../scripts/lib/vitest-cache-slots.mts";
-import type { VitestCacheAssignment } from "../../scripts/test-projects.test-support.mts";
+import {
+  applyDefaultVitestCachePaths,
+  type VitestCacheAssignment,
+} from "../../scripts/test-projects.test-support.mts";
 import { createDeferred } from "../helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { loadVitestPerformanceConfig } from "../vitest/vitest.performance-config.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const spec = {
   config: "test/vitest/vitest.tooling.config.ts",
@@ -13,8 +21,70 @@ const spec = {
 const cachePath = (assigned: typeof spec) => assigned.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH;
 
 describe("Vitest cache slot ownership", () => {
+  it.skipIf(process.platform === "win32").each(["root", "default"] as const)(
+    "reuses separately warmed configs through %s in serial, reordered, and parallel project runs",
+    async (mode) => {
+      const root = tempDirs.make("vitest-cache-layout-");
+      const env: NodeJS.ProcessEnv =
+        mode === "root" ? { OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: root } : {};
+      const run = async (configs: string[], parallel: boolean, seed = false) => {
+        const lease = createVitestCacheSlots("linux");
+        const specs = applyDefaultVitestCachePaths(
+          configs.map((config) => ({ config, env, watchMode: false })),
+          { env, cwd: root },
+        );
+        const visit = (entry: (typeof specs)[number]) =>
+          lease(entry, async (assigned) => {
+            const directory = loadVitestPerformanceConfig(
+              assigned.env,
+              "linux",
+              root,
+            ).fsModuleCachePath!;
+            const file = path.join(directory, `${entry.config}.js`);
+            if (seed) {
+              fs.mkdirSync(directory, { recursive: true });
+              fs.writeFileSync(file, entry.config);
+            } else {
+              expect(fs.existsSync(file), `${entry.config} did not consume its warmed cache`).toBe(
+                true,
+              );
+              expect(fs.readFileSync(file, "utf8")).toBe(entry.config);
+            }
+            return { groupJoined: true };
+          });
+        if (parallel) {
+          await Promise.all(specs.map(visit));
+        } else {
+          for (const entry of specs) {
+            await visit(entry);
+          }
+        }
+      };
+      await run(["first.config.ts"], false, true);
+      await run(["second.config.ts"], false, true);
+      await run(["second.config.ts", "first.config.ts"], false);
+      await run(["first.config.ts", "first.config.ts"], false);
+      await run(["first.config.ts", "second.config.ts"], true);
+    },
+  );
+
+  it("preserves an explicit caller leaf alongside a shared root", async () => {
+    const env = {
+      OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: "/shared-cache",
+      OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/caller-owned-leaf",
+    };
+    const assigned = applyDefaultVitestCachePaths([{ ...spec, env, cacheAssignment: undefined }], {
+      env,
+    });
+    const lease = createVitestCacheSlots("linux");
+    await lease(assigned[0]!, async (entry) => {
+      expect(entry.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe("/caller-owned-leaf");
+      return { groupJoined: true };
+    });
+  });
+
   it("reuses an idle config cache while another config occupies its former scheduler slot", async () => {
-    const run = createVitestCacheSlots(2, "linux");
+    const run = createVitestCacheSlots("linux");
     const first = createDeferred<{ groupJoined: boolean }>();
     const peer = createDeferred<{ groupJoined: boolean }>();
     const third = createDeferred<{ groupJoined: boolean }>();
@@ -48,7 +118,7 @@ describe("Vitest cache slot ownership", () => {
   });
 
   it("reuses lexical root and config aliases without sharing live leases", async () => {
-    const run = createVitestCacheSlots(2, "linux");
+    const run = createVitestCacheSlots("linux");
     const first = createDeferred<{ groupJoined: boolean }>();
     let firstPath: string | undefined;
     const pending = run(spec, (assigned) => {
@@ -81,7 +151,7 @@ describe("Vitest cache slot ownership", () => {
   });
 
   it("keeps fresh indices distinct across root spellings even after an unjoined lease", async () => {
-    const run = createVitestCacheSlots(2, "linux");
+    const run = createVitestCacheSlots("linux");
     const first = createDeferred<{ groupJoined: boolean }>();
     const paths: string[] = [];
     const pending = run(spec, (assigned) => {
@@ -104,7 +174,7 @@ describe("Vitest cache slot ownership", () => {
         paths.push(cachePath(assigned));
         return { groupJoined: true };
       });
-      expect(new Set(paths.map((value) => path.basename(path.dirname(value)))).size).toBe(3);
+      expect(new Set(paths.map((value) => path.basename(value))).size).toBe(3);
     } finally {
       first.resolve({ groupJoined: false });
       await pending;
@@ -112,7 +182,7 @@ describe("Vitest cache slot ownership", () => {
   });
 
   it("holds concurrent leases until joined and reuses a failed command's completed slot", async () => {
-    const run = createVitestCacheSlots(2, "linux");
+    const run = createVitestCacheSlots("linux");
     const first = createDeferred<{ groupJoined: boolean; code: number }>();
     const second = createDeferred<{ groupJoined: boolean; code: number }>();
     const paths: string[] = [];
@@ -141,7 +211,7 @@ describe("Vitest cache slot ownership", () => {
   it.each(["child-only", "rejected"])(
     "retires a %s lease without reusing its directory",
     async (mode) => {
-      const run = createVitestCacheSlots(2, "linux");
+      const run = createVitestCacheSlots("linux");
       let retired: string | undefined;
       const attempt = run(spec, async (assigned) => {
         retired = cachePath(assigned);
@@ -164,18 +234,20 @@ describe("Vitest cache slot ownership", () => {
     },
   );
 
-  it.each(["caller", "serial", "watch", "windows"])(
+  it.each(["caller", "unassigned", "watch", "windows"])(
     "preserves the %s cache owner",
     async (mode) => {
       const input = {
         ...spec,
         watchMode: mode === "watch",
-        cacheAssignment: mode === "caller" ? { kind: "caller" as const } : spec.cacheAssignment,
+        cacheAssignment:
+          mode === "unassigned"
+            ? undefined
+            : mode === "caller"
+              ? { kind: "caller" as const }
+              : spec.cacheAssignment,
       };
-      const run = createVitestCacheSlots(
-        mode === "serial" ? 1 : 2,
-        mode === "windows" ? "win32" : "linux",
-      );
+      const run = createVitestCacheSlots(mode === "windows" ? "win32" : "linux");
       await run(input, async (assigned) => {
         expect(assigned).toBe(input);
         return { groupJoined: false };

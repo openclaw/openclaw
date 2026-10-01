@@ -13,14 +13,12 @@ import {
 import type { SqliteWorkerStore } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
-export { clearDeviceAuthTokenFromDatabase } from "./device-auth-store.kernel.js";
-
 // The Gateway lock makes state-directory contents process-stable. Cache both
 // outcomes to keep reconnects free of freshness polling; Doctor invalidates
 // the entry after its exclusive legacy import removes the retired file.
 const legacyPresenceCache = new Map<string, boolean>();
 
-function assertNoLegacyDeviceAuth(env: NodeJS.ProcessEnv | undefined): void {
+export function assertNoLegacyDeviceAuth(env: NodeJS.ProcessEnv | undefined): void {
   const stateDir = resolveStateDir(env);
   let hasLegacy = legacyPresenceCache.get(stateDir);
   if (hasLegacy === undefined) {
@@ -127,18 +125,16 @@ async function executeDeviceAuth<Type extends DeviceAuthCommand>(
   return result;
 }
 
-/** Open the shared actor during request preparation without reading or caching token facts. */
+/** Prepare the command runtime before connection work, without reading or caching token facts. */
 export async function prepareDeviceAuthStore(
   params: DeviceAuthOperation & { readOnly?: boolean },
 ): Promise<void> {
-  const { context, assertActive } = captureDeviceAuthOperation(params);
-  assertActive();
-  const prepare = async () => {};
-  const options = { assertCurrent: assertActive };
-  await (params.readOnly
-    ? runOpenClawStateWorkerOperation(context, prepare, { ...options, existingOnly: true })
-    : runOpenClawStateWorkerOperation(context, prepare, options));
-  assertActive();
+  await executeDeviceAuth(
+    captureDeviceAuthOperation(params),
+    "deviceAuth.prepare",
+    undefined,
+    params.readOnly === true,
+  );
 }
 
 async function readDeviceAuth(

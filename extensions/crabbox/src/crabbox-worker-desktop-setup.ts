@@ -1,4 +1,12 @@
 import type { WorkerDesktopEndpoint } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  createCrabboxMacosDesktopEndpoint,
+  createCrabboxMacosDesktopSetup,
+} from "./crabbox-worker-desktop-macos.js";
+import {
+  createCrabboxWindowsDesktopEndpoint,
+  createCrabboxWindowsDesktopSetup,
+} from "./crabbox-worker-desktop-windows.js";
 import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
 
 const CRABBOX_WORKER_BROWSER_PATH = "/usr/local/bin/openclaw-worker-browser";
@@ -70,7 +78,8 @@ function browserLauncher(leaseId: string): string[] {
     "fi",
     'launch_log="$CRABBOX_BROWSER_PROFILE/launch.log"',
     ': >"$launch_log"',
-    `nohup /usr/local/bin/crabbox-browser --remote-debugging-address=127.0.0.1 --remote-debugging-port=${CRABBOX_WORKER_BROWSER_CDP_PORT} about:blank >>"$launch_log" 2>&1 </dev/null &`,
+    // The persistent browser and its children must not retain the launcher's readiness lock.
+    `nohup /usr/local/bin/crabbox-browser --remote-debugging-address=127.0.0.1 --remote-debugging-port=${CRABBOX_WORKER_BROWSER_CDP_PORT} about:blank >>"$launch_log" 2>&1 </dev/null 9>&- &`,
     "for _attempt in $(seq 1 40); do",
     '  if curl --fail --silent --show-error --max-time 1 "$cdp_url" >/dev/null; then',
     "    exit 0",
@@ -102,7 +111,33 @@ function heredoc(target: string, marker: string, contents: string[]): string[] {
   return [`cat >"$setup_dir/${target}" <<'${marker}'`, ...contents, marker];
 }
 
-export function createCrabboxWorkerDesktopSetup(leaseId: string, wallpaperBase64: string): string {
+export function createCrabboxWorkerDesktopSetup(
+  leaseId: string,
+  wallpaperBase64: string,
+  target: CrabboxOperatingSystem,
+  sshUser?: string,
+): string {
+  switch (target) {
+    case "linux":
+      break;
+    case "windows/normal":
+      return createCrabboxWindowsDesktopSetup(leaseId, wallpaperBase64);
+    case "macos":
+      return createCrabboxMacosDesktopSetup(leaseId, wallpaperBase64, requireDesktopUser(sshUser));
+    case "windows/wsl2":
+      throw new Error("Crabbox desktop requires native Windows");
+  }
+  return createCrabboxLinuxDesktopSetup(leaseId, wallpaperBase64);
+}
+
+function requireDesktopUser(value: string | undefined): string {
+  if (!value || value === "<token>") {
+    throw new Error("Crabbox macOS desktop inspection must identify the worker account");
+  }
+  return value;
+}
+
+function createCrabboxLinuxDesktopSetup(leaseId: string, wallpaperBase64: string): string {
   return [
     "set -euo pipefail",
     ...createCrabboxXfceSessionEnvironment(),
@@ -162,40 +197,20 @@ export function createCrabboxWorkerDesktopSetup(leaseId: string, wallpaperBase64
   ].join("\n");
 }
 
-export function createCrabboxMacDesktopSetup(): string {
-  // Crabbox owns the root-only account password. Give the enrolled user a private
-  // copy on this disposable machine; never return credentials through command output.
-  return [
-    "set -eu",
-    'sudo install -o "$(id -u)" -g "$(id -g)" -m 0600 /var/db/crabbox/vnc.password /var/db/crabbox/openclaw-vnc.password',
-    "test -s /var/db/crabbox/openclaw-vnc.password",
-    "test -r /var/db/crabbox/openclaw-vnc.password",
-  ].join("\n");
-}
-
 export function createCrabboxWorkerDesktopEndpoint(
-  target: CrabboxOperatingSystem = "linux",
-  username?: string,
+  leaseId: string,
+  target: CrabboxOperatingSystem,
+  sshUser?: string,
 ): WorkerDesktopEndpoint {
-  if (target === "macos") {
-    if (!username) {
-      throw new Error("Crabbox macOS desktop requires the inspected lease account username");
-    }
-    return {
-      protocol: "rfb",
-      port: 5900,
-      username,
-      passwordFilePath: "/var/db/crabbox/openclaw-vnc.password",
-      allowsResize: false,
-    };
-  }
-  if (target === "windows/normal") {
-    return {
-      protocol: "rfb",
-      port: 5900,
-      passwordFilePath: String.raw`C:\ProgramData\crabbox\vnc.password`,
-      allowsResize: false,
-    };
+  switch (target) {
+    case "windows/normal":
+      return createCrabboxWindowsDesktopEndpoint(leaseId);
+    case "macos":
+      return createCrabboxMacosDesktopEndpoint(leaseId, requireDesktopUser(sshUser));
+    case "windows/wsl2":
+      throw new Error("Crabbox desktop requires native Windows");
+    case "linux":
+      break;
   }
   return {
     protocol: "rfb",

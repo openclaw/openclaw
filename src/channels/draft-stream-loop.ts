@@ -1,8 +1,3 @@
-/**
- * Throttled draft stream loop.
- *
- * Sends the latest pending draft text with single-flight edit semantics.
- */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
 /** Throttled draft-stream sender used by channels that edit in-progress replies. */
@@ -21,7 +16,6 @@ type CreatedDraftStreamLoop<T> = DraftStreamLoop<T> & {
   takePending: () => T;
 };
 
-/** Creates a single-flight draft stream loop that preserves the newest pending value. */
 export function createDraftStreamLoop<T = string>(params: {
   throttleMs: number;
   /** Keep background updates arriving during a send in the next throttle window. */
@@ -46,11 +40,24 @@ export function createDraftStreamLoop<T = string>(params: {
   let inFlightPromise: Promise<void | boolean> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const flush = async (background = false) => {
+  const clearTimer = () => {
     if (timer) {
       clearTimeout(timer);
       timer = undefined;
     }
+  };
+
+  const retainUnsentValue = (value: T, background: boolean) => {
+    if (!hasPendingValue(pendingValue)) {
+      pendingValue = value;
+    } else if (background && params.coalesceInFlight) {
+      // Only newer work owns another attempt; never retry the failed/rejected value.
+      schedule();
+    }
+  };
+
+  const flush = async (background = false) => {
+    clearTimer();
     while (!params.isStopped()) {
       if (inFlightPromise) {
         await inFlightPromise;
@@ -76,22 +83,11 @@ export function createDraftStreamLoop<T = string>(params: {
         inFlightPromise = current;
         sent = await current;
       } catch (err) {
-        if (!hasPendingValue(pendingValue)) {
-          pendingValue = value;
-        } else if (background && params.coalesceInFlight) {
-          // Only newer work owns another attempt; never retry the failed value.
-          schedule();
-        }
+        retainUnsentValue(value, background);
         throw err;
       }
       if (sent === false) {
-        if (!hasPendingValue(pendingValue)) {
-          pendingValue = value;
-        } else if (background && params.coalesceInFlight) {
-          // Do not retry an unchanged/rejected value automatically. A newer
-          // update arriving during the send still owns its background flush.
-          schedule();
-        }
+        retainUnsentValue(value, background);
         return;
       }
       lastSentAt = Date.now();
@@ -146,20 +142,14 @@ export function createDraftStreamLoop<T = string>(params: {
     flush: () => flush(),
     stop: () => {
       pendingValue = emptyValue;
-      if (timer) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
+      clearTimer();
     },
     resetPending: () => {
       pendingValue = emptyValue;
     },
     resetThrottleWindow: () => {
       lastSentAt = 0;
-      if (timer) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
+      clearTimer();
     },
     waitForInFlight: async () => {
       if (inFlightPromise) {
@@ -169,10 +159,7 @@ export function createDraftStreamLoop<T = string>(params: {
     takePending: () => {
       const value = pendingValue;
       pendingValue = emptyValue;
-      if (timer) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
+      clearTimer();
       return value;
     },
   };

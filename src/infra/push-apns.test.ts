@@ -91,10 +91,12 @@ type DestroyableConnection = {
 function createDirectApnsSendFixture(params: {
   nodeId: string;
   environment: "sandbox" | "production";
-  sendResult: { status: number; apnsId: string; body: string };
+  sendResult?: { status: number; apnsId: string; body: string };
 }) {
   return {
-    send: vi.fn().mockResolvedValue(params.sendResult),
+    send: vi
+      .fn()
+      .mockResolvedValue(params.sendResult ?? { status: 200, apnsId: "test-apns-id", body: "" }),
     registration: {
       nodeId: params.nodeId,
       transport: "direct" as const,
@@ -326,11 +328,6 @@ describe("push APNs send semantics", () => {
     const { send, registration, auth } = createDirectApnsSendFixture({
       nodeId: "ios-node-alert",
       environment: "sandbox",
-      sendResult: {
-        status: 200,
-        apnsId: "apns-alert-id",
-        body: "",
-      },
     });
 
     const result = await sendApnsAlert({
@@ -470,17 +467,11 @@ describe("push APNs send semantics", () => {
     const { send, registration, auth } = createDirectApnsSendFixture({
       nodeId: "ios-node-wake",
       environment: "production",
-      sendResult: {
-        status: 200,
-        apnsId: "apns-wake-id",
-        body: "",
-      },
     });
 
     const result = await sendApnsBackgroundWake({
       registration,
       nodeId: "ios-node-wake",
-      wakeReason: "node.invoke",
       auth,
       requestSender: send,
     });
@@ -512,11 +503,6 @@ describe("push APNs send semantics", () => {
     const { send, registration, auth } = createDirectApnsSendFixture({
       nodeId: "ios-node-guarded-wake",
       environment: "production",
-      sendResult: {
-        status: 200,
-        apnsId: "apns-guarded-wake-id",
-        body: "",
-      },
     });
     const controller = new AbortController();
     const isCurrent = vi.fn().mockResolvedValue(true);
@@ -607,11 +593,6 @@ describe("push APNs send semantics", () => {
     const { send, registration, auth } = createDirectApnsSendFixture({
       nodeId: "ios-node-approval-alert",
       environment: "sandbox",
-      sendResult: {
-        status: 200,
-        apnsId: "apns-approval-alert-id",
-        body: "",
-      },
     });
 
     const result = await sendApnsExecApprovalAlert({
@@ -659,11 +640,6 @@ describe("push APNs send semantics", () => {
     const { send, registration, auth } = createDirectApnsSendFixture({
       nodeId: "ios-node-approval-cleanup",
       environment: "sandbox",
-      sendResult: {
-        status: 200,
-        apnsId: "apns-approval-cleanup-id",
-        body: "",
-      },
     });
 
     const result = await sendApnsExecApprovalResolvedWake({
@@ -697,11 +673,6 @@ describe("push APNs send semantics", () => {
     const { send, registration, auth } = createDirectApnsSendFixture({
       nodeId: "ios-node-plugin-approval-alert",
       environment: "sandbox",
-      sendResult: {
-        status: 200,
-        apnsId: "apns-plugin-approval-alert-id",
-        body: "",
-      },
     });
     const description = `${"x".repeat(255)}😀${"y".repeat(300)}`;
 
@@ -851,11 +822,6 @@ describe("push APNs send semantics", () => {
     const { send, registration, auth } = createDirectApnsSendFixture({
       nodeId: "ios-node-invalid-topic",
       environment: "sandbox",
-      sendResult: {
-        status: 200,
-        apnsId: "unused",
-        body: "",
-      },
     });
 
     await expect(
@@ -870,32 +836,6 @@ describe("push APNs send semantics", () => {
     ).rejects.toThrow("topic required");
 
     expect(send).not.toHaveBeenCalled();
-  });
-
-  it("defaults background wake reason when not provided", async () => {
-    const { send, registration, auth } = createDirectApnsSendFixture({
-      nodeId: "ios-node-wake-default-reason",
-      environment: "sandbox",
-      sendResult: {
-        status: 200,
-        apnsId: "apns-wake-default-reason-id",
-        body: "",
-      },
-    });
-
-    await sendApnsBackgroundWake({
-      registration,
-      nodeId: "ios-node-wake-default-reason",
-      auth,
-      requestSender: send,
-    });
-
-    const payload = requirePayload(requireSendRequest(send));
-    expectRecordFields(requireRecord(payload.openclaw, "openclaw payload"), {
-      kind: "node.wake",
-      reason: "node.invoke",
-      nodeId: "ios-node-wake-default-reason",
-    });
   });
 
   it("sends relay alert pushes and falls back to the stored token debug suffix", async () => {

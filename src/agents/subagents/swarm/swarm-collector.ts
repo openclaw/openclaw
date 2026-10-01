@@ -1,3 +1,4 @@
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { consumeSwarmStructuredOutput } from "../../tools/structured-output-tool.js";
 import { ensureCompletionState } from "../registry/subagent-delivery-state.js";
@@ -25,10 +26,32 @@ function resolveStatus(
   return hasStructuredResult && entry.execution.outcome?.error === "completed" ? "done" : "failed";
 }
 
+export function prepareTerminatedCollectorLaunch(
+  entry: SubagentRunRecord,
+  endedAt: number,
+  error: string,
+  getRuntimeConfig: () => OpenClawConfig,
+): void {
+  entry.swarmLaunchPending = false;
+  entry.collectorLaunchCleanupPending = true;
+  entry.queuedLaunch = undefined;
+  entry.execution = { ...entry.execution, status: "terminal", endedAt };
+  entry.completion = {
+    required: false,
+    resultText:
+      entry.execution.outcome?.status === "error"
+        ? (entry.execution.outcome.error ?? error)
+        : error,
+    capturedAt: endedAt,
+  };
+  updateSwarmCollectorCompletion(entry, getRuntimeConfig());
+}
+
 /** Freeze the waitable collector record after raw completion capture. */
 export function updateSwarmCollectorCompletion(
   entry: SubagentRunRecord,
   cfg: OpenClawConfig,
+  prepared?: { entry: SessionEntry | undefined },
 ): boolean {
   if (!entry.collect) {
     return false;
@@ -53,7 +76,9 @@ export function updateSwarmCollectorCompletion(
     ? (captured?.schemaError ??
       (captured?.structured === undefined ? "structured_output was not called" : undefined))
     : undefined;
-  const session = loadSubagentSessionEntry({ childSessionKey: entry.childSessionKey });
+  const session = prepared
+    ? prepared.entry
+    : loadSubagentSessionEntry({ childSessionKey: entry.childSessionKey });
   const usage =
     typeof session?.inputTokens === "number" || typeof session?.outputTokens === "number"
       ? {

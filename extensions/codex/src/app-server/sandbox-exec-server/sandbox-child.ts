@@ -205,6 +205,7 @@ export async function spawnSandboxChild(params: SandboxChildStartParams): Promis
             "Sandbox process interrupt timed out waiting for remote process admission",
           );
         }
+        assertCurrent();
         if (await interruptRemote(remainingMs)) {
           return;
         }

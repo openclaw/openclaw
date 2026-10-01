@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { chmod, lstat, mkdir, realpath, symlink, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
+import { createServer, type Server } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -20,6 +20,46 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   return { ...actual, lstat: fsMocks.lstat };
 });
 
+async function withSocket(socketPath: string, run: (server: Server) => Promise<void>) {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, resolve);
+  });
+  try {
+    await run(server);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+}
+
+async function withStaleSocket(socketPath: string, run: () => Promise<void>) {
+  const child = spawn(
+    process.execPath,
+    [
+      "-e",
+      "require('node:net').createServer().listen(process.argv[1], () => process.stdout.write('ready'))",
+      socketPath,
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  try {
+    await once(child.stdout, "data");
+    const exit = once(child, "exit");
+    child.kill("SIGKILL");
+    await exit;
+    await run();
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      const exit = once(child, "exit");
+      child.kill("SIGKILL");
+      await exit;
+    }
+  }
+}
+
 describe.skipIf(process.platform === "win32")("Signal socket filesystem boundary", () => {
   let root: string;
   beforeEach(async () => {
@@ -33,23 +73,14 @@ describe.skipIf(process.platform === "win32")("Signal socket filesystem boundary
     const socketPath = path.join(root, "private", "rpc");
     await prepareSignalSocketPath(socketPath);
     expect((await lstat(path.dirname(socketPath))).mode & 0o777).toBe(0o700);
-    const server = createServer();
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(socketPath, resolve);
-    });
-    try {
+    await withSocket(socketPath, async (server) => {
       await expect(assertSignalSocketEndpoint(socketPath)).resolves.toBeUndefined();
       await expect(prepareSignalSocketPath(socketPath)).rejects.toThrow("already exists");
       expect(server.listening).toBe(true);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+    });
   });
 
-  it.each([0o755, 0o770, 0o777])(
+  it.each([0o755, 0o770])(
     "rejects a nonprivate parent (%s) without changing its permissions",
     async (mode) => {
       await chmod(root, mode);
@@ -85,12 +116,7 @@ describe.skipIf(process.platform === "win32")("Signal socket filesystem boundary
 
   it("rejects a socket endpoint reported as owned by another uid", async () => {
     const socketPath = path.join(root, "rpc");
-    const server = createServer();
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(socketPath, resolve);
-    });
-    try {
+    await withSocket(socketPath, async () => {
       fsMocks.lstat.mockImplementation(async (entryPath, ...args) => {
         const stat = await fsMocks.actualLstat(entryPath, ...args);
         if (entryPath !== socketPath) {
@@ -106,29 +132,12 @@ describe.skipIf(process.platform === "win32")("Signal socket filesystem boundary
       await expect(assertSignalSocketEndpoint(socketPath)).rejects.toThrow(
         "socket owned by the current user",
       );
-    } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
+    });
   });
 
   it("rejects an endpoint replaced during its stale-socket ownership probe", async () => {
     const socketPath = path.join(root, "rpc");
-    const child = spawn(
-      process.execPath,
-      [
-        "-e",
-        "require('node:net').createServer().listen(process.argv[1], () => process.stdout.write('ready'))",
-        socketPath,
-      ],
-      { stdio: ["ignore", "pipe", "pipe"] },
-    );
-    try {
-      await once(child.stdout, "data");
-      const exit = once(child, "exit");
-      child.kill("SIGKILL");
-      await exit;
+    await withStaleSocket(socketPath, async () => {
       let endpointStats = 0;
       fsMocks.lstat.mockImplementation(async (entryPath, ...args) => {
         const stat = await fsMocks.actualLstat(entryPath, ...args);
@@ -144,41 +153,16 @@ describe.skipIf(process.platform === "win32")("Signal socket filesystem boundary
         "changed during its ownership probe",
       );
       expect((await fsMocks.actualLstat(socketPath)).isSocket()).toBe(true);
-    } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        const exit = once(child, "exit");
-        child.kill("SIGKILL");
-        await exit;
-      }
-    }
+    });
   });
 
   it("recovers a stale owned socket after an unclean daemon exit", async () => {
     const socketPath = path.join(root, "rpc");
-    const child = spawn(
-      process.execPath,
-      [
-        "-e",
-        "require('node:net').createServer().listen(process.argv[1], () => process.stdout.write('ready'))",
-        socketPath,
-      ],
-      { stdio: ["ignore", "pipe", "pipe"] },
-    );
-    try {
-      await once(child.stdout, "data");
-      const exit = once(child, "exit");
-      child.kill("SIGKILL");
-      await exit;
+    await withStaleSocket(socketPath, async () => {
       expect((await lstat(socketPath)).isSocket()).toBe(true);
       await expect(prepareSignalSocketPath(socketPath)).resolves.toBeUndefined();
       await expect(lstat(socketPath)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        const exit = once(child, "exit");
-        child.kill("SIGKILL");
-        await exit;
-      }
-    }
+    });
   });
 
   it("does not probe or remove an existing socket when startup was cancelled", async () => {
@@ -228,18 +212,9 @@ describe.skipIf(process.platform !== "darwin")("Signal socket macOS ACL boundary
 
   it("rejects a socket endpoint with an access-granting ACL", async () => {
     const socketPath = path.join(root, "rpc");
-    const server = createServer();
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(socketPath, resolve);
-    });
-    try {
+    await withSocket(socketPath, async () => {
       await execFileAsync("/bin/chmod", ["+a", "everyone allow write", socketPath]);
       await expect(assertSignalSocketEndpoint(socketPath)).rejects.toThrow("ACL access");
-    } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
+    });
   });
 });

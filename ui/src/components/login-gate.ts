@@ -1,8 +1,10 @@
 // Control UI component renders the login gate.
 import { html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
+import type { ThemeMascot } from "../../../packages/gateway-protocol/src/theme.ts";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { canReloadControlUiDocument } from "../app/document-reload-guard.ts";
+import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { retryStaleChunkReloadWhenReachable } from "../app/stale-chunk-reload.ts";
 import { t } from "../i18n/index.ts";
@@ -12,6 +14,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
+import { PollController } from "../lit/poll-controller.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { icons } from "./icons.ts";
 import {
@@ -25,6 +28,7 @@ import {
 registerLoginEnglish();
 
 type LoginGateProps = LoginFailureFeedbackParams & {
+  mascot?: ThemeMascot;
   resourceBasePath: string;
   gatewayUrl: string;
   secret: string;
@@ -244,6 +248,7 @@ function renderStatusBody(params: {
 }) {
   const { props, feedback } = params;
   const waitingForPairing = feedback.kind === "pairing-required" && props.reconnectPending;
+  const retrySeconds = Math.max(0, Math.ceil(((props.reconnectAt ?? 0) - Date.now()) / 1_000));
   return html`
     <section
       class="login-gate__body login-gate__failure"
@@ -270,6 +275,19 @@ function renderStatusBody(params: {
           : nothing
       }
       ${renderSteps(feedback)}
+      ${
+        feedback.kind === "busy"
+          ? html`
+              <p class="login-gate__retry" aria-live="off">
+                ${
+                  retrySeconds > 0
+                    ? t("login.failure.busy.countdown", { seconds: String(retrySeconds) })
+                    : t("login.failure.busy.retrying")
+                }
+              </p>
+            `
+          : nothing
+      }
       ${
         waitingForPairing
           ? html`<p class="login-gate__failure-summary">
@@ -352,19 +370,34 @@ function renderLoginGate(props: LoginGateProps, refreshAction: RefreshAction) {
       : renderFormBody({ props, feedback });
 
   return html`
-    <div class="login-gate">
+    <div
+      class="login-gate"
+      @mousedown=${(event: MouseEvent) => {
+        if (event.target === event.currentTarget) {
+          beginNativeWindowDrag(event);
+        }
+      }}
+    >
       <openclaw-toast-host></openclaw-toast-host>
       <div class="login-gate__card" data-mode=${feedback?.placement ?? "form"}>
         <header class="login-gate__brand">
-          <img class="login-gate__logo" src=${faviconSrc} alt="" />
+          ${
+            props.mascot === "none"
+              ? html`<span class="login-gate__logo login-gate__logo--neutral" aria-hidden="true"
+                  >${icons.mark}</span
+                >`
+              : html`<img class="login-gate__logo" src=${faviconSrc} alt="" />`
+          }
           <span class="login-gate__brand-name">OpenClaw</span>
         </header>
         ${body}
         ${
           props.onOpenGatewaySettings
-            ? html`<button class="btn" @click=${props.onOpenGatewaySettings}>
-                ${t("login.gatewaySettings")}
-              </button>`
+            ? html`<footer class="login-gate__recovery">
+                <button type="button" class="btn btn--ghost" @click=${props.onOpenGatewaySettings}>
+                  ${t("login.gatewaySettings")}
+                </button>
+              </footer>`
             : nothing
         }
       </div>
@@ -376,6 +409,13 @@ class LoginGate extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: LoginGateProps;
   @state() private refreshState: RefreshAction["state"] = "idle";
   private refreshAttempt?: { props: LoginGateProps };
+  private readonly retryCountdown = new PollController(
+    this,
+    1_000,
+    () => this.requestUpdate(),
+    false,
+    "visible",
+  );
 
   private ownsRefresh(attempt: { props: LoginGateProps }): boolean {
     const current = this.props;
@@ -404,6 +444,15 @@ class LoginGate extends OpenClawLightDomContentsElement {
   }
 
   override willUpdate() {
+    if (
+      this.props?.reconnectPending &&
+      this.props.lastErrorCode === "GATEWAY_BUSY" &&
+      (this.props.reconnectAt ?? 0) > Date.now()
+    ) {
+      this.retryCountdown.start();
+    } else {
+      this.retryCountdown.stop();
+    }
     if (this.refreshAttempt && !this.ownsRefresh(this.refreshAttempt)) {
       this.cancelRefresh();
     }

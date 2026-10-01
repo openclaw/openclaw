@@ -29,7 +29,7 @@ import {
 import {
   addSessionMember,
   removeSessionMember,
-} from "../../config/sessions/session-sharing-store.js";
+} from "../../config/sessions/session-sharing-store.native.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -510,7 +510,7 @@ describe("sessions.fork storage ownership", () => {
         const { sessionKey } = sourceScope;
         const repository =
           kind === "repository"
-            ? getSessionRepositoryWorkspaceStore().create({
+            ? await getSessionRepositoryWorkspaceStore().create({
                 agentId: "main",
                 sessionKey,
                 url: "https://github.com/openclaw/fixture.git",
@@ -566,12 +566,12 @@ describe("sessions.fork storage ownership", () => {
         if (repository) {
           expect(child.repositoryWorkspaceId).toBeDefined();
           expect(child.repositoryWorkspaceId).not.toBe(repository.workspaceId);
-          expect(getSessionRepositoryWorkspaceStore().find(childScope)).toMatchObject({
+          expect(await getSessionRepositoryWorkspaceStore().find(childScope)).toMatchObject({
             workspaceId: child.repositoryWorkspaceId,
             url: repository.url,
             sessionKey: childScope.sessionKey,
           });
-          expect(getSessionRepositoryWorkspaceStore().get(repository.workspaceId)).toEqual(
+          expect(await getSessionRepositoryWorkspaceStore().get(repository.workspaceId)).toEqual(
             repository,
           );
           expect(child.sessionRoot).toBeUndefined();

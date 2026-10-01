@@ -370,9 +370,7 @@ public final class OpenClawVoiceNoteAudioCapture: NSObject, VoiceNoteAudioCaptur
     public func stop() -> TimeInterval {
         guard let recorder = self.recorder else { return 0 }
         let duration = recorder.currentTime
-        recorder.stop()
-        self.recorder = nil
-        self.deactivateAudioSession()
+        self.cancel()
         return duration
     }
 
@@ -408,9 +406,7 @@ public final class OpenClawVoiceNoteAudioCapture: NSObject, VoiceNoteAudioCaptur
 
     private func captureDidFail() {
         guard self.recorder != nil else { return }
-        self.recorder?.stop()
-        self.recorder = nil
-        self.deactivateAudioSession()
+        self.cancel()
         self.failureHandler?()
     }
 

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
 import { inlineAuthProfileCredentialSchema } from "../agents/auth-profiles/credential-schema.js";
@@ -14,7 +15,7 @@ import {
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { SECRET_STORE_VALUE_MAX_BYTES } from "../secrets/store/secret-store-validation-error.js";
 import {
-  isArtifactPreservingStateRead,
+  executeExistingOpenClawStateRead,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "./openclaw-state-db-readonly.js";
 import { ensureSecretStoreSchema } from "./openclaw-state-db-schema-additive.js";
@@ -24,9 +25,9 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
-import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
+import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
 import { isUserModelAuthProfileId, parseUserModelAuthProfileId } from "./user-model-account-id.js";
+import { publishUserProfileModelAccountLinksChange } from "./user-profile-events.js";
 import { selectResolvedUserProfile, userProfilesDb } from "./user-profiles-internal.js";
 
 const credentialSchema = inlineAuthProfileCredentialSchema.refine(
@@ -67,13 +68,7 @@ function parseRecord<T>(value: string, schema: z.ZodType<T>): T {
   if (Buffer.byteLength(value, "utf8") > SECRET_STORE_VALUE_MAX_BYTES) {
     throw invalidAccounts();
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw invalidAccounts();
-  }
-  const result = schema.safeParse(parsed);
+  const result = schema.safeParse(safeParseJson(value));
   if (!result.success) {
     throw invalidAccounts();
   }
@@ -167,6 +162,7 @@ function readLinks(db: DatabaseSync, owner: string): UserModelLinks {
 
 function writeLinks(db: DatabaseSync, owner: string, links: UserModelLinks): void {
   writeRecord(db, owner, "model-accounts", JSON.stringify(linksSchema.parse(links)));
+  publishUserProfileModelAccountLinksChange(db, owner);
 }
 
 function readProfile(
@@ -182,11 +178,12 @@ function readProfile(
     return undefined;
   }
   const { credential, usageStats } = parseRecord(raw, profileSchema);
-  registerProfileSecrets(credential);
+  registerUserModelAuthProfileSecrets(credential);
   return { credential, usageStats };
 }
 
-function registerProfileSecrets(credential: AuthProfileCredential): void {
+// Redaction is process-local; both native reads and host message results register secrets.
+export function registerUserModelAuthProfileSecrets(credential: AuthProfileCredential): void {
   if (credential.type === "oauth") {
     registerSecretValueForRedaction(credential.access);
     registerSecretValueForRedaction(credential.refresh);
@@ -260,13 +257,12 @@ function accountSummary(
   links: UserModelLinks,
 ): UserModelAccount {
   const { credential } = parseRecord(value, profileSchema);
+  const identity = [credential.email?.trim(), credential.displayName?.trim()].filter(Boolean);
   return {
     authProfileId,
     provider: credential.provider,
     label: truncateUtf16Safe(
-      toUSVString(
-        credential.displayName?.trim() || credential.email?.trim() || credential.provider,
-      ),
+      toUSVString([...new Set(identity)].join(" · ") || credential.provider),
       256,
     ),
     authType: credential.type,
@@ -341,27 +337,6 @@ export function readUserModelAuthProfile(
     const owner = credentialOwner(db, authProfileId);
     return owner ? readProfile(db, owner, authProfileId) : undefined;
   }, options);
-}
-
-/** Read one selected account on the canonical actor; redaction remains caller-owned. */
-export async function readUserModelAuthProfileAsync(
-  authProfileId: string,
-  context: OpenClawStateWorkerContext,
-): Promise<UserModelAuthProfile | undefined> {
-  const profile = await runOpenClawStateWorkerOperation(
-    context,
-    (scope) =>
-      scope.execute({
-        type: "authProfiles.personal",
-        input: { profileId: authProfileId, artifactPreserving: isArtifactPreservingStateRead() },
-      }),
-    { existingOnly: true },
-  );
-  context.admission.assertCurrent();
-  if (profile) {
-    registerProfileSecrets(profile.credential);
-  }
-  return profile;
 }
 
 /** The canonical OAuth/usage owners mutate one exact private credential under the DB lock. */
@@ -445,11 +420,36 @@ export function listUserProfileAuthLinks(
   options: OpenClawStateDatabaseOptions = {},
 ): UserProfileAuthLink[] {
   return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      const owner = resolveOwner(db, profileId);
-      return owner ? accountLinks(readLinks(db, owner)) : [];
-    }, options) ?? []
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => listUserProfileAuthLinksInDatabase(db, profileId),
+      options,
+    ) ?? []
   );
+}
+
+export function listUserProfileAuthLinksInDatabase(
+  db: DatabaseSync,
+  profileId: string,
+): UserProfileAuthLink[] {
+  const owner = resolveOwner(db, profileId);
+  return owner ? accountLinks(readLinks(db, owner)) : [];
+}
+
+/** Fresh private account selections are read on the shared-state reader, never the Gateway thread. */
+export async function listUserProfileAuthLinksAsync(
+  profileId: string,
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
+): Promise<UserProfileAuthLink[]> {
+  const context = captureOpenClawStateReadWorkerContext(options);
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "userModelAccounts.links", profileId },
+    { context, current: true, preferIndependentWarmRead: true },
+  );
+  if (reply && (!reply.ok || reply.type !== "userModelAccounts.links")) {
+    throw new Error(reply.ok ? "Unexpected model account links reply" : reply.message);
+  }
+  return reply?.links ?? [];
 }
 
 export function resolveUserProfileAuthLink(
@@ -525,6 +525,9 @@ export function renameUserProfileAuthLinks(
             .where("name", "=", "model-accounts")
             .where("deleted_at_ms", "is", null),
         );
+      }
+      for (const { owner } of replacements) {
+        publishUserProfileModelAccountLinksChange(db, owner);
       }
       return replacements.length;
     },
@@ -652,4 +655,5 @@ export function mergeUserModelAccounts(db: DatabaseSync, source: string, target:
         eb.or([eb("name", "=", "model-accounts"), eb("name", "like", "model-account:%")]),
       ),
   );
+  publishUserProfileModelAccountLinksChange(db, source, target);
 }

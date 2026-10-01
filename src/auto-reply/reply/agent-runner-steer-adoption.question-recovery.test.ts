@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { QuestionWaitAnswerResult } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   claimEmbeddedPendingUserInputAnswer,
   steerActiveSessionWithOptionalDeliveryWait,
@@ -16,9 +17,10 @@ import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
-import { clearSessionQueues, enqueueFollowupRun, type FollowupRun } from "./queue.js";
+import { enqueueFollowupRun, type FollowupRun } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
-import { getExistingFollowupQueue } from "./queue/state.js";
+import { clearFollowupDrainCallback } from "./queue/drain.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -133,7 +135,8 @@ describe("question response custody through reply adoption", () => {
         releaseFirst.resolve();
         await Promise.allSettled(followup.mock.results.map((result) => result.value));
         clearAgentRunContext("accepted-backing-work");
-        clearSessionQueues([key]);
+        clearFollowupQueue(key);
+        clearFollowupDrainCallback(key);
       }
     });
   });
@@ -232,7 +235,8 @@ describe("question response custody through reply adoption", () => {
       } finally {
         firstOutcome.resolve();
         await Promise.allSettled([firstSteer, waitingSteer]);
-        clearSessionQueues([key]);
+        clearFollowupQueue(key);
+        clearFollowupDrainCallback(key);
       }
     });
   });
@@ -356,13 +360,23 @@ describe("question response custody through reply adoption", () => {
         } finally {
           delivery.resolve();
           await adoption.catch(() => undefined);
-          clearSessionQueues([key]);
+          clearFollowupQueue(key);
+          clearFollowupDrainCallback(key);
         }
       });
     },
   );
 
-  it.each(["next-model", "tool-cap", "permission", "sender", "source-closure"] as const)(
+  const questionSourceAuthorityChanges = [
+    "next-model",
+    "tool-cap",
+    "permission",
+    "sender",
+    "source-closure",
+    "operator-source",
+    "legacy-dispatcher",
+  ] as const;
+  it.each(questionSourceAuthorityChanges)(
     "uses creator policy and incoming source authority for %s",
     async (change) => {
       const key = `agent:main:question-caller-${change}`;
@@ -371,9 +385,23 @@ describe("question response custody through reply adoption", () => {
       run.run.traceAuthorized = true;
       run.run.messageProvider = "webchat";
       run.run.config = { tools: { toolsBySender: { "*": { allow: [] } } } };
+      let operatorCurrent = true;
+      if (change === "operator-source") {
+        run.operatorAuthority = createAdmittedRunOperatorAuthority({
+          profileId: "guest",
+          scopes: ["operator.write"],
+          source: {},
+          assertCurrent: () => {
+            if (!operatorCurrent) {
+              throw new Error("original operator authority revoked");
+            }
+          },
+        });
+      }
       await withQuestionCreator(key, run, async (operation) => {
         const source = new AbortController();
         const committed = vi.fn();
+        const legacyCall = vi.fn(async () => ({ status: "answered" }));
         const gatewayCall: AgentQuestionDispatcher = {
           version: 2,
           call: async ({ authority }) => {
@@ -381,6 +409,9 @@ describe("question response custody through reply adoption", () => {
             await Promise.resolve();
             if (change === "source-closure") {
               source.abort();
+            }
+            if (change === "operator-source") {
+              operatorCurrent = false;
             }
             if (authority.kind === "source-bound") {
               authority.assertCurrent();
@@ -393,7 +424,7 @@ describe("question response custody through reply adoption", () => {
           questionId: `ask_caller_${change}`,
           sessionKey: key,
           questions: [{ id: "answer", header: "Answer", question: "Continue?" }],
-          gatewayCall,
+          gatewayCall: change === "legacy-dispatcher" ? legacyCall : gatewayCall,
           answer: Promise.resolve({ status: "pending" }),
         });
         claim.attachRegistration(Promise.resolve());
@@ -425,7 +456,14 @@ describe("question response custody through reply adoption", () => {
             opts: { abortSignal: source.signal, [REPLY_OPERATION_RUN_STATE]: state },
           });
           expect(operation.result).toBeNull();
-          if (change === "next-model") {
+          if (change === "legacy-dispatcher") {
+            expect(result).toEqual({ handled: false });
+            expect(legacyCall).not.toHaveBeenCalled();
+            expect(adopted).not.toHaveBeenCalled();
+            expect(settled).not.toHaveBeenCalled();
+            expect(state.admission).toBeUndefined();
+            expect(claim.isResolving()).toBe(false);
+          } else if (change === "next-model") {
             expect(result).toEqual({ handled: true, payload: undefined });
             expect(committed).toHaveBeenCalledOnce();
             expect(adopted).toHaveBeenCalledOnce();
@@ -756,7 +794,8 @@ describe("question response custody through reply adoption", () => {
             await answerOutcome;
             await adoption.catch(() => undefined);
             claim.dispose();
-            clearSessionQueues([key]);
+            clearFollowupQueue(key);
+            clearFollowupDrainCallback(key);
             if (hidden) {
               clearAgentRunContext("accepted-backing-work");
             }

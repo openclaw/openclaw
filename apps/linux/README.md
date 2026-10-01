@@ -13,6 +13,12 @@ web UI's typography and light/dark palettes. They follow system appearance chang
 while open, preserving connection drafts, credential visibility, and Quick Chat
 replies. The connected dashboard retains its own web UI appearance setting.
 
+Quick Chat places the latest reply above a single bottom composer. Its disclosure
+button collapses the reply while retaining streamed text, widget contents, and
+the next draft. Return sends; Shift-Return adds a newline. The next draft remains
+editable while a reply streams, and sending becomes available when that turn
+finishes. **Open dashboard** opens the Primary Gateway's full interface.
+
 During remote setup or in Connection Settings, choose token or password under
 **Authentication**. **Show credential** reveals only what you entered; changing
 authentication types clears that draft and masks the new field. Press Enter or
@@ -46,6 +52,34 @@ requirement.
 
 See [Desktop compatibility](https://docs.openclaw.ai/platforms/linux#desktop-compatibility)
 for package updates, desktop limitations, and native-app distinctions.
+
+New Session uses `Cmd+Shift+O` on macOS and `Ctrl+Shift+O` on Linux and Windows
+only while its dashboard is focused. Quick Chat keeps the separate global
+`Cmd+Shift+Space` or `Ctrl+Shift+Space` shortcut, including when another app is
+in front.
+
+## Chrome setup bridge
+
+The selected main dashboard can explicitly inspect, install, or verify Chrome
+setup on the computer running the companion, including when the dashboard's
+Gateway is remote. Loading the dashboard does not run setup. Chrome retains its
+extension installation approval; the companion does not ask for a pairing key.
+
+The dashboard adapter is
+`window.webkit.messageHandlers.openclawDeviceSettings.postMessage({type: "chrome-extension-setup", action})`,
+where `action` is `inspect`, `install`, or `verify`. Its Promise resolves directly
+to the canonical CLI setup JSON, including pending and blocked results, and
+rejects on transport, invalid-action, or CLI execution errors. It shares the
+existing native browser document token, origin/path, and generation checks;
+reading tabs and other dashboard windows do not receive this bridge.
+
+The adapter invokes only
+`openclaw browser extension setup --action ACTION --json --wait-ms 1000`
+through the companion's local CLI owner. Profile selection is left to the CLI so
+a saved profile is not overridden. Callers cannot choose commands, paths,
+profiles, or URLs. Platform bootstrap support comes from the CLI result rather
+than the app platform: a Windows app build alone does not establish that native
+host bootstrap is supported or verified.
 
 ## Omarchy
 
@@ -107,6 +141,16 @@ cargo build
 The app uses `OPENCLAW_DESKTOP_CLI` when set. Otherwise it checks `~/.openclaw/bin/openclaw`, then `openclaw` on `PATH`.
 
 Desktop notifications use each platform's system notification service. macOS 13+ uses Apple's User Notifications framework; Windows uses native system toasts and Linux uses the desktop notification service through `notify-rust`. On macOS, test notifications from a signed `.app` bundle: a direct `cargo run` stays unbundled, so the app disables notifications instead of initializing Apple's framework with no bundle identity.
+
+On macOS, a test launch with an isolated `HOME` or `CFFIXED_USER_HOME` can make
+the user's default keychain unavailable to that process. The saved-Gateway notice
+describes the app's launch environment; it does not mean the Mac has no login
+keychain. Keep credential-free tests isolated and treat saved-Gateway storage as
+unavailable in that fixture. Do not restore the user's keychain or redirect the
+test to real credentials to silence the notice. For an installed app, quit and
+reopen it from Finder to use the normal login environment. If the configured
+keychain is still unavailable, check its configuration in Keychain Access before
+attempting any repair.
 
 ### Inline browser live regression on Linux
 
@@ -227,6 +271,12 @@ to loopback when possible. See the
 [remote access guide](https://docs.openclaw.ai/gateway/remote) for Gateway
 authentication and network requirements.
 
+The remote **Primary Gateway** dashboard uses the native app's approved operator
+identity and granted permissions, so it does not require a second device approval.
+The native connection must be ready before its dashboard can authenticate. Saved
+Gateways that are not Primary keep their independent browser sign-in; local
+Gateways continue to use the CLI's dashboard sign-in handoff.
+
 Use **Connection Settings** in the native tray menu to edit a remote connection.
 Opening settings reads only the saved address and transport settings; it does not
 resolve credentials, and token and password fields stay empty. **Retry** reconnects
@@ -314,6 +364,8 @@ the additional sign-in options.
 
 The companion checks the latest GitHub release shortly after launch and from **Check for Updates** in the tray menu. AppImage installs download and verify the signed update in place, then wait for **Restart to update**. Package-managed installs such as `.deb` stay owned by the system package manager and link to the release download page instead of replacing installed files. The macOS and Windows test builds use a separate opt-in desktop-test update channel; macOS self-updates like the AppImage build, while Windows downloads the update first and runs its installer only after **Restart to update**.
 
+If the Windows installer cannot launch, the companion stays open, reports the error, and keeps the downloaded update available for another **Restart to update** attempt.
+
 While a newer Gateway release waits for its Linux app, the latest release keeps
 the previous published Linux updater manifest. Its original version, signature,
 and download URL stay intact. Successful Linux publication advances that
@@ -324,6 +376,38 @@ package-managed installs still link to the existing release page. The
 `linux-stable` publication channel does not change those client defaults.
 Changing them requires separate release-owner approval and signed
 installed-client migration proof.
+
+## Desktop sharing
+
+**Settings → This computer → Desktop sharing** controls this companion's desktop
+viewer on Linux and Windows. The macOS Tauri build calls that settings page
+**This Mac**. Sharing defaults to enabled once the local CLI is available and
+its settings can be resolved. An authored `desktop.host.enabled: false` remains
+an opt-out until you explicitly change the native setting. The native choice
+is saved in the companion's existing system credential store.
+
+The companion starts a desktop-only CLI node for the Primary Gateway, including
+when the settings page has never been opened. Approve its device and desktop
+capability requests on that Gateway when prompted. **Running** confirms the
+local sharing process is active; opening the viewer also requires approved
+pairing and an authenticated local Screen Sharing/VNC server. On macOS, enable
+**System Settings → General → Sharing → Screen Sharing**. Linux and Windows use
+an authenticated VNC server reachable on loopback. The viewer reports setup or
+authentication errors when you open it.
+
+Turning sharing off or quitting the companion closes its desktop relay and
+joins its process tree. Changing Primary retires the old node before starting
+the replacement. Each logical Gateway and local config profile has its own node
+identity; recovery of an SSH tunnel retains that identity when its local port
+changes. Computer Control and Keep computer awake retain their separate
+settings and permissions.
+
+The CLI remains the owner of local configuration, including `$include` files.
+The companion reads its resolved setting and passes the canonical config path
+to the node. Missing CLI support, invalid config, and failed startup appear in
+**Desktop sharing status** with a recovery message. If an off preference cannot
+be saved, sharing stops for this run and the status warns that the previous
+saved choice may return after restarting the app.
 
 ## Keep computer awake
 
@@ -358,9 +442,11 @@ Quick Chat advertises the Gateway `inline-widgets` capability and renders hosted
 
 Retrying an unchanged Quick Chat draft after a connection error reuses its original idempotency key while the Gateway and agent remain unchanged. If the Gateway confirms the turn already completed, Quick Chat attempts to recover the matching reply from bounded session history instead of resending it. Unavailable or incomplete history produces an error; further retries of that unchanged draft on the same configured Gateway only retry recovery. Widget previews can refresh access after reconnecting to the same configured Gateway, but switching Gateways prevents old previews from using the new connection's access, even after switching back to the original URL.
 
+Quick Chat pins its native request identity before sending, so activity from other runs cannot evict its buffered reply while the acknowledgment is pending. If an earlier retry prefix was already lost, a complete snapshot or recovered history can restore it; otherwise Quick Chat reports incomplete text instead of silently completing an empty reply.
+
 ## Installer resource
 
-`tauri.conf.json` bundles the repository's canonical `scripts/install-cli.sh` directly as `install-cli.sh`. The app never keeps a forked copy. Stable, beta, and dev installs select `latest`, `beta`, and a managed Git `main` checkout respectively, always under `~/.openclaw`.
+The Rust build assembles the repository's `scripts/install-cli.sh` and shared `scripts/install-policy.sh` into the standalone `install-cli.sh` resource. The app never keeps a forked copy. Stable, beta, and dev installs select `latest`, `beta`, and a managed Git `main` checkout respectively, always under `~/.openclaw`.
 
 ## Icons
 
@@ -433,8 +519,8 @@ Regular stable publication automatically requests Linux bundles after the
 GitHub release becomes visible. `OpenClaw Release Publish` and `OpenClaw Release
 Button` both use the same Linux release owner; the request can finish before
 the build, signing, and publication do. Their summaries report Linux as pending
-until its own assets verify. Beta and alpha prereleases, and extended-stable
-publication, do not request Linux bundles.
+until its own assets verify. Beta prereleases and extended-stable publication do
+not request Linux bundles.
 
 For independent recovery, manually dispatch `Linux App Release Request` from `main`. Provide the existing
 stable release tag in `tag`; prerelease tags are rejected because their semver
@@ -466,7 +552,7 @@ Core finalization remains independent of Linux readiness. After finalization,
 a detached mirror-only request catches up the legacy endpoint. A dispatch is
 not a successful mirror: cancellation, queue overflow, timeout, or readback
 failure leaves a visible degraded result for reconciliation. See the
-[Linux publication contract](https://docs.openclaw.ai/reference/RELEASING#linux-companion-publication).
+[Linux publication contract](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/platform-publication.md#linux).
 
 The website selects desktop assets at build time. After publication, rebuild
 `openclaw.ai` through its existing deployment owner and verify the deployed Apps

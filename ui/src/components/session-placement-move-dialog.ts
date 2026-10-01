@@ -15,6 +15,7 @@ import { DraftCloudMachineState } from "../pages/new-session/draft-cloud-machine
 import "../styles/new-session.css";
 import { icons } from "./icons.ts";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
+import { compareCloudProfiles } from "./provider-icon.ts";
 
 registerNewSessionSetupEnglish();
 
@@ -44,10 +45,9 @@ function targetKey(target: SessionMoveTarget | null): string {
       return "gateway";
     case "profile":
       return `profile:${target.profileId}`;
-    case "device":
+    default:
       return `device:${target.deviceId}`;
   }
-  throw new Error("Unknown session placement move target");
 }
 
 export function showSessionPlacementTargetDialog(
@@ -94,6 +94,7 @@ export function showSessionPlacementTargetDialog(
 
     function paint() {
       const selectedKey = targetKey(selected);
+      const profiles = catalog.profiles.toSorted(compareCloudProfiles);
       const restart = options.mode === "restart";
       const dispatch = options.mode === "dispatch";
       const title = t(`sessionsView.${options.mode}SessionTitle`);
@@ -185,7 +186,7 @@ export function showSessionPlacementTargetDialog(
                                   <div class="new-session-page__menu-title">
                                     ${t("newSession.cloud")}
                                   </div>
-                                  ${catalog.profiles.map((profile) => {
+                                  ${profiles.map((profile) => {
                                     const profileSelected =
                                       selected?.kind === "profile" &&
                                       selected.profileId === profile.id;
@@ -200,7 +201,6 @@ export function showSessionPlacementTargetDialog(
                                         profiles: [profile],
                                         selectedId: profileSelected ? profile.id : "",
                                         submitting: false,
-                                        icon: icons.server,
                                         profileDisabledReason: options.profileDisabledReason,
                                         onSelect: (profileId) =>
                                           select({ kind: "profile", profileId }),

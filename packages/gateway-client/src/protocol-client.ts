@@ -3,7 +3,8 @@ import {
   isGatewayEventFrame,
   isGatewayResponseFrame,
 } from "@openclaw/gateway-protocol/frame-guards";
-import { RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveSleepDelayMs, RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
 import { GatewayEventListeners } from "./event-listeners.js";
 import { GatewayPendingRequests, type GatewayProtocolRequestTiming } from "./pending-request.js";
 import type {
@@ -357,6 +358,7 @@ export class GatewayProtocolClient<TPlan> {
           return;
         }
         this.helloReceived = true;
+        this.requests.setSuspensionPhase(hello.snapshot?.suspension?.phase);
         this.clearHandshakeTimer();
         this.connectFailure = undefined;
         this.reconnectSupervisor.reset();
@@ -416,7 +418,7 @@ export class GatewayProtocolClient<TPlan> {
   }
 
   private handleMessage(socket: GatewayProtocolSocket, generation: number, raw: string): void {
-    if (!this.isActive(socket, generation)) {
+    if (!this.isActive(socket, generation) || this.connectionAbort?.signal.aborted) {
       return;
     }
     let parsed: unknown;
@@ -458,27 +460,28 @@ export class GatewayProtocolClient<TPlan> {
       if (seq !== null) {
         if (this.lastSeq !== null && seq > this.lastSeq + 1) {
           const expected = this.lastSeq + 1;
-          this.invoke("gap", () => this.opts.onGap?.({ expected, received: seq }));
-          // Gap recovery can retire this socket synchronously. Never advance a
-          // replacement's sequence or dispatch a frame from the retired owner.
-          if (!this.isActive(socket, generation)) {
+          const state = asRecord(parsed.payload).state;
+          if (
+            parsed.event === "chat" &&
+            (state === "final" || state === "error" || state === "aborted")
+          ) {
+            // Terminal snapshots settle runs even when an earlier append was lost.
+            this.dispatchEvent(socket, generation, parsed);
+          }
+          if (!this.isActive(socket, generation) || this.connectionAbort?.signal.aborted) {
             return;
           }
+          this.invoke("gap", () => this.opts.onGap?.({ expected, received: seq }));
+          // An adapter may already have replaced the socket. Otherwise reconnect
+          // here: a lost append cannot be repaired by the next append-only frame.
+          if (this.isActive(socket, generation) && !this.connectionAbort?.signal.aborted) {
+            this.closeSocket(4000, "event sequence gap");
+          }
+          return;
         }
         this.lastSeq = seq;
       }
-      // An owner may replace the socket while handling this frame. Snapshot
-      // first so replacement listeners cannot inherit a retired event.
-      const listeners = this.listeners.snapshot();
-      this.invoke("event", () => this.opts.onEvent?.(parsed));
-      for (const [listener, subscription] of listeners) {
-        if (!this.isActive(socket, generation)) {
-          return;
-        }
-        if (this.listeners.isCurrent(listener, subscription)) {
-          this.invoke("event listener", () => listener(parsed));
-        }
-      }
+      this.dispatchEvent(socket, generation, parsed);
       return;
     }
     if (!isGatewayResponseFrame(parsed)) {
@@ -486,6 +489,32 @@ export class GatewayProtocolClient<TPlan> {
     }
     this.opts.onActivity?.();
     this.requests.handleResponse(parsed);
+  }
+
+  private dispatchEvent(
+    socket: GatewayProtocolSocket,
+    generation: number,
+    event: EventFrame,
+  ): void {
+    // Snapshot before callbacks so replacement listeners cannot inherit a retired event.
+    const listeners = this.listeners.snapshot();
+    if (
+      event.event === "gateway.suspension" &&
+      typeof event.payload === "object" &&
+      event.payload !== null &&
+      "phase" in event.payload
+    ) {
+      this.requests.setSuspensionPhase(event.payload.phase);
+    }
+    this.invoke("event", () => this.opts.onEvent?.(event));
+    for (const [listener, subscription] of listeners) {
+      if (!this.isActive(socket, generation) || this.connectionAbort?.signal.aborted) {
+        return;
+      }
+      if (this.listeners.isCurrent(listener, subscription)) {
+        this.invoke("event listener", () => listener(event));
+      }
+    }
   }
 
   private handleClose(
@@ -560,7 +589,20 @@ export class GatewayProtocolClient<TPlan> {
     // Ignore cancelled sleeps only; reconnect start failures stay observable.
     // Wire Retry-After is a floor: repeated short hints must still advance
     // normal backoff, while adapter-owned startup overrides stay independent.
-    const delayMs = overrideMs ?? Math.max(retry.delayMs, minimumMs);
+    let delayMs = overrideMs;
+    if (delayMs === undefined) {
+      const base = Math.max(retry.delayMs, minimumMs);
+      const ceiling = Math.max(
+        this.opts.reconnect.maxMs,
+        Math.min(Number.MAX_VALUE, minimumMs * 1.2),
+      );
+      // Shift the interval before sampling: clamping a draw would synchronize
+      // clients at the cap or a shared server floor.
+      const lower = Math.max(minimumMs, Math.min(base, ceiling / 1.2));
+      const upper = Math.min(base * 1.2, ceiling);
+      delayMs = Math.ceil(lower + Math.random() * (upper - lower));
+    }
+    delayMs = resolveSleepDelayMs(delayMs);
     void sleepWithAbort(delayMs, retry.signal).then(
       () => {
         if (this.reconnectSignal !== retry.signal) {
@@ -575,6 +617,9 @@ export class GatewayProtocolClient<TPlan> {
           this.reconnectSignal = null;
         }
       },
+    );
+    this.invoke("reconnect scheduled", () =>
+      this.opts.onReconnectScheduled?.(delayMs, retry.signal),
     );
   }
 

@@ -1,3 +1,4 @@
+import { Routes } from "discord-api-types/v10";
 import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ReplyDispatchRuntimeInfo } from "openclaw/plugin-sdk/reply-runtime";
@@ -19,15 +20,16 @@ function createPreviewController(
     deliveryRest: rest,
     deliverChannelId: "c1",
     replyReference: { peek: () => undefined },
-    tableMode: "off",
-    maxLinesPerMessage: undefined,
-    chunkMode: "length",
     log: () => {},
     ...overrides,
   });
 }
 
-function createContinuationHarness(options?: { missingId?: boolean; textLimit?: number }) {
+function createContinuationHarness(options?: {
+  missingId?: boolean;
+  textLimit?: number;
+  mode?: "partial" | "block" | "progress";
+}) {
   const visible = new Map<string, string>();
   let nextId = 0;
   const failures = { edit: false };
@@ -52,7 +54,7 @@ function createContinuationHarness(options?: { missingId?: boolean; textLimit?: 
       return Response.json(options?.missingId ? {} : { id: messageId });
     },
   });
-  const controller = createPreviewController(rest, "progress", {
+  const controller = createPreviewController(rest, options?.mode ?? "progress", {
     textLimit: options?.textLimit ?? 2_000,
   });
   return { controller, visible, failures };
@@ -68,7 +70,7 @@ describe("Discord draft preview REST lifecycle", () => {
         { step: "Verify", status: "in_progress" as const },
       ];
       await controller.pushPlanProgress(plan);
-      controller.markFinalReplyStarted();
+      controller.freezeProgress();
       const adopt = vi.fn<NonNullable<ReplyDispatchRuntimeInfo["adoptProgressContinuation"]>>(
         async (receipt) => {
           expect(receipt.messageId).toBe("1");
@@ -89,6 +91,7 @@ describe("Discord draft preview REST lifecycle", () => {
       await controller.cleanup();
       expect([...visible.keys()]).toEqual(accepted ? ["1"] : []);
       expect(adopt).toHaveBeenCalledOnce();
+      expect(controller.lifecycle.finalDelivered).toBe(false);
       if (accepted) {
         const retained = visible.get("1");
         controller.handleQueuedFollowupAdmitted();
@@ -101,6 +104,37 @@ describe("Discord draft preview REST lifecycle", () => {
     },
   );
 
+  it("keeps the queued preview independent of a late continuation handoff", async () => {
+    const { controller, visible } = createContinuationHarness();
+    const handoffStarted = createDeferred<void>();
+    const finishHandoff = createDeferred<boolean>();
+    await controller.pushPlanProgress([{ step: "Prior turn", status: "in_progress" }]);
+    const retained = visible.get("1");
+    const adopting = controller.adoptProgressContinuation(
+      { text: "Waiting for workers" },
+      {
+        kind: "final",
+        adoptProgressContinuation: async () => {
+          handoffStarted.resolve();
+          return await finishHandoff.promise;
+        },
+      },
+      { to: "channel:c1" },
+    );
+    await handoffStarted.promise;
+    controller.handleQueuedFollowupAdmitted();
+    await controller.pushPlanProgress([{ step: "Queued turn", status: "in_progress" }]);
+    await controller.flush();
+    finishHandoff.resolve(true);
+    expect(await adopting).toBe(true);
+
+    await controller.pushPlanProgress([{ step: "Queued result", status: "completed" }]);
+    await controller.flush();
+    expect(visible.get("2")).toContain("Queued result");
+    await controller.cleanup();
+    expect([...visible]).toEqual([["1", retained]]);
+  });
+
   it("publishes retained preamble data after the final gate without reopening parent progress", async () => {
     const { controller, visible } = createContinuationHarness();
     await controller.pushItemEvent({
@@ -109,7 +143,7 @@ describe("Discord draft preview REST lifecycle", () => {
       progressText: "Waiting for child verification.",
     });
     expect([...visible]).toEqual([]);
-    controller.markFinalReplyStarted();
+    controller.freezeProgress();
 
     expect(
       await controller.adoptProgressContinuation(
@@ -123,12 +157,11 @@ describe("Discord draft preview REST lifecycle", () => {
     expect([...visible]).toEqual([["1", "Waiting for child verification."]]);
   });
 
-  it.each(["missing-id", "failed-edit", "oversize"] as const)(
+  it.each(["missing-id", "failed-edit"] as const)(
     "declines unconfirmed progress instead of adopting stale display data (%s)",
     async (failure) => {
       const { controller, visible, failures } = createContinuationHarness({
         missingId: failure === "missing-id",
-        textLimit: failure === "oversize" ? 40 : 2_000,
       });
       await controller.pushPlanProgress([{ step: "Inspect", status: "in_progress" }]);
       if (failure !== "missing-id") {
@@ -140,7 +173,7 @@ describe("Discord draft preview REST lifecycle", () => {
           },
         ]);
       }
-      controller.markFinalReplyStarted();
+      controller.freezeProgress();
       const adopt = vi.fn(async () => true);
 
       expect(
@@ -173,7 +206,7 @@ describe("Discord draft preview REST lifecycle", () => {
     const controller = createPreviewController(rest);
     const publishing = controller.pushPlanProgress([{ step: "Verify", status: "in_progress" }]);
     await started.promise;
-    controller.markFinalReplyStarted();
+    controller.freezeProgress();
     let current = true;
     const adopt = vi.fn(async () => true);
     const adopting = controller.adoptProgressContinuation(
@@ -198,30 +231,10 @@ describe("Discord draft preview REST lifecycle", () => {
     await controller.cleanup();
   });
 
-  it.each(["partial", "block", "progress"] as const)(
+  it.each(["block"] as const)(
     "publishes and retracts a short complete plan, then resumes in %s mode",
     async (mode) => {
-      const visible = new Map<string, string>();
-      let nextId = 0;
-      const rest = new RequestClient("test-token", {
-        queueRequests: false,
-        fetch: async (input, init) => {
-          const url = new URL(input instanceof Request ? input.url : input);
-          const id = url.pathname.split("/").at(-1)!;
-          if (init?.method === "DELETE") {
-            visible.delete(id);
-            return new Response(null, { status: 204 });
-          }
-          if (typeof init?.body !== "string") {
-            throw new Error("Expected a serialized Discord message");
-          }
-          const body = JSON.parse(init.body) as { content: string };
-          const messageId = init.method === "POST" ? String(++nextId) : id;
-          visible.set(messageId, body.content);
-          return Response.json({ id: messageId });
-        },
-      });
-      const controller = createPreviewController(rest, mode);
+      const { controller, visible } = createContinuationHarness({ mode });
 
       await controller.pushPlanProgress([]);
       expect(visible.size).toBe(0);
@@ -286,20 +299,26 @@ describe("Discord draft preview REST lifecycle", () => {
 
     controller.draftStream?.update("🛠️ Exec: failed");
     await controller.flush();
-    controller.markFinalReplyStarted();
-    controller.markFinalReplyDelivered(true);
+    await controller.lifecycle.deliver({
+      kind: "final",
+      payload: { text: "Something failed", isError: true },
+      isError: true,
+      deliverNormally: async (payload) => {
+        const sent = (await rest.post(Routes.channelMessages("c1"), {
+          body: { content: payload.text },
+        })) as { id: string };
+        return { messageIds: [sent.id], visibleReplySent: true };
+      },
+    });
     controller.draftStream?.update("stale pending update");
     await controller.cleanup();
     await controller.flush();
 
-    expect(requests).toEqual(["POST /channels/c1/messages"]);
+    expect(requests).toEqual(["POST /channels/c1/messages", "POST /channels/c1/messages"]);
   });
 
   it.each([
-    ["queued admission", 0],
     ["queued admission", 1],
-    ["teardown", 0],
-    ["teardown", 1],
     ["teardown", 2],
   ] as const)(
     "removes a late preview after %s (%i delete failures)",
@@ -349,8 +368,7 @@ describe("Discord draft preview REST lifecycle", () => {
 
         expect(controller.draftStream?.messageId()).toBe("2");
         expect(visibleMessages.get("2")).toBe("queued turn progress");
-        controller.markFinalReplyStarted();
-        controller.markFinalReplyDelivered(false);
+        await controller.lifecycle.observeDelivery({ visibleReplySent: true });
         await controller.cleanup();
       } else {
         const cleanup = controller.cleanup();

@@ -107,7 +107,7 @@ describe("runCliProcessChild", () => {
         stdout: JSON.stringify({
           output: "out",
           maglevDisabled: !process.versions.bun && !enableMaglev,
-          concurrentSparkplugDisabled: !process.versions.bun && !enableMaglev,
+          concurrentSparkplugDisabled: !process.versions.bun,
         }),
         stderr: "err",
       });
@@ -124,7 +124,7 @@ describe("runCliProcessChild", () => {
           "process.stdout.write('partial');",
           "globalThis.pending = new Promise(() => {});",
           "require('node:net').createServer().listen(0, '127.0.0.1');",
-          "process.on('SIGUSR2', () => process.stderr.write('x'.repeat(8_100) + '\\nlast-stderr-line\\n'));",
+          "process.on('SIGQUIT', () => process.stderr.write('x'.repeat(8_100) + '\\nlast-stderr-line\\n'));",
           "setInterval(() => {}, 1_000);",
         ].join("\n"),
       ],
@@ -195,7 +195,7 @@ describe("runCliProcessChild", () => {
         runCliProcessChild({
           nodeArgs: [
             "-e",
-            "process.on('SIGUSR2', () => process.exit(0)); setInterval(() => {}, 1_000);",
+            "process.on('SIGQUIT', () => process.exit(0)); setInterval(() => {}, 1_000);",
           ],
           env: process.env,
           timeoutMs: 500,

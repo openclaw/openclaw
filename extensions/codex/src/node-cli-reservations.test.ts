@@ -295,57 +295,53 @@ describe("registered Codex node resume reservations", () => {
     }
   });
 
-  it.each(["catalog", "legacy"] as const)(
-    "keeps home aliases mutually exclusive until a canceled %s turn settles",
-    async (route) => {
-      const fixture = await createRegisteredResume();
-      const started = createDeferred<void>();
-      const release = createDeferred<void>();
-      processRuntimeMocks.runCommandBuffered.mockImplementationOnce(async (argv, options) => {
-        expect(await fs.realpath(options?.env?.CODEX_HOME ?? "")).toBe(fixture.alphaHome);
-        started.resolve();
-        await release.promise;
-        return completeResume(argv, options);
-      });
-      const controller = new AbortController();
-      const running = fixture.command.handle(
-        fixture.request(route === "catalog" ? "alpha" : undefined),
-        undefined,
-        { signal: controller.signal, sendNodeEvent: async () => undefined },
+  it("keeps catalog and legacy home aliases mutually exclusive until a canceled turn settles", async () => {
+    const fixture = await createRegisteredResume();
+    const started = createDeferred<void>();
+    const release = createDeferred<void>();
+    processRuntimeMocks.runCommandBuffered.mockImplementationOnce(async (argv, options) => {
+      expect(await fs.realpath(options?.env?.CODEX_HOME ?? "")).toBe(fixture.alphaHome);
+      started.resolve();
+      await release.promise;
+      return completeResume(argv, options);
+    });
+    const controller = new AbortController();
+    const running = fixture.command.handle(fixture.request("alpha"), undefined, {
+      signal: controller.signal,
+      sendNodeEvent: async () => undefined,
+    });
+    const outcome = running.then(
+      (value) => value,
+      (error: unknown) => error,
+    );
+    try {
+      await expect(Promise.race([started.promise.then(() => "started"), outcome])).resolves.toBe(
+        "started",
       );
-      const outcome = running.then(
-        (value) => value,
-        (error: unknown) => error,
-      );
-      try {
-        await expect(Promise.race([started.promise.then(() => "started"), outcome])).resolves.toBe(
-          "started",
-        );
-        for (const canceled of [false, true]) {
-          if (canceled) {
-            controller.abort(new Error("node invocation canceled"));
-          }
-          for (const agentId of ["alpha", undefined]) {
-            await expect(fixture.command.handle(fixture.request(agentId))).rejects.toThrow(
-              "already has an active resume turn",
-            );
-          }
-          expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledOnce();
+      for (const canceled of [false, true]) {
+        if (canceled) {
+          controller.abort(new Error("node invocation canceled"));
         }
-        release.resolve();
-        expect(await outcome).toMatchObject({ message: "node invocation canceled" });
         for (const agentId of ["alpha", undefined]) {
-          expect(JSON.parse(await fixture.command.handle(fixture.request(agentId)))).toMatchObject({
-            ok: true,
-            text: fixture.alphaHome,
-          });
+          await expect(fixture.command.handle(fixture.request(agentId))).rejects.toThrow(
+            "already has an active resume turn",
+          );
         }
-        expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledTimes(3);
-      } finally {
-        release.resolve();
-        await outcome;
-        await fixture.stop();
+        expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledOnce();
       }
-    },
-  );
+      release.resolve();
+      expect(await outcome).toMatchObject({ message: "node invocation canceled" });
+      for (const agentId of ["alpha", undefined]) {
+        expect(JSON.parse(await fixture.command.handle(fixture.request(agentId)))).toMatchObject({
+          ok: true,
+          text: fixture.alphaHome,
+        });
+      }
+      expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledTimes(3);
+    } finally {
+      release.resolve();
+      await outcome;
+      await fixture.stop();
+    }
+  });
 });

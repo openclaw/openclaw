@@ -5,8 +5,8 @@ import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteInfraError } from "./errors.js";
 import { extractGatewayMessageText } from "./gateway-log-sentinel.js";
+import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import { runQaCli } from "./qa-cli-process.js";
-import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import { readSessionTranscriptSummary } from "./suite-runtime-agent-session.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
 import type { QaDreamingStatus, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
@@ -74,63 +74,48 @@ async function startAgentRun(
     }>;
   },
 ) {
-  if (params.taskTracking === false) {
-    const target = params.to ?? "dm:qa-operator";
-    const delivery = env.transport.buildAgentDelivery({
-      target,
-      ...(params.threadId ? { threadId: params.threadId } : {}),
-    });
-    const started = (await env.gateway.call(
-      "chat.send",
-      {
-        idempotencyKey: randomUUID(),
-        sessionKey: params.sessionKey,
-        message: params.message,
-        deliver: true,
-        originatingChannel: delivery.replyChannel,
-        originatingTo: delivery.replyTo,
-        // chat.send routes threads separately; omitting this replies at the conversation root.
-        originatingThreadId: delivery.threadId ?? params.threadId,
-      },
-      {
-        timeoutMs: params.timeoutMs ?? 30_000,
-      },
-    )) as { runId?: string; status?: string };
-    if (!started.runId) {
-      throw new Error(`chat.send did not return a runId: ${JSON.stringify(started)}`);
-    }
-    return started;
-  }
   const target = params.to ?? "dm:qa-operator";
   const delivery = env.transport.buildAgentDelivery({
     target,
     ...(params.threadId ? { threadId: params.threadId } : {}),
   });
+  const taskTracking = params.taskTracking !== false;
   const started = (await env.gateway.call(
-    "agent",
+    taskTracking ? "agent" : "chat.send",
     {
       idempotencyKey: randomUUID(),
-      agentId: "qa",
       sessionKey: params.sessionKey,
       message: params.message,
       deliver: true,
-      channel: delivery.channel,
-      to: delivery.to ?? target,
-      replyChannel: delivery.replyChannel,
-      replyTo: delivery.replyTo,
-      ...((delivery.threadId ?? params.threadId)
-        ? { threadId: delivery.threadId ?? params.threadId }
-        : {}),
-      ...(params.provider ? { provider: params.provider } : {}),
-      ...(params.model ? { model: params.model } : {}),
-      ...(params.attachments ? { attachments: params.attachments } : {}),
+      ...(taskTracking
+        ? {
+            agentId: "qa",
+            channel: delivery.channel,
+            to: delivery.to ?? target,
+            replyChannel: delivery.replyChannel,
+            replyTo: delivery.replyTo,
+            ...((delivery.threadId ?? params.threadId)
+              ? { threadId: delivery.threadId ?? params.threadId }
+              : {}),
+            ...(params.provider ? { provider: params.provider } : {}),
+            ...(params.model ? { model: params.model } : {}),
+            ...(params.attachments ? { attachments: params.attachments } : {}),
+          }
+        : {
+            originatingChannel: delivery.replyChannel,
+            originatingTo: delivery.replyTo,
+            // chat.send routes threads separately; omitting this replies at the conversation root.
+            originatingThreadId: delivery.threadId ?? params.threadId,
+          }),
     },
     {
       timeoutMs: params.timeoutMs ?? 30_000,
     },
   )) as { runId?: string; status?: string };
   if (!started.runId) {
-    throw new Error(`agent call did not return a runId: ${JSON.stringify(started)}`);
+    throw new Error(
+      `${taskTracking ? "agent call" : "chat.send"} did not return a runId: ${JSON.stringify(started)}`,
+    );
   }
   return started;
 }
@@ -181,23 +166,6 @@ function readLatestAssistantTextFromHistory(history: QaChatHistoryResponse | und
   return undefined;
 }
 
-async function readLatestAgentHistoryReply(
-  env: Pick<QaSuiteRuntimeEnv, "gateway">,
-  sessionKey: string,
-) {
-  const history = (await env.gateway.call(
-    "chat.history",
-    {
-      sessionKey,
-      limit: 12,
-    },
-    {
-      timeoutMs: 10_000,
-    },
-  )) as QaChatHistoryResponse | undefined;
-  return readLatestAssistantTextFromHistory(history);
-}
-
 function resolveRetryableHistoryDelayMs(error: unknown) {
   let current: unknown = error;
   // QA adds redacted logs in two wrapper layers. Walk their causes so retry
@@ -206,7 +174,7 @@ function resolveRetryableHistoryDelayMs(error: unknown) {
     const code = current.gatewayCode ?? current.code;
     if (code === "UNAVAILABLE" && current.retryable === true) {
       const detailMethod = isRecord(current.details) ? current.details.method : undefined;
-      if (typeof detailMethod !== "string" || detailMethod === "chat.history") {
+      if (detailMethod === "chat.history") {
         const retryAfterMs = current.retryAfterMs;
         const rawDelayMs =
           typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs)
@@ -223,20 +191,25 @@ function resolveRetryableHistoryDelayMs(error: unknown) {
   return null;
 }
 
-async function waitForAgentHistoryReply(
+async function waitForAgentHistory<T>(
   env: Pick<QaSuiteRuntimeEnv, "gateway">,
   sessionKey: string,
-  predicate: (text: string) => boolean | Promise<boolean>,
+  select: (history: QaChatHistoryResponse) => T | undefined | Promise<T | undefined>,
   timeoutMs = 30_000,
   intervalMs = 250,
+  options = { limit: 100, requestTimeoutMs: 30_000 },
 ) {
   const startedAt = Date.now();
   let lastRetryableHistoryError: unknown;
   while (Date.now() - startedAt < timeoutMs) {
     let delayMs = intervalMs;
-    let text: string | undefined;
+    let history: QaChatHistoryResponse | undefined;
     try {
-      text = await readLatestAgentHistoryReply(env, sessionKey);
+      history = (await env.gateway.call(
+        "chat.history",
+        { sessionKey, limit: options.limit },
+        { timeoutMs: options.requestTimeoutMs },
+      )) as QaChatHistoryResponse;
       lastRetryableHistoryError = undefined;
     } catch (error) {
       const retryDelayMs = resolveRetryableHistoryDelayMs(error);
@@ -246,8 +219,11 @@ async function waitForAgentHistoryReply(
       lastRetryableHistoryError = error;
       delayMs = retryDelayMs;
     }
-    if (text && (await predicate(text))) {
-      return { text };
+    if (history) {
+      const selected = await select(history);
+      if (selected !== undefined) {
+        return selected;
+      }
     }
     const remainingMs = timeoutMs - (Date.now() - startedAt);
     if (remainingMs <= 0) {
@@ -259,6 +235,26 @@ async function waitForAgentHistoryReply(
   throw lastRetryableHistoryError === undefined
     ? new Error(message)
     : new Error(message, { cause: lastRetryableHistoryError });
+}
+
+async function waitForAgentHistoryReply(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  sessionKey: string,
+  predicate: (text: string) => boolean | Promise<boolean>,
+  timeoutMs = 30_000,
+  intervalMs = 250,
+) {
+  return waitForAgentHistory(
+    env,
+    sessionKey,
+    async (history) => {
+      const text = readLatestAssistantTextFromHistory(history);
+      return text && (await predicate(text)) ? { text } : undefined;
+    },
+    timeoutMs,
+    intervalMs,
+    { limit: 12, requestTimeoutMs: 10_000 },
+  );
 }
 
 async function listCronJobs(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
@@ -318,9 +314,7 @@ async function waitForMemorySearchMatch(params: {
     if (haystack.includes(params.expectedNeedle)) {
       return result;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 500);
-    });
+    await sleep(500);
   }
   throw new Error(`memory index missing expected fact after reindex: ${params.expectedNeedle}`);
 }
@@ -336,17 +330,17 @@ async function forceMemoryIndex(params: {
   await waitForGatewayHealthy(params.env, 60_000);
   await waitForTransportReady(params.env, 60_000);
   await runQaCli(params.env, ["memory", "index", "--agent", "qa", "--force"], {
-    timeoutMs: liveTurnTimeoutMs(params.env, 60_000),
+    timeoutMs: resolveQaLiveTurnTimeoutMs(params.env, 60_000),
   });
   const result = await waitForMemorySearchMatch({
     expectedNeedle: params.expectedNeedle,
-    timeoutMs: liveTurnTimeoutMs(params.env, 20_000),
+    timeoutMs: resolveQaLiveTurnTimeoutMs(params.env, 20_000),
     search: async () =>
       (await runQaCli(
         params.env,
         ["memory", "search", "--agent", "qa", "--json", "--query", params.query],
         {
-          timeoutMs: liveTurnTimeoutMs(params.env, 60_000),
+          timeoutMs: resolveQaLiveTurnTimeoutMs(params.env, 60_000),
           json: true,
         },
       )) as QaMemorySearchResult,
@@ -393,22 +387,9 @@ async function waitForPersistedTranscriptToolEvidence(
 
 async function runAgentPrompt(
   env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">,
-  params: {
-    sessionKey: string;
-    message: string;
-    to?: string;
-    threadId?: string;
-    provider?: string;
-    model?: string;
-    taskTracking?: boolean;
-    timeoutMs?: number;
+  params: Parameters<typeof startAgentRun>[1] & {
     transcriptToolName?: string;
     requireSuccessfulTranscriptToolResult?: boolean;
-    attachments?: Array<{
-      mimeType: string;
-      fileName: string;
-      content: string;
-    }>;
   },
 ) {
   const started = await startAgentRun(env, params);
@@ -438,6 +419,7 @@ export {
   readDoctorMemoryStatus,
   runAgentPrompt,
   startAgentRun,
+  waitForAgentHistory,
   waitForAgentHistoryReply,
   waitForAgentRun,
 };

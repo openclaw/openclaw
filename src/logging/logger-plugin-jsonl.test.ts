@@ -9,6 +9,7 @@ import { readConfiguredLogTail } from "./log-tail.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { applyLoggingConfig, flushLogger, resetLogger } from "./logger.js";
 import { testApi } from "./logger.test-support.js";
+import type { RedactPattern } from "./redact-pattern-runtime.js";
 import { getDefaultRedactPatterns } from "./redact.js";
 import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
@@ -37,7 +38,7 @@ afterAll(async () => await paths.cleanup());
 async function logFromPlugin(
   message: string,
   meta?: Record<string, unknown>,
-  patterns?: string[],
+  patterns?: readonly RedactPattern[],
   write?: (logger: ReturnType<typeof getChildLogger>) => void,
 ) {
   const file = paths.nextPath();
@@ -46,7 +47,8 @@ async function logFromPlugin(
     file,
     consoleStyle: "json",
     consoleLevel: "info",
-    redactPatterns: patterns,
+    // Logging config carries pattern text only; the default policy's matchers are not configurable.
+    redactPatterns: patterns?.filter((pattern): pattern is string => typeof pattern === "string"),
   });
   const output = vi.fn();
   loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
@@ -570,4 +572,19 @@ it("registered plugin service logger never restores a secret after a zero-width 
   ]);
   expect(result.records[0]["1"].value).toBe("FIRST_…7890 ***SECOND_PRIVATE_VALUE");
   expect(result.console[0].value).toBe("FIRST_…7890 ***SECOND_PRIVATE_VALUE");
+});
+
+it("registered plugin logger projects one capture across scalars before the next rule", async () => {
+  const result = await logFromPlugin(
+    "cross-scalar capture",
+    { alpha: "SYNTHETIC_A", beta: "SYNTHETIC_B", next: "SYNTHETIC_NEXT", safe: "visible" },
+    [
+      String.raw`/"alpha":"(SYNTHETIC_A","beta":"SYNTHETIC_B)"/g`,
+      String.raw`/"alpha":"\*\*\*","\*\*\*":"\*\*\*","next":"(SYNTHETIC_NEXT)"/g`,
+    ],
+  );
+  const expected = { alpha: "***", "***": "***", next: "***", safe: "visible" };
+  expect(result.records[0]["1"]).toEqual(expected);
+  expect(result.console[0]).toMatchObject(expected);
+  expect(JSON.stringify(result)).not.toMatch(/SYNTHETIC_(?:A|B|NEXT)/);
 });

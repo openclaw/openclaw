@@ -33,7 +33,7 @@
   "modelPricing": {
     "providers": {
       "moonshot": {
-        "openRouter": {
+        "modelsDev": {
           "provider": "moonshotai"
         },
         "liteLLM": {

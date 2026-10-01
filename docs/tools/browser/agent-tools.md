@@ -25,6 +25,8 @@ How it maps:
   cross-document navigation include the same fresh page state. Navigations
   that resolve to a download skip it.
 - `browser act` uses the snapshot `ref` IDs to click/type/drag/select.
+  When a captured control disappears, its bound ref fails. Take a new snapshot
+  before retrying the action.
 - `browser screenshot` captures pixels (full page, element, or labeled refs).
 - If a screenshot times out while the browser is still capturing or restoring
   page settings, further screenshots, resizing, and device changes on that tab

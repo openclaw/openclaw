@@ -9,11 +9,71 @@ const suite = createControlUiE2eSuite({ name: "Control UI chat error details" })
 
 async function captureDiagnosticProof(page: Page, name: string) {
   if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-    await page.screenshot({ path: path.join(suite.artifactDir, `${name}.png`), fullPage: false });
+    await page.screenshot({
+      path: path.join(suite.artifactDir, `${name}.png`),
+      fullPage: false,
+      animations: "disabled",
+    });
   }
 }
 
 suite.define(() => {
+  it.each(["failed", "timeout"] as const)(
+    "shows a %s diagnostic when only the terminal session update arrives",
+    async (status) => {
+      await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {
+        const sessionKey = "agent:main:main";
+        const diagnostic = "The configured model is unavailable. Select another model and retry.";
+        const gateway = await installMockGateway(page, { sessionKey });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await page.locator(".agent-chat__input textarea").fill("Review the project");
+        await page.getByRole("button", { name: "Send message" }).click();
+        const send = await gateway.waitForRequest("chat.send");
+        assert(isRecord(send.params) && typeof send.params.idempotencyKey === "string");
+        const runId = send.params.idempotencyKey;
+        await page.getByRole("button", { name: "Stop generating" }).waitFor();
+        const row = {
+          key: sessionKey,
+          kind: "direct",
+          updatedAt: Date.now(),
+          endedAt: Date.now(),
+          hasActiveRun: false,
+          activeRunIds: [],
+          lastRunId: runId,
+          status,
+          lastRunError: diagnostic,
+        };
+        await gateway.setSessionsListResponse({
+          sessions: [row],
+          count: 1,
+          path: "",
+          ts: row.updatedAt,
+          defaults: { model: "gpt-5.5", modelProvider: "openai", contextTokens: null },
+        });
+        // Deliberately omit chat.error: the canonical session update must be sufficient.
+        await gateway.emitGatewayEvent("sessions.changed", {
+          sessionKey,
+          agentId: "main",
+          runId,
+          reason: "lifecycle",
+          phase: "error",
+          session: row,
+        });
+        await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
+        await captureDiagnosticProof(page, `run-error-session-${status}`);
+        const alert = page.locator(".chat-error");
+        await expect.poll(() => alert.textContent()).toContain(diagnostic);
+        expect(await alert.getByRole("button", { name: "Copy error", exact: true }).count()).toBe(
+          1,
+        );
+        await page.locator(".agent-chat__input textarea").fill("Try again");
+        await page.getByRole("button", { name: "Send message" }).click();
+        await gateway.waitForRequest("chat.send", { after: 1 });
+        await expect.poll(() => alert.count()).toBe(0);
+      });
+    },
+  );
+
   it("keeps a rejected session-change message visible with recovery guidance and diagnostic details", async () => {
     await suite.withPage(
       {

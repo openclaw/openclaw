@@ -5,7 +5,7 @@ import baseConfig from "./vitest.config.ts";
 import { RepoE2eSequencer } from "./vitest.e2e.sequencer.ts";
 import { resolveRepoRootPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 import { tuiPtyTestFiles } from "./vitest.test-shards.mjs";
-import { uiE2eRealGatewayTestFiles } from "./vitest.ui-e2e.config.ts";
+import { uiE2eRealGatewayTestFiles } from "./vitest.ui-paths.mjs";
 
 function resolveE2EWorkerCount(env: Record<string, string | undefined>): number {
   const requestedWorkers = Number.parseInt(env.OPENCLAW_E2E_WORKERS ?? "", 10);

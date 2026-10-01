@@ -108,17 +108,7 @@ export function listAgentIds(cfg: AgentRosterConfig): string[] {
     // Match resolveDefaultAgentId's Plugin SDK compatibility for raw pre-roster configs.
     return [LEGACY_IMPLICIT_AGENT_ID];
   }
-  const seen = new Set<string>();
-  const ids: string[] = [];
-  for (const entry of agents) {
-    const id = normalizeAgentId(entry?.id);
-    if (seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    ids.push(id);
-  }
-  return ids;
+  return [...new Set(agents.map((entry) => normalizeAgentId(entry?.id)))];
 }
 
 export function tryResolveSoleAgentId(cfg: AgentRosterConfig): string | undefined {

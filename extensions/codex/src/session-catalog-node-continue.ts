@@ -21,7 +21,7 @@ import {
   findNodeAdoptedSessionEntry,
   nodeAdoptedSourceKey,
   nodeSessionMarker,
-  runSessionActionExclusive,
+  catalogSessionActions,
   type AdoptedSessionEntry,
   type CodexNodeHistory,
   type CodexSessionDisposition,
@@ -72,13 +72,7 @@ export function nodeLabel(node: CatalogNode): string {
 export function compareNodeLabels(left: CatalogNode, right: CatalogNode): number {
   const leftLabel = nodeLabel(left);
   const rightLabel = nodeLabel(right);
-  if (leftLabel < rightLabel) {
-    return -1;
-  }
-  if (leftLabel > rightLabel) {
-    return 1;
-  }
-  return 0;
+  return leftLabel < rightLabel ? -1 : leftLabel > rightLabel ? 1 : 0;
 }
 
 function canContinueCodexOnNode(node: CatalogNode): boolean {
@@ -98,7 +92,6 @@ export async function listPairedNode(params: {
   runtime: PluginRuntime;
   node: CatalogNode;
   query: CodexSessionCatalogParams;
-  adoptedSessions: ReadonlyMap<string, AdoptedSessionEntry>;
   terminalCapabilities: Pick<CodexSessionCatalogHost, "canOpenTerminalCodex" | "canStartTerminal">;
   onHost?: (host: CodexSessionCatalogHost) => void;
   waitUntil?: (completion: Promise<void>) => void;
@@ -154,19 +147,9 @@ export async function listPairedNode(params: {
         ...page,
         canContinueCodex:
           common.canContinueCodex && page.canContinueCodex === true && Boolean(page.sourceHomeId),
-        sessions: page.sessions.map((session) => {
-          const adopted = page.sourceHomeId
-            ? params.adoptedSessions.get(
-                nodeAdoptedSourceKey(hostId, session.threadId, page.sourceHomeId),
-              )
-            : undefined;
-          return Object.assign(
-            {},
-            session,
-            page.sourceHomeId ? { sourceHomeId: page.sourceHomeId } : {},
-            adopted ? { sessionKey: adopted.key } : {},
-          );
-        }),
+        sessions: page.sessions.map((session) =>
+          Object.assign({}, session, page.sourceHomeId ? { sourceHomeId: page.sourceHomeId } : {}),
+        ),
       };
     })
     .catch((error: unknown) => ({
@@ -195,14 +178,10 @@ export async function listPairedNode(params: {
 
 async function requireNodeForCodexContinue(params: {
   runtime: PluginRuntime;
-  hostId: string;
-}): Promise<{ node: CatalogNode; nodeId: string }> {
-  const nodeId = params.hostId.slice("node:".length).trim();
-  if (!nodeId || params.hostId !== `node:${nodeId}`) {
-    throw new CatalogParamsError("Codex session catalog hostId is invalid");
-  }
+  nodeId: string;
+}): Promise<void> {
   const node = (await params.runtime.nodes.list()).nodes.find(
-    (candidate) => candidate.nodeId === nodeId,
+    (candidate) => candidate.nodeId === params.nodeId,
   );
   if (!node || !canContinueCodexOnNode(node)) {
     if (node?.connected && !node.caps?.includes(CODEX_CLI_SESSION_SOURCE_CAPABILITY)) {
@@ -210,7 +189,6 @@ async function requireNodeForCodexContinue(params: {
     }
     throw new CatalogParamsError("paired node does not permit Codex session continuation");
   }
-  return { node, nodeId };
 }
 
 function requireContinuableNodeRecord(record: CodexSessionCatalogSession): void {
@@ -274,9 +252,9 @@ async function continueNodeCodexSessionInner(params: {
   api: OpenClawPluginApi;
   config: OpenClawConfig;
   hostId: string;
+  nodeId: string;
   threadId: string;
   sourceHomeId?: string;
-  clientScopes?: readonly string[];
 }): Promise<{
   sessionKey: string;
   disposition: CodexSessionDisposition;
@@ -287,9 +265,10 @@ async function continueNodeCodexSessionInner(params: {
   };
   afterConversationBound: () => Promise<void>;
 }> {
-  const { nodeId } = await requireNodeForCodexContinue({
+  const { nodeId } = params;
+  await requireNodeForCodexContinue({
     runtime: params.api.runtime,
-    hostId: params.hostId,
+    nodeId,
   });
   const lookup = await lookupNodeCodexCatalogRecord({
     agentId: params.agentId,
@@ -410,8 +389,8 @@ export async function continueNodeCodexSession(params: {
     sourceKey: operationKey,
     findExisting: () => undefined,
     create: () =>
-      runSessionActionExclusive(sourceKey, async () =>
-        continueNodeCodexSessionInner({ ...params, agentId }),
+      catalogSessionActions.enqueue(sourceKey, async () =>
+        continueNodeCodexSessionInner({ ...params, agentId, nodeId }),
       ),
     complete: async (continued) =>
       continued as Awaited<ReturnType<typeof continueNodeCodexSessionInner>>,

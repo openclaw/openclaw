@@ -119,7 +119,7 @@ describe("FreeBSD CLI runtime installation", () => {
       expect(result.stdout).toContain("npm-node24");
       expect(result.stdout).not.toContain("unexpected");
       expect(readlinkSync(join(prefix, "tools", "node"))).toBe(oldRuntime);
-      expect(existsSync(join(prefix, "tools", "node-v24.19.0"))).toBe(false);
+      expect(existsSync(join(prefix, "tools", "node-v24.21.0"))).toBe(false);
     },
   );
 

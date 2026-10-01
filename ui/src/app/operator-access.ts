@@ -1,5 +1,6 @@
-// Control UI app-level operator scope checks.
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
+import type { GatewaySessionRow } from "../api/types.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 
 type GatewayOperatorAccess = Readonly<{
@@ -10,9 +11,14 @@ type GatewayOperatorAccess = Readonly<{
   canGrantApprovals: boolean;
 }>;
 
-type OperatorAuth = { role?: string; scopes?: readonly string[] } | null;
+type OperatorAuth = {
+  role?: string;
+  scopes?: readonly string[];
+  sessionCap?: NonNullable<ApplicationGatewaySnapshot["hello"]>["auth"]["sessionCap"];
+} | null;
 type OperatorScope =
   | "operator.read"
+  | "operator.sessions.read"
   | "operator.write"
   | "operator.admin"
   | "operator.pairing"
@@ -69,4 +75,38 @@ export function hasOperatorPairingAccess(auth: OperatorAuth): boolean {
 
 export function hasOperatorApprovalsAccess(auth: OperatorAuth): boolean {
   return hasOperatorScope(auth, "operator.approvals", false);
+}
+
+export function hasOperatorSelfReadAccess(auth: OperatorAuth): boolean {
+  return hasOperatorReadAccess(auth) || hasOperatorScope(auth, "operator.sessions.read", true);
+}
+
+export function canReactToSession(
+  snapshot: Pick<ApplicationGatewaySnapshot, "hello" | "phase" | "client">,
+  session: Pick<GatewaySessionRow, "sharingRole" | "visibility"> | undefined,
+  options: { archived: boolean; catalog: boolean },
+): boolean {
+  const auth = snapshot.hello?.auth;
+  const cap = auth?.sessionCap;
+  const role = session?.sharingRole;
+  if (
+    !session ||
+    !role ||
+    options.archived ||
+    options.catalog ||
+    cap === "none" ||
+    !canCallGatewayMethod(snapshot, "session.reactions.set", "operator.write")
+  ) {
+    return false;
+  }
+  const visibility = session.visibility ?? "shared";
+  if (visibility === "draft") {
+    return role === "owner" || role === "admin";
+  }
+  if (role !== "viewer") {
+    return true;
+  }
+  return visibility === "shared"
+    ? cap !== "view" && cap !== "suggest"
+    : visibility === "suggest" && cap !== "view";
 }

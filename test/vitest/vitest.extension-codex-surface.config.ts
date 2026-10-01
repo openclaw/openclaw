@@ -15,7 +15,7 @@ function createExtensionCodexSurfaceVitestConfig(
         "extensions/codex/src/app-server/**/*.test.ts",
         ...databaseWorkerExtensionTestFiles,
       ],
-      fileParallelism: false,
+      isolate: true,
       name: "extension-codex-surface",
       passWithNoTests: true,
       setupFiles: ["test/setup.extensions.ts"],

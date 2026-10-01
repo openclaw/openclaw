@@ -5,15 +5,14 @@ import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-su
 import type { ModelFallbackAvailability } from "./agent-scope.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
-import { FailoverError } from "./failover-error.js";
 import { markFallbackCandidateSkipped } from "./fallback-skip-cache.js";
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-support.js";
 import type { ModelFallbackStepFields } from "./model-fallback-observation.js";
+import { createModelFallbackAttemptMocks } from "./model-fallback.run-embedded.attempts.test-support.js";
 import {
   CLOUDFLARE_502_ERROR_PAYLOAD,
   type EmbeddedAttemptParams,
   LONG_RATE_LIMIT_ERROR_MESSAGE,
-  makeFallbackSuccessAttempt,
   makeModelFallbackConfig,
   NO_ENDPOINTS_FOUND_ERROR_MESSAGE,
   NO_ERROR_DETAILS_MESSAGE,
@@ -241,89 +240,14 @@ async function runEmbeddedEntryFallback(params: {
   }
 }
 
-function mockPrimaryOverloadedThenFallbackSuccess() {
-  mockPrimaryErrorThenFallbackSuccess(OVERLOADED_ERROR_PAYLOAD);
-}
-
-function mockPrimaryFailureThenFallbackSuccess(
-  makePrimaryAttempt: (
-    attemptParams: EmbeddedAttemptParams,
-  ) => EmbeddedRunAttemptResult | Promise<EmbeddedRunAttemptResult>,
-  options?: { primaryProvider?: string },
-) {
-  const primaryProvider = options?.primaryProvider ?? "openai";
-  runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
-    const attemptParams = params as EmbeddedAttemptParams;
-    if (attemptParams.provider === primaryProvider) {
-      // Keep route/receipt scenarios bounded with a provider-reported retry cap.
-      return { ...(await makePrimaryAttempt(attemptParams)), providerRetryMaxRetries: 3 };
-    }
-    if (attemptParams.provider === "groq") {
-      return makeFallbackSuccessAttempt();
-    }
-    throw new Error(`Unexpected provider ${attemptParams.provider}`);
-  });
-}
-
-function mockPrimaryPromptErrorThenFallbackSuccess(errorMessage: string) {
-  mockPrimaryFailureThenFallbackSuccess(() =>
-    makeEmbeddedRunnerAttempt({
-      terminal: { kind: "failed", source: "prompt", error: new Error(errorMessage) },
-    }),
-  );
-}
-
-function mockPrimarySuspendingPromptErrorThenFallbackSuccess(sessionId: string) {
-  mockPrimaryFailureThenFallbackSuccess(() =>
-    makeEmbeddedRunnerAttempt({
-      sessionIdUsed: sessionId,
-      terminal: {
-        kind: "failed",
-        source: "prompt",
-        error: new FailoverError(RATE_LIMIT_ERROR_MESSAGE, {
-          reason: "rate_limit",
-          provider: "openai",
-          model: "mock-1",
-          suspend: true,
-        }),
-      },
-    }),
-  );
-}
-
-function mockPrimaryErrorThenFallbackSuccess(
-  errorMessage: string,
-  options?: { primaryProvider?: string },
-) {
-  mockPrimaryFailureThenFallbackSuccess(
-    (attemptParams) =>
-      makeEmbeddedRunnerAttempt({
-        assistantTexts: [],
-        lastAssistant: buildEmbeddedRunnerAssistant({
-          provider: attemptParams.provider,
-          model: attemptParams.modelId ?? "mock-1",
-          stopReason: "error",
-          errorMessage,
-        }),
-      }),
-    options,
-  );
-}
-
-function mockPrimaryStaleRateLimitTextSuccess(errorMessage: string) {
-  mockPrimaryFailureThenFallbackSuccess(() =>
-    makeEmbeddedRunnerAttempt({
-      assistantTexts: ["primary ok"],
-      lastAssistant: buildEmbeddedRunnerAssistant({
-        provider: "openai",
-        model: "mock-1",
-        stopReason: "stop",
-        content: [{ type: "text", text: "primary ok" }],
-        errorMessage,
-      }),
-    }),
-  );
-}
+const {
+  mockPrimaryOverloadedThenFallbackSuccess,
+  mockPrimaryFailureThenFallbackSuccess,
+  mockPrimaryPromptErrorThenFallbackSuccess,
+  mockPrimarySuspendingPromptErrorThenFallbackSuccess,
+  mockPrimaryErrorThenFallbackSuccess,
+  mockPrimaryStaleRateLimitTextSuccess,
+} = createModelFallbackAttemptMocks(runEmbeddedAttemptMock);
 
 function expectAttemptOrder(expected: Array<{ provider: string; authProfileId: string }>) {
   expect(
@@ -375,6 +299,42 @@ function expectProviderAttemptCounts(expected: { openai: number; groq: number })
 }
 
 describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
+  it.each(["thrown", "assistant"] as const)(
+    "does not replay %s transcript turn assertions through retries or model fallback",
+    async (surface) => {
+      await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
+        await writeFallbackAuthStore(agentDir);
+        const errorMessage = "Session transcript keyed user is outside the current turn: old-input";
+        runEmbeddedAttemptMock.mockImplementation(async (params) => {
+          if (surface === "thrown") {
+            throw new Error(errorMessage);
+          }
+          const attempt = params as EmbeddedAttemptParams;
+          return makeEmbeddedRunnerAttempt({
+            lastAssistant: buildEmbeddedRunnerAssistant({
+              provider: attempt.provider,
+              model: attempt.modelId,
+              stopReason: "error",
+              errorMessage,
+            }),
+          });
+        });
+        const result = await runEmbeddedEntryFallback({
+          agentDir,
+          workspaceDir,
+          sessionKey: "agent:test:transcript-assertion",
+          runId: "announce:requester-settle:test:transcript-assertion",
+          fallbacksOverride: ["groq/mock-2", "groq/mock-3"],
+        }).catch((error: unknown) => error);
+
+        expect(runEmbeddedAttemptMock).toHaveBeenCalledOnce();
+        expect(result).toBeInstanceOf(Error);
+        expect(result).toMatchObject({ message: errorMessage });
+        expect(suspendSessionMock).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   it("keeps a pinned model on its rate-limit surface instead of escalating to fallback", async () => {
     await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeFallbackMultiProfileAuthStore(agentDir);

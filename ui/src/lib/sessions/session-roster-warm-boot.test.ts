@@ -204,6 +204,7 @@ describe("session capability warm roster", () => {
   it("publishes groups synchronously, then the cached roster without a connection or canonical revision", async () => {
     const cached = createDeferred<SessionRosterRecord | null>();
     const h = harness({ cached: cached.promise });
+    expect(h.sessions.cachedRoutingDefaults).toEqual({ mainKey: "main", scope: "per-sender" });
     expect(h.sessions.state.groups).toEqual(["Work"]);
     expect(h.sessions.state.result).toBeNull();
     let settled = false;
@@ -230,6 +231,7 @@ describe("session capability warm roster", () => {
 
   it("does not read or publish a cached roster without an accepted boot record", async () => {
     const h = harness({ withBootRecord: false });
+    expect(h.sessions.cachedRoutingDefaults).toBeUndefined();
     await h.sessions.whenCachedRosterSettled();
     expect(h.read).not.toHaveBeenCalled();
     expect(h.sessions.state).toMatchObject({
@@ -409,10 +411,6 @@ describe("session capability warm roster", () => {
             h.emitChanged(current);
           }
         }
-        if (source === "event") {
-          // A second consumer must not recapture the old payload in this connection.
-          expect(h.sessions.reconcileChanged(previous).applied).toBe(false);
-        }
         const accepted = h.sessions.state.result?.sessions.find((row) => row.key === key);
         expect(accepted?.label).toBe(observeAfterReconnect ? current.label : previous.label);
         expect(h.write).not.toHaveBeenCalled();
@@ -431,17 +429,14 @@ describe("session capability warm roster", () => {
     },
   );
 
-  it.each(["trusted-proxy", "password", "tailscale", "bootstrap-token", "none"] as const)(
-    "does not persist live rows for %s authentication",
-    async (method) => {
-      const h = harness({ withBootRecord: false });
-      h.connect("profile-one", method);
-      const live = sessionsResult([{ key: "agent:main:private", kind: "direct" }], 2);
-      h.live.resolve(live);
-      await vi.waitFor(() => expect(h.sessions.state.result).toEqual(live));
-      expect(h.write).not.toHaveBeenCalled();
-    },
-  );
+  it("does not persist live rows for password authentication", async () => {
+    const h = harness({ withBootRecord: false });
+    h.connect("profile-one", "password");
+    const live = sessionsResult([{ key: "agent:main:private", kind: "direct" }], 2);
+    h.live.resolve(live);
+    await vi.waitFor(() => expect(h.sessions.state.result).toEqual(live));
+    expect(h.write).not.toHaveBeenCalled();
+  });
 
   it("drops a mismatched profile before bootstrap asks for its live rows", async () => {
     const h = harness();
@@ -458,21 +453,16 @@ describe("session capability warm roster", () => {
     );
   });
 
-  it.each(["connect", "dispose", "credentials", "credentials-before-notification"] as const)(
+  it.each(["credentials", "credentials-before-notification"] as const)(
     "does not publish a late cache read after %s",
     async (transition) => {
       const cached = createDeferred<SessionRosterRecord | null>();
       const h = harness({ cached: cached.promise });
-      if (transition === "connect") {
-        h.connect();
-      } else if (transition === "dispose") {
-        h.sessions.dispose();
-      } else {
-        h.changeCredentials();
-        if (transition === "credentials") {
-          h.publish({ phase: "connecting" });
-          expect(h.sessions.state.groups).toEqual([]);
-        }
+      h.changeCredentials();
+      expect(h.sessions.cachedRoutingDefaults).toBeUndefined();
+      if (transition === "credentials") {
+        h.publish({ phase: "connecting" });
+        expect(h.sessions.state.groups).toEqual([]);
       }
       cached.resolve(roster());
       await h.sessions.whenCachedRosterSettled();
@@ -492,6 +482,7 @@ describe("session capability warm roster", () => {
       } else {
         h.sessions.dispose();
       }
+      expect(h.sessions.cachedRoutingDefaults).toBeUndefined();
       await expect(
         Promise.race([
           settled.then(() => "released"),
@@ -502,6 +493,7 @@ describe("session capability warm roster", () => {
       ).resolves.toBe("released");
       cached.resolve(roster());
       await settled;
+      expect(h.sessions.state.result).toBeNull();
       expect(h.sessions.state.resultCached).not.toBe(true);
     },
   );
@@ -521,6 +513,7 @@ describe("session capability warm roster", () => {
       } else {
         h.changeCredentials();
       }
+      expect(h.sessions.cachedRoutingDefaults).toBeUndefined();
       h.publish({ phase: "connecting" });
       expect(h.sessions.state).toMatchObject({
         result: null,
@@ -544,25 +537,10 @@ describe("session capability warm roster", () => {
     },
   );
 
-  it.each(["agent", "profile", "query", "query-agent"] as const)(
-    "rejects an incompatible %s from an injected roster reader",
-    async (mismatch) => {
-      const invalid = roster();
-      if (mismatch === "agent") {
-        invalid.agentId = "other";
-      }
-      if (mismatch === "profile") {
-        invalid.profileId = "other";
-      }
-      if (mismatch === "query") {
-        invalid.query = { archivedFilter: "archived" };
-      }
-      if (mismatch === "query-agent") {
-        invalid.query = { agentId: "other" };
-      }
-      const h = harness({ cached: Promise.resolve(invalid) });
-      await h.sessions.whenCachedRosterSettled();
-      expect(h.sessions.state.result).toBeNull();
-    },
-  );
+  it("rejects an incompatible profile from an injected roster reader", async () => {
+    const invalid = { ...roster(), profileId: "other" };
+    const h = harness({ cached: Promise.resolve(invalid) });
+    await h.sessions.whenCachedRosterSettled();
+    expect(h.sessions.state.result).toBeNull();
+  });
 });

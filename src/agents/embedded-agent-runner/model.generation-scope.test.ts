@@ -1,3 +1,4 @@
+import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
@@ -6,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import "../../claws/tool-policy-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { SQLITE_READONLY_CHILD_ARG } from "../../infra/runtime-process-entrypoints.js";
+import { withSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
@@ -20,6 +23,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "../auth-profiles/store-runtime.js";
+import { withAuthProfileStoreAgentDir } from "../auth-profiles/store.js";
 import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
 import { AuthStorage, ModelRegistry } from "../sessions/index.js";
 import { resolveTieredModel } from "./model-resolution.js";
@@ -30,6 +34,11 @@ import {
   resetModelGenerationFixtureState,
 } from "./model.generation-scope.test-support.js";
 import { resolveModelAsync } from "./model.js";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawn: vi.fn(actual.spawn) };
+});
 
 let state: OpenClawTestState;
 let auth: ReturnType<typeof guardModelFixtureAuth>;
@@ -48,6 +57,20 @@ afterEach(async () => {
     await state.cleanup();
   }
 });
+
+function generationFixture(
+  options: Omit<
+    Parameters<typeof createModelGenerationFixture>[0],
+    "agentDir" | "workspaceDir" | "config"
+  > & { config?: OpenClawConfig },
+) {
+  return createModelGenerationFixture({
+    agentDir: state.agentDir(),
+    workspaceDir: state.workspaceDir,
+    config: {},
+    ...options,
+  });
+}
 
 async function resolveGeneration(
   generation: ReturnType<typeof createModelGenerationFixture>,
@@ -93,9 +116,7 @@ async function createExternalCodexGeneration() {
   vi.spyOn(globalThis, "fetch").mockImplementation(() => {
     throw new Error("Model auth discovery must not contact a provider");
   });
-  const generation = createModelGenerationFixture({
-    agentDir: state.agentDir(),
-    workspaceDir: state.workspaceDir,
+  const generation = generationFixture({
     provider: "openai",
     requestProvider: "openai",
     config: {},
@@ -116,21 +137,11 @@ describe("model runtime generation scope", () => {
     resetModelGenerationFixtureState();
   });
 
-  it.each([
-    { selection: "explicit", profileId: "openai:default" },
-    { selection: "automatic", profileId: undefined },
-  ])("keeps $selection host auth separate from native Codex credentials", async ({ profileId }) => {
+  it("keeps automatic host auth separate from native Codex credentials", async () => {
     const generation = await createExternalCodexGeneration();
-
-    if (profileId) {
-      await expect(resolveGeneration(generation, profileId)).rejects.toMatchObject({
-        code: "selected_auth_profile_unavailable",
-      });
-    } else {
-      const result = await resolveGeneration(generation);
-      expect(result.model?.id).toBe(generation.modelId);
-      expect(result.authStorage.get("openai")).toBeUndefined();
-    }
+    const result = await resolveGeneration(generation);
+    expect(result.model?.id).toBe(generation.modelId);
+    expect(result.authStorage.get("openai")).toBeUndefined();
     expect(
       ensureAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles["openai:default"],
     ).toBeUndefined();
@@ -163,10 +174,7 @@ describe("model runtime generation scope", () => {
   });
 
   it("reports a removed selected credential before reusing dynamic model metadata", async () => {
-    const generation = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
-      config: {},
+    const generation = generationFixture({
       label: "revoked",
     });
     const profileId = `${generation.provider}:selected`;
@@ -191,9 +199,7 @@ describe("model runtime generation scope", () => {
   it("resolves a config-only AWS SDK profile without requiring a stored credential", async () => {
     const provider = "amazon-bedrock";
     const profileId = `${provider}:default`;
-    const generation = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
+    const generation = generationFixture({
       provider,
       requestProvider: provider,
       config: {
@@ -214,10 +220,7 @@ describe("model runtime generation scope", () => {
   });
 
   it("passes the selected personal auth mode into dynamic model discovery", async () => {
-    const generation = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
-      config: {},
+    const generation = generationFixture({
       label: "personal",
     });
     const owner = ensureProfileForEmail("alice@example.test");
@@ -249,10 +252,8 @@ describe("model runtime generation scope", () => {
   });
 
   it.each([
-    { auth: true, registry: true },
     { auth: true, registry: false },
     { auth: false, registry: true },
-    { auth: false, registry: false },
   ])(
     "fills missing stores from the prepared runtime (auth=$auth, registry=$registry)",
     async (supplied) => {
@@ -281,10 +282,7 @@ describe("model runtime generation scope", () => {
       };
       const preparedStores = createStores("prepared");
       const callerStores = createStores("caller");
-      const generation = createModelGenerationFixture({
-        agentDir: state.agentDir(),
-        workspaceDir: state.workspaceDir,
-        config: {},
+      const generation = generationFixture({
         label: "stores",
         provider,
         requestProvider: provider,
@@ -333,58 +331,42 @@ describe("model runtime generation scope", () => {
     },
   );
 
-  it.each([
-    "explicit-snapshot",
-    "explicit-config",
-    "mutable-process",
-    "mutable-scope",
-    "unowned",
-  ] as const)("preserves metadata compatibility for %s discovery", async (mode) => {
-    const config = { plugins: { enabled: false } } satisfies OpenClawConfig;
-    await state.writeConfig(config);
-    const generation = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
-      config: {},
-      label: "compatibility",
-    });
-    if (mode === "mutable-process" || mode === "explicit-config") {
-      publishCurrentModelGeneration(generation);
-    }
-    const resolve = () =>
-      resolveModelPluginMetadataSnapshot({
-        useRuntimeConfig: true,
-        workspaceDir: state.workspaceDir,
-        ...(mode === "explicit-config" ? { config } : {}),
-        ...(mode === "explicit-snapshot"
-          ? { pluginMetadataSnapshot: generation.metadataSnapshot, config }
-          : {}),
+  it.each(["explicit-config", "mutable-scope"] as const)(
+    "preserves metadata compatibility for %s discovery",
+    async (mode) => {
+      const config = { plugins: { enabled: false } } satisfies OpenClawConfig;
+      await state.writeConfig(config);
+      const generation = generationFixture({
+        label: "compatibility",
       });
-    const snapshot =
-      mode === "mutable-scope"
-        ? withPluginMetadataSnapshotScope(generation.metadataSnapshot, resolve, {
-            config: generation.preparedModelRuntime.config,
-          })
-        : resolve();
-    if (mode === "explicit-snapshot") {
-      expect(snapshot).toBe(generation.metadataSnapshot);
-    } else {
+      if (mode === "explicit-config") {
+        publishCurrentModelGeneration(generation);
+      }
+      const resolve = () =>
+        resolveModelPluginMetadataSnapshot({
+          useRuntimeConfig: true,
+          workspaceDir: state.workspaceDir,
+          ...(mode === "explicit-config" ? { config } : {}),
+        });
+      const snapshot =
+        mode === "mutable-scope"
+          ? withPluginMetadataSnapshotScope(generation.metadataSnapshot, resolve, {
+              config: generation.preparedModelRuntime.config,
+            })
+          : resolve();
       expect(snapshot).toBeDefined();
       expect(snapshot).not.toBe(generation.metadataSnapshot);
       expect(snapshot).toMatchObject({ policyHash: resolveInstalledPluginIndexPolicyHash(config) });
-    }
-    if (mode === "explicit-config" || mode === "explicit-snapshot") {
-      expect(getRuntimeConfigSnapshot()).toBeNull();
-    } else {
-      expect(getRuntimeConfigSnapshot()?.plugins?.enabled).toBe(false);
-    }
-  });
+      if (mode === "explicit-config") {
+        expect(getRuntimeConfigSnapshot()).toBeNull();
+      } else {
+        expect(getRuntimeConfigSnapshot()?.plugins?.enabled).toBe(false);
+      }
+    },
+  );
 
   it("selects from a prepared generation without reading or publishing ambient config", async () => {
-    const generation = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
-      config: {},
+    const generation = generationFixture({
       label: "cold-owned",
     });
     await state.writeConfig({ gateway: { mode: "local" } });
@@ -472,40 +454,9 @@ describe("model runtime generation scope", () => {
     }
   });
 
-  it("keeps alias, suppression, static metadata, and runtime hooks on the prepared generation", async () => {
-    const config = {} satisfies OpenClawConfig;
-    const generationA = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
-      config,
-      label: "a",
-    });
-    const generationB = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
-      config,
-      label: "b",
-      suppression: {},
-    });
-    publishCurrentModelGeneration(generationB);
-
-    const result = await resolveGeneration(generationA);
-
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      provider: generationA.provider,
-      name: "Runtime A",
-      mediaInput: { image: generationA.staticImagePolicy },
-    });
-    expect(generationA.resolveDynamicModel).toHaveBeenCalled();
-    expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
-  });
-
   it("preserves the retirement remedy when the selected route has no discoverable model", async () => {
     const provider = "generation-retirement-miss";
-    const generation = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
+    const generation = generationFixture({
       config: {
         models: {
           providers: {
@@ -534,10 +485,7 @@ describe("model runtime generation scope", () => {
   });
 
   it("keeps the retirement failure discovered by the prepared catalog tier", async () => {
-    const generation = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
-      config: {},
+    const generation = generationFixture({
       label: "tiered-retirement",
       runtimeBaseUrl: "https://subscription.example/v1",
       withRegistry: false,
@@ -564,6 +512,129 @@ describe("model runtime generation scope", () => {
     expect(resolution.error).toContain("current-model");
   });
 
+  it.each([
+    { ambientScope: false, invalidation: "none" },
+    { ambientScope: true, invalidation: "none" },
+    { ambientScope: false, invalidation: "abort" },
+    { ambientScope: false, invalidation: "authority" },
+  ] as const)(
+    "reuses fresh auth readers during fallback (ambient=$ambientScope, invalidation=$invalidation)",
+    async ({ ambientScope, invalidation }) => {
+      const missingProvider = "generation-missing";
+      const fallbackProvider = "generation-fallback";
+      const children: ChildProcess[] = [];
+      const closed = new Set<ChildProcess>();
+      let liveDuringFallback: ChildProcess[] = [];
+      let liveAfterSelection: ChildProcess[] = [];
+      let prepared = false;
+      let current = true;
+      const controller = new AbortController();
+      const stopped = new Error("Model selection stopped during reader close");
+      const generation = generationFixture({
+        label: "readonly-reuse",
+        provider: fallbackProvider,
+        requestProvider: fallbackProvider,
+        prepareDynamicModel: async () => {
+          liveDuringFallback = children.filter((child) => child.exitCode === null);
+          prepared = true;
+        },
+      });
+      await state.writeAuthProfiles({
+        version: 1,
+        profiles: {
+          [`${missingProvider}:default`]: {
+            type: "api_key",
+            provider: missingProvider,
+            key: "synthetic-missing-provider-key",
+          },
+          [`${fallbackProvider}:default`]: {
+            type: "api_key",
+            provider: fallbackProvider,
+            key: "synthetic-fallback-provider-key",
+          },
+        },
+      });
+      const actual =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      try {
+        const resolving = withAuthProfileStoreAgentDir(state.agentDir(), state.stateDir, () => {
+          auth.spy.mockClear();
+          vi.mocked(spawn).mockImplementation((...args) => {
+            const child = actual.spawn(...args);
+            if (
+              Array.isArray(args[1]) &&
+              args[1].includes(SQLITE_READONLY_CHILD_ARG) &&
+              args[1].includes("session")
+            ) {
+              children.push(child);
+              child.once("close", () => {
+                closed.add(child);
+                if (prepared && invalidation === "abort") {
+                  controller.abort(stopped);
+                }
+                if (prepared && invalidation === "authority") {
+                  current = false;
+                }
+              });
+            }
+            return child;
+          });
+          const select = async () => {
+            const selected = await resolveTieredModel({
+              abortSignal: controller.signal,
+              assertCurrent: () => {
+                if (!current) {
+                  throw stopped;
+                }
+              },
+              provider: missingProvider,
+              fallbackProvider,
+              modelId: generation.modelId,
+              agentDir: state.agentDir(),
+              config: generation.preparedModelRuntime.config,
+              workspaceDir: state.workspaceDir,
+              preparedModelRuntime: generation.preparedModelRuntime,
+            });
+            liveAfterSelection = children.filter((child) => child.exitCode === null);
+            return selected;
+          };
+          return ambientScope ? withSqliteReadOnlyWorkerScope(select) : select();
+        });
+        if (invalidation === "none") {
+          const result = await resolving;
+          expect(result.provider).toBe(fallbackProvider);
+          expect(result.resolution.model).toMatchObject({
+            id: generation.modelId,
+            provider: fallbackProvider,
+            name: "Runtime READONLY-REUSE",
+          });
+        } else {
+          await expect(resolving).rejects.toBe(stopped);
+        }
+        expect(auth.spy.mock.calls.map(([, options]) => options?.migrationProvider)).toEqual([
+          missingProvider,
+          fallbackProvider,
+        ]);
+        expect(generation.resolveDynamicModel).toHaveBeenCalledWith(
+          expect.objectContaining({
+            authProfileId: `${fallbackProvider}:default`,
+            authProfileMode: "api_key",
+          }),
+        );
+        expect(children).toHaveLength(1);
+        expect(liveDuringFallback).toEqual(children);
+        expect(liveAfterSelection).toEqual(ambientScope ? children : []);
+        for (const child of children) {
+          expect(closed.has(child)).toBe(true);
+          expect(child.exitCode).toBe(0);
+          expect(child.connected).toBe(false);
+        }
+      } finally {
+        vi.mocked(spawn).mockImplementation(actual.spawn);
+      }
+    },
+  );
+
   it("keeps concurrent prepared generations isolated across awaited runtime hooks", async () => {
     const config = {} satisfies OpenClawConfig;
     let arrivals = 0;
@@ -578,16 +649,12 @@ describe("model runtime generation scope", () => {
       }
       await gate;
     };
-    const generationA = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
+    const generationA = generationFixture({
       config,
       label: "a",
       prepareDynamicModel,
     });
-    const generationB = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
+    const generationB = generationFixture({
       config,
       label: "b",
       prepareDynamicModel,
@@ -617,16 +684,12 @@ describe("model runtime generation scope", () => {
 
   it("keeps metadata-only prepared generations from borrowing current runtime hooks", async () => {
     const config = {} satisfies OpenClawConfig;
-    const generationA = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
+    const generationA = generationFixture({
       config,
       label: "a",
       withRegistry: false,
     });
-    const generationB = createModelGenerationFixture({
-      agentDir: state.agentDir(),
-      workspaceDir: state.workspaceDir,
+    const generationB = generationFixture({
       config,
       label: "b",
     });

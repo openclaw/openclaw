@@ -1,4 +1,3 @@
-// Control UI chat module implements chat avatar behavior.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { isReservedSystemAgentId } from "../../../../src/system-agent/agent-id.js";
@@ -13,6 +12,7 @@ import {
 import {
   identityAvatarClass,
   renderAgentIdentityAvatar,
+  renderAgentAvatarHat,
   renderIdentityAvatarImage,
   resolveIdentityAvatarView,
 } from "../../components/identity-avatar-view.ts";
@@ -146,7 +146,7 @@ function renderAgentAvatar(
       fallbackSelector: ".chat-avatar-slot",
       className: "chat-avatar assistant",
       alt: name,
-    })}${fallback}
+    })}${fallback}${renderAgentAvatarHat(id)}
   </span>`;
 }
 
@@ -231,7 +231,7 @@ function readHelloDefaultAgentId(host: Pick<ChatAvatarHost, "hello">): string | 
 
 export function resolveAgentIdForSession(
   host: Pick<ChatAvatarHost, "sessionKey" | "assistantAgentId" | "agentsList" | "hello">,
-): string | null {
+): string {
   const parsed = parseAgentSessionKey(host.sessionKey);
   if (parsed?.agentId) {
     return parsed.agentId;
@@ -243,23 +243,9 @@ export function resolveAgentIdForSession(
 }
 
 function beginChatAvatarRequest(host: ChatAvatarHost): number {
-  const key = host as object;
-  const nextVersion = (chatAvatarRequestVersions.get(key) ?? 0) + 1;
-  chatAvatarRequestVersions.set(key, nextVersion);
+  const nextVersion = (chatAvatarRequestVersions.get(host) ?? 0) + 1;
+  chatAvatarRequestVersions.set(host, nextVersion);
   return nextVersion;
-}
-
-function shouldApplyChatAvatarResult(
-  host: ChatAvatarHost,
-  version: number,
-  sessionKey: string,
-  agentId: string | null,
-): boolean {
-  return (
-    chatAvatarRequestVersions.get(host as object) === version &&
-    host.sessionKey === sessionKey &&
-    resolveAgentIdForSession(host) === agentId
-  );
 }
 
 function clearChatAvatarState(host: ChatAvatarHost) {
@@ -270,18 +256,6 @@ function clearChatAvatarState(host: ChatAvatarHost) {
   host.chatAvatarSource = null;
   host.chatAvatarStatus = null;
   host.chatAvatarReason = null;
-}
-
-function applyChatAvatarSnapshot(
-  host: ChatAvatarHost,
-  agentId: string,
-  snapshot: ChatAvatarSnapshot,
-): void {
-  host.chatAvatarSource = snapshot.source;
-  host.chatAvatarStatus = snapshot.status;
-  host.chatAvatarReason = snapshot.reason;
-  host.chatAvatarUrl = snapshot.url;
-  chatAvatarDisplayedAgents.set(host as object, agentId);
 }
 
 function rememberChatAvatarReference(
@@ -460,10 +434,6 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
   const epoch = host.connectionEpoch;
   const requestVersion = beginChatAvatarRequest(host);
   const agentId = resolveAgentIdForSession(host);
-  if (!agentId) {
-    clearChatAvatarState(host);
-    return;
-  }
   const showingSameAgent = chatAvatarDisplayedAgents.get(host) === agentId;
   if (!showingSameAgent) {
     clearChatAvatarState(host);
@@ -473,14 +443,20 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
     !host.connected ||
     host.client !== client ||
     host.connectionEpoch !== epoch ||
-    !shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)
+    chatAvatarRequestVersions.get(host) !== requestVersion ||
+    host.sessionKey !== sessionKey ||
+    resolveAgentIdForSession(host) !== agentId
   ) {
     snapshot?.release();
     return;
   }
   if (snapshot) {
     rememberChatAvatarReference(host, currentAvatarReference, snapshot.release);
-    applyChatAvatarSnapshot(host, agentId, snapshot);
+    host.chatAvatarSource = snapshot.source;
+    host.chatAvatarStatus = snapshot.status;
+    host.chatAvatarReason = snapshot.reason;
+    host.chatAvatarUrl = snapshot.url;
+    chatAvatarDisplayedAgents.set(host, agentId);
   } else if (!showingSameAgent) {
     clearChatAvatarState(host);
   }

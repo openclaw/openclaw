@@ -43,9 +43,10 @@ const sessionSkillCases: Array<{
 
 describe("skills/filter", () => {
   it("normalizes configured filters with trimming", () => {
-    expect(normalizeSkillFilter([" weather ", "", "meme-factory"])).toEqual([
+    expect(normalizeSkillFilter([" weather ", "", "meme-factory", " weather "])).toEqual([
       "weather",
       "meme-factory",
+      "weather",
     ]);
   });
 
@@ -54,12 +55,41 @@ describe("skills/filter", () => {
     expect(normalizeSkillFilter(undefined)).toBeUndefined();
   });
 
-  it("matches equivalent filters after normalization", () => {
-    expect(matchesSkillFilter(["weather", "meme-factory"], [" meme-factory ", "weather"])).toBe(
-      true,
-    );
-    expect(matchesSkillFilter(undefined, undefined)).toBe(true);
-    expect(matchesSkillFilter([], undefined)).toBe(false);
+  it.each([
+    {
+      name: "reordered duplicates",
+      cached: ["weather", "meme-factory"],
+      next: [" meme-factory ", "weather", "weather"],
+      expected: true,
+    },
+    { name: "both absent", cached: undefined, next: undefined, expected: true },
+    { name: "both empty", cached: [], next: [], expected: true },
+    { name: "empty versus absent", cached: [], next: undefined, expected: false },
+    { name: "absent versus empty", cached: undefined, next: [], expected: false },
+    { name: "blank entries", cached: ["", "   "], next: [], expected: true },
+    {
+      name: "different membership",
+      cached: ["weather", "meme-factory"],
+      next: ["weather", "other"],
+      expected: false,
+    },
+    { name: "case-sensitive names", cached: ["Weather"], next: ["weather"], expected: false },
+    {
+      name: "string coercion",
+      cached: [42, null, false],
+      next: [" 42 ", "null", "false"],
+      expected: true,
+    },
+  ])("compares $name", ({ cached, next, expected }) => {
+    expect(matchesSkillFilter(cached, next)).toBe(expected);
+  });
+
+  it("normalizes both inputs in order even when they share an array", () => {
+    const values = ["weather", "other"];
+    const entry = { toString: () => values.shift() ?? "" };
+    const filter = Object.freeze([entry]);
+    expect(matchesSkillFilter(filter, filter)).toBe(false);
+    expect(values).toEqual([]);
   });
 
   it.each(sessionSkillCases)("$name", ({ skill, skillKey, base, overrides, expected }) => {

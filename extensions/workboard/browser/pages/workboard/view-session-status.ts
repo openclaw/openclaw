@@ -3,12 +3,8 @@ import { t } from "../../i18n/index.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
 import { getCardStaleAgeMs } from "../../lib/workboard/card-alerts.ts";
 import { getCardSessionState, type CardSessionState } from "../../lib/workboard/session-state.ts";
-import type {
-  WorkboardCard,
-  WorkboardLifecycle,
-  WorkboardTaskSummary,
-} from "../../lib/workboard/types.ts";
-import { formatLifecycle, taskMatchesLifecycle } from "./view-helpers.ts";
+import type { WorkboardCard, WorkboardLifecycle } from "../../lib/workboard/types.ts";
+import { formatLifecycle } from "./view-helpers.ts";
 
 export type SessionStatusPresentation = {
   state: CardSessionState;
@@ -22,13 +18,10 @@ export type SessionStatusPresentation = {
 export function getSessionStatus(
   card: WorkboardCard,
   lifecycle: WorkboardLifecycle,
-  task?: WorkboardTaskSummary,
   now = Date.now(),
 ): SessionStatusPresentation {
-  const formatted = formatLifecycle(lifecycle, task);
-  const authoritative = task && taskMatchesLifecycle(task, lifecycle) ? task : undefined;
-  const state = getCardSessionState(lifecycle, task);
-  const sessionName = lifecycle.session?.displayName ?? lifecycle.session?.label ?? task?.title;
+  const formatted = formatLifecycle(lifecycle);
+  const state = getCardSessionState(lifecycle);
   const key = state === "succeeded" ? "done" : state === "timed_out" ? "timedOut" : state;
   const staleAgeMs = state === "stale" ? getCardStaleAgeMs(card, lifecycle, now) : undefined;
   const staleAge =
@@ -47,11 +40,7 @@ export function getSessionStatus(
     detail: [
       ...new Set(
         [
-          state === "succeeded" && !authoritative ? undefined : formatted.detail,
-          authoritative?.title !== sessionName ? authoritative?.title : undefined,
-          authoritative?.progressSummary,
-          authoritative?.terminalSummary,
-          authoritative?.error,
+          state === "succeeded" ? undefined : formatted.detail,
           lifecycle.state === "stale" ? card.metadata?.stale?.reason : undefined,
           card.execution?.engine,
           card.execution?.mode,

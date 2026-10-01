@@ -72,7 +72,10 @@ function poolFor(state: GitWorkerRuntime, command: GitWorkerCommand): GitPool {
         ? "worktrees"
         : command.type.startsWith("workspace.")
           ? "workspace"
-          : command.type === "repository.branches" || command.type === "checkout.context"
+          : command.type === "repository.branches" ||
+              command.type === "repository.identities" ||
+              command.type === "checkout.context" ||
+              command.type === "checkout.revision"
             ? "reads"
             : "content";
   // Preparation can hold the allocation lease; unrelated maintenance must not block it.
@@ -127,6 +130,17 @@ export async function runGitWorkerOperation<Command extends GitWorkerCommand>(
     ? structuredClone(command, { transfer: [...new Set(transferList)] })
     : structuredClone(command);
   const baseEnv = { ...process.env };
+  // Pooled workers do not inherit later environment changes. Git discovery
+  // overrides must disable direct metadata reads for this admission too.
+  admitted.filesystemRefs =
+    options.git === undefined &&
+    !Object.entries(baseEnv).some(
+      ([key, value]) =>
+        value !== undefined &&
+        /^(GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM|GIT_NAMESPACE)$/i.test(
+          key,
+        ),
+    );
   const operation = executeOperation(poolFor(state, admitted), admitted, baseEnv, {
     ...options,
     git: options.git ? { text: options.git.text, buffered: options.git.buffered } : undefined,
@@ -160,34 +174,18 @@ async function executeOperation(
       const effect = value as GitWorkerHostRequest;
       let result: unknown;
       const transferList: Transferable[] = [];
-      if (effect.type === "git.text") {
-        const output = await (options.git?.text ?? runGitBytes)(
-          effect.input.cwd,
-          effect.input.args,
-          {
-            ...effect.input.options,
-            baseEnv,
-            signal,
-            beforeRun: options.assertCurrent,
-            killProcessTree: true,
-          },
-        );
-        const stdout = ownedWorkerBytes(output.stdout);
-        const stderr = ownedWorkerBytes(output.stderr);
-        result = { ...output, stdout, stderr };
-        transferList.push(stdout.buffer, stderr.buffer);
-      } else if (effect.type === "git.buffer") {
-        const output = await (options.git?.buffered ?? runGitBuffered)(
-          effect.input.cwd,
-          effect.input.args,
-          {
-            ...effect.input.options,
-            baseEnv,
-            signal,
-            beforeRun: options.assertCurrent,
-            killProcessTree: true,
-          },
-        );
+      if (effect.type === "git.text" || effect.type === "git.buffer") {
+        const run =
+          effect.type === "git.text"
+            ? (options.git?.text ?? runGitBytes)
+            : (options.git?.buffered ?? runGitBuffered);
+        const output = await run(effect.input.cwd, effect.input.args, {
+          ...effect.input.options,
+          baseEnv,
+          signal,
+          beforeRun: options.assertCurrent,
+          killProcessTree: true,
+        });
         const stdout = ownedWorkerBytes(output.stdout);
         const stderr = ownedWorkerBytes(output.stderr);
         result = { ...output, stdout, stderr };

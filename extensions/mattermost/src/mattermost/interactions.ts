@@ -1,4 +1,3 @@
-// Mattermost plugin module implements interactions behavior.
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
@@ -7,6 +6,7 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getMattermostRuntime } from "../runtime.js";
 import { isWildcardBindHost } from "./callback-host.js";
 import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
@@ -62,8 +62,6 @@ export type MattermostInteractiveButtonInput = {
   context?: Record<string, unknown>;
 };
 
-// ── Callback URL registry ──────────────────────────────────────────────
-
 const callbackUrls = new Map<string, string>();
 
 export function setInteractionCallbackUrl(accountId: string, url: string): void {
@@ -78,10 +76,6 @@ type InteractionCallbackConfig = Pick<OpenClawConfig, "gateway" | "channels"> & 
 
 export function resolveInteractionCallbackPath(accountId: string): string {
   return `/mattermost/interactions/${accountId}`;
-}
-
-function normalizeCallbackBaseUrl(baseUrl: string): string {
-  return baseUrl.trim().replace(/\/+$/, "");
 }
 
 function headerValue(value: string | string[] | undefined): string | undefined {
@@ -127,7 +121,7 @@ export function computeInteractionCallbackUrl(
     normalizeOptionalString(cfg?.interactions?.callbackBaseUrl) ??
     normalizeOptionalString(cfg?.channels?.mattermost?.interactions?.callbackBaseUrl);
   if (callbackBaseUrl) {
-    return `${normalizeCallbackBaseUrl(callbackBaseUrl)}${path}`;
+    return `${callbackBaseUrl.replace(/\/+$/, "")}${path}`;
   }
   const port = resolveGatewayPort(cfg);
   let host =
@@ -159,32 +153,22 @@ export function resolveInteractionCallbackUrl(
   return computeInteractionCallbackUrl(accountId, cfg);
 }
 
-// ── HMAC token management ──────────────────────────────────────────────
 // Secret is derived from the bot token so it's stable across CLI and gateway processes.
 
 const interactionSecrets = new Map<string, string>();
-let defaultInteractionSecret: string | undefined;
 
 function deriveInteractionSecret(botToken: string): string {
   return createHmac("sha256", "openclaw-mattermost-interactions").update(botToken).digest("hex");
 }
 
-export function setInteractionSecret(accountIdOrBotToken: string, botToken?: string): void {
-  if (typeof botToken === "string") {
-    interactionSecrets.set(accountIdOrBotToken, deriveInteractionSecret(botToken));
-    return;
-  }
-  // Backward-compatible fallback for call sites/tests that only pass botToken.
-  defaultInteractionSecret = deriveInteractionSecret(accountIdOrBotToken);
+export function setInteractionSecret(accountId: string, botToken: string): void {
+  interactionSecrets.set(accountId, deriveInteractionSecret(botToken));
 }
 
 function getInteractionSecret(accountId?: string): string {
   const scoped = accountId ? interactionSecrets.get(accountId) : undefined;
   if (scoped) {
     return scoped;
-  }
-  if (defaultInteractionSecret) {
-    return defaultInteractionSecret;
   }
   // Fallback for single-account runtimes that only registered scoped secrets.
   if (interactionSecrets.size === 1) {
@@ -218,17 +202,6 @@ function generateInteractionToken(context: Record<string, unknown>, accountId?: 
   return createHmac("sha256", secret).update(payload).digest("hex");
 }
 
-function verifyInteractionToken(
-  context: Record<string, unknown>,
-  token: string,
-  accountId?: string,
-): boolean {
-  const expected = generateInteractionToken(context, accountId);
-  return safeEqualSecret(expected, token);
-}
-
-// ── Button builder helpers ─────────────────────────────────────────────
-
 type MattermostButton = {
   id: string;
   type: "button" | "select";
@@ -246,13 +219,6 @@ type MattermostAttachment = {
   [key: string]: unknown;
 };
 
-/**
- * Build Mattermost `props.attachments` with interactive buttons.
- *
- * Each button includes an HMAC token in its integration context so the
- * callback handler can verify the request originated from a legitimate
- * button click (Mattermost's recommended security pattern).
- */
 /**
  * Sanitize a button ID so Mattermost's action router can match it.
  * Mattermost uses the action ID in the URL path `/api/v4/posts/{id}/actions/{actionId}`
@@ -344,22 +310,18 @@ export function buildButtonProps(params: {
   };
 }
 
-// ── Request body reader ────────────────────────────────────────────────
-
-function readInteractionBody(req: IncomingMessage): Promise<string> {
-  return readRequestBodyWithLimit(req, {
-    maxBytes: INTERACTION_MAX_BODY_BYTES,
-    timeoutMs: INTERACTION_BODY_TIMEOUT_MS,
-    // Defer destruction so the rejection below reaches Mattermost before the close.
-    destroyOnLimit: false,
-  });
+function sendInteractionResponse(
+  res: ServerResponse,
+  statusCode: number,
+  body: MattermostInteractionResponse | { error: string },
+): void {
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify(body));
 }
-
-// ── HTTP handler ───────────────────────────────────────────────────────
 
 export function createMattermostInteractionHandler(params: {
   client: MattermostClient;
-  botUserId: string;
   accountId: string;
   allowedSourceIps?: string[];
   trustedProxies?: string[];
@@ -397,15 +359,14 @@ export function createMattermostInteractionHandler(params: {
   const core = getMattermostRuntime();
 
   function parseInteractionPayload(raw: string): MattermostInteractionPayload {
-    try {
-      return JSON.parse(raw) as MattermostInteractionPayload;
-    } catch {
+    const payload = safeParseJson<MattermostInteractionPayload>(raw);
+    if (payload === null) {
       throw new Error("Mattermost interaction body was malformed JSON");
     }
+    return payload;
   }
 
   return async (req: IncomingMessage, res: ServerResponse) => {
-    // Only accept POST
     if (req.method !== "POST") {
       res.statusCode = 405;
       res.setHeader("Allow", "POST");
@@ -425,15 +386,18 @@ export function createMattermostInteractionHandler(params: {
       log?.(
         `mattermost interaction: rejected callback source remote=${req.socket?.remoteAddress ?? "?"}`,
       );
-      res.statusCode = 403;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Forbidden origin" }));
+      sendInteractionResponse(res, 403, { error: "Forbidden origin" });
       return;
     }
 
     let payload: MattermostInteractionPayload;
     try {
-      const raw = await readInteractionBody(req);
+      const raw = await readRequestBodyWithLimit(req, {
+        maxBytes: INTERACTION_MAX_BODY_BYTES,
+        timeoutMs: INTERACTION_BODY_TIMEOUT_MS,
+        // Defer destruction so the rejection below reaches Mattermost before the close.
+        destroyOnLimit: false,
+      });
       payload = parseInteractionPayload(raw);
     } catch (err) {
       log?.(`mattermost interaction: failed to parse body: ${String(err)}`);
@@ -457,45 +421,34 @@ export function createMattermostInteractionHandler(params: {
         );
         return;
       }
-      res.statusCode = 400;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Invalid request body" }));
+      sendInteractionResponse(res, 400, { error: "Invalid request body" });
       return;
     }
 
     const context = payload.context;
     if (!context) {
-      res.statusCode = 400;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Missing context" }));
+      sendInteractionResponse(res, 400, { error: "Missing context" });
       return;
     }
 
-    // Verify HMAC token
     const token = context["_token"];
     if (typeof token !== "string") {
       log?.("mattermost interaction: missing _token in context");
-      res.statusCode = 403;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Missing token" }));
+      sendInteractionResponse(res, 403, { error: "Missing token" });
       return;
     }
 
     // Strip _token before verification (it wasn't in the original context)
     const { _token, ...contextWithoutToken } = context;
-    if (!verifyInteractionToken(contextWithoutToken, token, accountId)) {
+    if (!safeEqualSecret(generateInteractionToken(contextWithoutToken, accountId), token)) {
       log?.("mattermost interaction: invalid _token");
-      res.statusCode = 403;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Invalid token" }));
+      sendInteractionResponse(res, 403, { error: "Invalid token" });
       return;
     }
 
     const actionId = context.action_id;
     if (typeof actionId !== "string") {
-      res.statusCode = 400;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Missing action_id in context" }));
+      sendInteractionResponse(res, 400, { error: "Missing action_id in context" });
       return;
     }
 
@@ -507,15 +460,13 @@ export function createMattermostInteractionHandler(params: {
       log?.(
         `mattermost interaction: signed channel mismatch payload=${payload.channel_id} signed=${signedChannelId}`,
       );
-      res.statusCode = 403;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Channel mismatch" }));
+      sendInteractionResponse(res, 403, { error: "Channel mismatch" });
       return;
     }
 
     const userName = payload.user_name ?? payload.user_id;
     let originalMessage;
-    let originalPost: MattermostPost | null;
+    let originalPost: MattermostPost;
     let clickedButtonName: string | null = null;
     try {
       originalPost = await client.request<MattermostPost>(`/posts/${payload.post_id}`);
@@ -524,9 +475,7 @@ export function createMattermostInteractionHandler(params: {
         log?.(
           `mattermost interaction: post channel mismatch payload=${payload.channel_id} post=${postChannelId ?? "<missing>"}`,
         );
-        res.statusCode = 403;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Post/channel mismatch" }));
+        sendInteractionResponse(res, 403, { error: "Post/channel mismatch" });
         return;
       }
       originalMessage = originalPost.message ?? "";
@@ -546,24 +495,12 @@ export function createMattermostInteractionHandler(params: {
       }
       if (clickedButtonName === null) {
         log?.(`mattermost interaction: action ${actionId} not found in post ${payload.post_id}`);
-        res.statusCode = 403;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Unknown action" }));
+        sendInteractionResponse(res, 403, { error: "Unknown action" });
         return;
       }
     } catch (err) {
       log?.(`mattermost interaction: failed to validate post ${payload.post_id}: ${String(err)}`);
-      res.statusCode = 500;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Failed to validate interaction" }));
-      return;
-    }
-
-    if (!originalPost) {
-      log?.(`mattermost interaction: missing fetched post ${payload.post_id}`);
-      res.statusCode = 500;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Failed to load interaction post" }));
+      sendInteractionResponse(res, 500, { error: "Failed to validate interaction" });
       return;
     }
 
@@ -579,22 +516,18 @@ export function createMattermostInteractionHandler(params: {
           post: originalPost,
         });
         if (!authorization.ok) {
-          res.statusCode = authorization.statusCode ?? 200;
-          res.setHeader("Content-Type", "application/json");
-          res.end(
-            JSON.stringify(
-              authorization.response ?? {
-                ephemeral_text: "You are not allowed to use this action here.",
-              },
-            ),
+          sendInteractionResponse(
+            res,
+            authorization.statusCode ?? 200,
+            authorization.response ?? {
+              ephemeral_text: "You are not allowed to use this action here.",
+            },
           );
           return;
         }
       } catch (err) {
         log?.(`mattermost interaction: authorization failed: ${String(err)}`);
-        res.statusCode = 500;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Interaction authorization failed" }));
+        sendInteractionResponse(res, 500, { error: "Interaction authorization failed" });
         return;
       }
     }
@@ -611,16 +544,12 @@ export function createMattermostInteractionHandler(params: {
           post: originalPost,
         });
         if (response !== null) {
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify(response));
+          sendInteractionResponse(res, 200, response);
           return;
         }
       } catch (err) {
         log?.(`mattermost interaction: custom handler failed: ${String(err)}`);
-        res.statusCode = 500;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Interaction handler failed" }));
+        sendInteractionResponse(res, 500, { error: "Interaction handler failed" });
         return;
       }
     }
@@ -650,7 +579,6 @@ export function createMattermostInteractionHandler(params: {
       log?.(`mattermost interaction: system event dispatch failed: ${String(err)}`);
     }
 
-    // Update the post via API to replace buttons with a completion indicator.
     try {
       await updateMattermostPost(client, payload.post_id, {
         message: originalMessage,
@@ -666,10 +594,7 @@ export function createMattermostInteractionHandler(params: {
       log?.(`mattermost interaction: failed to update post ${payload.post_id}: ${String(err)}`);
     }
 
-    // Respond with empty JSON — the post update is handled above
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "application/json");
-    res.end("{}");
+    sendInteractionResponse(res, 200, {});
 
     // Dispatch a synthetic inbound message so the agent responds to the button click.
     if (params.dispatchButtonClick) {

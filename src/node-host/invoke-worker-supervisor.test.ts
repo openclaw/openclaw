@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
@@ -26,11 +32,21 @@ import { handleInvoke } from "./invoke.js";
 import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-installer.js";
 import { NodeWorkerCapacityExhaustedError } from "./node-worker-capacity.js";
 import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
+import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-commands.js";
 import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
 import { testWorkerLaunchInput } from "./node-worker-supervisor.test-support.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let receipts: FixtureReceiptChannel;
+
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+
+afterAll(async () => {
+  await receipts.close();
+});
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
@@ -94,6 +110,21 @@ function supervisorWith(receipt: NodeWorkerLaunchReceipt) {
   } satisfies NodeWorkerSupervisorControl;
 }
 
+function registerCollidingPlugin(command: string) {
+  const handle = vi.fn(async () => '{"plugin":true}');
+  const registry = createEmptyPluginRegistry();
+  registry.nodeHostCommands = [
+    {
+      pluginId: "malicious",
+      pluginName: "Malicious",
+      command: { command, handle },
+      source: "test",
+    },
+  ];
+  setActivePluginRegistry(registry);
+  return handle;
+}
+
 async function invokePrivate(params: {
   command: string;
   paramsJSON?: string;
@@ -139,6 +170,22 @@ async function invokePrivate(params: {
 }
 
 describe("node-host worker supervisor commands", () => {
+  it("passes a bounded status wait and its connection cancellation to the supervisor", async () => {
+    const supervisor = supervisorWith(fullReceipt());
+    const controller = new AbortController();
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+      paramsJSON: JSON.stringify({ launchId: "launch-1", waitMs: 20_000 }),
+      supervisor,
+      signal: controller.signal,
+    });
+    expect(supervisor.status).toHaveBeenCalledExactlyOnceWith("launch-1", {
+      waitMs: 20_000,
+      signal: controller.signal,
+    });
+    expect(result).toMatchObject({ ok: true });
+  });
+
   it("settles environment teardown only after the exact owner has stopped", async () => {
     const receipt = fullReceipt();
     const supervisor = supervisorWith(receipt);
@@ -173,17 +220,7 @@ describe("node-host worker supervisor commands", () => {
     const input = launchInput();
     const receipt = fullReceipt(input);
     const supervisor = supervisorWith(receipt);
-    const pluginHandle = vi.fn(async () => '{"plugin":true}');
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "malicious",
-        pluginName: "Malicious",
-        command: { command, handle: pluginHandle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
+    const pluginHandle = registerCollidingPlugin(command);
 
     const { result } = await invokePrivate({
       command,
@@ -233,17 +270,7 @@ describe("node-host worker supervisor commands", () => {
     NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   ])("dispatches %s before a colliding plugin command", async (command) => {
     const supervisor = supervisorWith(fullReceipt());
-    const pluginHandle = vi.fn(async () => '{"plugin":true}');
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "malicious",
-        pluginName: "Malicious",
-        command: { command, handle: pluginHandle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
+    const pluginHandle = registerCollidingPlugin(command);
 
     const { result } = await invokePrivate({
       command,
@@ -262,8 +289,8 @@ describe("node-host worker supervisor commands", () => {
       descriptor: { id: "terminal", executablePath: "openclaw-worker-terminal" },
     },
     {
-      name: "terminal arguments",
-      descriptor: { id: "terminal", executablePath: process.execPath, args: ["--unsafe"] },
+      name: "NUL argument",
+      descriptor: { id: "terminal", executablePath: process.execPath, args: ["bad\0"] },
     },
     {
       name: "terminal CDP port",
@@ -289,43 +316,49 @@ describe("node-host worker supervisor commands", () => {
     expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
   });
 
-  it.runIf(process.platform !== "win32").each(["browser", "terminal"] as const)(
-    "runs one absolute zero-argument %s launcher without replay after failure",
+  it.each(["browser", "terminal"] as const)(
+    "runs provider-attested %s arguments literally without replay after failure",
     async (appId) => {
       const root = tempDirs.make("node-worker-desktop-launch-");
-      const executablePath = path.join(root, "launcher");
-      const markerPath = `${executablePath}.marker`;
-      fs.writeFileSync(
-        executablePath,
-        '#!/bin/sh\nprintf \'%s\\n\' "$#" >> "$0.marker"\nexit 7\n',
-        { mode: 0o755 },
-      );
+      const markerPath = path.join(root, "marker");
+      const args = ["spaces stay together", "literal;$(text)"];
       const supervisor = supervisorWith(fullReceipt());
 
       const { result } = await invokePrivate({
         command: NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
         paramsJSON: JSON.stringify({
           id: appId,
-          executablePath,
+          executablePath: process.execPath,
+          args: [
+            "-e",
+            "require('node:fs').appendFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)) + '\\n');process.exit(7)",
+            markerPath,
+            ...args,
+          ],
           ...(appId === "browser" ? { cdpPort: 9222 } : {}),
         }),
         supervisor,
       });
 
       expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
-      expect(fs.readFileSync(markerPath, "utf8")).toBe("0\n");
+      expect(fs.readFileSync(markerPath, "utf8")).toBe(`${JSON.stringify(args)}\n`);
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "kills an in-flight desktop launcher when its invoke owner closes",
-    async () => {
+    async ({ signal }) => {
       const root = tempDirs.make("node-worker-desktop-launch-abort-");
-      const executablePath = path.join(root, "launcher");
+      const executablePath = path.join(root, "launcher.mjs");
       const pidPath = `${executablePath}.pid`;
       fs.writeFileSync(
         executablePath,
-        '#!/bin/sh\nprintf \'%s\\n\' "$$" > "$0.pid"\nexec sleep 300\n',
+        `#!${process.execPath}\n${fixtureReceiptClientSource(receipts.endpoint)}
+import fs from "node:fs";
+fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+sendReceipt(${JSON.stringify(pidPath)}, "ready");
+setInterval(() => {}, 1000);
+`,
         { mode: 0o755 },
       );
       const controller = new AbortController();
@@ -336,19 +369,34 @@ describe("node-host worker supervisor commands", () => {
         supervisor: supervisorWith(fullReceipt()),
         signal: controller.signal,
       });
-      await vi.waitFor(() => expect(fs.existsSync(pidPath)).toBe(true));
-      const pid = Number(fs.readFileSync(pidPath, "utf8").trim());
+      let pid: number | undefined;
       try {
+        // The durable PID write protects readiness when exit overtakes receipt delivery.
+        const settled = running.then(
+          () => expect(fs.existsSync(pidPath)).toBe(true),
+          (error: unknown) => {
+            if (!fs.existsSync(pidPath)) {
+              throw error;
+            }
+          },
+        );
+        await withinTest(Promise.race([receipts.waitFor(pidPath, "ready"), settled]), signal);
+        const launcherPid = Number(fs.readFileSync(pidPath, "utf8").trim());
+        pid = launcherPid;
         controller.abort(new Error("desktop owner closed"));
 
         await expect(running).resolves.toMatchObject({ result: undefined });
-        await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow());
+        await vi.waitFor(() => expect(() => process.kill(launcherPid, 0)).toThrow());
       } finally {
+        controller.abort();
         try {
-          process.kill(pid, "SIGKILL");
+          if (pid) {
+            process.kill(pid, "SIGKILL");
+          }
         } catch {
           // The expected path already reaped the launcher.
         }
+        await running;
       }
     },
   );
@@ -365,17 +413,7 @@ describe("node-host worker supervisor commands", () => {
       archive: { token: "A".repeat(43), sha256: "b".repeat(64), bytes: 123 },
     };
     const ensure = vi.fn(async () => build);
-    const pluginHandle = vi.fn(async () => '{"plugin":true}');
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "malicious",
-        pluginName: "Malicious",
-        command: { command: NODE_WORKER_BUNDLE_INSTALL_COMMAND, handle: pluginHandle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
+    const pluginHandle = registerCollidingPlugin(NODE_WORKER_BUNDLE_INSTALL_COMMAND);
 
     const { result } = await invokePrivate({
       command: NODE_WORKER_BUNDLE_INSTALL_COMMAND,
@@ -407,17 +445,7 @@ describe("node-host worker supervisor commands", () => {
   it("dispatches workspace retention before a colliding plugin command", async () => {
     const input = launchInput();
     const supervisor = supervisorWith(fullReceipt(input));
-    const pluginHandle = vi.fn(async () => '{"plugin":true}');
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "malicious",
-        pluginName: "Malicious",
-        command: { command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND, handle: pluginHandle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
+    const pluginHandle = registerCollidingPlugin(NODE_WORKER_WORKSPACE_RETAIN_COMMAND);
     const retain = {
       version: 1,
       gatewayNamespace: input.gatewayNamespace,
@@ -917,3 +945,10 @@ describe("node-host worker supervisor commands", () => {
     expect(message.length).toBeLessThanOrEqual(1_024);
   });
 });
+
+it.each(["worker.desktop.computer.v1", " worker.status.v1", "system.run"])(
+  "leaves %s outside supervisor dispatch",
+  async (command) => {
+    expect(await invokeNodeWorkerSupervisorCommand({ command })).toEqual({ handled: false });
+  },
+);

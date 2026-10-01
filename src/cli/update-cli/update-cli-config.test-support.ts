@@ -2,11 +2,75 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { onTestFinished, vi, type Mock } from "vitest";
+import type { runPostCorePluginConvergence } from "../../commands/doctor/shared/post-core-plugin-convergence.js";
 import type { readConfigFileSnapshot as ReadConfigFileSnapshot } from "../../config/config.js";
 import { resolveConfigPath } from "../../config/paths.js";
-import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import type {
+  OpenClawConfig,
+  ConfigFileSnapshot,
+  ConfigValidationIssue,
+} from "../../config/types.openclaw.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { writeJsonFixture } from "./update-cli-package.test-support.js";
+import type { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
+
+type PostCoreUpdateOptions = Parameters<typeof completePostCorePluginUpdate>[0];
+
+export function createChangedPostCoreUpdateOptions(
+  overrides: Partial<PostCoreUpdateOptions> = {},
+): PostCoreUpdateOptions {
+  return {
+    root: "/tmp/openclaw-updated-root",
+    pluginUpdate: {
+      status: "ok",
+      changed: true,
+      warnings: [],
+      sync: {
+        changed: false,
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+      npm: { changed: true, outcomes: [] },
+      integrityDrifts: [],
+    },
+    freshDoctorRequired: true,
+    yes: true,
+    json: true,
+    timeoutMs: 30_000,
+    ...overrides,
+  };
+}
+
+export function createConfigValidationFailure(
+  issues: readonly ConfigValidationIssue[],
+  message = "config invalid",
+) {
+  // Match the CLI issue envelope and an ordinary completed Execa failure.
+  return Object.assign(new Error(message), {
+    failed: true,
+    exitCode: 1,
+    stdout: JSON.stringify({ valid: false, issues }),
+  });
+}
+
+export function createUpdateCliBaseSnapshot(config: OpenClawConfig): ConfigFileSnapshot {
+  return {
+    path: "/tmp/openclaw-config.json",
+    exists: true,
+    raw: "{}",
+    parsed: {},
+    resolved: config,
+    sourceConfig: config,
+    valid: true,
+    config,
+    runtimeConfig: config,
+    issues: [],
+    warnings: [],
+    legacyIssues: [],
+  };
+}
 
 export const pluginSyncResult = (
   config: OpenClawConfig,
@@ -41,6 +105,8 @@ export const postCoreConvergenceResult = (
     errored: boolean;
   }> = {},
 ) => ({
+  configChanges: [],
+  installedPluginIdRecovery: new Map(),
   changes: [],
   warnings: [],
   errored: false,
@@ -48,6 +114,18 @@ export const postCoreConvergenceResult = (
   installRecords: {},
   ...overrides,
 });
+
+/** Return each call's config while overriding only the scenario's convergence outcome. */
+export function mockPostCoreConvergenceOnce(
+  spy: Pick<Mock<typeof runPostCorePluginConvergence>, "mockImplementationOnce">,
+  overrides: Partial<Awaited<ReturnType<typeof runPostCorePluginConvergence>>> = {},
+): void {
+  spy.mockImplementationOnce(async ({ cfg }) => ({
+    ...postCoreConvergenceResult(),
+    config: cfg,
+    ...overrides,
+  }));
+}
 
 export const stableConfig = (overrides: Omit<OpenClawConfig, "update"> = {}): OpenClawConfig => ({
   update: { channel: "stable" },

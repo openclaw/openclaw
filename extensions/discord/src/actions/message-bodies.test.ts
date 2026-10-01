@@ -5,13 +5,14 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { discordMessageActions } from "../channel-actions.js";
 import { RequestClient } from "../internal/rest.js";
+import { sendDiscordComponentMessage } from "../send.components.js";
+import * as runtime from "../send.js";
 import { sendPollDiscord, sendStickerDiscord } from "../send.outbound.js";
 import { handleDiscordMessageAction } from "./handle-action.js";
 import { handleDiscordAction } from "./runtime.js";
-import * as runtime from "./runtime.messaging.runtime.js";
 
-vi.mock("./runtime.messaging.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./runtime.messaging.runtime.js")>();
+vi.mock("../send.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../send.js")>();
   return {
     ...actual,
     editMessageDiscord: vi.fn(actual.editMessageDiscord),
@@ -19,11 +20,18 @@ vi.mock("./runtime.messaging.runtime.js", async (importOriginal) => {
     fetchChannelInfoDiscord: vi.fn(actual.fetchChannelInfoDiscord),
     fetchGuildInfoDiscord: vi.fn(actual.fetchGuildInfoDiscord),
     sendMessageDiscord: vi.fn(actual.sendMessageDiscord),
-    sendDiscordComponentMessage: vi.fn(actual.sendDiscordComponentMessage),
     sendStickerDiscord: vi.fn(actual.sendStickerDiscord),
     createThreadDiscord: vi.fn(actual.createThreadDiscord),
   };
 });
+
+vi.mock("../send.components.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../send.components.js")>();
+  return { ...actual, sendDiscordComponentMessage: vi.fn(actual.sendDiscordComponentMessage) };
+});
+
+const originalComponents =
+  await vi.importActual<typeof import("../send.components.js")>("../send.components.js");
 
 const channelId = "123456789012345678";
 const messageId = "223456789012345678";
@@ -34,9 +42,7 @@ const attachment = { id: "423456789012345678", filename: "example.txt", size: 4 
 const cfg: OpenClawConfig = {
   channels: { discord: { token, groupPolicy: "open" } },
 };
-const original = await vi.importActual<typeof import("./runtime.messaging.runtime.js")>(
-  "./runtime.messaging.runtime.js",
-);
+const original = await vi.importActual<typeof import("../send.js")>("../send.js");
 const originalFetch = globalThis.fetch;
 let server: Server;
 let rest: RequestClient;
@@ -133,8 +139,8 @@ beforeAll(async () => {
   vi.mocked(runtime.sendMessageDiscord).mockImplementation((to, content, opts) =>
     original.sendMessageDiscord(to, content, { ...opts, rest }),
   );
-  vi.mocked(runtime.sendDiscordComponentMessage).mockImplementation((to, spec, opts) =>
-    original.sendDiscordComponentMessage(to, spec, { ...opts, rest }),
+  vi.mocked(sendDiscordComponentMessage).mockImplementation((to, spec, opts) =>
+    originalComponents.sendDiscordComponentMessage(to, spec, { ...opts, rest }),
   );
   vi.mocked(runtime.sendStickerDiscord).mockImplementation((to, ids, opts) =>
     original.sendStickerDiscord(to, ids, { ...opts, rest }),
@@ -163,7 +169,7 @@ afterAll(async () => {
     runtime.fetchChannelInfoDiscord,
     runtime.fetchGuildInfoDiscord,
     runtime.sendMessageDiscord,
-    runtime.sendDiscordComponentMessage,
+    sendDiscordComponentMessage,
     runtime.sendStickerDiscord,
     runtime.createThreadDiscord,
   ]) {

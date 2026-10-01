@@ -27,7 +27,10 @@ use tokio_tungstenite::{
 };
 use url::{Host, Url};
 
-use crate::{pinned_tls_config, TlsTrust};
+use crate::{
+    deferred_tls_config, pinned_tls_config, CapturedTlsCertificate, TlsCertificatePolicy,
+    TlsPeerCertificate, TlsTrust,
+};
 
 const DEFAULT_CHALLENGE_TIMEOUT: Duration = Duration::from_secs(15);
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -44,6 +47,7 @@ type DispatchGuard =
 pub struct GatewayClientConfig {
     request: tokio_tungstenite::tungstenite::http::Request<()>,
     tls_trust: TlsTrust,
+    tls_certificate_policy: Option<Arc<dyn TlsCertificatePolicy>>,
     connect_timeout: Duration,
     challenge_timeout: Duration,
     request_timeout: Duration,
@@ -66,6 +70,7 @@ impl GatewayClientConfig {
         Ok(Self {
             request,
             tls_trust: TlsTrust::SystemRoots,
+            tls_certificate_policy: None,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             challenge_timeout: DEFAULT_CHALLENGE_TIMEOUT,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
@@ -91,6 +96,14 @@ impl GatewayClientConfig {
     #[must_use]
     pub fn tls_trust(mut self, trust: TlsTrust) -> Self {
         self.tls_trust = trust;
+        self
+    }
+
+    /// Replace built-in CA/pin trust with an asynchronous product-owned TLS policy.
+    /// The policy must approve the actual peer before the HTTP upgrade is written.
+    #[must_use]
+    pub fn tls_certificate_policy(mut self, policy: Arc<dyn TlsCertificatePolicy>) -> Self {
+        self.tls_certificate_policy = Some(policy);
         self
     }
 
@@ -491,6 +504,11 @@ where
             "Gateway TLS fingerprint requires a wss:// URL".into(),
         ));
     }
+    if config.tls_certificate_policy.is_some() && config.request.uri().scheme_str() != Some("wss") {
+        return Err(ClientError::InvalidUrl(
+            "Gateway TLS certificate policy requires a wss:// URL".into(),
+        ));
+    }
     let websocket_config = WebSocketConfig::default()
         .max_message_size(Some(config.max_message_bytes))
         .max_frame_size(Some(config.max_frame_bytes));
@@ -501,13 +519,17 @@ where
         ))),
     };
     let secure_endpoint = config.request.uri().scheme_str() == Some("wss");
-    let (mut socket, _) = tokio::time::timeout(
-        config.connect_timeout,
-        connect_async_tls_with_config(config.request, Some(websocket_config), false, connector),
-    )
+    let (mut socket, _) = tokio::time::timeout(config.connect_timeout, async {
+        if let Some(policy) = config.tls_certificate_policy {
+            connect_with_certificate_policy(config.request, websocket_config, policy).await
+        } else {
+            connect_async_tls_with_config(config.request, Some(websocket_config), false, connector)
+                .await
+                .map_err(|error| classify_connect_error(error, secure_endpoint))
+        }
+    })
     .await
-    .map_err(|_| ClientError::ConnectTimeout)?
-    .map_err(|error| classify_connect_error(error, secure_endpoint))?;
+    .map_err(|_| ClientError::ConnectTimeout)??;
 
     let challenge = tokio::time::timeout(
         config.challenge_timeout,
@@ -540,8 +562,11 @@ where
     // timeout cannot overtake its request. Each request carries its
     // semaphore permit through the session task, bounding queued and
     // pending requests even if the caller drops its future.
-    let command_capacity = config.max_in_flight.max(1);
+    // Keep one command slot available for cancellation when every RPC slot is
+    // occupied by a caller-owned request.
+    let command_capacity = config.max_in_flight.max(1).saturating_add(1);
     let (command_tx, command_rx) = mpsc::channel(command_capacity);
+    let (control_tx, control_rx) = mpsc::channel(1);
     let events = Arc::new(EventHub::new(
         config.event_capacity,
         config.max_event_buffer_bytes,
@@ -553,6 +578,7 @@ where
         socket,
         SessionChannels {
             commands: command_rx,
+            controls: control_rx,
             events: Arc::clone(&events),
             activity: activity_tx,
             closed: closed_tx,
@@ -566,6 +592,7 @@ where
     Ok(GatewaySession {
         hello,
         command_tx,
+        control_tx,
         event_rx: Arc::new(Mutex::new(events.initial_subscription(closed_rx.clone()))),
         events,
         activity_rx,
@@ -574,13 +601,81 @@ where
         next_request_id: Arc::new(AtomicU64::new(1)),
         request_timeout: config.request_timeout,
         in_flight: Arc::new(Semaphore::new(config.max_in_flight.max(1))),
+        control_in_flight: Arc::new(Semaphore::new(1)),
     })
+}
+
+async fn connect_with_certificate_policy(
+    request: tokio_tungstenite::tungstenite::http::Request<()>,
+    websocket_config: WebSocketConfig,
+    policy: Arc<dyn TlsCertificatePolicy>,
+) -> Result<
+    (
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        tokio_tungstenite::tungstenite::handshake::client::Response,
+    ),
+    ClientError,
+> {
+    let host = request
+        .uri()
+        .host()
+        .ok_or_else(|| ClientError::InvalidUrl("missing host".into()))?
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_owned();
+    let port = request.uri().port_u16().unwrap_or(443);
+    let server_name = rustls::pki_types::ServerName::try_from(host.clone())
+        .map_err(|error| ClientError::Tls(error.to_string()))?;
+    let tcp = tokio::net::TcpStream::connect((host.as_str(), port))
+        .await
+        .map_err(|error| ClientError::Transport(error.to_string()))?;
+    let peer_addr = tcp
+        .peer_addr()
+        .map_err(|error| ClientError::Transport(error.to_string()))?;
+    let captured = Arc::new(StdMutex::new(CapturedTlsCertificate::default()));
+    let tls_config = deferred_tls_config(Arc::clone(&captured)).map_err(ClientError::Tls)?;
+    let stream = tokio_rustls::TlsConnector::from(Arc::new(tls_config))
+        .connect(server_name, tcp)
+        .await
+        .map_err(|error| ClientError::Tls(error.to_string()))?;
+    let evidence = std::mem::take(
+        &mut *captured
+            .lock()
+            .map_err(|_| ClientError::Tls("Gateway TLS evidence unavailable".into()))?,
+    );
+    if evidence.certificate_chain.is_empty() {
+        return Err(ClientError::Tls(
+            "Gateway TLS certificate unavailable".into(),
+        ));
+    }
+    policy
+        .verify(TlsPeerCertificate {
+            server_name: host,
+            port,
+            peer_addr,
+            certificate_chain: evidence.certificate_chain,
+            ocsp_response: evidence.ocsp_response,
+        })
+        .await
+        .map_err(ClientError::Tls)?;
+    // This is the first application write on this exact TLS stream. Dropping the enclosing
+    // connect future on policy rejection, timeout, or cancellation closes the connection.
+    tokio_tungstenite::client_async_with_config(
+        request,
+        tokio_tungstenite::MaybeTlsStream::Rustls(stream),
+        Some(websocket_config),
+    )
+    .await
+    .map_err(|error| classify_connect_error(error, true))
 }
 
 #[derive(Clone)]
 pub struct GatewaySession {
     hello: Value,
     command_tx: mpsc::Sender<SessionCommand>,
+    control_tx: mpsc::Sender<SessionControl>,
     events: Arc<EventHub>,
     event_rx: Arc<Mutex<EventSubscription>>,
     activity_rx: watch::Receiver<u64>,
@@ -589,9 +684,48 @@ pub struct GatewaySession {
     next_request_id: Arc<AtomicU64>,
     request_timeout: Duration,
     in_flight: Arc<Semaphore>,
+    control_in_flight: Arc<Semaphore>,
 }
 
 impl GatewaySession {
+    /// Send a WebSocket keepalive and wait for its matching pong.
+    /// This uses separately bounded control capacity and never consumes a Gateway RPC slot.
+    pub async fn ping(&self) -> Result<(), ClientError> {
+        let id = format!(
+            "rust-gateway-ping-{}",
+            self.next_request_id.fetch_add(1, Ordering::Relaxed)
+        );
+        let deadline = Instant::now() + self.request_timeout;
+        let permit =
+            tokio::time::timeout_at(deadline, self.control_in_flight.clone().acquire_owned())
+                .await
+                .map_err(|_| ClientError::RequestTimeout("ping".into()))?
+                .map_err(|_| ClientError::Closed("session retired".into()))?;
+        let (reply, response) = oneshot::channel();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let mut cancellation =
+            RequestCancellation::new(id.clone(), self.command_tx.clone(), cancelled.clone());
+        tokio::time::timeout_at(
+            deadline,
+            self.control_tx.send(SessionControl::Ping {
+                id,
+                reply,
+                permit,
+                deadline,
+                cancelled,
+            }),
+        )
+        .await
+        .map_err(|_| ClientError::RequestTimeout("ping".into()))?
+        .map_err(|_| self.closed_error())?;
+        let result = tokio::time::timeout_at(deadline, response)
+            .await
+            .map_err(|_| ClientError::RequestTimeout("ping".into()))?
+            .map_err(|_| self.closed_error())?;
+        cancellation.disarm();
+        result.map(|_| ())
+    }
+
     #[must_use]
     pub fn hello(&self) -> &Value {
         &self.hello
@@ -620,7 +754,7 @@ impl GatewaySession {
         self.request_inner(
             method.into(),
             params,
-            Instant::now() + self.request_timeout,
+            Some(Instant::now() + self.request_timeout),
             None,
         )
         .await
@@ -643,7 +777,7 @@ impl GatewaySession {
         self.request_inner(
             method.into(),
             params,
-            deadline,
+            Some(deadline),
             Some(Box::new(move |dispatch| {
                 guard()?;
                 dispatch.enqueue();
@@ -673,15 +807,25 @@ impl GatewaySession {
             + Send
             + 'static,
     {
-        self.request_inner(method.into(), params, deadline, Some(Box::new(guard)))
+        self.request_inner(method.into(), params, Some(deadline), Some(Box::new(guard)))
             .await
+    }
+
+    /// Send a request whose lifetime is owned by the caller instead of the default deadline.
+    /// Dropping the future retires its correlation and releases capacity. Socket writes remain bounded.
+    pub async fn request_until_cancelled(
+        &self,
+        method: impl Into<String>,
+        params: Value,
+    ) -> Result<Value, ClientError> {
+        self.request_inner(method.into(), params, None, None).await
     }
 
     async fn request_inner(
         &self,
         method: String,
         params: Value,
-        deadline: Instant,
+        deadline: Option<Instant>,
         guard: Option<DispatchGuard>,
     ) -> Result<Value, ClientError> {
         if method.is_empty() {
@@ -689,7 +833,7 @@ impl GatewaySession {
                 "request method must not be empty".into(),
             ));
         }
-        let permit = tokio::time::timeout_at(deadline, self.in_flight.clone().acquire_owned())
+        let permit = before_deadline(deadline, self.in_flight.clone().acquire_owned())
             .await
             .map_err(|_| ClientError::RequestTimeout(method.clone()))?
             .map_err(|_| self.closed_error())?;
@@ -699,7 +843,7 @@ impl GatewaySession {
         );
         let (reply_tx, reply_rx) = oneshot::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
-        tokio::time::timeout_at(
+        before_deadline(
             deadline,
             self.command_tx.send(SessionCommand::Request {
                 id: id.clone(),
@@ -717,7 +861,7 @@ impl GatewaySession {
         .map_err(|_| self.closed_error())?;
 
         let mut cancellation = RequestCancellation::new(id, self.command_tx.clone(), cancelled);
-        match tokio::time::timeout_at(deadline, reply_rx).await {
+        match before_deadline(deadline, reply_rx).await {
             Ok(Ok(result)) => {
                 cancellation.disarm();
                 result
@@ -761,6 +905,16 @@ impl GatewaySession {
             || ClientError::Closed("session task ended".into()),
             SessionCloseCause::to_client_error,
         )
+    }
+}
+
+async fn before_deadline<F: Future>(
+    deadline: Option<Instant>,
+    future: F,
+) -> Result<F::Output, tokio::time::error::Elapsed> {
+    match deadline {
+        Some(deadline) => tokio::time::timeout_at(deadline, future).await,
+        None => Ok(future.await),
     }
 }
 
@@ -839,12 +993,22 @@ enum SessionCommand {
         params: Value,
         reply: oneshot::Sender<Result<Value, ClientError>>,
         permit: tokio::sync::OwnedSemaphorePermit,
-        deadline: Instant,
+        deadline: Option<Instant>,
         cancelled: Arc<AtomicBool>,
         guard: Option<DispatchGuard>,
     },
     CancelRequest {
         id: String,
+    },
+}
+
+enum SessionControl {
+    Ping {
+        id: String,
+        reply: oneshot::Sender<Result<Value, ClientError>>,
+        permit: tokio::sync::OwnedSemaphorePermit,
+        deadline: Instant,
+        cancelled: Arc<AtomicBool>,
     },
 }
 
@@ -1061,6 +1225,7 @@ where
 
 struct SessionChannels {
     commands: mpsc::Receiver<SessionCommand>,
+    controls: mpsc::Receiver<SessionControl>,
     events: Arc<EventHub>,
     activity: watch::Sender<u64>,
     closed: watch::Sender<Option<SessionCloseCause>>,
@@ -1081,6 +1246,7 @@ async fn run_session<S>(
 {
     let SessionChannels {
         mut commands,
+        mut controls,
         events,
         activity,
         closed,
@@ -1099,7 +1265,7 @@ async fn run_session<S>(
         }
         let next_deadline = pending
             .values()
-            .map(|request: &PendingRequest| request.deadline)
+            .filter_map(|request: &PendingRequest| request.deadline)
             .min();
         let deadline = async move {
             if let Some(deadline) = next_deadline {
@@ -1119,7 +1285,7 @@ async fn run_session<S>(
                 let now = Instant::now();
                 let expired = pending
                     .iter()
-                    .filter(|(_, request)| request.deadline <= now)
+                    .filter(|(_, request)| request.deadline.is_some_and(|deadline| deadline <= now))
                     .map(|(id, _)| id.clone())
                     .collect::<Vec<_>>();
                 for id in expired {
@@ -1130,24 +1296,40 @@ async fn run_session<S>(
                     }
                 }
             }
+            Some(SessionControl::Ping { id, reply, permit, deadline, cancelled }) = controls.recv() => {
+                if cancelled.load(Ordering::Acquire) || deadline <= Instant::now() {
+                    let _ = reply.send(Err(ClientError::RequestTimeout("ping".into())));
+                    continue;
+                }
+                match send_message(&mut socket, Message::Ping(id.clone().into_bytes().into()), write_timeout, "ping").await {
+                    Ok(()) => {
+                        pending.insert(id, PendingRequest { method: "ping".into(), reply, _permit: permit, deadline: Some(deadline), cancelled });
+                    }
+                    Err(error) => {
+                        let reason = error.to_string();
+                        let _ = reply.send(Err(error));
+                        break SessionCloseCause::Transport(reason);
+                    }
+                }
+            }
             command = commands.recv() => {
                 match command {
                     Some(SessionCommand::Request { id, method, params, reply, permit, deadline, cancelled, guard }) => {
                         if cancelled.load(Ordering::Acquire) {
                             continue;
                         }
-                        if deadline <= Instant::now() {
+                        if deadline.is_some_and(|deadline| deadline <= Instant::now()) {
                             let _ = reply.send(Err(ClientError::RequestTimeout(method)));
                             continue;
                         }
-                        let remaining = deadline.saturating_duration_since(Instant::now());
-                        let request_deadline_wins = remaining <= write_timeout;
+                        let remaining = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+                        let request_deadline_wins = remaining.is_some_and(|remaining| remaining <= write_timeout);
                         match send_request(
                             &mut socket,
                             &id,
                             &method,
                             params,
-                            write_timeout.min(remaining),
+                            remaining.map_or(write_timeout, |remaining| write_timeout.min(remaining)),
                             guard,
                         ).await {
                             Ok(()) => {
@@ -1223,7 +1405,16 @@ async fn run_session<S>(
                     Some(Ok(Message::Close(frame))) => {
                         break SessionCloseCause::Closed(format_close(frame.as_ref()));
                     }
-                    Some(Ok(Message::Binary(_) | Message::Pong(_) | Message::Frame(_))) => {}
+                    Some(Ok(Message::Pong(payload))) => {
+                        if let Ok(id) = std::str::from_utf8(&payload) {
+                            if id.starts_with("rust-gateway-ping-") {
+                                if let Some(request) = pending.remove(id) {
+                                    let _ = request.reply.send(Ok(Value::Null));
+                                }
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Binary(_) | Message::Frame(_))) => {}
                     Some(Err(error)) => break SessionCloseCause::Transport(error.to_string()),
                     None => break SessionCloseCause::Closed("Gateway ended the WebSocket stream".into()),
                 }
@@ -1244,7 +1435,7 @@ struct PendingRequest {
     method: String,
     reply: oneshot::Sender<Result<Value, ClientError>>,
     _permit: tokio::sync::OwnedSemaphorePermit,
-    deadline: Instant,
+    deadline: Option<Instant>,
     cancelled: Arc<AtomicBool>,
 }
 
@@ -1467,6 +1658,7 @@ mod tests {
             tokio_tungstenite::WebSocketStream::from_raw_socket(StalledIo, Role::Client, None)
                 .await;
         let (command_tx, command_rx) = mpsc::channel(1);
+        let (_control_tx, control_rx) = mpsc::channel(1);
         let events = Arc::new(EventHub::new(1, 1024));
         let (activity_tx, _activity_rx) = watch::channel(0);
         let (closed_tx, mut closed_rx) = watch::channel(None);
@@ -1476,6 +1668,7 @@ mod tests {
             socket,
             SessionChannels {
                 commands: command_rx,
+                controls: control_rx,
                 events,
                 activity: activity_tx,
                 closed: closed_tx,
@@ -1497,7 +1690,7 @@ mod tests {
                 params: json!({}),
                 reply: reply_tx,
                 permit,
-                deadline: Instant::now() + Duration::from_secs(1),
+                deadline: Some(Instant::now() + Duration::from_secs(1)),
                 cancelled,
                 guard: None,
             })

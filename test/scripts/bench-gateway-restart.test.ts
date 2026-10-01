@@ -8,7 +8,6 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { testing } from "../../scripts/bench-gateway-restart.ts";
-import { stopChild } from "../../scripts/lib/gateway-bench-child.ts";
 import * as gatewayBenchProbes from "../../scripts/lib/gateway-bench-probes.ts";
 import { parseProcessRssKb, requestProbeStatus } from "../../scripts/lib/gateway-bench-probes.ts";
 import {
@@ -27,10 +26,12 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../src/state/openclaw-state-db.js";
-import { registerStopChildBehaviorTests } from "./bench-gateway-child-test-support.js";
 
 type RestartSampleFixture = Parameters<typeof testing.summarizeCase>[1][number];
 type ProbeFixture = RestartSampleFixture["initialHealthz"];
+
+const wallClockSetTimeout = setTimeout;
+const wallClockClearTimeout = clearTimeout;
 
 function createProbeFixture(
   ms: ProbeFixture["ms"],
@@ -98,12 +99,15 @@ async function withWallClockDeadline<T>(
     return await Promise.race([
       promise,
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} exceeded ${timeoutMs}ms`)), timeoutMs);
+        timer = wallClockSetTimeout(
+          () => reject(new Error(`${label} exceeded ${timeoutMs}ms`)),
+          timeoutMs,
+        );
         timer.unref?.();
       }),
     ]);
   } finally {
-    clearTimeout(timer);
+    wallClockClearTimeout(timer);
   }
 }
 
@@ -217,7 +221,7 @@ describe("gateway restart benchmark script", () => {
     expect(unknownArgsResult.stderr).not.toContain("\n    at ");
   });
 
-  it("guards the SIGUSR1 restart benchmark on Windows", () => {
+  it("guards the SIGUSR2 restart benchmark on Windows", () => {
     expect(() => testing.ensureSupportedRestartPlatform("linux")).not.toThrow();
     expect(() => testing.ensureSupportedRestartPlatform("darwin")).not.toThrow();
     expect(() => testing.ensureSupportedRestartPlatform("win32")).toThrow(
@@ -337,6 +341,8 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
       server.listen(0, "127.0.0.1", resolve);
     });
     try {
+      // Freeze the probe deadline while real HTTP delivers headers; the watchdog stays on wall time.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const address = server.address();
       if (!address || typeof address === "string") {
         throw new Error("test server did not bind to a TCP port");
@@ -351,6 +357,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
       ).resolves.toEqual({ errorKind: null, status: 200 });
       expect(requestMethod).toBe("HEAD");
     } finally {
+      vi.useRealTimers();
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -467,11 +474,6 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
   it("reports deadline expiry separately from child exit", () => {
     expect(testing.resolveRestartDeadlineFailure(false)).toBe("restart_deadline_timeout");
     expect(testing.resolveRestartDeadlineFailure(true)).toBe("restart_child_exited");
-  });
-
-  registerStopChildBehaviorTests({
-    stopChild,
-    queuedExitCode: 0,
   });
 
   it("marks clean and signaled pre-teardown child exits as benchmark failures", () => {

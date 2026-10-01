@@ -447,7 +447,9 @@ async function resolveActiveRecall(
   }
 }
 
-async function maybeResolveActiveRecall(params: ActiveRecallParams): Promise<ActiveRecallResult> {
+export async function maybeResolveActiveRecall(
+  params: ActiveRecallParams,
+): Promise<ActiveRecallResult> {
   const { runId, ...recallParams } = params;
   if (!runId || params.requestKey === null) {
     return await resolveActiveRecall(recallParams);
@@ -474,5 +476,3 @@ async function maybeResolveActiveRecall(params: ActiveRecallParams): Promise<Act
     resolveActiveRecall({ ...recallParams, onTimeoutCleanup }),
   );
 }
-
-export { maybeResolveActiveRecall };

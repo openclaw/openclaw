@@ -302,57 +302,32 @@ export function diffPluginSdkApi(
     for (const exportName of [...exportNames].toSorted(compareText)) {
       const beforeExport = beforeExports.get(exportName);
       const afterExport = afterExports.get(exportName);
+      let change: PluginSdkApiExportChange["change"];
       if (!beforeExport && afterExport) {
-        payload.exports.push({
-          after: snapshot(afterExport),
-          before: null,
-          change: "added",
-          declarationChanges: [],
-          entrypoint,
-          exportName,
-          importSpecifier: moduleSurface.importSpecifier,
-        });
+        change = "added";
+      } else if (beforeExport && !afterExport) {
+        change = "removed";
+      } else if (!beforeExport || !afterExport) {
         continue;
-      }
-      if (beforeExport && !afterExport) {
-        payload.exports.push({
-          after: null,
-          before: snapshot(beforeExport),
-          change: "removed",
-          declarationChanges: [],
-          entrypoint,
-          exportName,
-          importSpecifier: moduleSurface.importSpecifier,
-        });
-        continue;
-      }
-      if (!beforeExport || !afterExport) {
-        continue;
-      }
-      if (
+      } else if (
         beforeExport.kind !== afterExport.kind ||
         beforeExport.declaration !== afterExport.declaration
       ) {
-        payload.exports.push({
-          after: snapshot(afterExport),
-          before: snapshot(beforeExport),
-          change: "signature",
-          declarationChanges: [],
-          entrypoint,
-          exportName,
-          importSpecifier: moduleSurface.importSpecifier,
-        });
+        change = "signature";
       } else if (beforeExport.closureHash !== afterExport.closureHash) {
-        payload.exports.push({
-          after: snapshot(afterExport),
-          before: snapshot(beforeExport),
-          change: "reachable",
-          declarationChanges: [],
-          entrypoint,
-          exportName,
-          importSpecifier: moduleSurface.importSpecifier,
-        });
+        change = "reachable";
+      } else {
+        continue;
       }
+      payload.exports.push({
+        after: snapshot(afterExport),
+        before: snapshot(beforeExport),
+        change,
+        declarationChanges: [],
+        entrypoint,
+        exportName,
+        importSpecifier: moduleSurface.importSpecifier,
+      });
     }
   }
 
@@ -478,21 +453,17 @@ export function formatPluginSdkApiDiffReport(params: {
     lines.push("", `… ${diff.exports.length - REPORT_ITEM_LIMIT} more affected exports`);
   }
 
-  appendExportChanges(
-    lines,
-    "Exports removed",
-    diff.exports.filter((change) => change.change === "removed"),
-  );
-  appendExportChanges(
-    lines,
-    "Exports added",
-    diff.exports.filter((change) => change.change === "added"),
-  );
-  appendExportChanges(
-    lines,
-    "Signatures changed",
-    diff.exports.filter((change) => change.change === "signature"),
-  );
+  for (const [kind, title] of [
+    ["removed", "Exports removed"],
+    ["added", "Exports added"],
+    ["signature", "Signatures changed"],
+  ] as const) {
+    appendExportChanges(
+      lines,
+      title,
+      diff.exports.filter((change) => change.change === kind),
+    );
+  }
   const reachable = collectDeclarationReportChanges(diff.exports);
   if (reachable.length > 0) {
     lines.push("", `## Reachable declarations changed (${reachable.length})`);

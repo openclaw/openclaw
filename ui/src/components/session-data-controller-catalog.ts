@@ -3,11 +3,14 @@ import type { ReactiveControllerHost } from "lit";
 import type {
   SessionCatalog,
   SessionsCatalogArchiveParams,
+  SessionsCatalogImportParams,
+  SessionsCatalogImportResult,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
+import { readSessionMethodScopeAccess } from "../lib/session-method-access.ts";
 import {
   buildCatalogSessionKey,
   type CatalogSessionContinuedDetail,
@@ -74,6 +77,37 @@ export interface SessionCatalogDataOwner {
   sessionCatalogIdsWithoutVisibleRows(): readonly string[];
 }
 
+/** A completed list RPC can still leave pending hosts or hidden discovery pages. */
+export function areSessionCatalogsSettled(
+  owner: Pick<
+    SessionCatalogDataOwner,
+    | "context"
+    | "sessionCatalogs"
+    | "sessionCatalogRefreshStatus"
+    | "sessionCatalogLive"
+    | "loadingMoreSessionCatalogIds"
+  >,
+): boolean {
+  const status = owner.sessionCatalogRefreshStatus;
+  return (
+    !status.error &&
+    (!canCallGatewayMethod(
+      owner.context?.gateway.snapshot,
+      "sessions.catalog.list",
+      "operator.read",
+    ) ||
+      (status.hasLoaded &&
+        !status.awaitingGateway &&
+        owner.sessionCatalogLive.requestGeneration === null &&
+        owner.loadingMoreSessionCatalogIds.size === 0 &&
+        owner.sessionCatalogs.every(
+          (catalog) =>
+            !catalog.error &&
+            catalog.hosts.every((entry) => !entry.pending && !entry.error && !entry.nextCursor),
+        )))
+  );
+}
+
 function visibleSessionCatalogClient(owner: SessionCatalogDataOwner): GatewayBrowserClient | null {
   if (document.visibilityState === "hidden") {
     return null;
@@ -112,7 +146,7 @@ export function resolveSessionCatalogAgentId(
   // transient reconnect still preserves its rows until the replacement lands.
   if (
     gateway?.phase === "connected" &&
-    isGatewayMethodAdvertised(gateway, "sessions.catalog.list") === false
+    !canCallGatewayMethod(gateway, "sessions.catalog.list", "operator.read")
   ) {
     return null;
   }
@@ -150,7 +184,7 @@ export function resolveSessionCatalogAgentId(
 }
 
 export function scheduleSessionCatalogRefresh(owner: SessionCatalogDataOwner): void {
-  if (document.visibilityState === "hidden") {
+  if (!visibleSessionCatalogClient(owner)) {
     owner.sessionCatalogLive.cancelScheduledRefreshes();
     return;
   }
@@ -256,6 +290,8 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
   }
   const generation = owner.sessionScopeGeneration;
   const revision = owner.sessionCatalogRevision;
+  // Publish the existing request lifecycle to settled-empty presentation too.
+  owner.requestSessionDataUpdate();
   await refreshSessionCatalogsLive({
     live: owner.sessionCatalogLive,
     client,
@@ -292,6 +328,7 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
     },
     refresh: () => refreshSessionCatalogsInBackground(owner),
   });
+  owner.requestSessionDataUpdate();
 }
 
 function hiddenSessionCatalogPages(owner: SessionCatalogDataOwner) {
@@ -301,7 +338,7 @@ function hiddenSessionCatalogPages(owner: SessionCatalogDataOwner) {
       return [];
     }
     const hostIds = catalog.hosts
-      .filter((host) => host.nextCursor && !host.error)
+      .filter((host) => host.nextCursor && !host.pending && !host.error)
       .map((host) => host.hostId);
     return hostIds.length > 0 ? [{ catalogId: catalog.id, hostIds }] : [];
   });
@@ -351,6 +388,7 @@ export async function loadMoreSessionCatalog(
   hostIds?: readonly string[],
   discovering = false,
 ): Promise<void> {
+  owner.synchronizeSessionScope();
   if (owner.loadingMoreSessionCatalogIds.has(catalogId)) {
     return;
   }
@@ -365,7 +403,7 @@ export async function loadMoreSessionCatalog(
   if (!catalog || Object.keys(cursors).length === 0) {
     return;
   }
-  const client = owner.context?.gateway.snapshot.client;
+  const client = owner.sessionCatalogGatewayClient();
   const agentId = resolveSessionCatalogAgentId(owner);
   if (
     !client ||
@@ -487,7 +525,7 @@ function isCurrentSessionCatalogRequest(
 
 export async function archiveSessionCatalog(
   owner: SessionCatalogDataOwner & {
-    readonly pendingCatalogArchives: Set<string>;
+    pendingCatalogArchives: ReadonlySet<string>;
     isSessionMutationScopeCurrent(scope: SidebarSessionMutationScope): boolean;
     invalidateSessionCatalogs(): void;
   },
@@ -496,7 +534,7 @@ export async function archiveSessionCatalog(
 ): Promise<void> {
   const generation = scope.catalogGeneration;
   const key = buildCatalogSessionKey(params);
-  owner.pendingCatalogArchives.add(key);
+  owner.pendingCatalogArchives = new Set([...owner.pendingCatalogArchives, key]);
   owner.requestSessionDataUpdate();
   try {
     await scope.client.request("sessions.catalog.archive", params);
@@ -507,8 +545,42 @@ export async function archiveSessionCatalog(
     }
   } finally {
     if (generation === owner.sessionScopeGeneration) {
-      owner.pendingCatalogArchives.delete(key);
+      owner.pendingCatalogArchives = new Set(
+        [...owner.pendingCatalogArchives].filter((entry) => entry !== key),
+      );
       owner.requestSessionDataUpdate();
     }
   }
+}
+
+export async function importSessionCatalog(
+  owner: SessionCatalogDataOwner & {
+    isSessionMutationScopeCurrent(scope: SidebarSessionMutationScope): boolean;
+    refreshSidebarSessions(agentId?: string): Promise<void>;
+  },
+  scope: SidebarCatalogSessionMutationScope,
+  params: SessionsCatalogImportParams,
+): Promise<SessionsCatalogImportResult | null> {
+  const isCurrent = () =>
+    scope.catalogGeneration === owner.sessionScopeGeneration &&
+    owner.isSessionMutationScopeCurrent(scope);
+  if (!isCurrent()) {
+    return null;
+  }
+  const access = readSessionMethodScopeAccess(scope.gateway.snapshot.hello?.auth, {
+    method: "sessions.catalog.import",
+    requiredScope: "operator.write",
+  });
+  if (!access.allowed) {
+    throw new Error(access.reason);
+  }
+  const result = await scope.client.request<SessionsCatalogImportResult>(
+    "sessions.catalog.import",
+    params,
+  );
+  if (!isCurrent()) {
+    return null;
+  }
+  void owner.refreshSidebarSessions(params.agentId);
+  return result;
 }

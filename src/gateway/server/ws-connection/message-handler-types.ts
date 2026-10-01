@@ -5,9 +5,11 @@ import type {
   errorShape,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { CloudWorkerSetupMutationAdmission } from "../../../infra/device-bootstrap.worker-types.js";
 import type { DeviceAuthToken } from "../../../infra/device-pairing.types.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
+import type { GatewayAuthPolicy } from "../../auth-policy.types.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import type { GatewayAttributedIngress } from "../../ingress-attribution.js";
@@ -18,6 +20,7 @@ import type { PluginNodeCapabilitySurface } from "../../plugin-node-capability.j
 import type { GatewayRole } from "../../role-policy.types.js";
 import type { GatewayConnectionWork } from "../../server-connection-work.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
+import type { GatewayClientRegistry } from "../client-registry.js";
 import type {
   GatewayConnectionTransport,
   PrepareGatewayAuthenticatedReceive,
@@ -38,6 +41,7 @@ type WsSendResult = { kind: "sent" | "unavailable" } | { kind: "serialization"; 
 
 export type GatewayWsMessageHandlerParams = {
   socket: GatewayConnectionTransport;
+  clients: GatewayClientRegistry;
   prepareAuthenticatedReceive: PrepareGatewayAuthenticatedReceive;
   connectionWork: GatewayConnectionWork;
   upgradeReq: IncomingMessage;
@@ -50,7 +54,6 @@ export type GatewayWsMessageHandlerParams = {
   localPort?: number;
   endpoint?: string;
   forwardedFor?: string;
-  realIp?: string;
   requestHost?: string;
   requestOrigin?: string;
   requestUserAgent?: string;
@@ -66,6 +69,7 @@ export type GatewayWsMessageHandlerParams = {
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
   isStartupPending?: () => boolean;
   isPendingWorkerNodeSetup?: (setupId: string, deviceId: string) => boolean;
+  admitsNodeSetupCompletion?: (setup: CloudWorkerSetupMutationAdmission) => boolean;
   gatewayMethods: string[];
   events: string[];
   extraHandlers: GatewayRequestHandlers;
@@ -128,6 +132,7 @@ export type GatewayConnectPhaseContext = {
 };
 
 export type AuthenticatedGatewayConnect = {
+  authPolicy: GatewayAuthPolicy;
   resolvedAuth: ResolvedGatewayAuth;
   minProtocol: number;
   maxProtocol: number;
@@ -148,10 +153,8 @@ export type AuthenticatedGatewayConnect = {
   bootstrapTokenCandidate?: string;
   deviceTokenSharedGatewaySessionGeneration?: string;
   authResult: GatewayAuthResult;
-  authOk: boolean;
   authMethod: GatewayAuthResult["method"];
   pairingLocality: PairingLocalityKind;
-  usesSharedGatewayAuth: boolean;
   sessionUsesSharedGatewayAuth: boolean;
   sessionSharedGatewaySessionGeneration?: string;
   issuedBootstrapProfile: DeviceBootstrapProfile | null;

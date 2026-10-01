@@ -8,8 +8,8 @@ import {
   loadTranscriptEventsSync,
 } from "../config/sessions/session-accessor.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import {
   appendClientVoiceTranscript,
   appendRelayVoiceTranscript,
@@ -90,8 +90,10 @@ beforeEach(() => {
   envSnapshot.restore();
 });
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
+afterEach(async () => {
+  for (const stateDir of tempDirs.dirs) {
+    await cleanupSessionStateForTest({ stateDir });
+  }
   envSnapshot.restore();
 });
 

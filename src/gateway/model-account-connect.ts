@@ -23,9 +23,11 @@ import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import {
   clearUserProfileAuthLink,
   connectUserModelAccount,
+  isUserModelAuthProfileOwner,
   listUserModelAccounts,
   listUserProfileAuthLinks,
   readUserModelAccountSummary,
+  readUserModelAuthProfile,
   setUserProfileAuthLink,
 } from "../state/user-model-accounts.js";
 import { sanitizeWizardStepForClient, WizardSession } from "../wizard/session.js";
@@ -317,9 +319,26 @@ export function createModelAccountConnectService(options: {
         let failure: "exchange" | "unavailable" = "exchange";
         try {
           assertLive(operation);
+          // Reconnect may reuse only this person's selected private registration.
+          // Shared gateway profiles never enter a personal provider login context.
+          const selectedProfileId = listUserProfileAuthLinks(operation.owner).find(
+            (link) => link.provider === provider,
+          )?.authProfileId;
+          const selectedCredential =
+            selectedProfileId &&
+            isUserModelAuthProfileOwner({
+              profileId: operation.owner,
+              authProfileId: selectedProfileId,
+            })
+              ? readUserModelAuthProfile(selectedProfileId)?.credential
+              : undefined;
           const result = await runProviderPluginAuthMethodUnpersisted({
             config: {},
             env: {},
+            existingProfiles:
+              selectedProfileId && selectedCredential?.provider === provider
+                ? [{ profileId: selectedProfileId, credential: selectedCredential }]
+                : [],
             method,
             prompter,
             signal,

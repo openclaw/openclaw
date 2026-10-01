@@ -6,7 +6,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { NodeOnlyGatewayInfo } from "./status.node-mode.js";
 import type { StatusScanOverviewResult } from "./status.scan-overview.ts";
 
-/** Logs multi-line gateway connection details with the standard heading. */
 export function logGatewayConnectionDetails(params: {
   runtime: Pick<RuntimeEnv, "log">;
   info: (value: string) => string;

@@ -18,6 +18,7 @@ const daemonMocks = vi.hoisted(() => ({
   },
   loadNodeHostConfig: vi.fn<LoadNodeHostConfig>(async () => null),
   runNodeHost: vi.fn(),
+  runNodeHostWorker: vi.fn(),
   runNodeDaemonInstall: vi.fn(),
   runNodeDaemonRestart: vi.fn(),
   runNodeDaemonStart: vi.fn(),
@@ -34,6 +35,10 @@ vi.mock("../../node-host/config.js", () => ({
 
 vi.mock("../../node-host/runner.js", () => ({
   runNodeHost: daemonMocks.runNodeHost,
+}));
+
+vi.mock("../../node-host/worker.js", () => ({
+  runNodeHostWorker: daemonMocks.runNodeHostWorker,
 }));
 
 vi.mock("../../runtime.js", () => ({
@@ -58,12 +63,61 @@ describe("registerNodeCli", () => {
     daemonMocks.loadNodeHostConfig.mockClear();
     daemonMocks.loadNodeHostConfig.mockResolvedValue(null);
     daemonMocks.runNodeHost.mockClear();
+    daemonMocks.runNodeHostWorker.mockClear();
     daemonMocks.runNodeDaemonInstall.mockClear();
     daemonMocks.runNodeDaemonRestart.mockClear();
     daemonMocks.runNodeDaemonStart.mockClear();
     daemonMocks.runNodeDaemonStatus.mockClear();
     daemonMocks.runNodeDaemonStop.mockClear();
     daemonMocks.runNodeDaemonUninstall.mockClear();
+  });
+
+  it.each([
+    { args: [], enabled: undefined },
+    { args: ["--desktop-sharing"], enabled: true },
+    { args: ["--no-desktop-sharing"], enabled: false },
+  ])(
+    "forwards only the private worker's explicit desktop preference: $args",
+    async ({ args, enabled }) => {
+      await createProgram().parseAsync(["node", "worker", ...args], { from: "user" });
+      expect(daemonMocks.runNodeHostWorker).toHaveBeenCalledWith({
+        desktopSharingEnabled: enabled,
+      });
+    },
+  );
+
+  it.each([
+    { args: [], enabled: undefined },
+    { args: ["--desktop-sharing"], enabled: true },
+    { args: ["--no-desktop-sharing"], enabled: false },
+  ])("forwards the desktop companion preference to node run: $args", async ({ args, enabled }) => {
+    const program = createProgram();
+    await program.parseAsync(["node", "run", ...args], { from: "user" });
+    expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
+      expect.objectContaining({ desktopSharingEnabled: enabled }),
+    );
+    expect(
+      program.commands
+        .find((command) => command.name() === "node")
+        ?.commands.find((command) => command.name() === "run")
+        ?.helpInformation(),
+    ).not.toContain("--desktop-sharing");
+  });
+
+  it("forwards a companion's scoped authentication and parent lifetime without public help flags", async () => {
+    const program = createProgram();
+    await program.parseAsync(["node", "run", "--auth-from-env", "--parent-stdin"], {
+      from: "user",
+    });
+    expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
+      expect.objectContaining({ gatewayAuthFromEnv: true, parentStdin: true }),
+    );
+    const help = program.commands
+      .find((command) => command.name() === "node")
+      ?.commands.find((command) => command.name() === "run")
+      ?.helpInformation();
+    expect(help).not.toContain("--auth-from-env");
+    expect(help).not.toContain("--parent-stdin");
   });
 
   it.each([
@@ -282,6 +336,65 @@ describe("registerNodeCli", () => {
         preferGatewayBootstrapToken: preferBootstrap,
       }),
     );
+  });
+
+  it("defers an expired fallback code to the node host credential owner", async () => {
+    const setupCode = encodePairingSetupCode({
+      url: "wss://paired.example/node",
+      bootstrapToken: "expired-test-bootstrap",
+      expiresAtMs: 1,
+    });
+
+    await createProgram().parseAsync(["node", "run", "--pair-if-needed", setupCode], {
+      from: "user",
+    });
+
+    expect(daemonMocks.defaultRuntime.error).not.toHaveBeenCalled();
+    expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gatewayHost: "paired.example",
+        gatewayBootstrapToken: "expired-test-bootstrap",
+        gatewayBootstrapExpiresAtMs: 1,
+        preferGatewayBootstrapToken: false,
+      }),
+    );
+  });
+
+  it.each([
+    { urls: ["wss://paired.example/node", 42] },
+    { tlsFingerprint: "invalid-pin" },
+    { expiresAtMs: -1 },
+  ])("rejects malformed fallback payload fields: %j", async (invalidFields) => {
+    const setupCode = Buffer.from(
+      JSON.stringify({
+        url: "wss://paired.example/node",
+        bootstrapToken: "expired-test-bootstrap",
+        expiresAtMs: 1,
+        ...invalidFields,
+      }),
+    ).toString("base64url");
+
+    await createProgram().parseAsync(["node", "run", "--pair-if-needed", setupCode], {
+      from: "user",
+    });
+
+    expect(daemonMocks.defaultRuntime.error).toHaveBeenCalledWith("Invalid pairing setup payload.");
+    expect(daemonMocks.runNodeHost).not.toHaveBeenCalled();
+  });
+
+  it("rejects an expired explicit pairing code before starting the node host", async () => {
+    const setupCode = encodePairingSetupCode({
+      url: "wss://paired.example/node",
+      bootstrapToken: "expired-test-bootstrap",
+      expiresAtMs: 1,
+    });
+
+    await createProgram().parseAsync(["node", "run", "--pair", setupCode], { from: "user" });
+
+    expect(daemonMocks.defaultRuntime.error).toHaveBeenCalledWith(
+      "Pairing setup code has expired.",
+    );
+    expect(daemonMocks.runNodeHost).not.toHaveBeenCalled();
   });
 
   it("rejects simultaneous forced and resumable pairing", async () => {

@@ -5,7 +5,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
-const SUPPORTED_DIST_TAGS = new Set(["alpha", "beta", "latest", "extended-stable"]);
+const SUPPORTED_DIST_TAGS = new Set(["beta", "latest", "extended-stable"]);
 
 export function parseExtendedStableGuardBypass(value = "") {
   if (value === "" || value === "false") {
@@ -30,6 +30,9 @@ export function validateNpmPublishBoundary(
   npmDistTag,
   { bypassExtendedStableGuard = false } = {},
 ) {
+  if (npmDistTag === "alpha" || parseReleaseVersion(packageVersion)?.channel === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   if (!SUPPORTED_DIST_TAGS.has(npmDistTag)) {
     throw new Error(`Unsupported npm dist-tag "${npmDistTag}".`);
   }
@@ -40,12 +43,6 @@ export function validateNpmPublishBoundary(
   }
   const releaseTrain = classifyReleaseTrain(parsed);
 
-  if (releaseTrain === "alpha") {
-    if (npmDistTag !== "alpha") {
-      throw new Error("Alpha prereleases must publish to the alpha npm dist-tag.");
-    }
-    return parsed;
-  }
   if (releaseTrain === "beta") {
     if (npmDistTag !== "beta") {
       throw new Error("Beta prereleases must publish to the beta npm dist-tag.");
@@ -74,6 +71,9 @@ export function validateNpmPublishBoundary(
 }
 
 export function resolveNpmPreflightSdkSelectors(packageVersion, npmDistTag) {
+  if (npmDistTag === "alpha" || parseReleaseVersion(packageVersion)?.channel === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   const parsed = parseReleaseVersion(packageVersion);
   return parsed &&
     classifyReleaseTrain(parsed) === "stable" &&
@@ -83,6 +83,13 @@ export function resolveNpmPreflightSdkSelectors(packageVersion, npmDistTag) {
 }
 
 export function validateNpmPreflightDistTag({ manifest, npmDistTag }) {
+  if (
+    npmDistTag === "alpha" ||
+    manifest?.npmDistTag === "alpha" ||
+    parseReleaseVersion(manifest?.packageVersion ?? "")?.channel === "alpha"
+  ) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   if (SUPPORTED_DIST_TAGS.has(npmDistTag) && manifest?.npmDistTag === npmDistTag) {
     return;
   }
@@ -112,6 +119,14 @@ export function validateNpmPreflightDistTag({ manifest, npmDistTag }) {
 }
 
 export function validateExtendedStableNpmReleaseRequest(request) {
+  if (
+    request.npmDistTag === "alpha" ||
+    request.releaseTag?.includes("-alpha.") ||
+    parseReleaseVersion(request.packageVersion ?? "")?.channel === "alpha" ||
+    request.npmWorkflowRef?.includes("tideclaw/alpha/")
+  ) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   const bypassExtendedStableGuard = request.bypassExtendedStableGuard ?? false;
   requireExtendedStableBypassTag(request.npmDistTag, bypassExtendedStableGuard);
   const shaPreflight =
@@ -186,7 +201,14 @@ export function validateExtendedStableNpmReleaseRequest(request) {
     };
   }
 
-  const mainVersion = parseReleaseVersion(request.mainPackageVersion);
+  validateActiveExtendedStableLine(releaseVersion, request.mainPackageVersion);
+  return { extendedStable: true, releaseVersion, extendedStableBranch };
+}
+
+// Core admission, parent dispatch, and plugin mutation share one retirement policy.
+export function validateActiveExtendedStableLine(releaseVersion, mainPackageVersion) {
+  const releaseVersionParsed = validateNpmPublishBoundary(releaseVersion, "extended-stable");
+  const mainVersion = parseReleaseVersion(mainPackageVersion);
   if (
     mainVersion === null ||
     mainVersion.channel !== "stable" ||
@@ -195,19 +217,25 @@ export function validateExtendedStableNpmReleaseRequest(request) {
     throw new Error("Protected main package version must be an exact final YYYY.M.P version.");
   }
   const mainCalendarMonth = mainVersion.year * 12 + mainVersion.month;
-  const releaseCalendarMonth = taggedVersion.year * 12 + taggedVersion.month;
-  // Keep one active trailing-month line; advancing main another month retires the older line.
-  if (mainCalendarMonth - releaseCalendarMonth !== 1) {
-    const expectedYear = mainVersion.month === 1 ? mainVersion.year - 1 : mainVersion.year;
-    const expectedMonth = mainVersion.month === 1 ? 12 : mainVersion.month - 1;
+  const releaseCalendarMonth = releaseVersionParsed.year * 12 + releaseVersionParsed.month;
+  // Keep both trailing completed months eligible so maintenance can finish shortly after
+  // main enters a new month. Advancing main a third month retires the older line.
+  const monthDifference = mainCalendarMonth - releaseCalendarMonth;
+  if (monthDifference < 1 || monthDifference > 2) {
+    const allowedMonths = [mainCalendarMonth - 1, mainCalendarMonth - 2]
+      .map((calendarMonth) => {
+        const year = Math.floor((calendarMonth - 1) / 12);
+        const month = ((calendarMonth - 1) % 12) + 1;
+        return `${year}.${month}`;
+      })
+      .join(" or ");
     throw new Error(
-      `Extended-stable publishes only the trailing completed month: protected main ${request.mainPackageVersion} allows ${expectedYear}.${expectedMonth}.PATCH, not ${releaseVersion}. Retire the older line or dispatch with BYPASS_EXTENDED_STABLE_GUARD for an explicitly approved exception.`,
+      `Extended-stable publishes only the two trailing completed months: protected main ${mainPackageVersion} allows ${allowedMonths}.PATCH, not ${releaseVersion}. Retire the older line; publishing a retired line requires an explicit maintainer decision.`,
     );
   }
   if (classifyReleaseTrain(mainVersion) !== "stable") {
     throw new Error("Protected main must remain on a daily patch below 33.");
   }
-  return { extendedStable: true, releaseVersion, extendedStableBranch };
 }
 
 export function validateExtendedStableRunIdentity({
@@ -221,6 +249,8 @@ export function validateExtendedStableRunIdentity({
   fullReleaseRunId = "",
   fullReleaseRunAttempt = "",
   workflowPath = "",
+  expectedOrchestratorBranch = "",
+  expectedOrchestratorSha = "",
   trustedPluginWorkflowSha = "",
 }) {
   const fullReleasePreflight =
@@ -260,6 +290,15 @@ export function validateExtendedStableRunIdentity({
       );
     }
   }
+  const directTargetIdentity = run.headBranch === expectedBranch && run.headSha === expectedSha;
+  const orchestratedPluginIdentity =
+    kind === "plugin" &&
+    typeof expectedOrchestratorBranch === "string" &&
+    expectedOrchestratorBranch.length > 0 &&
+    typeof expectedOrchestratorSha === "string" &&
+    expectedOrchestratorSha.length > 0 &&
+    run.headBranch === expectedOrchestratorBranch &&
+    run.headSha === expectedOrchestratorSha;
   // FRV runs trusted tooling against a separately pinned release source; its
   // qualified manifest, not the workflow head, binds that source SHA.
   // A main-branch plugin recovery likewise separates tooling from source. The
@@ -277,7 +316,8 @@ export function validateExtendedStableRunIdentity({
     !fullReleasePreflight &&
     !trustedPluginRecovery &&
     npmDistTag === "extended-stable" &&
-    (run.headBranch !== expectedBranch || run.headSha !== expectedSha)
+    !directTargetIdentity &&
+    !orchestratedPluginIdentity
   ) {
     throw new Error(
       `Referenced extended-stable ${kind} run must have headBranch=${expectedBranch} and headSha=${expectedSha}; got ${run.headBranch ?? "<missing>"} and ${run.headSha ?? "<missing>"}.`,
@@ -359,7 +399,8 @@ export async function verifyExtendedStableRegistryReadback({
   expectedVersion,
   query,
   sleep,
-  attempts = 12,
+  // Initial read plus thirty minutes of replication waits.
+  attempts = 181,
   delayMs = 10_000,
 }) {
   let exactVersion = "missing";
@@ -466,34 +507,6 @@ function validateRequestFromRepository() {
         : packageVersionAt("refs/remotes/origin/main"),
     });
   }
-  if (bypassExtendedStableGuard) {
-    execFileSync(
-      "git",
-      [
-        "fetch",
-        "--no-tags",
-        "origin",
-        `+refs/heads/${extendedStableBranch}:refs/remotes/origin/${extendedStableBranch}`,
-      ],
-      { stdio: "inherit" },
-    );
-    execFileSync(
-      "git",
-      ["fetch", "--no-tags", "origin", `+refs/tags/${releaseTag}:refs/tags/${releaseTag}`],
-      { stdio: "inherit" },
-    );
-    return validateExtendedStableNpmReleaseRequest({
-      npmDistTag,
-      bypassExtendedStableGuard,
-      releaseTag,
-      npmWorkflowRef,
-      checkoutSha: git(["rev-parse", "HEAD"]),
-      tagSha: git(["rev-parse", `${releaseTag}^{commit}`]),
-      extendedStableBranchSha: git(["rev-parse", `refs/remotes/origin/${extendedStableBranch}`]),
-      packageVersion,
-      mainPackageVersion: "",
-    });
-  }
   execFileSync(
     "git",
     [
@@ -501,7 +514,7 @@ function validateRequestFromRepository() {
       "--no-tags",
       "origin",
       `+refs/heads/${extendedStableBranch}:refs/remotes/origin/${extendedStableBranch}`,
-      "+refs/heads/main:refs/remotes/origin/main",
+      ...(bypassExtendedStableGuard ? [] : ["+refs/heads/main:refs/remotes/origin/main"]),
     ],
     { stdio: "inherit" },
   );
@@ -519,7 +532,9 @@ function validateRequestFromRepository() {
     tagSha: git(["rev-parse", `${releaseTag}^{commit}`]),
     extendedStableBranchSha: git(["rev-parse", `refs/remotes/origin/${extendedStableBranch}`]),
     packageVersion,
-    mainPackageVersion: packageVersionAt("refs/remotes/origin/main"),
+    mainPackageVersion: bypassExtendedStableGuard
+      ? ""
+      : packageVersionAt("refs/remotes/origin/main"),
   });
 }
 
@@ -538,6 +553,20 @@ function appendOutput(values) {
 
 async function main() {
   const command = process.argv[2];
+  if (command === "validate-active-line") {
+    const repository = process.env.GITHUB_REPOSITORY ?? "";
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository)) {
+      throw new Error("GITHUB_REPOSITORY must identify the publication repository.");
+    }
+    const content = execFileSync(
+      "gh",
+      ["api", `repos/${repository}/contents/package.json?ref=refs/heads/main`, "--jq", ".content"],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    const mainPackageVersion = JSON.parse(Buffer.from(content, "base64").toString("utf8")).version;
+    validateActiveExtendedStableLine(process.env.PACKAGE_VERSION ?? "", mainPackageVersion);
+    return;
+  }
   if (command === "validate-request") {
     const result = validateRequestFromRepository();
     console.log(
@@ -572,6 +601,8 @@ async function main() {
       fullReleaseRunId: process.env.FULL_RELEASE_VALIDATION_RUN_ID,
       fullReleaseRunAttempt: process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT,
       workflowPath: process.env.RUN_WORKFLOW_PATH,
+      expectedOrchestratorBranch: process.env.EXPECTED_ORCHESTRATOR_BRANCH,
+      expectedOrchestratorSha: process.env.EXPECTED_ORCHESTRATOR_SHA,
       trustedPluginWorkflowSha: process.env.TRUSTED_PLUGIN_WORKFLOW_SHA,
     });
     console.log(`Verified referenced ${process.env.RUN_KIND} run.`);

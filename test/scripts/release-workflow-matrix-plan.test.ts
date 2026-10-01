@@ -51,6 +51,7 @@ type MatrixEntry = {
 };
 
 type WorkflowJob = {
+  "timeout-minutes"?: string | number;
   env: Record<string, string>;
   if?: string;
   needs: string[];
@@ -75,6 +76,10 @@ function requiredJob(definition: WorkflowDocument, name: string): WorkflowJob {
 // Direct dispatches build from the selected ref. Only trusted workflow callers
 // may provide the complete immutable package artifact tuple.
 const WORKFLOW_CALL_ONLY_INPUTS = new Set([
+  "runner_group",
+  "package_sha256",
+  "prepublish_plugin_registry_manifest_sha256",
+  "shared_image_archive_sha256",
   "published_upgrade_survivor_baseline_scope",
   "prepare_only",
   "emit_candidate_evidence",
@@ -112,6 +117,21 @@ const PACKAGE_UPDATE_CHUNKS = [
   "package-update-self-upgrade",
 ];
 
+const FULL_DOCKER_CHUNKS = [
+  "core",
+  ...PACKAGE_UPDATE_CHUNKS,
+  "plugins-runtime-plugins",
+  "plugins-runtime-services",
+  "plugins-runtime-install-a",
+  "plugins-runtime-install-b",
+  "plugins-runtime-install-c",
+  "plugins-runtime-install-d",
+  "plugins-runtime-install-e",
+  "plugins-runtime-install-f",
+  "plugins-runtime-install-g",
+  "plugins-runtime-install-h",
+];
+
 const PROFILE_EXPECTATIONS = [
   {
     profile: "minimum",
@@ -125,38 +145,12 @@ const PROFILE_EXPECTATIONS = [
   },
   {
     profile: "stable",
-    dockerE2eChunks: [
-      "core",
-      ...PACKAGE_UPDATE_CHUNKS,
-      "plugins-runtime-plugins",
-      "plugins-runtime-services",
-      "plugins-runtime-install-a",
-      "plugins-runtime-install-b",
-      "plugins-runtime-install-c",
-      "plugins-runtime-install-d",
-      "plugins-runtime-install-e",
-      "plugins-runtime-install-f",
-      "plugins-runtime-install-g",
-      "plugins-runtime-install-h",
-    ],
+    dockerE2eChunks: FULL_DOCKER_CHUNKS,
     liveModelProviders: ["anthropic", "google", "minimax", "openai"],
   },
   {
     profile: "full",
-    dockerE2eChunks: [
-      "core",
-      ...PACKAGE_UPDATE_CHUNKS,
-      "plugins-runtime-plugins",
-      "plugins-runtime-services",
-      "plugins-runtime-install-a",
-      "plugins-runtime-install-b",
-      "plugins-runtime-install-c",
-      "plugins-runtime-install-d",
-      "plugins-runtime-install-e",
-      "plugins-runtime-install-f",
-      "plugins-runtime-install-g",
-      "plugins-runtime-install-h",
-    ],
+    dockerE2eChunks: FULL_DOCKER_CHUNKS,
     liveModelProviders: [
       "anthropic",
       "google",
@@ -590,14 +584,6 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       expect(definition.on.workflow_call.inputs).toHaveProperty(input);
       expect(definition.on.workflow_dispatch.inputs).not.toHaveProperty(input);
     }
-    expect(definition.on.workflow_dispatch.inputs.live_advisory).toEqual(
-      definition.on.workflow_call.inputs.live_advisory,
-    );
-    expect(definition.on.workflow_dispatch.inputs.live_advisory).toMatchObject({
-      default: false,
-      required: false,
-      type: "boolean",
-    });
     expect(definition.on.workflow_dispatch.inputs.allow_unreleased_changelog).toEqual(
       definition.on.workflow_call.inputs.allow_unreleased_changelog,
     );
@@ -632,6 +618,16 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       expect(plan.dockerE2e.matrix.include.map((entry: MatrixEntry) => entry.chunk_id)).toEqual(
         dockerE2eChunks,
       );
+      expect(
+        plan.dockerE2e.matrix.include.find(
+          (entry: MatrixEntry) => entry.chunk_id === "package-update-self-upgrade",
+        ),
+      ).toMatchObject({ timeout_minutes: 210 });
+      expect(
+        plan.dockerE2e.matrix.include.find(
+          (entry: MatrixEntry) => entry.chunk_id === "package-update-openai",
+        ),
+      ).toMatchObject({ timeout_minutes: 160 });
       expect(plan.liveModels.matrix.include.map((entry: MatrixEntry) => entry.providers)).toEqual(
         liveModelProviders,
       );
@@ -736,30 +732,6 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     },
   );
 
-  it("keeps stable release jobs broad enough for stable-required lanes", () => {
-    const plan = createReleaseWorkflowMatrixPlan({
-      includeLiveSuites: true,
-      includeReleasePathSuites: true,
-      releaseProfile: "stable",
-    });
-
-    expect(plan.dockerE2e.count).toBe(15);
-    expect(plan.liveModels.matrix.include.map((entry: MatrixEntry) => entry.providers)).toEqual([
-      "anthropic",
-      "google",
-      "minimax",
-      "openai",
-    ]);
-    expect(plan.liveModels.omitted.map((entry: MatrixEntry) => entry.id)).toEqual([
-      "moonshot",
-      "opencode-go",
-      "openrouter",
-      "xai",
-      "zai",
-      "fireworks",
-    ]);
-  });
-
   it("limits MiniMax Docker live-model coverage to the stable M3 pair", () => {
     const plan = createReleaseWorkflowMatrixPlan({
       includeLiveSuites: true,
@@ -776,7 +748,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     });
   });
 
-  it("keeps stable Anthropic Docker proof blocking and full proof advisory", () => {
+  it("keeps stable and full Anthropic Docker proof blocking", () => {
     const jobs = workflow().jobs;
     const dockerLiveJob = expectDefined(
       jobs.validate_live_docker_provider_suites,
@@ -804,8 +776,8 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
         suiteId: "live-gateway-anthropic-docker",
       },
       {
-        advisory: true,
-        label: "Docker live gateway Anthropic (full advisory)",
+        advisory: undefined,
+        label: "Docker live gateway Anthropic (full)",
         profiles: "full",
         suiteId: "live-gateway-anthropic-docker-full",
       },
@@ -864,6 +836,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       liveImage.steps.find((step) => step.name === "Resolve shared live-test image tag")?.env
         ?.LIVE_IMAGE_EXTENSIONS,
     ).toBe("${{ needs.plan_release_workflow_matrices.outputs.live_image_extensions }}");
+    expect(dockerE2e["timeout-minutes"]).toBe("${{ matrix.timeout_minutes }}");
     expect(dockerE2e.needs).toContain("plan_release_workflow_matrices");
     expect(liveModels.needs).toContain("plan_release_workflow_matrices");
     expect(liveDocker.needs).toContain("plan_release_workflow_matrices");

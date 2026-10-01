@@ -1,12 +1,15 @@
 import http from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./bridge-auth-registry.js";
+import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./bridge-server.js";
+import { resolveBrowserConfig } from "./config.js";
 import { isAuthorizedBrowserRequest } from "./http-auth.js";
 
 type Auth = { token?: string; password?: string };
 const fixture = vi.hoisted(() => ({ configuredAuth: {} as Auth }));
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>();
   return { ...actual, getRuntimeConfig: () => ({}) };
 });
 vi.mock("./control-auth.js", () => ({
@@ -30,20 +33,17 @@ const cases: AuthCase[] = [
     status: 200,
   },
   {
-    name: "registry password crosses real HTTP",
-    serverAuth: { password: "fixture-password" },
-    bridgeAuth: { password: "fixture-password" },
+    name: "registered bridge password wins over Gateway auth",
+    serverAuth: { password: "fixture-bridge-password" },
+    configuredAuth: { token: "fixture-unrelated-gateway-token" },
+    bridgeAuth: { password: "fixture-bridge-password" },
     status: 200,
   },
   {
-    name: "missing auth receives real 401",
-    serverAuth: { token: "fixture-token" },
-    status: 401,
-  },
-  {
-    name: "wrong explicit auth is not replaced by configured auth",
+    name: "explicit auth still wins over registered bridge auth",
     serverAuth: { token: "fixture-token" },
     configuredAuth: { token: "fixture-token" },
+    bridgeAuth: { token: "fixture-token" },
     headers: { Authorization: "Bearer fixture-wrong-token" },
     status: 401,
   },
@@ -121,6 +121,27 @@ describe("fetchBrowserJson automatic auth over loopback HTTP", () => {
       await closed;
     } finally {
       vi.unstubAllEnvs();
+    }
+  });
+
+  it("reads the real bridge routes with its own auth when Gateway auth differs", async () => {
+    fixture.configuredAuth = { token: "fixture-unrelated-gateway-token" };
+    const bridge = await startBrowserBridgeServer({
+      resolved: resolveBrowserConfig({
+        enabled: true,
+        attachOnly: true,
+        defaultProfile: "fixture",
+        profiles: { fixture: { cdpPort: 1, color: "#123456" } },
+      }),
+      authToken: "fixture-private-bridge-token",
+    });
+    try {
+      await expect(fetchBrowserJson(`${bridge.baseUrl}/tabs?profile=fixture`)).resolves.toEqual({
+        running: false,
+        tabs: [],
+      });
+    } finally {
+      await stopBrowserBridgeServer(bridge.server);
     }
   });
 

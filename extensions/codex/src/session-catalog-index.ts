@@ -72,7 +72,6 @@ export class CodexCatalogIndex {
   private needsNativeRefresh = false;
   private restored = false;
   private restoring: Promise<void> | undefined;
-  private background: NodeJS.Immediate | undefined;
   private failure: { error: unknown } | undefined;
   private closed = false;
   private readonly currency: CodexCatalogCurrency;
@@ -116,13 +115,14 @@ export class CodexCatalogIndex {
       },
       upsert: (thread) => this.upsertThread(thread),
       reserveTurnStartOrder: () => this.ordering.reserveEvent(),
+      requestNativeRefresh: () => this.currency.requestNativeRefresh(),
       refresh: (id, readThread, sourceOrder) => this.refreshThread(id, readThread, sourceOrder),
       archive: (id) => this.archive(id),
       remove: (id) => {
         this.currency.requestNativeRefresh();
         this.remove(id);
       },
-      report: (error) => this.report(error),
+      report: (error, disposition) => this.report(error, disposition),
     });
     this.unsubscribe = subscribeCodexCatalogEvents(
       options.homeId,
@@ -163,9 +163,14 @@ export class CodexCatalogIndex {
     }
   }
 
-  private report(error: unknown): void {
-    if (!this.closed) {
-      embeddedAgentLog.warn("Codex resident catalog background update failed", { error });
+  private report(error: unknown, disposition?: "deferred"): void {
+    if (!this.closed && !this.currency.stopForTerminalFailure(error)) {
+      embeddedAgentLog.warn(
+        disposition === "deferred"
+          ? "Codex resident catalog metadata refresh interrupted; deferred for automatic recovery"
+          : "Codex resident catalog background update failed",
+        { error },
+      );
     }
   }
 
@@ -222,8 +227,8 @@ export class CodexCatalogIndex {
 
   async initialize(): Promise<void> {
     this.assertCurrent();
-    clearImmediate(this.background);
-    this.background = undefined;
+    this.currency.assertRunnable();
+    this.currency.cancelHydration();
     if (this.initialized && !this.needsNativeRefresh) {
       return;
     }
@@ -255,6 +260,7 @@ export class CodexCatalogIndex {
         .catch((error: unknown) => {
           this.failure = { error };
           this.availability.fail(error);
+          this.currency.stopForTerminalFailure(error);
           throw error;
         })
         .finally(() => {
@@ -316,22 +322,10 @@ export class CodexCatalogIndex {
   }
 
   private scheduleHydration(): void {
-    if (
-      (this.initialized && !this.needsNativeRefresh) ||
-      this.initializing ||
-      this.background ||
-      this.closed
-    ) {
+    if ((this.initialized && !this.needsNativeRefresh) || this.initializing || this.closed) {
       return;
     }
-    this.background = setImmediate(() => {
-      this.background = undefined;
-      const run = () => this.initialize();
-      void (this.options.runBackground ? this.options.runBackground(run) : run()).catch(
-        (error: unknown) => this.report(error),
-      );
-    });
-    this.background.unref();
+    this.currency.scheduleHydration(() => this.initialize());
   }
 
   private captureFields(): FieldRevision {
@@ -598,7 +592,6 @@ export class CodexCatalogIndex {
     sourceOrder: number | undefined,
   ): Promise<boolean> {
     this.assertCurrent();
-    this.currency.requestNativeRefresh();
     this.observations.mark(id);
     const fields = this.captureFields();
     return this.projections.run(() =>
@@ -675,7 +668,6 @@ export class CodexCatalogIndex {
     return Boolean(
       this.initializing ||
       (!this.restored && this.restoring) ||
-      this.background ||
       this.reconciling ||
       this.reconcilingNative ||
       this.currency.hasActiveWork() ||
@@ -708,6 +700,7 @@ export class CodexCatalogIndex {
           return await this.nativePages.list(params, cursor, this.options, request);
         }
         if (page) {
+          void this.currency.refreshNativeIfDue();
           return page;
         }
         await this.availability.next(expiresAt);
@@ -724,8 +717,6 @@ export class CodexCatalogIndex {
     this.unsubscribe();
     // close() joins the running scan after retirement has fenced its publications.
     void this.currency.close();
-    clearImmediate(this.background);
-    this.background = undefined;
     return this.persistence.retire();
   }
 

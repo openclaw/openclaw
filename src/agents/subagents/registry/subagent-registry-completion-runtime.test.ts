@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -41,7 +42,7 @@ function createHarness() {
   const completeSubagentRun = vi
     .fn<(_: SubagentCompletionRequest) => Promise<void>>()
     .mockRejectedValue(new Error("synthetic completion failure"));
-  const resumeRun = vi.fn(() => {
+  const resumeRun = vi.fn<() => void>(() => {
     throw resumeError;
   });
   const scheduleSweep = vi.fn();
@@ -259,13 +260,14 @@ describe("subagent completion rejection ownership", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
-  it("retains the restart-retry diagnostic and retires the fired timer", async () => {
+  it("retains the interrupted-finalization restart diagnostic and retires the fired timer", async () => {
     const h = createHarness();
-    h.runtime.scheduleSubagentCompletionRetryAfterRestart(
-      h.request,
-      "explicit-failed-mark",
-      h.entry,
-    );
+    markGatewayRestartDraining();
+    await expect(
+      h.runtime.finalizeInterruptedSubagentRun({ runId: h.entry.runId, error: "interrupted" }),
+    ).resolves.toBe(1);
+    expect(h.retryTimers.size).toBe(1);
+    resetGatewayWorkAdmission();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(h.warn).toHaveBeenLastCalledWith(
       "failed to retry subagent completion after gateway restart",
@@ -275,26 +277,26 @@ describe("subagent completion rejection ownership", () => {
         error: h.resumeError,
       },
     );
-    expect(h.completeSubagentRun).toHaveBeenCalledTimes(2);
+    expect(h.completeSubagentRun).toHaveBeenCalledTimes(3);
     expect(h.retryTimers.size).toBe(0);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
-  it.each(["replacement", "generation"] as const)(
-    "rejects a stale restart timer after %s",
-    async (change) => {
-      const h = createHarness();
-      h.runtime.scheduleSubagentCompletionRetryAfterRestart(h.request, "restart", h.entry);
-      if (change === "replacement") {
-        h.runs.set(h.entry.runId, { ...h.entry });
-      } else {
-        h.entry.generation = 2;
-      }
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(h.completeSubagentRun).not.toHaveBeenCalled();
-      expect(h.retryTimers.size).toBe(0);
-    },
-  );
+  it("propagates an unknown SQLite outcome from interrupted finalization during restart drain", async () => {
+    const h = createHarness();
+    const error = new SqliteWorkerError("completion commit outcome is unknown", "outcome-unknown");
+    h.completeSubagentRun.mockRejectedValueOnce(error);
+    markGatewayRestartDraining();
+
+    await expect(
+      h.runtime.finalizeInterruptedSubagentRun({ runId: h.entry.runId, error: "interrupted" }),
+    ).rejects.toBe(error);
+    expect(h.completeSubagentRun).toHaveBeenCalledOnce();
+    expect(h.retryTimers.size).toBe(0);
+    expect(h.scheduleSweep).not.toHaveBeenCalled();
+    expect(h.resumeRun).not.toHaveBeenCalled();
+    expect(h.warn).not.toHaveBeenCalled();
+  });
 
   it.each([1, 2])(
     "stops after successful attempt %i without starting cleanup recovery",
@@ -312,17 +314,52 @@ describe("subagent completion rejection ownership", () => {
     },
   );
 
-  it("stops retrying when the failed attempt removes the row", async () => {
-    const h = createHarness();
-    h.completeSubagentRun.mockImplementation(async () => {
-      h.runs.delete(h.entry.runId);
-      throw new Error("row retired during completion");
-    });
-    await h.runtime.completeSubagentRunWithRecovery(h.request, "subagent-wait");
-    expect(h.completeSubagentRun).toHaveBeenCalledOnce();
-    expect(h.resumeRun).not.toHaveBeenCalled();
-    expect(h.scheduleSweep).not.toHaveBeenCalled();
-  });
+  it.each(
+    [1, 2].flatMap((attempt) =>
+      ["removal", "replacement", "generation"].map((change) => ({ attempt, change })),
+    ),
+  )(
+    "retires recovery after $change during failed attempt $attempt",
+    async ({ attempt, change }) => {
+      const h = createHarness();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      h.resumeRun.mockImplementation(() => {});
+      h.completeSubagentRun.mockReset();
+      if (attempt === 2) {
+        h.completeSubagentRun.mockRejectedValueOnce(new Error("retry current owner"));
+      }
+      h.completeSubagentRun.mockImplementation(async () => {
+        entered.resolve();
+        await release.promise;
+        throw new Error("row retired during completion");
+      });
+      const completion = h.runtime.completeSubagentRunWithRecovery(
+        { ...h.request, expectedEntry: undefined },
+        "lifecycle-event",
+      );
+      try {
+        await entered.promise;
+        if (change === "removal") {
+          h.runs.delete(h.entry.runId);
+        } else if (change === "replacement") {
+          h.runs.set(h.entry.runId, { ...h.entry, generation: 2 });
+        } else {
+          h.entry.generation = 2;
+        }
+        release.resolve();
+        await completion;
+        expect(h.completeSubagentRun).toHaveBeenCalledTimes(attempt);
+        expect(h.resumeRun).not.toHaveBeenCalled();
+        expect(h.scheduleSweep).not.toHaveBeenCalled();
+        expect(h.entry.cleanupHandled).toBe(true);
+        expect(h.resumed.has(h.entry.runId)).toBe(true);
+      } finally {
+        release.resolve();
+        await completion;
+      }
+    },
+  );
 
   it.each(["running", "cleaned", "yielded"] as const)(
     "preserves %s recovery after both attempts fail",

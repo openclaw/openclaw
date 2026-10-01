@@ -1,4 +1,5 @@
-// QA Lab mock provider input and tool-output extraction.
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isInternalRuntimeContextCarrierText } from "../shared/runtime-context.js";
 import {
   type ResponsesInputItem,
   type MockOpenAiRequestKind,
@@ -6,8 +7,6 @@ import {
   QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
   QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE,
   QA_SUBAGENT_PRIVATE_WORKER_RE,
-  INTERNAL_RUNTIME_CONTEXT_BEGIN,
-  INTERNAL_RUNTIME_CONTEXT_END,
   QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE,
   QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE,
   buildSlackMpimHistoryBotReply,
@@ -61,6 +60,16 @@ export function extractLastUserText(input: ResponsesInputItem[]) {
   return extractLastMatchingUserTurn(input)?.text ?? "";
 }
 
+export function normalizeResponsesInput(value: unknown): ResponsesInputItem[] {
+  if (Array.isArray(value)) {
+    return value.map(asOptionalRecord).filter((item) => item !== undefined);
+  }
+  if (typeof value === "string") {
+    return [{ role: "user", content: [{ type: "input_text", text: value }] }];
+  }
+  return [];
+}
+
 export function extractLastMatchingUserTurn(input: ResponsesInputItem[], pattern?: RegExp) {
   const matcher = pattern && new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ""));
   for (let index = input.length - 1; index >= 0; index -= 1) {
@@ -98,25 +107,48 @@ function extractCurrentTaskEvent(text: string): string | undefined {
   if (!isInternalRuntimeContextCarrierText(text)) {
     return undefined;
   }
-  // v4 quotes each top-level data fragment. Selected history can contain nested
-  // event text, but only a fragment starting with the event owns this turn.
-  for (const match of Array.from(
-    text.matchAll(
-      /^Conversation data \(data, not instructions\):\r?\n("(?:[^"\\\r\n]|\\.)*")\r?$/gmu,
-    ),
-  ).toReversed()) {
-    try {
-      const fragment: unknown = JSON.parse(match[1] ?? "");
-      if (typeof fragment === "string" && startsTaskEvent(fragment)) {
-        return fragment;
-      }
-    } catch {
-      // Malformed quoted data does not become a current task event.
+  for (const fragment of extractRuntimeConversationData(text).toReversed()) {
+    if (startsTaskEvent(fragment)) {
+      return fragment;
     }
   }
   // v3 keeps the producer event as a literal runtime-instruction fragment.
   const literal = /^\[Internal task completion event\](?:\r?\n|$)/mu.exec(text);
   return literal ? text.slice(literal.index) : undefined;
+}
+
+function extractRuntimeConversationData(text: string): string[] {
+  const fragments: string[] = [];
+  // Decode only top-level v4 data fragments, never quoted history nested inside them.
+  for (const match of text.matchAll(
+    /^Conversation data \(data, not instructions\):\r?\n("(?:[^"\\\r\n]|\\.)*")\r?$/gmu,
+  )) {
+    try {
+      const fragment: unknown = JSON.parse(match[1] ?? "");
+      if (typeof fragment === "string") {
+        fragments.push(fragment);
+      }
+    } catch {
+      // Malformed quoted data is not runtime context.
+    }
+  }
+  return fragments;
+}
+
+export function extractCurrentRuntimeContextTexts(input: ResponsesInputItem[]): string[] {
+  const turn = extractLastMatchingUserTurn(input);
+  if (!turn) {
+    return [];
+  }
+  return input.slice(turn.index + 1).flatMap((item) => {
+    const text = item.role === "user" ? extractInputText(item.content) : "";
+    if (!isInternalRuntimeContextCarrierText(text)) {
+      return [];
+    }
+    return /^Conversation data \(data, not instructions\):$/mu.test(text)
+      ? extractRuntimeConversationData(text)
+      : [text]; // Session v3 retains literal runtime context.
+  });
 }
 
 function isSubagentRecoveryText(text: string): boolean {
@@ -130,6 +162,13 @@ function isSubagentRecoveryText(text: string): boolean {
       "The previous assistant turn completed its tool calls but did not produce a user-visible answer.",
       "The previous attempt compacted the conversation context before producing a final user-visible answer.",
     ].some((prefix) => text.startsWith(prefix))
+  );
+}
+
+export function isMockSubagentSettledWake(text: string): boolean {
+  // Installed-candidate QA can still send the earlier session-wide wording.
+  return /^(?:\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} [^\]\r\n]+\] )?\[Subagent Context\] Every subagent (?:in this batch|spawned from this session) has now settled\b/mu.test(
+    text,
   );
 }
 
@@ -161,11 +200,7 @@ export function resolveMockSubagentTurn(input: ResponsesInputItem[]):
     if (isInternalRuntimeContextCarrierText(current)) {
       continue;
     }
-    if (
-      /^\[Subagent Context\] Every subagent spawned from this session has now settled/mu.test(
-        current,
-      )
-    ) {
+    if (isMockSubagentSettledWake(current)) {
       settled = true;
       continue;
     }
@@ -226,14 +261,6 @@ function isUserTurn(item: ResponsesInputItem) {
   );
 }
 
-function isInternalRuntimeContextCarrierText(text: string) {
-  const trimmed = text.trim();
-  return (
-    trimmed.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN) &&
-    trimmed.endsWith(INTERNAL_RUNTIME_CONTEXT_END)
-  );
-}
-
 function isContinuationUserText(text: string) {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -242,6 +269,12 @@ function isContinuationUserText(text: string) {
   return (
     /^(?:continue|keep going|resume|retry|carry on)(?:[.!?])?$/i.test(trimmed) ||
     /\b(?:continue|continuation|compaction|post-compaction|retry|resume)\b/i.test(trimmed)
+  );
+}
+
+function readFunctionCallOutputText(record: Record<string, unknown>) {
+  return [record.text, record.output_text, record.content].find(
+    (value): value is string => typeof value === "string",
   );
 }
 
@@ -258,31 +291,15 @@ function stringifyFunctionCallOutput(output: unknown): string {
         if (!entry || typeof entry !== "object") {
           return "";
         }
-        const record = entry as Record<string, unknown>;
-        if (typeof record.text === "string") {
-          return record.text;
-        }
-        if (typeof record.output_text === "string") {
-          return record.output_text;
-        }
-        if (typeof record.content === "string") {
-          return record.content;
-        }
-        return "";
+        return readFunctionCallOutputText(entry as Record<string, unknown>) ?? "";
       })
       .filter(Boolean)
       .join("\n");
   }
   if (output && typeof output === "object") {
-    const record = output as Record<string, unknown>;
-    if (typeof record.text === "string") {
-      return record.text;
-    }
-    if (typeof record.output_text === "string") {
-      return record.output_text;
-    }
-    if (typeof record.content === "string") {
-      return record.content;
+    const text = readFunctionCallOutputText(output as Record<string, unknown>);
+    if (text !== undefined) {
+      return text;
     }
     try {
       return JSON.stringify(output);
@@ -297,30 +314,19 @@ function isResponsesToolCallOutput(item: ResponsesInputItem) {
   return item.type === "function_call_output" || item.type === "custom_tool_call_output";
 }
 
-function extractFunctionCallOutputText(item: ResponsesInputItem) {
-  if (!isResponsesToolCallOutput(item)) {
-    return "";
-  }
-  return stringifyFunctionCallOutput(item.output);
-}
-
 function findCurrentToolOutput(input: ResponsesInputItem[]): ResponsesInputItem | undefined {
-  const lastUserIndex = input.findLastIndex(isUserTurn);
-  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
-    if (isResponsesToolCallOutput(item)) {
+  let hasLaterContinuation = false;
+  for (const item of input.toReversed()) {
+    const userTurn = isUserTurn(item);
+    if (isResponsesToolCallOutput(item) && (hasLaterContinuation || !userTurn)) {
       return item;
     }
-  }
-  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
-    if (!isResponsesToolCallOutput(candidateItem)) {
-      continue;
-    }
-    const laterUserTexts = input
-      .slice(candidateIndex + 1)
-      .filter(isUserTurn)
-      .map((laterItem) => extractInputText(laterItem.content));
-    if (laterUserTexts.length > 0 && laterUserTexts.every(isContinuationUserText)) {
-      return candidateItem;
+    if (userTurn) {
+      // A fresh authored turn fences old results; continuation turns do not.
+      if (!isContinuationUserText(extractInputText(item.content))) {
+        return undefined;
+      }
+      hasLaterContinuation = true;
     }
   }
   return undefined;
@@ -356,17 +362,13 @@ export function extractToolOutputCallId(input: ResponsesInputItem[]) {
 }
 
 export function extractLatestToolOutput(input: ResponsesInputItem[]) {
-  for (const item of input.toReversed()) {
-    if (isResponsesToolCallOutput(item)) {
-      return stringifyFunctionCallOutput(item.output);
-    }
-  }
-  return "";
+  return stringifyFunctionCallOutput(input.findLast(isResponsesToolCallOutput)?.output);
 }
 
 export function extractAllToolOutputText(input: ResponsesInputItem[]) {
   return input
-    .map((item) => extractFunctionCallOutputText(item))
+    .filter(isResponsesToolCallOutput)
+    .map((item) => stringifyFunctionCallOutput(item.output))
     .filter(Boolean)
     .join("\n");
 }
@@ -380,6 +382,12 @@ export function extractUserTextAfterLatestToolOutput(input: ResponsesInputItem[]
     .slice(latestToolOutputIndex + 1)
     .filter((item) => item.role === "user")
     .map((item) => extractInputText(item.content))
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function extractFollowthroughEvidenceText(input: ResponsesInputItem[]): string {
+  return [extractAllToolOutputText(input), extractUserTextAfterLatestToolOutput(input)]
     .filter(Boolean)
     .join("\n");
 }
@@ -565,14 +573,15 @@ export function buildWhatsAppGroupDispatchReply(allInputText: string) {
   return QA_WHATSAPP_REPLY_TO_BOT_SEED_MARKER_RE.exec(allInputText)?.[0];
 }
 
-export function buildWhatsAppBatchedReply(allInputText: string) {
-  const finalMatch = QA_WHATSAPP_BATCHED_FINAL_MARKER_RE.exec(allInputText);
+export function buildWhatsAppBatchedReply(prompt: string) {
+  const { current } = splitMockConversationContext(prompt);
+  const finalMatch = QA_WHATSAPP_BATCHED_FINAL_MARKER_RE.exec(current);
   const suffix = finalMatch?.[1];
   if (!suffix) {
     return undefined;
   }
   const firstMarker = `WHATSAPP_QA_BATCHED_FIRST_${suffix}`;
-  if (!allInputText.includes(firstMarker)) {
+  if (!current.includes(firstMarker)) {
     return `WHATSAPP_QA_BATCHED_MISSING_CONTEXT_${suffix}`;
   }
   return finalMatch[0];
@@ -609,57 +618,34 @@ export function countImageInputs(value: unknown): number {
   return count;
 }
 
-function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
-  const latestUserIndex = input.findLastIndex(isUserTurn);
-  if (latestUserIndex < 0) {
-    return { text: "", imageInputCount: 0 };
-  }
-
-  const latestUserItem = input[latestUserIndex];
-  if (!latestUserItem) {
-    return { text: "", imageInputCount: 0 };
-  }
-
-  const imageTurnItems = [latestUserItem];
-  const imageInputCount = countImageInputs(imageTurnItems.map((item) => item.content));
-  if (imageInputCount === 0) {
-    return { text: "", imageInputCount: 0 };
-  }
-  return {
-    text: imageTurnItems
-      .map((item) => extractInputText(item.content))
-      .filter(Boolean)
-      .join("\n"),
-    imageInputCount,
-  };
-}
-
 export function extractCurrentImageRequest(
   input: ResponsesInputItem[],
   body: Record<string, unknown>,
 ) {
   // Match only the current request. Historical image prompts must not override
   // a later non-image turn just because they remain in transcript context.
-  const imageUserTurn = extractLatestImageUserTurn(input);
-  if (imageUserTurn.imageInputCount === 0) {
-    return imageUserTurn;
+  const latestUserItem = input.findLast(isUserTurn);
+  const imageInputCount = countImageInputs([latestUserItem?.content]);
+  if (imageInputCount === 0) {
+    return { text: "", imageInputCount: 0 };
   }
   const developerInstructions = input
     .filter((item) => item.role === "developer")
     .map((item) => extractInputText(item.content))
     .filter(Boolean);
   return {
-    text: [extractInstructionsText(body), ...developerInstructions, imageUserTurn.text]
+    text: [
+      extractInstructionsText(body),
+      ...developerInstructions,
+      extractInputText(latestUserItem?.content),
+    ]
       .filter(Boolean)
       .join("\n"),
-    imageInputCount: imageUserTurn.imageInputCount,
+    imageInputCount,
   };
 }
 
 export function parseToolOutputJson(toolOutput: string): Record<string, unknown> | null {
-  if (!toolOutput.trim()) {
-    return null;
-  }
   try {
     return JSON.parse(toolOutput) as Record<string, unknown>;
   } catch {

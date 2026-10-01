@@ -36,7 +36,8 @@ async function createFixture(state: OpenClawTestState, agentId = "main") {
   }
   const database = openOpenClawAgentDatabase(options);
   database.db.exec(`
-    INSERT INTO transcript_events VALUES ('hot', 0, '{"type":"session"}', 1);
+    INSERT INTO transcript_events (session_id, seq, event_json, created_at)
+      VALUES ('hot', 0, '{"type":"session"}', 1);
     INSERT INTO session_transcript_cold_archives
       (session_id, generation, archive_name, archive_sha256, event_count, raw_bytes,
        archive_bytes, last_seq, archived_at, storage)
@@ -80,8 +81,10 @@ it.each(["presence", "mutation"] as const)(
         db.exec(`
           DELETE FROM transcript_events WHERE session_id = 'hot';
           DELETE FROM session_transcript_cold_archives WHERE session_id = 'cold';
-          INSERT INTO transcript_events VALUES ('cold', 0, '{"type":"session"}', 1);
-          INSERT INTO transcript_events VALUES ('empty', 0, '{"type":"session"}', 1);
+          INSERT INTO transcript_events (session_id, seq, event_json, created_at)
+            VALUES ('cold', 0, '{"type":"session"}', 1);
+          INSERT INTO transcript_events (session_id, seq, event_json, created_at)
+            VALUES ('empty', 0, '{"type":"session"}', 1);
           UPDATE session_windows SET transcript_observed_at = NULL, transcript_updated_at = 50
             WHERE session_id = 'hot';
         `);

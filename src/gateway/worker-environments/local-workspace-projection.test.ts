@@ -3,12 +3,16 @@ import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
+import { deleteRegistryWorktree } from "../../agents/worktrees/registry.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
 } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   withLocalWorkspaceProjection,
   withSettledLocalWorkspace,
@@ -17,13 +21,24 @@ import { localWorkspaceStore } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 
 let root: string;
+let stateRoot: string;
 let owner: LocalWorkspaceOwner;
 let revoked = false;
 const git = (cwd: string, ...args: string[]) => requireGit(cwd, args);
 
+const suiteDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    cleanup();
+  }),
+);
+beforeAll(() => {
+  stateRoot = suiteDirs.make("openclaw-local-projection-state-");
+});
+
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-projection-"));
-  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateRoot);
   vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
   vi.stubEnv("GIT_CONFIG_SYSTEM", os.devNull);
   const repo = path.join(root, "source");
@@ -68,7 +83,19 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
+  // Retain the physical database and its reader worker; remove only this case's
+  // ownership. The store refuses deletion while a receipt or journal is pending.
+  revoked = false;
+  const store = localWorkspaceStore();
+  const row = store.get(owner.worktree.id);
+  if (row) {
+    store.delete(row, owner.assertCurrent);
+    await fs.rm(path.dirname(row.projection_path), { recursive: true, force: true });
+  }
+  deleteRegistryWorktree(process.env, owner.worktree.id);
+  if (process.env.OPENCLAW_STATE_DIR !== stateRoot) {
+    await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath());
+  }
   vi.unstubAllEnvs();
   await fs.rm(root, { recursive: true, force: true });
 });
@@ -77,6 +104,7 @@ describe("local sandbox workspace reconciliation", () => {
   it.runIf(process.env.OPENCLAW_TEST_LOCAL_PROJECTION_PODMAN === "1")(
     "edits and runs Git in a real required Podman sandbox across turns",
     async () => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
       const { proveRequiredPodmanWorkspace } =
         await import("./local-workspace-podman.test-support.js");
       await proveRequiredPodmanWorkspace(root, owner);
@@ -85,6 +113,7 @@ describe("local sandbox workspace reconciliation", () => {
   );
 
   it("installs additive owner state without changing the database version", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     const [
       { openOpenClawStateDatabase },
       { tableExists },
@@ -250,19 +279,41 @@ describe("local sandbox workspace reconciliation", () => {
       if (when === "later index") {
         await withLocalWorkspaceProjection(owner, (state) => state.prepare());
       }
-      const raw = Buffer.concat([
-        Buffer.from(owner.worktree.path + "/private-"),
-        Buffer.from([0xff]),
-      ]);
-      await fs.writeFile(raw, "ordinary source with an invalid filename");
-      if (when === "later index") {
-        await git(owner.worktree.path, "add", "-A");
-      }
+      // Git indexes preserve raw path bytes even when the host filesystem rejects them.
+      const blob = await requireGit(owner.worktree.path, ["hash-object", "-w", "--stdin"], {
+        input: "ordinary source with an invalid filename",
+      });
+      await requireGit(owner.worktree.path, ["update-index", "-z", "--index-info"], {
+        input: Buffer.concat([Buffer.from(`100644 ${blob}\tprivate-`), Buffer.from([0xff, 0])]),
+      });
       await expect(withLocalWorkspaceProjection(owner, (state) => state.prepare())).rejects.toThrow(
         "UTF-8",
       );
     },
   );
+
+  it("rejects an untracked non-UTF-8 path before initial guest capture", async ({ skip }) => {
+    const name = Buffer.concat([Buffer.from("private-"), Buffer.from([0xff])]);
+    const raw = Buffer.concat([Buffer.from(owner.worktree.path + path.sep), name]);
+    try {
+      await fs.writeFile(raw, "ordinary untracked source", { flag: "wx" });
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "EILSEQ") {
+        skip("filesystem rejects non-UTF-8 filenames (EILSEQ)");
+      }
+      throw error;
+    }
+    const names = await fs.readdir(owner.worktree.path, { encoding: "buffer" });
+    if (!names.some((entry) => entry.equals(name))) {
+      skip("filesystem does not preserve raw filename bytes");
+    }
+    const ignored = "private-\uFFFD";
+    await fs.writeFile(path.join(owner.worktree.path, ".gitignore"), ignored + "\n");
+    await fs.writeFile(path.join(owner.worktree.path, ignored), "synthetic ignored host secret");
+    await expect(withLocalWorkspaceProjection(owner, (state) => state.prepare())).rejects.toThrow(
+      "UTF-8",
+    );
+  });
 
   it("admits exact canonical source and host-staged new paths without trusting guest Git", async () => {
     await fs.writeFile(path.join(owner.worktree.path, "initial.txt"), "initial untracked source");
@@ -539,6 +590,9 @@ describe("local sandbox workspace reconciliation", () => {
         expect(remaining.entries).toHaveLength(1);
       } finally {
         execute.mockRestore();
+        await (kind === "browser"
+          ? registry.removeBrowserRegistryEntry(entry.containerName)
+          : registry.removeRegistryEntry(entry.containerName));
       }
     },
   );
@@ -622,7 +676,10 @@ describe("local sandbox workspace reconciliation", () => {
       ).not.toContain("guest-ignored");
       const receipt = localWorkspaceStore().get(owner.worktree.id)!.pending_ref!;
       expect(receipt).toBeTruthy();
-      const legacyState = getRegistryWorktreeProvisionedState(process.env, owner.worktree.id)!;
+      const legacyState = (await getRegistryWorktreeProvisionedState(
+        process.env,
+        owner.worktree.id,
+      ))!;
       expect(legacyState).toEqual([{ path: ".env.allowed", mode: expect.any(Number), chunks: 1 }]);
       await closeOpenClawStateDatabaseAsync();
       if (mode === "retention") {

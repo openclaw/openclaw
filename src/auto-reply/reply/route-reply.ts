@@ -1,12 +1,3 @@
-/**
- * Provider-agnostic reply router.
- *
- * Routes replies to the originating channel based on OriginatingChannel/OriginatingTo
- * instead of using the session's lastChannel. This ensures replies go back to the
- * provider where the message originated, even when the main session is shared
- * across multiple providers.
- */
-
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
@@ -21,6 +12,8 @@ import {
   isOutboundDeliveryError,
   PlatformMessageNotDispatchedError,
 } from "../../infra/outbound/deliver-types.js";
+import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
+import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
@@ -29,17 +22,15 @@ import type { SilentReplyConversationType } from "../../shared/silent-reply-poli
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   copyReplyPayloadMetadata,
+  formatBtwTextForExternalDelivery,
   getReplyPayloadMetadata,
+  shouldSuppressReasoningPayload,
   type ReplyDeliveryContext,
 } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayloadOutcome } from "./normalize-reply.js";
-import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
-import {
-  formatBtwTextForExternalDelivery,
-  shouldSuppressReasoningPayload,
-} from "./reply-payloads.js";
+import type { ReplyDispatchKind, ReplyDispatchOperation } from "./reply-dispatcher.types.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 
 const messageRuntimeLoader = createLazyImportLoader(
@@ -51,10 +42,6 @@ const BLOCK_REPLY_COMPLETION_RETENTION = {
   maxAgeMs: 24 * 60 * 60_000,
   maxEntries: 2_000,
 } as const;
-
-function loadDeliverRuntime() {
-  return messageRuntimeLoader.load();
-}
 
 function replyDeliverySourceMatchesRoute(params: {
   source: NonNullable<
@@ -79,11 +66,8 @@ function replyDeliverySourceMatchesRoute(params: {
 }
 
 type RouteReplyParams = {
-  /** The reply payload to send. */
   payload: ReplyPayload;
-  /** The originating channel type. */
   channel: OriginatingChannelType;
-  /** The destination chat/channel/user ID. */
   to: string;
   /** Session key for deriving agent identity defaults (multi-agent). */
   sessionKey?: string;
@@ -93,7 +77,6 @@ type RouteReplyParams = {
   policySessionKey?: string;
   /** Explicit conversation type for policy resolution when the policy key is generic. */
   policyConversationType?: SilentReplyConversationType;
-  /** Provider account id (multi-account). */
   accountId?: string;
   /** Originating sender id for sender-scoped outbound media policy. */
   requesterSenderId?: string;
@@ -109,19 +92,15 @@ type RouteReplyParams = {
   currentMessageId?: string;
   /** Reply policy fallback for delivery kinds that do not carry payload metadata. */
   replyDelivery?: ReplyDeliveryContext;
-  /** Config for provider-specific settings. */
   cfg: OpenClawConfig;
-  /** Optional abort signal for cooperative cancellation. */
   abortSignal?: AbortSignal;
   /** Mirror reply into session transcript (default: true when sessionKey is set). */
   mirror?: boolean;
-  /** Whether this message is being sent in a group/channel context */
   isGroup?: boolean;
   /** Group or channel identifier for correlation with received events */
   groupId?: string;
   /** Reply lane for reply_payload_sending hooks. */
   replyKind: ReplyDispatchKind;
-  /** Agent run id for hook context. */
   runId?: string;
   /** @internal Stable producer-owned block delivery intent. */
   deliveryIntentId?: string;
@@ -130,7 +109,6 @@ type RouteReplyParams = {
 };
 
 type RouteReplyResult = {
-  /** Whether the reply was sent successfully. */
   ok: boolean;
   /** Whether a recipient-visible send completed or may already have completed. */
   delivered: boolean;
@@ -149,9 +127,7 @@ type RouteReplyResult = {
     | "cancelled_by_reply_payload_sending_hook"
     | "empty_after_message_sending_hook"
     | "empty_after_reply_payload_sending_hook";
-  /** Optional message ID from the provider. */
   messageId?: string;
-  /** Error message if the send failed. */
   error?: string;
   /** Original failure retains the delivery owner's no-send proof. */
   cause?: unknown;
@@ -190,16 +166,26 @@ function summarizeVisibleRouteReplyDelivery(
   };
 }
 
-/**
- * Routes a reply payload to the specified channel.
- *
- * This function provides a unified interface for sending messages to any
- * supported provider. It's used by the followup queue to route replies
- * back to the originating channel when OriginatingChannel/OriginatingTo
- * are set.
- */
+/** Routes to the originating channel; shared sessions may have a different last channel. */
 export async function routeReply(params: RouteReplyParams): Promise<RouteReplyResult> {
-  const { payload, channel, to, accountId, threadId, cfg, abortSignal } = params;
+  const { payload, ...route } = params;
+  return await routeReplyOperation(route, { kind: "raw", payload });
+}
+
+/** Routes a prepared reply without reinterpreting its text as delivery directives. */
+export async function routePreparedReply(
+  params: Omit<RouteReplyParams, "payload"> & { plan: OutboundPayloadPlan },
+): Promise<RouteReplyResult> {
+  const { plan, ...route } = params;
+  return await routeReplyOperation(route, { kind: "prepared", plan });
+}
+
+async function routeReplyOperation(
+  params: Omit<RouteReplyParams, "payload">,
+  operation: ReplyDispatchOperation,
+): Promise<RouteReplyResult> {
+  const { channel, to, accountId, threadId, cfg, abortSignal } = params;
+  const payload = operation.kind === "raw" ? operation.payload : operation.plan.payload;
   if (shouldSuppressReasoningPayload(payload)) {
     return {
       ok: true,
@@ -221,7 +207,6 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     fallbackAgentId: params.agentId,
   });
 
-  // Debug: `pnpm test src/auto-reply/reply/route-reply.test.ts`
   const responsePrefix = resolveEffectiveMessagesConfig(cfg, resolvedAgentId, {
     channel: normalizedChannel,
     accountId,
@@ -246,16 +231,11 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   const normalized = normalization.payload;
   const externalPayload: ReplyPayload = {
     ...normalized,
-    text: formatBtwTextForExternalDelivery(normalized),
+    text: operation.kind === "raw" ? formatBtwTextForExternalDelivery(normalized) : normalized.text,
   };
 
   const text = externalPayload.text ?? "";
-  let mediaUrls: string[] = [];
-  for (const url of externalPayload.mediaUrls ?? []) {
-    if (url) {
-      mediaUrls.push(url);
-    }
-  }
+  let mediaUrls = externalPayload.mediaUrls?.filter(Boolean) ?? [];
   if (mediaUrls.length === 0 && externalPayload.mediaUrl) {
     mediaUrls = [externalPayload.mediaUrl];
   }
@@ -264,7 +244,6 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     payload: externalPayload,
   });
 
-  // Skip empty replies.
   if (
     !hasReplyPayloadContent(
       {
@@ -339,10 +318,12 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   });
 
   try {
-    // Provider docking: this is an execution boundary (we're about to send).
-    // Keep the module cheap to import by loading outbound plumbing lazily.
-    const { durableMessageBatchMayHaveReachedRecipient, sendDurableMessageBatchCore } =
-      await loadDeliverRuntime();
+    // Keep outbound plumbing off the import path until a send is needed.
+    const {
+      durableMessageBatchMayHaveReachedRecipient,
+      sendDurableMessageBatchCore,
+      sendStructuredDurableMessageBatchCore,
+    } = await messageRuntimeLoader.load();
     const outboundSession = buildOutboundSessionContext({
       cfg,
       agentId: resolvedAgentId,
@@ -356,12 +337,11 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       requesterSenderUsername: params.requesterSenderUsername,
       requesterSenderE164: params.requesterSenderE164,
     });
-    const send = await sendDurableMessageBatchCore({
+    const sendParams = {
       cfg,
       channel: channelId,
       to,
       accountId: accountId ?? undefined,
-      payloads: [deliveryPayload],
       replyPayloadSendingHook: {
         kind: params.replyKind,
         channel: channelId,
@@ -400,7 +380,14 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
               ...(params.groupId ? { groupId: params.groupId } : {}),
             }
           : undefined,
-    });
+    } satisfies Omit<Parameters<typeof sendDurableMessageBatchCore>[0], "payloads">;
+    const send =
+      operation.kind === "prepared"
+        ? await sendStructuredDurableMessageBatchCore({
+            ...sendParams,
+            plan: createStructuredOutboundPayloadPlan([deliveryPayload]),
+          })
+        : await sendDurableMessageBatchCore({ ...sendParams, payloads: [deliveryPayload] });
     if (send.status === "failed" || send.status === "partial_failed") {
       const delivery = summarizeVisibleRouteReplyDelivery(
         send.status === "failed" ? [] : send.results,
@@ -466,12 +453,6 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   }
 }
 
-/**
- * Checks if a channel type is routable via routeReply.
- *
- * Some channels (webchat) require special handling and cannot be routed through
- * this generic interface.
- */
 export function isRoutableChannel(
   channel: OriginatingChannelType | undefined,
 ): channel is Exclude<OriginatingChannelType, typeof INTERNAL_MESSAGE_CHANNEL> {

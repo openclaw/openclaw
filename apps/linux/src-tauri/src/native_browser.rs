@@ -206,7 +206,11 @@ impl BrowserHost {
         let state = json!({ "revision": self.revision, "tabs": self.tabs });
         if let (Some(view), Some(script)) = (
             app.get_webview("main"),
-            crate::native_browser_bridge::publication_script(app, &state.to_string()),
+            crate::native_browser_bridge::publication_script(
+                app,
+                &state.to_string(),
+                crate::native_browser_bridge::Publication::Browser,
+            ),
         ) {
             let _ = view.eval(script);
         }

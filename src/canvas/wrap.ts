@@ -1,5 +1,6 @@
 import { WIDGET_CDN_ORIGINS } from "../plugin-sdk/widget-html.js";
 import { escapeHtml } from "../shared/html-escape.js";
+import { WIDGET_MEDIA_SOURCES } from "../shared/widget-media.js";
 import { WIDGET_THEME_MESSAGE_TYPE, WIDGET_THEME_TOKENS } from "../shared/widget-theme.js";
 
 // Baked palettes mirror the host claw theme (ui/src/styles/base.css) so
@@ -292,5 +293,5 @@ export function buildWidgetDocument(
   const cdnSources = WIDGET_CDN_ORIGINS.join(" ");
   const scriptSources = [...WIDGET_CDN_ORIGINS, ...(options.scriptOrigins ?? [])].join(" ");
   return `<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' ${cdnSources}; script-src 'unsafe-inline' ${scriptSources}; font-src data: ${cdnSources}; img-src data:; connect-src ${connectSources};"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${widgetBridge}${errorBridge}${themeBridge}${chatHostBridge}${snapshotBridge}${sizeReporter}${widgetCode}</body></html>`;
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' ${cdnSources}; script-src 'unsafe-inline' ${scriptSources}; font-src data: ${cdnSources}; img-src data:; media-src data: ${WIDGET_MEDIA_SOURCES.join(" ")}; connect-src ${connectSources};"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${widgetBridge}${errorBridge}${themeBridge}${chatHostBridge}${snapshotBridge}${sizeReporter}${widgetCode}</body></html>`;
 }

@@ -1,8 +1,12 @@
+mod chrome_setup;
 mod cli;
 #[cfg(target_os = "linux")]
 mod desktop_bridge;
+mod desktop_node;
+mod desktop_node_process;
 mod discovery;
 mod gateway;
+mod gateway_control_auth;
 mod gateway_device_identity;
 mod gateway_operation_queue;
 mod gateway_profiles;
@@ -20,6 +24,7 @@ mod keep_awake_platform;
 mod native_browser;
 mod native_browser_bridge;
 mod native_browser_platform;
+mod native_device_settings;
 mod notify;
 mod pending_approvals;
 mod quickchat;
@@ -49,7 +54,6 @@ use tauri::{
     WebviewWindowBuilder,
 };
 use tauri_plugin_deep_link::DeepLinkExt;
-use tauri_plugin_global_shortcut::{Code, Modifiers};
 use tauri_plugin_opener::OpenerExt;
 
 const CONNECTED_WATCH_INTERVAL: Duration = Duration::from_secs(15);
@@ -65,6 +69,7 @@ pub(crate) fn native_auth_initialization_script(
     dashboard: &Url,
     gateway: &Url,
     request: &RemoteGatewayRequest,
+    native_session: bool,
 ) -> Result<String, String> {
     if request.transport == "direct" && request.tls_fingerprint.is_some() {
         return Err(
@@ -72,6 +77,9 @@ pub(crate) fn native_auth_initialization_script(
              Connect using Remote over SSH instead."
                 .to_string(),
         );
+    }
+    if native_session {
+        return gateway_control_auth::initialization_script(dashboard, gateway);
     }
     let path = dashboard.path().trim_end_matches('/');
     let origin = serde_json::to_string(&dashboard.origin().ascii_serialization())
@@ -103,8 +111,8 @@ pub(crate) fn native_auth_initialization_script(
 fn remote_ws_config(
     request: &RemoteGatewayRequest,
     gateway_url: &Url,
-) -> gateway_ws::GatewayWsConfig {
-    gateway_ws::GatewayWsConfig::new(
+) -> Result<gateway_ws::GatewayWsConfig, String> {
+    Ok(gateway_ws::GatewayWsConfig::new(
         gateway_url.to_string(),
         request.token.clone(),
         request.password.clone(),
@@ -115,6 +123,10 @@ fn remote_ws_config(
         },
         gateway_ws::GatewayOwnership::Remote,
     )
+    .with_node_identity_scope(remote_gateway::desktop_node_identity_scope(
+        request,
+        gateway_url,
+    )?))
 }
 
 fn open_external_browser(app: &AppHandle, url: &Url) {
@@ -252,7 +264,8 @@ mod native_browser_tests {
         let dashboard = Url::parse("https://gateway.example.com/openclaw").expect("dashboard");
         let gateway = Url::parse("wss://gateway.example.com/openclaw").expect("Gateway");
         let initialization_script =
-            native_auth_initialization_script(&dashboard, &gateway, &request).expect("auth script");
+            native_auth_initialization_script(&dashboard, &gateway, &request, false)
+                .expect("auth script");
         assert!(!dashboard.as_str().contains("fixture-password"));
         assert!(!gateway.as_str().contains("fixture-password"));
 
@@ -287,6 +300,41 @@ mod native_browser_tests {
     }
 
     #[test]
+    fn native_primary_dashboard_keeps_bootstrap_credentials_out_of_the_document() {
+        let request: RemoteGatewayRequest = serde_json::from_value(serde_json::json!({
+            "transport": "direct", "url": "https://gateway.example.com/control",
+            "token": "fixture-shared-secret", "password": "fixture-password",
+        }))
+        .unwrap();
+        let script = native_auth_initialization_script(
+            &Url::parse("https://gateway.example.com/control").unwrap(),
+            &Url::parse("wss://gateway.example.com/control").unwrap(),
+            &request,
+            true,
+        )
+        .unwrap();
+        let runner = r#"
+            const window = {addEventListener() {}, __TAURI_INTERNALS__: {invoke() {}}};
+            window.top = window;
+            new Function('window', 'location', process.argv[1])(window, {origin: 'https://gateway.example.com', pathname: '/control/chat'});
+            const auth = window.__OPENCLAW_NATIVE_CONTROL_AUTH__;
+            if (!auth?.nativeConnectAuth || auth.gatewayUrl !== 'wss://gateway.example.com/control' || 'token' in auth || 'password' in auth) {
+              throw new Error('Primary must use native challenge authentication, not bootstrap credentials');
+            }
+            if (typeof window.OpenClawNativeGatewayAuth?.postMessage !== 'function') throw new Error('native challenge bridge missing');
+        "#;
+        let result = Command::new("node")
+            .args(["-e", runner, &script])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    #[test]
     fn pinned_remote_gateway_never_receives_credentials_through_an_unpinned_webview() {
         let request: RemoteGatewayRequest = serde_json::from_value(serde_json::json!({
             "transport": "direct",
@@ -297,7 +345,7 @@ mod native_browser_tests {
         .expect("pinned remote request");
         let dashboard = Url::parse("https://gateway.example.com/openclaw").expect("dashboard");
         let gateway = Url::parse("wss://gateway.example.com/openclaw").expect("Gateway");
-        let result = native_auth_initialization_script(&dashboard, &gateway, &request);
+        let result = native_auth_initialization_script(&dashboard, &gateway, &request, false);
 
         assert!(
             result.is_err(),
@@ -316,8 +364,13 @@ mod native_browser_tests {
         let tunneled_dashboard = Url::parse("http://127.0.0.1:18789").expect("tunneled dashboard");
         let tunneled_gateway = Url::parse("ws://127.0.0.1:18789").expect("tunneled Gateway");
         assert!(
-            native_auth_initialization_script(&tunneled_dashboard, &tunneled_gateway, &tunneled)
-                .is_ok(),
+            native_auth_initialization_script(
+                &tunneled_dashboard,
+                &tunneled_gateway,
+                &tunneled,
+                false
+            )
+            .is_ok(),
             "host-key-verified SSH tunneling must remain available"
         );
     }
@@ -594,6 +647,7 @@ impl NavigationState {
 
 struct DesktopInner {
     cli: Mutex<Option<OpenClawCli>>,
+    chrome_setup: chrome_setup::ChromeSetup,
     navigation: Mutex<NavigationState>,
     operation: Mutex<()>,
     pending_approvals: Mutex<pending_approvals::PendingApprovalState>,
@@ -614,6 +668,7 @@ impl DesktopState {
         Self {
             inner: Arc::new(DesktopInner {
                 cli: Mutex::new(None),
+                chrome_setup: chrome_setup::ChromeSetup::default(),
                 navigation: Mutex::new(NavigationState::default()),
                 operation: Mutex::new(()),
                 pending_approvals: Mutex::new(pending_approvals::PendingApprovalState::default()),
@@ -798,6 +853,8 @@ impl DesktopState {
                 );
             }
         }
+
+        self.inner.chrome_setup.installed(app.clone(), cli.clone());
 
         self.inner
             .navigation
@@ -1024,7 +1081,7 @@ impl DesktopState {
             )?;
         }
         let target = remote_gateway::dashboard_url(&gateway_url)?;
-        let script = native_auth_initialization_script(&target, &gateway_url, &request)?;
+        let script = native_auth_initialization_script(&target, &gateway_url, &request, true)?;
         let pending = Arc::new(Mutex::new(tunnel));
         let commit_pending = Arc::clone(&pending);
         let result = self.on_main(app, move |state, app| {
@@ -1064,13 +1121,20 @@ impl DesktopState {
                                 state.inner.remote_tunnels.take();
                         }
                         app.state::<gateway_ws::GatewayClient>()
-                            .configure(&app, remote_ws_config(&request, &gateway_url));
+                            .configure(&app, remote_ws_config(&request, &gateway_url)?);
                         // The submitting view will be destroyed. Its IPC reply
                         // cannot own completion or prove Gateway health.
                         let snapshot = GatewaySnapshot::remote_opening();
+                        let returning_from_settings = navigation.settings_return.is_some();
                         navigation.select_remote();
                         navigation.remote_snapshot = Some(snapshot.clone());
-                        state.navigate_authenticated_remote(&app, target, script, navigation)?;
+                        state.navigate_authenticated_remote(
+                            &app,
+                            target,
+                            script,
+                            navigation,
+                            returning_from_settings,
+                        )?;
                         Ok(snapshot)
                     })
                 })
@@ -1093,51 +1157,58 @@ impl DesktopState {
         dashboard: Url,
         script: String,
         navigation: &mut NavigationState,
+        returning_from_settings: bool,
     ) -> Result<(), String> {
-        if !app
+        let selection = app
             .state::<gateway_windows::GatewayWindows>()
             .primary_selected(
                 app,
                 &dashboard,
-                Some(script.clone()),
+                Some(script),
                 gateway_ws::GatewayOwnership::Remote,
-            )?
-        {
-            if main_window(app)
-                .ok()
-                .and_then(|view| view.url().ok())
-                .is_some_and(|url| self.main_window_has_connection_settings_url(&url))
+            )?;
+        let generation = navigation.watch_generation;
+        let installed = selection.install(|auth_script| {
+            let bridge = app.state::<native_browser_bridge::NativeBrowserBridgeState>();
+            let bridge_script = bridge
+                .select(app, &dashboard, true)?
+                .ok_or_else(|| "Could not prepare the native browser.".to_string())?;
+            match replace_main_webview(
+                app,
+                dashboard.clone(),
+                Some(format!(
+                    "{}\n{bridge_script}",
+                    auth_script.unwrap_or_default()
+                )),
+                Some(generation),
+            ) {
+                Ok(_) => Ok(()),
+                Err(_) => {
+                    navigation.cancel_watchdog();
+                    bridge.clear(app);
+                    let mut local = self.inner.local_url.clone();
+                    local
+                        .query_pairs_mut()
+                        .append_pair("mode", "connectionSettings");
+                    let _ = replace_main_webview(app, local, None, None);
+                    Err(
+                        "Could not open the remote Gateway dashboard. Try connecting again."
+                            .to_string(),
+                    )
+                }
+            }
+        })?;
+        if !installed {
+            if returning_from_settings
+                && main_window(app)
+                    .ok()
+                    .and_then(|view| view.url().ok())
+                    .is_some_and(|url| self.main_window_has_connection_settings_url(&url))
             {
                 gateway_windows::restore_selected_main(app)?;
             }
             return Ok(());
         }
-        let generation = navigation.watch_generation;
-        let bridge = app.state::<native_browser_bridge::NativeBrowserBridgeState>();
-        let bridge_script = bridge
-            .select(app, &dashboard, true)?
-            .ok_or_else(|| "Could not prepare the native browser.".to_string())?;
-        match replace_main_webview(
-            app,
-            dashboard.clone(),
-            Some(format!("{script}\n{bridge_script}")),
-            Some(generation),
-        ) {
-            Ok(_) => {}
-            Err(_) => {
-                navigation.cancel_watchdog();
-                bridge.clear(app);
-                let mut local = self.inner.local_url.clone();
-                local
-                    .query_pairs_mut()
-                    .append_pair("mode", "connectionSettings");
-                let _ = replace_main_webview(app, local, None, None);
-                return Err(
-                    "Could not open the remote Gateway dashboard. Try connecting again."
-                        .to_string(),
-                );
-            }
-        };
         #[cfg(target_os = "linux")]
         {
             if !self.is_quitting()
@@ -1316,7 +1387,8 @@ impl DesktopState {
         session_key: &str,
         agent_id: &str,
     ) -> Result<(), String> {
-        // Match connection publication's NAV -> Gateway config lock order.
+        // Keep NAV -> route-publication ordering. Native navigation callbacks
+        // may read authentication without recursively locking Gateway config.
         // This entry is already on the native thread; do not nest on_main.
         let monitor = {
             let mut navigation = self.inner.navigation.lock().expect("navigation");
@@ -1529,6 +1601,9 @@ impl DesktopState {
 
     // Only the successful claim owner calls this, after releasing any route guard.
     pub(crate) fn finish_quit(&self, app: &AppHandle, code: i32) {
+        if let Some(node) = app.try_state::<desktop_node::DesktopNode>() {
+            node.stop();
+        }
         if let Some(power) = app.try_state::<keep_awake::KeepAwake>() {
             power.stop();
         }
@@ -1539,6 +1614,9 @@ impl DesktopState {
         let state = self.clone();
         let app = app.clone();
         thread::spawn(move || {
+            if let Some(node) = app.try_state::<desktop_node::DesktopNode>() {
+                node.wait_stopped();
+            }
             if let Some(power) = app.try_state::<keep_awake::KeepAwake>() {
                 power.wait_stopped();
             }
@@ -1557,18 +1635,12 @@ impl DesktopState {
     }
 
     pub(crate) fn resolve_cli(&self) -> Result<OpenClawCli, CliError> {
-        if let Some(cli) = self
-            .inner
-            .cli
-            .lock()
-            .expect("CLI mutex poisoned")
-            .clone()
-            .filter(OpenClawCli::is_available)
-        {
+        let mut cached = self.inner.cli.lock().expect("CLI mutex poisoned");
+        if let Some(cli) = cached.clone().filter(OpenClawCli::is_available) {
             return Ok(cli);
         }
         let cli = OpenClawCli::discover()?;
-        *self.inner.cli.lock().expect("CLI mutex poisoned") = Some(cli.clone());
+        *cached = Some(cli.clone());
         Ok(cli)
     }
 
@@ -1715,7 +1787,10 @@ impl DesktopState {
         let windows = app.state::<gateway_windows::GatewayWindows>();
         let base = Url::parse(target).map_err(|_| "Dashboard returned an invalid URL.")?;
         if dashboard {
-            if !windows.primary_selected(app, &base, None, gateway_ws::GatewayOwnership::Local)? {
+            if !windows
+                .primary_selected(app, &base, None, gateway_ws::GatewayOwnership::Local)?
+                .follows_primary()
+            {
                 return Ok(());
             }
         } else if !windows.main_is_primary(app) {
@@ -3132,6 +3207,15 @@ async fn gateway_action(
 }
 
 fn main() {
+    // Xlib requires thread initialization before GTK opens a display. Older
+    // libX11 versions do not initialize it automatically for WebKit's threads.
+    #[cfg(target_os = "linux")]
+    assert_ne!(
+        unsafe { x11::xlib::XInitThreads() },
+        0,
+        "Could not initialize X11 thread safety."
+    );
+
     // AppIndicator uses the GTK application name for the tray menu heading.
     #[cfg(target_os = "linux")]
     gtk::glib::set_application_name("OpenClaw");
@@ -3155,14 +3239,10 @@ fn main() {
         builder.plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
-                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        if quickchat_shortcut_state.matches_shortcut(shortcut) {
-                            quickchat::toggle_quickchat(app);
-                        } else if shortcut
-                            .matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyO)
-                        {
-                            tray::show_window(app);
-                        }
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed
+                        && quickchat_shortcut_state.matches_shortcut(shortcut)
+                    {
+                        quickchat::toggle_quickchat(app);
                     }
                 })
                 .build(),
@@ -3194,7 +3274,7 @@ fn main() {
         app.manage(gateway_windows::GatewayWindows::new(Arc::clone(&profiles)));
         app.manage(native_browser::NativeBrowserState::default());
         app.manage(native_browser_bridge::NativeBrowserBridgeState::default());
-        let window_config = app
+        let mut window_config = app
             .config()
             .app
             .windows
@@ -3202,6 +3282,18 @@ fn main() {
             .find(|window| window.label == "main")
             .cloned()
             .expect("tauri.conf.json must define the main window");
+        // Setup and recovery always use embedded assets. WKWebView has no current
+        // URL until its first navigation commits, so share the target before building.
+        let local_url = Url::parse(
+            match (cfg!(target_os = "windows"), window_config.use_https_scheme) {
+                (true, true) => "https://tauri.localhost/",
+                (true, false) => "http://tauri.localhost/",
+                (false, _) => "tauri://localhost/",
+            },
+        )?;
+        window_config.url = WebviewUrl::CustomProtocol(local_url.clone());
+        let state = DesktopState::new(local_url);
+        app.manage(state.clone());
         let browser_app = app.handle().clone();
         let window = WebviewWindowBuilder::from_config(app.handle(), &window_config)?
             .initialization_script(window_chrome::initialization_script(None, true))
@@ -3228,9 +3320,11 @@ fn main() {
         if let Some(view) = app.get_webview("main") {
             window_chrome_macos::install_webview(&view)?;
         }
-        let state = DesktopState::new(window.url()?);
-        app.manage(state.clone());
         app.manage(gateway_ws::GatewayClient::new());
+        app.manage(desktop_node::DesktopNode::start(
+            app.handle().clone(),
+            Arc::clone(&profiles),
+        )?);
         #[cfg(target_os = "linux")]
         app.manage(gateway_sleep_logind::SleepBridge::start(
             app.handle().clone(),
@@ -3303,6 +3397,8 @@ fn main() {
         #[cfg(target_os = "linux")]
         desktop_bridge::start(app.handle().clone());
         state.start_tunnel_monitor(app.handle().clone());
+        // Single-instance admission is complete; Chrome setup never follows a remote dashboard.
+        state.inner.chrome_setup.start(app.handle().clone());
         Ok(())
     });
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -3316,6 +3412,7 @@ fn main() {
         install_cli,
         gateway_action,
         native_browser_bridge::native_browser_request,
+        native_device_settings::native_device_settings_request,
         gateway_windows::gateway_request,
         gateway_windows::gateway_profile_request,
         quickchat::quickchat_activate,

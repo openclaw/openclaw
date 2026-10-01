@@ -289,7 +289,13 @@ suite.define(() => {
     expect(summaryClasses[1]).not.toContain("chat-tool-msg-summary--error");
     expect(await page.getByText("Command could not finish", { exact: false }).count()).toBe(0);
     await page.locator(".chat-tool-msg-summary").first().click();
-    await page.locator(".chat-json-summary").first().click();
+    const expandedResult = page.locator(".chat-tool-msg-body").first();
+    await expandedResult.locator(".chat-text pre code").waitFor({ state: "visible" });
+    expect(await expandedResult.locator(".chat-text pre code").textContent()).toBe(
+      failedTool(1).content,
+    );
+    expect(await expandedResult.locator("details, .code-block-json-mode").count()).toBe(0);
+    expect(await expandedResult.locator(".code-block-copy").isVisible()).toBe(true);
     await page.getByText("Command could not finish", { exact: false }).waitFor();
     await expect
       .poll(() => page.locator(".chat-tool-card__outcome").first().textContent())

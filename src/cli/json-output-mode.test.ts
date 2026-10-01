@@ -1,5 +1,6 @@
 // JSON output mode tests cover CLI JSON mode detection and output handling.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { loggingState } from "../logging/state.js";
 import {
   applyResolvedCommandOutputMode,
@@ -13,11 +14,14 @@ describe("json output mode", () => {
   const originalEarlyRestore = loggingState.earlyConsoleRoutingRestore;
 
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_SUPPRESS_NOTES", "");
     loggingState.forceConsoleToStderr = false;
     loggingState.earlyConsoleRoutingRestore = null;
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     loggingState.forceConsoleToStderr = originalForceStderr;
     loggingState.earlyConsoleRoutingRestore = originalEarlyRestore;
   });
@@ -43,6 +47,28 @@ describe("json output mode", () => {
     expect(loggingState.forceConsoleToStderr).toBe(false);
   });
 
+  it("keeps Doctor warnings on stderr and JSON stdout parseable", async () => {
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const message = "- Agent main database ...: synthetic failure";
+    const report = { ok: true, findings: [] };
+
+    await withConsoleLogsRoutedToStderrForJson(
+      ["node", "openclaw", "doctor", "--lint", "--json"],
+      async () => {
+        note(message, "Doctor warnings");
+        process.stdout.write(`${JSON.stringify(report)}\n`);
+      },
+    );
+
+    const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join("");
+    expect(output).toBe(`${JSON.stringify(report)}\n`);
+    expect(JSON.parse(output)).toEqual(report);
+    const warnings = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+    expect(warnings).toContain("Doctor warnings");
+    expect(warnings).toContain(message);
+  });
+
   it("leaves existing stderr routing enabled after json output preparation", async () => {
     loggingState.forceConsoleToStderr = true;
 
@@ -57,6 +83,9 @@ describe("json output mode", () => {
   });
 
   it("restores stdout routing when command metadata marks --json as parse-only", async () => {
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
     await withConsoleLogsRoutedToStderrForJson(
       ["node", "openclaw", "config", "set", "gateway.port", "18789", "--json"],
       async () => {
@@ -66,8 +95,14 @@ describe("json output mode", () => {
         expect(
           isJsonOutputModeActive(["node", "openclaw", "config", "set", "x", "1", "--json"]),
         ).toBe(false);
+        note("Updated gateway.port.", "Config updated");
       },
     );
+
+    const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join("");
+    expect(output).toContain("Config updated");
+    expect(output).toContain("Updated gateway.port.");
+    expect(stderr).not.toHaveBeenCalled();
   });
 
   it("does not treat config set's parser alias as JSON output before Commander resolves it", () => {

@@ -54,7 +54,11 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
           </h2>
         </div>
         <div class="model-setup-wizard__body">
-          ${[props.refreshWarning, props.cancellationNotice].map((warning) =>
+          ${[
+            props.refreshWarning,
+            props.cancellationNotice,
+            props.state.phase === "starting" ? props.state.notice : undefined,
+          ].map((warning) =>
             warning ? html`<div class="callout warning" role="alert">${warning}</div>` : nothing,
           )}
           ${
@@ -91,7 +95,11 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                   : html`
                       ${
                         props.state.validationError
-                          ? html`<div class="callout danger" role="alert">
+                          ? html`<div
+                              id="model-setup-wizard-validation-error"
+                              class="callout danger"
+                              role="alert"
+                            >
                               ${props.state.validationError}
                             </div>`
                           : nothing
@@ -102,6 +110,9 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                         value: props.value,
                         busy: props.state.busy,
                         inputId: WIZARD_TEXT_INPUT_ID,
+                        validationErrorId: props.state.validationError
+                          ? "model-setup-wizard-validation-error"
+                          : undefined,
                         confirmAffirmativeLabel:
                           props.mode === "prepare" && props.state.step.type === "confirm"
                             ? t("modelSetup.wizard.continue")

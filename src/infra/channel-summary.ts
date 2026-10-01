@@ -1,4 +1,3 @@
-// Formats channel account summaries for CLI status surfaces.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -21,11 +20,6 @@ type ChannelSummaryOptions = {
   sourceConfig?: OpenClawConfig;
 };
 
-const DEFAULT_OPTIONS: Omit<Required<ChannelSummaryOptions>, "plugins" | "sourceConfig"> = {
-  colorize: false,
-  includeAllowFrom: false,
-};
-
 type ChannelAccountEntry = ChannelAccountInspectionResult & {
   accountId: string;
 };
@@ -41,22 +35,6 @@ const formatAccountLabel = (params: { accountId: string; name?: string }) => {
 const accountLine = (label: string, details: string[]) =>
   `  - ${label}${details.length ? ` (${details.join(", ")})` : ""}`;
 
-async function loadChannelSummaryConfig(): Promise<OpenClawConfig> {
-  const { getRuntimeConfig } = await import("../config/config.js");
-  return getRuntimeConfig();
-}
-
-async function listChannelSummaryPlugins(params: {
-  cfg: OpenClawConfig;
-  sourceConfig: OpenClawConfig;
-}): Promise<ChannelPlugin[]> {
-  const { listReadOnlyChannelPluginsForConfig } = await import("../channels/plugins/read-only.js");
-  return listReadOnlyChannelPluginsForConfig(params.cfg, {
-    activationSourceConfig: params.sourceConfig,
-    includeSetupFallbackPlugins: false,
-  });
-}
-
 const buildAccountDetails = (params: {
   entry: ChannelAccountEntry;
   plugin: ChannelPlugin;
@@ -71,20 +49,16 @@ const buildAccountDetails = (params: {
   if (snapshot.dmPolicy) {
     details.push(`dm:${snapshot.dmPolicy}`);
   }
-  if (snapshot.tokenSource && snapshot.tokenSource !== "none") {
-    details.push(`token:${snapshot.tokenSource}`);
-  }
-  if (snapshot.botTokenSource && snapshot.botTokenSource !== "none") {
-    details.push(`bot:${snapshot.botTokenSource}`);
-  }
-  if (snapshot.appTokenSource && snapshot.appTokenSource !== "none") {
-    details.push(`app:${snapshot.appTokenSource}`);
-  }
-  if (
-    snapshot.signingSecretSource &&
-    snapshot.signingSecretSource !== "none" /* pragma: allowlist secret */
-  ) {
-    details.push(`signing:${snapshot.signingSecretSource}`);
+  for (const [key, label] of [
+    ["tokenSource", "token"],
+    ["botTokenSource", "bot"],
+    ["appTokenSource", "app"],
+    ["signingSecretSource", "signing"],
+  ] as const) {
+    const source = snapshot[key];
+    if (source && source !== "none") {
+      details.push(`${label}:${source}`);
+    }
   }
   if (
     params.entry.kind === "unavailable" ||
@@ -123,15 +97,19 @@ export async function buildChannelSummary(
   cfg?: OpenClawConfig,
   options?: ChannelSummaryOptions,
 ): Promise<string[]> {
-  const effective = cfg ?? (await loadChannelSummaryConfig());
+  const effective = cfg ?? (await import("../config/config.js")).getRuntimeConfig();
   const lines: string[] = [];
-  const resolved = { ...DEFAULT_OPTIONS, ...options };
+  const { colorize = false, includeAllowFrom = false } = options ?? {};
   const tint = (value: string, color?: (input: string) => string) =>
-    resolved.colorize && color ? color(value) : value;
+    colorize && color ? color(value) : value;
   const sourceConfig = options?.sourceConfig ?? effective;
 
   const plugins =
-    options?.plugins ?? (await listChannelSummaryPlugins({ cfg: effective, sourceConfig }));
+    options?.plugins ??
+    (await import("../channels/plugins/read-only.js")).listReadOnlyChannelPluginsForConfig(
+      effective,
+      { activationSourceConfig: sourceConfig, includeSetupFallbackPlugins: false },
+    );
   for (const plugin of plugins) {
     const accountIds = plugin.config.listAccountIds(effective);
     const defaultAccountId =
@@ -213,24 +191,22 @@ export async function buildChannelSummary(
 
     lines.push(tint(line, statusColor));
 
-    if (configuredEntries.length > 0) {
-      for (const entry of configuredEntries) {
-        const details = buildAccountDetails({
-          entry,
-          plugin,
-          cfg: effective,
-          includeAllowFrom: resolved.includeAllowFrom,
-        });
-        lines.push(
-          accountLine(
-            formatAccountLabel({
-              accountId: entry.accountId,
-              name: entry.snapshot.name,
-            }),
-            details,
-          ),
-        );
-      }
+    for (const entry of configuredEntries) {
+      const details = buildAccountDetails({
+        entry,
+        plugin,
+        cfg: effective,
+        includeAllowFrom,
+      });
+      lines.push(
+        accountLine(
+          formatAccountLabel({
+            accountId: entry.accountId,
+            name: entry.snapshot.name,
+          }),
+          details,
+        ),
+      );
     }
   }
 

@@ -155,7 +155,6 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
   let responseOwnerId: string | undefined;
   let suppressNextUnkeyedLegacyTerminal = false;
   const settledResponseIds = new Set<string>();
-  const settledResponseIdOrder: string[] = [];
   const transcript: RealtimeVoiceTranscriptEntry[] = [];
   const bridgeEvents: RealtimeVoiceBridgeEventLogEntry[] = [];
   const outputActivity = createRealtimeVoiceOutputActivityTracker();
@@ -191,9 +190,8 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
       return;
     }
     settledResponseIds.add(responseId);
-    settledResponseIdOrder.push(responseId);
-    if (settledResponseIdOrder.length > MAX_SETTLED_RESPONSE_IDS) {
-      const oldest = settledResponseIdOrder.shift();
+    if (settledResponseIds.size > MAX_SETTLED_RESPONSE_IDS) {
+      const oldest = settledResponseIds.values().next().value;
       if (oldest) {
         settledResponseIds.delete(oldest);
       }
@@ -318,11 +316,12 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
           ensureTurn();
           bridgeParams.onResponseRequest?.();
         },
-        onTranscript: (role, text, isFinal) => {
+        onTranscript: (...args) => {
+          const [role, text, isFinal] = args;
           if (isFinal) {
             harness.recordTranscript(role, text);
           }
-          bridgeParams.onTranscript?.(role, text, isFinal);
+          bridgeParams.onTranscript?.(...args);
         },
         onEvent: (event) => {
           claimResponseEvent(event);

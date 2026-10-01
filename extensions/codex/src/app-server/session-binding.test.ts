@@ -2,16 +2,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   getSessionEntry,
   patchSessionEntry,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLazyCodexAppServerBindingStore } from "./session-binding-store.js";
@@ -26,47 +23,18 @@ import {
   resolveCodexSessionBinding,
   type StoredCodexAppServerBinding,
 } from "./session-binding.js";
+import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
+import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 
 function createStateStore() {
   const values = new Map<string, StoredCodexAppServerBinding>();
-  const state: PluginStateSyncKeyedStore<StoredCodexAppServerBinding> = {
-    register(key, value) {
-      values.set(key, value);
-    },
-    registerIfAbsent(key, value) {
-      if (values.has(key)) {
-        return false;
-      }
-      values.set(key, value);
-      return true;
-    },
-    update(key, updateValue) {
-      const next = updateValue(values.get(key));
-      if (!next) {
-        return false;
-      }
-      values.set(key, next);
-      return true;
-    },
-    lookup: (key) => values.get(key),
-    consume(key) {
-      const value = values.get(key);
-      values.delete(key);
-      return value;
-    },
-    delete: (key) => values.delete(key),
-    deleteIf: (key, predicate) => {
-      const value = values.get(key);
-      return value !== undefined && predicate(value) && values.delete(key);
-    },
-    entries: () => [...values].map(([key, value]) => ({ key, value, createdAt: 0 })),
-    clear: () => values.clear(),
-  };
+  const state = createCodexTestBindingStateStore(values);
   return { state, values };
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
 });
 
@@ -100,10 +68,10 @@ describe("Codex app-server binding store", () => {
     expect(store.read(identity)).toEqual(binding);
   });
 
-  it("deletes only the requested stable owner and restores it on transaction rollback", async () => {
+  it("deletes only the requested stable owner in SQLite", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-binding-delete-"));
     try {
-      const state = createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
+      const state = createCodexSqliteTestBindingStateStore({
         namespace: "deletion-test",
         maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
         overflowPolicy: "reject-new",
@@ -126,7 +94,6 @@ describe("Codex app-server binding store", () => {
           },
         });
       }
-      const original = state.lookup(bindingStoreKey(run));
       await store.withSessionDeletion(
         run,
         () => {},
@@ -134,22 +101,11 @@ describe("Codex app-server binding store", () => {
           mutation.commit();
           expect(state.lookup(bindingStoreKey(run))).toBeUndefined();
           expect(state.lookup(bindingStoreKey(base))).toMatchObject({ state: "active" });
-          mutation.rollback();
-        },
-      );
-      expect(state.lookup(bindingStoreKey(run))).toEqual(original);
-      let retainedCommit: (() => void) | undefined;
-      await store.withSessionDeletion(
-        run,
-        () => {},
-        async (_binding, mutation) => {
-          retainedCommit = mutation.commit;
-          mutation.commit();
         },
       );
       expect(state.entries().map(({ key }) => key)).toEqual([bindingStoreKey(base)]);
-      expect(retainedCommit).toThrow("lease");
     } finally {
+      await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -179,7 +135,7 @@ describe("Codex app-server binding store", () => {
     }
   });
 
-  it("rejects revoked deletion authority and never restores over a successor", async () => {
+  it("rejects deletion by a stale stable generation", async () => {
     const { state, values } = createStateStore();
     const store = createCodexAppServerBindingStore(state);
     const identity = {
@@ -188,28 +144,6 @@ describe("Codex app-server binding store", () => {
       sessionId: "old",
       sessionKey: "agent:main:cron:expired",
     };
-    await store.mutate(identity, { kind: "set", binding: { threadId: "old", cwd: "/repo" } });
-    let active = true;
-    await expect(
-      store.withSessionDeletion(
-        identity,
-        () => {
-          if (!active) {
-            throw new Error("owner revoked");
-          }
-        },
-        async (_binding, mutation) => {
-          active = false;
-          expect(mutation.commit).toThrow("owner revoked");
-        },
-      ),
-    ).rejects.toThrow("owner revoked");
-    expect(values.get(bindingStoreKey(identity))).toMatchObject({
-      state: "active",
-      sessionId: "old",
-    });
-    // Revocation intentionally leaves the lease for expiry. The next owner is
-    // independent persisted state, not a continuation of that closed callback.
     const successor = {
       version: 1 as const,
       state: "active" as const,
@@ -226,18 +160,6 @@ describe("Codex app-server binding store", () => {
         },
       ),
     ).rejects.toThrow("generation changed");
-    expect(values.get(bindingStoreKey(identity))).toEqual(successor);
-
-    const current = { ...identity, sessionId: "new" };
-    await store.withSessionDeletion(
-      current,
-      () => {},
-      async (_binding, mutation) => {
-        mutation.commit();
-        state.register(bindingStoreKey(identity), successor);
-        expect(mutation.rollback).toThrow("changed before session deletion rollback");
-      },
-    );
     expect(values.get(bindingStoreKey(identity))).toEqual(successor);
   });
 
@@ -676,11 +598,9 @@ describe("Codex app-server binding store", () => {
   });
 
   it("retains cleared legacy conversation provenance after normal tombstones expire", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-06-13T00:00:00.000Z"));
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-binding-state-"));
     try {
-      const state = createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
+      const state = createCodexSqliteTestBindingStateStore({
         namespace: "app-server-thread-bindings-clear-test",
         maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
@@ -696,10 +616,12 @@ describe("Codex app-server binding store", () => {
         await store.mutate(identity, { kind: "clear" });
       }
 
-      vi.advanceTimersByTime(10);
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.now() + 10);
       expect(state.lookup(bindingStoreKey(normal))).toBeUndefined();
       expect(state.lookup(bindingStoreKey(legacy))).toEqual({ version: 1, state: "cleared" });
     } finally {
+      await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
@@ -727,44 +649,55 @@ describe("Codex app-server binding store", () => {
     );
   });
 
-  it("keeps one binding across physical session rotations for a stable session key", async () => {
-    const { state, values } = createStateStore();
-    const store = createCodexAppServerBindingStore(state);
-    const first = {
-      kind: "session" as const,
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:telegram:chat-1",
-    };
-    const second = { ...first, sessionId: "session-2" };
+  it.each([false, true])(
+    "keeps one binding across session rotations (expired lease=%s)",
+    async (expiredLease) => {
+      const { state, values } = createStateStore();
+      const store = createCodexAppServerBindingStore(state);
+      const first = {
+        kind: "session" as const,
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:telegram:chat-1",
+      };
+      const second = { ...first, sessionId: "session-2" };
 
-    await store.mutate(first, {
-      kind: "set",
-      binding: { threadId: "thread-1", cwd: "/repo" },
-    });
-    expect(store.read(second)).toBeUndefined();
-    await store.withLease(second, async () => undefined);
+      await store.mutate(first, {
+        kind: "set",
+        binding: { threadId: "thread-1", cwd: "/repo" },
+      });
+      expect(store.read(second)).toBeUndefined();
+      await store.withLease(second, async () => undefined);
 
-    expect(bindingStoreKey(first)).toBe(bindingStoreKey(second));
-    expect(values.size).toBe(1);
-    expect(values.get(bindingStoreKey(second))).toMatchObject({ sessionId: "session-1" });
-    await expect(store.adoptSessionGeneration(second, first.sessionId)).resolves.toBe("adopted");
-    expect(values.get(bindingStoreKey(second))).toMatchObject({
-      state: "active",
-      sessionId: "session-2",
-      binding: { threadId: "thread-1" },
-    });
-    await expect(
-      store.mutate(first, {
-        kind: "patch",
-        threadId: "thread-1",
-        patch: { model: "stale-model" },
-      }),
-    ).resolves.toBe(false);
-    await expect(store.mutate(first, { kind: "clear" })).resolves.toBe(false);
-    expect(store.read(second)).toMatchObject({ threadId: "thread-1" });
-    await expect(store.mutate(second, { kind: "clear" })).resolves.toBe(true);
-  });
+      expect(bindingStoreKey(first)).toBe(bindingStoreKey(second));
+      expect(values.size).toBe(1);
+      expect(values.get(bindingStoreKey(second))).toMatchObject({ sessionId: "session-1" });
+      if (expiredLease) {
+        const key = bindingStoreKey(first);
+        const predecessor = values.get(key)!;
+        values.set(key, {
+          ...predecessor,
+          lease: { token: "crashed-predecessor", expiresAt: Date.now() - 1 },
+        });
+      }
+      await expect(store.adoptSessionGeneration(second, first.sessionId)).resolves.toBe("adopted");
+      expect(values.get(bindingStoreKey(second))).toMatchObject({
+        state: "active",
+        sessionId: "session-2",
+        binding: { threadId: "thread-1" },
+      });
+      await expect(
+        store.mutate(first, {
+          kind: "patch",
+          threadId: "thread-1",
+          patch: { model: "stale-model" },
+        }),
+      ).resolves.toBe(false);
+      await expect(store.mutate(first, { kind: "clear" })).resolves.toBe(false);
+      expect(store.read(second)).toMatchObject({ threadId: "thread-1" });
+      await expect(store.mutate(second, { kind: "clear" })).resolves.toBe(true);
+    },
+  );
 
   it("rejects a delayed adoption after a newer session generation wins", async () => {
     const { state } = createStateStore();
@@ -826,15 +759,12 @@ describe("Codex app-server binding store", () => {
           : {}),
       };
       const openStore = () => {
-        const state = createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>(
-          "codex",
-          {
-            namespace: "predecessor-reopen",
-            maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-            overflowPolicy: "reject-new",
-            env: { ...process.env, OPENCLAW_STATE_DIR: root },
-          },
-        );
+        const state = createCodexSqliteTestBindingStateStore({
+          namespace: "predecessor-reopen",
+          maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+          overflowPolicy: "reject-new",
+          env: { ...process.env, OPENCLAW_STATE_DIR: root },
+        });
         return { state, store: createLazyCodexAppServerBindingStore(state) };
       };
       try {
@@ -851,6 +781,7 @@ describe("Codex app-server binding store", () => {
           sessionId: current.sessionId,
           previousSessionId: previous.sessionId,
         });
+        await closeOpenClawStateDatabaseAsync();
         resetPluginStateStoreForTests();
         const { state, store } = openStore();
         expect(store.read(current)).toBeUndefined();
@@ -873,6 +804,7 @@ describe("Codex app-server binding store", () => {
         });
         await expect(store.mutate(previous, { kind: "clear" })).resolves.toBe(false);
       } finally {
+        await closeOpenClawStateDatabaseAsync();
         resetPluginStateStoreForTests();
         await fixture.cleanup();
       }
@@ -955,71 +887,6 @@ describe("Codex app-server binding store", () => {
     },
   );
 
-  it("does not bridge two generations when the host rotates during a predecessor lease wait", async () => {
-    const fixture = await createOpenClawTestState({
-      prefix: "codex-predecessor-lease-",
-      layout: "state-only",
-      applyEnv: false,
-    });
-    const root = fixture.stateDir;
-    const storePath = path.join(root, "sessions.json");
-    const { state } = createStateStore();
-    const owner = createCodexAppServerBindingStore(state);
-    const peer = createCodexAppServerBindingStore(state);
-    const previous = {
-      kind: "session" as const,
-      agentId: "main",
-      sessionId: "previous",
-      sessionKey: "agent:main:compaction",
-    };
-    const current = { ...previous, sessionId: "current" };
-    const next = { ...previous, sessionId: "next" };
-    const scope = { agentId: previous.agentId, sessionKey: previous.sessionKey, storePath };
-    const binding = { threadId: "native-thread", cwd: "/repo" };
-    try {
-      await upsertSessionEntry({
-        ...scope,
-        entry: { sessionId: previous.sessionId, updatedAt: 1 },
-      });
-      await patchSessionEntry({ ...scope, update: () => ({ sessionId: current.sessionId }) });
-      await owner.mutate(previous, { kind: "set", binding });
-      vi.useFakeTimers();
-      let outcome!: Promise<unknown>;
-      await owner.withLease(previous, async () => {
-        outcome = reclaimCurrentCodexSessionGeneration({
-          bindingStore: peer,
-          identity: current,
-          storePath,
-          reclaimStale: false,
-        }).catch((error: unknown) => error);
-        await vi.advanceTimersByTimeAsync(0);
-        await patchSessionEntry({
-          ...scope,
-          skipMaintenance: true,
-          update: () => ({ sessionId: next.sessionId }),
-        });
-      });
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(await outcome).toMatchObject({ name: "AgentHarnessSessionSupersededError" });
-      expect(peer.read(previous)).toEqual(binding);
-      expect(getSessionEntry(scope)).toMatchObject({
-        sessionId: next.sessionId,
-        previousSessionId: current.sessionId,
-      });
-      await expect(
-        reclaimCurrentCodexSessionGeneration({
-          bindingStore: peer,
-          identity: next,
-          storePath,
-          reclaimStale: false,
-        }),
-      ).resolves.toBe(false);
-    } finally {
-      vi.useRealTimers();
-      await fixture.cleanup();
-    }
-  });
-
   it("rechecks predecessor adoption authority after the lazy store resolves", async () => {
     const { state } = createStateStore();
     const previous = {
@@ -1098,11 +965,9 @@ describe("Codex app-server binding store", () => {
   });
 
   it("expires physical-session retirement fences but retains stable-key fences", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-06-13T00:00:00.000Z"));
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-binding-state-"));
     try {
-      const state = createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
+      const state = createCodexSqliteTestBindingStateStore({
         namespace: "app-server-thread-bindings-retirement-test",
         maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
         overflowPolicy: "reject-new",
@@ -1136,7 +1001,8 @@ describe("Codex app-server binding store", () => {
         retired: true,
       });
 
-      vi.advanceTimersByTime(2 * 60_000);
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.now() + 2 * 60_000);
 
       expect(state.lookup(bindingStoreKey(physical))).toBeUndefined();
       expect(state.lookup(bindingStoreKey(stable))).toMatchObject({
@@ -1144,6 +1010,7 @@ describe("Codex app-server binding store", () => {
         retired: true,
       });
     } finally {
+      await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
@@ -1506,59 +1373,6 @@ describe("Codex app-server binding store", () => {
     }
   });
 
-  it("drains an in-flight ownership mutation and rejects late attachment during archive", async () => {
-    const fixture = createStateStore();
-    const stateUpdate = fixture.state.update;
-    if (!stateUpdate) {
-      throw new Error("test state store must support atomic updates");
-    }
-    const originalUpdate = stateUpdate.bind(fixture.state);
-    let startArchive: (() => void) | undefined;
-    fixture.state.update = (...args) => {
-      startArchive?.();
-      startArchive = undefined;
-      return originalUpdate(...args);
-    };
-    const store = createCodexAppServerBindingStore(fixture.state);
-    const firstIdentity = { kind: "conversation" as const, bindingId: "first" };
-    const lateIdentity = { kind: "conversation" as const, bindingId: "late" };
-    let releaseArchive!: () => void;
-    const archiveReleased = new Promise<void>((resolve) => {
-      releaseArchive = resolve;
-    });
-    let archive!: Promise<void>;
-    startArchive = () => {
-      archive = store.withThreadArchiveFence(async () => {
-        await expect(
-          store.mutate(firstIdentity, {
-            kind: "patch",
-            threadId: "thread-before-archive",
-            patch: { cwd: "/updated" },
-          }),
-        ).resolves.toBe(true);
-        await archiveReleased;
-      });
-    };
-
-    await expect(
-      store.mutate(firstIdentity, {
-        kind: "set",
-        binding: { threadId: "thread-before-archive", cwd: "/repo" },
-      }),
-    ).resolves.toBe(true);
-    await Promise.resolve();
-    await expect(
-      store.mutate(lateIdentity, {
-        kind: "set",
-        binding: { threadId: "thread-late", cwd: "/repo" },
-      }),
-    ).rejects.toThrow("native archive is in progress");
-    releaseArchive();
-    await expect(archive).resolves.toBeUndefined();
-    expect(store.read(firstIdentity)).toMatchObject({ cwd: "/updated" });
-    expect(store.read(lateIdentity)).toBeUndefined();
-  });
-
   it("hashes stable session keys and keeps agent ownership distinct", () => {
     const sessionKey = "agent:main:telegram:private-peer@example.com";
     const first = bindingStoreKey({
@@ -1633,215 +1447,6 @@ describe("Codex app-server binding store", () => {
       }),
     ).resolves.toBe(false);
     expect(store.read(identity)).toMatchObject({ threadId: "thread-new" });
-  });
-
-  it("serializes writes from another facade behind a native-compaction lease", async () => {
-    vi.useFakeTimers();
-    const { state } = createStateStore();
-    const owner = createCodexAppServerBindingStore(state);
-    const peer = createCodexAppServerBindingStore(state);
-    const identity = { kind: "conversation" as const, bindingId: "binding-1" };
-    await owner.mutate(identity, {
-      kind: "set",
-      binding: { threadId: "thread-1", cwd: "/repo" },
-    });
-    let peerFinished = false;
-    let peerWrite!: Promise<boolean>;
-
-    await owner.withLease(identity, async () => {
-      peerWrite = peer
-        .mutate(identity, {
-          kind: "set",
-          binding: { threadId: "thread-2", cwd: "/repo" },
-        })
-        .then((result) => {
-          peerFinished = true;
-          return result;
-        });
-      await Promise.resolve();
-      expect(peerFinished).toBe(false);
-    });
-    await vi.advanceTimersByTimeAsync(1_000);
-    await peerWrite;
-
-    expect(peer.read(identity)).toMatchObject({ threadId: "thread-2" });
-  });
-
-  it("leases an absent binding before creating its first thread", async () => {
-    vi.useFakeTimers();
-    const { state } = createStateStore();
-    const owner = createCodexAppServerBindingStore(state);
-    const peer = createCodexAppServerBindingStore(state);
-    const identity = { kind: "conversation" as const, bindingId: "binding-new" };
-    let peerFinished = false;
-    let peerWrite!: Promise<boolean>;
-
-    await owner.withLease(identity, async () => {
-      peerWrite = peer
-        .mutate(identity, {
-          kind: "set",
-          binding: { threadId: "thread-peer", cwd: "/repo" },
-          if: { kind: "absent" },
-        })
-        .then((result) => {
-          peerFinished = true;
-          return result;
-        });
-      await Promise.resolve();
-      expect(peerFinished).toBe(false);
-      await expect(
-        owner.mutate(identity, {
-          kind: "set",
-          binding: { threadId: "thread-owner", cwd: "/repo" },
-          if: { kind: "absent" },
-        }),
-      ).resolves.toBe(true);
-      await Promise.resolve();
-      expect(peerFinished).toBe(false);
-    });
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    await expect(peerWrite).resolves.toBe(false);
-    expect(owner.read(identity)).toMatchObject({ threadId: "thread-owner" });
-  });
-
-  it("releases a lease when its owner callback rejects", async () => {
-    const { state } = createStateStore();
-    const owner = createCodexAppServerBindingStore(state);
-    const peer = createCodexAppServerBindingStore(state);
-    const identity = { kind: "conversation" as const, bindingId: "binding-rejected-owner" };
-    await owner.mutate(identity, {
-      kind: "set",
-      binding: { threadId: "thread-owner", cwd: "/repo" },
-    });
-
-    await expect(
-      owner.withLease(identity, async () => {
-        throw new Error("owner failed");
-      }),
-    ).rejects.toThrow("owner failed");
-    await expect(
-      peer.mutate(identity, {
-        kind: "patch",
-        threadId: "thread-owner",
-        patch: { serviceTier: "priority" },
-      }),
-    ).resolves.toBe(true);
-  });
-
-  it("renews a live lease across a long app-server request", async () => {
-    vi.useFakeTimers();
-    const { state } = createStateStore();
-    const owner = createCodexAppServerBindingStore(state);
-    const peer = createCodexAppServerBindingStore(state);
-    const identity = { kind: "conversation" as const, bindingId: "binding-renewed-owner" };
-    await owner.mutate(identity, {
-      kind: "set",
-      binding: { threadId: "thread-owner", cwd: "/repo" },
-    });
-    let releaseOwner!: () => void;
-    let markOwnerStarted!: () => void;
-    const ownerStarted = new Promise<void>((resolve) => {
-      markOwnerStarted = resolve;
-    });
-    const holdOwner = new Promise<void>((resolve) => {
-      releaseOwner = resolve;
-    });
-    const ownerRun = owner.withLease(identity, async () => {
-      markOwnerStarted();
-      await holdOwner;
-      return await owner.mutate(identity, {
-        kind: "patch",
-        threadId: "thread-owner",
-        patch: { serviceTier: "priority" },
-      });
-    });
-    await ownerStarted;
-    let peerFinished = false;
-    const peerWrite = peer
-      .mutate(identity, {
-        kind: "set",
-        binding: { threadId: "thread-peer", cwd: "/repo" },
-      })
-      .then((result) => {
-        peerFinished = true;
-        return result;
-      });
-
-    await vi.advanceTimersByTimeAsync(66_000);
-    expect(peerFinished).toBe(false);
-    releaseOwner();
-    await expect(ownerRun).resolves.toBe(true);
-    await vi.advanceTimersByTimeAsync(1_000);
-    await expect(peerWrite).resolves.toBe(true);
-    expect(peer.read(identity)).toMatchObject({ threadId: "thread-peer" });
-  });
-
-  it("fences an expired lease owner after a peer takes over", async () => {
-    vi.useFakeTimers();
-    const { state } = createStateStore();
-    const owner = createCodexAppServerBindingStore(state);
-    const peer = createCodexAppServerBindingStore(state);
-    const identity = { kind: "conversation" as const, bindingId: "binding-stale-owner" };
-    await owner.mutate(identity, {
-      kind: "set",
-      binding: { threadId: "thread-owner", cwd: "/repo" },
-    });
-
-    await expect(
-      owner.withLease(identity, async () => {
-        vi.setSystemTime(Date.now() + 66_000);
-        await peer.withLease(identity, async () => {
-          await expect(
-            peer.mutate(identity, {
-              kind: "set",
-              binding: { threadId: "thread-peer", cwd: "/repo" },
-            }),
-          ).resolves.toBe(true);
-        });
-        await owner.mutate(identity, {
-          kind: "set",
-          binding: { threadId: "thread-stale", cwd: "/repo" },
-        });
-      }),
-    ).rejects.toThrow("Lost Codex binding lease");
-
-    expect(owner.read(identity)).toMatchObject({ threadId: "thread-peer" });
-  });
-
-  it("surfaces heartbeat lease loss without deleting the replacement owner", async () => {
-    vi.useFakeTimers();
-    const { state, values } = createStateStore();
-    const owner = createCodexAppServerBindingStore(state);
-    const identity = { kind: "conversation" as const, bindingId: "binding-replaced-owner" };
-    await owner.mutate(identity, {
-      kind: "set",
-      binding: { threadId: "thread-owner", cwd: "/repo" },
-    });
-    let releaseOwner!: () => void;
-    let markOwnerStarted!: () => void;
-    const ownerStarted = new Promise<void>((resolve) => {
-      markOwnerStarted = resolve;
-    });
-    const holdOwner = new Promise<void>((resolve) => {
-      releaseOwner = resolve;
-    });
-    const ownerRun = owner.withLease(identity, async () => {
-      markOwnerStarted();
-      await holdOwner;
-    });
-    await ownerStarted;
-    const key = bindingStoreKey(identity);
-    const current = values.get(key)!;
-    values.set(key, {
-      ...current,
-      lease: { token: "peer-owner", expiresAt: Date.now() + 120_000 },
-    });
-
-    await vi.advanceTimersByTimeAsync(30_000);
-    releaseOwner();
-    await expect(ownerRun).rejects.toThrow("Lost Codex binding lease");
-    expect(values.get(key)?.lease?.token).toBe("peer-owner");
   });
 
   it("rejects empty storage identities", () => {

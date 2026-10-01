@@ -20,6 +20,7 @@ import {
   startStaticRegistry,
 } from "../../../plugins/test-helpers/npm-registry-fixtures.js";
 import * as processExecution from "../../../process/exec.js";
+import { npmCommandArgs } from "../../../test-utils/npm-command.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
   detectConfiguredPluginInstallHealthIssues,
@@ -38,7 +39,7 @@ afterEach(async () => {
 });
 
 describe("Doctor same-version required dependency repair", () => {
-  it.each(["repaired", "hollow-replacement", "effect-refused"] as const)(
+  it.each(["repaired", "hollow-replacement", "killed-npm", "effect-refused"] as const)(
     "%s preserves the recorded generation and configuration through the real updater",
     { timeout: 180_000 },
     async (scenario) => {
@@ -124,6 +125,12 @@ describe("Doctor same-version required dependency repair", () => {
               await seedInstalledPluginIndex(records, { config: cfg, env: process.env });
               const configBefore = await fs.readFile(state.configPath, "utf8");
               const indexBefore = await readPersistedInstalledPluginIndex();
+              const projectInputs = ["package.json", "package-lock.json"];
+              const projectInputsBefore = await Promise.all(
+                projectInputs.map((file) =>
+                  fs.readFile(path.join(packageInfo.projectRoot, file), "utf8"),
+                ),
+              );
               const payloadPaths = ["package.json", "openclaw.plugin.json", "dist/index.js"];
               const payloadBefore = await Promise.all(
                 payloadPaths.map((file) =>
@@ -142,14 +149,51 @@ describe("Doctor same-version required dependency repair", () => {
                 }),
               );
               let npmInstalls = 0;
+              let killedNpm = false;
               const realRun = processExecution.runCommandWithTimeout;
               vi.spyOn(processExecution, "runCommandWithTimeout").mockImplementation(
                 async (...args) => {
-                  const result = await realRun(...args);
                   const [argv, options] = args;
                   if (
-                    argv[0] === "npm" &&
-                    argv[1] === "install" &&
+                    scenario === "killed-npm" &&
+                    npmCommandArgs(argv)?.[0] === "install" &&
+                    !argv.includes("--package-lock-only")
+                  ) {
+                    const installOptions =
+                      typeof options === "number" ? { timeoutMs: options } : options;
+                    let npmPid: number | undefined;
+                    const killDuringDownload = (request: http.IncomingMessage) => {
+                      if (!killedNpm && npmPid && request.url?.endsWith(".tgz")) {
+                        process.kill(npmPid, "SIGKILL");
+                        killedNpm = true;
+                      }
+                    };
+                    const server = servers.at(-1)!;
+                    server.prependListener("request", killDuringDownload);
+                    try {
+                      const result = await realRun(argv, {
+                        ...installOptions,
+                        input: "",
+                        env: {
+                          ...installOptions.env,
+                          NPM_CONFIG_CACHE: state.path("repair-npm-cache"),
+                          npm_config_cache: state.path("repair-npm-cache"),
+                        },
+                        beforeInput: (pid, command) => {
+                          npmPid = pid;
+                          installOptions.beforeInput?.(pid, command);
+                        },
+                      });
+                      expect(result.signal).toBe("SIGKILL");
+                      npmInstalls++;
+                      return result;
+                    } finally {
+                      server.off("request", killDuringDownload);
+                    }
+                  }
+                  const result = await realRun(...args);
+                  if (
+                    npmCommandArgs(argv)?.[0] === "install" &&
                     !argv.includes("--package-lock-only") &&
                     result.code === 0
                   ) {
@@ -223,9 +267,12 @@ describe("Doctor same-version required dependency repair", () => {
                 } else {
                   expect(result.failedPluginIds).toEqual([packageName]);
                   expect(result.records).toEqual(records);
-                  expect(result.warnings.join("\n")).toContain(dependency);
+                  expect(result.warnings.join("\n")).toContain(
+                    scenario === "killed-npm" ? "npm install failed" : dependency,
+                  );
                 }
               }
+              expect(killedNpm).toBe(scenario === "killed-npm");
               if (scenario !== "repaired") {
                 expect(await readPersistedInstalledPluginIndex()).toEqual(indexBefore);
                 expect((await fs.readdir(path.join(npmDir, "projects"))).toSorted()).toEqual(
@@ -236,6 +283,13 @@ describe("Doctor same-version required dependency repair", () => {
                 scenario === "repaired",
               );
               expect(await fs.readFile(state.configPath, "utf8")).toBe(configBefore);
+              expect(
+                await Promise.all(
+                  projectInputs.map((file) =>
+                    fs.readFile(path.join(packageInfo.projectRoot, file), "utf8"),
+                  ),
+                ),
+              ).toEqual(projectInputsBefore);
               expect(
                 await Promise.all(
                   payloadPaths.map((file) =>

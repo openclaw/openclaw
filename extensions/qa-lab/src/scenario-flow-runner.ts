@@ -24,6 +24,8 @@ const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
   "./codex-plugin.fixture.js": () => import("./codex-plugin.fixture.js"),
   "./errors.js": () => import("./errors.js"),
   "./gateway-log-redaction.js": () => import("./gateway-log-redaction.js"),
+  "./providers/mock-openai/mock-openai-input.js": () =>
+    import("./providers/mock-openai/mock-openai-input.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-allowbots.js": () =>
     import("./live-transports/matrix/scenarios/scenario-runtime-allowbots.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-approval.js": () =>
@@ -252,6 +254,17 @@ async function runFlowAction(
   }
 }
 
+async function runFlowActions(
+  actions: readonly unknown[],
+  api: QaFlowApi,
+  vars: QaFlowVars,
+  options: QaFlowActionOptions,
+) {
+  for (const action of actions) {
+    await runFlowAction(action, api, vars, options);
+  }
+}
+
 async function runFlowActionBody(
   action: unknown,
   api: QaFlowApi,
@@ -261,11 +274,23 @@ async function runFlowActionBody(
   if (!isPlainObject(action)) {
     throw new Error(`invalid qa flow action: ${JSON.stringify(action)}`);
   }
-  if (typeof action.call === "string") {
-    const callable = resolveCallable(action.call, api, vars);
-    const args = Array.isArray(action.args)
-      ? await Promise.all(action.args.map((entry) => resolveValue(entry, api, vars)))
-      : [];
+  const transportAction = [
+    "sendInbound",
+    "sendNativeCommand",
+    "waitForOutbound",
+    "waitForOutboundSequence",
+    "waitForNoOutbound",
+  ].find((name) => name in action);
+  const call = typeof action.call === "string" ? action.call : undefined;
+  if (call !== undefined || transportAction) {
+    const callable = resolveCallable(call ?? `transport.${transportAction}`, api, vars);
+    const inputs =
+      call === undefined
+        ? [action[transportAction!]]
+        : Array.isArray(action.args)
+          ? action.args
+          : [];
+    const args = await Promise.all(inputs.map((entry) => resolveValue(entry, api, vars)));
     // Value resolution may cross the deadline, so fence every callable at invocation time.
     throwIfFlowAborted(api, options);
     const result = await callable(...args);
@@ -273,24 +298,6 @@ async function runFlowActionBody(
       vars[action.saveAs.trim()] = result;
     }
     return;
-  }
-  for (const name of [
-    "sendInbound",
-    "sendNativeCommand",
-    "waitForOutbound",
-    "waitForOutboundSequence",
-    "waitForNoOutbound",
-  ] as const) {
-    if (name in action) {
-      const callable = resolveCallable(`transport.${name}`, api, vars);
-      const input = await resolveValue(action[name], api, vars);
-      throwIfFlowAborted(api, options);
-      const result = await callable(input);
-      if (typeof action.saveAs === "string" && action.saveAs.trim()) {
-        vars[action.saveAs.trim()] = result;
-      }
-      return;
-    }
   }
   if (action.resetTransport === true) {
     const reset = resolveCallable("transport.reset", api, vars);
@@ -351,9 +358,7 @@ async function runFlowActionBody(
     const ifAction = action.if as { expr: string; then: unknown[]; else?: unknown[] };
     const passed = Boolean(await evalExpr(ifAction.expr, api, vars));
     const branch = passed ? ifAction.then : (ifAction.else ?? []);
-    for (const nested of branch) {
-      await runFlowAction(nested, api, vars, options);
-    }
+    await runFlowActions(branch, api, vars, options);
     return;
   }
   if (isPlainObject(action.forEach)) {
@@ -372,9 +377,7 @@ async function runFlowActionBody(
       if (forEachAction.index) {
         vars[forEachAction.index] = index;
       }
-      for (const nested of forEachAction.actions) {
-        await runFlowAction(nested, api, vars, options);
-      }
+      await runFlowActions(forEachAction.actions, api, vars, options);
     }
     return;
   }
@@ -386,9 +389,7 @@ async function runFlowActionBody(
       finally?: unknown[];
     };
     try {
-      for (const nested of tryAction.actions) {
-        await runFlowAction(nested, api, vars, options);
-      }
+      await runFlowActions(tryAction.actions, api, vars, options);
     } catch (error) {
       if (!tryAction.catch && !tryAction.finally) {
         throw error;
@@ -397,21 +398,17 @@ async function runFlowActionBody(
         vars[tryAction.catchAs] = error;
       }
       if (tryAction.catch) {
-        for (const nested of tryAction.catch) {
-          await runFlowAction(nested, api, vars, options);
-        }
+        await runFlowActions(tryAction.catch, api, vars, options);
       } else {
         throw error;
       }
     } finally {
       if (tryAction.finally) {
-        for (const nested of tryAction.finally) {
-          // Keep this view local to finally; normal actions retain their scenario signal.
-          await runFlowAction(nested, options.cleanupApi ?? api, vars, {
-            ...options,
-            allowAfterAbort: true,
-          });
-        }
+        // Keep this view local to finally; normal actions retain their scenario signal.
+        await runFlowActions(tryAction.finally, options.cleanupApi ?? api, vars, {
+          ...options,
+          allowAfterAbort: true,
+        });
       }
     }
     return;
@@ -430,9 +427,7 @@ export async function runScenarioFlow(params: {
   const steps: QaSuiteStep[] = params.flow.steps.map((step) => ({
     name: step.name,
     run: async () => {
-      for (const action of step.actions) {
-        await runFlowAction(action, params.api, vars, { cleanupApi: params.cleanupApi });
-      }
+      await runFlowActions(step.actions, params.api, vars, { cleanupApi: params.cleanupApi });
       if (!step.detailsExpr && !step.resultExpr) {
         return undefined;
       }

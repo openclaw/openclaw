@@ -2,11 +2,12 @@
 
 import { html, nothing, render } from "lit";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import { adjustTextareaHeight } from "./chat-composer-dom.ts";
+import { message, stubRailVisibility } from "./chat-position-rail.test-support.ts";
 import { renderChatPositionRail } from "./chat-position-rail.ts";
 import { getTranscriptState } from "./chat-thread-interactions.ts";
 import { renderChatThread } from "./chat-thread.ts";
-import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import {
   installTranscriptDomMocks,
@@ -18,66 +19,166 @@ import {
   type TestContentRow,
 } from "./chat-transcript.test-support.ts";
 
-function message(id: string, role: string, content: unknown, seq: number, runId?: string) {
-  return {
-    role,
-    content,
-    timestamp: seq * 1_000,
-    __openclaw: { id, seq, ...(runId ? { runId } : {}) },
-  };
-}
-
 describe("conversation position rail", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it.each(["resize", "focus", "focus-resize", "pointer", "reader"] as const)(
-    "keeps the reader's rail position through %s updates",
-    async (scenario) => {
-      vi.stubGlobal(
-        "IntersectionObserver",
-        class {
-          observe = vi.fn();
-          unobserve = vi.fn();
-          disconnect = vi.fn();
-        },
-      );
+  it.each(["mounted", "off-window", "focused"] as const)(
+    "publishes current position and keyboard entry together for a %s observer target",
+    (scenario) => {
+      const flushFrame = stubAnimationFrames();
+      const publishVisibility = stubRailVisibility();
       const transcript = createTestTranscript();
       const container = document.body.appendChild(document.createElement("div"));
       const activeMessage = vi.fn(() => "message-79");
+      const markers = Array.from({ length: 80 }, (_, index) => ({
+        id: `message-${index}`,
+        anchorId: `message-${index}`,
+        role: "user" as const,
+        message: message(`message-${index}`, "user", `Checkpoint ${index}`, index + 1),
+      }));
+      render(
+        transcript.renderSession("agent:main:rail-publication", (session) => {
+          vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
+          return html`<div class="chat-thread" tabindex="0">
+            <div class="chat-bubble" data-entry-id="message-79">Latest message</div>
+            ${renderChatPositionRail({
+              positions: {
+                markers,
+                markerIdsByMessageId: new Map(markers.map(({ id }) => [id, id])),
+              },
+              transcript: session,
+              requestUpdate: () => {},
+            })}
+          </div>`;
+        }),
+        container,
+      );
+      const root = container.querySelector<HTMLElement>(".chat-thread")!;
+      const marks = container.querySelector<HTMLElement>(".chat-position-rail__marks")!;
+      Object.defineProperty(marks, "clientHeight", { configurable: true, value: 240 });
+      for (const observer of resizeObservers) {
+        observer.emitTarget(marks, 44, 240);
+      }
+      const marker = (id: string) =>
+        marks.querySelector<HTMLButtonElement>(`[data-position-marker-id="${id}"]`);
+      const current = () => marks.querySelector<HTMLButtonElement>('[aria-current="true"]');
+      const tabStops = () => [...marks.querySelectorAll<HTMLButtonElement>('[tabindex="0"]')];
+      try {
+        flushFrame();
+        publishVisibility(root.querySelector(".chat-bubble")!);
+        flushFrame();
+        root.focus();
+        expect(current()).toBe(marker("message-79"));
+        expect(tabStops()).toEqual([current()]);
+
+        if (scenario === "focused") {
+          marks.scrollTop = 40 * 12;
+          marks.dispatchEvent(new Event("scroll"));
+          flushFrame();
+          document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+          marker("message-40")!.focus();
+          expect(marker("message-40")!.matches(":focus-visible")).toBe(true);
+        }
+        const focused = document.activeElement;
+        const offset = marks.scrollTop;
+        const nextId = scenario === "mounted" ? "message-76" : "message-0";
+        expect(marker(nextId) !== null).toBe(scenario === "mounted");
+        activeMessage.mockReturnValue(nextId);
+        publishVisibility(root.querySelector(".chat-bubble")!);
+
+        // Observer delivery must not expose a new aria-current with the old Tab entry.
+        // Assert before advancing any frame, rather than waiting out that mismatch.
+        expect(current()).not.toBeNull();
+        expect(tabStops()).toEqual([scenario === "focused" ? focused : current()]);
+        expect(document.activeElement).toBe(focused);
+        flushFrame();
+        expect(current()?.dataset.positionMarkerId).toBe(nextId);
+        expect(tabStops()).toEqual([scenario === "focused" ? focused : current()]);
+        expect(document.activeElement).toBe(focused);
+        expect(marks.querySelectorAll(".chat-position-rail__marker").length).toBeLessThan(50);
+        if (scenario === "focused") {
+          expect(marks.scrollTop).toBe(offset);
+          // Leaving exploration restores the retained, off-window reader entry immediately.
+          root.focus();
+          expect(tabStops()).toEqual([current()]);
+        }
+        tabStops()[0]!.focus();
+        expect(document.activeElement).toBe(current());
+        root.focus();
+        expect(tabStops()).toEqual([current()]);
+      } finally {
+        render(nothing, container);
+        transcript.hostDisconnected();
+      }
+    },
+  );
+
+  const railUpdateScenarios = [
+    "boot",
+    "boot-resize",
+    "resize",
+    "resize-jump",
+    "composer-resize-reversal",
+    "composer-resize-reversal-current",
+    "end",
+    "focus",
+    "focus-resize",
+    "pointer",
+    "reader",
+    "reader-offset",
+    "hidden",
+    "composer-resize-reversal-navigation",
+  ] as const;
+
+  it.each(railUpdateScenarios)(
+    "keeps the reader's rail position through %s updates",
+    (scenario) => {
+      const navigatesBeforeResize = scenario === "composer-resize-reversal-navigation";
+      const flushFrame = stubAnimationFrames();
+      const publishVisibility = stubRailVisibility();
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      const settlesAtEnd = scenario === "end";
+      const count = settlesAtEnd ? 5 : 80;
+      const startsAtTop = settlesAtEnd || scenario === "resize-jump";
+      const activeMessage = vi.fn((): string =>
+        scenario === "resize-jump" ? "message-0" : settlesAtEnd ? "message-2" : "message-79",
+      );
       const positions = {
-        markers: Array.from({ length: 80 }, (_, index) => ({
+        markers: Array.from({ length: count }, (_, index) => ({
           id: `message-${index}`,
           anchorId: `message-${index}`,
           role: "user" as const,
           message: message(`message-${index}`, "user", `Checkpoint ${index}`, index + 1),
         })),
         markerIdsByMessageId: new Map(
-          Array.from({ length: 80 }, (_, index) => [`message-${index}`, `message-${index}`]),
+          Array.from({ length: count }, (_, index) => [`message-${index}`, `message-${index}`]),
         ),
       };
-      render(
-        transcript.renderSession(
-          "rail-scroll-policy",
-          "agent:main:rail-scroll-policy",
-          (session) => {
+      const renderRail = () =>
+        render(
+          transcript.renderSession("agent:main:rail-scroll-policy", (session) => {
             vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
-            return html`<div class="chat-thread">
+            return html`<div class="chat-thread" tabindex="0">
+              <div class="chat-bubble" data-entry-id="message-79">Latest message</div>
               ${renderChatPositionRail({ positions, transcript: session, requestUpdate: () => {} })}
             </div>`;
-          },
-        ),
-        container,
-      );
+          }),
+          container,
+        );
+      renderRail();
       const root = container.querySelector<HTMLElement>(".chat-thread")!;
       const marks = container.querySelector<HTMLElement>(".chat-position-rail__marks")!;
-      const markers = [...marks.querySelectorAll<HTMLButtonElement>(".chat-position-rail__marker")];
-      let height = 597;
-      let marksHeight = 283;
+      const marker = (index: number) =>
+        marks.querySelector<HTMLButtonElement>(`[data-position-marker-id="message-${index}"]`)!;
+      let height = settlesAtEnd ? 668 : 597;
+      let scrollHeight = settlesAtEnd ? 700 : 8912;
+      let marksHeight = settlesAtEnd ? 60 : 283;
       let railOffset = 0;
       Object.defineProperties(root, {
         clientHeight: { configurable: true, get: () => height },
-        scrollHeight: { configurable: true, value: 8912 },
+        scrollHeight: { configurable: true, get: () => scrollHeight },
       });
       Object.defineProperties(marks, {
         clientHeight: { configurable: true, get: () => marksHeight },
@@ -85,42 +186,155 @@ describe("conversation position rail", () => {
           configurable: true,
           get: () => railOffset,
           set: (value: number) => {
-            railOffset = Math.max(0, Math.min(value, 960 - marksHeight));
+            railOffset = Math.max(0, Math.min(value, count * 12 - marksHeight));
           },
         },
       });
-      markers.forEach((marker, index) => {
-        Object.defineProperties(marker, {
-          offsetTop: { configurable: true, value: index * 12 },
-          offsetHeight: { configurable: true, value: 12 },
-        });
-      });
-      root.scrollTop = 8315;
-      const flush = async () => {
+      root.scrollTop = startsAtTop ? 0 : 8315;
+      const flush = () => {
         marks.dispatchEvent(new Event("scroll"));
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-        });
+        flushFrame();
+        flushFrame();
       };
       try {
-        await flush();
-        expect(marks.scrollTop).toBe(677);
-        if (scenario === "resize") {
+        flush();
+        expect(marks.scrollTop).toBe(startsAtTop ? 0 : 677);
+        expect(marks.querySelectorAll(".chat-position-rail__marker").length).toBeLessThan(50);
+        if (scenario === "hidden") {
+          const mounted = [...marks.querySelectorAll(".chat-position-rail__marker")];
+          marksHeight = 0;
+          railOffset = 0;
+          for (const observer of resizeObservers) {
+            observer.emitTarget(marks, 44, 0);
+          }
+          flushFrame();
+          renderRail();
+          flushFrame();
+          expect([...marks.querySelectorAll(".chat-position-rail__marker")]).toEqual(mounted);
+          expect(marks.style.getPropertyValue("--chat-position-scroll-top")).toBe("677px");
+
+          // Reader navigation while hidden must be reflected once the rail returns.
+          root.scrollTop = 0;
+          activeMessage.mockReturnValue("message-0");
+          marksHeight = 283;
+          for (const observer of resizeObservers) {
+            observer.emitTarget(marks, 44, 283);
+          }
+          flushFrame();
+          expect(marker(0).getAttribute("aria-current")).toBe("true");
+          expect(marks.style.getPropertyValue("--chat-position-scroll-top")).toBe("0px");
+        } else if (scenario === "boot" || scenario === "boot-resize") {
+          height = 554;
+          marksHeight = 240;
+          flush();
+          // The initial observer result can arrive after the composer claims its space.
+          publishVisibility(root.querySelector(".chat-bubble")!);
+          if (scenario === "boot-resize") {
+            height = 543;
+            marksHeight = 229;
+          }
+          flush();
+          expect(marker(79).hasAttribute("data-visible")).toBe(true);
+          const initialOffset = scenario === "boot-resize" ? 731 : 720;
+          expect(marks.scrollTop).toBe(initialOffset);
+          height = 512;
+          marksHeight = 198;
+          flush();
+          expect(marks.scrollTop).toBe(initialOffset);
+        } else if (scenario === "end") {
+          // Initial row measurements settle at the end before later composer growth.
+          height = 552;
+          scrollHeight = 552;
+          activeMessage.mockReturnValue("message-4");
+          flush();
+          expect(marks.scrollTop).toBe(0);
+          height = 452;
+          scrollHeight = 486;
+          root.scrollTop = 34;
+          marksHeight = 47;
+          flush();
+          expect(marker(4).getAttribute("aria-current")).toBe("true");
+          expect(marks.scrollTop).toBe(0);
+        } else if (scenario === "resize-jump") {
+          // Initial end navigation can share the frame that reveals the composer.
+          height = 554;
+          marksHeight = 240;
+          root.scrollTop = 8358;
+          activeMessage.mockReturnValue("message-79");
+          flush();
+          expect(marker(79).getAttribute("aria-current")).toBe("true");
+          expect(Number.parseFloat(marker(79).style.top)).toBeGreaterThanOrEqual(marks.scrollTop);
+          expect(Number.parseFloat(marker(79).style.top) + 12).toBeLessThanOrEqual(
+            marks.scrollTop + marks.clientHeight,
+          );
+        } else if (scenario.startsWith("composer-resize-reversal")) {
+          publishVisibility(root.querySelector(".chat-bubble")!);
+          flush();
+          height = 512;
+          marksHeight = 198;
+          let readerOffset = 8400;
+          Object.defineProperty(root, "scrollTop", {
+            configurable: true,
+            get: () => Math.min(readerOffset, scrollHeight - height),
+            set: (value: number) => {
+              readerOffset = Math.max(0, Math.min(value, scrollHeight - height));
+            },
+          });
+          flush();
+          expect(marks.scrollTop).toBe(677);
+          container.classList.add("chat");
+          const textarea = container.appendChild(document.createElement("textarea"));
+          textarea.value = "/goal";
+          Object.defineProperties(textarea, {
+            clientHeight: { configurable: true, value: 32 },
+            scrollHeight: {
+              configurable: true,
+              get: () => {
+                // Measuring the replacement draft commits the expanded transcript.
+                height = 597;
+                marksHeight = 283;
+                return 32;
+              },
+            },
+          });
+          if (navigatesBeforeResize) {
+            root.scrollTop = 0;
+            activeMessage.mockReturnValue("message-0");
+          }
+          adjustTextareaHeight(textarea);
+          expect(root.scrollTop).toBe(navigatesBeforeResize ? 0 : 8315);
+          // The goal header regrows the composer before any observer or frame runs.
+          height = 576;
+          marksHeight = 262;
+          if (scenario === "composer-resize-reversal-current") {
+            activeMessage.mockReturnValue("message-76");
+          }
+          publishVisibility(root.querySelector(".chat-bubble")!);
+          flush();
+          if (navigatesBeforeResize) {
+            expect(marks.scrollTop).toBe(0);
+            return;
+          }
+          expect(marks.scrollTop).toBe(677);
+          root.scrollTop = scrollHeight - height;
+          flush();
+          expect(marks.scrollTop).toBe(677);
+        } else if (scenario === "resize") {
           height = 554;
           marksHeight = 240;
           activeMessage.mockReturnValue("message-76");
-          await flush();
+          flush();
           expect(marks.scrollTop).toBe(677);
           root.scrollTop = 8319;
-          await flush();
+          flush();
           expect(marks.scrollTop).toBe(677);
           // A second resize retargets the same smooth compensation, including its last 6px.
           height = 512;
           marksHeight = 198;
-          await flush();
+          flush();
           for (const offset of [8323, 8394, 8400]) {
             root.scrollTop = offset;
-            await flush();
+            flush();
             expect(marks.scrollTop).toBe(677);
           }
           publishTranscriptScroll(root, {
@@ -130,48 +344,77 @@ describe("conversation position rail", () => {
           });
           root.scrollTop = 8000;
           activeMessage.mockReturnValue("message-40");
-          await flush();
+          flush();
           expect(marks.scrollTop).toBeLessThan(677);
         } else if (scenario === "focus") {
+          marks.scrollTop = 60 * 12 - 100;
+          flush();
+          root.focus();
           document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
-          markers[40]!.focus();
-          expect(markers[40]!.matches(":focus-visible")).toBe(true);
-          await flush();
-          expect(markers[40]!.offsetTop).toBeGreaterThanOrEqual(marks.scrollTop);
-          expect(markers[40]!.offsetTop + markers[40]!.offsetHeight).toBeLessThanOrEqual(
+          marker(60).focus();
+          expect(marker(60).matches(":focus-visible")).toBe(true);
+          flush();
+          expect(Number.parseFloat(marker(60).style.top)).toBeGreaterThanOrEqual(marks.scrollTop);
+          expect(Number.parseFloat(marker(60).style.top) + 12).toBeLessThanOrEqual(
             marks.scrollTop + marks.clientHeight,
           );
           const focusedOffset = marks.scrollTop;
           activeMessage.mockReturnValue("message-77");
-          await flush();
-          expect(document.activeElement).toBe(markers[40]);
+          publishVisibility(root.querySelector(".chat-bubble")!);
+          expect([...marks.querySelectorAll('[tabindex="0"]')]).toEqual([marker(60)]);
+          flush();
+          expect(document.activeElement).toBe(marker(60));
           expect(marks.scrollTop).toBe(focusedOffset);
-          markers[40]!.blur();
+          marker(60).blur();
           activeMessage.mockReturnValue("message-79");
-          await flush();
+          publishVisibility(root.querySelector(".chat-bubble")!);
+          // Native Tab may arrive before the scheduled reader update commits.
+          const publishedMarker = marks.querySelector('[aria-current="true"]');
+          expect([...marks.querySelectorAll('[tabindex="0"]')]).toEqual([publishedMarker]);
+          // Observer updates publish reader position and Tab entry in the same layout frame.
+          flush();
+          expect(marker(79).getAttribute("aria-current")).toBe("true");
+          expect([...marks.querySelectorAll('[tabindex="0"]')]).toEqual([marker(79)]);
           expect(marks.scrollTop).toBe(677);
         } else if (scenario === "focus-resize") {
           document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
-          markers[79]!.focus();
-          expect(markers[79]!.matches(":focus-visible")).toBe(true);
+          marker(79).focus();
+          expect(marker(79).matches(":focus-visible")).toBe(true);
           height = 554;
           marksHeight = 240;
-          await flush();
-          expect(document.activeElement).toBe(markers[79]);
+          flush();
+          expect(document.activeElement).toBe(marker(79));
           expect(marks.scrollTop).toBe(720);
+        } else if (scenario === "reader-offset") {
+          // Reading within the rendered rows re-renders nothing; the published
+          // offset alone must move the current marker.
+          activeMessage.mockReturnValue("message-78");
+          root.scrollTop = 8200;
+          publishTranscriptScroll(root, {
+            type: "offset",
+            delta: -115,
+            scrolling: true,
+            touching: false,
+            programmatic: false,
+          });
+          for (const observer of resizeObservers) {
+            observer.emitTarget(marks, 44, marksHeight);
+          }
+          flushFrame();
+          expect(marker(78).getAttribute("aria-current")).toBe("true");
         } else if (scenario === "pointer") {
-          markers[40]!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-          markers[40]!.focus();
-          expect(markers[40]!.matches(":focus-visible")).toBe(false);
+          marker(60).dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+          marker(60).focus();
+          expect(marker(60).matches(":focus-visible")).toBe(false);
           expect(marks.scrollTop).toBe(677);
           activeMessage.mockReturnValue("message-0");
-          await flush();
-          expect(document.activeElement).toBe(markers[40]);
+          flush();
+          expect(document.activeElement).toBe(marker(60));
           expect(marks.scrollTop).toBe(0);
         } else {
           height = 554;
           marksHeight = 240;
-          await flush();
+          flush();
           expect(marks.scrollTop).toBe(677);
           publishTranscriptScroll(root, {
             type: "input",
@@ -179,8 +422,8 @@ describe("conversation position rail", () => {
             touching: false,
           });
           root.scrollTop = 8319;
-          await flush();
-          expect(markers[79]!.getAttribute("aria-current")).toBe("true");
+          flush();
+          expect(marker(79).getAttribute("aria-current")).toBe("true");
           expect(marks.scrollTop).toBe(720);
         }
       } finally {
@@ -230,6 +473,9 @@ describe("conversation position rail", () => {
       );
       assert(root && marks && original);
       Object.defineProperty(marks, "clientHeight", { configurable: true, value: 600 });
+      for (const observer of resizeObservers) {
+        observer.emitTarget(marks, 44, 600);
+      }
       await settleFrames();
       expect(observed.has(original)).toBe(true);
       const query = vi.spyOn(root, "querySelectorAll");
@@ -291,76 +537,6 @@ describe("conversation position rail", () => {
       expect(observed.has(replacement)).toBe(false);
     } finally {
       render(nothing, container);
-      transcript.hostDisconnected();
-    }
-  });
-
-  it("publishes consecutive reader offsets even when the virtual row range is unchanged", async () => {
-    transcriptDomState.measuredRowHeight = 120;
-    const requestUpdate = vi.fn();
-    const transcript = new ChatTranscriptController({
-      addController: () => undefined,
-      removeController: () => undefined,
-      requestUpdate,
-      updateComplete: Promise.resolve(true),
-    });
-    const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
-      kind: "content",
-      key: `row-${index}`,
-      content: html`<div>${index}</div>`,
-    }));
-    const { container, session, renderRows } = await mountTestTranscript(
-      "rail-notification",
-      rows,
-      transcript,
-    );
-    try {
-      Object.defineProperties(container, {
-        clientHeight: { configurable: true, value: 600 },
-        scrollHeight: { configurable: true, value: 4800 },
-      });
-      for (const observer of resizeObservers) {
-        observer.emitTarget(container, 800, 600);
-      }
-      const ids = rows.map((row) => row.key);
-      session.syncMessageRows(
-        new Map(ids.map((id) => [id, id])),
-        new Map(ids.map((id) => [id, id])),
-      );
-      renderRows(rows);
-      const currentId = () => session.activeMessageId(["row-2", "row-3"]);
-      container.scrollTop = 50;
-      container.dispatchEvent(new Event("scroll"));
-      expect(currentId()).toBe("row-2");
-      requestUpdate.mockClear();
-
-      // Both viewports span rows 0–5, but their midpoints straddle row 3.
-      // TanStack's range/isScrolling notification alone cannot publish this.
-      container.scrollTop = 70;
-      container.dispatchEvent(new Event("scroll"));
-      expect(requestUpdate).toHaveBeenCalled();
-      expect(currentId()).toBe("row-3");
-      requestUpdate.mockClear();
-      container.scrollTop = 50;
-      container.dispatchEvent(new Event("scroll"));
-      expect(requestUpdate).toHaveBeenCalled();
-      expect(currentId()).toBe("row-2");
-
-      Object.defineProperty(container, "clientHeight", { configurable: true, value: 640 });
-      for (const observer of resizeObservers) {
-        observer.emitTarget(container, 800, 640);
-      }
-      expect(currentId()).toBe("row-3");
-      requestUpdate.mockClear();
-      container.dispatchEvent(new Event("scroll"));
-      expect(requestUpdate).not.toHaveBeenCalled();
-
-      transcript.hostDisconnected();
-      requestUpdate.mockClear();
-      container.scrollTop = 70;
-      container.dispatchEvent(new Event("scroll"));
-      expect(requestUpdate).not.toHaveBeenCalled();
-    } finally {
       transcript.hostDisconnected();
     }
   });
@@ -512,7 +688,7 @@ describe("conversation position rail", () => {
   it.each([
     { role: "user", senderName: undefined, label: "User message" },
     { role: "user", senderName: "Alice Example", label: "Alice Example" },
-    { role: "assistant", senderName: "Alice Example", label: "Assistant message" },
+    { role: "assistant", senderName: "Alice Example", label: "Molty" },
   ])(
     "renders safe Markdown and attribution in $role previews ($label)",
     ({ role, senderName, label }) => {
@@ -528,6 +704,9 @@ describe("conversation position rail", () => {
       Object.assign(messages[0]!["__openclaw"], { senderName });
       const props = threadProps("rail-markdown", "agent:main:markdown", messages);
       props.userName = "Local Viewer";
+      if (role === "assistant") {
+        props.assistantAvatar = "🦞";
+      }
       const transcript = createTestTranscript();
       const container = document.body.appendChild(document.createElement("div"));
       const rerender = () => {
@@ -545,8 +724,26 @@ describe("conversation position rail", () => {
         );
         const avatar = container.querySelector(".chat-position-rail__preview .chat-author-avatar");
         expect(avatar?.getAttribute("aria-label") ?? null).toBe(
-          role === "user" ? (senderName ?? null) : null,
+          role === "user" ? (senderName ?? null) : "Molty",
         );
+        if (role === "assistant") {
+          expect(avatar?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe(
+            "🦞",
+          );
+          expect(
+            container.querySelector(".chat-position-rail__marker")?.getAttribute("aria-label"),
+          ).toContain("Molty");
+          props.assistantName = "Roboclaw";
+          rerender();
+          expect(container.querySelector(".chat-position-rail__preview-label")?.textContent).toBe(
+            "Roboclaw",
+          );
+          expect(
+            container
+              .querySelector(".chat-position-rail__preview .chat-author-avatar")
+              ?.getAttribute("aria-label"),
+          ).toBe("Roboclaw");
+        }
         expect(preview.querySelector("strong")?.textContent).toBe("Important");
         expect(preview.querySelector("em")?.textContent).toBe("detail");
         expect(preview.querySelector("code")?.textContent).toBe("code");
@@ -669,6 +866,9 @@ describe("conversation position rail", () => {
       const root = container.querySelector<HTMLElement>(".chat-thread")!;
       const marks = container.querySelector<HTMLElement>(".chat-position-rail__marks")!;
       Object.defineProperty(marks, "clientHeight", { configurable: true, value: 600 });
+      for (const observer of resizeObservers) {
+        observer.emitTarget(marks, 44, 600);
+      }
       await settleFrames();
       expect(observed.has(streamBubble)).toBe(true);
       const query = vi.spyOn(root, "querySelectorAll");

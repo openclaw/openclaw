@@ -1,5 +1,6 @@
 // Resource ceiling assertions for Docker E2E stats output.
 import fs from "node:fs";
+import { reportLimitViolations } from "../../../lib/check-limits.mts";
 
 const [statsFile, maxMemoryRaw, maxCpuRaw, label = "docker"] = process.argv.slice(2);
 const NON_NEGATIVE_DECIMAL_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d+)?$/u;
@@ -175,13 +176,21 @@ console.log(
 if (parsedSamples === 0) {
   throw new Error(`no docker stats samples captured for ${label}`);
 }
+const violations = [];
 if (maxObservedMemoryMiB > maxMemoryMiB) {
-  throw new Error(
-    `${label} memory peak ${maxObservedMemoryMiB.toFixed(1)}MiB exceeded ${maxMemoryMiB}MiB`,
-  );
+  violations.push({
+    file: "scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs",
+    title: "Docker memory budget",
+    message: `${label} memory peak ${maxObservedMemoryMiB.toFixed(1)}MiB exceeded ${maxMemoryMiB}MiB`,
+  });
 }
 if (maxObservedCpuPercent > maxCpuPercent) {
-  throw new Error(
-    `${label} CPU peak ${maxObservedCpuPercent.toFixed(1)}% exceeded ${maxCpuPercent}%`,
-  );
+  violations.push({
+    file: "scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs",
+    title: "Docker CPU budget",
+    message: `${label} CPU peak ${maxObservedCpuPercent.toFixed(1)}% exceeded ${maxCpuPercent}%`,
+  });
+}
+if (reportLimitViolations(violations)) {
+  process.exitCode = 1;
 }

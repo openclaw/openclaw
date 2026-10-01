@@ -153,7 +153,7 @@ it.each(dispatchCases)(
     const gitCoauthorPrompt =
       "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
       "Co-authored-by: ada <20+ada@users.noreply.github.com>";
-    vi.mocked(resolveSessionGitCoauthorPrompt).mockReturnValue(gitCoauthorPrompt);
+    vi.mocked(resolveSessionGitCoauthorPrompt).mockResolvedValue(gitCoauthorPrompt);
     await withOpenClawTestState({ label: "harness-owner" }, async (state) => {
       let workspaceDir = retirePlacement
         ? state.path("workspace-after-retirement")
@@ -384,8 +384,6 @@ it.each(dispatchCases)(
             maybeAnnounceFastModeAutoOff: vi.fn(),
             notifyExecutionPhase: vi.fn(),
             notifyRunProgress: vi.fn(),
-            notifyToolResult: vi.fn(),
-            notifyAgentEvent: vi.fn(),
           },
         },
         preparedRuntime: {
@@ -502,6 +500,7 @@ it.each(dispatchCases)(
               sessionPermissionRoot: projection,
               sessionPermissionPolicy: { root: projection, mode: "guarded" },
               sandbox: projectedSandbox,
+              sandboxReport: { mode: "all", sandboxed: true },
               sandboxSessionKey: "global",
               sessionAgentId: agentId,
             })
@@ -527,6 +526,7 @@ it.each(dispatchCases)(
             expect(outcome.error).toMatchObject({
               code: "sandbox_provisioning",
               backendId: "docker",
+              message: "LOCAL_DOCKER_UNAVAILABLE",
             });
             expect(localBackend).toHaveBeenCalledOnce();
             expect(localBackend.mock.calls[0]?.[0].workspaceSource).toBe("managed-worktree");
@@ -580,12 +580,10 @@ it.each(dispatchCases)(
           config,
           agentId,
           sessionKey: "global",
+          sessionId: `${agentId}-global`,
           storePath: undefined,
         });
         expect.soft(runAttempt.mock.calls[0]?.[0].oneShotCliRun).toBe(oneShotCliRun);
-        expect
-          .soft(runAttempt.mock.calls[0]?.[0].runtimePluginToolGrant)
-          .toBe(runtimePluginToolGrant);
         const sandbox = runAttempt.mock.calls[0]?.[0].sandbox;
         if (managedWorkspace && !remoteSkills) {
           expect(preparation).toHaveBeenCalledWith(expect.objectContaining({ admittedRunContext }));

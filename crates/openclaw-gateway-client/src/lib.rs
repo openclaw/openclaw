@@ -14,7 +14,10 @@ use rustls::{ClientConfig, DigitallySignedStruct, Error as RustlsError, Signatur
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::fmt;
-use std::sync::Arc;
+use std::future::Future;
+use std::net::SocketAddr;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use subtle::ConstantTimeEq;
 
@@ -107,6 +110,36 @@ pub enum TlsTrust {
     Pinned([u8; 32]),
 }
 
+/// Certificate evidence from the same TLS connection that will carry the WebSocket.
+#[derive(Debug)]
+pub struct TlsPeerCertificate {
+    pub server_name: String,
+    pub port: u16,
+    pub peer_addr: SocketAddr,
+    pub certificate_chain: Vec<Vec<u8>>,
+    pub ocsp_response: Vec<u8>,
+}
+
+/// Product-owned certificate trust, evaluated before any HTTP or Gateway credentials are sent.
+/// Implementations may consult a native platform trust engine over authenticated local IPC.
+pub trait TlsCertificatePolicy: fmt::Debug + Send + Sync {
+    fn verify(
+        &self,
+        peer: TlsPeerCertificate,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
+}
+
+#[derive(Default)]
+pub(crate) struct CapturedTlsCertificate {
+    pub certificate_chain: Vec<Vec<u8>>,
+    pub ocsp_response: Vec<u8>,
+}
+
+enum CertificateTrust {
+    Pinned([u8; 32]),
+    Deferred(Arc<Mutex<CapturedTlsCertificate>>),
+}
+
 /// Parse a SHA-256 leaf-certificate fingerprint, or select platform system roots when absent.
 pub fn tls_trust(fingerprint: Option<&str>) -> Result<TlsTrust, String> {
     fingerprint
@@ -133,35 +166,58 @@ fn pinned_fingerprint_matches(expected: &[u8; 32], certificate_der: &[u8]) -> bo
     bool::from(expected.as_slice().ct_eq(observed.as_slice()))
 }
 
-struct GatewayTlsPinVerifier {
-    expected: [u8; 32],
+struct GatewayTlsVerifier {
+    trust: CertificateTrust,
     supported_algorithms: WebPkiSupportedAlgorithms,
 }
 
-impl fmt::Debug for GatewayTlsPinVerifier {
+impl fmt::Debug for GatewayTlsVerifier {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("GatewayTlsPinVerifier")
+            .debug_struct("GatewayTlsVerifier")
             .finish_non_exhaustive()
     }
 }
 
-impl ServerCertVerifier for GatewayTlsPinVerifier {
+impl ServerCertVerifier for GatewayTlsVerifier {
     fn verify_server_cert(
         &self,
         end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
+        intermediates: &[CertificateDer<'_>],
         _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
+        ocsp_response: &[u8],
         _now: UnixTime,
     ) -> Result<ServerCertVerified, RustlsError> {
         // A configured pin replaces CA/hostname trust, matching OpenClawKit. Signature checks
         // below still prove the peer owns the certificate's private key.
-        if pinned_fingerprint_matches(&self.expected, end_entity.as_ref()) {
-            Ok(ServerCertVerified::assertion())
-        } else {
-            Err(RustlsError::General(TLS_PIN_MISMATCH_ERROR.to_string()))
+        match &self.trust {
+            CertificateTrust::Pinned(expected) => {
+                if !pinned_fingerprint_matches(expected, end_entity.as_ref()) {
+                    return Err(RustlsError::General(TLS_PIN_MISMATCH_ERROR.to_string()));
+                }
+            }
+            CertificateTrust::Deferred(captured) => {
+                // The caller holds this stream private until native trust approves. Bound evidence
+                // before copying it across IPC; signature verification below remains mandatory.
+                let bytes = end_entity.len()
+                    + ocsp_response.len()
+                    + intermediates.iter().map(|cert| cert.len()).sum::<usize>();
+                if bytes > 64 * 1024 {
+                    return Err(RustlsError::General(
+                        "Gateway TLS certificate chain exceeds limit".into(),
+                    ));
+                }
+                let mut captured = captured
+                    .lock()
+                    .map_err(|_| RustlsError::General("Gateway TLS evidence unavailable".into()))?;
+                captured.certificate_chain = std::iter::once(end_entity)
+                    .chain(intermediates.iter())
+                    .map(|cert| cert.as_ref().to_vec())
+                    .collect();
+                captured.ocsp_response = ocsp_response.to_vec();
+            }
         }
+        Ok(ServerCertVerified::assertion())
     }
 
     fn verify_tls12_signature(
@@ -189,9 +245,24 @@ impl ServerCertVerifier for GatewayTlsPinVerifier {
 
 /// Build a rustls client configuration that trusts exactly one leaf-certificate fingerprint.
 pub fn pinned_tls_config(expected: [u8; 32]) -> Result<ClientConfig, String> {
+    tls_config(CertificateTrust::Pinned(expected))
+}
+
+pub(crate) fn deferred_tls_config(
+    captured: Arc<Mutex<CapturedTlsCertificate>>,
+) -> Result<ClientConfig, String> {
+    let mut config = tls_config(CertificateTrust::Deferred(captured))?;
+    // A resumed session can omit fresh certificate verification. Every native-policy attempt
+    // must provide fresh evidence, and no early application data may precede its decision.
+    config.resumption = rustls::client::Resumption::disabled();
+    config.enable_early_data = false;
+    Ok(config)
+}
+
+fn tls_config(trust: CertificateTrust) -> Result<ClientConfig, String> {
     let provider = rustls::crypto::ring::default_provider();
-    let verifier = GatewayTlsPinVerifier {
-        expected,
+    let verifier = GatewayTlsVerifier {
+        trust,
         supported_algorithms: provider.signature_verification_algorithms,
     };
     ClientConfig::builder_with_provider(Arc::new(provider))

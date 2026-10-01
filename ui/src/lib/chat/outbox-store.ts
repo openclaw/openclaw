@@ -1,9 +1,8 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import {
-  DEFAULT_AGENT_ID,
-  DEFAULT_MAIN_KEY,
   normalizeAgentId,
   parseAgentSessionKey,
   hasUiSessionDefaults,
@@ -17,12 +16,18 @@ import {
   type StoredComposerSession,
 } from "./outbox-store-codec.ts";
 import { observeDraftRevision, rememberDraftRevision } from "./outbox-store-draft-state.ts";
+import {
+  storedChatOutboxScopeKey,
+  UNRESOLVED_GLOBAL_AGENT_SCOPE,
+  type StoredChatOutboxScope,
+} from "./outbox-store-scope.ts";
+
+export { storedChatOutboxScopeKey } from "./outbox-store-scope.ts";
 
 const LEGACY_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v1:";
 const PREVIOUS_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v2:";
 const BLOB_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v3:";
 const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v4:";
-const UNRESOLVED_GLOBAL_AGENT_SCOPE = "@unresolved";
 const storedChatOutboxChangeListeners = new Set<() => void>();
 let storageChangeListenerInstalled = false;
 
@@ -45,11 +50,6 @@ type ComposerStorageTarget = {
   legacyOwnerIsUnambiguous: boolean;
 };
 
-export type StoredChatOutboxScope = {
-  sessionKey: string;
-  agentId?: string;
-};
-
 export type StoredComposerState = {
   version: 4;
   gatewayOwner: string;
@@ -65,7 +65,56 @@ export type StoredComposerRecovery = {
   session: StoredComposerSession;
 };
 
-// Keep the original recovery bound; excess whole legacy sources remain untouched.
+/** Sidebar draft presence for a tab row; attachments exist only in durable drafts. */
+export function hasStoredComposerDraftInput(session: {
+  draft?: string;
+  goalMode?: unknown;
+  replyTarget?: unknown;
+}): boolean {
+  return Boolean(session.draft || session.goalMode || session.replyTarget);
+}
+
+/** Content-only edits stay silent so projection subscribers cannot re-persist a stale pane. */
+export function notifyDraftPresence(
+  before: Parameters<typeof hasStoredComposerDraftInput>[0],
+  after: Parameters<typeof hasStoredComposerDraftInput>[0],
+): void {
+  if (hasStoredComposerDraftInput(before) !== hasStoredComposerDraftInput(after)) {
+    notifyStoredChatOutboxChanges();
+  }
+}
+
+export function clearStoredComposerDraftInput(session: {
+  draft?: unknown;
+  draftMentions?: unknown;
+  goalMode?: unknown;
+  replyTarget?: unknown;
+}): boolean {
+  if (!session.draft && !session.draftMentions && !session.goalMode && !session.replyTarget) {
+    return false;
+  }
+  delete session.draft;
+  delete session.draftMentions;
+  delete session.goalMode;
+  delete session.replyTarget;
+  return true;
+}
+
+function retireStoredIncognitoDrafts(store: StoredComposerState): boolean {
+  let changed = false;
+  const rows = [
+    ...Object.entries(store.sessions),
+    ...Object.values(store.recovery).map((entry) => [entry.sourceScopeKey, entry.session] as const),
+  ];
+  for (const [key, session] of rows) {
+    if (isIncognitoSessionKey(parseStoredChatOutboxScope(key)?.sessionKey)) {
+      changed = clearStoredComposerDraftInput(session) || changed;
+    }
+  }
+  return changed;
+}
+
+// Keep the original recovery bound; excess whole legacy sources remain available.
 const MAX_RECOVERY_ROWS = 80;
 const pendingLegacyTransfers = new WeakMap<
   StoredComposerState,
@@ -182,7 +231,7 @@ export function resolvePendingComposerSessions(
       const existingIds = new Set(destination.queue?.map((item) => item.id));
       const conflict = session.queue?.some((item) => existingIds.has(item.id));
       const sourceNewer = (session.draftRevision ?? 0) > (destination.draftRevision ?? 0);
-      if (conflict || (session.draft && !sourceNewer)) {
+      if (conflict || (hasStoredComposerDraftInput(session) && !sourceNewer)) {
         holdComposerRecovery(store, `pending:${key}`, 4, key, session);
       } else {
         const draftOwner = sourceNewer ? session : destination;
@@ -222,22 +271,6 @@ export function captureChatOutboxAdmission(
   };
 }
 
-// Captured scopes never consult current defaults. Fill only an omitted agent;
-// explicit conflicting facts must remain visible to stored-scope validation.
-function storedChatOutboxAgentId(scope: StoredChatOutboxScope): string | undefined {
-  return scope.agentId ?? parseAgentSessionKey(scope.sessionKey)?.agentId;
-}
-
-export function storedChatOutboxScopeKey(scope: StoredChatOutboxScope): string {
-  const normalizedSessionKey = scope.sessionKey.trim().toLowerCase();
-  const agentScope =
-    storedChatOutboxAgentId(scope) ??
-    (normalizedSessionKey === "global" || normalizedSessionKey === DEFAULT_MAIN_KEY
-      ? UNRESOLVED_GLOBAL_AGENT_SCOPE
-      : DEFAULT_AGENT_ID);
-  return `${scope.sessionKey}\u0000agent:${agentScope}`;
-}
-
 /** Logical client ownership plus this key fences a retained delivery's display. */
 export function chatOutboxDeliveryKey(
   host: ChatComposerScope,
@@ -262,7 +295,7 @@ function holdComposerRecovery(
 ): void {
   const { queue, ...draft } = session;
   const groups = new Map<string | undefined, ChatQueueItem[]>();
-  if (draft.draft || draft.goalMode || (!queue?.length && draft.draftRevision !== undefined)) {
+  if (hasStoredComposerDraftInput(draft) || (!queue?.length && draft.draftRevision !== undefined)) {
     groups.set(undefined, []);
   }
   for (const item of queue ?? []) {
@@ -360,6 +393,9 @@ export function readStoredOutboxStore(
   ] as const) {
     const legacyRaw = storage.getItem(key);
     if (!legacyRaw) {
+      if (legacyRaw === "") {
+        sources.push({ key, raw: legacyRaw });
+      }
       continue;
     }
     const receipt = bytesToHex(sha256(new TextEncoder().encode(legacyRaw)));
@@ -382,6 +418,7 @@ export function readStoredOutboxStore(
     }
     const previousSessions = { ...store.sessions };
     const previousRecovery = { ...store.recovery };
+    let retiredLegacyDrafts = false;
     for (const [sourceScopeKey, value] of Object.entries(legacy.sessions)) {
       const session = normalizeStoredSession(value);
       const removed =
@@ -397,6 +434,13 @@ export function readStoredOutboxStore(
         throw new Error("Invalid legacy chat outbox record");
       }
       const scope = parseStoredChatOutboxScope(sourceScopeKey);
+      if (isRecord(value) && isIncognitoSessionKey(scope?.sessionKey)) {
+        retiredLegacyDrafts = clearStoredComposerDraftInput(value) || retiredLegacyDrafts;
+        clearStoredComposerDraftInput(session);
+        if (!normalizeStoredSession(value)) {
+          delete legacy.sessions[sourceScopeKey];
+        }
+      }
       const identifiable =
         scope &&
         (parseAgentSessionKey(scope.sessionKey) ||
@@ -440,8 +484,7 @@ export function readStoredOutboxStore(
         }
       }
       if (
-        session.draft ||
-        session.goalMode ||
+        hasStoredComposerDraftInput(session) ||
         session.draftRevision !== undefined ||
         session.queue?.length
       ) {
@@ -462,13 +505,25 @@ export function readStoredOutboxStore(
       store.sessions = previousSessions;
       store.recovery = previousRecovery;
       store.recoveryBlocked = true;
+      if (retiredLegacyDrafts && storage.getItem(key) === legacyRaw) {
+        try {
+          // The whole source validated. Preserve queue bytes and unknown fields;
+          // no receipt acknowledges these deferred bytes until migration succeeds.
+          storage.setItem(key, JSON.stringify(legacy));
+        } catch {
+          // Storage failures must not hide the existing recovery queue.
+        }
+      }
       continue;
     }
     store.legacyReceipts = { ...store.legacyReceipts, [version]: receipt };
     sources.push({ key, raw: legacyRaw });
   }
-  if (sources.length) {
-    pendingLegacyTransfers.set(store, sources);
+  const retiredPrivateDrafts = retireStoredIncognitoDrafts(store);
+  if (sources.length || retiredPrivateDrafts) {
+    if (sources.length) {
+      pendingLegacyTransfers.set(store, sources);
+    }
     try {
       writeStoredOutboxStore(storage, target, store);
     } catch {
@@ -499,6 +554,9 @@ export function writeStoredOutboxStore(
   target: ComposerStorageTarget,
   store: StoredComposerState,
 ): void {
+  // Queue and recovery mutations share this owner: none may carry a legacy
+  // private draft forward alongside the separately retained submitted message.
+  retireStoredIncognitoDrafts(store);
   const previous = storage.getItem(target.key);
   projectedStoreByStorage.get(storage)?.delete(target.key);
   if (Object.keys(store.recovery).length > MAX_RECOVERY_ROWS) {
@@ -526,7 +584,7 @@ export function writeStoredOutboxStore(
       .filter(
         ([sessionKey, session]) =>
           sessionKey !== unresolvedGlobalKey &&
-          !session.draft &&
+          !hasStoredComposerDraftInput(session) &&
           session.draftRevision !== undefined,
       )
       .toSorted(byNewest),
@@ -536,7 +594,8 @@ export function writeStoredOutboxStore(
       ...outboxes.toSorted(byNewest),
       ...drafts
         .filter(
-          ([sessionKey, session]) => sessionKey !== unresolvedGlobalKey && Boolean(session.draft),
+          ([sessionKey, session]) =>
+            sessionKey !== unresolvedGlobalKey && hasStoredComposerDraftInput(session),
         )
         .toSorted(byNewest),
     ].slice(0, MAX_STORED_SESSIONS),
@@ -577,6 +636,15 @@ export function writeStoredOutboxStore(
         storage.removeItem(source.key);
       } catch {
         // The verified receipt fences this exact source even if deletion fails.
+      }
+      try {
+        if (storage.getItem(source.key) === source.raw) {
+          // All rows already committed above. An empty legacy value is also
+          // absent to readers, so failed deletion need not retain private input.
+          storage.setItem(source.key, "");
+        }
+      } catch {
+        // Keep the receipt if storage cannot retire the acknowledged bytes.
       }
     }
   }
@@ -665,7 +733,7 @@ export function applyStoredChatOutboxScope(
   scope: StoredChatOutboxScope,
 ): ChatQueueItem {
   const { agentId: _agentId, ...withoutAgentId } = item;
-  const agentId = storedChatOutboxAgentId(scope);
+  const agentId = scope.agentId ?? parseAgentSessionKey(scope.sessionKey)?.agentId;
   return {
     ...withoutAgentId,
     sessionKey: scope.sessionKey,

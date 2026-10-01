@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { NodeInvokeCancelEvent } from "../../packages/gateway-protocol/src/schema/nodes.js";
 
 export function buildNodeInvokeRequest(params: {
   id: string;
@@ -20,7 +21,7 @@ export function buildNodeInvokeRequest(params: {
   };
 }
 
-export function buildNodeInvokeCancel(params: { invokeId: string; nodeId: string }) {
+export function buildNodeInvokeCancel(params: NodeInvokeCancelEvent): NodeInvokeCancelEvent {
   return {
     invokeId: params.invokeId,
     nodeId: params.nodeId,

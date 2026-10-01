@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
+import { createServer as createHttpServer } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { serializeWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
 import { runNodeWorkerWorkspaceTransfer } from "./node-worker-transfer-client.js";
+import { listen } from "./node-worker-transfer-client.test-support.js";
 
 const workspaceDebug = vi.hoisted(() => vi.fn());
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
@@ -21,18 +22,6 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-async function listen(server: HttpServer): Promise<string> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("test transfer server did not bind");
-  }
-  return `ws://127.0.0.1:${address.port}`;
-}
 
 describe("node worker transfer client hash memo", () => {
   it("reuses the placement hash memo across download and upload captures", async () => {

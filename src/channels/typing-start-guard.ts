@@ -23,18 +23,8 @@ export function createTypingStartGuard(params: {
   let consecutiveFailures = 0;
   let tripped = false;
 
-  const isBlocked = () => {
-    if (params.isSealed()) {
-      return true;
-    }
-    if (tripped) {
-      return true;
-    }
-    return params.shouldBlock?.() === true;
-  };
-
   const run: TypingStartGuard["run"] = async (start) => {
-    if (isBlocked()) {
+    if (params.isSealed() || tripped || params.shouldBlock?.() === true) {
       return "skipped";
     }
     try {

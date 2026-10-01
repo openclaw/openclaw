@@ -2,69 +2,49 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { createConfigIO } from "../config/io.js";
 import { replaceConfigFile } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { setupCommand } from "./setup.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
-function createSetupDeps(home: string) {
-  const configPath = path.join(home, ".openclaw", "openclaw.json");
-  const configIO = createConfigIO({
-    configPath,
-    env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
-    homedir: () => home,
-    logger: { error: vi.fn(), warn: vi.fn() },
+// Real config operations must stay inside this case even with an inherited config override.
+function withSetupHome(run: (home: string) => Promise<void>): Promise<void> {
+  return withTempHome(run, {
+    env: {
+      OPENCLAW_CONFIG_PATH: (home) => path.join(home, ".openclaw", "openclaw.json"),
+    },
   });
+}
+
+// Observe canonical owners without replacing their filesystem or config effects.
+async function observeSetupOwners() {
+  const [config, workspace, sessions] = await Promise.all([
+    import("../config/config.js"),
+    import("../agents/workspace.js"),
+    import("../config/sessions.js"),
+  ]);
   return {
-    createConfigIO: () => ({
-      configPath,
-      readConfigFileSnapshotForWrite: configIO.readConfigFileSnapshotForWrite,
-    }),
-    ensureAgentWorkspace: vi.fn(
-      async (params?: { dir?: string; skipOptionalBootstrapFiles?: string[] }) => ({
-        dir: params?.dir ?? path.join(home, ".openclaw", "workspace"),
-      }),
-    ),
-    formatConfigFilePath: (value: string) => value,
-    logConfigUpdated: vi.fn(
-      (runtime: { log: (message: string) => void }, opts: { path?: string; suffix?: string }) => {
-        const suffix = opts.suffix ? ` ${opts.suffix}` : "";
-        runtime.log(`Updated ${opts.path}${suffix}`);
-      },
-    ),
-    mkdir: vi.fn(async () => {}),
-    resolveSessionTranscriptsDir: vi.fn(() => path.join(home, ".openclaw", "sessions")),
-    replaceConfigFile: vi.fn(async (params: Parameters<typeof replaceConfigFile>[0]) => {
-      await replaceConfigFile(params);
-    }),
+    replaceConfigFile: vi.spyOn(config, "replaceConfigFile"),
+    ensureAgentWorkspace: vi.spyOn(workspace, "ensureAgentWorkspace"),
+    resolveSessionTranscriptsDir: vi.spyOn(sessions, "resolveSessionTranscriptsDirForAgent"),
+    mkdir: vi.spyOn(fs, "mkdir"),
   };
 }
 
-function requireFirstWorkspaceParams(
-  ensureAgentWorkspace: ReturnType<typeof vi.fn>,
-): Record<string, unknown> {
-  const [call] = ensureAgentWorkspace.mock.calls;
-  if (!call) {
-    throw new Error("expected workspace setup call");
-  }
-  const [params] = call;
-  if (!params || typeof params !== "object" || Array.isArray(params)) {
-    throw new Error("expected workspace setup params");
-  }
-  return params as Record<string, unknown>;
-}
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("setupCommand", () => {
   it("writes gateway.mode=local on first run", async () => {
-    await withTempHome(async (home) => {
+    await withSetupHome(async (home) => {
       const runtime = createTestRuntime();
-      const deps = createSetupDeps(home);
+      const effects = await observeSetupOwners();
       const workspace = path.join(home, ".openclaw", "workspace");
 
-      await setupCommand({ workspace }, runtime, deps);
+      await setupCommand({ workspace }, runtime);
 
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       const raw = JSON.parse(await fs.readFile(configPath, "utf-8")) as unknown;
@@ -80,7 +60,7 @@ describe("setupCommand", () => {
           mode: "local",
         },
       });
-      expect(deps.replaceConfigFile).toHaveBeenCalledWith(
+      expect(effects.replaceConfigFile).toHaveBeenCalledWith(
         expect.objectContaining({
           baseHash: expect.any(String),
           writeOptions: expect.objectContaining({
@@ -89,16 +69,64 @@ describe("setupCommand", () => {
           }),
         }),
       );
-      expect(deps.resolveSessionTranscriptsDir).toHaveBeenCalledWith("main");
+      expect(effects.resolveSessionTranscriptsDir).toHaveBeenCalledWith("main");
+      expect((await fs.stat(path.join(workspace, "AGENTS.md"))).isFile()).toBe(true);
+    });
+  });
+
+  it.each([false, true])("persists skipped bootstrap files (existing: %s)", async (existing) => {
+    await withSetupHome(async (home) => {
+      const runtime = createTestRuntime();
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const workspace = path.join(home, "workspace");
+      const userContent = "User-maintained instructions.\n";
+      await fs.mkdir(configDir, { recursive: true });
+      if (existing) {
+        await fs.writeFile(
+          configPath,
+          JSON.stringify({
+            agents: { defaults: { workspace, skipBootstrap: false } },
+            gateway: { mode: "local" },
+          }),
+        );
+        await fs.mkdir(workspace, { recursive: true });
+        await fs.writeFile(path.join(workspace, "USER.md"), userContent);
+      }
+
+      await setupCommand({ workspace, skipBootstrap: true }, runtime);
+
+      const raw = await fs.readFile(configPath, "utf8");
+      const config = JSON.parse(raw);
+      expect(config.agents?.defaults?.skipBootstrap).toBe(true);
+      expect(config).toMatchObject({
+        agents: { defaults: { workspace, skipBootstrap: true }, entries: { main: {} } },
+      });
+      const expectedFiles = existing ? ["USER.md"] : [];
+      expect((await fs.readdir(workspace)).filter((name) => name.endsWith(".md"))).toEqual(
+        expectedFiles,
+      );
+      expect(
+        (await fs.stat(path.join(configDir, "agents", "main", "sessions"))).isDirectory(),
+      ).toBe(true);
+
+      await setupCommand(undefined, runtime);
+
+      expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+      expect((await fs.readdir(workspace)).filter((name) => name.endsWith(".md"))).toEqual(
+        expectedFiles,
+      );
+      if (existing) {
+        expect(await fs.readFile(path.join(workspace, "USER.md"), "utf8")).toBe(userContent);
+      }
     });
   });
 
   it("explains that plain setup only initializes local files", async () => {
-    await withTempHome(async (home) => {
+    await withSetupHome(async (home) => {
       const runtime = createTestRuntime();
-      const deps = createSetupDeps(home);
 
-      await setupCommand(undefined, runtime, deps);
+      await setupCommand({ workspace: path.join(home, "workspace") }, runtime);
 
       expect(runtime.log.mock.calls.map((call) => String(call[0])).slice(-5)).toStrictEqual([
         "",
@@ -110,13 +138,45 @@ describe("setupCommand", () => {
     });
   });
 
+  it.each([false, true])(
+    "preserves an included skip-bootstrap leaf (value: %s)",
+    async (skipBootstrap) => {
+      await withSetupHome(async (home) => {
+        const configDir = path.join(home, ".openclaw");
+        const configPath = path.join(configDir, "openclaw.json");
+        const includePath = path.join(configDir, "skip-bootstrap.json");
+        const workspace = path.join(home, "workspace");
+        const rootRaw = JSON.stringify({
+          agents: {
+            defaults: { workspace, skipBootstrap: { $include: "./skip-bootstrap.json" } },
+            entries: { ops: { default: true } },
+          },
+          gateway: { mode: "local" },
+        });
+        await fs.mkdir(configDir, { recursive: true });
+        await fs.writeFile(configPath, rootRaw);
+        await fs.writeFile(includePath, JSON.stringify(skipBootstrap));
+
+        const setup = setupCommand({ skipBootstrap: true }, createTestRuntime());
+        if (skipBootstrap) {
+          await setup;
+          expect(await fs.readdir(workspace)).toEqual([]);
+        } else {
+          await expect(setup).rejects.toThrow("Edit the included file directly");
+          await expect(fs.stat(workspace)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);
+        expect(await fs.readFile(includePath, "utf8")).toBe(JSON.stringify(skipBootstrap));
+      });
+    },
+  );
+
   it("emits one structured result for baseline JSON output", async () => {
-    await withTempHome(async (home) => {
+    await withSetupHome(async (home) => {
       const runtime = createTestRuntime();
-      const deps = createSetupDeps(home);
       const workspace = path.join(home, ".openclaw", "workspace");
 
-      await setupCommand({ workspace, json: true }, runtime, deps);
+      await setupCommand({ workspace, json: true }, runtime);
 
       expect(runtime.log).toHaveBeenCalledOnce();
       expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
@@ -124,20 +184,19 @@ describe("setupCommand", () => {
         configPath: path.join(home, ".openclaw", "openclaw.json"),
         configStatus: "created",
         workspaceDir: workspace,
-        sessionsDir: path.join(home, ".openclaw", "sessions"),
+        sessionsDir: path.join(home, ".openclaw", "agents", "main", "sessions"),
       });
     });
   });
 
   it("updates the default entry workspace created by fresh setup", async () => {
-    await withTempHome(async (home) => {
+    await withSetupHome(async (home) => {
       const runtime = createTestRuntime();
-      const deps = createSetupDeps(home);
       const initialWorkspace = path.join(home, "initial-workspace");
       const nextWorkspace = path.join(home, "next-workspace");
 
-      await setupCommand({ workspace: initialWorkspace }, runtime, deps);
-      await setupCommand({ workspace: nextWorkspace }, runtime, deps);
+      await setupCommand({ workspace: initialWorkspace }, runtime);
+      await setupCommand({ workspace: nextWorkspace }, runtime);
 
       const config = JSON.parse(
         await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8"),
@@ -149,27 +208,30 @@ describe("setupCommand", () => {
   });
 
   it("keeps the default entry workspace on bare setup", async () => {
-    await withTempHome(async (home) => {
+    await withSetupHome(async (home) => {
       const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
-      const workspace = "/srv/ops";
+      const workspace = path.join(home, "ops-workspace");
       const raw = JSON.stringify({
         agents: { entries: { ops: { default: true, workspace } } },
         gateway: { mode: "local" },
       });
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(configPath, raw);
-      const deps = createSetupDeps(home);
+      const effects = await observeSetupOwners();
 
-      await setupCommand(undefined, runtime, deps);
+      await setupCommand(undefined, runtime);
 
       expect(await fs.readFile(configPath, "utf8")).toBe(raw);
-      expect(requireFirstWorkspaceParams(deps.ensureAgentWorkspace).dir).toBe(workspace);
-      expect(deps.resolveSessionTranscriptsDir).toHaveBeenCalledWith("ops");
+      expect(effects.ensureAgentWorkspace.mock.calls[0]?.[0]?.dir).toBe(workspace);
+      expect(effects.resolveSessionTranscriptsDir).toHaveBeenCalledWith("ops");
+      expect(
+        (await fs.stat(path.join(home, ".openclaw", "agents", "ops", "sessions"))).isDirectory(),
+      ).toBe(true);
 
       const nextWorkspace = path.join(home, "next-ops-workspace");
-      await setupCommand({ workspace: nextWorkspace }, runtime, deps);
+      await setupCommand({ workspace: nextWorkspace }, runtime);
       const updated = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
       expect(resolveAgentWorkspaceDir(updated, "ops")).toBe(nextWorkspace);
       expect(updated.agents?.entries?.ops?.workspace).toBe(nextWorkspace);
@@ -177,11 +239,11 @@ describe("setupCommand", () => {
   });
 
   it("does not copy an entry workspace into defaults during a gateway-only write", async () => {
-    await withTempHome(async (home) => {
+    await withSetupHome(async (home) => {
       const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
-      const workspace = "/srv/ops";
+      const workspace = path.join(home, "ops-workspace");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
         configPath,
@@ -189,14 +251,8 @@ describe("setupCommand", () => {
           agents: { entries: { ops: { default: true, workspace } } },
         }),
       );
-      const deps = {
-        ensureAgentWorkspace: vi.fn(async () => ({ dir: workspace })),
-        formatConfigFilePath: (value: string) => value,
-        mkdir: vi.fn(async () => {}),
-        resolveSessionTranscriptsDir: vi.fn(() => path.join(home, "sessions")),
-      };
 
-      await setupCommand(undefined, runtime, deps);
+      await setupCommand(undefined, runtime);
 
       const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
       expect(config.agents?.defaults?.workspace).toBeUndefined();
@@ -206,12 +262,11 @@ describe("setupCommand", () => {
   });
 
   it("adds gateway.mode=local to an existing config without overwriting workspace", async () => {
-    await withTempHome(async (home) => {
+    await withSetupHome(async (home) => {
       const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
       const workspace = path.join(home, "custom-workspace");
-      const deps = createSetupDeps(home);
 
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
@@ -225,7 +280,7 @@ describe("setupCommand", () => {
         }),
       );
 
-      await setupCommand(undefined, runtime, deps);
+      await setupCommand(undefined, runtime);
 
       const raw = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
         agents?: { defaults?: { workspace?: string } };
@@ -238,7 +293,7 @@ describe("setupCommand", () => {
   });
 
   it("leaves an include-owned roster in its authored file", async () => {
-    await withTempHome(async (home) => {
+    await withSetupHome(async (home) => {
       const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
@@ -259,22 +314,17 @@ describe("setupCommand", () => {
           gateway: { mode: "local" },
         }),
       );
-      const deps = {
-        ensureAgentWorkspace: vi.fn(async () => ({ dir: workspace })),
-        formatConfigFilePath: (value: string) => value,
-        mkdir: vi.fn(async () => {}),
-        resolveSessionTranscriptsDir: vi.fn(() => path.join(home, "ops-sessions")),
-      };
+      const effects = await observeSetupOwners();
 
-      await setupCommand(undefined, runtime, deps);
+      await setupCommand(undefined, runtime);
 
       expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);
-      expect(deps.resolveSessionTranscriptsDir).toHaveBeenCalledWith("ops");
+      expect(effects.resolveSessionTranscriptsDir).toHaveBeenCalledWith("ops");
     });
   });
 
   it("updates only inherited workspace defaults beside an include-owned roster", async () => {
-    await withTempHome(async (home) => {
+    await withSetupHome(async (home) => {
       const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
@@ -291,14 +341,8 @@ describe("setupCommand", () => {
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(configPath, JSON.stringify({ $include: "./agents.json" }));
       await fs.writeFile(includePath, JSON.stringify(included));
-      const deps = {
-        ensureAgentWorkspace: vi.fn(async () => ({ dir: nextWorkspace })),
-        formatConfigFilePath: (value: string) => value,
-        mkdir: vi.fn(async () => {}),
-        resolveSessionTranscriptsDir: vi.fn(() => path.join(home, "ops-sessions")),
-      };
 
-      await setupCommand({ workspace: nextWorkspace }, runtime, deps);
+      await setupCommand({ workspace: nextWorkspace }, runtime);
 
       const root = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig & {
         $include?: string;
@@ -310,8 +354,151 @@ describe("setupCommand", () => {
     });
   });
 
+  it.each([
+    { scope: "root", skip: undefined, changeWorkspace: false, missingGateway: false },
+    { scope: "root", skip: false, changeWorkspace: true, missingGateway: false },
+    { scope: "root", skip: false, changeWorkspace: false, missingGateway: true },
+    { scope: "agents", skip: undefined, changeWorkspace: false, missingGateway: false },
+    { scope: "agents", skip: false, changeWorkspace: true, missingGateway: false },
+    { scope: "defaults", skip: false, changeWorkspace: false, missingGateway: false },
+    { scope: "defaults", skip: false, changeWorkspace: true, missingGateway: false },
+    { scope: "authored", skip: false, changeWorkspace: false, missingGateway: false },
+    { scope: "authored", skip: false, changeWorkspace: true, missingGateway: false },
+  ])(
+    "keeps $scope includes while skipping bootstrap (workspace: $changeWorkspace, gateway missing: $missingGateway)",
+    async ({ scope, skip, changeWorkspace, missingGateway }) => {
+      await withSetupHome(async (home) => {
+        const runtime = createTestRuntime();
+        const configDir = path.join(home, ".openclaw");
+        const configPath = path.join(configDir, "openclaw.json");
+        const includePath = path.join(configDir, "agents.json");
+        const oldWorkspace = path.join(home, "old-workspace");
+        const nextWorkspace = path.join(home, "next-workspace");
+        const defaults = {
+          workspace: oldWorkspace,
+          skipBootstrap: skip,
+          heartbeat: { every: "30m" },
+        };
+        const agents = { defaults, entries: { ops: { default: true } } };
+        const gateway = missingGateway ? {} : { mode: "local" };
+        const include = { $include: "./agents.json" };
+        const included =
+          scope === "root" ? { agents, gateway } : scope === "defaults" ? defaults : agents;
+        const authored =
+          scope === "root"
+            ? include
+            : {
+                agents:
+                  scope === "defaults"
+                    ? { defaults: include, entries: agents.entries }
+                    : {
+                        ...include,
+                        ...(scope === "authored"
+                          ? {
+                              defaults: {
+                                skipBootstrap: false,
+                                ...(changeWorkspace ? { workspace: oldWorkspace } : {}),
+                              },
+                            }
+                          : {}),
+                      },
+                gateway,
+              };
+        const includedRaw = JSON.stringify(included);
+        await fs.mkdir(configDir, { recursive: true });
+        await fs.writeFile(configPath, JSON.stringify(authored));
+        await fs.writeFile(includePath, includedRaw);
+
+        const options = {
+          skipBootstrap: true,
+          ...(changeWorkspace ? { workspace: nextWorkspace } : {}),
+        };
+        await setupCommand(options, runtime);
+
+        const raw = await fs.readFile(configPath, "utf8");
+        const root = JSON.parse(raw);
+        const directive =
+          scope === "root" ? root : scope === "defaults" ? root.agents.defaults : root.agents;
+        expect(directive.$include).toBe("./agents.json");
+        expect(root.agents?.defaults?.skipBootstrap).toBe(true);
+        expect(root.agents.defaults.workspace).toBe(changeWorkspace ? nextWorkspace : undefined);
+        expect(root.agents.entries).toEqual(scope === "defaults" ? agents.entries : undefined);
+        expect(root.agents.defaults.heartbeat).toBeUndefined();
+        expect(root.gateway?.mode).toBe(
+          missingGateway ? "local" : scope === "root" ? undefined : "local",
+        );
+        expect(await fs.readFile(includePath, "utf8")).toBe(includedRaw);
+        const workspace = changeWorkspace ? nextWorkspace : oldWorkspace;
+        expect((await fs.readdir(workspace)).filter((name) => name.endsWith(".md"))).toEqual([]);
+
+        await setupCommand(undefined, runtime);
+
+        expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+        expect(await fs.readFile(includePath, "utf8")).toBe(includedRaw);
+        expect((await fs.readdir(workspace)).filter((name) => name.endsWith(".md"))).toEqual([]);
+      });
+    },
+  );
+
+  it.each(["defaults", "entry", "legacy-entry", "local-entry"])(
+    "handles combined workspace and bootstrap ownership (%s)",
+    async (scope) => {
+      await withSetupHome(async (home) => {
+        const configDir = path.join(home, ".openclaw");
+        const configPath = path.join(configDir, "openclaw.json");
+        const includePath = path.join(configDir, "workspace.json");
+        const oldWorkspace = path.join(home, "old-workspace");
+        const workspace = path.join(home, "new-workspace");
+        const include = { $include: "./workspace.json" };
+        const defaults = { skipBootstrap: false };
+        const selected = { default: true, workspace: oldWorkspace };
+        const included =
+          scope === "defaults"
+            ? oldWorkspace
+            : scope === "local-entry"
+              ? { workspace: oldWorkspace }
+              : {
+                  defaults,
+                  ...(scope === "legacy-entry"
+                    ? { list: [{ id: "ops", ...selected }] }
+                    : { entries: { ops: selected } }),
+                };
+        const rootRaw = JSON.stringify({
+          agents:
+            scope === "defaults"
+              ? {
+                  defaults: { ...defaults, workspace: include },
+                  entries: { ops: { default: true } },
+                }
+              : scope === "local-entry"
+                ? { defaults, entries: { ops: selected, worker: include } }
+                : include,
+          gateway: { mode: "local" },
+        });
+        const includeRaw = JSON.stringify(included);
+        await fs.mkdir(configDir, { recursive: true });
+        await fs.writeFile(configPath, rootRaw);
+        await fs.writeFile(includePath, includeRaw);
+
+        const setup = setupCommand({ workspace, skipBootstrap: true }, createTestRuntime());
+        if (scope === "local-entry") {
+          await setup;
+          const config = JSON.parse(await fs.readFile(configPath, "utf8"));
+          expect(config.agents.entries.ops.workspace).toBe(workspace);
+          expect(config.agents.defaults.skipBootstrap).toBe(true);
+          expect((await fs.readdir(workspace)).filter((name) => name.endsWith(".md"))).toEqual([]);
+        } else {
+          await expect(setup).rejects.toMatchObject({ code: "CONFIG_INCLUDE_OWNERSHIP" });
+          expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);
+          await expect(fs.stat(workspace)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
+      });
+    },
+  );
+
   it("updates inherited workspace defaults below a nested roster include", async () => {
-    await withTempHome(async (home) => {
+    await withSetupHome(async (home) => {
       const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
@@ -329,12 +516,7 @@ describe("setupCommand", () => {
       );
       await fs.writeFile(includePath, JSON.stringify(includedAgents));
 
-      await setupCommand({ workspace: nextWorkspace }, runtime, {
-        ensureAgentWorkspace: vi.fn(async () => ({ dir: nextWorkspace })),
-        formatConfigFilePath: (value: string) => value,
-        mkdir: vi.fn(async () => {}),
-        resolveSessionTranscriptsDir: vi.fn(() => path.join(home, "ops-sessions")),
-      });
+      await setupCommand({ workspace: nextWorkspace }, runtime);
 
       const root = JSON.parse(await fs.readFile(configPath, "utf8")) as {
         agents?: {
@@ -353,7 +535,7 @@ describe("setupCommand", () => {
   });
 
   it("persists a roster when existing setup settings already match", async () => {
-    await withTempHome(async (home) => {
+    await withSetupHome(async (home) => {
       const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
@@ -366,14 +548,8 @@ describe("setupCommand", () => {
           gateway: { mode: "local" },
         }),
       );
-      const deps = {
-        ensureAgentWorkspace: vi.fn(async () => ({ dir: workspace })),
-        formatConfigFilePath: (value: string) => value,
-        mkdir: vi.fn(async () => {}),
-        resolveSessionTranscriptsDir: vi.fn(() => path.join(home, "sessions")),
-      };
 
-      await setupCommand(undefined, runtime, deps);
+      await setupCommand(undefined, runtime);
 
       const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
       expect(config.agents?.entries).toEqual({ main: {} });
@@ -381,11 +557,11 @@ describe("setupCommand", () => {
   });
 
   it("threads skipOptionalBootstrapFiles into workspace creation", async () => {
-    await withTempHome(async (home) => {
+    await withSetupHome(async (home) => {
       const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
-      const deps = createSetupDeps(home);
+      const effects = await observeSetupOwners();
       const workspace = path.join(home, "custom-workspace");
 
       await fs.mkdir(configDir, { recursive: true });
@@ -401,24 +577,31 @@ describe("setupCommand", () => {
         }),
       );
 
-      await setupCommand(undefined, runtime, deps);
+      await setupCommand(undefined, runtime);
 
-      expect(deps.ensureAgentWorkspace).toHaveBeenCalledOnce();
-      const workspaceParams = requireFirstWorkspaceParams(deps.ensureAgentWorkspace);
-      expect(workspaceParams.dir).toBe(workspace);
-      expect(workspaceParams.skipOptionalBootstrapFiles).toEqual(["IDENTITY.md", "USER.md"]);
+      expect((await fs.stat(path.join(workspace, "AGENTS.md"))).isFile()).toBe(true);
+      await expect(fs.stat(path.join(workspace, "IDENTITY.md"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(fs.stat(path.join(workspace, "USER.md"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(effects.ensureAgentWorkspace).toHaveBeenCalledOnce();
+      const workspaceParams = effects.ensureAgentWorkspace.mock.calls[0]?.[0];
+      expect(workspaceParams?.dir).toBe(workspace);
+      expect(workspaceParams?.skipOptionalBootstrapFiles).toEqual(["IDENTITY.md", "USER.md"]);
     });
   });
 
   it.each([false, true])(
     "rejects a foreign write before the final config commit (fresh: %s)",
     async (fresh) => {
-      await withTempHome(async (home) => {
+      await withSetupHome(async (home) => {
         const runtime = createTestRuntime();
         const configDir = path.join(home, ".openclaw");
         const configPath = path.join(configDir, "openclaw.json");
         const workspace = path.join(home, "custom-workspace");
-        const deps = createSetupDeps(home);
+        const effects = await observeSetupOwners();
         const externalRaw = `${JSON.stringify({ external: true }, null, 2)}\n`;
 
         await fs.mkdir(configDir, { recursive: true });
@@ -429,19 +612,36 @@ describe("setupCommand", () => {
             "utf-8",
           );
         }
-        deps.replaceConfigFile.mockImplementationOnce(async (params) => {
+        const sessionsDir = path.join(home, ".openclaw", "agents", "main", "sessions");
+        const sessionMkdirCalls = () =>
+          effects.mkdir.mock.calls.filter(([dir]) => dir === sessionsDir).length;
+        const beforeFinalWrite = { workspace: 0, sessions: 0, mkdir: 0 };
+        let finalWriteReached = false;
+        let finalWriteBasis: string | null | undefined;
+        effects.replaceConfigFile.mockImplementationOnce(async (params) => {
+          // The facade export is setup's final replace, not first-agent creation's transform.
+          finalWriteBasis = fresh ? params.baseHash : params.snapshot?.hash;
+          finalWriteReached = true;
           await fs.writeFile(configPath, externalRaw, "utf-8");
-          await replaceConfigFile(params);
+          beforeFinalWrite.workspace = effects.ensureAgentWorkspace.mock.calls.length;
+          beforeFinalWrite.sessions = effects.resolveSessionTranscriptsDir.mock.calls.length;
+          beforeFinalWrite.mkdir = sessionMkdirCalls();
+          return await replaceConfigFile(params);
         });
 
-        await expect(setupCommand(undefined, runtime, deps)).rejects.toThrow(
+        await expect(setupCommand({ workspace }, runtime)).rejects.toThrow(
           "config changed since last load",
         );
 
         expect(await fs.readFile(configPath, "utf-8")).toBe(externalRaw);
-        expect(deps.ensureAgentWorkspace).not.toHaveBeenCalled();
-        expect(deps.resolveSessionTranscriptsDir).not.toHaveBeenCalled();
-        expect(deps.mkdir).not.toHaveBeenCalled();
+        expect(finalWriteReached).toBe(true);
+        expect(finalWriteBasis).toEqual(expect.any(String));
+        // Fresh creation may already provision files; failure must stop subsequent setup effects.
+        expect(effects.ensureAgentWorkspace).toHaveBeenCalledTimes(beforeFinalWrite.workspace);
+        expect(effects.resolveSessionTranscriptsDir).toHaveBeenCalledTimes(
+          beforeFinalWrite.sessions,
+        );
+        expect(sessionMkdirCalls()).toBe(beforeFinalWrite.mkdir);
       });
     },
   );
@@ -449,17 +649,17 @@ describe("setupCommand", () => {
   it.each([false, true])(
     "preserves malformed config and reports failure (json: %s)",
     async (json) => {
-      await withTempHome(async (home) => {
+      await withSetupHome(async (home) => {
         const runtime = createTestRuntime();
         const configDir = path.join(home, ".openclaw");
         const configPath = path.join(configDir, "openclaw.json");
-        const deps = createSetupDeps(home);
+        const effects = await observeSetupOwners();
         const original = Buffer.from('{ "gateway": ', "utf-8");
 
         await fs.mkdir(configDir, { recursive: true });
         await fs.writeFile(configPath, original);
 
-        await setupCommand(json ? { json: true } : undefined, runtime, deps);
+        await setupCommand(json ? { json: true } : undefined, runtime);
 
         expect(runtime.exit).toHaveBeenCalledWith(1);
         expect(runtime.error).toHaveBeenCalledWith(
@@ -481,10 +681,14 @@ describe("setupCommand", () => {
           expect(runtime.log).not.toHaveBeenCalled();
         }
         expect(await fs.readFile(configPath)).toStrictEqual(original);
-        expect(deps.replaceConfigFile).not.toHaveBeenCalled();
-        expect(deps.ensureAgentWorkspace).not.toHaveBeenCalled();
-        expect(deps.resolveSessionTranscriptsDir).not.toHaveBeenCalled();
-        expect(deps.mkdir).not.toHaveBeenCalled();
+        expect(effects.replaceConfigFile).not.toHaveBeenCalled();
+        expect(effects.ensureAgentWorkspace).not.toHaveBeenCalled();
+        expect(effects.resolveSessionTranscriptsDir).not.toHaveBeenCalled();
+        expect(
+          effects.mkdir.mock.calls.filter(
+            ([dir]) => dir === path.join(home, ".openclaw", "agents", "main", "sessions"),
+          ),
+        ).toEqual([]);
       });
     },
   );
@@ -496,36 +700,40 @@ describe("setupCommand", () => {
   ])(
     "preserves an existing %s config root and stops before setup mutations",
     async (_label, raw) => {
-      await withTempHome(async (home) => {
+      await withSetupHome(async (home) => {
         const runtime = createTestRuntime();
         const configDir = path.join(home, ".openclaw");
         const configPath = path.join(configDir, "openclaw.json");
-        const deps = createSetupDeps(home);
+        const effects = await observeSetupOwners();
 
         await fs.mkdir(configDir, { recursive: true });
         await fs.writeFile(configPath, raw, "utf-8");
 
-        await setupCommand(undefined, runtime, deps);
+        await setupCommand(undefined, runtime);
 
         expect(runtime.exit).toHaveBeenCalledWith(1);
         expect(runtime.error).toHaveBeenCalledWith(
           expect.stringContaining("openclaw doctor --fix"),
         );
         expect(await fs.readFile(configPath, "utf-8")).toBe(raw);
-        expect(deps.replaceConfigFile).not.toHaveBeenCalled();
-        expect(deps.ensureAgentWorkspace).not.toHaveBeenCalled();
-        expect(deps.resolveSessionTranscriptsDir).not.toHaveBeenCalled();
-        expect(deps.mkdir).not.toHaveBeenCalled();
+        expect(effects.replaceConfigFile).not.toHaveBeenCalled();
+        expect(effects.ensureAgentWorkspace).not.toHaveBeenCalled();
+        expect(effects.resolveSessionTranscriptsDir).not.toHaveBeenCalled();
+        expect(
+          effects.mkdir.mock.calls.filter(
+            ([dir]) => dir === path.join(home, ".openclaw", "agents", "main", "sessions"),
+          ),
+        ).toEqual([]);
       });
     },
   );
 
   it("uses systemAgent.agentId in multi-agent explicit mode", async () => {
-    await withTempHome(async (home) => {
+    await withSetupHome(async (home) => {
       const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
-      const deps = createSetupDeps(home);
+      const effects = await observeSetupOwners();
       const agentAWorkspace = path.join(home, "agent-a-workspace");
       const agentBWorkspace = path.join(home, "agent-b-workspace");
       const preexisting: OpenClawConfig = {
@@ -543,20 +751,20 @@ describe("setupCommand", () => {
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(configPath, JSON.stringify(preexisting), "utf-8");
 
-      await setupCommand(undefined, runtime, deps);
+      await setupCommand(undefined, runtime);
 
       expect(runtime.exit).not.toHaveBeenCalledWith(1);
-      expect(requireFirstWorkspaceParams(deps.ensureAgentWorkspace).dir).toBe(agentAWorkspace);
-      expect(deps.resolveSessionTranscriptsDir).toHaveBeenCalledWith("agent-a");
+      expect(effects.ensureAgentWorkspace.mock.calls[0]?.[0]?.dir).toBe(agentAWorkspace);
+      expect(effects.resolveSessionTranscriptsDir).toHaveBeenCalledWith("agent-a");
     });
   });
 
   it("gives an actionable error when baseline setup has no ambient owner", async () => {
-    await withTempHome(async (home) => {
+    await withSetupHome(async (home) => {
       const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
-      const deps = createSetupDeps(home);
+      const effects = await observeSetupOwners();
       const preexisting: OpenClawConfig = {
         agents: {
           ownership: "explicit",
@@ -568,11 +776,11 @@ describe("setupCommand", () => {
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(configPath, JSON.stringify(preexisting), "utf-8");
 
-      await expect(setupCommand(undefined, runtime, deps)).rejects.toThrow(
+      await expect(setupCommand(undefined, runtime)).rejects.toThrow(
         "Multiple agents are configured, but baseline setup has no explicit owner. Set agents.defaults.systemAgent.agentId.",
       );
-      expect(deps.ensureAgentWorkspace).not.toHaveBeenCalled();
-      expect(deps.resolveSessionTranscriptsDir).not.toHaveBeenCalled();
+      expect(effects.ensureAgentWorkspace).not.toHaveBeenCalled();
+      expect(effects.resolveSessionTranscriptsDir).not.toHaveBeenCalled();
     });
   });
 });

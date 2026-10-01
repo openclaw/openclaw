@@ -188,6 +188,35 @@ describe("gateway ws log helpers", () => {
     expect(formatForLog(input)).toBe(`${"a".repeat(239)}...`);
   });
 
+  test.each(["assistant", "tool", "lifecycle", "other"])(
+    "keeps Incognito %s content out of verbose event logs while retaining routing metadata",
+    (stream) => {
+      setVerbose(true);
+      setGatewayWsLogStyle("full");
+      setLoggerOverride({ level: "silent", consoleLevel: "info" });
+      const output = vi.fn();
+      loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+      const marker = "synthetic-private-content";
+      const summary = summarizeAgentEventForWsLog({
+        runId: "private-run",
+        sessionKey: "agent:main:dashboard:incognito-synthetic",
+        stream,
+        seq: 2,
+        data: { text: marker, meta: marker, error: marker, reason: marker },
+      });
+      logWs("out", "event", { event: "agent", ...summary });
+      expect(output).toHaveBeenCalled();
+      expect(JSON.stringify(output.mock.calls)).not.toContain(marker);
+      expect(summary).toEqual({
+        run: "private-run",
+        agent: "main",
+        session: "dashboard:incognito-synthetic",
+        stream,
+        aseq: 2,
+      });
+    },
+  );
+
   test("summarizeAgentEventForWsLog compacts assistant payloads", () => {
     const summary = summarizeAgentEventForWsLog({
       runId: "12345678-1234-1234-1234-123456789abc",

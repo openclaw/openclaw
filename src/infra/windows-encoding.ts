@@ -92,22 +92,12 @@ export function resolveWindowsConsoleEncoding(): string | null {
   if (cachedWindowsConsoleEncoding !== undefined) {
     return cachedWindowsConsoleEncoding;
   }
-  try {
-    const result = spawnSync(getWindowsCmdExePath(), ["/d", "/s", "/c", "chcp"], {
-      env: resolveDiagnosticProcessEnv(),
-      windowsHide: true,
-      encoding: "utf8",
-      killSignal: "SIGKILL",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: WINDOWS_ENCODING_PROBE_TIMEOUT_MS,
-    });
-    const raw = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-    const codePage = parseWindowsCodePage(raw);
-    cachedWindowsConsoleEncoding =
-      codePage !== null ? (WINDOWS_CODEPAGE_ENCODING_MAP[codePage] ?? null) : null;
-  } catch {
-    cachedWindowsConsoleEncoding = null;
-  }
+  cachedWindowsConsoleEncoding = probeWindowsEncoding(getWindowsCmdExePath, [
+    "/d",
+    "/s",
+    "/c",
+    "chcp",
+  ]);
   return cachedWindowsConsoleEncoding;
 }
 
@@ -119,27 +109,28 @@ function resolveWindowsSystemEncoding(): string | null {
   if (cachedWindowsSystemEncoding !== undefined) {
     return cachedWindowsSystemEncoding;
   }
-  try {
-    const result = spawnSync(
-      "powershell.exe",
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Text.Encoding]::Default.CodePage"],
-      {
-        env: resolveDiagnosticProcessEnv(),
-        windowsHide: true,
-        encoding: "utf8",
-        killSignal: "SIGKILL",
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: WINDOWS_ENCODING_PROBE_TIMEOUT_MS,
-      },
-    );
-    const raw = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-    const codePage = parseWindowsCodePage(raw);
-    cachedWindowsSystemEncoding =
-      codePage !== null ? (WINDOWS_CODEPAGE_ENCODING_MAP[codePage] ?? null) : null;
-  } catch {
-    cachedWindowsSystemEncoding = null;
-  }
+  cachedWindowsSystemEncoding = probeWindowsEncoding(
+    () => "powershell.exe",
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Text.Encoding]::Default.CodePage"],
+  );
   return cachedWindowsSystemEncoding;
+}
+
+function probeWindowsEncoding(command: () => string, args: string[]): string | null {
+  try {
+    const result = spawnSync(command(), args, {
+      env: resolveDiagnosticProcessEnv(),
+      windowsHide: true,
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: WINDOWS_ENCODING_PROBE_TIMEOUT_MS,
+    });
+    const codePage = parseWindowsCodePage(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
+    return codePage !== null ? (WINDOWS_CODEPAGE_ENCODING_MAP[codePage] ?? null) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Resolves and caches the boot-time Windows OEM encoding cmd.exe reads batch files with. */

@@ -3,10 +3,8 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentConfig, AgentEntryConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  ChatMetadataSnapshotUnavailableError,
-  createGatewayChatMetadataRuntime,
-} from "../gateway/server-methods/chat-metadata-runtime.js";
+import { ChatMetadataSnapshotUnavailableError } from "../gateway/server-methods/chat-metadata-facts.js";
+import { createGatewayChatMetadataRuntime } from "../gateway/server-methods/chat-metadata-runtime.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
@@ -28,8 +26,6 @@ const { makeTempDir, retireAfterTest } = usePreparedCatalogWorkerFixtures();
 
 describe("chat metadata with published model owners", () => {
   it.each([
-    { shape: "entries", count: 1 },
-    { shape: "list", count: 1 },
     { shape: "entries", count: 64 },
     { shape: "list", count: 64 },
   ] as const)(

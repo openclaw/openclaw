@@ -1,6 +1,7 @@
 // Loads startup context snippets injected into the first reply turn.
 import fs from "node:fs";
 import path from "node:path";
+import { promisify } from "node:util";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -98,10 +99,6 @@ function trimStartupMemoryContent(content: string, maxChars: number): string {
   return `${truncateUtf16Safe(trimmed, maxChars)}\n...[truncated]...`;
 }
 
-function escapeQuotedStartupMemory(content: string): string {
-  return content.replaceAll("```", "\\`\\`\\`");
-}
-
 function sanitizeStartupMemoryLabel(value: string): string {
   return value
     .replaceAll(/[\r\n\t]+/g, " ")
@@ -115,7 +112,7 @@ function formatStartupMemoryBlock(relativePath: string, content: string): string
     `[Untrusted daily memory: ${sanitizeStartupMemoryLabel(relativePath)}]`,
     "BEGIN_QUOTED_NOTES",
     "```text",
-    escapeQuotedStartupMemory(content),
+    content.replaceAll("```", "\\`\\`\\`"),
     "```",
     "END_QUOTED_NOTES",
   ].join("\n");
@@ -153,18 +150,6 @@ function fitStartupMemoryBlock(params: {
   return best;
 }
 
-async function closeFd(fd: number): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    fs.close(fd, (error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-  });
-}
-
 async function readStartupMemoryFile(params: {
   workspaceDir: string;
   relativePath: string;
@@ -183,7 +168,7 @@ async function readStartupMemoryFile(params: {
   try {
     return (await readFileDescriptorBounded(opened.fd, params.maxFileBytes)).toString("utf-8");
   } finally {
-    await closeFd(opened.fd);
+    await promisify(fs.close)(opened.fd);
   }
 }
 
@@ -198,52 +183,35 @@ async function listStartupMemoryPathsByDate(params: {
 
   try {
     const entries = await fs.promises.readdir(memoryDir, { withFileTypes: true });
-    const sluggedNamesByStamp = new Map<string, string[]>();
-
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith(".md")) {
-        continue;
-      }
+    const sluggedNames = entries.flatMap((entry) => {
       const stamp = entry.name.slice(0, 10);
-      if (!stampSet.has(stamp)) {
-        continue;
+      if (
+        !entry.isFile() ||
+        !entry.name.endsWith(".md") ||
+        !stampSet.has(stamp) ||
+        !entry.name.startsWith(`${stamp}-`)
+      ) {
+        return [];
       }
-      if (entry.name === `${stamp}.md`) {
-        continue;
-      }
-      if (!entry.name.startsWith(`${stamp}-`)) {
-        continue;
-      }
-      const names = sluggedNamesByStamp.get(stamp);
-      if (names) {
-        names.push(entry.name);
-      } else {
-        sluggedNamesByStamp.set(stamp, [entry.name]);
-      }
-    }
+      return [{ stamp, name: entry.name }];
+    });
 
     const sluggedNameResults = await Promise.allSettled(
-      Array.from(sluggedNamesByStamp.entries()).flatMap(([stamp, names]) =>
-        names.map(async (name) => ({
-          stamp,
-          name,
-          stat: await fs.promises.stat(path.join(memoryDir, name)),
-        })),
-      ),
+      sluggedNames.map(async ({ stamp, name }) => ({
+        stamp,
+        name,
+        stat: await fs.promises.stat(path.join(memoryDir, name)),
+      })),
     );
     const sluggedStatsByStamp = new Map<string, Array<{ name: string; stat: fs.Stats }>>();
     for (const result of sluggedNameResults) {
       if (result.status !== "fulfilled") {
         continue;
       }
-      const existing = sluggedStatsByStamp.get(result.value.stamp);
-      if (existing) {
-        existing.push({ name: result.value.name, stat: result.value.stat });
-      } else {
-        sluggedStatsByStamp.set(result.value.stamp, [
-          { name: result.value.name, stat: result.value.stat },
-        ]);
-      }
+      const { stamp, name, stat } = result.value;
+      const stampEntries = sluggedStatsByStamp.get(stamp) ?? [];
+      stampEntries.push({ name, stat });
+      sluggedStatsByStamp.set(stamp, stampEntries);
     }
 
     return new Map(
@@ -277,7 +245,6 @@ export async function buildSessionStartupContextPrelude(params: {
   const nowMs = params.nowMs ?? Date.now();
   const timezone = resolveUserTimezone(params.cfg?.agents?.defaults?.userTimezone);
   const limits = resolveStartupContextLimits(params.cfg);
-  const dailyPaths: string[] = [];
   const stamps = buildStartupMemoryDateStamps({
     nowMs,
     timezone,
@@ -287,12 +254,9 @@ export async function buildSessionStartupContextPrelude(params: {
     workspaceDir: params.workspaceDir,
     stamps,
   });
-  for (const stamp of stamps) {
-    const relativePaths = relativePathsByDate.get(stamp) ?? [`${stamp}.md`];
-    for (const relativePath of relativePaths) {
-      dailyPaths.push(`memory/${relativePath}`);
-    }
-  }
+  const dailyPaths = stamps.flatMap((stamp) =>
+    (relativePathsByDate.get(stamp) ?? [`${stamp}.md`]).map((entry) => `memory/${entry}`),
+  );
   const loaded: Array<{ relativePath: string; content: string }> = [];
 
   for (const relativePath of dailyPaths) {
@@ -327,10 +291,6 @@ export async function buildSessionStartupContextPrelude(params: {
       if (sections.length > 0) {
         sections.push("...[additional startup memory truncated]...");
       }
-      break;
-    }
-    if (sections.length > 0 && totalChars + block.length > limits.maxTotalChars) {
-      sections.push("...[additional startup memory truncated]...");
       break;
     }
     sections.push(block);

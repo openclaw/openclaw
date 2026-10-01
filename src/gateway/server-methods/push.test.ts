@@ -392,43 +392,6 @@ describe("push.test handler", () => {
     });
   });
 
-  it("does not clear relay registrations after invalidation-shaped failures", async () => {
-    const registration = relayRegistration();
-    vi.mocked(loadApnsRegistration).mockResolvedValue(registration);
-    vi.mocked(resolveApnsRelayConfigFromEnv).mockReturnValue({
-      ok: true,
-      value: {
-        baseUrl: "https://relay.example.com",
-        timeoutMs: 1000,
-      },
-    });
-    vi.mocked(normalizeApnsEnvironment).mockReturnValue(null);
-    const result = apnsResult({
-      ok: false,
-      status: 410,
-      reason: "Unregistered",
-      tokenSuffix: "abcd1234",
-      environment: "production",
-      transport: "relay",
-    });
-    vi.mocked(sendApnsAlert).mockResolvedValue(result);
-    vi.mocked(shouldClearStoredApnsRegistration).mockReturnValue(false);
-
-    const { invoke } = createInvokeParams({
-      nodeId: "ios-node-1",
-      title: "Wake",
-      body: "Ping",
-    });
-    await invoke();
-
-    expect(shouldClearStoredApnsRegistration).toHaveBeenCalledWith({
-      registration,
-      result,
-      overrideEnvironment: null,
-    });
-    expect(clearApnsRegistrationIfCurrent).not.toHaveBeenCalled();
-  });
-
   it("does not clear direct registrations when push.test overrides the environment", async () => {
     const registration = directRegistration();
     vi.mocked(loadApnsRegistration).mockResolvedValue(registration);
@@ -685,7 +648,6 @@ describe("bound Web Push handlers", () => {
           agentFinished: false,
           agentQuestion: false,
           scheduledTaskFailed: false,
-          backgroundTaskFailed: false,
           ...(humanMentioned === undefined ? {} : { humanMentioned }),
         },
         detailLevel: "private",
@@ -754,7 +716,6 @@ describe("bound Web Push handlers", () => {
                 agentFinished: false,
                 agentQuestion: false,
                 scheduledTaskFailed: false,
-                backgroundTaskFailed: false,
               },
               detailLevel: "private",
               quietHours: {

@@ -76,15 +76,28 @@ Channel connectivity and inbound admission are separate failure domains. A chann
 
 The Gateway exposes three unauthenticated `GET`/`HEAD` probe pairs:
 
-| Endpoints               | Meaning                                                                                                       | Use                                                            |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `/health`, `/healthz`   | The HTTP server is live.                                                                                      | Process liveness and restart decisions.                        |
-| `/startup`, `/startupz` | Startup work is complete and the Gateway is not draining. Channel health is not consulted.                    | Orchestrator startup and traffic admission.                    |
-| `/ready`, `/readyz`     | Startup is complete, the Gateway is not draining, and configured channel accounts pass deep readiness checks. | Operator monitoring that should surface hard channel failures. |
+| Endpoints               | Meaning                                                                                                                                              | Use                                        |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `/health`, `/healthz`   | The HTTP server is live.                                                                                                                             | Process liveness and restart decisions.    |
+| `/startup`, `/startupz` | Startup sidecars have settled and the Gateway is not draining. Agent and channel health are not consulted.                                           | Startup-phase monitoring.                  |
+| `/ready`, `/readyz`     | Startup is complete, the Gateway is not draining, required agent databases are admitted, and configured channel accounts pass deep readiness checks. | Traffic admission and operator monitoring. |
 
-`/startupz` returns `503` with `status: "starting"` while startup sidecars are pending, `503` with `status: "draining"` during drain, and `200` with `status: "started"` otherwise. Use it for Kubernetes, Fly, Render, and similar traffic admission. A broken Telegram or other channel account can make `/readyz` return `503` without taking a healthy Control UI out of service through `/startupz`.
+`/startupz` returns `503` with `status: "starting"` while startup sidecars are pending, `503` with `status: "draining"` during drain, and `200` with `status: "started"` otherwise. Use `/readyz` when traffic admission requires usable agents. A refused default or system agent database keeps readiness false after any migration outcome, with `failing: ["agent-database:<id>"]` and the exact admission reason and repair hint in `agentDatabases`. A refused optional agent can remain isolated while healthy agents serve requests. Gateway ready announcements use the same readiness decision.
+
+A broken Telegram or other channel account can also make `/readyz` return `503` while `/startupz` remains started. Neither probe replaces the other: startup completion alone does not certify agent or channel availability.
 
 Remote unauthenticated startup responses contain only `ok` and `status`. Local-direct and authenticated callers also receive `version`, `uptimeMs`, and `pendingReason` while startup is pending. Readiness details follow the same local-or-authenticated gate because they can name failing subsystems.
+
+### Shared-state integrity failure
+
+A terminal shared-state admission failure immediately makes `/ready` and `/readyz`
+return `503`, including failures discovered by a SQLite worker after startup.
+Detailed responses include `failing: ["state-database"]` and `stateDatabase.reason`
+with the recorded refusal. This bypasses cached channel health;
+probes read the admission owner's recorded result without querying SQLite.
+
+`/healthz` still reports HTTP liveness. Supervisors that need to detect a Gateway
+that is running but cannot admit work must monitor `/readyz`.
 
 ### Plugin replacement recovery
 
@@ -114,6 +127,11 @@ including worker and native threads, divided by elapsed wall time. The unit is
 core equivalents: `1` means one CPU core fully occupied over the interval, and
 parallel work can produce values above `1`. It is not a percentage of the host's
 total CPU capacity.
+
+The `health` RPC also reads the latest completed sample when returning a cached
+summary or publishing a newly collected one. Slow channel checks do not freeze
+its CPU and delay readings. If the sampler resets, health responses omit
+`eventLoop` until a new window completes instead of reviving a cached sample.
 
 The optional `cpuBreakdown` separates independent native counters:
 

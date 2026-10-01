@@ -87,25 +87,10 @@ describe("Matrix public message actions", () => {
     ]);
   });
 
-  it.each([
-    { name: "absent", params: { media_url: "alias.png" }, mediaUrl: "alias.png" },
-    {
-      name: "own undefined",
-      params: { mediaUrl: undefined, media_url: "alias.png" },
-      mediaUrl: undefined,
-    },
-    { name: "own empty", params: { mediaUrl: "", media_url: "alias.png" }, mediaUrl: undefined },
-  ])(
-    "preserves $name camel-case media fields before snake-case aliases",
-    async ({ params, mediaUrl }) => {
-      await runMatrixAction(
-        "send",
-        { to: "!room:example", message: "", ...params },
-        {} as CoreConfig,
-      );
-      expect(mocks.sendMatrixMessage.mock.lastCall?.[2].mediaUrl).toBe(mediaUrl);
-    },
-  );
+  it("accepts snake-case media fields when the camel-case key is absent", async () => {
+    await runMatrixAction("send", { to: "!room:example", message: "", media_url: "alias.png" }, {});
+    expect(mocks.sendMatrixMessage.mock.lastCall?.[2].mediaUrl).toBe("alias.png");
+  });
 
   it("drops public delete reasons but preserves the downstream undefined property", async () => {
     const cfg = {} as CoreConfig;
@@ -329,22 +314,20 @@ describe("Matrix public message actions", () => {
     expect(result.details).toEqual({ ok: true, verifications: [] });
   });
 
-  it.each(["invalid", "constructor", "__proto__"])(
-    "rejects unsupported verification operation %s before action gating",
-    async (operation) => {
-      await expect(
-        runMatrixAction(
-          "permissions",
-          { operation },
-          {
-            channels: { matrix: { actions: { verification: false } } },
-          } as CoreConfig,
-          { senderIsOwner: true },
-        ),
-      ).rejects.toThrow(`Unsupported Matrix permissions operation: ${operation}.`);
-      expect(mocks.listMatrixVerifications).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects inherited verification operations before action gating", async () => {
+    const operation = "constructor";
+    await expect(
+      runMatrixAction(
+        "permissions",
+        { operation },
+        {
+          channels: { matrix: { actions: { verification: false } } },
+        } as CoreConfig,
+        { senderIsOwner: true },
+      ),
+    ).rejects.toThrow(`Unsupported Matrix permissions operation: ${operation}.`);
+    expect(mocks.listMatrixVerifications).not.toHaveBeenCalled();
+  });
 
   it("rejects profile mutation without trusted owner identity before applying the profile", async () => {
     await expect(

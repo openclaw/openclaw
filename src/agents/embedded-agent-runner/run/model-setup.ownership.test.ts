@@ -25,6 +25,8 @@ import { persistAuthProfileBatch } from "../../auth-profiles/upsert-with-lock.js
 import { registerAgentHarness } from "../../harness/registry.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../harness/tool-authority.runtime.js";
 import type { AgentHarness } from "../../harness/types.js";
+import { modelCatalogRowToEntry } from "../../model-catalog-entry.js";
+import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.types.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../session-runtime-compat.js";
 import { resolveExtraParams } from "../extra-params.js";
 import {
@@ -121,7 +123,10 @@ async function createFixture(
         }),
   };
   await replaceSessionEntry(target, entry);
-  const resolve = (assertCurrent = () => {}) =>
+  const resolve = (
+    assertCurrent = () => {},
+    preparedModelRuntime: PreparedModelRuntimeSnapshot = generation.preparedModelRuntime,
+  ) =>
     resolveEmbeddedRunModelSetup({
       assertCurrent,
       runParams,
@@ -137,7 +142,7 @@ async function createFixture(
         workspaceDir: runParams.workspaceDir,
       },
       onHooksResolved: () => {},
-      preparedModelRuntime: generation.preparedModelRuntime,
+      preparedModelRuntime,
     });
   const withRuntime = async (
     overrides: Partial<RunEmbeddedAgentParams>,
@@ -289,6 +294,39 @@ describe("model chat and native model ownership", () => {
       maxTokens: 2_048,
     });
   });
+
+  it.each([false, true])(
+    "keeps host model resolution when a harness catalog does not claim native ownership (catalog fails=%s)",
+    async (catalogFails) => {
+      const fixture = await createFixture();
+      const entry = modelCatalogRowToEntry(fixture.generation.resolveDynamicModel());
+      const catalog = { entries: [entry], routeVariants: [entry] };
+      fixture.harness.loadModelCatalog = vi.fn(async () => [entry]);
+      registerAgentHarness(fixture.harness);
+      const loadNativeModelCatalog = vi.fn(async () => {
+        if (catalogFails) {
+          throw new Error("Optional catalog unavailable");
+        }
+        return catalog;
+      });
+      const setup = await fixture.resolve(undefined, {
+        ...fixture.generation.preparedModelRuntime,
+        loadNativeModelCatalog,
+      });
+
+      expect(loadNativeModelCatalog).toHaveBeenCalledWith({
+        provider: "openai",
+        modelId: "fixture-model",
+        runtime: fixture.harness.id,
+      });
+      expect(setup.nativeModelOwned).toBe(false);
+      expect(setup.model).toMatchObject({
+        id: "fixture-model",
+        baseUrl: "https://api.openai.com/v1",
+        api: "openai-responses",
+      });
+    },
+  );
 
   it("keeps model and plugin ownership across usage writes and subsequent turns", async () => {
     const fixture = await createFixture();

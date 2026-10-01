@@ -1,13 +1,17 @@
 import type { DaemonRuntimePinSnapshot } from "../../daemon/runtime-pin-types.js";
 import type { ServiceInspectionReason } from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceDefinitionBackupReceipt } from "../../daemon/service-stage.js";
-import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
+import type {
+  GatewayServiceCommandConfig,
+  SystemdServiceIdentity,
+} from "../../daemon/service-types.js";
 import type {
   PackageDirectoryIdentity,
   PackageIntegrityFingerprint,
   PackageLauncherFingerprint,
 } from "../../infra/package-update-integrity.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import type { WindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
@@ -38,16 +42,24 @@ export type PreManagedServiceStop = {
   running: boolean;
   /** Verified native service process, used only to correlate legacy Gateway locks. */
   servicePid?: number;
+  serviceControlGroup?: string;
+  /** Reporting fact only; membership is rechecked before the native stop. */
+  serviceMembershipSourceAbsent?: boolean;
   offline?: boolean;
   serviceMutationAllowed?: boolean;
   serviceMutationSkipMessage?: string;
   serviceUpdateVerdict?: ManagedGatewayUpdateVerdict;
   blockMessage?: string;
+  blockFailureFacts?: UpdateFailureFact[];
   serviceEnv?: NodeJS.ProcessEnv;
   serviceDefinitionEnv?: NodeJS.ProcessEnv;
   serviceNodeRunner?: string;
+  servicePort?: number;
+  /** Original service generation, which can differ from the invoking CLI package. */
+  serviceIdentity?: { version: string; buildId?: string };
   /** Original account observed from the pinned native user-manager connection. */
   serviceManagerUid?: number;
+  serviceSystemdIdentity?: SystemdServiceIdentity;
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
 };
 
@@ -88,4 +100,16 @@ export type OriginalManagedServiceRuntime = {
     targetFingerprint: PackageLauncherFingerprint;
   };
   nodeIdentity: string;
+};
+
+export type ManagedServiceRootRedirect = {
+  root: string;
+  previousRoot: string;
+};
+
+export type ManagedServicePackageUpdatePlan = {
+  rootRedirect: ManagedServiceRootRedirect | null;
+  serviceRoot?: string;
+  nodeRunner?: string;
+  serviceUnitTarget?: string;
 };

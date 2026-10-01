@@ -1,6 +1,11 @@
+import { Buffer } from "node:buffer";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installMockGateway,
+  startControlUiE2eServer,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProof,
   chatSessionListResponse,
@@ -8,6 +13,7 @@ import {
 } from "./chat-flow.test-support.ts";
 import { verifyDurableComposerFences } from "./composer-draft-fences.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { navigateInApp } from "./new-session-page.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -426,6 +432,109 @@ suite.define(() => {
     );
   });
 
+  it("keeps question drafts scoped, bounded, and retired with their conversation", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}settings`);
+      const storeHandle = await page.evaluateHandle<
+        typeof import("../lib/chat/composer-draft-store.runtime.ts")
+      >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+      const result = await page.evaluate(async (store) => {
+        const parent = {
+          gatewayOwner: "question-fixture",
+          recoveryScope: "person-a",
+          scopeKey: "chat:v3:agent:main:one\u0000agent:main",
+        };
+        const scope = { ...parent, scopeKey: `questions:v1:${parent.scopeKey}` };
+        const payload = {
+          text: "",
+          attachments: [],
+          questionDrafts: [
+            {
+              itemId: "audience",
+              signature: "fixture",
+              edited: true,
+              answers: [{ selected: [], freeText: "My team" }],
+            },
+          ],
+        };
+        await store.writeDurableComposerDraft(
+          scope,
+          { ...payload, revision: 1 },
+          { expectedRevision: 0, writeId: "first" },
+        );
+        const recovery = await store.prepareDurableComposerRecovery(parent);
+        const read = await store.readDurableComposerDraft(scope);
+        const other = await store.readDurableComposerDraft({ ...scope, recoveryScope: "person-b" });
+        await store.retireDurableComposerDraft(parent);
+        const retired = await store.readDurableComposerDraft(scope);
+        const stale = await store.writeDurableComposerDraft(
+          scope,
+          { ...payload, revision: 2 },
+          { expectedRevision: 1, writeId: "late" },
+        );
+        // The owner budget evicts by updatedAt, not revision. Real writes can share
+        // one millisecond, so give each fixture row a distinct timestamp like the
+        // existing composer fence scenario, without depending on IDB key tie order.
+        const boundedScopes = Array.from({ length: 21 }, (_, index) => ({
+          ...scope,
+          scopeKey: `questions:v1:chat:v3:agent:main:bounded-${index}\u0000agent:main`,
+        }));
+        const originalNow = Date.now;
+        let now = originalNow();
+        const writes = [];
+        try {
+          Date.now = () => ++now;
+          for (const [index, boundedScope] of boundedScopes.entries()) {
+            writes.push(
+              await store.writeDurableComposerDraft(
+                boundedScope,
+                { ...payload, revision: index + 10 },
+                { expectedRevision: 0, writeId: `bounded-${index}` },
+              ),
+            );
+          }
+        } finally {
+          Date.now = originalNow;
+        }
+        const bounded = await Promise.all(
+          boundedScopes.map((boundedScope) => store.readDurableComposerDraft(boundedScope)),
+        );
+        return {
+          recovery,
+          read,
+          other,
+          retired,
+          stale,
+          oldest: bounded[0],
+          active: bounded.filter((storedDraft) => storedDraft.status === "found").length,
+          writes: writes.map((write) => write.status),
+          expireScope: {
+            ...scope,
+            scopeKey: "questions:v1:chat:v3:agent:main:bounded-20\u0000agent:main",
+          },
+        };
+      }, storeHandle);
+      expect(result.recovery).toEqual({ status: "ready", entries: [] });
+      expect(result.read).toMatchObject({
+        status: "found",
+        draft: { questionDrafts: [{ answers: [{ freeText: "My team" }] }] },
+      });
+      expect(result.other.status).toBe("not-found");
+      expect(result.retired.status).toBe("not-found");
+      expect(result.stale.status).toBe("conflict");
+      expect(result.writes).toEqual(Array.from({ length: 21 }, () => "persisted"));
+      expect(result.active).toBe(20);
+      expect(result.oldest?.status).toBe("not-found");
+      await rawDraftRecords(page, [result.expireScope], true);
+      const expired = await page.evaluate(
+        ({ store, scope }) => store.readDurableComposerDraft(scope),
+        { store: storeHandle, scope: result.expireScope },
+      );
+      expect(expired.status).toBe("not-found");
+    });
+  });
+
   it("expires drafts across abandoned credential owners on the next database open", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block" },
@@ -488,108 +597,146 @@ suite.define(() => {
     );
   });
 
-  it("keeps existing-session Incognito drafts memory-only across restart", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const storeHandle = await page.evaluateHandle<
-        typeof import("../lib/chat/composer-draft-store.runtime.ts")
-      >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
-      const composerHandle = await page.evaluateHandle<
-        typeof import("../pages/chat/composer-persistence.ts")
-      >('import("/src/pages/chat/composer-persistence.ts")');
-      const sessionKeyHandle = await page.evaluateHandle<
-        typeof import("../lib/sessions/session-key.ts")
-      >('import("/src/lib/sessions/session-key.ts")');
-      const durableHandle = await page.evaluateHandle<
-        typeof import("../pages/chat/durable-composer-persistence.ts")
-      >('import("/src/pages/chat/durable-composer-persistence.ts")');
-      const result = await page.evaluate(
-        async ({ draftStore, sessionKeys, composer, durable }) => {
-          const waitFor = async (predicate: () => Promise<boolean>) => {
-            for (let attempt = 0; attempt < 100; attempt += 1) {
-              if (await predicate()) {
-                return;
-              }
-              await new Promise((resolve) => {
-                setTimeout(resolve, 10);
-              });
-            }
-            throw new Error("existing-session Incognito draft state did not settle");
-          };
-          const state = {
-            settings: { gatewayUrl: "incognito-chat-gateway" },
-            hello: null,
-            sessionKey: "agent:main:incognito-chat",
-            chatMessage: "",
-            chatAttachments: [] as import("../lib/chat/chat-types.ts").ChatAttachment[],
-            chatQueue: [],
-            client: {
-              recoveryScope: "incognito-chat-credential",
-              recoveryScopeReady: true,
-            },
-            connected: true,
-            selectedChatSessionIncognito: false,
-          };
-          const storedScope = sessionKeys.resolveUiConversationIdentity(state, state.sessionKey);
-          const scope = {
-            gatewayOwner: state.settings.gatewayUrl,
-            recoveryScope: state.client.recoveryScope,
-            scopeKey: `chat:v3:${composer.storedChatOutboxScopeKey(storedScope)}`,
-          };
-          const persistence = new composer.ChatComposerPersistence(() => state);
-          persistence.start();
-          state.chatMessage = "private existing-session draft";
-          state.chatAttachments = await durable.hydrateDurableComposerAttachments([
-            {
-              blob: new Blob(["private attachment"], { type: "text/plain" }),
-              mimeType: "text/plain",
-              fileName: "private.txt",
-              sizeBytes: 18,
-            },
-          ]);
-          persistence.schedule();
-          persistence.persistNow();
-          await waitFor(async () => {
-            const read = await draftStore.readDurableComposerDraft(scope);
-            return read.status === "found" && read.draft.attachments.length === 1;
-          });
-
-          state.selectedChatSessionIncognito = true;
-          persistence.persistChangedState();
-          await waitFor(async () => {
-            const read = await draftStore.readDurableComposerDraft(scope);
-            return read.status === "not-found" && read.revision !== undefined;
-          });
-          persistence.stop();
-
-          const restartedState = {
-            ...state,
-            chatMessage: "",
-            chatAttachments: [] as import("../lib/chat/chat-types.ts").ChatAttachment[],
-          };
-          const restarted = new composer.ChatComposerPersistence(() => restartedState);
-          restarted.start();
-          await waitFor(async () => {
-            const read = await draftStore.readDurableComposerDraft(scope);
-            return read.status === "not-found";
-          });
-          restarted.stop();
-          return {
-            message: restartedState.chatMessage,
-            attachments: restartedState.chatAttachments.length,
-          };
-        },
-        {
-          draftStore: storeHandle,
-          sessionKeys: sessionKeyHandle,
-          composer: composerHandle,
-          durable: durableHandle,
-        },
-      );
-
-      expect(result).toEqual({ message: "", attachments: 0 });
-    });
+  it("keeps existing-session Incognito drafts in memory while preserving its submitted queue", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        const ordinary = "agent:main:ordinary-draft";
+        const incognito = "agent:main:dashboard:incognito-private-draft";
+        const gateway = await installMockGateway(page, {
+          sessionKey: ordinary,
+          methodResponses: {
+            "sessions.list": chatSessionListResponse([
+              { key: ordinary, kind: "direct", label: "Ordinary draft", updatedAt: 2 },
+              {
+                key: incognito,
+                kind: "direct",
+                label: "Private draft",
+                incognito: true,
+                updatedAt: 1,
+              },
+            ]),
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, ordinary));
+        const activePane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+        const composer = activePane.getByRole("textbox", { name: "Chat composer" });
+        await composer.fill("Ordinary unsent draft");
+        await waitForCommittedComposerDraft(
+          page,
+          `chat:v3:${ordinary}\u0000agent:main`,
+          "Ordinary unsent draft",
+          0,
+        );
+        await page
+          .locator(
+            `.sidebar-recent-session[data-session-key="${incognito}"] a.sidebar-recent-session__link`,
+          )
+          .click();
+        await expect.poll(() => composer.inputValue()).toBe("");
+        const composerHandle = await page.evaluateHandle<
+          typeof import("../pages/chat/composer-persistence.ts")
+        >('import("/src/pages/chat/composer-persistence.ts")');
+        const outboxHandle = await page.evaluateHandle<
+          typeof import("../lib/chat/outbox-store.ts")
+        >('import("/src/lib/chat/outbox-store.ts")');
+        // A submitted, held message has a separate reload contract from unsent input.
+        const admitted = await page.evaluate(
+          ({ persistence, outbox, sessionKey }) => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime: { context: { gateway: { connection: { gatewayUrl: string } } } };
+            };
+            const state = {
+              settings: { gatewayUrl: app.runtime.context.gateway.connection.gatewayUrl },
+            };
+            return persistence.admitStoredChatComposerQueueItem(
+              state,
+              outbox.captureChatOutboxAdmission(state, sessionKey),
+              {
+                id: "held-private",
+                text: "Submitted private queue entry",
+                createdAt: 1,
+                sendState: "held",
+              },
+            );
+          },
+          { persistence: composerHandle, outbox: outboxHandle, sessionKey: incognito },
+        );
+        expect(admitted).toBe(true);
+        await composer.fill("Private unsent draft — café 雪 🦞");
+        await activePane.locator(".agent-chat__file-input").setInputFiles({
+          name: "private-draft.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from("Synthetic private attachment"),
+        });
+        await expect
+          .poll(() => activePane.locator(".chat-attachment-file__name").allTextContents())
+          .toContain("private-draft.txt");
+        await navigateInApp(page, "appearance");
+        await waitForControlUiRoute(page, {
+          routeId: "appearance",
+          pathname: "/settings/appearance",
+        });
+        await page.goBack();
+        await expect.poll(() => composer.inputValue()).toBe("Private unsent draft — café 雪 🦞");
+        await expect
+          .poll(() => activePane.locator(".chat-attachment-file__name").allTextContents())
+          .toContain("private-draft.txt");
+        await waitForCommittedComposerDraft(page, `chat:v3:${incognito}\u0000agent:main`, null, 0);
+        await page.reload();
+        await waitForControlUiRoute(page, {
+          routeId: "chat",
+          pathname: new URL(controlUiSessionUrl(suite.server.baseUrl, incognito)).pathname,
+        });
+        await page.waitForFunction((sessionKey) => {
+          const pane = document.querySelector('openclaw-chat-pane[aria-hidden="false"]') as
+            | (HTMLElement & {
+                state?: {
+                  sessionKey: string;
+                  connected: boolean;
+                  selectedChatSessionIncognito: boolean;
+                };
+              })
+            | null;
+          return (
+            pane?.state?.sessionKey === sessionKey &&
+            pane.state.connected &&
+            pane.state.selectedChatSessionIncognito
+          );
+        }, incognito);
+        try {
+          await expect.poll(() => composer.inputValue()).toBe("");
+          await expect
+            .poll(() => activePane.locator(".chat-attachment-file__name").count())
+            .toBe(0);
+        } finally {
+          await captureUiProof(suite, page, "incognito-draft-reload", "reloaded.png");
+        }
+        const stored = await page.evaluate((sessionKey) => {
+          const key = Object.keys(sessionStorage).find((storageKey) =>
+            storageKey.startsWith("openclaw.control.chatComposer.v4:"),
+          );
+          return key
+            ? JSON.parse(sessionStorage.getItem(key)!).sessions[`${sessionKey}\u0000agent:main`]
+            : null;
+        }, incognito);
+        expect(stored).toMatchObject({
+          queue: [{ id: "held-private", text: "Submitted private queue entry", sendState: "held" }],
+        });
+        expect(stored.draft).toBeUndefined();
+        expect(stored.draftMentions).toBeUndefined();
+        expect(stored.goalMode).toBeUndefined();
+        await page
+          .locator(
+            `.sidebar-recent-session[data-session-key="${ordinary}"] a.sidebar-recent-session__link`,
+          )
+          .click();
+        await expect.poll(() => composer.inputValue()).toBe("Ordinary unsent draft");
+        expect(
+          (await gateway.getRequests()).filter(({ method }) => method === "chat.send"),
+        ).toEqual([]);
+      },
+    );
   });
 
   it("fences stale writes and expires or evicts bounded durable drafts", async () => {

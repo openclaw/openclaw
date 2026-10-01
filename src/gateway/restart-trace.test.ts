@@ -28,7 +28,7 @@ describe("gateway restart trace handoff", () => {
 
     expect(metrics.rssMb).toEqual(expect.any(Number));
     expect(metrics.activeTimersCount).toEqual(expect.any(Number));
-    expect(metrics.processSigusr1ListenersCount).toEqual(expect.any(Number));
+    expect(metrics.processRestartListenersCount).toEqual(expect.any(Number));
     expect(metrics.processSigtermListenersCount).toEqual(expect.any(Number));
     expect(metrics.processSigintListenersCount).toEqual(expect.any(Number));
   });

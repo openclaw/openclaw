@@ -51,7 +51,7 @@ export type CronFormState = {
   payloadModel: string;
   payloadThinking: string;
   payloadLightContext: boolean;
-  deliveryMode: "none" | "announce" | "webhook";
+  deliveryMode: "" | "none" | "announce" | "webhook";
   deliveryChannel: string;
   deliveryTo: string;
   deliveryAccountId: string;
@@ -80,6 +80,7 @@ export type CronFieldKey =
   | "payloadModel"
   | "payloadThinking"
   | "timeoutSeconds"
+  | "deliveryMode"
   | "deliveryTo"
   | "failureAlertAfter"
   | "failureAlertCooldownSeconds";
@@ -88,7 +89,7 @@ export type CronFieldErrors = Partial<Record<CronFieldKey, string>>;
 
 export type CronJobsLastStatusFilter = "all" | CronRunStatus | "unknown";
 
-export type CronState = {
+export type CronJobsState<Row = CronJob> = {
   // Read admission belongs to the page; accepted mutation chains remain independent.
   canRefresh?: () => boolean;
   client: GatewayBrowserClient | null;
@@ -98,7 +99,7 @@ export type CronState = {
   cronJobsLoadingMore: boolean;
   cronJobsReloadPending: boolean;
   cronJobsReloadPendingTableFilters: boolean;
-  cronJobs: CronJob[];
+  cronJobs: Row[];
   cronJobsSnapshotRevision: string | null;
   cronJobsTotal: number;
   cronJobsHasMore: boolean;
@@ -113,6 +114,9 @@ export type CronState = {
   cronJobsSortDir: CronSortDir;
   cronAgentId: string | null;
   cronSessionFilter?: { sessionKey: string; sessionAgentId: string };
+};
+
+export type CronState<Row = CronJob> = CronJobsState<Row> & {
   cronStatus: CronStatus | null;
   cronScopedTotal: number | null;
   cronScopedNextWakeAtMs: number | null;

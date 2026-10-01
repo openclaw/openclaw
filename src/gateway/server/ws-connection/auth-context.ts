@@ -244,10 +244,8 @@ async function resolveConnectAuthDecisionCore(
 
   const bootstrapTokenCandidate = params.state.bootstrapTokenCandidate;
   if (params.hasDeviceIdentity && params.deviceId && params.publicKey && bootstrapTokenCandidate) {
-    // Per-IP gate on the bootstrap-token verify path.
-    // verifyDeviceBootstrapToken is mutex-serialized and runs fs read + fs
-    // write per attempt, so unrate-limited attackers can queue the bootstrap
-    // pairing flow behind their requests and block legitimate onboarding.
+    // Bootstrap verification shares the SQLite worker mutation queue.
+    // Limit attempts before they can delay legitimate onboarding.
     let bootstrapRateLimited = false;
     if (params.rateLimiter) {
       const bootstrapRateCheck = params.rateLimiter.check(

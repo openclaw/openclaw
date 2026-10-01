@@ -1,18 +1,19 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
-  ProviderReplayPolicy,
-  ProviderReplayPolicyContext,
+  ProviderDefaultThinkingPolicyContext,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { findNormalizedProviderValue } from "openclaw/plugin-sdk/provider-auth";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
-  buildProviderReplayFamilyHooks,
+  buildPassthroughGeminiSanitizingReplayPolicy,
   DEFAULT_CONTEXT_TOKENS,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  getLoadedOpenRouterModelCapabilities,
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
 } from "openclaw/plugin-sdk/provider-stream-family";
@@ -34,6 +35,7 @@ import {
   buildOpenrouterProvider,
   isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,
+  OPENROUTER_BASE_URL,
   resolveOpenRouterApiBaseUrl,
 } from "./provider-catalog.js";
 import { resolveOpenRouterExtraParamsForTransport } from "./provider-routing.js";
@@ -52,6 +54,46 @@ const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_FUSION_MODEL_ID = "openrouter/fusion";
 const OPENROUTER_CACHE_TTL_MODEL_FAMILY = /^(?:anthropic|deepseek|moonshot(?:ai)?|z-?ai)\//;
 const MAX_PROMPT_MODEL_ID_DISPLAY_CHARS = 256;
+
+// Configured rows keep their sizing and opt-outs, but the OpenRouter model
+// catalog owns effort capabilities on its canonical transport.
+function isOpenRouterCatalogRoute(route: {
+  api?: string | null;
+  baseUrl?: string | null;
+}): boolean {
+  return (
+    (route.api == null || route.api === "openai-completions") &&
+    // Target-provider resolution may compare routes before normalizing a
+    // legacy URL, so only the exact catalog route can borrow its metadata.
+    (route.baseUrl == null || route.baseUrl === OPENROUTER_BASE_URL)
+  );
+}
+
+function withOpenRouterCatalogThinking(
+  ctx: ProviderDefaultThinkingPolicyContext,
+): ProviderDefaultThinkingPolicyContext {
+  if (
+    ctx.thinkingLevelMap ||
+    ctx.compat?.supportsReasoningEffort !== undefined ||
+    ctx.compat?.supportedReasoningEfforts !== undefined ||
+    !isOpenRouterCatalogRoute(ctx)
+  ) {
+    return ctx;
+  }
+  // Thinking profiles run on synchronous session reads, so they only consume
+  // catalog capabilities already loaded in memory.
+  const capabilities = getLoadedOpenRouterModelCapabilities(
+    normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId,
+  );
+  if (!capabilities?.compat && !capabilities?.thinkingLevelMap) {
+    return ctx;
+  }
+  return {
+    ...ctx,
+    compat: { ...capabilities.compat, ...ctx.compat },
+    ...(capabilities.thinkingLevelMap ? { thinkingLevelMap: capabilities.thinkingLevelMap } : {}),
+  };
+}
 
 type OpenRouterFusionPromptContext = {
   config?: OpenClawConfig;
@@ -87,18 +129,7 @@ function sanitizePromptModelId(value: unknown): string | undefined {
     return undefined;
   }
   const normalized = truncateUtf16Safe(
-    Array.from(value)
-      .filter((char) => {
-        const codePoint = char.codePointAt(0) ?? 0;
-        return (
-          codePoint > 0x1f &&
-          (codePoint < 0x7f || codePoint > 0x9f) &&
-          codePoint !== 0x2028 &&
-          codePoint !== 0x2029
-        );
-      })
-      .join("")
-      .trim(),
+    value.replace(/[\p{Cc}\u2028\u2029]/gu, "").trim(),
     MAX_PROMPT_MODEL_ID_DISPLAY_CHARS,
   );
   return normalized || undefined;
@@ -152,33 +183,18 @@ function findConfiguredOpenRouterModelParams(
   return undefined;
 }
 
-function findConfiguredOpenRouterAgentParams(
-  ctx: OpenRouterFusionPromptContext,
-): Record<string, unknown> | undefined {
-  if (!ctx.agentId) {
-    return undefined;
-  }
-  return readRecord(resolveAgentConfig(ctx.config ?? {}, ctx.agentId)?.params);
-}
-
-function resolveMergedOpenRouterPromptParams(
-  ctx: OpenRouterFusionPromptContext,
-): Record<string, unknown> | undefined {
-  const merged = {
-    ...readRecord(ctx.config?.agents?.defaults?.params),
-    ...findConfiguredOpenRouterModelParams(ctx),
-    ...findConfiguredOpenRouterAgentParams(ctx),
-  };
-  return Object.keys(merged).length > 0 ? merged : undefined;
-}
-
 function resolveFusionExtraBody(
   ctx: OpenRouterFusionPromptContext,
 ): Record<string, unknown> | undefined {
-  const params = resolveMergedOpenRouterPromptParams(ctx);
-  const rawExtraBody =
-    params && Object.hasOwn(params, "extra_body") ? params.extra_body : params?.extraBody;
-  return readRecord(rawExtraBody);
+  const params = {
+    ...readRecord(ctx.config?.agents?.defaults?.params),
+    ...findConfiguredOpenRouterModelParams(ctx),
+    ...(ctx.agentId ? readRecord(resolveAgentConfig(ctx.config ?? {}, ctx.agentId)?.params) : {}),
+  };
+  if (Object.keys(params).length === 0) {
+    return undefined;
+  }
+  return readRecord(Object.hasOwn(params, "extra_body") ? params.extra_body : params.extraBody);
 }
 
 function resolveOpenRouterFusionPromptContribution(
@@ -193,10 +209,7 @@ function resolveOpenRouterFusionPromptContribution(
   const fusionPlugin = Array.isArray(extraBody?.plugins)
     ? extraBody.plugins.map(readRecord).find((plugin) => plugin?.id === "fusion")
     : undefined;
-  if (!fusionPlugin) {
-    return undefined;
-  }
-  if (fusionPlugin.enabled === false) {
+  if (!fusionPlugin || fusionPlugin.enabled === false) {
     return undefined;
   }
 
@@ -258,26 +271,6 @@ export default defineSingleProviderPluginEntry({
       };
     }
 
-    const passthroughGeminiReplayHooks = buildProviderReplayFamilyHooks({
-      family: "passthrough-gemini",
-    });
-    const passthroughReplayHook = passthroughGeminiReplayHooks.buildReplayPolicy;
-    function buildOpenRouterReplayPolicy(ctx: ProviderReplayPolicyContext): ProviderReplayPolicy {
-      const base = passthroughReplayHook?.(ctx) ?? {};
-      // OpenRouter proxies Mistral, which uses non-base62 tool_call_ids and
-      // requires the 9-char id contract that direct `mistral` provider already
-      // applies. Without strict9, replayed assistant turns fail with HTTP 400
-      // `invalid_function_call` 3280 (#58012).
-      if (isOpenRouterMistralModelId(ctx.modelId)) {
-        return {
-          ...base,
-          sanitizeToolCallIds: true,
-          toolCallIdMode: "strict9",
-        };
-      }
-      return base;
-    }
-
     return {
       label: "OpenRouter",
       docsPath: "/providers/models",
@@ -313,7 +306,25 @@ export default defineSingleProviderPluginEntry({
           provider: buildOpenrouterProvider(),
         }),
       },
-      resolveDynamicModel: (ctx) => buildDynamicOpenRouterModel(ctx),
+      resolveDynamicModel: buildDynamicOpenRouterModel,
+      // Resolve the catalog model even when a configured row already exists.
+      preferRuntimeResolvedModel: (ctx) => {
+        const configuredProvider = findNormalizedProviderValue(
+          ctx.config?.models?.providers,
+          PROVIDER_ID,
+        );
+        const requestedId = normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId;
+        const configuredModel = configuredProvider?.models?.find(
+          (model) => (normalizeOpenRouterApiModelId(model.id) ?? model.id) === requestedId,
+        );
+        return (
+          configuredModel !== undefined &&
+          isOpenRouterCatalogRoute({
+            api: configuredModel.api ?? configuredProvider?.api,
+            baseUrl: configuredModel.baseUrl ?? configuredProvider?.baseUrl,
+          })
+        );
+      },
       prepareDynamicModel: async (ctx) => {
         await loadOpenRouterModelCapabilities(
           normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId,
@@ -346,12 +357,18 @@ export default defineSingleProviderPluginEntry({
         }
         return /provider returned error/i.test(errorMessage) ? "timeout" : undefined;
       },
-      ...passthroughGeminiReplayHooks,
-      buildReplayPolicy: buildOpenRouterReplayPolicy,
+      buildReplayPolicy: ({ modelId }) => ({
+        ...buildPassthroughGeminiSanitizingReplayPolicy(modelId),
+        // Mistral requires 9-character base62 tool-call ids even through OpenRouter (#58012).
+        ...(isOpenRouterMistralModelId(modelId)
+          ? { sanitizeToolCallIds: true, toolCallIdMode: "strict9" as const }
+          : {}),
+      }),
       normalizeToolSchemas: normalizeOpenRouterToolSchemas,
       inspectToolSchemas: inspectOpenRouterToolSchemas,
       resolveReasoningOutputMode: () => "native",
-      resolveThinkingProfile: (ctx) => resolveOpenRouterThinkingProfile(ctx.modelId, ctx),
+      resolveThinkingProfile: (ctx) =>
+        resolveOpenRouterThinkingProfile(ctx.modelId, withOpenRouterCatalogThinking(ctx)),
       isModernModelRef: () => true,
       resolveSystemPromptContribution: resolveOpenRouterFusionPromptContribution,
       extraParamsForTransport: resolveOpenRouterExtraParamsForTransport,
@@ -371,6 +388,7 @@ export default defineSingleProviderPluginEntry({
           baseUrl: ctx.config.models?.providers?.openrouter?.baseUrl,
           request: ctx.config.models?.providers?.openrouter?.request,
           timeoutMs: ctx.timeoutMs,
+          signal: ctx.signal,
           fetchFn: ctx.fetchFn,
         }),
     };

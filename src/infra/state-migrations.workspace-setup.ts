@@ -38,7 +38,6 @@ import {
   canonicalCoversParsedSource,
   importAndRecordReceipt,
   parseSource,
-  type SourceSnapshot,
 } from "./state-migrations.workspace-setup-store.js";
 import type {
   LegacyWorkspaceStateDetection,
@@ -285,7 +284,7 @@ function assertConfiguredWorkspaceIdentity(source: LegacyWorkspaceStateSource): 
 
 async function cleanupReceiptSource(params: {
   sourceRoot: Root;
-  sourceClaim: LegacyMigrationSourceClaim<SourceSnapshot>;
+  sourceClaim: LegacyMigrationSourceClaim;
   source: LegacyWorkspaceStateSource;
   receipt: MigrationReceipt;
   env: NodeJS.ProcessEnv;
@@ -395,7 +394,7 @@ async function migrateOneSource(params: {
   beforeClaim?: (source: LegacyWorkspaceStateSource) => void;
   removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
-  let sourceClaim: LegacyMigrationSourceClaim<SourceSnapshot>;
+  let sourceClaim: LegacyMigrationSourceClaim;
   let sourceRoot: Root;
   const unreadable = (error: unknown): MigrationMessages => ({
     changes: [],
@@ -426,6 +425,7 @@ async function migrateOneSource(params: {
   let hasSource: boolean;
   let hasClaim: boolean;
   try {
+    await sourceClaim.recoverLinkedMove();
     hasSource = await sourceClaim.exists();
     hasClaim = await sourceClaim.exists(true);
   } catch (error) {
