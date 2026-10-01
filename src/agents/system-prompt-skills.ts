@@ -1,3 +1,5 @@
+import { parseSkillsPromptCatalog } from "../skills/loading/skill-prompt-catalog.js";
+
 export function buildSkillsSection(params: {
   skillsPrompt?: string;
   readToolName: string;
@@ -6,14 +8,15 @@ export function buildSkillsSection(params: {
   installedSkillRead?: boolean;
 }) {
   const trimmed = params.skillsPrompt?.trim();
-  if (!trimmed && !params.installedSkillSearch) {
-    return [];
+  const hasListedSkills = parseSkillsPromptCatalog(trimmed ?? "").length > 0;
+  if (!hasListedSkills && !params.installedSkillSearch) {
+    return trimmed ? ["## Skills", trimmed, ""] : [];
   }
   return [
     "## Skills",
-    ...(trimmed
+    ...(hasListedSkills
       ? ["Scan <available_skills> for a matching workflow."]
-      : ["Installed skills are available, but their directory is not listed in this prompt."]),
+      : ["No skill entries are listed in this prompt."]),
     params.codeModeActive && params.installedSkillRead
       ? 'Known name or clear match: use `skills.read("<name>")` inside `exec`; read the complete instructions before task actions and follow them.'
       : params.installedSkillRead
@@ -21,7 +24,7 @@ export function buildSkillsSection(params: {
         : `Clear match: read exact <location> with \`${params.readToolName}\`; obey.`,
     ...(params.installedSkillSearch
       ? [
-          `Before work involving files, specialized tools, or a reusable workflow, ${trimmed ? "use a listed match or search" : "search"} with ${params.codeModeActive ? "`skills.search(query)` inside `exec`" : "`skills_search`"} for an applicable skill. Read the best match before implementing the workflow yourself.`,
+          `Before work involving files, specialized tools, or a reusable workflow, ${hasListedSkills ? "use a listed match or search" : "search"} with ${params.codeModeActive ? "`skills.search(query)` inside `exec`" : "`skills_search`"} for an applicable skill. Read the best match before implementing the workflow yourself.`,
           "Search by the task goal and distinctive terms. Simple conversation or a self-contained answer does not need a search. Search covers installed skills; it does not install skills.",
         ]
       : []),
