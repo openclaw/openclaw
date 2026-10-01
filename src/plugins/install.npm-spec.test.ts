@@ -81,14 +81,7 @@ function successfulSpawn(stdout = "") {
 }
 
 function failedSpawn(stderr: string, stdout = "") {
-  return {
-    code: 1,
-    stdout,
-    stderr,
-    signal: null,
-    killed: false,
-    termination: "exit" as const,
-  };
+  return { ...successfulSpawn(stdout), code: 1, stderr };
 }
 
 function npmViewArgs(spec: string): string[] {
