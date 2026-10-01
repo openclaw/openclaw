@@ -84,12 +84,26 @@ describeTelegramDispatch("Telegram provider preview hook safety", () => {
       expectDispatchParams({
         replyOptions: expect.objectContaining({
           onPartialReply: undefined,
-          disableBlockStreaming: undefined,
+          disableBlockStreaming: false,
           forceToolResultProgress: false,
         }),
       });
     },
   );
+
+  it("preserves an explicit global block-streaming opt-out when hooks suppress previews", async () => {
+    registerHooks("message_sending");
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      cfg: { agents: { defaults: { blockStreamingDefault: "off" } } },
+    });
+
+    expectDispatchParams({
+      replyOptions: expect.objectContaining({ disableBlockStreaming: true }),
+    });
+  });
 
   it("suppresses previews when both modifying hooks are registered", async () => {
     registerHooks("reply_payload_sending", "message_sending");
