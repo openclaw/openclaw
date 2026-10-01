@@ -1378,71 +1378,72 @@ describe("dispatchReplyFromConfig", () => {
     }
   });
 
-  it("keeps group participants pending until the active reply operation completes", async () => {
-    setNoAbort();
-    const { createRuntimeChannel } = await import("../../plugins/runtime/runtime-channel.js");
-    const lowLevelDispatch = createRuntimeChannel().reply.dispatchReplyFromConfig;
-    const sessionKey = "agent:main:telegram:group:123";
-    const activeOperation = createReplyOperation({
-      sessionKey,
-      sessionId: "active-session",
-      resetTriggered: false,
-    });
-    activeOperation.setPhase("running");
-    const cfg: OpenClawConfig = {
-      ...emptyConfig,
-      agents: { entries: { main: {} } },
-      broadcast: { "telegram:123": ["main"] },
-    };
-    const group = expectDefined(
-      resolveGroupThreadConfig({ cfg, channel: "telegram", peerId: "123" }),
-      "expected configured group thread",
-    );
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async () => ({ text: "participant final" }) satisfies ReplyPayload);
-    const resultPromise = runGroupThread({
-      cfg,
-      group,
-      channel: "telegram",
-      peerId: "123",
-      messageId: "group-pending-turn",
-      text: "Discuss the proposal",
-      runTurn: (turn) =>
-        lowLevelDispatch({
-          ctx: buildTestCtx({
-            Provider: "telegram",
-            Surface: "telegram",
-            ChatType: "group",
-            SessionKey: sessionKey,
-            MessageSid: turn.messageId,
-            BodyForAgent: "Discuss the proposal",
-          }),
-          cfg,
-          dispatcher,
-          replyResolver,
-        }),
-    });
-    let settled = false;
-    void resultPromise.then(() => {
-      settled = true;
-    });
-
-    try {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
+  it.each(["core", "low-level"] as const)(
+    "lets %s group participants reach queue resolution while a reply operation is active",
+    async (entry) => {
+      setNoAbort();
+      const { createRuntimeChannel } = await import("../../plugins/runtime/runtime-channel.js");
+      const dispatch =
+        entry === "core"
+          ? dispatchReplyFromConfig
+          : createRuntimeChannel().reply.dispatchReplyFromConfig;
+      const sessionKey = "agent:main:telegram:group:123";
+      const activeOperation = createReplyOperation({
+        sessionKey,
+        sessionId: "active-session",
+        resetTriggered: false,
       });
-      expect(replyResolver).not.toHaveBeenCalled();
-      expect(settled).toBe(false);
-      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-      activeOperation.complete();
-      await expect(resultPromise).resolves.toMatchObject({ turnsStarted: 1, failedTurns: 0 });
-      expect(replyResolver).toHaveBeenCalledOnce();
-      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "participant final" });
-    } finally {
-      activeOperation.complete();
-      await resultPromise;
-    }
-  });
+      activeOperation.setPhase("running");
+      const cfg: OpenClawConfig = {
+        ...emptyConfig,
+        agents: { entries: { main: {} } },
+        broadcast: { "telegram:123": ["main"] },
+      };
+      const group = expectDefined(
+        resolveGroupThreadConfig({ cfg, channel: "telegram", peerId: "123" }),
+        "expected configured group thread",
+      );
+      const dispatcher = createDispatcher();
+      // Queue policy runs while the earlier participant turn still owns the session.
+      const replyResolver = vi.fn(async () => {
+        expect(activeOperation.result).toBeNull();
+        activeOperation.abortByUser();
+        activeOperation.complete();
+        return { text: "participant final" } satisfies ReplyPayload;
+      });
+      const resultPromise = runGroupThread({
+        cfg,
+        group,
+        channel: "telegram",
+        peerId: "123",
+        messageId: "group-busy-turn",
+        text: "Discuss the proposal",
+        runTurn: (turn) =>
+          dispatch({
+            ctx: buildTestCtx({
+              Provider: "telegram",
+              Surface: "telegram",
+              ChatType: "group",
+              SessionKey: sessionKey,
+              MessageSid: turn.messageId,
+              BodyForAgent: "Discuss the proposal",
+            }),
+            cfg,
+            dispatcher,
+            replyResolver,
+          }),
+      });
+
+      try {
+        await vi.waitFor(() => expect(replyResolver).toHaveBeenCalledOnce());
+        await expect(resultPromise).resolves.toMatchObject({ turnsStarted: 1, failedTurns: 0 });
+        expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "participant final" });
+      } finally {
+        activeOperation.complete();
+        await Promise.allSettled([resultPromise]);
+      }
+    },
+  );
 
   it("lets Gateway-owned turns reach queue resolution while a reply operation is active", async () => {
     setNoAbort();

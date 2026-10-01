@@ -27,15 +27,16 @@ export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
-  return await dispatchReplyFromConfigWithQueuePolicy(params, false);
+  // A group-thread participant has no turn-adoption lifecycle (the root's stays with the
+  // coordinator), so it reaches queue policy here, like any channel turn with its own lifecycle.
+  return await dispatchReplyFromConfigWithQueuePolicy(params, getGroupThreadTurn() !== undefined);
 }
 
 /** Low-level plugin dispatch must reach queue policy before waiting on the active reply owner. */
 export async function dispatchLowLevelChannelReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
-  // A group coordinator must retain this turn until execution, not just queue publication.
-  return await dispatchReplyFromConfigWithQueuePolicy(params, !getGroupThreadTurn());
+  return await dispatchReplyFromConfigWithQueuePolicy(params, true);
 }
 
 async function dispatchReplyFromConfigWithQueuePolicy(

@@ -249,6 +249,12 @@ responding participant's session, and local media resolves with that participant
 media roots. This also applies to qualified entries with one participant, whose
 replies do not have a participant name label.
 
+A participant that is still answering an earlier message handles a new one with
+its session's [queue mode](/concepts/queue), like a single agent would: steered
+into the running turn or queued for a later turn. A queued reply, including a
+[stalled-turn recovery](/concepts/queue#troubleshooting), is delivered to the
+group without a participant name label and does not feed follow-up rounds.
+
 On WhatsApp, one input is shared on purpose: the **group context buffer** (recent group messages used for context) is shared per peer, so all broadcast agents see the same context when triggered. It is cleared once after the fan-out completes.
 
 This allows each agent to have different personalities, models, skills, and tool access (for example read-only vs. read-write).
@@ -484,6 +490,7 @@ type BroadcastConfig = {
 3. **Rate limits:** participants share the channel account’s transport limits; one turn can produce several platform messages.
 4. **Recovery:** round and turn-budget state is in memory and cannot resume after a Gateway restart.
 5. **Control UI:** a dedicated team-thread session is not yet available. Each participant keeps its own session.
+6. **Queued participant replies:** a reply from a participant's queued turn has no name label and is not part of follow-up rounds.
 
 ## Related
 

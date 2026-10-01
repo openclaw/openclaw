@@ -1,0 +1,186 @@
+title: Group-thread participant stall recovery and busy queueing
+
+scenario:
+  id: group-thread-participant-queue
+  surface: runtime
+  coverage:
+    primary:
+      - channels.broadcast-groups
+    secondary:
+      - agent-runtime.failure-recovery
+      - channels.room-session-group-messages
+  objective: Verify a group-thread participant turn aborted by the stuck-session detector before output recovers in the group, and that a group message for a busy participant follows its session's queue mode and is answered.
+  successCriteria:
+    - Scenario is mock-openai only so live lanes do not pick it up implicitly.
+    - The participant's stalled group turn loops on failing model requests until the QA-tuned stuck detector aborts it.
+    - Exactly one model request carries the stalled-turn recovery context, and the group receives the recovered answer exactly once and no "stopped making progress" notice.
+    - A group message that reaches the participant while its session is busy is queued and answered in the group exactly once.
+  docsRefs:
+    - docs/channels/broadcast-groups.md
+    - docs/concepts/queue.md
+  codeRefs:
+    - src/auto-reply/group-thread-dispatch.ts
+    - src/auto-reply/reply/dispatch-from-config.ts
+    - src/auto-reply/reply/stalled-turn-recovery.ts
+  gatewayConfigPatch:
+    diagnostics:
+      enabled: true
+    broadcast:
+      qa-channel:qa-group-room:
+        - qa
+      qa-channel:qa-busy-room:
+        - qa
+    messages:
+      queue:
+        mode: followup
+    models:
+      providers:
+        mock-openai:
+          # Keep the held request abortable by stuck recovery rather than timing out first.
+          timeoutSeconds: 45
+  gatewayRuntime:
+    env:
+      # Minimum QA-accepted stuck-session abort bound (production uses minutes).
+      QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS: "30000"
+  execution:
+    kind: flow
+    summary: Verify a stalled group-thread participant turn recovers in the group and a busy participant queues and answers a group message.
+    suiteIsolation: isolated
+    isolationReason: Needs QA-tuned stuck-session diagnostics and a shorter provider allowance on a fresh gateway.
+    retryCount: 0
+    config:
+      requiredProviderMode: mock-openai
+      requiredProvider: mock-openai
+      conversationId: qa-group-room
+      # A second room gives the busy step its own participant session and mock stall state.
+      busyConversationId: qa-busy-room
+      busySessionKey: agent:qa:qa-channel:group:qa-busy-room
+      promptSnippet: Stalled turn recovery QA check
+      prompt: "Stalled turn recovery QA check: I'm travelling to Lisbon next week. What should I pack? Include the exact marker STALLED-TURN-RECOVERED-OK."
+      expectedReply: STALLED-TURN-RECOVERED-OK
+      queuedSnippet: Repeated request queued reply Gateway QA check
+      queuedPrompt: Repeated request queued reply Gateway QA check. Reply with the fixture marker.
+      queuedReply: GATEWAY_REPEATED_REQUEST_QUEUED_OK
+      recoveryNeedle: previous turn stopped making progress
+      forbiddenNotices:
+        - Please try again
+        - stopped making progress
+
+flow:
+  steps:
+    - name: recovers a stalled participant turn in the group
+      actions:
+        - assert:
+            expr: "env.providerMode === 'mock-openai'"
+            message: this seeded scenario is mock-openai only
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - resetTransport: true
+        - set: groupOutboundSince
+          value:
+            expr: "(conversationId, startIndex) => state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(startIndex).filter((message) => message.conversation.id === conversationId).map((message) => String(message.text ?? ''))"
+        - set: classifyRequestsAfter
+          value:
+            expr: "async (cursor) => (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${cursor}`)).map((request) => { const prompt = String(request.prompt ?? ''); return { cursor: request.cursor, outcome: request.outcome, kind: prompt.includes(config.recoveryNeedle) ? 'recovery' : prompt.includes(config.queuedSnippet) ? 'queued' : prompt.includes(config.promptSnippet) ? 'stalled' : 'other' }; })"
+        - set: waitForIdleSession
+          value:
+            expr: "() => waitForCondition(async () => { const last = (await env.gateway.call('diagnostics.stability', { type: 'session.state', limit: 20 })).events.at(-1); return last?.outcome === 'idle' && last.queueDepth === 0 ? true : undefined; }, 60000, 250)"
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: group
+            senderId: qa-traveler
+            senderName: QA Traveler
+            text:
+              ref: config.prompt
+        # A regressed notice fails fast.
+        - call: waitForCondition
+          args:
+            - lambda:
+                expr: "(() => { const texts = groupOutboundSince(config.conversationId, outboundStartIndex); if (texts.some((text) => config.forbiddenNotices.some((needle) => text.includes(needle)))) { throw new Error(`stalled-turn notice sent instead of recovery: ${JSON.stringify(texts)}`); } return texts.some((text) => text.includes(config.expectedReply)) || undefined; })()"
+            - 300000
+            - 250
+        - call: waitForIdleSession
+        - set: recoveryTexts
+          value:
+            expr: "groupOutboundSince(config.conversationId, outboundStartIndex)"
+        - set: recoveryRequests
+          value:
+            expr: "await classifyRequestsAfter(requestCursorBefore)"
+        - assert:
+            expr: "recoveryTexts.length === 1 && recoveryTexts[0].includes(config.expectedReply)"
+            message:
+              expr: "`expected only the recovered answer in the group: ${JSON.stringify(recoveryTexts)}`"
+        - assert:
+            expr: "recoveryRequests.filter((request) => request.kind === 'stalled').length >= 5 && recoveryRequests.filter((request) => request.kind === 'stalled').every((request) => request.outcome === 'error')"
+            message:
+              expr: "`expected the participant turn to loop on failing model requests before recovery: ${JSON.stringify(recoveryRequests)}`"
+        - assert:
+            expr: "recoveryRequests.filter((request) => request.kind === 'recovery').length === 1 && recoveryRequests.find((request) => request.kind === 'recovery')?.outcome === 'success'"
+            message:
+              expr: "`expected exactly one successful recovery request: ${JSON.stringify(recoveryRequests)}`"
+      detailsExpr: "`group=${JSON.stringify(recoveryTexts)}\\nrequests=${JSON.stringify(recoveryRequests)}`"
+    - name: queues a group message for a busy participant
+      actions:
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        # qa-channel handles inbound serially, so a Web UI turn keeps the participant session busy.
+        - call: env.gateway.call
+          args:
+            - chat.send
+            - sessionKey:
+                ref: config.busySessionKey
+              message:
+                ref: config.prompt
+              deliver: false
+              idempotencyKey: group-thread-participant-busy
+        - call: waitForCondition
+          args:
+            - lambda:
+                expr: "(async () => (await classifyRequestsAfter(requestCursorBefore)).some((request) => request.kind === 'stalled') || undefined)()"
+            - 60000
+            - 250
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.busyConversationId
+              kind: group
+            senderId: qa-member
+            senderName: QA Member
+            text:
+              ref: config.queuedPrompt
+        - call: waitForCondition
+          args:
+            - lambda:
+                expr: "groupOutboundSince(config.busyConversationId, outboundStartIndex).some((text) => text.includes(config.queuedReply)) || undefined"
+            - 180000
+            - 250
+        - call: waitForIdleSession
+        - set: queuedTexts
+          value:
+            expr: "groupOutboundSince(config.busyConversationId, outboundStartIndex)"
+        - set: queuedRequests
+          value:
+            expr: "(await classifyRequestsAfter(requestCursorBefore)).filter((request) => request.kind === 'queued')"
+        - assert:
+            expr: "queuedTexts.length === 1 && queuedTexts[0].includes(config.queuedReply)"
+            message:
+              expr: "`expected only the queued member reply in the group: ${JSON.stringify(queuedTexts)}`"
+        - assert:
+            expr: "queuedRequests.length === 1 && queuedRequests[0].outcome === 'success'"
+            message:
+              expr: "`expected one model request for the queued member message: ${JSON.stringify(queuedRequests)}`"
+      detailsExpr: "`group=${JSON.stringify(queuedTexts)}\\nqueuedRequests=${JSON.stringify(queuedRequests)}`"

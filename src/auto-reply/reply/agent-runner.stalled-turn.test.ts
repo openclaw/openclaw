@@ -462,7 +462,7 @@ describe("runReplyAgent stalled turn continuation", () => {
     },
   );
 
-  it("leaves the notice with a group-thread participant whose source declares no reply owner", async () => {
+  it("leaves the notice with a source that declares no queued reply owner", async () => {
     const stalled = createStalledRun({
       queuedFollowupReplyDisposition: { kind: "drop", reason: "source-unavailable" },
     });

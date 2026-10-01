@@ -68,8 +68,8 @@ export function continueStalledReplyTurn({
     );
     return true;
   }
-  // Group-thread participants declare no queued reply owner, so a recovery's
-  // answer would be dropped; leave the notice with the stalled turn's dispatch.
+  // A source that declares no queued reply owner would drop the recovery's answer;
+  // leave the notice with the stalled turn's dispatch.
   if (followupRun.queuedFollowupReplyDisposition?.kind === "drop") {
     return false;
   }
