@@ -1,3 +1,4 @@
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -524,56 +525,58 @@ export async function enqueueRun(
   const scheduleOwnershipAtMs = state.deps.nowMs();
   const runId = `manual:${id}:${scheduleOwnershipAtMs}:${nextManualRunId++}`;
   const terminalTracker: ManualRunTerminalTracker = { emitted: false };
-  void runWithGatewayIndependentRootWorkContinuation(
-    () =>
-      enqueueCommandInLane(
-        CommandLane.Cron,
-        async (owningCronLaneTaskMarker) => {
-          const result = await run(state, id, mode, {
-            runId,
-            scheduleOwnershipAtMs,
-            terminalTracker,
-            owningCronLaneTaskMarker,
-            ...(opts?.commitGuard ? { commitGuard: opts.commitGuard } : {}),
-          });
-          if (result.ok && "ran" in result && !result.ran) {
-            if (result.reason !== "invalid-spec") {
-              const finishedAt = state.deps.nowMs();
-              const job = state.store?.jobs.find((entry) => entry.id === id);
-              emitCronRunFinished(
-                state,
-                {
-                  jobId: id,
-                  action: "finished",
-                  job,
-                  status: "skipped",
-                  error: `queued manual run skipped before execution: ${result.reason}`,
-                  runId,
-                  runAtMs: finishedAt,
-                  durationMs: 0,
-                  nextRunAtMs: job?.state.nextRunAtMs,
-                },
-                terminalTracker,
+  void runWithoutOwnedSessionTranscriptWrites(() =>
+    runWithGatewayIndependentRootWorkContinuation(
+      () =>
+        enqueueCommandInLane(
+          CommandLane.Cron,
+          async (owningCronLaneTaskMarker) => {
+            const result = await run(state, id, mode, {
+              runId,
+              scheduleOwnershipAtMs,
+              terminalTracker,
+              owningCronLaneTaskMarker,
+              ...(opts?.commitGuard ? { commitGuard: opts.commitGuard } : {}),
+            });
+            if (result.ok && "ran" in result && !result.ran) {
+              if (result.reason !== "invalid-spec") {
+                const finishedAt = state.deps.nowMs();
+                const job = state.store?.jobs.find((entry) => entry.id === id);
+                emitCronRunFinished(
+                  state,
+                  {
+                    jobId: id,
+                    action: "finished",
+                    job,
+                    status: "skipped",
+                    error: `queued manual run skipped before execution: ${result.reason}`,
+                    runId,
+                    runAtMs: finishedAt,
+                    durationMs: 0,
+                    nextRunAtMs: job?.state.nextRunAtMs,
+                  },
+                  terminalTracker,
+                );
+              }
+              state.deps.log.info(
+                { jobId: id, runId, reason: result.reason },
+                "cron: queued manual run skipped before execution",
               );
             }
-            state.deps.log.info(
-              { jobId: id, runId, reason: result.reason },
-              "cron: queued manual run skipped before execution",
-            );
-          }
-          return result;
-        },
-        {
-          warnAfterMs: 5_000,
-          onWait: (waitMs, queuedAhead) => {
-            state.deps.log.warn(
-              { jobId: id, runId, waitMs, queuedAhead },
-              "cron: queued manual run waiting for an execution slot",
-            );
+            return result;
           },
-        },
-      ),
-    "cron:manual-run",
+          {
+            warnAfterMs: 5_000,
+            onWait: (waitMs, queuedAhead) => {
+              state.deps.log.warn(
+                { jobId: id, runId, waitMs, queuedAhead },
+                "cron: queued manual run waiting for an execution slot",
+              );
+            },
+          },
+        ),
+      "cron:manual-run",
+    ),
   ).catch((err: unknown) => {
     if (terminalTracker.emitted) {
       state.deps.log.error(
