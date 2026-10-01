@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   assertStateDatabaseAccessAllowed,
+  getStateDatabaseSchemaLease,
   GatewayStateOwnerContentionError,
 } from "../infra/gateway-state-owner.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
@@ -33,6 +34,7 @@ import {
   StateSchemaMutationConflictError,
   withStateDatabaseSchemaMaintenance,
 } from "../infra/state-database-maintenance.js";
+import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   type OpenClawStateSchemaReadAdmission,
@@ -238,7 +240,13 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
     return;
   }
   const env = options.env ?? process.env;
-  if (!options.openStateSchemaReadAdmission) {
+  // Offline admission belongs to this process. Its live scope/lease cannot be
+  // borrowed by a native reader child; retain the private-copy path instead.
+  if (
+    !options.openStateSchemaReadAdmission &&
+    !getOpenClawDatabaseMaintenanceScope() &&
+    !getStateDatabaseSchemaLease(databasePath)
+  ) {
     const ownershipJson = await runSqliteReadOnlyWorker(databasePath, {
       mode: "state-ownership",
       signal: options.signal,
