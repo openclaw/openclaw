@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -19,6 +20,7 @@ import {
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const mocks = vi.hoisted(() => ({
   spawn: vi.fn(),
@@ -105,6 +107,59 @@ describe("canary teardown evidence", () => {
     mocks.port.mockResolvedValue(43_123);
     stubHealthyGateway();
   });
+
+  it("propagates initial progress refusal before snapshot admission", async () => {
+    const refusal = new Error("initial progress receipt was refused");
+    const onStep = vi.fn();
+    await expect(
+      validateUpdateCandidateCanary({
+        ...canaryStateOptions(3_000),
+        onProgress: vi.fn().mockRejectedValue(refusal),
+        onStep,
+      }),
+    ).rejects.toBe(refusal);
+    expect(mocks.snapshot).not.toHaveBeenCalled();
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    expect(onStep).not.toHaveBeenCalled();
+  });
+
+  it.each(["candidate-state-snapshot", "candidate-doctor", "candidate-gateway-startup"])(
+    "propagates a settled %s receipt refusal once after owned cleanup",
+    async (stepName) => {
+      let copiedStateDir: string | undefined;
+      mocks.snapshot.mockImplementation(async (_command, options: { input: string }) => {
+        const request: unknown = JSON.parse(options.input);
+        if (isRecord(request) && request.mode === "snapshot") {
+          if (typeof request.targetStateDir !== "string") {
+            throw new Error("Snapshot fixture requires its owned target directory");
+          }
+          copiedStateDir = request.targetStateDir;
+        }
+        return createCanarySnapshotResult(options.input);
+      });
+      const refusal = new Error("completion receipt was refused");
+      let refused = false;
+      const onStep = vi.fn(async (step: UpdateStepResult) => {
+        if (step.name === stepName && !refused) {
+          refused = true;
+          throw refusal;
+        }
+      });
+      await expect(
+        validateUpdateCandidateCanary({ ...canaryStateOptions(3_000), onStep }),
+      ).rejects.toBe(refusal);
+      expect(onStep.mock.calls.filter(([step]) => step.name === stepName)).toEqual([
+        [expect.objectContaining({ exitCode: 0 })],
+      ]);
+      for (const child of children.values()) {
+        expect(child.exitCode).toBe(0);
+      }
+      if (!copiedStateDir) {
+        throw new Error("Candidate did not create its private state copy");
+      }
+      await expect(fs.access(copiedStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
   it.each(["before-deadline", "after-deadline"] as const)(
     "retains uncertain cleanup progress after custody succeeds (%s)",

@@ -344,7 +344,7 @@ export function createPluginDoctorStateMigrationContext(params: {
   if (params.trustedForDurableStores) {
     context.inspectCronJobs = async () => {
       params.repairAuthority?.assertCurrent();
-      const { inspectCronJobsForDoctor } = await import("../cron/store/doctor.js");
+      const { inspectCronJobsForDoctor } = await import("../commands/doctor/cron/store-repair.js");
       params.repairAuthority?.assertCurrent();
       const inventory = await inspectCronJobsForDoctor(params);
       params.repairAuthority?.assertCurrent();
@@ -354,7 +354,7 @@ export function createPluginDoctorStateMigrationContext(params: {
       const authority = params.repairAuthority;
       context.repairCronJobs = async (inventory, changes) => {
         authority.assertCurrent();
-        const { repairCronJobsForDoctor } = await import("../cron/store/doctor.js");
+        const { repairCronJobsForDoctor } = await import("../commands/doctor/cron/store-repair.js");
         authority.assertCurrent();
         return repairCronJobsForDoctor(params, authority, inventory, changes);
       };

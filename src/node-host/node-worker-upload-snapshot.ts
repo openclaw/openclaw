@@ -88,6 +88,7 @@ export async function withNodeWorkerUploadSnapshot<T>(
         stream: async (file, write, signal) => {
           signal?.throwIfAborted();
           await using handle = (await stagedRoot.open(file.name)).handle;
+          signal?.throwIfAborted();
           for await (const value of handle.createReadStream({ autoClose: false, signal })) {
             await write(Buffer.isBuffer(value) ? value : Buffer.from(value));
           }

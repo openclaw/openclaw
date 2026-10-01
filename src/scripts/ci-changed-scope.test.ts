@@ -152,6 +152,17 @@ describe("detectChangedScope", () => {
     [["scripts/install.sh"], { runNode: true, runChangedSmoke: true }],
     [[".github/workflows/install-smoke.yml"], { runNode: true, runChangedSmoke: true }],
     [["src/plugins/loader.ts"], { runNode: true, runChangedSmoke: true }],
+    [
+      ["packages/gateway-protocol/src/schema/messages.ts"],
+      {
+        runNode: true,
+        runChangedSmoke: true,
+        runMacos: true,
+        runMacosNode: true,
+        runIosBuild: true,
+        runAndroid: true,
+      },
+    ],
     [["src/plugins/loader.test.ts"], { runNode: true }],
   ])("selects only the owning lanes for %j", (paths, lanes) => {
     expect(detectChangedScope(paths)).toEqual(expectedScope(lanes));
@@ -301,6 +312,7 @@ describe("detectChangedScope", () => {
       execFileSync("git", ["config", "user.name", "CI"], { cwd: repoDir });
       for (const sourcePath of [
         "scripts/ci-changed-scope.mjs",
+        "scripts/native-protocol-inputs.json",
         "scripts/lib/arg-utils.runtime.mjs",
         "scripts/lib/changed-path-facts.mjs",
         "scripts/lib/ci-native-generated-scope.mjs",

@@ -492,6 +492,7 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
                 internalEvents: params.request.internalEvents,
                 runtimeContextFragments: params.client?.internal?.runtimeContextFragments,
                 inputProvenance: params.inputProvenance,
+                privateCompletion: prepared.userTurn.privateCompletion,
                 senderIsOwner,
                 sessionEffects: params.sessionEffects,
                 skipInitialSessionTouch: params.skipAgentInitialSessionTouch,

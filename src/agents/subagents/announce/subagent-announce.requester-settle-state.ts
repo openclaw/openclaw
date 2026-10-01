@@ -147,7 +147,7 @@ export function resolvePrivateSettlePolicy(
   completionRows: readonly SubagentRunRecord[],
   requesterYielded: boolean,
   state: RequesterSettleWakeBatchState,
-  requesterSessionId: string,
+  requester: { sessionId: string; lifecycleRevision?: string },
 ) {
   // One private result makes the aggregate private; public siblings keep their own route.
   const privateRows = completionRows.filter((entry) => entry.completionTarget === "parent");
@@ -158,7 +158,12 @@ export function resolvePrivateSettlePolicy(
   // Private findings stay bound to the requester incarnation that produced them.
   const privateBinding = {
     ...(parentOnly ? { completionTarget: "parent" as const } : {}),
-    ...(hasPrivateRows ? { completionRequesterSessionId: requesterSessionId } : {}),
+    ...(hasPrivateRows
+      ? {
+          completionRequesterSessionId: requester.sessionId,
+          completionRequesterLifecycleRevision: requester.lifecycleRevision,
+        }
+      : {}),
   };
   const admissionMarker = yieldedFinalDeliverable ? { yieldedFinalDeliverable: true as const } : {};
   // A yield owes the conversation a visible final unless private findings let the

@@ -401,12 +401,10 @@ extension OpenClawChatViewModel {
         -> Bool
     {
         let routing = OpenClawChatSessionRoutingContract.parse(sessionRoutingContract)
-        let incomingNormalized = ChatSessionNavigation.comparisonKey(
-            incoming, agentID: agentId, scope: routing?.scope, mainKey: routing?.mainKey)
-            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let currentNormalized = ChatSessionNavigation.comparisonKey(
-            current, agentID: activeAgentId, scope: routing?.scope, mainKey: routing?.mainKey)
-            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let incomingNormalized = OpenClawChatSessionKey.comparisonKey(ChatSessionNavigation.comparisonKey(
+            incoming, agentID: agentId, scope: routing?.scope, mainKey: routing?.mainKey))
+        let currentNormalized = OpenClawChatSessionKey.comparisonKey(ChatSessionNavigation.comparisonKey(
+            current, agentID: activeAgentId, scope: routing?.scope, mainKey: routing?.mainKey))
         if incomingNormalized == currentNormalized {
             if OpenClawChatSessionKey.agentID(from: currentNormalized) == nil {
                 // `global` is always agent-ambiguous. Ordinary exact keys can
@@ -426,7 +424,7 @@ extension OpenClawChatViewModel {
             return true
         }
 
-        let mainNormalized = mainSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let mainNormalized = OpenClawChatSessionKey.comparisonKey(mainSessionKey)
         if Self.matchesMainAlias(
             incoming: incomingNormalized,
             current: currentNormalized,

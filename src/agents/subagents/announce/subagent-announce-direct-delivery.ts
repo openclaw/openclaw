@@ -78,6 +78,7 @@ export type SubagentAnnounceDirectParams = {
   expectsCompletionMessage: boolean;
   completionTarget?: "parent";
   completionRequesterSessionId?: string;
+  completionRequesterLifecycleRevision?: string;
   requireVisibleReply?: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
@@ -205,7 +206,8 @@ export async function sendSubagentAnnounceDirectly(
     if (
       requesterSessionBound &&
       (!params.completionRequesterSessionId ||
-        requesterActivity.sessionId !== params.completionRequesterSessionId)
+        requesterActivity.sessionId !== params.completionRequesterSessionId ||
+        requesterEntry?.lifecycleRevision !== params.completionRequesterLifecycleRevision)
     ) {
       return {
         delivered: false,
@@ -378,7 +380,11 @@ export async function sendSubagentAnnounceDirectly(
     // turn would inherit that turn's delivery policy and expose child output.
     const directAgentParams: Record<string, unknown> = {
       ...(requesterSessionBound
-        ? { expectedExistingSessionId: params.completionRequesterSessionId }
+        ? {
+            expectedExistingSessionId: params.completionRequesterSessionId,
+            expectedExistingSessionLifecycleRevision:
+              params.completionRequesterLifecycleRevision ?? null,
+          }
         : {}),
       sessionKey: canonicalRequesterSessionKey,
       message: params.triggerMessage,
