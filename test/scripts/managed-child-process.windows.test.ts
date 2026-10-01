@@ -2,7 +2,7 @@ import { spawn as spawnChild, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi, type TestContext } from "vitest";
 import { stopChild } from "../../scripts/lib/gateway-bench-child.ts";
 import {
   inspectManagedProcessGroup,
@@ -14,8 +14,7 @@ import type { ManagedWindowsJob } from "../../scripts/lib/managed-windows-job.mt
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { createWindowsJobBindings } from "../../src/process/supervisor/service-child-windows-job-native.js";
 import { testing } from "../helpers/openclaw-test-instance.js";
-import { waitForFile } from "../helpers/process-wait.js";
-import { createDeferred } from "../helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const fault = vi.hoisted(() => {
@@ -36,8 +35,30 @@ vi.mock("../../scripts/lib/managed-windows-job.mts", async (original) => {
     },
   };
 });
-const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+const joinedTestBodies = new WeakMap<TestContext, Promise<unknown>>();
+const joinTestBody = (context: TestContext) => joinedTestBodies.get(context)?.catch(() => {});
+function joinedCase<T>(body: (value: T, context: TestContext) => Promise<void>) {
+  return (value: T, context: TestContext) => {
+    const run = Promise.resolve().then(() => {
+      context.signal.throwIfAborted();
+      return body(value, context);
+    });
+    joinedTestBodies.set(context, run);
+    context.onTestFinished(() => run);
+    return run;
+  };
+}
+// Both teardown owners retain the timed-out body; onTestFinished reports any late error.
+const dirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async (context) => {
+    await joinTestBody(context);
+    cleanup();
+  }),
+);
+afterEach(async (context) => {
+  await joinTestBody(context);
+  vi.restoreAllMocks();
+});
 
 it.runIf(process.platform === "win32")(
   "retains the benchmark termination receipt on the original Windows child",
@@ -91,10 +112,10 @@ it.runIf(process.platform === "win32")(
   },
 );
 
-it.runIf(process.platform === "win32").each(["abort", "normal exit"])(
+it.runIf(process.platform === "win32").for(["abort", "normal exit"])(
   "joins native Job descendants with independent output after %s",
   { timeout: 30_000 },
-  async (mode) => {
+  joinedCase(async (mode, { signal }) => {
     const koffi = (await import("koffi")).default;
     createWindowsJobBindings(koffi).assertLayouts();
     createWindowsJobBindings(koffi).assertLayouts();
@@ -102,6 +123,7 @@ it.runIf(process.platform === "win32").each(["abort", "normal exit"])(
     const ready = path.join(root, "ready");
     const owner = createVitestResourceOwner(root);
     const warning = createDeferred<Error>();
+    const fixtureReady = createDeferred();
     vi.spyOn(process, "emitWarning").mockImplementation((value) => {
       if (value instanceof Error && "survivingPids" in value) {
         warning.resolve(value);
@@ -124,6 +146,7 @@ const descendant = spawn(process.execPath, ["-e", 'setInterval(() => process.std
 fs.closeSync(out);
 fs.writeFileSync(process.argv[1] + ".tmp", process.pid + " " + descendant.pid);
 fs.renameSync(process.argv[1] + ".tmp", process.argv[1]);
+process.stdout.write("fixture ready\\n");
 ${mode === "normal exit" ? 'process.stdin.once("data", () => process.exit(0));' : "setInterval(() => {}, 1000);"}
 `,
         ready,
@@ -133,6 +156,13 @@ ${mode === "normal exit" ? 'process.stdin.once("data", () => process.exit(0));' 
       shell: false,
       signal: abort.signal,
       onReady: (child) => {
+        let output = "";
+        child.stdout?.on("data", (chunk) => {
+          output += String(chunk);
+          if (output.includes("fixture ready\n")) {
+            fixtureReady.resolve();
+          }
+        });
         leaderClosed = once(child, "close");
         void leaderClosed.catch(() => {});
       },
@@ -148,12 +178,14 @@ ${mode === "normal exit" ? 'process.stdin.once("data", () => process.exit(0));' 
     });
     const outcome = command.catch((error: unknown) => error);
     try {
-      await Promise.race([
-        waitForFile(ready, 10_000),
-        outcome.then((error) => {
-          throw new Error("command completed before descendant readiness", { cause: error });
-        }),
-      ]);
+      await withinTest(
+        awaitGateBeforeSettlement(
+          fixtureReady.promise,
+          outcome,
+          "command completed before descendant readiness",
+        ),
+        signal,
+      );
       const pids = (await fs.readFile(ready, "utf8")).trim().split(/\s+/u).map(Number);
       const descendantPid = pids[1] ?? 0;
       commandPid = pids[0] ?? 0;
@@ -170,15 +202,21 @@ ${mode === "normal exit" ? 'process.stdin.once("data", () => process.exit(0));' 
         }
         fault.child.stdin.end("exit\n");
       }
-      const observation = await Promise.race([
-        warning.promise,
-        outcome.then((error) => {
-          throw new Error("cleanup settled before recording the surviving descendant", {
-            cause: error,
-          });
-        }),
-      ]);
-      await leaderClosed;
+      const observation = await withinTest(
+        Promise.race([
+          warning.promise,
+          outcome.then((error) => {
+            throw new Error("cleanup settled before recording the surviving descendant", {
+              cause: error,
+            });
+          }),
+        ]),
+        signal,
+      );
+      if (!leaderClosed) {
+        throw new Error("Expected native Job launcher close observer");
+      }
+      await withinTest(leaderClosed, signal);
       expect(fault.child.stdout?.closed && fault.child.stderr?.closed).toBe(true);
       expect(fault.job?.stop).toHaveBeenCalled();
       expect(fault.job?.inspect()).toContain(descendantPid);
@@ -203,5 +241,5 @@ ${mode === "normal exit" ? 'process.stdin.once("data", () => process.exit(0));' 
       expect(await outcome).toBe(0);
     }
     owner.assertReleased();
-  },
+  }),
 );
