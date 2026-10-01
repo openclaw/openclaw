@@ -165,6 +165,7 @@ export type CodexThreadConfigurationContext = CodexThreadPromptContext &
     | "authoredContextTokenCap"
     | "bootstrapContextMode"
     | "scheduledRuntimeAuthority"
+    | "requireWorkspaceOnly"
   >;
 
 /** Common deterministic start/resume/fork fields; no run resources or unsupported setters. */
@@ -223,7 +224,9 @@ export function buildThreadStartParams(
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     serviceName: "OpenClaw",
     threadSource: "openclaw",
-    ...resolveCodexThreadEnvironmentSelection(options),
+    ...resolveCodexThreadEnvironmentSelection(
+      params.requireWorkspaceOnly === true ? { nativeCodeModeEnabled: false } : options,
+    ),
     // Codex 0.146 accepts canonical typed function and namespace specs natively.
     dynamicTools: [...options.dynamicTools],
     experimentalRawEvents: true,
@@ -367,6 +370,7 @@ export function isCodexNativeDelegationDisabledForRun(
   return (
     isCodexResponsesOAuthRun(params) ||
     params.delegationCapability === "report_only" ||
+    params.requireWorkspaceOnly === true ||
     params.pluginHarnessToolPolicyRestricted === true ||
     isMessageOnlyCodexSourceReply(params) ||
     (hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow))
@@ -395,7 +399,10 @@ export function buildCodexRuntimeThreadConfigForRun(
     isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow);
   const messageOnlySourceReply = isMessageOnlyCodexSourceReply(params);
   const restrictedToolSurface =
-    ringZeroActive || messageOnlySourceReply || params.pluginHarnessToolPolicyRestricted === true;
+    ringZeroActive ||
+    messageOnlySourceReply ||
+    params.pluginHarnessToolPolicyRestricted === true ||
+    params.requireWorkspaceOnly === true;
   const restrictedTurnDisablesProjectDocs =
     ringZeroActive ||
     messageOnlySourceReply ||
@@ -446,10 +453,14 @@ export function buildCodexRuntimeThreadConfigForRun(
       shouldDisableCodexToolSearchForModel(params.modelId)
         ? CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG
         : undefined,
-      messageOnlySourceReply || params.pluginHarnessToolPolicyRestricted === true
+      messageOnlySourceReply ||
+        params.pluginHarnessToolPolicyRestricted === true ||
+        params.requireWorkspaceOnly === true
         ? buildRestrictedToolConfigPatch(
             restrictedToolSurfaceMcpServerNames,
-            Boolean(params.scheduledRuntimeAuthority) && !isCodexResponsesOAuthRun(params),
+            Boolean(params.scheduledRuntimeAuthority) &&
+              !isCodexResponsesOAuthRun(params) &&
+              params.requireWorkspaceOnly !== true,
           )
         : buildCodexRingZeroThreadConfigPatch(
             params,
