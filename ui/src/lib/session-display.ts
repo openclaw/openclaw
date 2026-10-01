@@ -278,9 +278,9 @@ export function resolveSessionDisplayName(
   row?: SessionDisplayRow,
   options: SessionDisplayOptions = {},
 ): string {
-  const label = normalizeOptionalString(row?.label) ?? "";
-  const displayName = normalizeOptionalString(row?.displayName) ?? "";
-  const derivedTitle = normalizeOptionalString(row?.derivedTitle) ?? "";
+  const label = normalizeOptionalString(row?.label);
+  const displayName = normalizeOptionalString(row?.displayName);
+  const derivedTitle = normalizeOptionalString(row?.derivedTitle);
   const { kind, prefix, fallbackName, accountId: keyAccountId } = parseSessionKey(key);
   // The Gateway records the account on the row (src/gateway/session-classification.ts);
   // the key is parsed only for panes rendered before their row arrives.
