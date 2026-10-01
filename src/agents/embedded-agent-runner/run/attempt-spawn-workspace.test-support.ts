@@ -113,7 +113,7 @@ type AttemptSpawnWorkspaceHoisted = {
 
 type AttemptBaseMocks = Omit<AttemptSpawnWorkspaceHoisted, keyof ReturnType<typeof getSkillMocks>>;
 
-const baseHoisted = vi.hoisted((): AttemptBaseMocks => {
+const hoisted = vi.hoisted((): AttemptBaseMocks => {
   // Hoisted mocks must exist before the runner module graph is imported, because
   // runEmbeddedAttempt captures these dependencies at module load.
   const spawnSubagentDirectMock = vi.fn();
@@ -237,10 +237,8 @@ const baseHoisted = vi.hoisted((): AttemptBaseMocks => {
   };
 });
 
-const hoisted: AttemptSpawnWorkspaceHoisted = Object.assign(baseHoisted, getSkillMocks());
-
 export function getHoisted(): AttemptSpawnWorkspaceHoisted {
-  return hoisted;
+  return Object.assign(hoisted, getSkillMocks());
 }
 
 const emptyPluginIndex: PluginMetadataSnapshot["index"] = {
