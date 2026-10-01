@@ -1500,12 +1500,15 @@ describe("models.authLogout", () => {
     expect(error?.message).toContain("unavailable auth profiles");
   });
 
+  const sparseProfileIds: unknown[] = [];
+  sparseProfileIds.length = 1;
+
   it.each([
     { label: "empty", profileIds: [] },
     { label: "non-array", profileIds: "openrouter:oauth" },
     { label: "non-string", profileIds: ["openrouter:oauth", 1] },
     { label: "blank", profileIds: ["openrouter:oauth", " "] },
-    { label: "sparse", profileIds: new Array<string>(1) },
+    { label: "sparse", profileIds: sparseProfileIds },
   ])("rejects $label targeted profile ids", async ({ profileIds }) => {
     const opts = createLogoutOptions({ provider: "openrouter", profileIds });
 
