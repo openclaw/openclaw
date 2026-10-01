@@ -102,6 +102,7 @@ const CronStatusOutputSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const runEntry = CronRunLogEntrySchema.properties;
 const processInstanceId = Type.Optional(Type.String());
 const CronRunOutputSchema = Type.Union([
   Type.Object({ ok: Type.Literal(false), processInstanceId }, { additionalProperties: false }),
@@ -115,7 +116,24 @@ const CronRunOutputSchema = Type.Union([
       enqueued: Type.Literal(true),
       runId: Type.String(),
       processInstanceId,
-      run: Type.Optional(CronRunLogEntrySchema),
+      // The full history entry stays in the result; declare only the outcome fields so the
+      // generated action declarations stay within their shared size allowance.
+      run: Type.Optional(
+        Type.Object(
+          {
+            runId: runEntry.runId,
+            status: runEntry.status,
+            completionStatus: runEntry.completionStatus,
+            error: runEntry.error,
+            summary: runEntry.summary,
+            deliveryStatus: runEntry.deliveryStatus,
+            deliveryError: runEntry.deliveryError,
+            durationMs: runEntry.durationMs,
+          },
+          { additionalProperties: true },
+        ),
+      ),
+      finished: Type.Optional(Type.Literal(true)),
       note: Type.Optional(Type.String()),
     },
     { additionalProperties: false },

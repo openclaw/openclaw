@@ -174,12 +174,12 @@ function formatCronTerminalPresentation(
   }
 }
 
-function isOlderGatewayWithoutCompactCronList(error: unknown): boolean {
+function isOlderGatewayRejectingParam(error: unknown, method: string, param: string): boolean {
   return (
     error instanceof GatewayClientRequestError &&
     error.gatewayCode === "INVALID_REQUEST" &&
-    error.message.includes("invalid cron.list params") &&
-    error.message.includes("unexpected property 'compact'")
+    error.message.includes(`invalid ${method} params`) &&
+    error.message.includes(`unexpected property '${param}'`)
   );
 }
 
@@ -391,7 +391,10 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                     ...pageParams,
                   });
                 } catch (error) {
-                  if (!useCompactList || !isOlderGatewayWithoutCompactCronList(error)) {
+                  if (
+                    !useCompactList ||
+                    !isOlderGatewayRejectingParam(error, "cron.list", "compact")
+                  ) {
                     throw error;
                   }
                   // Protocol v4 gateways predating compact reject the additive field.
@@ -621,19 +624,32 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               parsedGatewayOpts.timeoutMs ?? 60_000,
               CRON_RUN_MAX_WAIT_MS,
             );
-            const result = await callGateway<Record<string, unknown>>(
-              "cron.run",
-              { ...gatewayOpts, timeoutMs: waitTimeoutMs + CRON_RUN_ENQUEUE_TIMEOUT_MS },
-              { id, mode: runMode, waitTimeoutMs },
-            );
-            return jsonResult(
-              result.enqueued === true && !result.run
-                ? {
-                    ...result,
-                    note: "Not finished yet: it is still running, or it runs in this session and starts after this turn. Its delivery follows the job settings. Check later with runs jobId runId; do not schedule a verification job.",
-                  }
-                : result,
-            );
+            let result: Record<string, unknown>;
+            try {
+              result = await callGateway(
+                "cron.run",
+                { ...gatewayOpts, timeoutMs: waitTimeoutMs + CRON_RUN_ENQUEUE_TIMEOUT_MS },
+                { id, mode: runMode, waitTimeoutMs },
+              );
+            } catch (error) {
+              // Shipped Gateways reject the param before enqueueing, so retrying cannot double-run.
+              if (!isOlderGatewayRejectingParam(error, "cron.run", "waitTimeoutMs")) {
+                throw error;
+              }
+              result = await callGateway("cron.run", gatewayOpts, { id, mode: runMode });
+            }
+            if (result.enqueued !== true || result.run) {
+              return jsonResult(result);
+            }
+            const followUp = managementAuthority?.managementOnly
+              ? "check it later on the Automations page"
+              : "check it later with runs jobId runId";
+            return jsonResult({
+              ...result,
+              note: result.finished
+                ? `Finished, but its run history is not visible to this turn (a one-shot may have deleted itself after succeeding); ${followUp} if needed.`
+                : `Not finished yet: it is still running, or it runs in this session and starts after this turn. Its delivery follows the job settings; ${followUp}. Do not schedule a verification job.`,
+            });
           }
           case "next_check": {
             const jobId = readCronSelfRemoveOnlyJobId(opts);

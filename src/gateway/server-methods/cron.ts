@@ -906,23 +906,35 @@ export const cronHandlers: GatewayRequestHandlers = {
         (job.sessionTarget === "main" ||
           resolveCronSessionTargetSessionKey(job.sessionTarget) === callerSessionKey);
       let run: unknown;
+      let finished = false;
       // cron.run stays an enqueue (#40192); waiting is opt-in and bounded by the caller.
       // The outcome is read through cron.runs so it honors the same history visibility.
-      if (
-        p.waitTimeoutMs !== undefined &&
-        "enqueued" in result &&
-        !runQueuesBehindCaller &&
-        (await context.cron.waitForManualRun(result.runId, p.waitTimeoutMs, options.signal))
-      ) {
-        await cronRunsHandler({
-          ...options,
-          params: { id: jobId, runId: result.runId, limit: 1 },
-          respond: (ok, page) => {
-            run = ok && isRecord(page) && Array.isArray(page.entries) ? page.entries[0] : undefined;
-          },
-        });
+      if (p.waitTimeoutMs !== undefined && "enqueued" in result && !runQueuesBehindCaller) {
+        finished = await context.cron.waitForManualRun(
+          result.runId,
+          p.waitTimeoutMs,
+          options.signal,
+        );
       }
-      respond(true, run ? { ...ack, run } : ack, undefined);
+      if (finished && "enqueued" in result) {
+        try {
+          await cronRunsHandler({
+            ...options,
+            params: { id: jobId, runId: result.runId, limit: 1 },
+            respond: (ok, page) => {
+              run =
+                ok && isRecord(page) && Array.isArray(page.entries) ? page.entries[0] : undefined;
+            },
+          });
+        } catch (error) {
+          // A delegated grant can lapse during a long wait; the accepted run must not turn
+          // into a request error, so return the ack without history instead.
+          if (!(error instanceof TypeError)) {
+            throw error;
+          }
+        }
+      }
+      respond(true, run ? { ...ack, run } : finished ? { ...ack, finished } : ack, undefined);
     },
   ),
   "cron.history": cronHistoryHandler,

@@ -648,6 +648,9 @@ export async function waitForManualRun(
   if (!settled) {
     return true;
   }
+  if (signal?.aborted) {
+    return false;
+  }
   const { promise, resolve } = createDeferredCore<boolean>();
   const timer = setSafeTimeout(() => resolve(false), timeoutMs);
   const onAbort = () => resolve(false);
