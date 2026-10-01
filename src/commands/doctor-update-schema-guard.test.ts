@@ -31,6 +31,7 @@ import * as backupVerify from "./backup-verify.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { guardUpdateDoctorSchemaUpgrade } from "./doctor-update-schema-guard.js";
+import { doctorCommand } from "./doctor.js";
 
 beforeEach(() => {
   // Exact 2026.9.2 package caller arguments; plugin deferral does not identify the schema phase.
@@ -146,6 +147,21 @@ it.each([false, true])(
     });
   },
 );
+
+it("guards externally managed repair before it can mutate update-owned schema", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = await legacyAgentFixture(true);
+
+    await expect(
+      doctorCommand(
+        runtime(),
+        { repair: true, externallyManaged: true, nonInteractive: true },
+        f.schemas,
+      ),
+    ).rejects.toMatchObject({ code: "update-schema-bump-unfenced" });
+    expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
+  });
+});
 
 it.each(["rollback phase", "different update"])(
   "refuses a delegated claim for the %s even under maintenance",

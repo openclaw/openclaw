@@ -1,4 +1,5 @@
 import type { RetiredAuthProfileCleanupPlan } from "../commands/doctor-auth-legacy-oauth.js";
+import type { DoctorRepairEvidenceSink } from "../commands/doctor-externally-managed-repair.js";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { DoctorConfigReferenceSource } from "../commands/doctor/shared/config-flow-steps.js";
@@ -94,6 +95,7 @@ export type DoctorHealthFlowContext = {
   updateWarnings?: string[];
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   invalidatePluginMetadataSnapshot?: () => void;
+  repairEvidence?: DoctorRepairEvidenceSink;
 };
 
 /** Internal facts carried through Doctor detect/repair/validate passes without widening the SDK. */

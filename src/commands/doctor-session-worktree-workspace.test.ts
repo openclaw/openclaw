@@ -8,6 +8,7 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { runSessionStartupMigration } from "../config/sessions/startup-migration.js";
+import * as worktreeMigration from "../config/sessions/worktree-workspace-migration.js";
 import * as sessionReaders from "../infra/session-sqlite-migration-readers.js";
 import {
   ensureProjectRegistrySchema,
@@ -26,6 +27,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
+import { repairLegacySessionWorktreeWorkspaces } from "./doctor-session-worktree-workspace.js";
 
 const note = vi.hoisted(() => vi.fn());
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
@@ -132,4 +134,27 @@ it("repairs discovered worktree sessions only through Doctor and releases their 
       "Session worktrees",
     );
   });
+});
+
+it("returns a warning when one agent database cannot be repaired", async () => {
+  const root = fs.realpathSync.native(tempDirs.make("openclaw-doctor-worktree-failure-"));
+  const sqlitePath = path.join(root, "worker.db");
+  vi.spyOn(worktreeMigration, "migrateManagedWorktreeCanonicalWorkspaces").mockRejectedValueOnce(
+    new Error("database is locked"),
+  );
+
+  const report = await repairLegacySessionWorktreeWorkspaces({
+    apply: true,
+    cfg: {},
+    env: { ...process.env, OPENCLAW_STATE_DIR: root },
+    targets: [{ agentId: "worker", sqlitePath, storePath: sqlitePath }],
+  });
+
+  expect(report).toMatchObject({ found: 0, repaired: 0, scannedStores: 1 });
+  expect(report.warnings).toEqual([expect.stringContaining("Agent worker database")]);
+  expect(report.warnings[0]).toContain("database is locked");
+  expect(note).toHaveBeenCalledWith(
+    expect.stringContaining("Agent worker database"),
+    "Doctor warnings",
+  );
 });

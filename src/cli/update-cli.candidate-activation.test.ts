@@ -668,10 +668,11 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(freshRestartCalls()).toEqual([]);
 
-    const packageInstallCallIndex = commandCalls().findIndex(
+    const packageInstallCall = commandCalls().find(
       ([argv]) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g",
     );
-    expect(commandCalls()[packageInstallCallIndex]?.[0]).toContain("--prefix");
+    expect(packageInstallCall).toBeDefined();
+    expect(packageInstallCall?.[0]).toContain("--prefix");
   });
 
   it.each([

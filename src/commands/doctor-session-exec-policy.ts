@@ -12,7 +12,10 @@ import {
 } from "../infra/exec-approvals-core.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import type { ExistingAgentDatabaseTarget } from "../infra/session-sqlite-migration-readers.js";
-import { repairCanonicalSessionEntries } from "./doctor-session-delivery-state.js";
+import {
+  repairCanonicalSessionEntries,
+  type SessionDeliveryStateRepairReport,
+} from "./doctor-session-delivery-state.js";
 
 type LegacySessionEntry = SessionEntry & { execSecurity?: unknown; execAsk?: unknown };
 
@@ -22,9 +25,9 @@ export function repairLegacySessionExecPolicy(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   targets?: readonly ExistingAgentDatabaseTarget[];
-}): void {
+}): SessionDeliveryStateRepairReport {
   const messages: string[] = [];
-  repairCanonicalSessionEntries({
+  const report = repairCanonicalSessionEntries({
     ...params,
     updateDeliveryProjection: false,
     transform(entry: LegacySessionEntry, sessionKey, phase) {
@@ -92,4 +95,5 @@ export function repairLegacySessionExecPolicy(params: {
     }
     note(messages.join("\n"), "Session exec policy");
   }
+  return report;
 }

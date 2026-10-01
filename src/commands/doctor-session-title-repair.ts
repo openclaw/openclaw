@@ -133,6 +133,7 @@ export async function repairLegacySessionTitles(params: {
       },
     });
     if (!scan.ok) {
+      report.warnings.push(scan.message);
       continue;
     }
     for (const sessionKey of scan.value) {

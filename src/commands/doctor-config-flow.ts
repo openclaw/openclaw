@@ -16,7 +16,6 @@ import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { inspectShippedPluginInstallConfigRecords } from "../config/plugin-install-config-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { callGateway } from "../gateway/call.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import { withoutPluginInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -43,40 +42,33 @@ import {
   applyUnknownConfigKeyStep,
   prepareDoctorConfigReferenceSource,
 } from "./doctor/shared/config-flow-steps.js";
-import { prepareDoctorConfigMigrationResult } from "./doctor/shared/config-migration-result.js";
+import {
+  type DoctorConfigPreflightOptions,
+  prepareDoctorConfigMigrationResult,
+} from "./doctor/shared/config-migration-result.js";
 import {
   applyDoctorConfigMutation,
   type DoctorConfigMutationResult,
   type DoctorConfigMutationState,
 } from "./doctor/shared/config-mutation-state.js";
 import { listDoctorConfiguredChannelIds } from "./doctor/shared/configured-channel-ids.js";
+import { refreshGatewayAuthStateAfterAuthProfileRepair } from "./doctor/shared/gateway-auth-refresh.js";
 import { containsAuthoredInclude } from "./doctor/shared/include-migration-ownership.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 import type { DoctorPluginMetadataSnapshotState } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
 import { canWriteDoctorInclude } from "./doctor/shared/roster-include-write.js";
 import { shouldSkipLegacyUpdateDoctorConfigWrite } from "./doctor/shared/update-phase.js";
 
-async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
-  for (const request of [
-    { method: "secrets.reload", params: {} },
-    { method: "models.authStatus", params: { refresh: true } },
-  ]) {
-    try {
-      await callGateway({ ...request, timeoutMs: 3000 });
-    } catch {
-      // Doctor repair remains best effort when the Gateway is stopped or cannot reload.
-    }
-  }
-}
-
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
+  onStateMigrationMessage?: DoctorConfigPreflightOptions["onStateMigrationMessage"];
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
   runtime?: RuntimeEnv;
   prompter?: DoctorPrompter;
 }) {
-  const shouldRepair = params.options.repair === true || params.options.yes === true;
+  const shouldRepairState = params.options.repair === true || params.options.yes === true;
+  const shouldRepairConfig = shouldRepairState && params.options.externallyManaged !== true;
   let preflight = await withProgress(
     {
       label: "Checking OpenClaw state…",
@@ -87,12 +79,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       runDoctorConfigPreflight({
         observe: false,
         invocationPurpose: "doctor",
-        repairPrefixedConfig: shouldRepair,
-        recoverCorruptTargetStore: shouldRepair,
-        doctorOnlyStateMigrations: shouldRepair,
+        ...(params.options.externallyManaged === true ? { migrateLegacyConfig: false } : {}),
+        repairPrefixedConfig: shouldRepairConfig,
+        recoverCorruptTargetStore: shouldRepairState,
+        doctorOnlyStateMigrations: shouldRepairState,
         preparePluginMetadataSnapshot: true,
         ...(params.agentDatabaseMigrationDiscovery
           ? { agentDatabaseMigrationDiscovery: params.agentDatabaseMigrationDiscovery }
+          : {}),
+        ...(params.onStateMigrationMessage
+          ? { onStateMigrationMessage: params.onStateMigrationMessage }
           : {}),
         beforeWorkspaceStateMigration: createWorkspaceAliasMigrationRepair(
           params.prompter,
@@ -168,7 +164,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let modelRetirementRepairRan = false;
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
-  const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
+  const changesPanelSink = createDoctorChangesPanelSink(shouldRepairConfig);
   const configRepairWarnings: string[] = [];
   const applyConfigMutation = (
     mutation: DoctorConfigMutationResult & { warnings?: string[] },
@@ -182,7 +178,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     state = applyDoctorConfigMutation({
       state,
       mutation,
-      shouldRepair,
+      shouldRepair: shouldRepairConfig,
       fixHint: options.fixHint,
     });
   };
@@ -202,7 +198,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     applyLegacyCompatibilityStep({
       snapshot,
       state,
-      shouldRepair,
+      shouldRepair: shouldRepairConfig,
       doctorFixCommand,
     }),
   );
@@ -315,7 +311,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const legacyIssueLines = [...legacyStep.issueLines, ...pluginIssueLines];
   if (
     pluginIssueLines.length > 0 &&
-    !shouldRepair &&
+    !shouldRepairConfig &&
     !state.fixHints.includes(`Run "${doctorFixCommand}" to migrate legacy config keys.`)
   ) {
     state.fixHints.push(`Run "${doctorFixCommand}" to migrate legacy config keys.`);
@@ -403,7 +399,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       emitWarnings: true,
     },
   );
-  if (retiredPhoneControlCleanup.cleanupPending && !shouldRepair) {
+  if (retiredPhoneControlCleanup.cleanupPending && !shouldRepairConfig) {
     note(
       `Retired Phone Control lease state remains. Run "${doctorFixCommand}" to archive it.`,
       "Legacy state detected",
@@ -445,7 +441,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     },
   );
 
-  if (!shouldRepair) {
+  if (!shouldRepairConfig) {
     const { repairStaleAgentModelRefs } =
       await import("./doctor/shared/stale-agent-model-ref-repair.js");
     const staleAgentModelRepair = runWithCurrentPluginMetadata(state.candidate, () =>
@@ -494,7 +490,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       channelDoctor.runChannelDoctorConfigSequences({
         cfg: state.candidate,
         env: process.env,
-        shouldRepair,
+        shouldRepair: shouldRepairConfig,
       }),
     );
     emitDoctorNotes({
@@ -524,7 +520,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     fixHint: `Run "${doctorFixCommand}" to rotate hooks.token away from Gateway auth.`,
   });
 
-  if (shouldRepair) {
+  if (shouldRepairConfig) {
     const { runDoctorRepairSequence } = await import("./doctor/repair-sequencing.js");
     const prompter = params.prompter;
     const repairSequence = await runDoctorRepairSequence({
@@ -605,7 +601,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   const unknownStep = applyUnknownConfigKeyStep({
     state,
-    shouldRepair,
+    shouldRepair: shouldRepairConfig,
     doctorFixCommand,
   });
   state = unknownStep.state;
@@ -614,7 +610,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       ...unknownStep.removed.map((pathLocal) => `- ${pathLocal}`),
       ...unknownStep.repairs.map((change) => `- ${change}`),
     ];
-    if (shouldRepair) {
+    if (shouldRepairConfig) {
       changesPanelSink.emit(lines);
     } else {
       note(lines.join("\n"), "Unknown config keys");
@@ -639,7 +635,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const finalized = await finalizeDoctorConfigFlow({
     ...state,
     snapshot,
-    shouldRepair,
+    shouldRepair: shouldRepairConfig,
     confirm: params.confirm,
     note,
   });
@@ -716,7 +712,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     ...(shouldRepairCronCodexModelRefsAfterConfigWrite
       ? { shouldRepairCronCodexModelRefsAfterConfigWrite: true }
       : {}),
-    ...(shouldRepair &&
+    ...(shouldRepairConfig &&
     retiredPhoneControlCleanup.cleanupPending &&
     retiredPhoneControlCleanup.cleanupSafe
       ? { retiredPhoneControlStateCleanupPending: true }

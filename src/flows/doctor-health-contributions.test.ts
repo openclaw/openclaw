@@ -2991,10 +2991,10 @@ describe("doctor health contributions", () => {
         cwd: "/tmp/openclaw-workspace",
         configPath: "/tmp/fake-openclaw.json",
       }),
-      {
+      expect.objectContaining({
         checks: contribution.healthChecks,
         dryRun: false,
-      },
+      }),
     );
     expect(ctx.cfg).toEqual({ updated: true });
     expect(ctx.cfgForPersistence).toEqual({});
@@ -3034,10 +3034,10 @@ describe("doctor health contributions", () => {
       { config: ctx.cfg, workspaceDir: cwd },
       expect.any(Function),
     );
-    expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(expect.objectContaining({ cwd }), {
-      checks: contribution.healthChecks,
-      dryRun: false,
-    });
+    expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd }),
+      expect.objectContaining({ checks: contribution.healthChecks, dryRun: false }),
+    );
     if (soleAgentId === undefined) {
       expect(mocks.resolveAgentWorkspaceDir).not.toHaveBeenCalled();
     } else {
@@ -3161,7 +3161,7 @@ describe("doctor health contributions", () => {
 
     expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(
       expect.objectContaining({ env: { OPENCLAW_UPDATE_POST_CORE: "1" } }),
-      { checks: [getHealthCheck("plugin/example/regular")] },
+      expect.objectContaining({ checks: [getHealthCheck("plugin/example/regular")] }),
     );
   });
 

@@ -167,12 +167,18 @@ export async function noteSessionTranscriptLabelHealth(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
+  onChanges?: (changes: readonly string[]) => void;
+  onWarnings?: (warnings: readonly string[]) => void;
 }): Promise<void> {
   const env = params.env ?? process.env;
   let foundSessions = 0;
   let foundEvents = 0;
   let repairedSessions = 0;
   let repairedEvents = 0;
+  const reportWarning = (warning: string) => {
+    note(warning, NOTE_TITLE);
+    params.onWarnings?.([warning]);
+  };
 
   for (const target of projectExistingAgentDatabaseTargets(
     resolveAllAgentSessionStoreTargetsSync(params.cfg, { env }),
@@ -198,9 +204,8 @@ export async function noteSessionTranscriptLabelHealth(params: {
         );
         if (!readResult.ok) {
           const detail = formatErrorMessage(readResult.error).replace(/\s+/g, " ").trim();
-          note(
+          reportWarning(
             `- Failed to read transcript for session ${sessionId} (${agentId}): ${detail}`,
-            NOTE_TITLE,
           );
           continue;
         }
@@ -247,20 +252,21 @@ export async function noteSessionTranscriptLabelHealth(params: {
             );
             repairedSessions += 1;
             repairedEvents += updates.length;
+            params.onChanges?.([
+              `Rewrote legacy inbound-context labels in session ${sessionId} (${agentId}).`,
+            ]);
           } catch (repairError) {
             const detail = formatErrorMessage(repairError).replace(/\s+/g, " ").trim();
-            note(
+            reportWarning(
               `- Failed to rewrite labels for session ${sessionId} (${agentId}): ${detail}`,
-              NOTE_TITLE,
             );
           }
         }
       }
     } catch (error) {
       const detail = formatErrorMessage(error).replace(/\s+/g, " ").trim();
-      note(
+      reportWarning(
         `- Failed to inspect or rewrite labels for ${agentId} (${sqlitePath}): ${detail}`,
-        NOTE_TITLE,
       );
     } finally {
       readDatabase?.close();

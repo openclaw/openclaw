@@ -194,10 +194,16 @@ export async function noteSessionTranscriptHeaderHealth(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
+  onChanges?: (changes: readonly string[]) => void;
+  onWarnings?: (warnings: readonly string[]) => void;
 }): Promise<HeaderRepairReport> {
   const env = params.env ?? process.env;
   let found = 0;
   let repaired = 0;
+  const reportWarning = (warning: string) => {
+    note(warning, NOTE_TITLE);
+    params.onWarnings?.([warning]);
+  };
 
   for (const target of projectExistingAgentDatabaseTargets(
     resolveAllAgentSessionStoreTargetsSync(params.cfg, { env }),
@@ -220,10 +226,7 @@ export async function noteSessionTranscriptHeaderHealth(params: {
         );
         if (!snapshot.ok) {
           const detail = formatErrorMessage(snapshot.error).replace(/\s+/g, " ").trim();
-          note(
-            `- Failed to read transcript ${sessionId} (${target.agentId}): ${detail}`,
-            NOTE_TITLE,
-          );
+          reportWarning(`- Failed to read transcript ${sessionId} (${target.agentId}): ${detail}`);
           continue;
         }
         if (!snapshot.sessionKey || !parser.hasIndexedEntries() || snapshot.rows.length === 0) {
@@ -231,9 +234,8 @@ export async function noteSessionTranscriptHeaderHealth(params: {
         }
         const headerTimestamp = timestampMsToIsoString(snapshot.rows[0]?.createdAt ?? Number.NaN);
         if (!headerTimestamp) {
-          note(
+          reportWarning(
             `- Failed to repair transcript ${sessionId} (${target.agentId}): invalid first-row timestamp`,
-            NOTE_TITLE,
           );
           continue;
         }
@@ -296,19 +298,20 @@ export async function noteSessionTranscriptHeaderHealth(params: {
             { operationLabel: "doctor.session-transcript-headers" },
           );
           repaired += 1;
+          params.onChanges?.([
+            `Prepended a missing header to session transcript ${sessionId} (${target.agentId}).`,
+          ]);
         } catch (error) {
           const detail = formatErrorMessage(error).replace(/\s+/g, " ").trim();
-          note(
+          reportWarning(
             `- Failed to repair transcript ${sessionId} (${target.agentId}): ${detail}`,
-            NOTE_TITLE,
           );
         }
       }
     } catch (error) {
       const detail = formatErrorMessage(error).replace(/\s+/g, " ").trim();
-      note(
+      reportWarning(
         `- Failed to inspect transcript headers for ${target.agentId} (${sqlitePath}): ${detail}`,
-        NOTE_TITLE,
       );
     } finally {
       readDatabase?.close();

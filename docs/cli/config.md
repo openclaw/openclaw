@@ -32,11 +32,13 @@ Entries in `env.vars` are ignored, including differently cased spellings; flat
 or change the host-selected read-only mode. Only the host value `1` enables
 this switch. Existing `OPENCLAW_NIX_MODE` behavior is unchanged.
 
-Config writes are blocked, including setup, onboarding, doctor repairs, plugin
+Config writes are blocked, including setup, onboarding, ordinary doctor repairs, plugin
 install/update/uninstall/enable/disable, and mutating `openclaw update` flows.
 Startup-derived defaults stay runtime-only. Change the config through your
 external deployment system, then let the Gateway reload it or restart the Gateway
-as needed. Runtime state still needs a writable `OPENCLAW_STATE_DIR`.
+as needed. Runtime state still needs a writable `OPENCLAW_STATE_DIR`. To repair
+offline runtime state without changing this file or managing the Gateway service,
+use [`doctor --fix --externally-managed --non-interactive`](/cli/doctor/running#externally-managed-repair).
 
 `OPENCLAW_CONFIG_READONLY=1` uses generic externally managed config messages and
 does not enable Nix-specific installation or service behavior. `OPENCLAW_NIX_MODE=1`

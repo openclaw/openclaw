@@ -21,6 +21,7 @@ import {
 } from "./doctor-config-preflight.state-migration.test-helpers.js";
 
 const {
+  autoMigrateLegacyStateDir,
   autoMigrateLegacyState,
   repairLegacyCronStoreWithoutPrompt,
   collectCronCodexRuntimePolicyTargetsReadOnly,
@@ -29,6 +30,8 @@ const {
   planStartupPluginConvergence,
   readConfigFileSnapshot,
   recordDeferredPluginMigrations,
+  pluginMigrationFingerprint,
+  runWithPluginMetadataSnapshot,
   note,
 } = preflightStateMigrationMocks;
 const { runDoctorConfigPreflight } = await import("./doctor-config-preflight.js");
@@ -200,6 +203,47 @@ describe("runDoctorConfigPreflight state migration", () => {
       "Doctor warnings",
     );
     expect(note).toHaveBeenCalledWith(expect.stringContaining(hostWarning), "Doctor warnings");
+  });
+
+  it("uses the converged plugin generation for Doctor state migrations", async () => {
+    pluginMigrationFingerprint.mockReturnValue("plugin-migrations-before");
+    runPostCorePluginConvergence.mockImplementationOnce(async () => {
+      pluginMigrationFingerprint.mockReturnValue("plugin-migrations-after");
+      return makeStartupConvergenceResult({ changes: ["Refreshed managed plugin."] });
+    });
+    autoMigrateLegacyState.mockImplementationOnce(async () => {
+      expect(runWithPluginMetadataSnapshot.mock.calls.at(-1)?.[0]).toMatchObject({
+        configFingerprint: "plugin-migrations-after",
+      });
+      return { migrated: true, skipped: false, changes: [], warnings: [] };
+    });
+    const result = await runDoctorConfigPreflight(doctorMigrationOptions);
+    expect(result.pluginMetadataSnapshot?.configFingerprint).toBe("plugin-migrations-after");
+    expect(autoMigrateLegacyState).toHaveBeenCalledOnce();
+  });
+
+  it("reports advisory migration warnings without blocking Doctor", async () => {
+    autoMigrateLegacyStateDir.mockResolvedValueOnce({
+      migrated: false,
+      skipped: false,
+      changes: [],
+      warnings: ["Left legacy config health state in place."],
+    });
+    await expect(runDoctorConfigPreflight(doctorMigrationOptions)).resolves.toMatchObject({
+      stateMigrationMessages: expect.arrayContaining([
+        expect.objectContaining({
+          stepId: "state-directory",
+          result: expect.objectContaining({
+            changes: [],
+            warnings: ["Left legacy config health state in place."],
+          }),
+        }),
+      ]),
+    });
+    expect(note).toHaveBeenCalledWith(
+      "- Left legacy config health state in place.",
+      "Doctor warnings",
+    );
   });
 
   it("bounds and redacts recorded migration warnings while preserving Doctor guidance", () => {

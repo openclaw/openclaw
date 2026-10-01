@@ -358,9 +358,12 @@ describe("update-cli", () => {
       await expect(updateCommand({ yes: true, restart: false, json: true })).rejects.toEqual(
         new ExitError(1),
       );
+      // Doctor repaired persisted runtime state before the config owner refused publication.
+      // The terminal reason must preserve the resulting no-rollback boundary; the step retains
+      // the original config refusal and its keys for operator diagnosis.
       expect(lastWriteJsonCall()).toMatchObject({
         status: "error",
-        reason: reason === "requester-revoked" ? reason : "repair-requires-config-change",
+        reason: "state-migrated-no-rollback",
         steps: expect.arrayContaining([expect.objectContaining({ configWriteRefusal: refusal })]),
       });
     },
