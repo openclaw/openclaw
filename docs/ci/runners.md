@@ -21,6 +21,8 @@ collisions can leave other slots unused; this is a ceiling, not a promise of
 Admission expires ten minutes after the workflow was created. A request that
 waits longer fails before checkout or hydration when its runner starts; it can
 still incur runner startup cost. This does not remove the queued job immediately.
+Once the request passes that check, checkout and hydration do not recheck queue
+age. They remain bounded by the job timeout and idle limit.
 Stop an abandoned lease by its exact ID instead of leaving a warmup pending.
 Do not retry in a loop when the pool is full.
 
@@ -75,7 +77,10 @@ operating choice; remeasure after the 15-minute idle cap is deployed before
 making 30 minutes or 8-class the general default.
 
 These controls cover dispatches using the updated workflows in this repository.
-Historical refs, other repositories, alternate workflows, and Windows probe
+The OpenClaw wrapper selects the workflow from `main` for Testbox `run` and
+`warmup`, overriding configured refs and rejecting explicit historical refs.
+Its source capsule still reconstructs the checkout being tested. Old wrappers,
+direct historical-ref dispatches, other repositories, alternate workflows, and Windows probe
 workflows are outside the shared pool. Organization-wide concurrency, per-token
 admission, SKU restrictions, and a hard spending stop require provider controls.
 
