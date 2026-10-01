@@ -2624,6 +2624,16 @@ jobs:
 
       - *linux_node_setup_step
 
+      - name: Install ripgrep for baseline ratchets
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          if command -v rg >/dev/null 2>&1; then
+            exit 0
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ripgrep
+
       - name: Run baseline ratchets
         env:
           RATCHET_PR_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
