@@ -56,12 +56,8 @@ const DIRECT_ACCOUNT_DATA_QUEUE_KEY = EventType.Direct;
 const directAccountDataWriteQueues = new WeakMap<MatrixClient, KeyedAsyncQueue>();
 
 async function readMatrixDirectAccountData(client: MatrixClient): Promise<MatrixDirectAccountData> {
-  try {
-    const direct = (await client.getAccountData(EventType.Direct)) as MatrixDirectAccountData;
-    return direct && typeof direct === "object" && !Array.isArray(direct) ? direct : {};
-  } catch {
-    return {};
-  }
+  const direct = (await client.getAccountData(EventType.Direct)) as MatrixDirectAccountData;
+  return direct && typeof direct === "object" && !Array.isArray(direct) ? direct : {};
 }
 
 function normalizeRemoteUserId(remoteUserId: string): string {
@@ -208,7 +204,9 @@ export async function inspectMatrixDirectRooms(params: {
   const remoteUserId = normalizeRemoteUserId(params.remoteUserId);
   const selfUserId =
     normalizeOptionalString(await params.client.getUserId().catch(() => null)) ?? null;
-  const directContent = await readMatrixDirectAccountData(params.client);
+  const directContent: MatrixDirectAccountData = await readMatrixDirectAccountData(
+    params.client,
+  ).catch(() => ({}));
   const mappedRoomIds = normalizeUniqueTrimmedStringList(directContent[remoteUserId]);
   const mappedRooms = await Promise.all(
     mappedRoomIds.map(

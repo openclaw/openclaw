@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -391,18 +393,8 @@ function computeAcquireBackoffMs(params: {
 }
 
 function assertConvexOk(payload: unknown, actionLabel: string) {
-  if (payload === undefined) {
+  if (payload === undefined || convexOkSchema.safeParse(payload).success) {
     return;
-  }
-  if (convexOkSchema.safeParse(payload).success) {
-    return;
-  }
-  const brokerError = toBrokerError({
-    payload,
-    fallback: `Convex credential ${actionLabel} failed.`,
-  });
-  if (brokerError) {
-    throw brokerError;
   }
   throw new Error(`Convex credential ${actionLabel} failed with an invalid response payload.`);
 }
@@ -448,12 +440,7 @@ export async function acquireQaCredentialLease<TPayload>(
     ownerId: opts.ownerId,
   });
   const fetchImpl = opts.fetchImpl ?? fetch;
-  const sleepImpl =
-    opts.sleepImpl ??
-    ((ms: number) =>
-      new Promise((resolve) => {
-        setTimeout(resolve, ms);
-      }));
+  const sleepImpl = opts.sleepImpl ?? sleep;
   const timeImpl = opts.timeImpl ?? (() => Date.now());
   const randomImpl = opts.randomImpl ?? (() => Math.random());
   const startedAt = timeImpl();
@@ -650,10 +637,7 @@ export function startQaCredentialLeaseHeartbeat(
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let inFlight: Promise<void> | null = null;
-  let resolveFailure: (error: Error) => void = () => undefined;
-  const whenFailed = new Promise<Error>((resolve) => {
-    resolveFailure = resolve;
-  });
+  const { promise: whenFailed, resolve: resolveFailure } = createDeferred<Error>();
   const getFailure = () => {
     if (!failure) {
       try {

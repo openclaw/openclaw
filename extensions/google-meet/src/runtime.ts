@@ -1,4 +1,3 @@
-// Google Meet composes platform strategies with the shared meeting session runtime.
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -60,10 +59,6 @@ import type {
 } from "./transports/types.js";
 import { createVoiceCallGateway, joinMeetViaVoiceCallGateway } from "./voice-call-gateway.js";
 
-type ChromeAudioBridgeResult = NonNullable<
-  | Awaited<ReturnType<typeof launchChromeMeet>>["audioBridge"]
-  | Awaited<ReturnType<typeof launchChromeMeetOnNode>>["audioBridge"]
->;
 type ChromeLaunchResult =
   | Awaited<ReturnType<typeof launchChromeMeet>>
   | Awaited<ReturnType<typeof launchChromeMeetOnNode>>;
@@ -482,7 +477,7 @@ export class GoogleMeetRuntime {
 
   #attachChromeAudioBridge(
     session: GoogleMeetSession,
-    audioBridge: ChromeAudioBridgeResult | undefined,
+    audioBridge: ChromeLaunchResult["audioBridge"],
   ): MeetingSessionRuntimeHandles<GoogleMeetChromeHealth> | undefined {
     if (!session.chrome || !audioBridge) {
       return undefined;

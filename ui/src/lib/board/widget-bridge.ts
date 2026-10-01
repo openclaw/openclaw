@@ -14,16 +14,10 @@ export type BoardWidgetBridgeGatewayClient = {
   request: (method: string, params: Record<string, unknown>) => Promise<unknown>;
 };
 
-type PromptDispatcher = typeof dispatchWidgetPrompt;
-
 const STATE_PAYLOAD_MAX_BYTES = 8 * 1024;
 const STATE_COALESCE_WINDOW_MS = 5_000;
 const STATE_RATE_WINDOW_MS = 60_000;
 const STATE_RATE_MAX_ATTEMPTS = 12;
-
-function openWidgetUrl(url: string): boolean {
-  return openExternalUrlSafe(url) !== null;
-}
 
 export function isBoardWidgetBridgeRequest(value: unknown): value is BoardWidgetBridgeRequest {
   if (!value || typeof value !== "object") {
@@ -61,7 +55,7 @@ export class BoardWidgetBridgeController {
   private readonly client: BoardWidgetBridgeGatewayClient;
   private readonly rateKey: string;
   private readonly confirmPrompt: (text: string) => boolean;
-  private readonly dispatchPrompt: PromptDispatcher;
+  private readonly dispatchPrompt: typeof dispatchWidgetPrompt;
   private readonly now: () => number;
   private readonly openUrl: (url: string) => boolean;
   private readonly recentStatePayloads = new Map<string, number>();
@@ -74,7 +68,7 @@ export class BoardWidgetBridgeController {
     client: BoardWidgetBridgeGatewayClient;
     rateKey: string;
     confirmPrompt: (text: string) => boolean;
-    dispatchPrompt?: PromptDispatcher;
+    dispatchPrompt?: typeof dispatchWidgetPrompt;
     now?: () => number;
     openUrl?: (url: string) => boolean;
   }) {
@@ -85,7 +79,7 @@ export class BoardWidgetBridgeController {
     this.confirmPrompt = options.confirmPrompt;
     this.dispatchPrompt = options.dispatchPrompt ?? dispatchWidgetPrompt;
     this.now = options.now ?? Date.now;
-    this.openUrl = options.openUrl ?? openWidgetUrl;
+    this.openUrl = options.openUrl ?? ((url) => openExternalUrlSafe(url) !== null);
   }
 
   updateIdentity(frame: HTMLIFrameElement, ticket: string): void {
@@ -193,7 +187,7 @@ export class BoardWidgetBridgeController {
         return await this.client.request("board.data.read", {
           ticket: this.ticket,
           bindingId,
-          ...(bindingParams ? { params: bindingParams as Record<string, unknown> } : {}),
+          ...(bindingParams ? { params: bindingParams } : {}),
         });
       }
       case "action.run": {

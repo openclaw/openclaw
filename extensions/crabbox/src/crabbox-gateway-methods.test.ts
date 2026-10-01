@@ -258,7 +258,12 @@ describe("Crabbox snapshots Gateway methods", () => {
     };
     const store = openWarmImageStore();
     store.register("current", current);
-    store.register("older", { version: 3, allocations: {} });
+    const captureUnsupported = {
+      atMs: 100,
+      provider: "hetzner",
+      message: "Native checkpoints are unsupported for this coordinator target.",
+    };
+    store.register("older", { version: 3, allocations: {}, captureUnsupported });
     const respond = vi.fn();
 
     await listCrabboxImages(createApi(), { params: {}, respond });
@@ -283,6 +288,7 @@ describe("Crabbox snapshots Gateway methods", () => {
           projectLabel: undefined,
           projectRoot: undefined,
           state: "no-image",
+          captureUnsupported,
           held: false,
           allocationCount: 0,
         }),

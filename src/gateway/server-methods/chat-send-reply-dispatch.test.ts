@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { observeReplyDelivery } from "../../agents/reply-completion.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../../agents/stream-message-shared.js";
@@ -18,6 +19,7 @@ import {
   rewriteTranscriptMessageAtAnchor,
   SessionTranscriptProjectionUnavailableError,
 } from "../../config/sessions/session-accessor.js";
+import * as historyReaders from "../../config/sessions/session-transcript-worker-readers.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -25,6 +27,8 @@ import {
   emitSessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import * as sessionTranscriptReaders from "../session-transcript-readers.js";
@@ -43,13 +47,13 @@ import {
   createChatSendReplyDispatch,
 } from "./chat-send-reply-dispatch.js";
 
-async function createReplyTranscriptFixture() {
+async function createReplyTranscriptFixture(sessionKey = "agent:main:receipt") {
   const runId = "receipt-run";
   const scope = {
     agentId: "main",
     sessionId: "receipt-session",
-    sessionKey: "agent:main:receipt",
-    storePath: loadSessionEntry("agent:main:receipt", { agentId: "main" }).storePath,
+    sessionKey,
+    storePath: loadSessionEntry(sessionKey, { agentId: "main" }).storePath,
   };
   const sessionEntry = {
     sessionId: scope.sessionId,
@@ -190,6 +194,157 @@ describe("buildTranscriptReplyTextFromInputs", () => {
         "private",
       ].join("\n\n"),
     );
+  });
+});
+
+describe("chat delivery watermark preparation", () => {
+  it("retires a shared-store watermark with its physical owner", async () => {
+    await withOpenClawTestState({ label: "chat-watermark-shared" }, async (state) => {
+      const storePath = state.statePath("shared.sqlite");
+      openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+      const scope = {
+        agentId: "ops",
+        sessionKey: "agent:ops:watermark",
+        sessionId: "shared-watermark",
+        storePath,
+      };
+      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const appended = appendTranscriptMessageSync(scope, {
+        eventId: "answer",
+        message: { role: "assistant", content: "Shared-store answer." },
+      });
+      expect(appended?.ok).toBe(true);
+      expect(
+        await sessionTranscriptReaders.readSessionTranscriptWatermarkAsync(scope),
+      ).toMatchObject({
+        maxSeq: 1,
+      });
+      const createReaders = historyReaders.createSessionHistoryWorkerReaders;
+      const readerSpy = vi
+        .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+        .mockImplementation((runRequest) => {
+          const readers = createReaders(runRequest);
+          return {
+            ...readers,
+            readWatermark: async (input) => {
+              const watermark = await readers.readWatermark(input);
+              await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
+              return watermark;
+            },
+          };
+        });
+      try {
+        await expect(
+          sessionTranscriptReaders.readSessionTranscriptWatermarkAsync(scope),
+        ).rejects.toThrow("revoked");
+      } finally {
+        readerSpy.mockRestore();
+      }
+    });
+  });
+
+  it.each([false, true])(
+    "keeps watermark SQLite with its owner (incognito=%s)",
+    async (incognito) => {
+      await withOpenClawTestState({ label: "chat-watermark-owner" }, async () => {
+        const { dispatch, append } = await createReplyTranscriptFixture(
+          incognito ? "agent:main:dashboard:incognito-watermark" : undefined,
+        );
+        await dispatch.runAgentMediaTranscript(
+          { run: async (operation) => operation() },
+          async () => {
+            dispatch.captureAgentTranscriptStart();
+            await append("answer", { role: "assistant", content: "Committed answer." });
+            const sql = observeHostDataSql();
+            try {
+              expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
+              const watermarks = sql.queries.filter(
+                (query) =>
+                  query.includes('from "transcript_events"') &&
+                  query.includes('from "transcript_rewrite_watermarks"'),
+              );
+              expect(watermarks.length > 0).toBe(incognito);
+            } finally {
+              sql.restore();
+            }
+          },
+        );
+      });
+    },
+  );
+
+  it.each([
+    { read: 1, change: "retired", expected: "missing" },
+    { read: 2, change: "retired", expected: "missing" },
+    { read: 1, change: "rejected", expected: "rejected" },
+    { read: 2, change: "rejected", expected: "rejected" },
+    { read: 2, change: "branch", expected: "missing" },
+    { read: 2, change: "new-input", expected: "missing" },
+    { read: 2, change: "rewrite", expected: "pending" },
+    { read: 2, change: "append", expected: "pending" },
+  ])("rechecks $change after watermark read $read", async ({ read, change, expected }) => {
+    await withOpenClawTestState({ label: "chat-watermark-delay" }, async () => {
+      const { dispatch, append, scope, inputId, retire } = await createReplyTranscriptFixture();
+      await dispatch.runAgentMediaTranscript(
+        { run: async (operation) => operation() },
+        async () => {
+          dispatch.captureAgentTranscriptStart();
+          await append("answer", { role: "assistant", content: "Committed answer." });
+          let reads = 0;
+          const createReaders = historyReaders.createSessionHistoryWorkerReaders;
+          const failure = new Error("watermark read rejected");
+          const readerSpy = vi
+            .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+            .mockImplementation((runRequest) => {
+              const readers = createReaders(runRequest);
+              return {
+                ...readers,
+                readWatermark: async (input) => {
+                  const watermark = await readers.readWatermark(input);
+                  if (++reads !== read) {
+                    return watermark;
+                  }
+                  if (change === "retired") {
+                    retire();
+                  } else if (change === "rejected") {
+                    throw failure;
+                  } else if (change === "rewrite") {
+                    const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: "answer" });
+                    if (!anchor) {
+                      throw new Error("Expected active answer anchor");
+                    }
+                    await rewriteTranscriptMessageAtAnchor(anchor, (message) => ({
+                      ...asOptionalRecord(message),
+                      content: "NO_REPLY",
+                    }));
+                  } else {
+                    await append(
+                      "later-row",
+                      {
+                        role: change === "new-input" ? "user" : "assistant",
+                        content: "NO_REPLY",
+                      },
+                      change === "branch" ? inputId : undefined,
+                    );
+                  }
+                  return watermark;
+                },
+              };
+            });
+          try {
+            const delivery = dispatch.resolveReplyDelivery();
+            if (expected === "rejected") {
+              await expect(delivery).rejects.toBe(failure);
+            } else {
+              expect(await delivery).toBe(expected);
+            }
+            expect(reads).toBe(read);
+          } finally {
+            readerSpy.mockRestore();
+          }
+        },
+      );
+    });
   });
 });
 

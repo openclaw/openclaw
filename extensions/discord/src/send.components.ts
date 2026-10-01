@@ -1,4 +1,4 @@
-import { ChannelType } from "discord-api-types/v10";
+import { ChannelType, Routes } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
@@ -16,7 +16,6 @@ import {
   type DiscordComponentMessageSpec,
 } from "./components.js";
 import {
-  createChannelMessage,
   editChannelMessage,
   serializePayload,
   type MessagePayloadFile,
@@ -246,6 +245,7 @@ export async function sendDiscordComponentMessage(
         mediaAccess: opts.mediaAccess,
         reply: opts.reply,
         silent: opts.silent,
+        allowedMentions: opts.allowedMentions,
         textLimit: opts.textLimit,
         maxLinesPerMessage: opts.maxLinesPerMessage,
         tableMode: opts.tableMode,
@@ -307,7 +307,11 @@ async function writeDiscordComponentMessage(
         }
         await opts.onPlatformSendDispatch?.();
         opts.assertPlatformSendAuthorized?.();
-        return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body });
+        // SAFETY: Discord's Create Message response includes its message and channel IDs.
+        return (await rest.post(Routes.channelMessages(channelId), { body })) as {
+          id: string;
+          channel_id: string;
+        };
       },
       "components",
       creating ? { safety: "nonce-protected-create" } : undefined,

@@ -31,7 +31,7 @@ function listSteerCandidateSessionKeys(targetSessionKey: string): string[] {
       targetSessionKey.replace(":slash:", ":dm:"),
     );
   }
-  return [...new Set(candidates)];
+  return candidates;
 }
 
 function resolveSteerSourceSessionKey(params: {
@@ -48,8 +48,8 @@ function resolveSteerSourceSessionKey(params: {
     return undefined;
   }
 
-  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
-  return resolveInternalSessionKey({ key: raw, alias, mainKey });
+  const { alias } = resolveMainSessionAlias(params.cfg);
+  return resolveInternalSessionKey({ key: raw, alias });
 }
 
 /**

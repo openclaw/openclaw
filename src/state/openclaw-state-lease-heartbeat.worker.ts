@@ -15,6 +15,7 @@ import {
   leaseHeartbeatState as state,
   leaseHeartbeatStartupPhase as startupPhase,
   LEASE_HEARTBEAT_START_TIMEOUT_MS,
+  LEASE_CONTENTION_RETRY_MS,
   type LeaseHeartbeatRenewalFailure,
   type LeaseHeartbeatReply,
   type LeaseHeartbeatParentMessage,
@@ -52,7 +53,12 @@ function openHeartbeatDatabase() {
         throw error;
       }
     }
-    Atomics.wait(shared, state.status, state.starting, Math.max(1, Math.min(25, remaining())));
+    Atomics.wait(
+      shared,
+      state.status,
+      state.starting,
+      Math.max(1, Math.min(LEASE_CONTENTION_RETRY_MS, remaining())),
+    );
   }
   throw new Error("state lease heartbeat startup deadline expired or owner stopped");
 }
@@ -155,7 +161,13 @@ const renewInWorker = (explicit: boolean): number | undefined => {
         renew();
       }
     },
-    Math.max(1, Math.min(params.heartbeatMs, expiresAt - Date.now())),
+    Math.max(
+      1,
+      Math.min(
+        contentionError === undefined ? params.heartbeatMs : LEASE_CONTENTION_RETRY_MS,
+        expiresAt - Date.now(),
+      ),
+    ),
   );
   // A still-valid old expiry permits automatic retry, not renewal success.
   if (explicit && contentionError !== undefined) {
@@ -190,7 +202,10 @@ function activateHeartbeat(): void {
         activateHeartbeat,
         Math.max(
           1,
-          Math.min(params.heartbeatMs, Number(Atomics.load(shared, state.expiresAt)) - Date.now()),
+          Math.min(
+            LEASE_CONTENTION_RETRY_MS,
+            Number(Atomics.load(shared, state.expiresAt)) - Date.now(),
+          ),
         ),
       );
       return;

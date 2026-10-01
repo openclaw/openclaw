@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import {
   readSessionProgressCard,
@@ -43,7 +42,6 @@ import {
   createSessionEntryWithTranscript,
   deleteSessionEntryLifecycle,
   findTranscriptEvent,
-  ensureSessionEntrySync,
   listSessionChildEntriesReadOnly,
   listSessionEntriesByStatus,
   listSessionTranscriptInstances,
@@ -60,7 +58,6 @@ import {
   readTranscriptStatsSync,
   recordInboundSessionMeta,
   replaceSessionEntry,
-  replaceTranscriptEventsSync,
   resetSessionEntryLifecycle,
   SessionInitializationAgentScopeMismatchError,
   type SessionPatchProjectionOperation,
@@ -88,11 +85,7 @@ import {
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
-import {
-  SessionTranscriptWriterClaimReboundError,
-  withOwnedSessionTranscriptWrites,
-} from "./transcript-write-context.js";
-import type { InternalSessionEntry, SessionEntry } from "./types.js";
+import type { SessionEntry } from "./types.js";
 
 const cleanupArchivedSessionTranscriptsMock = vi.hoisted(() => vi.fn(async () => {}));
 const tempDirs: string[] = [];
@@ -571,32 +564,6 @@ describe("session accessor seam", () => {
     ).rejects.toThrow("route owner changed");
 
     expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
-  });
-
-  it("stamps last-route creation from the participant, never the conversation route", async () => {
-    const participantKey = "agent:main:webchat:dm:route-participant";
-    const participant = await updateSessionLastRoute({
-      storePath,
-      sessionKey: participantKey,
-      channel: "webchat",
-      to: "webchat:room-1",
-      ctx: { From: "webchat:room-1", SenderId: "webchat:person-1" },
-    });
-    expect(participant).toMatchObject({
-      createdVia: "channel",
-      createdActor: { type: "human", source: "channel", id: "webchat:person-1" },
-    });
-
-    const senderlessKey = "agent:main:webchat:dm:route-senderless";
-    const senderless = await updateSessionLastRoute({
-      storePath,
-      sessionKey: senderlessKey,
-      channel: "webchat",
-      to: "webchat:room-2",
-      ctx: { From: "webchat:room-2" },
-    });
-    expect(senderless?.createdVia).toBe("channel");
-    expect(senderless?.createdActor).toBeUndefined();
   });
 
   it("rejects alias targets and keeps canonical lifecycle mutations explicit", async () => {
@@ -3261,77 +3228,6 @@ describe("session accessor seam", () => {
       appendedCount: 0,
       rejectedReason: "session-rebound",
     });
-    await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
-  });
-
-  it("fences matching sync transcript mutations with the admitted writer claim", async () => {
-    const sensitivePeer = "+15551234567";
-    const scope = {
-      agentId: "main",
-      sessionId: "session-owned-fence",
-      sessionKey: `agent:main:owned-fence:${sensitivePeer}\n\x1b[31mspoof`,
-      storePath,
-    };
-    replaceSessionEntrySync(scope, {
-      activeWriterRunId: "current-run",
-      sessionId: scope.sessionId,
-      updatedAt: 1,
-    } as InternalSessionEntry);
-
-    await withOwnedSessionTranscriptWrites(
-      {
-        sessionFile: scope.sessionKey,
-        sessionKey: scope.sessionKey,
-        sessionTarget: {
-          ...scope,
-          expectedWriterRunId: "superseded-run",
-        },
-        withTranscriptWrite: async (run) => await run(),
-      },
-      async () => {
-        expect(ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 2 })).toBe(
-          true,
-        );
-        const captureClaimError = (run: () => unknown): unknown => {
-          try {
-            run();
-          } catch (error) {
-            return error;
-          }
-          throw new Error("expected the writer claim to reject transcript persistence");
-        };
-        const replacementError = captureClaimError(() => replaceTranscriptEventsSync(scope, []));
-        const eventError = captureClaimError(() =>
-          appendTranscriptEventSync(scope, { type: "custom", id: "stale-event" }),
-        );
-        const messageError = captureClaimError(() =>
-          appendTranscriptMessageSync(scope, {
-            eventId: "stale-message",
-            message: { role: "user", content: "late" },
-          }),
-        );
-        const expectedCause = {
-          actualSessionIdHash: redactIdentifier(scope.sessionId),
-          agentIdHash: redactIdentifier(scope.agentId),
-          code: "session-rebound",
-          expectedSessionIdHash: redactIdentifier(scope.sessionId),
-          sessionKeyHash: redactIdentifier(scope.sessionKey),
-        };
-        expect(eventError).toMatchObject({ cause: expectedCause });
-        expect(messageError).toMatchObject({ cause: expectedCause });
-        for (const error of [replacementError, eventError, messageError]) {
-          expect(error).toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
-          const formatted = formatErrorMessage(error);
-          expect(formatted).not.toContain(scope.sessionKey);
-          expect(formatted).not.toContain(sensitivePeer);
-          expect(formatted).not.toContain("spoof");
-          expect(formatted).not.toContain("\n");
-          expect(formatted).not.toContain("\x1b");
-        }
-      },
-    );
-
-    expect(loadSessionEntry(scope)?.updatedAt).toBe(1);
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
   });
 

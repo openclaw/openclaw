@@ -16,6 +16,7 @@ import {
 installPwToolsCoreTestHooks();
 const mod = await import("./pw-tools-core.downloads.js");
 const interactions = await import("./pw-tools-core.interactions.js");
+const { waitForViaPlaywright } = await import("./pw-tools-core.interactions.content.js");
 const target = { cdpUrl: "http://127.0.0.1:18792" };
 
 describe("pw-tools-core", () => {
@@ -235,7 +236,7 @@ describe("pw-tools-core", () => {
     };
     setPwToolsCoreCurrentPage(page);
 
-    await interactions.waitForViaPlaywright({
+    await waitForViaPlaywright({
       ...target,
       selector: "#main",
       url: "**/dash",
@@ -266,7 +267,7 @@ describe("pw-tools-core", () => {
   it("clamps passive wait deadlines without running an executable predicate", async () => {
     const waitFor = vi.fn(async () => {});
     setPwToolsCoreCurrentPage({ locator: () => ({ first: () => ({ waitFor }) }) });
-    await interactions.waitForViaPlaywright({ ...target, selector: "#main", timeoutMs: 999_999 });
+    await waitForViaPlaywright({ ...target, selector: "#main", timeoutMs: 999_999 });
     expect(waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 120_000 });
   });
 

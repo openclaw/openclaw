@@ -9,7 +9,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -17,6 +23,7 @@ const runner = join(process.cwd(), "scripts/pr-lib/process-group-runner.mjs");
 const lockScript = join(process.cwd(), "scripts/pr-lib/operation-lock.sh");
 const lockRef = "refs/openclaw/pr-operation-locks/42";
 const describePosix = process.platform === "win32" ? describe.skip : describe;
+let receipts: FixtureReceiptChannel;
 
 function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`;
@@ -75,6 +82,7 @@ function createMaintenanceFixture(command: string, exitCode: number) {
   writeFileSync(
     hook,
     [
+      fixtureReceiptClientSource(receipts.endpoint),
       'import { execFileSync } from "node:child_process";',
       'import { existsSync, fstatSync, renameSync, writeFileSync } from "node:fs";',
       `const ready = ${JSON.stringify(ready)};`,
@@ -84,6 +92,7 @@ function createMaintenanceFixture(command: string, exitCode: number) {
       "  const notifierOpen = fstatSync(3).isSocket() || fstatSync(3).isFIFO();",
       '  writeFileSync(ready + ".pending", JSON.stringify({ pgid, notifierOpen }));',
       '  renameSync(ready + ".pending", ready);',
+      '  sendReceipt(ready, "ready");',
       "  const deadline = Date.now() + 10_000;",
       "  while (!existsSync(release)) {",
       '    if (Date.now() >= deadline) throw new Error("maintenance gate was not released");',
@@ -117,6 +126,12 @@ function createMaintenanceFixture(command: string, exitCode: number) {
 }
 
 describePosix("scripts/pr Git maintenance ownership", () => {
+  beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
+  });
+  afterAll(async () => {
+    await receipts.close();
+  });
   it.each(["git fetch origin main", "git gc --auto"])(
     "suppresses automatic maintenance during %s",
     (command) => {
@@ -144,12 +159,12 @@ describePosix("scripts/pr Git maintenance ownership", () => {
     },
   );
 
-  it.each([
+  it.for([
     { command: "git gc", exitCode: 0 },
     { command: "git gc", exitCode: 7 },
   ])(
     "joins $command before operation completion (exit $exitCode)",
-    async ({ command, exitCode }) => {
+    async ({ command, exitCode }, { signal }) => {
       const fixture = createMaintenanceFixture(command, exitCode);
       const child = spawn(process.execPath, [runner, fixture.repo, fixture.script], {
         cwd: fixture.repo,
@@ -162,14 +177,22 @@ describePosix("scripts/pr Git maintenance ownership", () => {
       child.stderr.on("data", (chunk: string) => {
         stderr += chunk;
       });
-      const closed = new Promise<number | null>((resolve) => {
+      const closed = new Promise<number | null>((resolve, reject) => {
+        child.once("error", reject);
         child.once("close", resolve);
       });
       let ownerOid = "";
       try {
-        await vi.waitFor(() => expect(existsSync(fixture.ready), stderr).toBe(true), {
-          timeout: 5000,
-        });
+        await withinTest(
+          Promise.race([
+            receipts.waitFor(fixture.ready, "ready"),
+            closed.then(() => {
+              // The hook publishes this record before its receipt; separate pipes may reorder.
+              expect(existsSync(fixture.ready), stderr).toBe(true);
+            }),
+          ]),
+          signal,
+        );
         ownerOid = fixture.git(["rev-parse", lockRef]);
         const owner = fixture.git(["cat-file", "blob", ownerOid]);
         const pgid = Number(/^pgid=(\d+)$/m.exec(owner)?.[1]);
@@ -190,10 +213,18 @@ describePosix("scripts/pr Git maintenance ownership", () => {
           ],
           { cwd: fixture.repo, env: fixture.env, detached: true, stdio: "ignore" },
         );
-        const probeCode = await new Promise<number | null>((resolve) => {
+        const probeClosed = new Promise<number | null>((resolve, reject) => {
+          probe.once("error", reject);
           probe.once("close", resolve);
         });
-        expect(probeCode).toBe(1);
+        try {
+          expect(await withinTest(probeClosed, signal)).toBe(1);
+        } finally {
+          if (probe.exitCode === null && probe.signalCode === null) {
+            probe.kill("SIGKILL");
+          }
+          await probeClosed;
+        }
         expect(fixture.git(["rev-parse", lockRef])).toBe(ownerOid);
       } finally {
         // The gate belongs to this fixture. Let Git finish and join it; no PID-based cleanup.

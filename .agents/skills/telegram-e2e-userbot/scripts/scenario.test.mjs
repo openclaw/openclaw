@@ -11,7 +11,7 @@ test("normalizes Telegram and gateway actions", () => {
   assert.deepEqual(
     parseScenario({
       actions: [
-        { type: "send", text: "@{sut} first" },
+        { type: "send", text: "@{sut} first", awaitReply: { text: "BEFORE", requireQuote: true } },
         {
           type: "click",
           atMs: 500,
@@ -34,7 +34,12 @@ test("normalizes Telegram and gateway actions", () => {
     }),
     {
       actions: [
-        { type: "send", atMs: 0, text: "@{sut} first" },
+        {
+          type: "send",
+          atMs: 0,
+          text: "@{sut} first",
+          awaitReply: { text: "BEFORE", requireQuote: true },
+        },
         {
           type: "click",
           atMs: 500,
@@ -117,6 +122,15 @@ test("rejects fields and action types outside the closed schema", () => {
     () => parseScenario({ actions: [{ type: "cron", message: "deliver", bestEffort: "yes" }] }),
     /bestEffort must be a boolean/u,
   );
+  const send = { type: "send", text: "request", awaitReply: { text: "SAME" } };
+  assert.throws(() => parseScenario({ actions: [send, send] }), /must be distinct/);
+  for (const awaitReply of [
+    { text: "" },
+    { text: "X", requireQuote: false },
+    { text: "X", timeoutMs: 100 },
+  ]) {
+    assert.throws(() => parseScenario({ actions: [{ ...send, awaitReply }] }), /awaitReply/);
+  }
 });
 
 test("validates the recorder-ready artifact as a closed shape", () => {

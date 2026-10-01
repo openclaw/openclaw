@@ -35,8 +35,12 @@ export type SqliteSessionReclamationDiagnostics = {
   kind?:
     | "archive-publish-prepare"
     | "archive-publish-record"
+    | "deletion-plan"
     | "entry"
     | "lifecycle-artifacts"
+    | "lifecycle-projection-plan"
+    | "lifecycle-projection-commit"
+    | "lifecycle-projection-count"
     | "history-eviction"
     | "historical-generation"
     | "maintenance-plan"

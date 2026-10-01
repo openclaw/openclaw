@@ -49,12 +49,7 @@ import {
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
 import { resolveNodeGatewayOptions } from "./gateway-options.js";
 
-type NodeDaemonInstallOptions = {
-  host?: string;
-  port?: string | number;
-  contextPath?: string;
-  tls?: boolean;
-  tlsFingerprint?: string;
+type NodeDaemonInstallOptions = Parameters<typeof resolveNodeGatewayOptions>[0] & {
   nodeId?: string;
   displayName?: string;
   shareInstalledApps?: boolean;
@@ -317,17 +312,12 @@ export async function runNodeDaemonStatus(opts: NodeDaemonOutputOptions = {}) {
     })),
   ]);
 
-  const payload = {
-    service: {
-      ...buildDaemonServiceSnapshot(service, loaded),
-      command,
-      runtime,
-    },
-  };
-
   if (json) {
     defaultRuntime.writeJson({
-      service: projectDaemonServiceForJson(payload.service, { includeDefinitionPaths: true }),
+      service: projectDaemonServiceForJson(
+        { ...buildDaemonServiceSnapshot(service, loaded), command, runtime },
+        { includeDefinitionPaths: true },
+      ),
     });
     return;
   }

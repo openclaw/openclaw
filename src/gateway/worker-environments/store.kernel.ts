@@ -15,6 +15,7 @@ import {
 } from "./prepared-environment-store.js";
 import { createWorkerEnvironmentSessionAttachmentStore } from "./session-attachment-store.js";
 import type { WorkerEnvironmentAttachmentRecord } from "./session-attachment.js";
+import { isTerminalWorkerEnvironmentState } from "./state.js";
 import type { WorkerEnvironmentKernelOptions } from "./store-kernel-options.js";
 import {
   credentialInsert,
@@ -36,7 +37,6 @@ import {
   normalizeExpiry,
   normalizeSessionId,
   requireWorkerEnvironmentString,
-  TERMINAL_STATES,
 } from "./store-validation.js";
 import type { WorkerEnvironmentMutationMethods } from "./store-worker-contract.js";
 import type { CredentialRevocationInput } from "./store-write-types.js";
@@ -113,7 +113,10 @@ export function createWorkerEnvironmentStoreKernel(options: WorkerEnvironmentKer
       return write((db) => {
         ensureWorkerEnvironmentNodeEnrollmentSchema(db);
         const current = getRequiredWorkerEnvironment(db, environmentId);
-        if (TERMINAL_STATES.includes(current.state) || current.destroyRequestedAtMs !== null) {
+        if (
+          isTerminalWorkerEnvironmentState(current.state) ||
+          current.destroyRequestedAtMs !== null
+        ) {
           throw new Error(`Worker environment ${environmentId} cannot begin node enrollment`);
         }
         const setupId = current.nodeSetupId ?? randomUUID();

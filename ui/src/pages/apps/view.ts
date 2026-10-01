@@ -1,4 +1,3 @@
-// Control UI view renders the Apps & extensions promo page.
 import { html, nothing, type TemplateResult } from "lit";
 import type { RouteId } from "../../app-route-paths.ts";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";

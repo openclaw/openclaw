@@ -164,21 +164,18 @@ export function adoptRuntimeMemoryRegistrations(
   const canAdopt = (pluginId: string) => {
     const targetOwner = targetRegistry.plugins.find((plugin) => plugin.id === pluginId);
     const runtimeOwner = runtimeRegistry.plugins.find((plugin) => plugin.id === pluginId);
-    if (
-      runtimeOwner?.status !== "loaded" ||
-      !resolveEffectivePluginActivationState({
+    return (
+      runtimeOwner?.status === "loaded" &&
+      resolveEffectivePluginActivationState({
         id: runtimeOwner.id,
         origin: runtimeOwner.origin,
         config: normalizedConfig,
         rootConfig: config,
         enabledByDefault: runtimeOwner.activationSource === "default",
-      }).enabled ||
-      (targetOwner &&
-        (targetOwner.status !== "loaded" || targetOwner.source !== runtimeOwner.source))
-    ) {
-      return false;
-    }
-    return true;
+      }).enabled &&
+      (!targetOwner ||
+        (targetOwner.status === "loaded" && targetOwner.source === runtimeOwner.source))
+    );
   };
   const memoryCorpusSupplements = adoptEligibleRuntimeMemoryRegistrations(
     targetRegistry.memoryCorpusSupplements,

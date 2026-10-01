@@ -8,6 +8,7 @@ import {
   getRuntimeConfigSourceSnapshot,
   selectApplicableRuntimeConfig,
 } from "../config/config.js";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import type { Model } from "../llm/types.js";
@@ -316,8 +317,8 @@ export function applySecretRefHeaderSentinels<T extends Model>(
   if (!runtimeConfig || !runtimeSourceConfig || !usesRuntimeProvider) {
     return model;
   }
-  const sourceProvider = authConfig.resolveProviderConfig(runtimeSourceConfig, model.provider);
-  const runtimeProvider = authConfig.resolveProviderConfig(runtimeConfig, model.provider);
+  const sourceProvider = resolveMergedModelProviderConfig(runtimeSourceConfig, model.provider);
+  const runtimeProvider = resolveMergedModelProviderConfig(runtimeConfig, model.provider);
   const replacements = new Map<string, { value: string; replacement: string }>();
   const isManagedSecret = (value: unknown) =>
     coerceSecretRef(value) !== null ||
@@ -436,7 +437,7 @@ export function applyAuthHeaderOverride<T extends Model>(
   if (!auth?.apiKey || isNonSecretApiKeyMarker(auth.apiKey)) {
     return sentinelModel;
   }
-  const providerConfig = authConfig.resolveProviderConfig(cfg, sentinelModel.provider);
+  const providerConfig = resolveMergedModelProviderConfig(cfg, sentinelModel.provider);
   if (!providerConfig?.authHeader) {
     return sentinelModel;
   }

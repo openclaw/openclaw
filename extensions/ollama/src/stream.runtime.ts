@@ -14,6 +14,7 @@ import type {
   Usage,
 } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream, transformMessages } from "openclaw/plugin-sdk/llm";
+import { asNonNegativeFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderResponseErrorText } from "openclaw/plugin-sdk/provider-http";
@@ -23,6 +24,7 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   buildAssistantMessage as buildStreamAssistantMessage,
+  createEmptyTransportUsage,
   describeUnsupportedToolResultMedia,
   extractToolResultText,
   failTransportStream,
@@ -64,13 +66,7 @@ import { checkNdjsonRecordCap } from "./stream-ndjson-cap.js";
 import type { OllamaLocalService } from "./stream-registration.js";
 import { normalizeOllamaToolSchema } from "./tool-schema.runtime.js";
 
-export {
-  createConfiguredOllamaCompatStreamWrapper,
-  isOllamaCompatProvider,
-  resolveOllamaCompatNumCtxEnabled,
-  shouldInjectOllamaCompatNumCtx,
-  wrapOllamaCompatNumCtx,
-} from "./stream-compat.js";
+export { createConfiguredOllamaCompatStreamWrapper } from "./stream-compat.js";
 
 export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
 
@@ -82,19 +78,13 @@ const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
 const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
 const LETTER_OR_DIGIT_RE = /[\p{L}\p{N}]/gu;
 
-type OllamaStreamCooperativeScheduler = {
-  afterEvent: () => Promise<void>;
-};
-
 function throwIfOllamaStreamAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new Error("Request was aborted");
   }
 }
 
-function createOllamaStreamCooperativeScheduler(
-  signal?: AbortSignal,
-): OllamaStreamCooperativeScheduler {
+function createOllamaStreamCooperativeScheduler(signal?: AbortSignal) {
   let lastYieldedAt = Date.now();
   let eventsSinceYield = 0;
   return {
@@ -134,12 +124,8 @@ function maxCharacterFrequency(text: string): number {
   return max;
 }
 
-function isKnownOllamaGarbledVisibleTextModel(modelId: string): boolean {
-  return GARBLED_VISIBLE_TEXT_MODEL_RE.test(modelId);
-}
-
 function isLikelyGarbledVisibleText(params: { text: string; modelId: string }): boolean {
-  if (!isKnownOllamaGarbledVisibleTextModel(params.modelId)) {
+  if (!GARBLED_VISIBLE_TEXT_MODEL_RE.test(params.modelId)) {
     return false;
   }
   const compact = params.text.replace(/\s+/g, "");
@@ -262,12 +248,6 @@ function resolveOllamaTopLevelParams(
 }
 
 function resolveStreamingTextDelta(previousText: string, nextText: string): string {
-  if (!nextText) {
-    return "";
-  }
-  if (!previousText) {
-    return nextText;
-  }
   if (nextText.startsWith(previousText)) {
     return nextText.slice(previousText.length);
   }
@@ -329,36 +309,6 @@ type StreamModelDescriptor = {
 type OllamaUsageFallback = Partial<Record<"input" | "output", number | (() => number)>>;
 
 const CHARS_PER_TOKEN_ESTIMATE = 4;
-
-function buildUsageWithNoCost(params: {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  cacheTelemetry?: Usage["cacheTelemetry"];
-  totalTokens?: number;
-  contextUsage?: Usage["contextUsage"];
-}): Usage {
-  const input = params.input ?? 0;
-  const output = params.output ?? 0;
-  const cacheRead = params.cacheRead ?? 0;
-  const cacheWrite = params.cacheWrite ?? 0;
-  const cacheTelemetry =
-    params.cacheTelemetry ??
-    (params.cacheRead !== undefined && params.cacheWrite !== undefined
-      ? { state: "available" as const }
-      : { state: "unavailable" as const });
-  return {
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    cacheTelemetry,
-    totalTokens: params.totalTokens ?? input + output,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    ...(params.contextUsage ? { contextUsage: params.contextUsage } : {}),
-  };
-}
 
 interface OllamaChatRequest {
   model: string;
@@ -477,11 +427,7 @@ function estimateOllamaCompletionTokens(
 
 function resolveUsageFallback(fallback: OllamaUsageFallback["input"]): number {
   const estimate = typeof fallback === "function" ? fallback() : fallback;
-  return resolveOptionalUsageCount(estimate) ?? 0;
-}
-
-function resolveOptionalUsageCount(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+  return asNonNegativeFiniteNumber(estimate) ?? 0;
 }
 
 type InputContentPart =
@@ -529,10 +475,6 @@ function extractOllamaThinking(content: unknown): string {
     .join("");
 }
 
-function ensureArgsObject(value: unknown): Record<string, unknown> {
-  return parseJsonObjectPreservingUnsafeIntegers(value) ?? {};
-}
-
 type OllamaToolCallNameOptions = {
   availableToolNames?: ReadonlySet<string>;
 };
@@ -557,7 +499,10 @@ function extractToolCalls(
         ...(id ? { id } : {}),
         function: {
           name: normalizeOllamaToolCallName(part.name, options),
-          arguments: ensureArgsObject(part.type === "toolCall" ? part.arguments : part.input),
+          arguments:
+            parseJsonObjectPreservingUnsafeIntegers(
+              part.type === "toolCall" ? part.arguments : part.input,
+            ) ?? {},
         },
       });
     }
@@ -740,12 +685,12 @@ export function buildAssistantMessage(
     }
   }
 
-  const reportedPromptTokens = resolveOptionalUsageCount(response.prompt_eval_count);
-  const reportedOutputTokens = resolveOptionalUsageCount(response.eval_count);
+  const reportedPromptTokens = asNonNegativeFiniteNumber(response.prompt_eval_count);
+  const reportedOutputTokens = asNonNegativeFiniteNumber(response.eval_count);
   // Provider counters, including zero, avoid scanning and serializing history for estimates.
   const promptTokens = reportedPromptTokens ?? resolveUsageFallback(usageFallback?.input);
   const outputTokens = reportedOutputTokens ?? resolveUsageFallback(usageFallback?.output);
-  const reportedCacheRead = resolveOptionalUsageCount(response.prompt_eval_cached_count);
+  const reportedCacheRead = asNonNegativeFiniteNumber(response.prompt_eval_cached_count);
   // Ollama includes cached tokens in prompt_eval_count; OpenClaw records input as uncached.
   const cacheRead =
     reportedCacheRead === undefined ? undefined : Math.min(reportedCacheRead, promptTokens);
@@ -759,18 +704,15 @@ export function buildAssistantMessage(
     model: modelInfo,
     content,
     stopReason: resolveOllamaStopReason(response),
-    usage: buildUsageWithNoCost({
+    usage: {
+      ...createEmptyTransportUsage(),
       input: promptTokens - (cacheRead ?? 0),
       output: outputTokens,
-      contextUsage,
-      ...(cacheRead === undefined
-        ? {}
-        : {
-            cacheRead,
-            cacheWrite: 0,
-            totalTokens: promptTokens + outputTokens,
-          }),
-    }),
+      cacheRead: cacheRead ?? 0,
+      cacheTelemetry: { state: cacheRead === undefined ? "unavailable" : "available" },
+      totalTokens: promptTokens + outputTokens,
+      ...(contextUsage ? { contextUsage } : {}),
+    },
   });
 }
 
@@ -1064,7 +1006,7 @@ function createRawOllamaStreamFn(
               model: modelInfo,
               content,
               stopReason: "stop",
-              usage: buildUsageWithNoCost({}),
+              usage: { ...createEmptyTransportUsage(), cacheTelemetry: { state: "unavailable" } },
             });
 
           const ensureStreamStarted = () => {
@@ -1202,8 +1144,10 @@ function createRawOllamaStreamFn(
           }
 
           if (
-            pendingFinalVisibleContent !== undefined &&
-            isLikelyGarbledVisibleText({ text: pendingFinalVisibleContent, modelId: model.id })
+            isLikelyGarbledVisibleText({
+              text: pendingFinalVisibleContent || accumulatedVisibleContent,
+              modelId: model.id,
+            })
           ) {
             throw new Error(
               `Ollama returned non-linguistic garbled visible text for ${model.id}; retry or switch models`,
@@ -1211,12 +1155,6 @@ function createRawOllamaStreamFn(
           }
 
           flushVisibleText(pendingFinalVisibleContent);
-
-          if (isLikelyGarbledVisibleText({ text: accumulatedVisibleContent, modelId: model.id })) {
-            throw new Error(
-              `Ollama returned non-linguistic garbled visible text for ${model.id}; retry or switch models`,
-            );
-          }
 
           finalResponse.message.content = accumulatedVisibleContent;
           if (accumulatedThinking) {
@@ -1298,7 +1236,7 @@ function createRawOllamaStreamFn(
             model,
             content: [],
             stopReason,
-            usage: buildUsageWithNoCost({}),
+            usage: { ...createEmptyTransportUsage(), cacheTelemetry: { state: "unavailable" } },
           }),
         });
       } finally {

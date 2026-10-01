@@ -1,4 +1,3 @@
-// Policy plugin channel, model, MCP, and network evidence.
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { asNonArrayRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -17,7 +16,7 @@ import type {
 } from "./policy-state-types.js";
 
 export function scanPolicyChannels(cfg: Record<string, unknown>): readonly PolicyChannelEvidence[] {
-  return Object.entries(configuredChannels(cfg))
+  return Object.entries(asNonArrayRecord(cfg.channels))
     .filter(([id]) => !RESERVED_CHANNEL_CONFIG_KEYS.has(id))
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([id, value]) => {
@@ -36,7 +35,7 @@ export function scanPolicyChannels(cfg: Record<string, unknown>): readonly Polic
 export function scanPolicyMcpServers(
   cfg: Record<string, unknown>,
 ): readonly PolicyMcpServerEvidence[] {
-  return Object.entries(configuredMcpServers(cfg))
+  return Object.entries(asNonArrayRecord(asNonArrayRecord(cfg.mcp).servers))
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([id, value]) => {
       const entry: PolicyEvidenceBuilder<PolicyMcpServerEvidence> = {
@@ -59,7 +58,7 @@ export function scanPolicyMcpServers(
 export function scanPolicyModelProviders(
   cfg: Record<string, unknown>,
 ): readonly PolicyModelProviderEvidence[] {
-  return Object.keys(configuredModelProviders(cfg))
+  return Object.keys(asNonArrayRecord(asNonArrayRecord(cfg.models).providers))
     .toSorted((a, b) => a.localeCompare(b))
     .map((id) => ({
       id: normalizeProviderId(id),
@@ -110,14 +109,6 @@ export function scanPolicyNetwork(cfg: Record<string, unknown>): readonly Policy
   });
 }
 
-export function configuredChannels(cfg: Record<string, unknown>): Record<string, unknown> {
-  return asNonArrayRecord(cfg.channels);
-}
-
-function configuredMcpServers(cfg: Record<string, unknown>): Record<string, unknown> {
-  return asNonArrayRecord(asNonArrayRecord(cfg.mcp).servers);
-}
-
 function mcpServerTransport(value: unknown): PolicyMcpServerEvidence["transport"] {
   if (!isRecord(value)) {
     return "unknown";
@@ -141,10 +132,6 @@ function redactMcpUrlForEvidence(raw: string): string {
   } catch {
     return "[redacted-url]";
   }
-}
-
-function configuredModelProviders(cfg: Record<string, unknown>): Record<string, unknown> {
-  return asNonArrayRecord(asNonArrayRecord(cfg.models).providers);
 }
 
 function collectModelRefsFromValue(
@@ -233,23 +220,15 @@ function isModelSettingKey(key: string): boolean {
 }
 
 function pushModelRef(refs: PolicyModelRefEvidence[], ref: string, source: string): void {
-  const parsed = parseModelRef(ref);
-  if (parsed === undefined) {
-    return;
-  }
-  refs.push({ ref, provider: parsed.provider, model: parsed.model, source });
-}
-
-function parseModelRef(
-  ref: string,
-): { readonly provider: string; readonly model: string } | undefined {
   const trimmed = ref.trim();
   const slash = trimmed.indexOf("/");
   if (slash <= 0 || slash >= trimmed.length - 1) {
-    return undefined;
+    return;
   }
-  return {
+  refs.push({
+    ref,
     provider: normalizeProviderId(trimmed.slice(0, slash)),
     model: trimmed.slice(slash + 1),
-  };
+    source,
+  });
 }

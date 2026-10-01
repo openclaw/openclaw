@@ -38,6 +38,7 @@ import {
   resolveOpenAIRequestReasoning,
   type OpenAIRequestReasoningEffort,
 } from "./openai-request-reasoning.js";
+import { resolveOpenAIResponsesTextFormat } from "./openai-response-format.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
 
 type OpenAIResponsesStreamOptions = Pick<
@@ -81,7 +82,10 @@ type OpenAIResponsesProcessStreamOptions = OpenAIResponsesStreamOptions &
 
 type ResponsesReasoningSummary = "auto" | "detailed" | "concise" | null;
 
-type ResponsesCommonParamsOptions = Pick<StreamOptions, "maxTokens" | "temperature"> & {
+type ResponsesCommonParamsOptions = Pick<
+  StreamOptions,
+  "maxTokens" | "temperature" | "responseFormat"
+> & {
   reasoningEffort?: OpenAIRequestReasoningEffort;
   reasoningSummary?: ResponsesReasoningSummary;
 };
@@ -127,6 +131,13 @@ export function applyCommonResponsesParams<TApi extends Api>(
 
   if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     params.temperature = options.temperature;
+  }
+
+  if (options?.responseFormat !== undefined) {
+    params.text = {
+      ...params.text,
+      format: resolveOpenAIResponsesTextFormat(options.responseFormat),
+    };
   }
 
   if (context.tools) {

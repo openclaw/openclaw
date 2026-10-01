@@ -87,8 +87,6 @@ export function reserveUpdateCommandExecutorSlot(fence: UpdateRecoveryFence, roo
   reserve(root);
 }
 
-export type { UpdateCommandChildGrant } from "./update-command-executor-children.js";
-
 export async function withUpdateCommandExecutorChild<T>(
   fence: UpdateRecoveryFence,
   root: string,

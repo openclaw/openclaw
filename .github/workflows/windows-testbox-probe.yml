@@ -42,6 +42,11 @@ on:
         required: false
         default: false
         type: boolean
+      skip_defender_exclusions:
+        description: "Leave Windows Defender policy unchanged"
+        required: false
+        default: false
+        type: boolean
       windows_ci_replay:
         description: "Exact diagnostic JSON: nodeVersion, packageManager, vitestVersion, maxWorkers, files, projects"
         required: false
@@ -507,7 +512,7 @@ jobs:
 
       - &windows_defender
         name: Try to exclude workspace from Windows Defender (best-effort)
-        if: ${{ inputs.run_windows_ci || inputs.windows_ci_replay != '' }}
+        if: ${{ !inputs.skip_defender_exclusions && (inputs.run_windows_ci || inputs.windows_ci_replay != '') }}
         shell: pwsh
         run: |
           $cmd = Get-Command Add-MpPreference -ErrorAction SilentlyContinue

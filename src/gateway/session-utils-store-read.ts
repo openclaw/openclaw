@@ -6,11 +6,11 @@ import {
   loadExactSessionEntryCandidates,
   loadExactSessionEntryCandidatesReadOnlyBatch,
 } from "../config/sessions/session-accessor.js";
+import type { SessionEntryListScope } from "../config/sessions/session-accessor.types.js";
 import type {
   CapturedSessionEntryReadSource,
-  SessionEntryListScope,
   SessionEntryReadSource,
-} from "../config/sessions/session-accessor.types.js";
+} from "../config/sessions/session-entry-read-source.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 
 /** Request-local, read-only views avoid rematerializing a store for each sharing lookup. */
@@ -130,15 +130,9 @@ function loadGatewaySessionLookupStoreUncached(
       ...target,
       projection: options.projection,
       sessionKeys: options.exactKeys,
-      onReadSource: (source, physical) => {
-        readSource = source;
-        capturedReadSource = physical
-          ? {
-              ...source,
-              databaseIdentity: physical.identity,
-              databaseBirthtime: physical.birthtime,
-            }
-          : undefined;
+      onReadSource: (source) => {
+        readSource = { agentId: source.agentId, path: source.path };
+        capturedReadSource = source;
       },
     });
     return {

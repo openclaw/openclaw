@@ -17,7 +17,22 @@ struct WatchExecApprovalIdentityKey: Hashable, Sendable {
     var approvalID: WatchApprovalID.Key
 }
 
+extension WatchExecApprovalIdentityKey {
+    init?(approvalId: String, gatewayStableID: String?) {
+        guard let approvalID = WatchApprovalID.key(approvalId),
+              let gatewayID = WatchGatewayID.key(gatewayStableID)
+        else { return nil }
+        self.init(gatewayID: gatewayID, approvalID: approvalID)
+    }
+}
+
 typealias WatchExecApprovalItem = OpenClawWatchExecApprovalItem
+
+extension WatchExecApprovalItem {
+    var ownerKey: WatchExecApprovalIdentityKey? {
+        WatchExecApprovalIdentityKey(approvalId: self.id, gatewayStableID: self.gatewayStableID)
+    }
+}
 
 struct WatchExecApprovalPromptMessage: Codable, Equatable {
     var approval: WatchExecApprovalItem

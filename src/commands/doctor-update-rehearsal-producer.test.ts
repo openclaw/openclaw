@@ -4,6 +4,7 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareUpdateCandidateRehearsal } from "../infra/update-candidate-rehearsal.js";
+import { materializeUpdateCandidateStateWorker } from "../infra/update-candidate-state.test-support.js";
 import { importLegacySkillProposal } from "../skills/workshop/store.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -24,6 +25,7 @@ it("admits real producer plugin host, dependency and basename links without trav
     const locator = path.join(root, "example");
     const modules = path.join(root, "modules");
     await fs.mkdir(candidate);
+    await materializeUpdateCandidateStateWorker(candidate);
     await fs.mkdir(plugin);
     await fs.symlink(plugin, locator, "dir");
     await fs.mkdir(path.join(modules, "dependency"), { recursive: true });
@@ -140,6 +142,7 @@ it.each(["pending", "applied"] as const)(
   "admits real copied Workshop %s history without claiming external skill data",
   async (status) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (source) => {
+      await materializeUpdateCandidateStateWorker(source.root);
       const skillDir = path.join(source.workspaceDir, "skills", "saved-procedure");
       const content = "# Saved procedure\n\nKeep the operator's current skill.\n";
       const applied = createAppliedLegacyProposal({
@@ -199,6 +202,7 @@ it("releases copied Workshop readers before removing a rehearsal", async () => {
   const { closeOpenClawStateDatabaseByPathAsync } =
     await import("../state/openclaw-state-db-cache.js");
   await withOpenClawTestState({ scenario: "minimal" }, async (source) => {
+    await materializeUpdateCandidateStateWorker(source.root);
     openOpenClawStateDatabase({ env: source.env });
     closeOpenClawStateDatabaseForTest();
     const rehearsal = await prepareUpdateCandidateRehearsal({

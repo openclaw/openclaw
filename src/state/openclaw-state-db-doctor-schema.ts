@@ -34,11 +34,9 @@ export function hasDanglingSkillWorkshopCollectionReviewIndex(database: Database
 }
 
 function inspectSkillWorkshopCollectionReviewIndex(database: DatabaseSync): boolean {
-  const rawIndex = database // sqlite-allow-raw -- Inspect the exact malformed catalog row before ordinary schema parsing.
+  const index = database // sqlite-allow-raw -- Inspect the exact malformed catalog row before ordinary schema parsing.
     .prepare("SELECT tbl_name, rootpage, sql FROM sqlite_schema WHERE type = 'index' AND name = ?")
     .get(LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX);
-  // SAFETY: the narrow catalog projection is validated field-by-field below.
-  const index = rawIndex as { tbl_name?: unknown; rootpage?: unknown; sql?: unknown } | undefined;
   if (
     index?.tbl_name !== "skill_workshop_collection_reviews" ||
     typeof index.rootpage !== "number" ||
@@ -49,11 +47,9 @@ function inspectSkillWorkshopCollectionReviewIndex(database: DatabaseSync): bool
   ) {
     return false;
   }
-  const rawColumns = database // sqlite-allow-raw -- Validate physical columns without parsing the malformed index.
+  const columns = database // sqlite-allow-raw -- Validate physical columns without parsing the malformed index.
     .prepare("PRAGMA table_info(skill_workshop_collection_reviews)")
     .all();
-  // SAFETY: PRAGMA table_info rows expose optional names compared as unknown values.
-  const columns = rawColumns as Array<{ name?: unknown }>;
   return (
     columns.some((column) => column.name === "owner_agent_id") &&
     !columns.some((column) => column.name === "workspace_dir")

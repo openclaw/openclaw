@@ -42,26 +42,8 @@ function openLegacyStores(context: PluginDoctorStateMigrationContext, env: NodeJ
   };
 }
 
-function isPersistedCard(value: unknown): value is PersistedWorkboardCard {
-  return Boolean(
-    value && typeof value === "object" && (value as PersistedWorkboardCard).version === 1,
-  );
-}
-
-function isPersistedBoard(value: unknown): value is PersistedWorkboardBoard {
-  return Boolean(
-    value && typeof value === "object" && (value as PersistedWorkboardBoard).version === 1,
-  );
-}
-
-function isPersistedSubscription(
-  value: unknown,
-): value is PersistedWorkboardNotificationSubscription {
-  return Boolean(
-    value &&
-    typeof value === "object" &&
-    (value as PersistedWorkboardNotificationSubscription).version === 1,
-  );
+function hasPersistedVersion(value: unknown): boolean {
+  return value !== null && typeof value === "object" && "version" in value && value.version === 1;
 }
 
 function isPersistedAttachment(value: unknown): value is PersistedWorkboardAttachment {
@@ -91,7 +73,7 @@ async function migrateNamespace<T>(params: {
   label: string;
   legacy: WorkboardKeyedStore<T>;
   target: WorkboardKeyedStore<T>;
-  isValid: (value: unknown) => value is T;
+  isValid: (value: unknown) => boolean;
 }): Promise<{ imported: number; warnings: string[] }> {
   const warnings: string[] = [];
   let imported = 0;
@@ -219,19 +201,19 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           label: "card",
           legacy: cards,
           target: sqlite.cards,
-          isValid: isPersistedCard,
+          isValid: hasPersistedVersion,
         });
         const boardResult = await migrateNamespace({
           label: "board",
           legacy: boards,
           target: sqlite.boards,
-          isValid: isPersistedBoard,
+          isValid: hasPersistedVersion,
         });
         const subscriptionResult = await migrateNamespace({
           label: "notification subscription",
           legacy: subscriptions,
           target: sqlite.subscriptions,
-          isValid: isPersistedSubscription,
+          isValid: hasPersistedVersion,
         });
         const attachmentResult = await migrateAttachments({
           legacy: attachments,

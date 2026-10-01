@@ -8,10 +8,10 @@ import {
   resolveSessionTranscriptDatabasePath,
 } from "../../config/sessions/session-accessor.js";
 import type {
-  SessionEntryReadSource,
   SessionTranscriptReadScope,
   SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.types.js";
+import type { SessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../config/sessions/session-store-owner.js";
 import {
   captureOwnedTranscriptWriteAssertion,
@@ -166,6 +166,7 @@ export async function persistCliAssistantTranscript(params: {
         : {}),
       storePath: runParams.storePath,
       idempotencyKey,
+      runId: runParams.runId,
       config: runParams.config,
       beforeMessageWrite: (write) => {
         const message = runAgentHarnessBeforeMessageWriteHook({
@@ -262,7 +263,7 @@ function captureCliBlockFallbackWrite(
     sessionKeys: [normalizedKey],
     readOnly: true,
     onReadSource: (readSource) => {
-      source = readSource;
+      source = { agentId: readSource.agentId, path: readSource.path };
     },
   })[0]?.entry;
   if (!source || !captured || captured.sessionId !== identity.sessionId) {

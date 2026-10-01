@@ -241,6 +241,36 @@ procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
 once, then restart the named system unit; subsequent updates can use the fixed
 updater.
 
+## Candidate migration rehearsal timeouts
+
+Current updaters give snapshot preparation and each candidate check separate
+budgets derived from the copied database and plugin sizes. SQLite integrity
+checks report their database size, elapsed time, and active phase while running.
+A check that exhausts its budget reports
+`candidate-migration-rehearsal: <step> exceeded budget after <n> s (<last output>)`.
+The last output is an observation, not proof that the check completed. Preserve
+that detail when reporting a slow integrity check or migration. An explicit
+`--timeout` still controls the candidate check deadline.
+
+The published 2026.9.3 updater shares a five-minute deadline across snapshot
+preparation and candidate checks. Increasing `--timeout` cannot extend that cap.
+Stopping the Gateway can remove writer contention, but it cannot extend this
+deadline or eliminate migration work on the copied databases. Candidate-side
+Doctor improvements can reduce that work; they cannot change the installed
+updater's deadline.
+
+That release can also report a skipped repair with “could not provide a usable
+inference route” after a rehearsal timeout. This comes from a broad error handler
+while preparing automatic repair, not from an inference check performed by the
+rehearsal. Inspect the original failed step and elapsed time. Current updaters
+retain the `candidate-checks-timeout` reason and do not run inference repair for
+that failure. If the installed updater cannot finish, preserve a
+[verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup)
+and use the installation owner's
+[manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+with an exact compatible target, then run the target's `openclaw doctor --fix`
+before starting its Gateway.
+
 ## Published 2026.9.4 on large agent fleets
 
 The published 2026.9.4 updater shares a five-minute deadline across snapshot
@@ -291,6 +321,26 @@ Verify the actual serving version/build through an authenticated Gateway RPC
 and check `/readyz` before declaring recovery or removing backups. The
 plain-start control did not verify these recovery steps or establish that
 restarting the same 2026.9.4 fleet resolves the failed-update condition.
+
+## Headless nodes waiting on 2026.9.6
+
+A headless node running published 2026.9.6 with the default plugins prepares an
+automatic update but never activates it. Its log shows
+`node auto-update <version> is ready; waiting for active work to finish` even
+when no commands run. That release's bundled File Transfer plugin does not
+report its idle state, and the running node makes the idle decision before any
+newer code loads, so a later release cannot repair this automatically.
+
+Update the node once through the normal workflow, then restart it:
+
+```bash
+openclaw update
+openclaw node restart
+```
+
+For a foreground node, stop `openclaw node run` and start it again instead.
+Later releases report File Transfer commands as idle between invocations, so
+subsequent automatic node updates activate normally.
 
 ## Plugin repair warnings
 
@@ -383,6 +433,13 @@ openclaw plugins enable <id>
 ```
 
 Updates from the fixed release onward inspect these plugins normally.
+
+The 2026.9.5 updater can also report `Cannot use 'import.meta' outside a module`
+for ESM plugins, including bundles using `import.meta.dir`. Use the same temporary
+disable/update/enable sequence: a new candidate cannot replace the parser already
+running in the installed updater. Version 2026.9.6 admits retained `import.meta`
+syntax. Current snapshot inventory also records unparseable entries as named
+plugin warnings instead of aborting the snapshot.
 
 ### Large model-catalog temporary directories
 

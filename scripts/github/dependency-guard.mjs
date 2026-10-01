@@ -4,7 +4,7 @@
 // lockfile-only PR changes without executing contributor code.
 import { appendFile } from "node:fs/promises";
 import {
-  SupersededReviewError,
+  ObsoleteReviewError,
   assertGuardUnchanged,
   findMaintainerApproval,
   finishGuard,
@@ -507,11 +507,11 @@ export async function createAutoscrubCommit(
   }
   // Recheck after reading file contents: neither an old workflow event nor the
   // detection job authorizes a write after the PR or its approval has changed.
-  await assertGuardUnchanged(guard);
+  await assertGuardUnchanged(guard, { allowMerged: false });
   if (await findMaintainerApproval(guard)) {
     return null;
   }
-  await assertGuardUnchanged(guard);
+  await assertGuardUnchanged(guard, { allowMerged: false });
   const data = await writeApi
     .graphql(
       `mutation CreateAutoscrubCommit($input: CreateCommitOnBranchInput!) {
@@ -637,7 +637,7 @@ export async function reviewDependencyChanges(
       dependencyManifestChanges,
     });
   const autoscrubTarget =
-    autoscrubCandidate && !approval && !removalOnly
+    autoscrubCandidate && pullRequest.state === "open" && !approval && !removalOnly
       ? autoscrubTargetRepository({ owner, repo, pullRequest })
       : null;
   if (mode === "detect") {
@@ -723,7 +723,7 @@ export async function reviewDependencyChanges(
           error instanceof GitHubRateLimitError ||
           error instanceof GitHubReadTimeoutError ||
           error instanceof GitHubDiffDataError ||
-          error instanceof SupersededReviewError
+          error instanceof ObsoleteReviewError
         ) {
           throw error;
         }
@@ -797,7 +797,17 @@ export async function reviewDependencyChanges(
     }),
   );
   if (mode === "autoscrub") {
-    await assertGuardUnchanged(guard);
+    try {
+      await assertGuardUnchanged(guard);
+    } catch (error) {
+      // A lifecycle stop must not hide a cleanup mutation that already failed.
+      if (autoscrubStatus?.kind === "failed") {
+        throw new Error(`Dependency lockfile autoscrub failed: ${autoscrubStatus.reason}`, {
+          cause: error,
+        });
+      }
+      throw error;
+    }
   }
   await upsertComment(existingGuardComment, body);
   await writeSummary(body);
@@ -810,7 +820,7 @@ export async function reviewDependencyChanges(
 if (import.meta.url === `file://${process.argv[1]}`) {
   reviewDependencyChanges().catch(
     /** @param {unknown} error */ (error) => {
-      if (error instanceof SupersededReviewError) {
+      if (error instanceof ObsoleteReviewError) {
         console.log(error.message);
         return;
       }

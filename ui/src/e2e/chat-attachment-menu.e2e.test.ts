@@ -23,6 +23,7 @@ suite.define(() => {
   it.each([
     { route: "chat", availability: "insecure" },
     { route: "new", availability: "unsupported" },
+    { route: "chat", availability: "permission-denied" },
   ])(
     "offers explicit native capture in $route when preview is $availability",
     async ({ route, availability }) => {
@@ -30,6 +31,10 @@ suite.define(() => {
         await page.addInitScript((kind) => {
           if (kind === "insecure") {
             Object.defineProperty(window, "isSecureContext", { configurable: true, value: false });
+          } else if (kind === "permission-denied") {
+            navigator.mediaDevices.getUserMedia = async () => {
+              throw new DOMException("Preview permission denied", "NotAllowedError");
+            };
           } else {
             Object.defineProperty(navigator, "mediaDevices", {
               configurable: true,

@@ -323,7 +323,7 @@ async function resolvePluginImplicitProviders(
   return Object.keys(discovered).length > 0 ? discovered : undefined;
 }
 
-async function runProviderCatalogWithTimeout(
+export async function runProviderCatalogWithTimeout(
   params: Parameters<typeof runProviderCatalog>[0] & {
     agentDir: string;
     authStore: AuthProfileStore;
@@ -335,9 +335,9 @@ async function runProviderCatalogWithTimeout(
   let active = true;
   const catalogParams = {
     ...params,
-    isActive: () => active,
+    isActive: () => active && params.isActive?.() !== false,
     reportCatalogOutcome: (outcome: ProviderCatalogOutcome) => {
-      if (active) {
+      if (active && params.isActive?.() !== false) {
         params.reportCatalogOutcome?.(outcome);
       }
     },

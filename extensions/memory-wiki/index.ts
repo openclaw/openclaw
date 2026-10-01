@@ -186,31 +186,10 @@ export default definePluginEntry({
       resolveConfig,
       resolveSourceSyncSignal: () => sourceSyncAbortController?.signal,
     });
-    api.registerTool(
-      (ctx) => {
-        const resolved = resolveToolContext(ctx.agentId);
-        return resolved
-          ? createWikiStatusTool(resolved.config, resolved.appConfig, {
-              agentId: resolved.config.agentId ?? ctx.agentId,
-              ...(resolved.signal ? { signal: resolved.signal } : {}),
-            })
-          : null;
-      },
-      { name: "wiki_status" },
-    );
     for (const [name, createTool] of [
+      ["wiki_status", createWikiStatusTool],
       ["wiki_lint", createWikiLintTool],
       ["wiki_apply", createWikiApplyTool],
-    ] as const) {
-      api.registerTool(
-        (ctx) => {
-          const resolved = resolveToolContext(ctx.agentId);
-          return resolved ? createTool(resolved.config, resolved.appConfig, resolved.signal) : null;
-        },
-        { name },
-      );
-    }
-    for (const [name, createTool] of [
       ["wiki_search", createWikiSearchTool],
       ["wiki_get", createWikiGetTool],
     ] as const) {

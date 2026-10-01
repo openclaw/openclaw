@@ -9,6 +9,7 @@ import {
 import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
 import { toRepoPath } from "./cli-paths.js";
 import {
+  collectQaEvidenceArtifacts,
   mergeQaEvidenceSummaries,
   validateQaEvidenceSummaryJson,
   type QaEvidenceSummaryJson,
@@ -438,15 +439,7 @@ export async function aggregateQaProfileEvidenceShards(params: {
 
     const rebasedSummary = structuredClone(summary);
     const resolvedArtifacts = new Map<string, string>();
-    const artifacts = [
-      ...rebasedSummary.entries.flatMap((entry) => entry.execution?.artifacts ?? []),
-      ...(rebasedSummary.schemaVersion === 3
-        ? rebasedSummary.occurrences.flatMap((occurrence) =>
-            occurrence.receipts.map((receipt) => receipt.artifact),
-          )
-        : []),
-    ];
-    for (const artifact of artifacts) {
+    for (const artifact of collectQaEvidenceArtifacts(rebasedSummary)) {
       let relativePath = resolvedArtifacts.get(artifact.path);
       if (!relativePath) {
         relativePath = await resolveChildArtifactPath({

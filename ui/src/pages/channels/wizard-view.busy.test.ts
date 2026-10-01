@@ -2,9 +2,9 @@
 
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WizardStep } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
-import type { ChannelWizardStep } from "./wizard-controller.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
 
 type WizardProps = Parameters<typeof renderChannelWizard>[0];
@@ -41,7 +41,7 @@ function renderWizard(wizard: WizardProps["wizard"], overrides: Partial<WizardPr
 }
 
 function renderStep(
-  step: ChannelWizardStep,
+  step: WizardStep,
   busy = true,
   textValue = typeof step.initialValue === "string" ? step.initialValue : "",
 ) {
@@ -50,7 +50,6 @@ function renderStep(
       phase: "step",
       channel: null,
       step,
-      stepIndex: 1,
       busy,
       validationError: null,
     },
@@ -73,7 +72,7 @@ describe("renderChannelWizard busy controls", () => {
   it.each([
     { name: "note", step: { id: "note", type: "note", message: "Do this" } },
     { name: "confirm", step: { id: "confirm", type: "confirm", message: "Continue?" } },
-  ] satisfies Array<{ name: string; step: ChannelWizardStep }>)(
+  ] satisfies Array<{ name: string; step: WizardStep }>)(
     "shows one spinner button while a $name answer is running",
     ({ step }) => {
       const rendered = renderStep(step);

@@ -143,11 +143,12 @@ class SessionSyncYieldHarness extends MemorySyncTestHarness {
     this.publishedDatabase = new MemoryIndexDatabase(db);
   }
 
-  async syncTargetArchiveFiles(files: string[]): Promise<void> {
+  async reindexArchiveFiles(files: string[]): Promise<void> {
     this.corpusFiles = files;
+    // Source-wide reindexing reads one in-memory hash snapshot. Worker round trips
+    // in targeted sync would yield on their own and hide a missing scheduler yield.
     await this.syncArchiveFiles({
-      needsFullReindex: false,
-      targetArchiveFiles: files,
+      needsFullReindex: true,
     });
   }
 
@@ -252,7 +253,7 @@ describe("session sync responsiveness", () => {
       );
 
       try {
-        await harness.syncTargetArchiveFiles(files);
+        await harness.reindexArchiveFiles(files);
         expect(harness.indexedPaths).toEqual(
           files.map((file) => `sessions/${path.basename(file)}`),
         );

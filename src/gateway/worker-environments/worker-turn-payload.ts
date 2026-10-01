@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { WorkerTranscriptMessage } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
@@ -33,6 +34,8 @@ import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { capturePresenceToolAuthority } from "../../agents/tools/presence-tool-authority.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { redactSensitiveText } from "../../logging/redact.js";
+import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import {
   windowWorkerReplayMessages,
@@ -43,10 +46,7 @@ import {
   toWorkerTranscriptMessage,
   type WorkerProviderReplayUnavailable,
 } from "../../worker/transcript-message.js";
-import {
-  parseWorkerRuntimeResult,
-  type WorkerRuntimeResult,
-} from "../../worker/worker-process-protocol.js";
+import { parseWorkerRuntimeResult } from "../../worker/worker-process-protocol.js";
 import {
   measureAgentRuntimeIdentityTokenBytes,
   mintAgentRuntimeIdentityToken,
@@ -258,12 +258,22 @@ function fitLaunchDescriptor(
   }
 }
 
-type StartedWorkerRuntimeResult = Exclude<WorkerRuntimeResult, { status: "not-started" }>;
-
-export function parseRuntimeResult(stdout: string): StartedWorkerRuntimeResult {
+export function parseWorkerTurnProcessResult(processResult: SpawnResult) {
+  if (processResult.code !== 0 || processResult.signal !== null || processResult.killed) {
+    // Boxes are destroyed on failure, so the redacted stderr tail is the only forensics.
+    const detail = truncateUtf16Safe(
+      redactSensitiveText(processResult.stderr, { mode: "tools" }).replace(/\s+/gu, " ").trim(),
+      400,
+    );
+    throw new Error(
+      detail
+        ? `Cloud worker process failed before completing the turn: ${detail}`
+        : "Cloud worker process failed before completing the turn",
+    );
+  }
   let value: unknown;
   try {
-    value = JSON.parse(stdout.trim()) as unknown;
+    value = JSON.parse(processResult.stdout.trim()) as unknown;
   } catch (error) {
     throw new Error("Worker process returned invalid output", { cause: error });
   }
@@ -273,6 +283,9 @@ export function parseRuntimeResult(stdout: string): StartedWorkerRuntimeResult {
   }
   if (result.status === "not-started") {
     throw new Error(result.errorText);
+  }
+  if (result.status === "fenced") {
+    throw new Error(`Cloud worker turn was fenced: ${result.reason}`);
   }
   return result;
 }
@@ -334,10 +347,7 @@ export function buildWorkerTurnResult(params: {
   };
 }
 
-export function assertSupportedTurn(params: SessionPlacementTurnParams): {
-  provider: string;
-  model: string;
-} {
+export function assertSupportedTurn(params: SessionPlacementTurnParams) {
   if (params.clientTools?.length) {
     throw new Error("Cloud worker turns do not support client-provided tools");
   }

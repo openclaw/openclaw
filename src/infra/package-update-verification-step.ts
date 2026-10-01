@@ -42,12 +42,9 @@ export type PackagePostInstallVerifier = (
   results: UpdateStepResult[],
 ) => Promise<UpdateStepResult | null>;
 
-function isNormalProcessExit(step: {
-  signal?: NodeJS.Signals | null;
-  killed?: boolean;
-  outputLimitExceeded?: boolean;
-  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
-}): boolean {
+function isNormalProcessExit(
+  step: Pick<UpdateStepResult, "signal" | "killed" | "outputLimitExceeded" | "termination">,
+): boolean {
   return (
     step.termination !== "timeout" &&
     step.termination !== "no-output-timeout" &&
@@ -59,24 +56,21 @@ function isNormalProcessExit(step: {
 }
 
 export function markPackagePostInstallDoctorAdvisory<
-  T extends {
-    exitCode: number | null;
-    stderrTail?: string | null;
-    signal?: NodeJS.Signals | null;
-    killed?: boolean;
-    outputLimitExceeded?: boolean;
-    termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
-    advisory?: UpdateStepResult["advisory"];
-    failureFacts?: UpdateStepResult["failureFacts"];
-  },
+  T extends Pick<
+    UpdateStepResult,
+    | "exitCode"
+    | "stderrTail"
+    | "signal"
+    | "killed"
+    | "outputLimitExceeded"
+    | "termination"
+    | "advisory"
+    | "failureFacts"
+  >,
 >(
   step: T,
   result: UpdatePostInstallDoctorResult | null,
-): T & {
-  advisory?: UpdateStepResult["advisory"];
-  warnings?: UpdateStepResult["warnings"];
-  failureFacts?: UpdateStepResult["failureFacts"];
-} {
+): T & Pick<UpdateStepResult, "advisory" | "warnings" | "failureFacts"> {
   if (result?.status === "error" || result?.failureFacts?.length) {
     const failureFacts = result.failureFacts?.length
       ? result.failureFacts

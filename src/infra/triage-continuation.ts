@@ -37,6 +37,9 @@ import {
 // Reuse the handoff admission/shutdown budget; cleanup loss must return to the caller.
 const TRIAGE_HANDOFF_GRACE_MS = 30_000;
 
+/** An admitted triage process failed after its cleanup was confirmed. */
+export class TriageAttemptFailedError extends Error {}
+
 const readySchema = z.strictObject({ type: z.literal("triage-ready"), version: z.literal(2) });
 const continuationSchema = z.strictObject({
   type: z.literal("triage"),
@@ -181,7 +184,7 @@ export async function continueTriageInFreshProcess(params: {
   failure: TriageFailureContext;
   signal: AbortSignal;
   output: (text: string) => void;
-}): Promise<void> {
+}): Promise<"completed" | void> {
   params.signal.throwIfAborted();
   const root = realpathSync(params.root);
   const failure = failureSchema.parse(params.failure);
@@ -384,11 +387,15 @@ export async function continueTriageInFreshProcess(params: {
       );
     }
     params.signal.throwIfAborted();
-    if (!admitted || exit.code !== 0 || exit.signal) {
-      throw new Error(
-        `automatic triage candidate ${admitted ? `failed (exit ${exit.code ?? "signal"})` : "is incompatible"}; run openclaw triage manually`,
+    if (!admitted) {
+      throw new Error("automatic triage candidate is incompatible; run openclaw triage manually");
+    }
+    if (exit.code !== 0 || exit.signal) {
+      throw new TriageAttemptFailedError(
+        `automatic triage candidate failed (exit ${exit.code ?? "signal"}); run openclaw triage manually`,
       );
     }
+    return "completed";
   } finally {
     clearTimeout(timeout);
     clearTimeout(shutdown);

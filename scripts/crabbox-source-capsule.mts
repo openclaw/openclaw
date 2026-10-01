@@ -308,7 +308,8 @@ export function prepareCrabboxSourceCapsule(options: {
     if (mirror) {
       const context = {
         gitVersion: git(repoRoot, ["--version"]).trim(),
-        witness: witness ? JSON.stringify(witness) : "",
+        // Ref identity bounds reuse; the full current witness still seals this command below.
+        witness: witness ? JSON.stringify({ gitDir: witness.gitDir, ref: witness.ref }) : "",
       };
       try {
         cache = openSourceMirror(

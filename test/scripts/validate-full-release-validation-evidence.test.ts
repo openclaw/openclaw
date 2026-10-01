@@ -158,6 +158,127 @@ function validate(
 }
 
 describe("full release validation evidence", () => {
+  it.each([3, 4])("accepts bound Windows Node advisory evidence in manifest v%s", (version) => {
+    const job = {
+      name: "checks-windows-node-test-2",
+      status: "completed",
+      conclusion: "failure",
+      url: "https://example.invalid/job",
+    };
+    const advisory = {
+      class: "windows-node-ci",
+      child: "normalCi",
+      job: job.name,
+      conclusion: "failure",
+      runId: "456",
+      url: job.url,
+    };
+    const manifest = {
+      version,
+      childRuns: { normalCi: "456" },
+      childEvidence: { normalCi: { runId: "456", jobs: [job] } },
+      advisoryJobs: [advisory],
+    };
+    expect(validate({}, manifest).result.source).toBe("sha-pinned-main");
+    for (const changed of [
+      { class: "windows" },
+      { child: "releaseChecksCandidate" },
+      { job: "macos-node" },
+      { job: "cross_os_release_checks / Windows / packaged upgrade" },
+      { runId: "789" },
+    ]) {
+      expect(() =>
+        validate({}, { ...manifest, advisoryJobs: [{ ...advisory, ...changed }] }),
+      ).toThrow(/advisory jobs differ/u);
+    }
+    expect(() => validate({}, { ...manifest, advisoryJobs: [] })).toThrow(/advisory jobs differ/u);
+    expect(validate({}, { version, advisoryJobs: [] }).result.source).toBe("sha-pinned-main");
+  });
+
+  it.each([
+    { validationInputs: { laneWaiver: "approved" } },
+    { publishInputs: { stableSoakWaiver: "approved" } },
+    { validationInputs: { knownFlakyJobsJson: '["checks-windows-node-test-2"]' } },
+  ])("rejects retired waiver inputs before accepting direct evidence: %j", (inputs) => {
+    expect(() => validate({}, inputs)).toThrow(/waivers|knownFlakyJobsJson/u);
+  });
+
+  it("binds a recorded flake to the original parent attempt and target during evidence admission", () => {
+    const receipt = {
+      schema: "openclaw.frv-flake-classification.v1",
+      parentRunId: "123",
+      parentRunAttempt: 1,
+      child: "normalCi",
+      childRunId: "456",
+      childRunAttempt: 1,
+      targetSha,
+      jobId: "457",
+      jobName: "checks-node-test-2",
+      jobUrl: "https://github.com/openclaw/openclaw/actions/runs/456/job/457",
+      conclusion: "failure",
+      trackingUrl: "https://github.com/openclaw/openclaw/issues/789",
+      reason: "Shared test fixture races during cleanup; repair tracked on main.",
+      classifiedBy: "release-operator",
+      receiptRunId: "890",
+      receiptRunAttempt: 1,
+    };
+    const childEvidence = {
+      runId: "456",
+      status: "completed",
+      conclusion: "failure",
+      jobs: [
+        {
+          name: receipt.jobName,
+          status: "completed",
+          conclusion: "failure",
+          acceptedRunAttempt: 1,
+          url: receipt.jobUrl,
+        },
+        { name: "openclaw/ci-gate", status: "completed", conclusion: "success" },
+      ],
+      flakeClassifications: [receipt],
+    };
+    const manifest = {
+      sourceParentRunAttempt: 1,
+      childRuns: { normalCi: "456" },
+      childEvidence: { normalCi: childEvidence },
+      advisoryJobs: [
+        {
+          class: "recorded-flake",
+          child: "normalCi",
+          job: receipt.jobName,
+          conclusion: "failure",
+          runId: "456",
+          url: receipt.jobUrl,
+          jobId: "457",
+          trackingUrl: receipt.trackingUrl,
+          reason: receipt.reason,
+          receiptRunId: "890",
+        },
+      ],
+    };
+    expect(validate({}, manifest).result.source).toBe("sha-pinned-main");
+    for (const changed of [
+      { parentRunId: "124" },
+      { parentRunAttempt: 2 },
+      { childRunId: "459" },
+      { targetSha: workflowSha },
+      { jobId: "458" },
+    ]) {
+      expect(() =>
+        validate(
+          {},
+          {
+            ...manifest,
+            childEvidence: {
+              normalCi: { ...childEvidence, flakeClassifications: [{ ...receipt, ...changed }] },
+            },
+          },
+        ),
+      ).toThrow(/recorded-flake|classification/u);
+    }
+  });
+
   it("keeps historical recovery outside new selection validation", () => {
     const expectedPublicationSelection = vi.fn(() => {
       throw new Error("new selection was evaluated");

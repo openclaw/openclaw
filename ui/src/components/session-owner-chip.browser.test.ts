@@ -84,13 +84,16 @@ async function applyTheme(theme: ThemeName, mode: "light" | "dark") {
   document.documentElement.dataset.themeMode = mode;
   const typefaces = resolveTypefaces(theme);
   syncTypefaceStylesheets(typefaces);
-  await expect
-    .poll(
-      () =>
-        document.querySelector<HTMLLinkElement>(`#openclaw-typeface-${typefaces.ui}`)?.sheet !=
-        null,
-    )
-    .toBe(true);
+  const stylesheet = document.querySelector<HTMLLinkElement>(`#openclaw-typeface-${typefaces.ui}`)!;
+  if (!stylesheet.sheet) {
+    await new Promise<void>((resolve, reject) => {
+      stylesheet.addEventListener("load", () => resolve(), { once: true });
+      stylesheet.addEventListener("error", () => reject(new Error("Typeface stylesheet failed")), {
+        once: true,
+      });
+    });
+  }
+  expect(stylesheet.sheet).not.toBeNull();
   await document.fonts.load(`700 9px ${TYPEFACES[typefaces.ui].stack}`, "AB+241");
 }
 

@@ -1,15 +1,17 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty as normalizePolicyChannelId,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyAgentWorkspaceEvidence, PolicyToolPostureEvidence } from "../policy-state.js";
 import { getPolicyPath, scopedPolicyValue } from "../policy-value.js";
 import {
+  POLICY_RULE_METADATA,
   SANDBOX_CONTAINER_POLICY_RULES,
   type PolicyRuleMetadata,
   type PolicyScopeSelectorKind,
 } from "./metadata.js";
-import { POLICY_RULES } from "./policy-constants.js";
-import { normalizePolicyChannelId } from "./policy-runtime.js";
 import { policyShapeFinding } from "./shape-helpers.js";
 import { isPolicyValueAtLeastAsStrict } from "./strictness.js";
 import { ocPathSegment } from "./utils.js";
@@ -362,7 +364,7 @@ function scopedPolicyFields(
   selector: PolicyScopeSelectorKind,
 ): readonly ScopedPolicyField[] {
   const prefix = `scopes/${ocPathSegment(scopeName)}`;
-  return POLICY_RULES.filter((rule) => rule.scopeSelectors?.includes(selector) === true)
+  return POLICY_RULE_METADATA.filter((rule) => rule.scopeSelectors?.includes(selector) === true)
     .map((rule) => ({ rule, value: scopedPolicyValue(overlay, rule.policyPath) }))
     .filter((entry) => entry.value !== undefined)
     .map(({ rule, value }) => ({

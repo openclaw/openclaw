@@ -1,4 +1,3 @@
-// Locates root memory files that seed agent context.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isMissingPathError } from "../infra/errno.js";

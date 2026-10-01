@@ -101,8 +101,9 @@ export const deprecatedPublicPluginSdkEntrypoints = publicPluginSdkSubpaths.filt
  * Deprecated barrel entrypoints that should not be expanded further.
  * @internal Shared repository-script contract.
  */
+const deprecatedBarrelPluginSdkSubpaths = new Set<string>(deprecatedBarrelPluginSdkSubpathList);
 export const deprecatedBarrelPluginSdkEntrypoints = pluginSdkSubpaths.filter((entry) =>
-  deprecatedBarrelPluginSdkSubpathList.includes(entry),
+  deprecatedBarrelPluginSdkSubpaths.has(entry),
 );
 
 /** Supported SDK facades backed by bundled plugins until generic contracts replace them. */

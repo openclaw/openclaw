@@ -38,7 +38,7 @@ existing recovery outcome.
 
 Auto-compaction is on by default. It runs when the session nears the context limit, or when the model returns a context-overflow error (in which case OpenClaw compacts and retries).
 
-If the provider rejects a request after tool calls have completed, the built-in runtime can compact and continue from their recorded results. It keeps the current model and account, preserves the original request, and does not replay completed actions. This recovery requires settled tool results; pending tools, approvals, cancellation, and a tool that intentionally ended the turn retain their normal handling.
+If the provider rejects a request after tool calls have completed, the built-in runtime can compact and continue from their recorded results. It keeps the current model and account, preserves the original request, and does not replay completed actions. This recovery requires settled tool results; pending tools, approvals, cancellation, and a tool that intentionally ended the turn retain their normal handling. If a Gateway restart later interrupts that continuing run, recovery preserves the accepted input even when compaction has summarized it.
 
 Overflow recovery trims tool results within the current model-context window. Older messages and reset boundaries remain in retained history without being copied into new transcript entries.
 

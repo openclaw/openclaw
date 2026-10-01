@@ -21,7 +21,6 @@ const dispatchAgentRunFromGateway = vi.hoisted(() => vi.fn());
 
 vi.mock("./agent-run-dispatch.js", () => ({
   dispatchAgentRunFromGateway,
-  resolveAbortedAgentStopReason: () => "rpc",
 }));
 
 function createExecution(options: { aborted?: boolean; assertContextCurrent?: () => void } = {}) {

@@ -51,23 +51,6 @@ run_install_smoke_container() {
   DOCKER_COMMAND_TIMEOUT="$INSTALL_SMOKE_DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run "$@"
 }
 
-resolve_default_smoke_platform() {
-  local host_arch
-  if [[ -n "${OPENCLAW_INSTALL_SMOKE_PLATFORM:-}" ]]; then
-    printf "%s" "$OPENCLAW_INSTALL_SMOKE_PLATFORM"
-    return
-  fi
-  host_arch="$(uname -m)"
-  case "$host_arch" in
-    arm64 | aarch64)
-      printf "linux/arm64"
-      ;;
-    *)
-      printf "linux/amd64"
-      ;;
-  esac
-}
-
 print_pack_audit() {
   local label="$1"
   local pack_json_file="$2"
@@ -212,7 +195,7 @@ process.stdout.write(filename);
 
 SMOKE_IMAGE="${OPENCLAW_INSTALL_SMOKE_IMAGE:-openclaw-install-smoke:local}"
 NONROOT_IMAGE="${OPENCLAW_INSTALL_NONROOT_IMAGE:-openclaw-install-nonroot:local}"
-SMOKE_PLATFORM="$(resolve_default_smoke_platform)"
+SMOKE_PLATFORM="$(docker_build_resolve_platform "${OPENCLAW_INSTALL_SMOKE_PLATFORM:-}")"
 NONROOT_PLATFORM="${OPENCLAW_INSTALL_NONROOT_PLATFORM:-$SMOKE_PLATFORM}"
 INSTALL_URL="${OPENCLAW_INSTALL_URL:-https://openclaw.bot/install.sh}"
 CLI_INSTALL_URL="${OPENCLAW_INSTALL_CLI_URL:-https://openclaw.bot/install-cli.sh}"
@@ -272,8 +255,8 @@ NPM_CACHE_DIR="${OPENCLAW_INSTALL_SMOKE_NPM_CACHE_DIR:-}"
 NPM_CACHE_OWNED=0
 NPM_CACHE_PREPARED=0
 NPM_CACHE_DOCKER_ARGS=()
-INSTALL_SCRIPT_PATH="$ROOT_DIR/scripts/install.sh"
-CLI_INSTALL_SCRIPT_PATH="$ROOT_DIR/scripts/install-cli.sh"
+INSTALL_SCRIPT_PATH="$UPDATE_DIR/installers/install.sh"
+CLI_INSTALL_SCRIPT_PATH="$UPDATE_DIR/installers/install-cli.sh"
 SMOKE_RUNNER_ENV_ARGS=()
 
 require_regular_payload_file() {
@@ -354,6 +337,10 @@ cleanup() {
 }
 
 trap cleanup EXIT
+
+if [[ -z "$FROZEN_PAYLOAD_DIR" ]]; then
+  node "$HARNESS_ROOT/scripts/build-installers.mjs" "$UPDATE_DIR/installers" "$ROOT_DIR"
+fi
 
 allocate_host_port() {
   node -e '

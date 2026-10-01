@@ -210,30 +210,30 @@ function parseConfigSetCommand(
   return body.trim() ? { valid: false } : undefined;
 }
 
-function parseConfigReadPath(
+function parseConfigReadCommand(
   input: string,
+  kind: "config-get" | "config-unset" | "config-schema",
   prefixPattern: RegExp,
-  options: { allowEmpty: boolean; allowRoot?: boolean },
-): { path?: string; valid: true } | { valid: false } | undefined {
+): SystemAgentOperation | undefined {
   const prefix = input.match(prefixPattern)?.[0];
   if (!prefix) {
     return undefined;
   }
   const path = input.slice(prefix.length).trim();
-  if (!path) {
-    return options.allowEmpty ? { valid: true } : { valid: false };
-  }
-  if (options.allowRoot && path === ".") {
-    return { path, valid: true };
+  if (kind === "config-schema" && (!path || path === ".")) {
+    return { kind, ...(path ? { path } : {}) };
   }
   try {
-    parseConfigSetPath(path);
-    return isSystemAgentSensitiveConfigPathEmbedding(path)
-      ? { valid: false }
-      : { path, valid: true };
+    if (path) {
+      parseConfigSetPath(path);
+      if (!isSystemAgentSensitiveConfigPathEmbedding(path)) {
+        return { kind, path };
+      }
+    }
   } catch {
-    return { valid: false };
+    // Malformed paths stay on the host instead of entering the assistant prompt.
   }
+  return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
 }
 
 function parseConfigSetRefCommand(input: string):
@@ -340,29 +340,15 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
       value: configSet.value,
     };
   }
-  const configUnset = parseConfigReadPath(trimmed, CONFIG_UNSET_PREFIX_RE, { allowEmpty: false });
-  if (configUnset?.valid && configUnset.path) {
-    return { kind: "config-unset", path: configUnset.path };
-  }
-  if (configUnset && !configUnset.valid) {
-    return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
-  }
-  const configGet = parseConfigReadPath(trimmed, CONFIG_GET_PREFIX_RE, { allowEmpty: false });
-  if (configGet?.valid && configGet.path) {
-    return { kind: "config-get", path: configGet.path };
-  }
-  if (configGet && !configGet.valid) {
-    return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
-  }
-  const configSchema = parseConfigReadPath(trimmed, CONFIG_SCHEMA_PREFIX_RE, {
-    allowEmpty: true,
-    allowRoot: true,
-  });
-  if (configSchema?.valid) {
-    return { kind: "config-schema", ...(configSchema.path ? { path: configSchema.path } : {}) };
-  }
-  if (configSchema && !configSchema.valid) {
-    return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
+  for (const [kind, prefix] of [
+    ["config-unset", CONFIG_UNSET_PREFIX_RE],
+    ["config-get", CONFIG_GET_PREFIX_RE],
+    ["config-schema", CONFIG_SCHEMA_PREFIX_RE],
+  ] as const) {
+    const parsed = parseConfigReadCommand(trimmed, kind, prefix);
+    if (parsed) {
+      return parsed;
+    }
   }
   const pluginSearchMatch = trimmed.match(PLUGIN_SEARCH_RE);
   if (pluginSearchMatch?.groups?.query?.trim()) {
@@ -507,11 +493,11 @@ function trimShellishToken(value: string | undefined): string | undefined {
 function normalizePluginInstallSpec(spec: string, source: string | undefined): string {
   const trimmed = spec.trim();
   const normalizedSource = source?.toLowerCase();
-  if (normalizedSource === "npm" && !trimmed.toLowerCase().startsWith("npm:")) {
-    return `npm:${trimmed}`;
-  }
-  if (normalizedSource === "clawhub" && !trimmed.toLowerCase().startsWith("clawhub:")) {
-    return `clawhub:${trimmed}`;
+  if (
+    (normalizedSource === "npm" || normalizedSource === "clawhub") &&
+    !trimmed.toLowerCase().startsWith(`${normalizedSource}:`)
+  ) {
+    return `${normalizedSource}:${trimmed}`;
   }
   return trimmed;
 }
@@ -549,14 +535,19 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
         : `set agents.defaults.model.primary to ${operation.model}`;
     case "config-unset":
       return `remove config ${redactSystemAgentConfigPath(operation.path)}`;
-    case "config-set":
-      return `set config ${redactSystemAgentConfigPath(operation.path)} to ${formatConfigSetValueForPlan(operation.path, operation.value)}`;
+    case "config-set": {
+      const path = redactSystemAgentConfigPath(operation.path);
+      const value = isSystemAgentSensitiveConfigValue(operation.path, operation.value)
+        ? "<redacted>"
+        : operation.value;
+      return `set config ${path} to ${value}`;
+    }
     case "config-set-ref":
       return operation.secret === undefined
         ? `set config ${redactSystemAgentConfigPath(operation.path)} to ${operation.source} SecretRef <redacted>`
         : `save the provided secret in the secret store and point config ${redactSystemAgentConfigPath(operation.path)} at it`;
     case "setup":
-      return formatSetupPlanDescription(operation);
+      return `bootstrap OpenClaw setup for workspace ${shortenHomePath(resolveUserPath(operation.workspace ?? process.cwd()))}`;
     case "model-setup":
       return "configure a model provider and default model";
     case "doctor-fix":
@@ -569,7 +560,7 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
       return `uninstall plugin ${operation.pluginId}`;
     case "create-agent":
       return [
-        `create agent ${operation.agentId} with workspace ${formatCreateAgentWorkspace(operation.workspace)}`,
+        `create agent ${operation.agentId} with workspace ${operation.workspace ? shortenHomePath(resolveUserPath(operation.workspace)) : "the default for this agent"}`,
         operation.name ? `name: ${JSON.stringify(operation.name)}` : undefined,
         operation.purpose ? `purpose: ${JSON.stringify(operation.purpose)}` : undefined,
         operation.role
@@ -615,22 +606,4 @@ export function formatSystemAgentPersistentPlan(
   return operatorApprovalOnly
     ? `Proposed: ${description}.\n\n${SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF}`
     : `Plan: ${description}. Say yes to apply.`;
-}
-
-function formatCreateAgentWorkspace(workspace: string | undefined): string {
-  return workspace ? shortenHomePath(resolveUserPath(workspace)) : "the default for this agent";
-}
-
-function formatConfigSetValueForPlan(configPath: string, value: string): string {
-  if (isSystemAgentSensitiveConfigValue(configPath, value)) {
-    return "<redacted>";
-  }
-  return value;
-}
-
-function formatSetupPlanDescription(
-  operation: Extract<SystemAgentOperation, { kind: "setup" }>,
-): string {
-  const workspace = shortenHomePath(resolveUserPath(operation.workspace ?? process.cwd()));
-  return `bootstrap OpenClaw setup for workspace ${workspace}`;
 }

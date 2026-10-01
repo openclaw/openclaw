@@ -1,5 +1,6 @@
 // Root help renders catalog placeholders while command help and completion use
 // registered Commander commands. Keep those user-facing descriptions aligned.
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cliCommandCatalog } from "../command-catalog.js";

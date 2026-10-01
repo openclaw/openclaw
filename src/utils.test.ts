@@ -173,9 +173,13 @@ describe("shortenHomePath", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32")("keeps POSIX home matching case-sensitive", () => {
+  it.skipIf(process.platform === "win32")("preserves POSIX home path boundaries and case", () => {
     withEnv({ OPENCLAW_HOME: "/srv/OpenClaw-Home", HOME: "/home/other" }, () => {
       expect(shortenHomePath("/srv/openclaw-home/workspace")).toBe("/srv/openclaw-home/workspace");
+      expect(shortenHomePath("/srv/OpenClaw-Home\\workspace")).toBe(
+        "/srv/OpenClaw-Home\\workspace",
+      );
+      expect(shortenHomePath("/srv/OpenClaw-Home/work\\space")).toBe("$OPENCLAW_HOME/work\\space");
     });
   });
 
@@ -226,6 +230,29 @@ describe("shortenHomeInString", () => {
       });
     },
   );
+
+  it.skipIf(process.platform === "win32")("replaces only whole home path components", () => {
+    withEnv({ OPENCLAW_HOME: undefined, HOME: "/home/al" }, () => {
+      expect(shortenHomeInString("/home/al")).toBe("~");
+      expect(shortenHomeInString("/home/al/x")).toBe("~/x");
+      expect(
+        shortenHomeInString("open /home/al/notes, /home/al, /home/alice/x and /mnt/home/al/x"),
+      ).toBe("open ~/notes, ~, /home/alice/x and /mnt/home/al/x");
+      expect(shortenHomeInString("Stored in /home/al. Backup: /home/al.bak/x")).toBe(
+        "Stored in ~. Backup: /home/al.bak/x",
+      );
+      const siblingPaths =
+        "/home/al+old, /home/al./notes, /home/al,old/x, /home/al:old/x, /home/al\\ice/x, /mnt+/home/al/x";
+      expect(shortenHomeInString(siblingPaths)).toBe(siblingPaths);
+      expect(
+        shortenHomeInString('PATH=/home/al:/usr/bin:/home/al/bin; dirs=/tmp;/home/al ("/home/al")'),
+      ).toBe('PATH=~:/usr/bin:~/bin; dirs=/tmp;~ ("~")');
+      expect(shortenHomeInString("at file:///home/al/app.js:5:3")).toBe("at file://~/app.js:5:3");
+    });
+    withEnv({ OPENCLAW_HOME: undefined, HOME: "/" }, () => {
+      expect(shortenHomeInString("see /var/log/openclaw.log")).toBe("see /var/log/openclaw.log");
+    });
+  });
 
   it.skipIf(process.platform !== "win32")(
     "shortens real Windows home casing aliases inside diagnostic text",

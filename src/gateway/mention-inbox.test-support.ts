@@ -6,7 +6,8 @@ import {
 import type { SessionEntry } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { ensureProfileForEmail, setDisplayName } from "../state/user-profiles.js";
+import { setDisplayName } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,

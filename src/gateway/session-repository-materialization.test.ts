@@ -89,13 +89,13 @@ describe("explicit repository move to Gateway", () => {
           const scope = { agentId: "main", sessionKey: "agent:main:dashboard:private-move" };
           const sessionId = "private-materialization-session";
           const repositories = getSessionRepositoryWorkspaceStore();
-          const created = repositories.create({
+          const created = await repositories.create({
             ...scope,
             url: "https://github.com/openclaw/private-materialization-fixture.git",
             runSetupScript: false,
             assertCurrent: () => {},
           });
-          const repository = repositories.bindBase({
+          const repository = await repositories.bindBase({
             workspaceId: created.workspaceId,
             expectedRevision: created.revision,
             baseCommit: "a".repeat(40),
@@ -221,14 +221,14 @@ describe("explicit repository move to Gateway", () => {
             ).stdout.trim();
       const scope = { agentId: "main", sessionKey: "agent:main:dashboard:materialization" };
       const repositories = getSessionRepositoryWorkspaceStore();
-      let repository = repositories.create({
+      let repository = await repositories.create({
         ...scope,
         url,
         requestedRef: outcome === "requested topic" ? "topic" : undefined,
         runSetupScript: false,
         assertCurrent: () => {},
       });
-      repository = repositories.bindBase({
+      repository = await repositories.bindBase({
         workspaceId: repository.workspaceId,
         expectedRevision: repository.revision,
         baseCommit,
@@ -335,7 +335,7 @@ describe("explicit repository move to Gateway", () => {
         expect(managedWorktrees.findLiveByOwner("session", scope.sessionKey)?.id).toBe(worktree.id);
       }
       // Retained publication may still need the original immutable source after the move.
-      expect(repositories.get(repository.workspaceId)).toEqual(repository);
+      expect(await repositories.get(repository.workspaceId)).toEqual(repository);
       expect(fs.existsSync(repositories.artifactPath(repository.workspaceId))).toBe(true);
       expect(await fsp.readFile(path.join(source, "edited.txt"), "utf8")).toBe("base\n");
     });

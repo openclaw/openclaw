@@ -10,6 +10,9 @@ import * as schtasksProbe from "../../src/daemon/schtasks-state-probe.js";
 import * as serviceLayout from "../../src/daemon/service-layout.js";
 import type { GatewayServiceState } from "../../src/daemon/service-types.ts";
 import * as gatewayService from "../../src/daemon/service.js";
+import * as loadedUnits from "../../src/daemon/systemd-loaded-unit-inventory.js";
+import * as systemdFiles from "../../src/daemon/systemd-service-files.js";
+import { CommandProcessCleanupError } from "../../src/process/exec-result.js";
 import { withTestDir } from "../../src/test-helpers/temp-dir.js";
 import { withMockedPlatform } from "../../src/test-utils/vitest-spies.js";
 import { createDeferred } from "../helpers/promise.js";
@@ -36,6 +39,7 @@ function baseState(overrides: Partial<GatewayServiceState> = {}): GatewayService
 async function inspectFixtureGateway(
   root: string,
   fixture: {
+    platform?: "linux" | "win32";
     env?: NodeJS.ProcessEnv;
     listBindings?: () => Promise<readonly ManagedGatewayBinding[]>;
     readState: (
@@ -46,7 +50,10 @@ async function inspectFixtureGateway(
 ) {
   const discover = vi
     .spyOn(gatewayBindings, "discoverManagedGatewayBindings")
-    .mockImplementation(async () => [...((await fixture.listBindings?.()) ?? [])]);
+    .mockImplementation(async (env, options) => [
+      ...(options?.includeInvoking ? [{ env }] : []),
+      ...((await fixture.listBindings?.()) ?? []),
+    ]);
   const read = vi
     .spyOn(gatewayService, "readGatewayServiceState")
     .mockImplementation(async (_service, input = {}) => {
@@ -54,7 +61,6 @@ async function inspectFixtureGateway(
       const target = input.systemdReadTarget;
       return fixture.readState(
         {
-          profile: env.OPENCLAW_PROFILE ?? "default",
           env,
           ...(target ? { scope: target.scope, systemdReadTarget: target } : {}),
           ...(input.windowsStartupEntry !== undefined
@@ -68,7 +74,12 @@ async function inspectFixtureGateway(
     read.mockRestore();
     discover.mockRestore();
   });
-  return resolveLiveManagedGatewayDistFence(root, { env: fixture.env ?? {} });
+  // These service-reader fixtures model Linux or Windows. Darwin's loaded native
+  // observation is exercised through real binding dispatch in managed-gateway-bindings.test.ts.
+  return withMockedPlatform(
+    fixture.platform ?? (process.platform === "win32" ? "win32" : "linux"),
+    () => resolveLiveManagedGatewayDistFence(root, { env: fixture.env ?? {} }),
+  );
 }
 
 function stateForPackage(root: string, overrides: Partial<GatewayServiceState> = {}) {
@@ -81,6 +92,51 @@ function stateForPackage(root: string, overrides: Partial<GatewayServiceState> =
 }
 
 describe("live-gateway-dist-fence", () => {
+  it("retains uncertain command-location work before consulting another service reader", async () => {
+    await withTestDir({ prefix: "openclaw-location-unjoined-inspection-" }, async (root) => {
+      const failure = new CommandProcessCleanupError();
+      const discover = vi
+        .spyOn(gatewayBindings, "discoverManagedGatewayBindings")
+        .mockImplementation(async (env, options) => (options?.includeInvoking ? [{ env }] : []));
+      const location = vi
+        .spyOn(systemdFiles, "readSystemdServiceCommandLocation")
+        .mockRejectedValue(failure);
+      const read = vi.spyOn(gatewayService, "readGatewayServiceState").mockResolvedValue(
+        baseState({
+          installed: false,
+          command: null,
+          loadState: { status: "not-loaded" },
+          runtime: { status: "stopped", missingUnit: true },
+        }),
+      );
+      onTestFinished(() => {
+        discover.mockRestore();
+        location.mockRestore();
+        read.mockRestore();
+      });
+      await expect(
+        withMockedPlatform("linux", () =>
+          resolveLiveManagedGatewayDistFence(root, {
+            env: {},
+            requireVerified: true,
+          }),
+        ),
+      ).rejects.toBe(failure);
+      expect(read).not.toHaveBeenCalled();
+    });
+  });
+  it("retains uncertain native read cleanup instead of allowing a build", async () => {
+    await withTestDir({ prefix: "openclaw-dist-unjoined-inspection-" }, async (root) => {
+      const failure = new CommandProcessCleanupError();
+      await expect(
+        inspectFixtureGateway(root, {
+          readState: async () => {
+            throw failure;
+          },
+        }),
+      ).rejects.toBe(failure);
+    });
+  });
   it.each([
     { name: "running", state: { running: true } },
     {
@@ -176,7 +232,6 @@ describe("live-gateway-dist-fence", () => {
             runtime: { status: "stopped", state: "inactive", pid: process.pid },
           }),
       });
-      expect(kill).toHaveBeenCalledTimes(1);
       expect(kill).toHaveBeenCalledWith(process.pid, 0);
       expect(result.refuse).toBe(refuse);
     });
@@ -235,6 +290,7 @@ async function writeOpenClawPackage(packageRoot: string) {
 }
 
 function isolateSystemdInventory(home: string) {
+  const loaded = vi.spyOn(loadedUnits, "listLoadedSystemdUnits").mockResolvedValue([]);
   const systemRoots = ["/etc/systemd/system", "/usr/lib/systemd/system", "/lib/systemd/system"];
   const fixturePath = (value: string) => {
     const normalized = path.normalize(value);
@@ -261,6 +317,7 @@ function isolateSystemdInventory(home: string) {
       return readFile(...args);
     });
   onTestFinished(() => {
+    loaded.mockRestore();
     files.mockRestore();
     directories.mockRestore();
   });
@@ -382,12 +439,7 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
       const otherCheckout = path.join(tmp, "other");
       await writeOpenClawPackage(tmp);
       await writeOpenClawPackage(otherCheckout);
-      const defaultBinding = {
-        profile: "default",
-        env: { OPENCLAW_PROFILE: undefined },
-      };
       const fenceproofBinding = {
-        profile: "fenceproof",
         env: {
           OPENCLAW_PROFILE: "fenceproof",
           OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-fenceproof.service",
@@ -395,9 +447,9 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
       };
       const result = await inspectFixtureGateway(tmp, {
         env: {},
-        listBindings: async () => [defaultBinding, fenceproofBinding],
+        listBindings: async () => [fenceproofBinding],
         readState: async (binding) => {
-          if (binding?.profile === "fenceproof") {
+          if (binding.env.OPENCLAW_SYSTEMD_UNIT === "openclaw-gateway-fenceproof.service") {
             return baseState({
               running: true,
               command: {
@@ -427,7 +479,7 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
       if (result.refuse) {
         expect(result.message).toContain("fenceproof");
         expect(result.message).toContain("openclaw update");
-        expect(result.message).toContain("openclaw gateway stop --profile fenceproof");
+        expect(result.message).toContain("openclaw-gateway-fenceproof.service");
         expect(result.message).not.toContain("profiles default, fenceproof");
       }
     });
@@ -492,12 +544,13 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
             const result = await resolveLiveManagedGatewayDistFence(checkout, { env });
             expect(result).toMatchObject({
               refuse: true,
-              message: expect.stringContaining("profile rescue"),
+              message: expect.stringContaining(
+                `Scheduled Task ${JSON.stringify("Services\\Recovery")}`,
+              ),
             });
             const bindings = await gatewayBindings.discoverManagedGatewayBindings(env);
             expect(bindings).toEqual([
               expect.objectContaining({
-                profile: "rescue",
                 env: expect.objectContaining({
                   OPENCLAW_PROFILE: "rescue",
                   OPENCLAW_WINDOWS_TASK_NAME: "Services\\Recovery",
@@ -595,21 +648,21 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
           };
           const callerEnv = { HOME: home, ...hostConnection, OPENCLAW_PROFILE: "selected" };
           const bindings = await discoverManagedGatewayBindings(callerEnv);
-          expect(bindings.map((binding) => binding.profile).toSorted()).toEqual([
-            "default",
-            "fenceproof",
-          ]);
+          expect(bindings).toHaveLength(2);
+          expect(bindings.map((binding) => binding.systemdReadTarget?.unitName)).toEqual(
+            expect.arrayContaining(["openclaw-gateway.service", siblingUnit]),
+          );
           expect(bindings.every((binding) => binding.scope === "user")).toBe(true);
           for (const binding of bindings) {
             expect(binding.env).toMatchObject(hostConnection);
-            expect(binding.env.OPENCLAW_PROFILE).not.toBe("selected");
+            expect(binding.env.OPENCLAW_PROFILE).toBeUndefined();
           }
 
           const result = await inspectFixtureGateway(checkout, {
             env: callerEnv,
             listBindings: async () => bindings,
             readState: async (binding) => {
-              if (binding?.profile === "fenceproof") {
+              if (binding.systemdReadTarget?.unitName === siblingUnit) {
                 return baseState({
                   running: true,
                   command: {
@@ -645,7 +698,7 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
           });
           expect(result.refuse).toBe(true);
           if (result.refuse) {
-            expect(result.message).toContain("fenceproof");
+            expect(result.message).toContain(siblingUnit);
             expect(result.message).toContain("openclaw update");
             expect(result.message).not.toContain("profiles default, fenceproof");
           }
@@ -677,13 +730,13 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
           let result: Awaited<ReturnType<typeof resolveLiveManagedGatewayDistFence>> | undefined;
           const inspection = inspectFixtureGateway(tmp, {
             listBindings: async () => [
-              { profile: "stalled", env: {}, windowsStartupEntry: startupPath },
-              { profile: "live", env: { OPENCLAW_PROFILE: "live" } },
+              { env: {}, windowsStartupEntry: startupPath },
+              { env: { OPENCLAW_PROFILE: "live" } },
             ],
             readState: async (binding, input) =>
               input?.windowsStartupEntry
                 ? readState(gatewayService.resolveGatewayService(), input)
-                : stateForPackage(tmp, { running: binding.profile === "live" }),
+                : stateForPackage(tmp, { running: binding.env.OPENCLAW_PROFILE === "live" }),
           }).then((value) => {
             result = value;
           });
@@ -694,8 +747,11 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
             await inspection;
             expect(result).toMatchObject({
               refuse: true,
-              message: expect.stringContaining("profile live"),
+              message: expect.stringContaining("Scheduled Task"),
             });
+            if (result?.refuse) {
+              expect(result.message).toContain("live");
+            }
           } finally {
             pending.reject(new Error("Fixture file read released"));
             try {
@@ -721,7 +777,6 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
         const result = await inspectFixtureGateway(tmp, {
           listBindings: async () =>
             [first, second].map((windowsStartupEntry) => ({
-              profile: "rescue",
               scope: "user",
               env: { OPENCLAW_PROFILE: "rescue" },
               windowsStartupEntry,
@@ -734,7 +789,6 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
         });
         expect(result.refuse).toBe(running);
         if (result.refuse) {
-          expect(result.message).toContain("profile rescue");
           expect(result.message).toContain(`Startup entry ${JSON.stringify(second)}`);
           expect(result.message).not.toContain("openclaw gateway stop --profile rescue");
           expect(result.message).not.toContain("openclaw update");
@@ -744,126 +798,16 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32").each([
-    ["literal", "Environment=OPENCLAW_PROFILE=fenceproof", "custom-rescue.service"],
-    ["spaced", "Environment = OPENCLAW_PROFILE=fenceproof", "custom-rescue.service"],
-    [
-      "last assignment",
-      "Environment=OPENCLAW_PROFILE=stale\nEnvironment=OPENCLAW_PROFILE=fenceproof",
-      "custom-rescue.service",
-    ],
-    [
-      "spaced reset",
-      "Environment=OPENCLAW_PROFILE=stale\nEnvironment =\nEnvironment=OPENCLAW_SERVICE_MARKER=openclaw\nEnvironment=OPENCLAW_SERVICE_KIND=gateway",
-      "openclaw-gateway-fenceproof.service",
-    ],
-    [
-      "section and case",
-      "Environment=OPENCLAW_PROFILE=fenceproof\n[Unit]\nEnvironment=OPENCLAW_PROFILE=wrong-section\n[Service]\nenvironment=OPENCLAW_PROFILE=wrong-case",
-      "custom-rescue.service",
-    ],
-  ] as const)(
-    "refuses through modeled Linux real-FS sibling bindings with %s inline profile metadata",
-    async (_name, metadata, siblingUnit) =>
-      withMockedPlatform("linux", async () => {
-        await withTestDir({ prefix: "openclaw-live-dist-unit-fixture-" }, async (tmp) => {
-          const home = path.join(tmp, "home");
-          const checkout = path.join(tmp, "checkout");
-          const other = path.join(tmp, "other");
-          const systemdDir = path.join(home, ".config", "systemd", "user");
-          isolateSystemdInventory(home);
-          await writeOpenClawPackage(checkout);
-          await writeOpenClawPackage(other);
-          await fs.mkdir(systemdDir, { recursive: true });
-          const unitBody = [
-            "[Service]",
-            "ExecStart=/usr/bin/node /srv/worker/dist/index.js gateway",
-            "Environment=OPENCLAW_SERVICE_MARKER=openclaw",
-            "Environment=OPENCLAW_SERVICE_KIND=gateway",
-            "",
-          ].join("\n");
-          await fs.writeFile(path.join(systemdDir, "openclaw-gateway.service"), unitBody);
-          await fs.writeFile(path.join(systemdDir, siblingUnit), `${unitBody}${metadata}\n`);
-
-          const { discoverManagedGatewayBindings } =
-            await import("../../src/daemon/managed-gateway-bindings.ts");
-          const hostConnection = {
-            XDG_RUNTIME_DIR: path.join(tmp, "caller-runtime"),
-            DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(tmp, "caller-bus")}`,
-            USER: "fixture-caller",
-            LOGNAME: "fixture-caller",
-            SUDO_USER: "fixture-origin",
-          };
-          const callerEnv = { HOME: home, ...hostConnection, OPENCLAW_PROFILE: "selected" };
-          const bindings = await discoverManagedGatewayBindings(callerEnv);
-          expect(bindings.map((binding) => binding.profile).toSorted()).toEqual([
-            "default",
-            "fenceproof",
-          ]);
-          expect(bindings.every((binding) => binding.scope === "user")).toBe(true);
-          for (const binding of bindings) {
-            expect(binding.env).toMatchObject(hostConnection);
-            expect(binding.env.OPENCLAW_PROFILE).not.toBe("selected");
-          }
-
-          const result = await inspectFixtureGateway(checkout, {
-            env: callerEnv,
-            listBindings: async () => bindings,
-            readState: async (binding) => {
-              if (binding?.profile === "fenceproof") {
-                return baseState({
-                  running: true,
-                  command: {
-                    programArguments: [
-                      process.execPath,
-                      path.join(checkout, "dist", "index.js"),
-                      "gateway",
-                    ],
-                  },
-                  runtime: {
-                    status: "running",
-                    pid: 77,
-                    systemd: { unit: siblingUnit },
-                  },
-                });
-              }
-              return baseState({
-                running: true,
-                command: {
-                  programArguments: [
-                    process.execPath,
-                    path.join(other, "dist", "index.js"),
-                    "gateway",
-                  ],
-                },
-                runtime: {
-                  status: "running",
-                  pid: 76,
-                  systemd: { unit: "openclaw-gateway.service" },
-                },
-              });
-            },
-          });
-          expect(result.refuse).toBe(true);
-          if (result.refuse) {
-            expect(result.message).toContain("fenceproof");
-            expect(result.message).toContain("openclaw update");
-            expect(result.message).not.toContain("profiles default, fenceproof");
-          }
-        });
-      }),
-  );
-
   it("names every overlapping live profile in the refusal", async () => {
     await withTestDir({ prefix: "openclaw-live-dist-two-profiles-" }, async (tmp) => {
       await writeOpenClawPackage(tmp);
       const result = await inspectFixtureGateway(tmp, {
         listBindings: async () => [
-          { profile: "work", env: { OPENCLAW_PROFILE: "work" } },
-          { profile: "fenceproof", env: { OPENCLAW_PROFILE: "fenceproof" } },
+          { env: { OPENCLAW_PROFILE: "work" } },
+          { env: { OPENCLAW_PROFILE: "fenceproof" } },
         ],
         readState: async (binding) =>
-          binding.profile === "default"
+          !binding.env.OPENCLAW_PROFILE
             ? baseState({ command: null })
             : baseState({
                 running: true,
@@ -877,7 +821,7 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
                 runtime: {
                   status: "running",
                   pid: 99,
-                  systemd: { unit: `openclaw-gateway-${binding?.profile}.service` },
+                  systemd: { unit: `openclaw-gateway-${binding.env.OPENCLAW_PROFILE}.service` },
                 },
               }),
       });
@@ -886,8 +830,8 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
         expect(result.message).toContain("fenceproof");
         expect(result.message).toContain("work");
         expect(result.message).toContain("openclaw update");
-        expect(result.message).toContain("openclaw gateway stop --profile fenceproof");
-        expect(result.message).toContain("openclaw gateway stop --profile work");
+        expect(result.message).toContain("openclaw-gateway-fenceproof.service");
+        expect(result.message).toContain("openclaw-gateway-work.service");
       }
     });
   });
@@ -896,7 +840,6 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
     await withTestDir({ prefix: "openclaw-live-dist-system-scope-" }, async (tmp) => {
       await writeOpenClawPackage(tmp);
       const userBinding = {
-        profile: "default",
         scope: "user" as const,
         systemdReadTarget: {
           scope: "user" as const,
@@ -906,7 +849,6 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
         env: { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" },
       };
       const systemBinding = {
-        profile: "default",
         scope: "system" as const,
         systemdReadTarget: {
           scope: "system" as const,

@@ -14,8 +14,10 @@ const secretInputSchema = z.union([
   }),
 ]);
 const personSchema = z.strictObject({
+  // The first GitHub login is the primary/display login; remaining entries are aliases.
   github: z.array(nonempty).min(1),
   display: nonempty.optional(),
+  // Public affiliation and free-form role, access, and stewardship labels.
   affiliation: nonempty.optional(),
   roleGroup: nonempty.optional(),
   roleLabel: nonempty.optional(),

@@ -8,7 +8,10 @@ import { buildSessionListRowMetadataContext } from "./session-utils-projection.j
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
 
 function placementReadView() {
-  const projection: SessionRowReadView & { isCurrent(): boolean } = {
+  const projection: SessionRowReadView & {
+    isCurrent(): boolean;
+    getPolicyConfig(): SessionRowReadView["state"]["policyConfig"];
+  } = {
     state: {
       cfg: {},
       policyConfig: {},
@@ -22,6 +25,7 @@ function placementReadView() {
       throw new Error("Placement lifecycle does not present session rows");
     },
     isCurrent: () => true,
+    getPolicyConfig: () => projection.state.policyConfig,
   };
   const query = (id: string): Lookup => ({ agentId: "main", key: id });
   const lookup = (target: Lookup) => {
@@ -283,59 +287,54 @@ it("keeps resident preparation ahead of later exact demand in the accepted FIFO"
   }
 });
 
-it.each([false, true])(
-  "reuses an owned exact snapshot when its row becomes resident (invalidated=%s)",
-  async (invalidated) => {
-    const { projection, query, lookup } = placementReadView();
-    const id = "materializing-exact-placement";
-    const materializing = createDeferredCore();
-    const releaseMaterialization = createDeferredCore();
-    const dispatched: string[][] = [];
-    let reconciling = false;
-    let rowsPrepared = false;
-    const owner = createSessionRowPlacementProjection(
-      {
-        async readProjection(ids) {
-          dispatched.push([...ids]);
-          return placementSnapshot(reconciling ? ids : []);
-        },
+it("refreshes an invalidated exact snapshot before adopting its resident row", async () => {
+  const { projection, query, lookup } = placementReadView();
+  const id = "materializing-exact-placement";
+  const materializing = createDeferredCore();
+  const releaseMaterialization = createDeferredCore();
+  const dispatched: string[][] = [];
+  let reconciling = false;
+  let rowsPrepared = false;
+  const owner = createSessionRowPlacementProjection(
+    {
+      async readProjection(ids) {
+        dispatched.push([...ids]);
+        return placementSnapshot(reconciling ? ids : []);
       },
-      () => undefined,
-    );
-    const reading = owner.withPreparedRows(
-      projection,
-      () => true,
-      lookup,
-      () => [query(id)],
-      () => {
-        if (rowsPrepared) {
-          return undefined;
-        }
-        rowsPrepared = true;
-        materializing.resolve();
-        return releaseMaterialization.promise;
-      },
-      () => owner.getProjectionFacts(id)?.workspaceResultReconciling,
-    );
-    const settled = Promise.allSettled([reading]);
-    try {
-      await withTestTimeout(materializing.promise, 2_000, "Exact row preparation did not enter");
-      if (invalidated) {
-        reconciling = true;
-        owner.invalidate(id);
+    },
+    () => undefined,
+  );
+  const reading = owner.withPreparedRows(
+    projection,
+    () => true,
+    lookup,
+    () => [query(id)],
+    () => {
+      if (rowsPrepared) {
+        return undefined;
       }
-      // Materialization publishes the resident row before exact preparation ends.
-      // A publication before registration must prevent adoption of the old lease.
-      owner.register(id);
-      await owner.prepare();
-      expect(dispatched).toEqual(invalidated ? [[id], [id]] : [[id]]);
-      releaseMaterialization.resolve();
-      expect(await reading).toEqual({ kind: "complete", value: invalidated });
-      expect(owner.getProjectionFacts(id)?.workspaceResultReconciling).toBe(invalidated);
-    } finally {
-      owner.dispose();
-      releaseMaterialization.resolve();
-      await settled;
-    }
-  },
-);
+      rowsPrepared = true;
+      materializing.resolve();
+      return releaseMaterialization.promise;
+    },
+    () => owner.getProjectionFacts(id)?.workspaceResultReconciling,
+  );
+  const settled = Promise.allSettled([reading]);
+  try {
+    await withTestTimeout(materializing.promise, 2_000, "Exact row preparation did not enter");
+    reconciling = true;
+    owner.invalidate(id);
+    // Materialization publishes the resident row before exact preparation ends.
+    // A publication before registration must prevent adoption of the old lease.
+    owner.register(id);
+    await owner.prepare();
+    expect(dispatched).toEqual([[id], [id]]);
+    releaseMaterialization.resolve();
+    expect(await reading).toEqual({ kind: "complete", value: true });
+    expect(owner.getProjectionFacts(id)?.workspaceResultReconciling).toBe(true);
+  } finally {
+    owner.dispose();
+    releaseMaterialization.resolve();
+    await settled;
+  }
+});

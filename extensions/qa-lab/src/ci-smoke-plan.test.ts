@@ -20,7 +20,7 @@ vi.mock("./profile-planning.js", async (importOriginal) => {
         return selection;
       }
       if (smokeProfileMock.mode === "empty") {
-        return { ...selection, scenarios: [] };
+        throw new Error("QA taxonomy profile smoke-ci resolved no executable scenarios.");
       }
       const scenarioPack = readQaScenarioPack();
       if (smokeProfileMock.mode === "ineligible") {
@@ -191,7 +191,7 @@ describe("createQaSmokeCiPart", () => {
     expect(selectQaSmokeCiEligibilityChannel(scenario)).toBe("telegram");
   });
 
-  it("fails when the smoke pack resolves empty", () => {
+  it("reports when the smoke profile has no executable scenarios", () => {
     smokeProfileMock.mode = "empty";
     expect(() => createQaSmokeCiPart("profile-1")).toThrow(
       "smoke-ci taxonomy profile did not resolve any CI scenarios",

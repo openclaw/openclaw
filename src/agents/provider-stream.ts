@@ -13,7 +13,6 @@ import {
   attachModelProviderRuntimePluginHandle,
   getModelProviderRuntimePluginHandle,
   resolveProviderRuntimePluginHandle,
-  type ProviderRuntimePluginHandle,
 } from "../plugins/provider-hook-runtime.js";
 import { resolveProviderStreamFn } from "../plugins/provider-runtime.js";
 import type { ProviderPrepareExtraParamsContext } from "../plugins/provider-runtime.types.js";
@@ -106,8 +105,13 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
           streamFn,
         }) ?? streamFn)
       : streamFn;
-  const preparedStreamFn = runtimeHandle
-    ? bindProviderRuntimeHandle(providerWrappedStreamFn, runtimeHandle)
+  const preparedStreamFn: StreamFn = runtimeHandle
+    ? (model, context, options) =>
+        providerWrappedStreamFn(
+          attachModelProviderRuntimePluginHandle(model, runtimeHandle),
+          context,
+          options,
+        )
     : providerWrappedStreamFn;
   // Register custom APIs only after a concrete stream exists, so later callers
   // can route by model.api without reloading provider runtime hooks.
@@ -115,14 +119,6 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
     ensureCustomApiRegistered(apiRegistry, runtimeModel.api, preparedStreamFn);
   }
   return preparedStreamFn;
-}
-
-function bindProviderRuntimeHandle(
-  streamFn: StreamFn,
-  runtimeHandle: ProviderRuntimePluginHandle,
-): StreamFn {
-  return (model, context, options) =>
-    streamFn(attachModelProviderRuntimePluginHandle(model, runtimeHandle), context, options);
 }
 
 function wrapPluginProviderStream(streamFn: StreamFn): StreamFn {

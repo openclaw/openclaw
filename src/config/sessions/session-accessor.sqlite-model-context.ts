@@ -1,5 +1,4 @@
 import type { AgentMessage, SessionTreeEntry } from "@openclaw/agent-core";
-import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { sql, type AliasableExpression } from "kysely";
 import {
   iterateSessionContextEntries,
@@ -7,6 +6,7 @@ import {
   projectSessionEntryMessage,
 } from "../../../packages/agent-core/src/harness/session/session.js";
 import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { isCompactionReplayCheckpoint } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
@@ -276,7 +276,7 @@ function selectBoundedModelRequests(
   }
   if (selected.length === 0) {
     throw new RangeError(
-      "Newest session context cannot fit the model-context limit without splitting a tool frame",
+      "The latest messages exceed this session's context limit. Start a new session with a brief summary to continue.",
     );
   }
   const selectedMessages = selected.flatMap(({ entry }) =>

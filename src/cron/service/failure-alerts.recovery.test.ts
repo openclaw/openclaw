@@ -71,7 +71,7 @@ describe("cron failure incident startup recovery", () => {
     await saveCronStore(store.storePath, { version: 1, jobs: [pendingJob] });
     const database = openOpenClawStateDatabase().db;
     database.exec(`
-      CREATE TEMP TRIGGER reject_recovered_cron_row
+      CREATE TRIGGER reject_recovered_cron_row
       BEFORE UPDATE ON cron_jobs
       WHEN NEW.store_key = '${cronStoreKey(store.storePath)}' AND NEW.job_id = '${pendingJob.id}'
       BEGIN

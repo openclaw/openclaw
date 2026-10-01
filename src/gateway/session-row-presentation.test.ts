@@ -14,7 +14,8 @@ import {
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
 import { readUserProfileIdentity, retainUserProfileCatalog } from "../state/user-profile-list.js";
-import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -32,6 +33,79 @@ import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-ut
 import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("projects send policy and recipient restrictions, clearing them when the current role permits sending", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = rolePolicyConfig();
+    cfg.gateway!.roles!.definitions.write!.sandbox = "required";
+    cfg.gateway!.roles!.definitions.restricted = {
+      sessions: { others: "write" },
+      agents: ["other"],
+      scopes: ["operator.read", "operator.write"],
+    };
+    cfg.session = {
+      sendPolicy: { rules: [{ action: "deny", match: { keyPrefix: "policy-blocked" } }] },
+    };
+    const clients = ["write", "view", "suggest", "restricted"].map((role) => {
+      const profile = ensureProfileForEmail(`${role}@send-presentation.test`);
+      setUserProfileRole(profile.id, role);
+      const client = sharingPolicyClient({ user: profile.id });
+      prepareGatewayRecipientProfile(client);
+      return client;
+    });
+    const creatorId = clients[0]!.authenticatedUserProfile!.profileId;
+    const keys = ["host", "sandbox", "entry-blocked", "policy-blocked"];
+    for (const key of keys) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: `agent:main:${key}` },
+        {
+          sessionId: key,
+          updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: creatorId },
+          ...(key === "host" ? {} : { sandbox: "required" as const }),
+          ...(key === "entry-blocked" ? { sendPolicy: "deny" as const } : {}),
+        },
+      );
+    }
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      for (const [index, key, reason] of [
+        [
+          0,
+          "host",
+          'Your operator role requires a sandboxed session; create a new session instead of running in "agent:main:host".',
+        ],
+        [0, "sandbox", null],
+        [0, "entry-blocked", "send blocked by session policy"],
+        [0, "policy-blocked", "send blocked by session policy"],
+        [1, "sandbox", "session is shared for this connection"],
+        [2, "sandbox", "session is shared for this connection"],
+        [
+          3,
+          "sandbox",
+          'Your operator role cannot create sessions for agent "main"; choose an allowed agent or ask a gateway administrator to update your role.',
+        ],
+      ] as const) {
+        expect(
+          prepareProjectedSessionPresentation(projection, clients[index]!).snapshot({
+            agentId: "main",
+            key: `agent:main:${key}`,
+          }).row?.sendDisabledReason,
+        ).toBe(reason);
+      }
+      setUserProfileRole(creatorId, "view");
+      prepareGatewayRecipientProfile(clients[0]!);
+      expect(
+        prepareProjectedSessionPresentation(projection, clients[0]!).snapshot({
+          agentId: "main",
+          key: "agent:main:host",
+        }).row?.sendDisabledReason,
+      ).toBeNull();
+    } finally {
+      projection.dispose();
+    }
+  });
+});
 
 it.each(["running", "queued", "capacity-wait"] as const)(
   "projects %s follow-up activity through completed subagent lineage outside the selected list page",
@@ -267,6 +341,9 @@ it("presents current recipient roles without SQLite while rejecting source overr
       expect(
         prepareProjectedSessionPresentation(projection).present(captured)?.sharingRole,
       ).toBeUndefined();
+      expect(
+        prepareProjectedSessionPresentation(projection).present(captured)?.sendDisabledReason,
+      ).toBeUndefined();
       for (const [index, expectedRole, visible] of [
         [0, "owner", true],
         [1, "member", true],
@@ -276,7 +353,11 @@ it("presents current recipient roles without SQLite while rejecting source overr
         const presentation = prepareProjectedSessionPresentation(projection, client);
         expect(
           presentation.present(captured, { excludedChildKeys: new Set(["agent:main:child"]) }),
-        ).toMatchObject({ sharingRole: expectedRole });
+        ).toMatchObject({
+          sharingRole: expectedRole,
+          sendDisabledReason:
+            expectedRole === "viewer" ? `Session "${query.key}" was not found.` : null,
+        });
         expect(
           presentation.present(captured, { excludedChildKeys: new Set(["agent:main:child"]) })
             ?.childSessions,
@@ -303,6 +384,7 @@ it("presents current recipient roles without SQLite while rejecting source overr
               key: query.key,
               sessionId: entry.sessionId,
               label: null,
+              sendDisabledReason: "Untrusted source restriction",
               endedAt: null,
               status: "completed",
               activitySummary: { state: "stale", text: "Retained event summary" },
@@ -329,6 +411,7 @@ it("presents current recipient roles without SQLite while rejecting source overr
             }),
           );
           expect(frame.payload.session).toEqual(JSON.parse(expectedWire));
+          expect(frame.payload.session.sendDisabledReason).toBeNull();
           expect(frame.payload.session).not.toMatchObject({ status: "completed", label: null });
         } else {
           expect(socket.send.mock.calls).toHaveLength(0);

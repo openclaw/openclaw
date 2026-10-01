@@ -1,4 +1,3 @@
-/** Validation and normalization for ACP session runtime options and config controls. */
 import { isAbsolute } from "node:path";
 import type { AcpRuntimeConfigOptionResult } from "@openclaw/acp-core/runtime/types";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
@@ -220,32 +219,26 @@ export function validateRuntimeOptionPatch(
 export function normalizeRuntimeOptions(
   options: AcpSessionRuntimeOptions | undefined,
 ): AcpSessionRuntimeOptions {
-  const runtimeMode = normalizeText(options?.runtimeMode);
-  const model = normalizeText(options?.model);
-  const thinking = normalizeText(options?.thinking);
-  const cwd = normalizeText(options?.cwd);
-  const permissionProfile = normalizeText(options?.permissionProfile);
-  let timeoutSeconds: number | undefined;
+  const normalized: AcpSessionRuntimeOptions = {};
+  for (const key of ["runtimeMode", "model", "thinking", "cwd", "permissionProfile"] as const) {
+    const value = normalizeText(options?.[key]);
+    if (value) {
+      normalized[key] = value;
+    }
+  }
   if (typeof options?.timeoutSeconds === "number" && Number.isFinite(options.timeoutSeconds)) {
     const rounded = Math.round(options.timeoutSeconds);
     if (rounded > 0) {
-      timeoutSeconds = rounded;
+      normalized.timeoutSeconds = rounded;
     }
   }
   const backendExtrasEntries = Object.entries(options?.backendExtras ?? {})
     .map(([key, value]) => [normalizeText(key), normalizeText(value)] as const)
     .filter(([key, value]) => Boolean(key && value)) as Array<[string, string]>;
-  const backendExtras =
-    backendExtrasEntries.length > 0 ? Object.fromEntries(backendExtrasEntries) : undefined;
-  return {
-    ...(runtimeMode ? { runtimeMode } : {}),
-    ...(model ? { model } : {}),
-    ...(thinking ? { thinking } : {}),
-    ...(cwd ? { cwd } : {}),
-    ...(permissionProfile ? { permissionProfile } : {}),
-    ...(typeof timeoutSeconds === "number" ? { timeoutSeconds } : {}),
-    ...(backendExtras ? { backendExtras } : {}),
-  };
+  if (backendExtrasEntries.length > 0) {
+    normalized.backendExtras = Object.fromEntries(backendExtrasEntries);
+  }
+  return normalized;
 }
 
 export function mergeRuntimeOptions(params: {
@@ -383,7 +376,7 @@ function buildAdvertisedConfigOptionKeyMap(
 function resolveRuntimeConfigOptionAliases(key: string): readonly string[] {
   const normalizedKey = normalizeLowercaseStringOrEmpty(key);
   for (const aliases of Object.values(RUNTIME_CONFIG_OPTION_ALIASES)) {
-    if (aliases.some((alias) => normalizeLowercaseStringOrEmpty(alias) === normalizedKey)) {
+    if (aliases.some((alias) => alias === normalizedKey)) {
       return aliases;
     }
   }
@@ -434,15 +427,10 @@ export function inferRuntimeOptionPatchFromConfigOption(
   if (isThinkingConfigKey(normalizedKey)) {
     return { thinking: validateRuntimeThinkingInput(validated.value) };
   }
-  if (
-    normalizedKey === "approval_policy" ||
-    normalizedKey === "permission_profile" ||
-    normalizedKey === "permissions" ||
-    normalizedKey === "permission_mode"
-  ) {
+  if (RUNTIME_CONFIG_OPTION_ALIASES.permissionProfile.some((alias) => alias === normalizedKey)) {
     return { permissionProfile: validateRuntimePermissionProfileInput(validated.value) };
   }
-  if (normalizedKey === "timeout" || normalizedKey === "timeout_seconds") {
+  if (RUNTIME_CONFIG_OPTION_ALIASES.timeoutSeconds.some((alias) => alias === normalizedKey)) {
     return { timeoutSeconds: parseRuntimeTimeoutSecondsInput(validated.value) };
   }
   if (normalizedKey === "cwd") {

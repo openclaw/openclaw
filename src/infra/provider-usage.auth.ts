@@ -150,13 +150,8 @@ function resolveProviderApiKeyCandidatesFromConfigAndStoreSync(params: {
     return candidates;
   }
 
-  const normalizedProviderIds = new Set(
-    normalizeUniqueStringEntries(
-      params.providerIds.map((providerId) => normalizeProviderId(providerId)),
-    ),
-  );
   const store = resolveUsageAuthStore(params.state);
-  const credentials = [...normalizedProviderIds]
+  const credentials = normalizeProviderIds(params.providerIds)
     .flatMap((provider) => resolveAuthProfileOrder({ cfg: params.state.cfg, store, provider }))
     .map((id) => store.profiles[id])
     .filter(
@@ -355,7 +350,6 @@ async function resolveOAuthToken(params: {
       };
     } catch {
       params.state.signal?.throwIfAborted();
-      // ignore
     }
   }
 

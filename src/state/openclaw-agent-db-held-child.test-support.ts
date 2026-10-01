@@ -28,9 +28,16 @@ if (fixtureRoot) {
     throw new Error("Held database fixture must stay inside its private state root");
   }
 }
-openOpenClawAgentDatabase(options);
+const database = openOpenClawAgentDatabase(options);
 process.send?.("ready");
-process.once("message", () => {
+process.on("message", (message) => {
+  if (message === "begin-write") {
+    database.db.exec(
+      "BEGIN IMMEDIATE; INSERT INTO auth_profile_state VALUES ('killed-write', '{}', 1)",
+    );
+    process.send?.("writing");
+    return;
+  }
   closeOpenClawAgentDatabases();
   closeOpenClawStateDatabaseForTest();
   process.disconnect?.();

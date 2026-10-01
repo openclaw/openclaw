@@ -12,7 +12,8 @@ import {
   clearAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { ensureGatewayOwnerProfile, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
 import { projectChatDisplayMessages } from "../chat-display-projection.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";

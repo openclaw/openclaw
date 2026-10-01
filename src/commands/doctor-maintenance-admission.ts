@@ -2,13 +2,18 @@ import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import { inspectUpdateRepairDriverAdmission } from "../infra/update-run-activity.js";
 import { recordUpdateRunRepairContinuation } from "../infra/update-run-ledger.js";
 import { createUpdateRunAdmissionReader } from "../infra/update-run-reader.js";
+import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 
-export function resolveDoctorUpdateAdmission(env: NodeJS.ProcessEnv): {
+export function resolveDoctorUpdateAdmission(
+  env: NodeJS.ProcessEnv,
+  boundRunId?: string,
+): {
   assertCurrent: () => void;
+  readContinuation: () => UpdateRunRecord | undefined;
   recordContinuation: () => void;
 } {
-  const inheritedRunId = env[UPDATE_RUN_ID_ENV]?.trim();
+  const inheritedRunId = (boundRunId ?? env[UPDATE_RUN_ID_ENV])?.trim();
   const readRuns = createUpdateRunAdmissionReader(
     { active: true, limit: 100, includeRunId: inheritedRunId },
     { env },
@@ -30,6 +35,10 @@ export function resolveDoctorUpdateAdmission(env: NodeJS.ProcessEnv): {
   return {
     assertCurrent: () => {
       readAdmission();
+    },
+    readContinuation: () => {
+      const current = readAdmission();
+      return current.kind === "continuation" ? current.run : undefined;
     },
     recordContinuation: () => {
       readAdmission();

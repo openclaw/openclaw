@@ -88,10 +88,8 @@ vi.mock("./trash.js", () => ({
   movePathToTrash: vi.fn(async (targetPath: string) => targetPath),
 }));
 
-vi.mock("./chrome-mcp.runtime.js", () => ({
-  getChromeMcpModule: async () => ({
-    closeChromeMcpSession: lifecycleMocks.closeChromeMcpSession,
-  }),
+vi.mock("./chrome-mcp.js", () => ({
+  closeChromeMcpSession: lifecycleMocks.closeChromeMcpSession,
 }));
 
 vi.mock("./pw-ai-module.js", () => ({
@@ -105,9 +103,20 @@ vi.mock("./chrome.js", () => ({
   stopOwnedOpenClawChrome: lifecycleMocks.stopOwnedOpenClawChrome,
 }));
 
-const [{ resolveBrowserConfig, resolveProfile }, { createBrowserProfilesService }] =
-  await Promise.all([import("./config.js"), import("./profiles-service.js")]);
+const [
+  { resolveBrowserConfig, resolveProfile },
+  { createBrowserProfilesService },
+  { getChromeMcpModule },
+] = await Promise.all([
+  import("./config.js"),
+  import("./profiles-service.js"),
+  import("./chrome-mcp.runtime.js"),
+]);
 const { setDefaultBrowserProfile } = await import("./config-mutations.js");
+
+afterEach(() => {
+  getChromeMcpModule.clear();
+});
 
 function createCtx(resolved: BrowserServerState["resolved"]) {
   const state: BrowserServerState = {
@@ -183,6 +192,7 @@ function createDeletionFixture(params: {
 
 describe("BrowserProfilesService", () => {
   beforeEach(() => {
+    getChromeMcpModule.clear();
     vi.clearAllMocks();
     configMocks.getRuntimeConfigSourceSnapshot.mockReset().mockReturnValue(null);
     configMocks.writeConfigFile.mockReset().mockResolvedValue(undefined);

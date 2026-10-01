@@ -30,7 +30,8 @@ import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-reques
 import type { PluginHookBeforeMessageWriteEvent } from "../../plugins/types.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { retainUserProfileCatalog } from "../../state/user-profile-list.js";
-import { ensureProfileForEmail, linkEmail, syncGitHubIdentity } from "../../state/user-profiles.js";
+import { linkEmail, syncGitHubIdentity } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -42,13 +43,22 @@ import {
   writeSessionStore,
 } from "../test-helpers.js";
 import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
+import { releaseGatewaySessionStoreFixture } from "../test/server-sessions-resources.test-helpers.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
 import { identifiedClient } from "./sessions-sharing.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
-const temporaryDirs = useAutoCleanupTempDirTracker(afterEach);
+const temporaryDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    // External store leases must retire before the per-case Gateway home.
+    for (const dir of temporaryDirs.dirs) {
+      await releaseGatewaySessionStoreFixture(dir);
+    }
+    cleanup();
+  });
+});
 
 async function createHostedChildFixture(
   system = false,
