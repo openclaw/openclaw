@@ -141,6 +141,14 @@ export async function startGatewayCoreRuntime(input: {
   if (secretEgressProxy) {
     runtime.registerGatewayLifetimeSidecars(secretEgressProxy);
   }
+  const sendNodeSessionEvent: (...args: Parameters<typeof nodeSendToSession>) => void = (
+    sessionKey,
+    event,
+    payload,
+    opts,
+  ) => {
+    void nodeSendToSession(sessionKey, event, payload, opts);
+  };
   let pendingThawRestartTargets: readonly ThawRestartTarget[] | undefined;
   let earlyRuntimePromise: Promise<GatewayEarlyRuntime> | undefined;
   const startEarlyRuntime = (): Promise<GatewayEarlyRuntime> =>
@@ -200,14 +208,7 @@ export async function startGatewayCoreRuntime(input: {
             chatRunState,
             removeChatRun,
             agentRunSeq,
-            nodeSendToSession: (
-              sessionKey,
-              event,
-              payload,
-              opts?: Parameters<typeof nodeSendToSession>[3],
-            ) => {
-              void nodeSendToSession(sessionKey, event, payload, opts);
-            },
+            nodeSendToSession: sendNodeSessionEvent,
             getRuntimeConfig,
             startupTrace,
           }),
@@ -240,14 +241,7 @@ export async function startGatewayCoreRuntime(input: {
       broadcast,
       broadcastToConnIds,
       nodeHasSessionSubscribers,
-      nodeSendToSession: (
-        sessionKey,
-        event,
-        payload,
-        opts?: Parameters<typeof nodeSendToSession>[3],
-      ) => {
-        void nodeSendToSession(sessionKey, event, payload, opts);
-      },
+      nodeSendToSession: sendNodeSessionEvent,
       agentRunSeq,
       chatRunState,
       toolEventRecipients,

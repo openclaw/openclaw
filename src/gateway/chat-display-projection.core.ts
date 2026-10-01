@@ -481,14 +481,8 @@ export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecover
     get pending() {
       return recovery.pending;
     },
-    result: recovery.result.bind(recovery),
+    result: recovery.result,
   };
-}
-
-function projectChatHistoryRecovery(messages: unknown[], options?: ChatHistoryRecoveryOptions) {
-  const projection = createChatHistoryRecoveryProjection(options);
-  projection.append(messages);
-  return projection.result();
 }
 
 export function projectChatDisplayMessagesWithState(
@@ -496,7 +490,9 @@ export function projectChatDisplayMessagesWithState(
   options?: ChatDisplayProjectionOptions,
 ): ChatDisplayProjectionResult {
   options?.subagentCoordination?.assertCurrent?.();
-  const recoveredErrors = projectChatHistoryRecovery(messages, options);
+  const recovery = createChatHistoryRecoveryProjection(options);
+  recovery.append(messages);
+  const recoveredErrors = recovery.result();
   const projectedErrors = projectEmptyAssistantErrorMessages(recoveredErrors.messages);
   const activity =
     options?.activity === false

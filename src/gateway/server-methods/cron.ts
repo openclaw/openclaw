@@ -119,10 +119,6 @@ function requiresExplicitAgentRuntimeToolsAllow(params: {
   );
 }
 
-function cronPatchTouchesToolRuntime(patch: CronJobPatch): boolean {
-  return patch.payload !== undefined || Object.hasOwn(patch, "trigger");
-}
-
 export const cronHandlers: GatewayRequestHandlers = {
   wake: async ({ params, respond, context, client, sessionMutationCommitGuard }) => {
     if (!assertValidParams(params, validateWakeParams, "wake", respond)) {
@@ -679,7 +675,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const touchesToolRuntime = cronPatchTouchesToolRuntime(patch);
+    const touchesToolRuntime = patch.payload !== undefined || Object.hasOwn(patch, "trigger");
     const validateUpdate = async (jobToUpdate: CronJob) => {
       const nextJob = await assertValidCronUpdatePatch({
         cfg,
