@@ -863,6 +863,43 @@ describe("Invalid engine fallback", () => {
     expect(compact).toHaveBeenCalledTimes(1);
   });
 
+  it("clears a missing-engine quarantine when the plugin registers later", async () => {
+    const engineId = uniqueEngineId("late-register");
+    expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe("legacy");
+    expect(await listContextEngineQuarantines()).toEqual([
+      expect.objectContaining({ engineId, operation: "resolve", reason: "not registered" }),
+    ]);
+    await registerTestContextEngine(engineId, () => createEngine(engineId));
+    expect(await listContextEngineQuarantines()).toEqual([]);
+    expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe(engineId);
+  });
+
+  it("does not quarantine a cancelled compaction", async () => {
+    const engineId = uniqueEngineId("compact-abort");
+    const controller = new AbortController();
+    const reason = new Error("user stopped compaction");
+    const error = new Error("compaction aborted", { cause: reason });
+    error.name = "AbortError";
+    await registerTestContextEngine(engineId, () =>
+      createEngine(engineId, {
+        async compact() {
+          controller.abort(reason);
+          throw error;
+        },
+      }),
+    );
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    await expect(
+      engine.compact({
+        sessionId: "s1",
+        sessionKey: "agent:main:s1",
+        abortSignal: controller.signal,
+      }),
+    ).rejects.toBe(error);
+    expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe(engineId);
+    expect(await listContextEngineQuarantines()).toEqual([]);
+  });
+
   it("defers quarantine clearing for builder-context direct registrations", async () => {
     const engineId = uniqueEngineId("builder-register");
     await resolveContextEngine(configWithSlot(engineId));

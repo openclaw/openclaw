@@ -157,9 +157,16 @@ describe("ExtensionRelayBridge", () => {
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(ready).toBe(false);
-    deliver(pending.handlers, { type: "not-hello" });
+    deliver(pending.handlers, { type: "tabs", tabs: defaultTabs });
     await vi.advanceTimersByTimeAsync(100);
     expect(ready).toBe(false);
+    expect(pending.socket).toMatchObject({
+      closed: true,
+      closeCode: 4001,
+      closeReason: "expected valid hello",
+    });
+    expect(bridge.extensionConnected).toBe(false);
+    expect(bridge.accessibleTabs()).toEqual([]);
 
     const replacement = wireExtension(bridge);
     sendHello(replacement.handlers);

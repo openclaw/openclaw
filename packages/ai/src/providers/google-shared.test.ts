@@ -880,18 +880,34 @@ describe("Google message conversion", () => {
     ]);
   });
 
-  it("does not replay a signature onto a foreign API route", () => {
-    const contents = convert([
-      makeGoogleAssistantMessage(conversionModel.id, [{ ...call, thoughtSignature: "c2lnbmVk" }]),
-      { ...makeGoogleAssistantMessage(conversionModel.id, [call]), api: "google-vertex" },
-    ] as Context["messages"]);
-    expect(
-      contents
-        .flatMap((content) => content.parts ?? [])
-        .filter((part) => part.functionCall)
-        .map((part) => part.thoughtSignature),
-    ).toEqual(["c2lnbmVk", "skip_thought_signature_validator"]);
-  });
+  it.each(["foreign route", "user turn", "runtime context"] as const)(
+    "does not replay an earlier signature across a %s",
+    (boundary) => {
+      const contents = convert([
+        makeGoogleAssistantMessage(conversionModel.id, [{ ...call, thoughtSignature: "c2lnbmVk" }]),
+        ...(boundary === "foreign route"
+          ? []
+          : [
+              {
+                role: "user",
+                content: "a new question",
+                timestamp: 1,
+                ...(boundary === "runtime context" ? { runtimeContextCarrier: true } : {}),
+              },
+            ]),
+        {
+          ...makeGoogleAssistantMessage(conversionModel.id, [call]),
+          ...(boundary === "foreign route" ? { api: "google-vertex" } : {}),
+        },
+      ] as Context["messages"]);
+      expect(
+        contents
+          .flatMap((content) => content.parts ?? [])
+          .filter((part) => part.functionCall)
+          .map((part) => part.thoughtSignature),
+      ).toEqual(["c2lnbmVk", "skip_thought_signature_validator"]);
+    },
+  );
 
   it("strips call and response IDs for google-gemini-cli", () => {
     const target = makeGeminiCliModel(conversionModel.id);

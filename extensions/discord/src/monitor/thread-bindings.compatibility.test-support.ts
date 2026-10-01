@@ -15,7 +15,10 @@ import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi, type Mock } from "vitest";
 import { discordPlugin } from "../channel.js";
 import * as discordSend from "../send.js";
-import { unbindThreadBindingsBySessionKey } from "./thread-bindings.lifecycle.js";
+import {
+  unbindThreadBindingsBySessionKey,
+  unbindThreadBindingsBySessionKeyAsync,
+} from "./thread-bindings.lifecycle.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 import type { ThreadBindingManager, ThreadBindingRecord } from "./thread-bindings.types.js";
 
@@ -51,6 +54,7 @@ export function registerThreadBindingCompatibilityTests({
     "missing-delete-idle",
     "missing-delete-sibling-touch",
     "stopping-unbind",
+    "queued-unbind",
     "queued-age",
   ] as const)("settles real SQLite compatibility at %s", async (boundary) => {
     await withOpenClawTestState({ label: "discord-binding-commit-order" }, async () => {
@@ -68,7 +72,7 @@ export function registerThreadBindingCompatibilityTests({
             .spyOn(discordSend, "sendMessageDiscord")
             .mockRejectedValue(new Error("Unexpected bot intro"))
         : undefined;
-      const queuedOperation = boundary === "queued-age";
+      const queuedOperation = boundary.startsWith("queued-");
       let deletingMissing = false;
       stores.openKeyedStore.mockImplementation((options) => {
         const store = createPluginStateKeyedStoreForTests<ThreadBindingRecord>("discord", options);
@@ -184,10 +188,13 @@ export function registerThreadBindingCompatibilityTests({
           expect(notify).not.toHaveBeenCalled();
         } else if (queuedOperation) {
           const params = { targetSessionKey: bindingTarget, accountId: "work" };
-          followup = discordPlugin.conversationBindings!.setMaxAgeBySessionKeyAsync!({
-            ...params,
-            maxAgeMs: 1000,
-          });
+          followup =
+            boundary === "queued-unbind"
+              ? unbindThreadBindingsBySessionKeyAsync({ ...params, sendFarewell: false })
+              : discordPlugin.conversationBindings!.setMaxAgeBySessionKeyAsync!({
+                  ...params,
+                  maxAgeMs: 1000,
+                });
           followup = followup.catch((error: unknown) => {
             followupFailure = error;
             return [];
@@ -237,11 +244,15 @@ export function registerThreadBindingCompatibilityTests({
           const changed = await followup;
           expect(followupFailure).toBeUndefined();
           expect(changed).toHaveLength(1);
-          expect(store.lookup(saved.key)?.maxAgeMs).toBe(1000);
-          expect(manager.getByThreadId("thread-1")?.maxAgeMs).toBe(1000);
+          if (boundary === "queued-age") {
+            expect(store.lookup(saved.key)?.maxAgeMs).toBe(1000);
+            expect(manager.getByThreadId("thread-1")?.maxAgeMs).toBe(1000);
+          }
         }
         const expectedTarget =
-          deleting || boundary === "committed-intro-unbind" ? undefined : bindingTarget;
+          deleting || boundary === "committed-intro-unbind" || boundary === "queued-unbind"
+            ? undefined
+            : bindingTarget;
         expect(store.lookup(saved.key)?.targetSessionKey).toBe(expectedTarget);
         expect(manager.getByThreadId("thread-1")?.targetSessionKey).toBe(
           boundary === "missing-delete-sibling-touch"
@@ -250,7 +261,8 @@ export function registerThreadBindingCompatibilityTests({
         );
         expect(notify).toHaveBeenCalledTimes(
           (deleting && boundary !== "missing-delete-sibling-touch") ||
-            boundary === "committed-intro-unbind"
+            boundary === "committed-intro-unbind" ||
+            boundary === "queued-unbind"
             ? 1
             : 0,
         );

@@ -53,29 +53,36 @@ describe("thread binding lifecycle", () => {
     }
   });
 
-  it("expires idle bindings without probing and sends the farewell as the bot", async () => {
-    vi.useFakeTimers();
-    try {
-      const manager = await createTestThreadBindingManager({
-        enableSweeper: true,
-        idleTimeoutMs: 60_000,
-      });
-      expect(await bindTestThread(manager, { introText: "intro" })).toMatchObject({
-        threadId: "thread-1",
-        targetSessionKey: target.targetSessionKey,
-      });
-      hoisted.sendMessageDiscord.mockClear();
-      hoisted.sendWebhookMessageDiscord.mockClear();
-      await vi.advanceTimersByTimeAsync(120_000);
-      expect(manager.getByThreadId("thread-1")).toBeUndefined();
-      expect(hoisted.restGet).not.toHaveBeenCalled();
-      expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
-      expect(hoisted.sendMessageDiscord).toHaveBeenCalledOnce();
-      expect(hoisted.sendMessageDiscord.mock.calls[0]?.[1]).toContain("after 1m of inactivity");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+  it.each([
+    { idleTimeoutMs: 60_000, maxAgeMs: 0, farewell: "after 1m of inactivity" },
+    { idleTimeoutMs: 0, maxAgeMs: 60_000, farewell: "max age of 1m" },
+  ])(
+    "expires bindings without probing ($farewell)",
+    async ({ idleTimeoutMs, maxAgeMs, farewell }) => {
+      vi.useFakeTimers();
+      try {
+        const manager = await createTestThreadBindingManager({
+          enableSweeper: true,
+          idleTimeoutMs,
+          maxAgeMs,
+        });
+        expect(await bindTestThread(manager, { introText: "intro" })).toMatchObject({
+          threadId: "thread-1",
+          targetSessionKey: target.targetSessionKey,
+        });
+        hoisted.sendMessageDiscord.mockClear();
+        hoisted.sendWebhookMessageDiscord.mockClear();
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(manager.getByThreadId("thread-1")).toBeUndefined();
+        expect(hoisted.restGet).not.toHaveBeenCalled();
+        expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
+        expect(hoisted.sendMessageDiscord).toHaveBeenCalledOnce();
+        expect(hoisted.sendMessageDiscord.mock.calls[0]?.[1]).toContain(farewell);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each([
     { error: new Error("ECONNRESET"), keeps: true },
