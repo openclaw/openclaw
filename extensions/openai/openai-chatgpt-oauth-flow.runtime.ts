@@ -1,10 +1,10 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { resolveOpenAICodexAuthIdentity } from "openclaw/plugin-sdk/provider-auth";
 import {
   createOAuthLoginCancelledError,
   oauthErrorHtml,
   oauthSuccessHtml,
   parseOAuthAuthorizationInput,
+  resolveOpenAICodexAuthIdentity,
   throwIfOAuthLoginAborted,
   withOAuthLoginAbort,
   type OAuthCredentials,
@@ -20,12 +20,15 @@ import {
   refreshOpenAIAccessToken,
 } from "./openai-chatgpt-oauth-token.runtime.js";
 
-const CALLBACK_PORT = 1455;
 const CALLBACK_HOST = resolveOpenAICallbackHost();
 const REDIRECT_URI = resolveOpenAIRedirectUri(CALLBACK_HOST);
 const MANUAL_PROMPT_FALLBACK_MS = 15_000;
 
-const loadNodeOAuthHttp = createLazyRuntimeModule(() => import("node:http"));
+const loadOAuthCallbackServer = createLazyRuntimeModule(() =>
+  import("openclaw/plugin-sdk/provider-auth-runtime").then(
+    ({ startProviderOAuthLoopbackCallbackServer }) => startProviderOAuthLoopbackCallbackServer,
+  ),
+);
 
 function waitForManualPromptFallback(signal?: AbortSignal): Promise<null> {
   return new Promise((resolve, reject) => {
@@ -68,99 +71,6 @@ async function promptForAuthorizationCode(
     await onPrompt({ message: "Paste the authorization code (or full redirect URL):" }),
     state,
   );
-}
-
-type OAuthServerInfo = {
-  close: () => void;
-  cancelWait: () => void;
-  waitForCode: () => Promise<{ code: string } | null>;
-};
-
-function sendOAuthHtmlResponse(
-  res: import("node:http").ServerResponse,
-  statusCode: number,
-  html: string,
-): void {
-  res.statusCode = statusCode;
-  // Callback browsers may reuse HTTP/1.1 connections. Force disconnect after
-  // the response so an accepted socket cannot keep the auth process alive.
-  res.setHeader("Connection", "close");
-  res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.end(html);
-}
-
-async function startLocalOAuthServer(
-  state: string,
-  assertCurrent?: () => void,
-): Promise<OAuthServerInfo> {
-  const http = await loadNodeOAuthHttp();
-  assertCurrent?.();
-  let settleWait: ((value: { code: string } | null) => void) | undefined;
-  const waitForCodePromise = new Promise<{ code: string } | null>((resolve) => {
-    settleWait = resolve;
-  });
-
-  const server = http.createServer((req, res) => {
-    try {
-      const url = new URL(req.url || "", "http://localhost");
-      if (url.pathname !== "/auth/callback") {
-        sendOAuthHtmlResponse(res, 404, oauthErrorHtml("Callback route not found."));
-        return;
-      }
-      if (url.searchParams.get("state") !== state) {
-        sendOAuthHtmlResponse(res, 400, oauthErrorHtml("State mismatch."));
-        return;
-      }
-      const code = url.searchParams.get("code");
-      if (!code) {
-        sendOAuthHtmlResponse(res, 400, oauthErrorHtml("Missing authorization code."));
-        return;
-      }
-      sendOAuthHtmlResponse(
-        res,
-        200,
-        oauthSuccessHtml("OpenAI authentication completed. You can close this window."),
-      );
-      settleWait?.({ code });
-    } catch {
-      sendOAuthHtmlResponse(
-        res,
-        500,
-        oauthErrorHtml("Internal error while processing OAuth callback."),
-      );
-    }
-  });
-
-  return new Promise((resolve) => {
-    server
-      .listen(CALLBACK_PORT, CALLBACK_HOST, () => {
-        resolve({
-          close: () => {
-            server.close();
-            // Force-close preconnected sockets so they cannot pin the CLI process.
-            server.closeAllConnections();
-          },
-          cancelWait: () => {
-            settleWait?.(null);
-          },
-          waitForCode: () => waitForCodePromise,
-        });
-      })
-      .on("error", () => {
-        settleWait?.(null);
-        resolve({
-          close: () => {
-            try {
-              server.close();
-            } catch {
-              // ignore
-            }
-          },
-          cancelWait: () => {},
-          waitForCode: async () => null,
-        });
-      });
-  });
 }
 
 function resolveOpenAICredentials(
@@ -216,8 +126,34 @@ export async function loginOpenAICodex(options: {
     options.originator ?? "openclaw",
     REDIRECT_URI,
   );
-  const server = await startLocalOAuthServer(state, options.assertCurrent);
-
+  const startCallbackServer = await loadOAuthCallbackServer();
+  options.assertCurrent?.();
+  throwIfOAuthLoginAborted(options.signal);
+  let server: Awaited<ReturnType<typeof startCallbackServer>> | undefined;
+  try {
+    server = await startCallbackServer({
+      redirectUrl: REDIRECT_URI,
+      expectedState: state,
+      bindOnlyHostname: CALLBACK_HOST,
+      signal: options.signal,
+      renderSuccess: () => ({
+        body: oauthSuccessHtml("OpenAI authentication completed. You can close this window."),
+        contentType: "text/html; charset=utf-8",
+      }),
+      renderError: (message) => ({
+        body: oauthErrorHtml(message),
+        contentType: "text/html; charset=utf-8",
+      }),
+    });
+  } catch {
+    // An unavailable callback port still permits manual entry; retired owners do not.
+    options.assertCurrent?.();
+    throwIfOAuthLoginAborted(options.signal);
+  }
+  let cancelWait!: () => void;
+  const cancelledWait = new Promise<null>((resolve) => {
+    cancelWait = () => resolve(null);
+  });
   let code: string | undefined;
   try {
     options.assertCurrent?.();
@@ -230,9 +166,21 @@ export async function loginOpenAICodex(options: {
         }),
       ),
       options.signal,
-      server.cancelWait,
+      cancelWait,
     );
     throwIfOAuthLoginAborted(options.signal);
+    const callbackPromise = Promise.race([
+      server
+        ? server.waitForCallback().then((result) => {
+            if (result.type === "oauth_error") {
+              throw new Error("OpenAI authorization was not completed.");
+            }
+            return { code: result.code };
+          })
+        : Promise.resolve(null),
+      cancelledWait,
+    ]);
+    void callbackPromise.catch(() => undefined);
 
     if (options.onManualCodeInput) {
       let manualCode: string | undefined;
@@ -241,21 +189,17 @@ export async function loginOpenAICodex(options: {
         .onManualCodeInput()
         .then((input) => {
           manualCode = input;
-          server.cancelWait();
+          cancelWait();
         })
         .catch((err: unknown) => {
           manualError = err instanceof Error ? err : new Error(String(err));
-          server.cancelWait();
+          cancelWait();
         });
 
-      const result = await withOAuthLoginAbort(
-        server.waitForCode(),
-        options.signal,
-        server.cancelWait,
-      );
+      const result = await withOAuthLoginAbort(callbackPromise, options.signal, cancelWait);
 
       if (!result?.code && !manualCode && !manualError) {
-        await withOAuthLoginAbort(manualPromise, options.signal, server.cancelWait);
+        await withOAuthLoginAbort(manualPromise, options.signal, cancelWait);
       }
       if (manualError) {
         throw manualError;
@@ -266,25 +210,24 @@ export async function loginOpenAICodex(options: {
         code = parseAuthorizationCode(manualCode, state);
       }
     } else {
-      const callbackPromise = server.waitForCode();
       const result = await withOAuthLoginAbort(
         Promise.race([callbackPromise, waitForManualPromptFallback(options.signal)]),
         options.signal,
-        server.cancelWait,
+        cancelWait,
       );
       if (result?.code) {
         code = result.code;
       } else {
         const promptCodePromise = promptForAuthorizationCode(options.onPrompt, state).then(
           (promptCode) => {
-            server.cancelWait();
+            cancelWait();
             return promptCode;
           },
         );
         code = await withOAuthLoginAbort(
           Promise.race([callbackPromise.then((callback) => callback?.code), promptCodePromise]),
           options.signal,
-          server.cancelWait,
+          cancelWait,
         );
       }
     }
@@ -293,7 +236,7 @@ export async function loginOpenAICodex(options: {
       code = await withOAuthLoginAbort(
         promptForAuthorizationCode(options.onPrompt, state),
         options.signal,
-        server.cancelWait,
+        cancelWait,
       );
     }
 
@@ -308,7 +251,7 @@ export async function loginOpenAICodex(options: {
       }),
     );
   } finally {
-    server.close();
+    await server?.close();
   }
 }
 

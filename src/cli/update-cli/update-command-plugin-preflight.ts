@@ -105,10 +105,10 @@ export async function preflightConfiguredNpmPluginTargets(params: {
             failure = `resolved plugin requires ${candidateRequirement}`;
           }
         } catch (error) {
-          if (hasCommandProcessCleanupError(error)) {
-            throw error;
-          }
-          if (!(error instanceof NpmChannelResolutionError)) {
+          if (
+            hasCommandProcessCleanupError(error) ||
+            !(error instanceof NpmChannelResolutionError)
+          ) {
             throw error;
           }
           failure = `registry could not be reached: ${formatErrorMessage(error)}`;

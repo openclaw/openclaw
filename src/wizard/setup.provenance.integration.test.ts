@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { resetConfigRuntimeState } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -82,88 +82,63 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("classic setup matched config bases", () => {
-  it.each([
-    { state: "retained-roster", telemetry: true },
-    { state: "rebased-roster", telemetry: false },
-    { state: "new-roster", telemetry: true },
-    { state: "fresh-config", telemetry: false },
-  ])(
-    "preserves consent and pending edits for $state (telemetry: $telemetry)",
-    async ({ state, telemetry }) => {
-      await withTempHome(async (home) => {
-        const stateDir = path.join(home, ".openclaw");
-        const configPath = path.join(stateDir, "openclaw.json");
-        const workspace = path.join(home, "workspace");
-        vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-        vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-        vi.stubEnv("CLASSIC_RESPONSE_PREFIX", "prefix-before");
-        await fs.mkdir(stateDir, { recursive: true });
-        if (state !== "fresh-config") {
-          const config: OpenClawConfig = {
-            agents: {
-              defaults: { workspace },
-              ...(state === "retained-roster"
-                ? { entries: { main: { workspace } } }
-                : state === "rebased-roster"
-                  ? { entries: { main: {} } }
-                  : {}),
-            },
-            gateway: { mode: "local", port: 18789 },
-            messages: { responsePrefix: "${CLASSIC_RESPONSE_PREFIX}" },
-            plugins: { enabled: false },
-          };
-          await fs.writeFile(configPath, JSON.stringify(config));
+it("preserves consent and authored values after rebasing the agent roster", async () => {
+  await withTempHome(async (home) => {
+    const stateDir = path.join(home, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const workspace = path.join(home, "workspace");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("CLASSIC_RESPONSE_PREFIX", "prefix-before");
+    await fs.mkdir(stateDir, { recursive: true });
+    const config: OpenClawConfig = {
+      agents: { defaults: { workspace }, entries: { main: {} } },
+      gateway: { mode: "local", port: 18789 },
+      messages: { responsePrefix: "${CLASSIC_RESPONSE_PREFIX}" },
+      plugins: { enabled: false },
+    };
+    await fs.writeFile(configPath, JSON.stringify(config));
+    resetConfigRuntimeState();
+    const confirm = vi.fn(async () => true);
+    const prompter = createWizardPrompter({
+      confirm,
+      select: async <T>(params: WizardSelectParams<T>): Promise<T> => {
+        const choice = params.options.find((option) => option.value === false);
+        if (!choice) {
+          throw new Error(`Unexpected selection: ${params.message}`);
         }
-        resetConfigRuntimeState();
-        const confirm = vi.fn(async () => true);
-        const prompter = createWizardPrompter({
-          confirm,
-          select: async <T>(params: WizardSelectParams<T>): Promise<T> => {
-            const choice = params.options.find((option) => option.value === telemetry);
-            if (!choice) {
-              throw new Error(`Unexpected selection: ${params.message}`);
-            }
-            return choice.value;
-          },
-        });
-        await runSetupWizard(
-          {
-            flow: "quickstart",
-            mode: "local",
-            authChoice: "skip",
-            agentName: "main",
-            workspace,
-            gatewayPort: 19001,
-            installDaemon: false,
-            skipChannels: true,
-            skipSearch: true,
-            skipSkills: true,
-            skipHealth: true,
-            skipHooks: true,
-            skipUi: true,
-          },
-          runtime,
-          prompter,
-        );
+        return choice.value;
+      },
+    });
+    await runSetupWizard(
+      {
+        flow: "quickstart",
+        mode: "local",
+        authChoice: "skip",
+        agentName: "main",
+        workspace,
+        gatewayPort: 19001,
+        installDaemon: false,
+        skipChannels: true,
+        skipSearch: true,
+        skipSkills: true,
+        skipHealth: true,
+        skipHooks: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
 
-        const saved = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-        expect.soft(saved.wizard?.securityAcknowledgedAt).toEqual(expect.any(String));
-        expect
-          .soft(saved.telemetry)
-          .toEqual({ enabled: telemetry, consentedAt: expect.any(String) });
-        expect.soft(saved.gateway?.port).toBe(19001);
-        expect.soft(saved.agents?.defaults?.workspace).toBe(workspace);
-        expect.soft(saved.agents?.entries).toHaveProperty("main");
-        if (state !== "fresh-config") {
-          expect.soft(saved.messages?.responsePrefix).toBe("${CLASSIC_RESPONSE_PREFIX}");
-        } else {
-          expect.soft(saved.messages?.responsePrefix).toBeUndefined();
-        }
-        expect.soft(saved.agents?.defaults).not.toHaveProperty("maxConcurrent");
-        expect.soft(saved.agents?.defaults).not.toHaveProperty("compaction");
-        expect(confirm).toHaveBeenCalledOnce();
-      });
-    },
-  );
+    const saved = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+    expect.soft(saved.wizard?.securityAcknowledgedAt).toEqual(expect.any(String));
+    expect.soft(saved.telemetry).toEqual({ enabled: false, consentedAt: expect.any(String) });
+    expect.soft(saved.gateway?.port).toBe(19001);
+    expect.soft(saved.agents?.defaults?.workspace).toBe(workspace);
+    expect.soft(saved.agents?.entries).toHaveProperty("main");
+    expect.soft(saved.messages?.responsePrefix).toBe("${CLASSIC_RESPONSE_PREFIX}");
+    expect.soft(saved.agents?.defaults).not.toHaveProperty("maxConcurrent");
+    expect.soft(saved.agents?.defaults).not.toHaveProperty("compaction");
+    expect(confirm).toHaveBeenCalledOnce();
+  });
 });

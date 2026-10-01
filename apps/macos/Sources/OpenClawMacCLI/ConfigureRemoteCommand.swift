@@ -493,13 +493,7 @@ private func isValidSSHTarget(_ raw: String) -> Bool {
 
 private func printConfigureRemoteOutput(_ output: ConfigureRemoteOutput, json: Bool) {
     if json {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(output),
-           let text = String(data: data, encoding: .utf8)
-        {
-            print(text)
-        }
+        printCLIJSON(output)
         return
     }
     print("OpenClaw macOS Remote Config")

@@ -5,7 +5,11 @@ import * as advertisedLanHost from "../../infra/advertised-lan-host.js";
 import { readResponseWithLimit } from "../../infra/http-body.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import * as httpListen from "../server/http-listen.js";
-import { createGatewayPortalService, type GatewayPortalService } from "./portal-service.js";
+import {
+  createGatewayPortalService,
+  createPortalOperations,
+  type GatewayPortalService,
+} from "./portal-service.js";
 
 const services = new Set<GatewayPortalService>();
 
@@ -428,15 +432,22 @@ describe("gateway portal service", () => {
 
   it("revalidates worker close authority immediately before queued removal", async () => {
     const { service } = makeService(["127.0.0.1"]);
-    const portal = await service.open({ targetPort: 3000 });
-    let authorityCurrent = true;
-    const assertCurrent = () => {
-      if (!authorityCurrent) {
-        throw new Error("Worker portal authority changed");
-      }
+    const owner = {
+      environmentId: "cloud-a",
+      ownerEpoch: 1,
+      ownershipError: "Worker portal belongs to another owner",
+      current: true,
+      assertCurrent() {
+        if (!this.current) {
+          throw new Error("Worker portal authority changed");
+        }
+      },
+      prepareTarget: async () => ({ connect: unavailableWorkerConnection, close: vi.fn() }),
     };
-    const closing = service.close(portal.id, assertCurrent);
-    authorityCurrent = false;
+    const operations = createPortalOperations(service, owner);
+    const portal = await operations.open({ port: 3000 });
+    const closing = operations.close(portal.id);
+    owner.current = false;
 
     await expect(closing).rejects.toThrow("Worker portal authority changed");
     expect(service.list()).toEqual([portal]);

@@ -389,7 +389,7 @@ describe("worker placement dispatch", () => {
       },
     });
     placementStore.markWorkspaceResultPending(claim);
-    placementStore.updateWorkspaceBaseManifest({
+    await placementStore.updateWorkspaceBaseManifest({
       claim,
       manifestRef: harness.reconciledManifestRef,
     });
@@ -447,7 +447,11 @@ describe("worker placement dispatch", () => {
   });
 
   it("keeps the worker draining when the remote workspace changes after local acceptance", async () => {
-    const harness = createTestHarness({ verifyFails: true });
+    const harness = createTestHarness({
+      reconcileCommitsManifest: false,
+      reconcileCommitsManifestOnApply: true,
+      verifyFailureCall: 3,
+    });
     await harness.service.dispatch(REQUEST);
 
     await expect(
@@ -461,7 +465,12 @@ describe("worker placement dispatch", () => {
     expect(harness.placements.current()).toMatchObject({
       state: "draining",
       workspaceBaseManifestRef: harness.reconciledManifestRef,
+      turnClaim: { owner: "worker" },
     });
+    expect(harness.log).toContain("workspace:apply-prepared");
+    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
+      { workspaceAcceptedAtMs: null },
+    ]);
     expect(harness.environments.destroy).not.toHaveBeenCalled();
     expect(harness.log).toContain("workspace:resume");
   });
@@ -732,7 +741,7 @@ describe("worker placement dispatch", () => {
     if (active?.state !== "active") {
       return;
     }
-    placementStore.beginWorkspaceReconciliation(
+    await placementStore.beginWorkspaceReconciliation(
       {
         sessionId: active.sessionId,
         environmentId: active.environmentId,
@@ -909,9 +918,9 @@ describe("worker placement dispatch", () => {
       },
     });
     const binding = claim;
-    placementStore.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    await placementStore.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     expect(
-      placementStore.beginWorkerSessionToolOperation({
+      await placementStore.beginWorkerSessionToolOperation({
         claim: binding,
         toolName: "sessions_send",
         toolCallId: "call-owner-mismatch",
@@ -949,7 +958,7 @@ describe("worker placement dispatch", () => {
       // Failed fence assertions must still unblock and join recovery before
       // afterEach closes the shared-state database.
       try {
-        completed = placementStore.completeWorkerSessionToolOperation({
+        completed = await placementStore.completeWorkerSessionToolOperation({
           sourceSessionId: claim.sessionId,
           sourceClaimId: claim.claimId,
           toolCallId: "call-owner-mismatch",

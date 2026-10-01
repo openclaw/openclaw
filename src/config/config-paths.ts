@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 // Resolves and classifies config paths for reads, writes, and metadata.
 import { isPlainObject } from "../utils.js";
@@ -81,8 +80,7 @@ export function unsetConfigValueAtPath(root: PathNode, path: string[]): boolean 
   delete cursor[leafKey];
   // Keep config writes tidy: removing foo.bar should also remove foo when it became empty, while
   // preserving any parent that still carries sibling config.
-  for (let idx = stack.length - 1; idx >= 0; idx -= 1) {
-    const { node, key } = expectDefined(stack[idx], "stack entry at idx");
+  for (const { node, key } of stack.toReversed()) {
     const child = node[key];
     if (isPlainObject(child) && Object.keys(child).length === 0) {
       delete node[key];

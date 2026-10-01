@@ -2,6 +2,9 @@
 // Config writes are lazy for ordinary CLI startup, but update finalization can first write
 // after a rebuild removes the old hashed chunk. Preload that closure before mutation.
 import "../../config/io.write.js";
+import { prepareDeferredPluginMigrationRuntime } from "../../infra/deferred-plugin-migrations.js";
+
+await prepareDeferredPluginMigrationRuntime();
 
 export { executeMutableUpdate } from "./update-command-execution.js";
 export { finishAlreadyCurrentUpdate } from "./update-command-noop.js";

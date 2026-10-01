@@ -51,7 +51,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     this.containerOnlyMounts =
       containerOnlyMounts ??
       resolveSandboxTmpfsMounts(sandbox.docker.tmpfs).map((mount) => mount.containerPath);
-    const mountsByContainer = [...this.mounts].toSorted(
+    const mountsByContainer = this.mounts.toSorted(
       (a, b) => b.containerRoot.length - a.containerRoot.length,
     );
     // Longest mount first keeps nested agent/skill mounts from being claimed by
@@ -444,9 +444,6 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
 }
 
 function coerceStatType(typeRaw?: string): "file" | "directory" | "other" {
-  if (!typeRaw) {
-    return "other";
-  }
   const normalized = normalizeOptionalLowercaseString(typeRaw) ?? "";
   if (normalized.includes("directory")) {
     return "directory";

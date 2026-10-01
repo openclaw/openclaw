@@ -1,10 +1,13 @@
 // Owns catalog-row menu state, actions, focus anchor, and rendering for AppSidebar.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { readSessionMethodScopeAccess } from "../lib/session-method-access.ts";
 import { parseCatalogSessionKey, type CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
+import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { showToast } from "../lib/toast.ts";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import type { SidebarCatalogSessionMutationScope } from "./app-sidebar-session-types.ts";
@@ -31,6 +34,7 @@ type SidebarCatalogMenuHost = Pick<
     | "beginSessionMutation"
     | "isSessionMutationScopeCurrent"
     | "archiveSessionCatalog"
+    | "importSessionCatalog"
     | "sessionScopeGeneration"
   >;
 };
@@ -99,6 +103,12 @@ export class SidebarCatalogMenuController {
     menu: SidebarCatalogSessionMenuState,
     action: CatalogSessionMenuAction,
   ): void {
+    if (action === "import") {
+      if (this.canImport()) {
+        void this.importSession(menu);
+      }
+      return;
+    }
     if (action === "terminal") {
       if (menu.canOpenTerminal && this.host.terminalAvailable) {
         openCatalogSessionInTerminal(this.host, menu.key, menu.agentId);
@@ -119,6 +129,64 @@ export class SidebarCatalogMenuController {
       this.host.sessionData.isSessionMutationScopeCurrent(scope) &&
       scope.catalogGeneration === this.host.sessionData.sessionScopeGeneration
     );
+  }
+
+  private canImport(): boolean {
+    const snapshot = this.host.sessionDataContext?.gateway.snapshot;
+    return (
+      snapshot?.phase === "connected" &&
+      readSessionMethodScopeAccess(snapshot.hello?.auth, {
+        method: "sessions.catalog.import",
+        requiredScope: "operator.write",
+      }).allowed
+    );
+  }
+
+  private async importSession(menu: SidebarCatalogSessionMenuState): Promise<void> {
+    const mutation = this.host.sessionData.beginSessionMutation();
+    if (!mutation) {
+      return;
+    }
+    const scope = { ...mutation, catalogGeneration: this.host.sessionData.sessionScopeGeneration };
+    const displayName = truncateUtf16Safe(menu.displayName?.trim() ?? "", 500);
+    try {
+      const result = await this.host.sessionData.importSessionCatalog(scope, {
+        ...menu.key,
+        agentId: menu.agentId,
+        ...(displayName ? { displayName } : {}),
+      });
+      if (!result || !this.isMutationCurrent(scope)) {
+        return;
+      }
+      showToast({
+        message: t(
+          !result.complete
+            ? "chat.catalog.importIncomplete"
+            : result.importedItems === 0
+              ? "chat.catalog.importUnchanged"
+              : "chat.catalog.importComplete",
+          { count: String(result.importedItems) },
+        ),
+        actionLabel: t("chat.catalog.openImportedSession"),
+        onAction: () => {
+          if (!this.isMutationCurrent(scope)) {
+            return;
+          }
+          const target = sessionNavigationTarget({
+            context: scope.context,
+            face: "chat",
+            sessionKey: result.sessionKey,
+            agentId: menu.agentId,
+            exactKey: true,
+          });
+          this.host.onNavigate?.("chat", { ...target.options, search: "", hash: "" });
+        },
+      });
+    } catch (error) {
+      if (this.isMutationCurrent(scope)) {
+        showToast({ message: formatUiError(error) });
+      }
+    }
   }
 
   private async deleteSession(menu: SidebarCatalogSessionMenuState): Promise<void> {
@@ -182,6 +250,7 @@ export class SidebarCatalogMenuController {
         .trigger=${this.trigger}
         .lastActive=${menu.meta}
         .canDelete=${menu.canDelete}
+        .canImport=${this.canImport()}
         .terminalDisabled=${!menu.canOpenTerminal || !this.host.terminalAvailable}
         .onAction=${(action: CatalogSessionMenuAction) => this.handleAction(menu, action)}
         .onClose=${() => this.close()}

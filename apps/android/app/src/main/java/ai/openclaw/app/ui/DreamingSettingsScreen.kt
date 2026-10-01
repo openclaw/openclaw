@@ -101,18 +101,14 @@ private fun DreamDiaryPanel(summary: GatewayDreamingSummary) {
   Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
     Text(text = nativeString("DIARY"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
     if (!summary.diaryFound) {
-      ClawPanel {
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-          Text(text = nativeString("No dream diary yet."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-          Text(text = nativeString("Entries appear after a dreaming cycle writes a narrative summary."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
-      }
+      SettingsMessagePanel(
+        title = nativeString("No dream diary yet."),
+        text = nativeString("Entries appear after a dreaming cycle writes a narrative summary."),
+      )
       return
     }
     if (summary.diaryEntries.isEmpty()) {
-      ClawPanel {
-        Text(text = nativeString("The diary is waiting for its first entry."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-      }
+      SettingsMessagePanel(text = nativeString("The diary is waiting for its first entry."))
       return
     }
     ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {

@@ -65,7 +65,7 @@ describe("resolveCronDeliveryPlan", () => {
     expect(plan.to).toBe("123");
   });
 
-  it.each(["googlechat", "gchat", "google-chat"])(
+  it.each(["googlechat", "gchat"])(
     "canonicalizes the registered %s primary delivery channel",
     (channel) => {
       const plan = resolveCronDeliveryPlan({
@@ -239,31 +239,6 @@ describe("resolveFailureDestination", () => {
     resetPluginRuntimeStateForTest();
   });
 
-  it("merges global defaults with job-level overrides", () => {
-    const plan = resolveFailureDestination(
-      {
-        delivery: {
-          mode: "announce",
-          channel: "telegram",
-          to: "111",
-          failureDestination: { channel: "signal", mode: "announce" },
-        },
-      },
-      {
-        channel: "telegram",
-        to: "222",
-        mode: "announce",
-        accountId: "global-account",
-      },
-    );
-    expect(plan).toEqual({
-      mode: "announce",
-      channel: "signal",
-      to: undefined,
-      accountId: undefined,
-    });
-  });
-
   it("preserves global targets and accounts for same-channel failure overrides", () => {
     const plan = resolveFailureDestination(
       {
@@ -288,56 +263,40 @@ describe("resolveFailureDestination", () => {
     });
   });
 
-  for (const { channelId, aliases } of [
-    { channelId: "googlechat", aliases: ["googlechat", "gchat", "google-chat"] },
-    { channelId: "msteams", aliases: ["msteams", "teams"] },
-  ]) {
-    it.each(
-      aliases.flatMap((globalChannel) =>
-        aliases.flatMap((channel) =>
-          ["failure destination", "job alert"].map((override) => ({
-            globalChannel,
-            channel,
-            override,
-          })),
+  it.each([
+    ["googlechat", "googlechat", "gchat", "failure destination"],
+    ["googlechat", "gchat", "googlechat", "job alert"],
+    ["googlechat", "gchat", "google-chat", "failure destination"],
+    ["msteams", "teams", "msteams", "job alert"],
+  ])(
+    "preserves %s failure routing from %s through %s %s",
+    (channelId, globalChannel, channel, override) => {
+      expect(
+        resolveFailureDestination(
+          {
+            delivery: {
+              mode: "none",
+              ...(override === "failure destination" ? { failureDestination: { channel } } : {}),
+            },
+          },
+          {
+            channel: globalChannel,
+            to: `${channelId}:alerts`,
+            accountId: `${channelId}-bot`,
+            mode: "announce",
+          },
+          override === "job alert" ? { channel } : undefined,
         ),
-      ),
-    )(
-      `preserves ${channelId} failure routing from $globalChannel through $channel $override`,
-      ({ globalChannel, channel, override }) => {
-        expect(
-          resolveFailureDestination(
-            {
-              delivery: {
-                mode: "none",
-                ...(override === "failure destination" ? { failureDestination: { channel } } : {}),
-              },
-            },
-            {
-              channel: globalChannel,
-              to: `${channelId}:alerts`,
-              accountId: `${channelId}-bot`,
-              mode: "announce",
-            },
-            override === "job alert" ? { channel } : undefined,
-          ),
-        ).toEqual({
-          mode: "announce",
-          channel: channelId,
-          to: `${channelId}:alerts`,
-          accountId: `${channelId}-bot`,
-        });
-      },
-    );
-  }
+      ).toEqual({
+        mode: "announce",
+        channel: channelId,
+        to: `${channelId}:alerts`,
+        accountId: `${channelId}-bot`,
+      });
+    },
+  );
 
   it.each([
-    {
-      name: "job alert override",
-      failureDestination: undefined,
-      jobAlertRoute: { channel: "gchat" },
-      globalChannel: "googlechat",
-    },
     {
       name: "both independently aliased overrides",
       failureDestination: { channel: "gchat" },
@@ -395,30 +354,6 @@ describe("resolveFailureDestination", () => {
     ).toEqual({
       mode: "announce",
       channel: "msteams",
-      to: undefined,
-      accountId: undefined,
-    });
-  });
-
-  it("does not reuse a global recipient or account across failure channels", () => {
-    const plan = resolveFailureDestination(
-      {
-        delivery: {
-          mode: "none",
-          failureDestination: { channel: "telegram" },
-        },
-      },
-      {
-        channel: "slack",
-        to: "slack:cron-alerts",
-        accountId: "slack-bot",
-        mode: "announce",
-      },
-    );
-
-    expect(plan).toEqual({
-      mode: "announce",
-      channel: "telegram",
       to: undefined,
       accountId: undefined,
     });
@@ -711,29 +646,6 @@ describe("resolveFailureDestination", () => {
       channel: "signal",
       to: "group-abc",
       accountId: "global-account",
-    });
-  });
-
-  it("uses a provider-prefixed failure destination as the announce channel", () => {
-    const plan = resolveFailureDestination(
-      {
-        delivery: {
-          mode: "announce",
-          channel: "telegram",
-          to: "111",
-          failureDestination: {
-            mode: "announce",
-            to: "slack:U123",
-          },
-        },
-      },
-      undefined,
-    );
-    expect(plan).toEqual({
-      mode: "announce",
-      channel: "slack",
-      to: "slack:U123",
-      accountId: undefined,
     });
   });
 

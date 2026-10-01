@@ -29,56 +29,31 @@ export function resolveConfiguredFallbackReasoning(params: {
   compat?: unknown;
   reasoning?: boolean;
 }): boolean {
-  return resolveConfiguredModelReasoning(params) ?? false;
-}
-
-function resolveConfiguredModelReasoning(params: {
-  provider: string;
-  compat?: unknown;
-  reasoning?: boolean;
-}): boolean | undefined {
-  if (params.reasoning !== undefined) {
-    return params.reasoning;
-  }
-  return isVllmQwenThinkingCompat(params) ? true : undefined;
+  return params.reasoning ?? isVllmQwenThinkingCompat(params);
 }
 
 export function resolveMergedConfiguredModelReasoning(params: {
   provider: string;
-  configuredCompat?: unknown;
-  resolvedCompat?: unknown;
+  compat?: unknown;
   configuredReasoning?: boolean;
   discoveredReasoning?: boolean;
 }): boolean {
   if (params.configuredReasoning !== undefined) {
     return params.configuredReasoning;
   }
-  if (isVllmQwenThinkingCompat({ provider: params.provider, compat: params.configuredCompat })) {
-    return true;
-  }
-  return (
-    resolveConfiguredModelReasoning({
-      provider: params.provider,
-      compat: params.resolvedCompat,
-      reasoning: params.discoveredReasoning,
-    }) ?? false
-  );
+  return isVllmQwenThinkingCompat(params) || (params.discoveredReasoning ?? false);
 }
 
 function isVllmQwenThinkingCompat(params: { provider: string; compat?: unknown }): boolean {
-  const thinkingFormat = readCompatThinkingFormat(params.compat);
+  const { compat } = params;
+  if (!compat || typeof compat !== "object" || Array.isArray(compat)) {
+    return false;
+  }
+  const thinkingFormat = (compat as { thinkingFormat?: unknown }).thinkingFormat;
   return (
     normalizeProviderId(params.provider) === "vllm" &&
     (thinkingFormat === "qwen" || thinkingFormat === "qwen-chat-template")
   );
-}
-
-function readCompatThinkingFormat(compat: unknown): string | undefined {
-  if (!compat || typeof compat !== "object" || Array.isArray(compat)) {
-    return undefined;
-  }
-  const thinkingFormat = (compat as { thinkingFormat?: unknown }).thinkingFormat;
-  return typeof thinkingFormat === "string" ? thinkingFormat : undefined;
 }
 
 export function mergeModelCompat(

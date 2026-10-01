@@ -863,7 +863,7 @@ describe.skipIf(process.platform === "win32")(
         installKind: "package",
         packageManager: "npm",
       });
-      vi.spyOn(runs, "readUpdateRunStatus").mockReturnValue({});
+      vi.spyOn(runs, "readUpdateRunStatus").mockResolvedValue({});
       const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
       const { updateStatusCommand } = await import("../cli/update-cli/status.js");
       await updateStatusCommand({ json: true });

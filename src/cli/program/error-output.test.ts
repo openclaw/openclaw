@@ -24,7 +24,7 @@ import {
 } from "./error-output.js";
 import { setCommandJsonMode } from "./json-mode.js";
 import { OpenClawCommand } from "./openclaw-command.js";
-import { registerLazyCommand } from "./register-lazy-command.js";
+import { registerCommandGroups } from "./register-command-groups.js";
 
 async function parseLazyGroupError(params: {
   argv: string[];
@@ -54,20 +54,24 @@ async function parseLazyGroupError(params: {
         );
       },
     });
-    registerLazyCommand({
+    registerCommandGroups(
       program,
-      name: params.group,
-      description: `${params.group} commands`,
-      register: () => {
-        const group = program.command(params.group).action(() => {});
-        for (const subcommand of params.subcommands) {
-          const command = group.command(subcommand.name).action(() => {});
-          for (const alias of subcommand.aliases ?? []) {
-            command.alias(alias);
-          }
-        }
-      },
-    });
+      [
+        {
+          placeholders: [{ name: params.group, description: `${params.group} commands` }],
+          register: () => {
+            const group = program.command(params.group).action(() => {});
+            for (const subcommand of params.subcommands) {
+              const command = group.command(subcommand.name).action(() => {});
+              for (const alias of subcommand.aliases ?? []) {
+                command.alias(alias);
+              }
+            }
+          },
+        },
+      ],
+      { eager: false, primary: null, registerPrimaryOnly: false },
+    );
 
     const error = await program.parseAsync(process.argv).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(CommanderError);

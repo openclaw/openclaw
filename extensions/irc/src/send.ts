@@ -1,4 +1,4 @@
-// Irc plugin module implements send behavior.
+import { randomUUID } from "node:crypto";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -11,8 +11,7 @@ import type { IrcClient } from "./client.js";
 import { connectIrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";
 import { normalizeIrcMessagingTarget } from "./normalize.js";
-import { makeIrcMessageId } from "./protocol.js";
-import { getIrcRuntime } from "./runtime.js";
+import { getOptionalIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
 type SendIrcOptions = {
@@ -34,20 +33,6 @@ export type SendIrcResult = {
   target: string;
   receipt: MessageReceipt;
 };
-
-function recordIrcOutboundActivity(accountId: string): void {
-  try {
-    getIrcRuntime().channel.activity.record({
-      channel: "irc",
-      accountId,
-      direction: "outbound",
-    });
-  } catch (error) {
-    if (!(error instanceof Error) || error.message !== "IRC runtime not initialized") {
-      throw error;
-    }
-  }
-}
 
 export async function sendIrcMessages(
   to: string,
@@ -118,9 +103,13 @@ export async function sendIrcMessages(
         throw new Error("IRC connection closed before send");
       }
       client.sendPrivmsg(target, message.text, message.replyTo);
-      recordIrcOutboundActivity(account.accountId);
+      getOptionalIrcRuntime()?.channel.activity.record({
+        channel: "irc",
+        accountId: account.accountId,
+        direction: "outbound",
+      });
 
-      const messageId = makeIrcMessageId();
+      const messageId = randomUUID();
       const result = {
         messageId,
         target,

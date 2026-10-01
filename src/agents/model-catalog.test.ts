@@ -553,6 +553,37 @@ describe("prepared model catalog builder", () => {
     ]);
   });
 
+  it("uses an explicitly ready live catalog order across entries and route variants", async () => {
+    const manifestSnapshot = providerManifestSnapshot({
+      provider: "demo",
+      discovery: "runtime",
+      modelIds: ["first", "second"],
+    });
+    const entries = [
+      { provider: "demo", id: "second", name: "Second", api: "openai-responses" as const },
+      { provider: "demo", id: "first", name: "First", api: "openai-responses" as const },
+      { provider: "demo", id: "new", name: "New", api: "openai-responses" as const },
+    ];
+    const liveOrder = {
+      provider: "demo",
+      status: "ready" as const,
+      modelOrder: ["second", "new", "first", "absent"],
+    };
+    const snapshot = await build({
+      entries,
+      metadataSnapshot: manifestSnapshot,
+      providerOutcomes: [liveOrder],
+    });
+
+    expect(snapshot.entries.map(({ id }) => id)).toEqual(["second", "new", "first"]);
+    expect(snapshot.routeVariants.map(({ id }) => id)).toEqual(["second", "new", "first"]);
+    expect(snapshot.entries.map(({ providerOrder }) => providerOrder)).toEqual([0, 1, 2]);
+    expect(snapshot.entries).toHaveLength(entries.length);
+
+    const withoutOptIn = await build({ entries, metadataSnapshot: manifestSnapshot });
+    expect(withoutOptIn.entries.map(({ id }) => id)).toEqual(["first", "second", "new"]);
+  });
+
   it("keeps manifest rank for configured runtime models absent from the registry", async () => {
     mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
       { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },

@@ -317,6 +317,18 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["test/scripts/bundled-plugin-install-uninstall-probe.test.ts", 4],
   ["test/scripts/changed-lanes.test.ts", 5],
   // Updated process-fixture walls include imports/setup from run 33364935118.
+  // Preserved case maxima from PR runs 36394634707, 36394423189 and
+  // 36394835419, plus 20s for each newly split file's process/import overhead.
+  // Policy retains the tooling-owner table; process owners also cover leaf configs.
+  // Keep cold projections until complete split-file CI walls arrive.
+  ["test/scripts/ci-changed-node-test-plan.test.ts", 143],
+  ["test/scripts/ci-changed-node-test-plan.source-owners.test.ts", 130],
+  ["test/scripts/ci-changed-node-test-plan.policy.test.ts", 130],
+  // Two-CPU / 7.65-GiB native replay took 146.24s plus the outer shard wrapper.
+  ["test/scripts/ci-changed-node-test-plan.dependency-inputs.test.ts", 148],
+  ["test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts", 130],
+  ["test/scripts/ci-changed-node-test-plan.config-fallback.test.ts", 130],
+  ["test/scripts/ci-changed-node-test-plan.process-owners.test.ts", 143],
   ["test/scripts/ci-git-owner.test.ts", 187],
   // Blacksmith PR runs 33532741896/33545657559 recorded 127.288s/135.808s wrapper
   // spans; canonical push plans omit this tooling workload.

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { createRetainedOperation, type RetainedOperation } from "../infra/retained-operation.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -9,6 +10,7 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
+import type { OpenClawStateReadOutcome } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { onUserProfilesChanged, readUserProfileVersion } from "./user-profile-events.js";
 import {
@@ -16,14 +18,9 @@ import {
   readUserProfileIdentity,
   retainUserProfileCatalog,
 } from "./user-profile-list.js";
+import { linkEmail, setAvatar, setDisplayName } from "./user-profile-writes.worker.js";
 import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
-import {
-  adoptTailscaleProfileAvatar,
-  ensureProfileForEmail,
-  linkEmail,
-  setAvatar,
-  setDisplayName,
-} from "./user-profiles.js";
+import { adoptTailscaleProfileAvatar, ensureProfileForEmail } from "./user-profiles.js";
 
 const delivery = vi.hoisted(() => ({
   afterResult: undefined as (() => Promise<void>) | undefined,
@@ -35,25 +32,42 @@ vi.mock("./openclaw-state-read-worker.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./openclaw-state-read-worker.js")>();
   return {
     ...actual,
-    createOpenClawStateReadTransport: (
-      ...args: Parameters<typeof actual.createOpenClawStateReadTransport>
-    ) => {
-      const owned = actual.createOpenClawStateReadTransport(...args);
+    captureOpenClawStateReadSource: () => {
+      const source = actual.captureOpenClawStateReadSource();
       return {
-        ...owned,
-        read: async (...readArgs: Parameters<typeof owned.read>) => {
-          if (delivery.readFailure) {
-            throw delivery.readFailure;
-          }
-          const result = await owned.read(...readArgs);
-          await delivery.afterRead?.();
-          return result;
-        },
-        close: async () => {
-          if (delivery.closeFailure) {
-            throw delivery.closeFailure;
-          }
-          await owned.close();
+        ...source,
+        createTransport: (...args: Parameters<typeof source.createTransport>) => {
+          const owned = source.createTransport(...args);
+          return {
+            ...owned,
+            startRead: (...readArgs: Parameters<typeof owned.startRead>) => {
+              let read: RetainedOperation<OpenClawStateReadOutcome> | undefined;
+              const completion = createRetainedOperation<OpenClawStateReadOutcome>(() =>
+                read?.service(),
+              );
+              if (delivery.readFailure) {
+                completion.reject(delivery.readFailure);
+              } else {
+                read = owned.startRead(...readArgs);
+                // The existing race control holds delivery after the real worker read.
+                void read.result
+                  .then(async (outcome) => {
+                    await delivery.afterRead?.();
+                    return outcome;
+                  })
+                  .then(completion.resolve, completion.reject);
+              }
+              return completion.operation;
+            },
+            startClose: () => {
+              if (delivery.closeFailure) {
+                const completion = createRetainedOperation<void>(() => {});
+                completion.reject(delivery.closeFailure);
+                return completion.operation;
+              }
+              return owned.startClose();
+            },
+          };
         },
       };
     },

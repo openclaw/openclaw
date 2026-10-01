@@ -31,7 +31,6 @@ type WorkspaceFileReadResult = {
   canonicalPath: string;
   readOnly?: boolean;
 };
-type WorkspaceFilePrefixResult = Pick<ReadResult, "buffer" | "stat"> & { canonicalPath: string };
 
 export const enqueueWorkspaceFileUpdate = createAsyncLock();
 
@@ -216,7 +215,7 @@ export async function readWorkspaceFilePrefix(
   rootDir: string,
   browserPath: string,
   maxBytes: number,
-): Promise<WorkspaceFilePrefixResult | undefined | "unsupported"> {
+): Promise<WorkspaceFileReadResult | undefined | "unsupported"> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
     return undefined;
   }

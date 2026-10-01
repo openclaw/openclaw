@@ -1,6 +1,8 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import { readInterruptedUpdateCandidateAsync } from "../infra/update-run-interruption-worker.js";
+import { reconcileInterruptedUpdateRuns } from "../infra/update-run-interruption.js";
 import {
   createUpdateRun,
   finishUpdateRun,
@@ -8,9 +10,25 @@ import {
 } from "../infra/update-run-ledger.js";
 import { getUpdateRun, listUpdateRunsAsync } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import {
+  isArtifactPreservingStateRead,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { noteStaleUpdateRuns } from "./doctor-update-run.js";
 
+const snapshot = vi.hoisted(() => ({ active: false }));
+vi.mock("../state/openclaw-state-db-readonly.js", async (original) => ({
+  ...(await original<typeof import("../state/openclaw-state-db-readonly.js")>()),
+  withOpenClawStateDatabaseReadSnapshot: vi.fn(async (operation: () => Promise<unknown>) => {
+    snapshot.active = true;
+    try {
+      return await operation();
+    } finally {
+      snapshot.active = false;
+    }
+  }),
+}));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 vi.mock("../infra/update-run-reader.js", async (original) => ({
   ...(await original<typeof import("../infra/update-run-reader.js")>()),
@@ -18,10 +36,43 @@ vi.mock("../infra/update-run-reader.js", async (original) => ({
 }));
 vi.mock("../infra/update-run-interruption.js", async (original) => ({
   ...(await original<typeof import("../infra/update-run-interruption.js")>()),
-  reconcileInterruptedUpdateRuns: async () => [],
+  reconcileInterruptedUpdateRuns: vi.fn(),
+}));
+vi.mock("../infra/update-run-interruption-worker.js", () => ({
+  readInterruptedUpdateCandidateAsync: vi.fn(),
 }));
 
+beforeEach(() => {
+  vi.mocked(reconcileInterruptedUpdateRuns).mockResolvedValue([]);
+  vi.mocked(readInterruptedUpdateCandidateAsync).mockResolvedValue(undefined);
+});
 afterEach(() => vi.resetAllMocks());
+
+it.each([false, true])(
+  "shares one snapshot for history reads (migrateState=%s)",
+  async (migrateState) => {
+    const assertSnapshot = () => {
+      expect(snapshot.active).toBe(true);
+      expect(isArtifactPreservingStateRead()).toBe(true);
+    };
+    vi.mocked(readInterruptedUpdateCandidateAsync).mockImplementation(async () => {
+      assertSnapshot();
+      return undefined;
+    });
+    vi.mocked(listUpdateRunsAsync).mockImplementation(async () => {
+      assertSnapshot();
+      return [];
+    });
+
+    await noteStaleUpdateRuns({ migrateState });
+
+    expect(withOpenClawStateDatabaseReadSnapshot).toHaveBeenCalledOnce();
+    expect(readInterruptedUpdateCandidateAsync).toHaveBeenCalledTimes(migrateState ? 1 : 0);
+    expect(listUpdateRunsAsync).toHaveBeenCalledTimes(2);
+    expect(reconcileInterruptedUpdateRuns).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalled();
+  },
+);
 
 it.each([
   {
@@ -68,6 +119,7 @@ it.each([
   vi.mocked(listUpdateRunsAsync).mockImplementation(async (input) =>
     input?.active ? [] : [latest],
   );
+  vi.mocked(readInterruptedUpdateCandidateAsync).mockResolvedValue(latest);
 
   await noteStaleUpdateRuns({});
 
@@ -76,6 +128,8 @@ it.each([
     expect.stringContaining(`OpenClaw update failed: ${failure.reason}`),
     "Update history",
   );
+  expect(reconcileInterruptedUpdateRuns).toHaveBeenCalledWith({ candidate: latest });
+  expect(listUpdateRunsAsync).toHaveBeenCalledTimes(2);
   expect(note).toHaveBeenCalledWith(
     expect.stringContaining(
       failure.nextAction ??
@@ -101,6 +155,55 @@ it.each([
   await noteStaleUpdateRuns({});
 
   expect(note).not.toHaveBeenCalled();
+});
+
+it("refreshes history outside the discovery snapshot after settling an interrupted update", async () => {
+  const abandoned: UpdateRunRecord = {
+    runId: "interrupted-update",
+    createdAtMs: 1,
+    updatedAtMs: 2,
+    trigger: "cli",
+    phase: "finished",
+    status: "failed",
+    reason: "abandoned",
+    origin: {},
+    target: {},
+    before: {},
+    after: {},
+    steps: [],
+    verification: {},
+    repair: [],
+    confirmedAtMs: null,
+    finishedAtMs: 2,
+    downtimeMs: null,
+  };
+  const settled: UpdateRunRecord = {
+    ...abandoned,
+    status: "succeeded",
+    reason: null,
+    after: { buildId: "candidate-build" },
+  };
+  vi.mocked(readInterruptedUpdateCandidateAsync).mockResolvedValue(abandoned);
+  vi.mocked(reconcileInterruptedUpdateRuns).mockImplementation(async () => {
+    expect(snapshot.active).toBe(false);
+    return [settled];
+  });
+  const readScopes: boolean[] = [];
+  vi.mocked(listUpdateRunsAsync).mockImplementation(async (input) => {
+    readScopes.push(snapshot.active);
+    return snapshot.active ? [abandoned] : input?.active ? [] : [settled];
+  });
+
+  await noteStaleUpdateRuns();
+
+  expect(withOpenClawStateDatabaseReadSnapshot).toHaveBeenCalledOnce();
+  expect(readInterruptedUpdateCandidateAsync).toHaveBeenCalledOnce();
+  expect(reconcileInterruptedUpdateRuns).toHaveBeenCalledWith({ candidate: abandoned });
+  expect(readScopes).toEqual([true, true, false, false]);
+  expect(note).toHaveBeenCalledExactlyOnceWith(
+    "Update interrupted-update: recorded succeeded after verifying the installed and serving candidate build candidate-build; its updater exited before recording completion.",
+    "Update history",
+  );
 });
 
 it.each(["state migration is pending", "data/settings upgrade is unfinished"])(

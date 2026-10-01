@@ -9,10 +9,14 @@ import {
 } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateWorkerLease } from "../state/openclaw-state-worker-store.js";
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
+import { withDeferredDebugProxyCapture } from "./runtime-deferral.js";
 import {
   finalizeDebugProxyCapture,
   finalizeDebugProxyCaptureAsync,
   initializeDebugProxyCapture,
+  initializeDebugProxyCaptureAsync,
+  prepareHttpCapture,
+  prepareHttpCaptureForTransport,
 } from "./runtime.js";
 
 const control = vi.hoisted(() => ({
@@ -133,6 +137,134 @@ function stubGuardedCaptureEnv(sessionId: string) {
     vi.stubEnv(key, undefined);
   }
 }
+
+it.each(["fresh", "cached-legacy", "cached-worker", "saved-fetch"] as const)(
+  "defers %s capture writes until the live update owner releases them",
+  async (mode) => {
+    stubGuardedCaptureEnv(`deferred-${mode}`);
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_REQUIRE", "1");
+    const settings = resolveDebugProxySettings();
+    const committed = vi.fn<OpenClawStateWorkerLease["execute"]>().mockResolvedValue(undefined);
+    createWorkerLease.mockImplementation((_context, finalize) => {
+      const scope = { execute: committed };
+      let closing: Promise<void> | undefined;
+      return {
+        ready: Promise.resolve(),
+        execute: committed,
+        runOperation: async (operation) => await operation(scope),
+        release: () => (closing ??= Promise.resolve().then(() => finalize?.(scope))),
+        retire: async () => {},
+      };
+    });
+    const store = { upsertSession: vi.fn(), endSession: vi.fn(), recordEvent: vi.fn() };
+    const transport = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
+    const target: typeof globalThis = { ...globalThis, fetch: transport };
+    const deps = {
+      getStore: vi.fn(() => store),
+      persistEventPayload: () => ({}),
+      fetchTarget: target,
+    };
+    const params = {
+      url: "https://synthetic.invalid/deferred-capture",
+      method: "GET",
+      error: new Error("synthetic transport diagnostic"),
+    };
+    let exercise: () => Promise<void>;
+    if (mode === "cached-legacy" || mode === "saved-fetch") {
+      initializeDebugProxyCapture("fixture", settings, deps);
+      const cached = prepareHttpCapture(settings, deps)!;
+      const savedFetch = target.fetch;
+      exercise = async () => {
+        if (mode === "cached-legacy") {
+          cached(params);
+        } else {
+          expect((await savedFetch(params.url)).status).toBe(204);
+        }
+      };
+    } else if (mode === "cached-worker") {
+      await initializeDebugProxyCaptureAsync("fixture", settings, { fetchTarget: target });
+      const cached = prepareHttpCaptureForTransport()!;
+      exercise = () => cached(params);
+    } else {
+      exercise = async () => {
+        await initializeDebugProxyCaptureAsync("fixture", settings, { fetchTarget: target });
+        const result = await fetchWithSsrFGuard({ url: params.url, fetchImpl: transport });
+        try {
+          expect(result.response.status).toBe(204);
+        } finally {
+          await result.release();
+          await finalizeDebugProxyCaptureAsync(settings);
+        }
+      };
+    }
+    const clearWrites = () => {
+      committed.mockClear();
+      createWorkerLease.mockClear();
+      store.upsertSession.mockClear();
+      store.recordEvent.mockClear();
+    };
+    const expectNoWrites = () => {
+      expect(committed).not.toHaveBeenCalled();
+      expect(createWorkerLease).not.toHaveBeenCalled();
+      expect(store.upsertSession).not.toHaveBeenCalled();
+      expect(store.recordEvent).not.toHaveBeenCalled();
+    };
+    const expectWrites = () => {
+      expect(committed.mock.calls.length + store.recordEvent.mock.calls.length).toBeGreaterThan(0);
+    };
+    const continueAfterClose = createDeferredCore();
+    const continueWithoutCapture = createDeferredCore();
+    let late: Promise<void> | undefined;
+    let uncapturedLate: Promise<void> | undefined;
+    clearWrites();
+    try {
+      await withDeferredDebugProxyCapture(async (resume) => {
+        await exercise();
+        expectNoWrites();
+        await withDeferredDebugProxyCapture(async (resumeNested) => {
+          await exercise();
+          expectNoWrites();
+          resumeNested();
+          await exercise();
+          expectWrites();
+        });
+        clearWrites();
+        await exercise();
+        expectWrites();
+        clearWrites();
+        late = continueAfterClose.promise.then(async () => {
+          resume();
+          await exercise();
+        });
+      });
+      continueAfterClose.resolve();
+      await late;
+      expectWrites();
+      clearWrites();
+      await withDeferredDebugProxyCapture(async (resume) => {
+        await exercise();
+        expectNoWrites();
+        uncapturedLate = continueWithoutCapture.promise.then(async () => {
+          resume();
+          await withDeferredDebugProxyCapture(async (resumeNested) => {
+            resumeNested();
+            await exercise();
+          });
+        });
+      });
+      continueWithoutCapture.resolve();
+      await uncapturedLate;
+      expectNoWrites();
+    } finally {
+      continueAfterClose.resolve();
+      continueWithoutCapture.resolve();
+      await late;
+      await uncapturedLate;
+      await finalizeDebugProxyCaptureAsync(settings, { fetchTarget: target });
+      finalizeDebugProxyCapture(settings, deps);
+    }
+  },
+);
 
 it.each(
   (["ready", "reservation"] as const).flatMap((failureKind) =>

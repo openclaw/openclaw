@@ -17,7 +17,6 @@ import {
   createColdPluginConfig,
   createColdPluginFixture,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
-import type { RuntimeEnv } from "../runtime.js";
 import * as backupRunRecords from "../state/backup-run-records.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -43,8 +42,7 @@ import {
 } from "./backup-create.test-support.js";
 import { classifyBackupSqliteSource } from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
-import { isVolatileBackupPath } from "./backup-volatile-filter.js";
-import { createBackupVolatileStatCache } from "./backup-volatile-stat-cache.js";
+import * as backupTarWalk from "./backup-tar-walk.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
@@ -491,42 +489,42 @@ describe("writeTarArchiveWithRetry", () => {
   });
 });
 
-describe("createBackupVolatileStatCache", () => {
-  it("lets tar filter a volatile file that disappears before lstat", async () => {
-    await withBackupState("openclaw-backup-volatile-stat-cache-", async (state) => {
+describe("volatile archive traversal", () => {
+  it("filters a volatile file removed after directory discovery", async () => {
+    await withBackupState("openclaw-backup-volatile-traversal-", async (state) => {
       const volatilePath = await state.writeText("logs/gateway.log", "live log\n");
       await state.writeText("settings.json", '{"keep":true}\n');
-      const archivePath = state.path("volatile-stat-cache.tar.gz");
-      const volatilePlan = { stateDirs: [state.stateDir] };
-      const isVolatile = (entryPath: string) => isVolatileBackupPath(entryPath, volatilePlan);
-      const statCache = createBackupVolatileStatCache(isVolatile);
-      const getCachedStat = statCache.get.bind(statCache);
+      const readdir = fs.readdir;
+      const walk = backupTarWalk.walkBackupTar;
+      let archiving = false;
       let removedBeforeStat = false;
-
-      statCache.get = (key: string) => {
-        if (path.resolve(key) === path.resolve(volatilePath)) {
+      const traversal = vi.spyOn(backupTarWalk, "walkBackupTar").mockImplementation((params) => {
+        archiving = true;
+        return walk(params);
+      });
+      const discovery = vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+        const entries = await readdir(...args);
+        // Earlier discovery also lists logs; remove only after the payload walker lists its name.
+        if (archiving && args[0] === path.dirname(volatilePath)) {
           rmSync(volatilePath, { force: true });
           removedBeforeStat = true;
         }
-        return getCachedStat(key);
-      };
-
-      await tar.c(
-        {
-          file: archivePath,
-          gzip: true,
-          portable: true,
-          preservePaths: true,
-          statCache,
-          filter: (entryPath) => !isVolatile(entryPath),
-        },
-        [state.stateDir],
-      );
-
-      const entries = await listArchiveEntries(archivePath);
-      expect(removedBeforeStat).toBe(true);
-      expect(entries.some((entry) => entry.endsWith("/settings.json"))).toBe(true);
-      expect(entries.some((entry) => entry.endsWith("/logs/gateway.log"))).toBe(false);
+        return entries;
+      });
+      try {
+        const archive = await createBackupArchive({
+          output: state.path("backup.tar.gz"),
+          includeWorkspace: false,
+        });
+        const entries = await listArchiveEntries(archive.archivePath);
+        expect(removedBeforeStat).toBe(true);
+        expect(archive.skippedVolatileCount).toBe(1);
+        expect(entries.some((entry) => entry.endsWith("/settings.json"))).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/logs/gateway.log"))).toBe(false);
+      } finally {
+        discovery.mockRestore();
+        traversal.mockRestore();
+      }
     });
   });
 });
@@ -689,7 +687,7 @@ describe("createBackupArchive", () => {
       expect(entries.some((entry) => entry.endsWith("/state/._directory.sqlite/keep.txt"))).toBe(
         true,
       );
-      const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createTestRuntime();
       await expect(
         backupVerifyCommand(runtime, { archive: result.archivePath }),
       ).resolves.toMatchObject({ ok: true });
@@ -1228,7 +1226,7 @@ describe("createBackupArchive", () => {
           ).toBe(true);
         }
 
-        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const runtime = createTestRuntime();
         const restore = await backupRestoreCommand(runtime, {
           archive: archive.archivePath,
           target: state.path("restored"),
@@ -1609,7 +1607,7 @@ describe("createBackupArchive", () => {
         includeWorkspace: false,
         nowMs: Date.UTC(2026, 4, 9, 8, 10, 0),
       });
-      const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createTestRuntime();
 
       await expect(
         backupVerifyCommand(runtime, { archive: result.archivePath }),
@@ -1937,7 +1935,7 @@ describe("createBackupArchive", () => {
           ),
         ).toBe(false);
 
-        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const runtime = createTestRuntime();
         await expect(
           backupVerifyCommand(runtime, { archive: result.archivePath }),
         ).resolves.toMatchObject({ ok: true });
@@ -2665,7 +2663,7 @@ describe("createBackupArchive", () => {
         ).toBe(true);
         expect(entries.some((entry) => entry.includes(`/${path.basename(lockDir)}/`))).toBe(false);
 
-        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const runtime = createTestRuntime();
         await expect(
           backupVerifyCommand(runtime, { archive: result.archivePath }),
         ).resolves.toMatchObject({ ok: true });
@@ -2964,7 +2962,7 @@ describe("createBackupArchive", () => {
           ).toBe(false);
         }
 
-        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const runtime = createTestRuntime();
         await expect(
           backupVerifyCommand(runtime, { archive: result.archivePath }),
         ).resolves.toMatchObject({ ok: true });
@@ -3137,7 +3135,7 @@ describe("createBackupArchive", () => {
       ).toBe(true);
       expect(entries.some((entry) => entry.includes("/SingletonSocket"))).toBe(false);
       expect(entries.some((entry) => entry.includes("/sandbox/skills-workspaces/"))).toBe(false);
-      const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createTestRuntime();
       await expect(
         backupVerifyCommand(runtime, { archive: result.archivePath }),
       ).resolves.toMatchObject({ ok: true });
@@ -3168,7 +3166,7 @@ describe("createBackupArchive", () => {
       expect(
         entries.find((entry) => entry.path.endsWith("/state/plugins/dedicated/linked.sqlite")),
       ).toMatchObject({ type: "SymbolicLink" });
-      const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createTestRuntime();
       await expect(backupVerifyCommand(runtime, { archive: result.archivePath })).resolves.toEqual(
         expect.objectContaining({ ok: true, symlinkCount: 1 }),
       );
@@ -3298,7 +3296,7 @@ describe("createBackupArchive", () => {
           }
         }
 
-        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const runtime = createTestRuntime();
         const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
         expect(verification.ok).toBe(true);
       } finally {
@@ -3416,7 +3414,7 @@ describe("createBackupArchive", () => {
         expect(db.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
           count: 1,
         });
-        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const runtime = createTestRuntime();
         await expect(
           backupVerifyCommand(runtime, { archive: result.archivePath }),
         ).resolves.toMatchObject({ ok: true });
@@ -3573,7 +3571,7 @@ describe("createBackupArchive", () => {
       );
       expect(pluginNodeModuleEntries).toStrictEqual([]);
 
-      const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createTestRuntime();
       const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
       expect(verification.ok).toBe(true);
     });
@@ -3721,7 +3719,7 @@ describe("createBackupArchive", () => {
           }),
         );
 
-        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const runtime = createTestRuntime();
         await expect(
           backupVerifyCommand(runtime, { archive: result.archivePath }),
         ).resolves.toMatchObject({ ok: true });
@@ -3755,7 +3753,7 @@ describe("createBackupArchive", () => {
         entries.some((entry) => entry.path.endsWith("/@esbuild/darwin-arm64/bin/esbuild")),
       ).toBe(true);
 
-      const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createTestRuntime();
       const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
       expect(verification.ok).toBe(true);
     });
@@ -3782,7 +3780,7 @@ describe("createBackupArchive", () => {
         );
         expect(rootManifestEntries).toHaveLength(1);
 
-        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const runtime = createTestRuntime();
         const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
         expect(verification.ok).toBe(true);
       } finally {
@@ -3839,7 +3837,7 @@ describe("createBackupArchive", () => {
           archivedDb.close();
         }
 
-        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const runtime = createTestRuntime();
         const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
         expect(verification.ok).toBe(true);
       } finally {

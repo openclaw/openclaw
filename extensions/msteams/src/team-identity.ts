@@ -1,4 +1,3 @@
-// Msteams plugin module implements canonical team identity resolution.
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { type MSTeamsRequestDeadline, withMSTeamsRequestDeadline } from "./request-timeout.js";
 

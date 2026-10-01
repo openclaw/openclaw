@@ -228,10 +228,13 @@ export function scaleAnnotations(
   scaleY: number,
   offset = { x: 0, y: 0 },
 ): AnnotationItem[] {
-  if (!Number.isFinite(scaleX) || !Number.isFinite(scaleY) || scaleX <= 0 || scaleY <= 0) {
-    return items.map((it) => ({ ...it, box: { ...it.box } }));
-  }
-  if (scaleX === 1 && scaleY === 1 && offset.x === 0 && offset.y === 0) {
+  if (
+    !Number.isFinite(scaleX) ||
+    !Number.isFinite(scaleY) ||
+    scaleX <= 0 ||
+    scaleY <= 0 ||
+    (scaleX === 1 && scaleY === 1 && offset.x === 0 && offset.y === 0)
+  ) {
     return items.map((it) => ({ ...it, box: { ...it.box } }));
   }
   return items.map((it) => ({

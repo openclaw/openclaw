@@ -208,14 +208,10 @@ function readAuthorization(db: DatabaseSync, id: string, policy: UserChannelAuth
   if (!row?.authorization_basis_json || row.authorization_basis_json.length > 1024) {
     return undefined;
   }
-  try {
-    const grant = grantSchema.safeParse(JSON.parse(row.authorization_basis_json));
-    return grant.success
-      ? { subject: row.subject, reference: { version: 1 as const, id }, grant: grant.data }
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const grant = grantSchema.safeParse(safeParseJson(row.authorization_basis_json));
+  return grant.success
+    ? { subject: row.subject, reference: { version: 1 as const, id }, grant: grant.data }
+    : undefined;
 }
 
 export class UserChannelIdentityConflictError extends Error {

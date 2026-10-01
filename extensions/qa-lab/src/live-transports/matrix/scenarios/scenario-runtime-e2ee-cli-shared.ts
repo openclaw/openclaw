@@ -3,7 +3,6 @@ import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { MatrixVerificationSummary } from "@openclaw/matrix/test-api.js";
 import { createMatrixQaClient } from "../substrate/client.js";
-import { createMatrixQaE2eeScenarioClient } from "../substrate/e2ee-client.js";
 import type { MatrixQaE2eeScenarioId } from "./scenario-contract.js";
 import {
   formatMatrixQaCliCommand,
@@ -11,8 +10,8 @@ import {
   type MatrixQaCliRunResult,
 } from "./scenario-runtime-cli.js";
 import {
+  createMatrixQaE2eeAccountClient,
   formatMatrixQaSasEmoji,
-  requireMatrixQaE2eeOutputDir,
   requireMatrixQaRegistrationToken,
 } from "./scenario-runtime-e2ee-shared.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
@@ -28,10 +27,15 @@ export type MatrixQaCliVerificationStatus = {
   crossSigningVerified?: boolean;
   encryptionEnabled?: boolean;
   pendingVerifications?: number;
+  error?: string;
+  recoveryKeyAccepted?: boolean;
+  backupUsable?: boolean;
+  deviceOwnerVerified?: boolean;
   recoveryKeyStored?: boolean;
-  serverDeviceKnown?: boolean;
+  serverDeviceKnown?: boolean | null;
   verified?: boolean;
   signedByOwner?: boolean;
+  success?: boolean;
   deviceId?: string | null;
   userId?: string | null;
 };
@@ -60,7 +64,11 @@ export type MatrixQaCliAccountAddStatus = {
 export type MatrixQaCliBackupRestoreStatus = {
   success?: boolean;
   backup?: MatrixQaCliVerificationStatus["backup"];
+  backupVersion?: string | null;
   error?: string;
+  imported?: number;
+  loadedFromSecretStorage?: boolean;
+  total?: number;
 };
 
 export function isMatrixQaCliBackupUsable(
@@ -166,16 +174,12 @@ export async function createMatrixQaE2eeCliOwnerClient(params: {
   context: MatrixQaScenarioContext;
   scenarioId: MatrixQaE2eeScenarioId;
 }) {
-  return await createMatrixQaE2eeScenarioClient({
+  return await createMatrixQaE2eeAccountClient(params.context, {
     accessToken: params.account.accessToken,
     actorId: `cli-owner-${randomUUID().slice(0, 8)}`,
-    baseUrl: params.context.baseUrl,
     deviceId: params.account.deviceId,
-    observedEvents: params.context.observedEvents,
-    outputDir: requireMatrixQaE2eeOutputDir(params.context),
     password: params.account.password,
     scenarioId: params.scenarioId,
-    timeoutMs: params.context.timeoutMs,
     userId: params.account.userId,
   });
 }

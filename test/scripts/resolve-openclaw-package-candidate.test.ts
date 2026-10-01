@@ -173,7 +173,6 @@ describe("resolve-openclaw-package-candidate", () => {
   it("accepts only OpenClaw release package specs for npm candidates", () => {
     for (const spec of [
       "openclaw@beta",
-      "openclaw@alpha",
       "openclaw@extended-stable",
       "openclaw@latest",
       "openclaw@2026.4.27",
@@ -184,20 +183,23 @@ describe("resolve-openclaw-package-candidate", () => {
       expect(validateOpenClawPackageSpec(spec), spec).toBeUndefined();
     }
 
+    expect(() => validateOpenClawPackageSpec("openclaw@alpha")).toThrow(
+      "Alpha releases are retired;",
+    );
     expect(() => validateOpenClawPackageSpec("@evil/openclaw@1.0.0")).toThrow(
-      "package_spec must be openclaw@alpha",
+      "package_spec must be openclaw@beta",
     );
     expect(() => validateOpenClawPackageSpec("openclaw@canary")).toThrow(
-      "package_spec must be openclaw@alpha",
+      "package_spec must be openclaw@beta",
     );
     expect(() => validateOpenClawPackageSpec("openclaw@2026.04.27")).toThrow(
-      "package_spec must be openclaw@alpha",
+      "package_spec must be openclaw@beta",
     );
     expect(() => validateOpenClawPackageSpec("openclaw@npm:other-package")).toThrow(
-      "package_spec must be openclaw@alpha",
+      "package_spec must be openclaw@beta",
     );
     expect(() => validateOpenClawPackageSpec("openclaw@file:../other-package.tgz")).toThrow(
-      "package_spec must be openclaw@alpha",
+      "package_spec must be openclaw@beta",
     );
   });
 

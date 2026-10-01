@@ -12,7 +12,6 @@ import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { getAiTransportHost } from "../host.js";
 import { applyProviderReportedUsageCost, calculateCost } from "../model-utils.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
-/** Shared options, usage shape, cache identity, and ordering for OpenAI APIs. */
 import { clampOpenAIPromptCacheKey } from "../providers/openai-prompt-cache.js";
 import { headersToRecord } from "../utils/headers.js";
 import { notifyProviderHttpResponse } from "./transport-stream-shared.js";
@@ -219,24 +218,23 @@ function appendOpenAICompletionsReasoningDelta(
     batch.hasVisibleText = true;
   }
   const previous = batch.deltas[batch.deltas.length - 1];
-  if (!previous || previous.kind !== next.kind) {
+  if (
+    !previous ||
+    previous.kind !== next.kind ||
+    (next.kind === "thinking" &&
+      previous.kind === "thinking" &&
+      previous.signature !== next.signature)
+  ) {
     batch.deltas.push(next);
     if (next.kind === "thinking") {
       batch.mirroredThinking.push(next.text);
     }
     return;
   }
-  if (next.kind === "thinking" && previous.kind === "thinking") {
-    if (previous.signature !== next.signature) {
-      batch.deltas.push(next);
-      batch.mirroredThinking.push(next.text);
-      return;
-    }
-    previous.text += next.text;
-    batch.mirroredThinking[batch.mirroredThinking.length - 1] += next.text;
-    return;
-  }
   previous.text += next.text;
+  if (next.kind === "thinking") {
+    batch.mirroredThinking[batch.mirroredThinking.length - 1] += next.text;
+  }
 }
 
 function createOpenAICompletionsReasoningBatch(): MutableOpenAICompletionsReasoningBatch {
@@ -345,6 +343,16 @@ export function parseOpenAICompletionsUsage(
   const input = Math.max(0, (rawUsage.prompt_tokens || 0) - cacheRead - cacheWrite);
   const output = rawUsage.completion_tokens || 0;
   const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
+  const hasCoherentContext =
+    [
+      rawUsage.prompt_tokens,
+      rawUsage.completion_tokens,
+      rawUsage.total_tokens,
+      cacheRead,
+      cacheWrite,
+    ].every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0) &&
+    rawUsage.prompt_tokens >= cacheRead + cacheWrite &&
+    rawUsage.total_tokens >= rawUsage.prompt_tokens + rawUsage.completion_tokens;
   const usage: MutableAssistantOutput["usage"] = {
     input,
     output,
@@ -356,6 +364,13 @@ export function parseOpenAICompletionsUsage(
     Number.isFinite(reasoningTokens)
       ? { reasoningTokens }
       : {}),
+    contextUsage: hasCoherentContext
+      ? {
+          state: "available",
+          promptTokens: rawUsage.prompt_tokens,
+          totalTokens: Math.max(input + output + cacheRead + cacheWrite, rawUsage.total_tokens),
+        }
+      : { state: "unavailable" },
     totalTokens: input + output + cacheRead + cacheWrite,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };

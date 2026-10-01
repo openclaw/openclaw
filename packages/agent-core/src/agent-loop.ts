@@ -20,6 +20,12 @@ import {
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import type { AgentCoreStreamRuntimeDeps } from "./runtime-deps.js";
 import {
+  admittedEntryIds,
+  admittedIds,
+  createRejectedToolCallLauncher,
+  toToolBatchCalls,
+} from "./tool-batch-admission.js";
+import {
   type AgentToolExecutionContext,
   runWithAgentToolExecutionContext,
 } from "./tool-execution-context.js";
@@ -74,41 +80,6 @@ export async function runAgentLoop(
   streamFn?: StreamFn,
   runtime?: AgentCoreStreamRuntimeDeps,
 ): Promise<AgentMessage[]> {
-  return runAgentLoopCore(prompts, context, config, emit, signal, streamFn, runtime);
-}
-
-/** Continue an existing loop context and emit only newly produced messages. */
-export async function runAgentLoopContinue(
-  context: AgentContext,
-  config: AgentLoopConfig,
-  emit: AgentEventSink,
-  signal?: AbortSignal,
-  streamFn?: StreamFn,
-  runtime?: AgentCoreStreamRuntimeDeps,
-): Promise<AgentMessage[]> {
-  assertContinuableContext(context);
-  return runAgentLoopCore([], context, config, emit, signal, streamFn, runtime);
-}
-
-function assertContinuableContext(context: AgentContext): void {
-  const lastMessage = context.messages.at(-1);
-  if (!lastMessage) {
-    throw new Error("Cannot continue: no messages in context");
-  }
-  if (lastMessage.role === "assistant") {
-    throw new TranscriptNotContinuableError(lastMessage.role);
-  }
-}
-
-async function runAgentLoopCore(
-  prompts: AgentMessage[],
-  context: AgentContext,
-  config: AgentLoopConfig,
-  emit: AgentEventSink,
-  signal?: AbortSignal,
-  streamFn?: StreamFn,
-  runtime?: AgentCoreStreamRuntimeDeps,
-): Promise<AgentMessage[]> {
   const newMessages: AgentMessage[] = [];
   const state = { context: { ...context, messages: [...context.messages] } };
   await emit({ type: "agent_start" });
@@ -132,6 +103,29 @@ async function runAgentLoopCore(
     return [];
   }
   return runLoop(state, newMessages, config, signal, emit, streamFn, runtime);
+}
+
+/** Continue an existing loop context and emit only newly produced messages. */
+export async function runAgentLoopContinue(
+  context: AgentContext,
+  config: AgentLoopConfig,
+  emit: AgentEventSink,
+  signal?: AbortSignal,
+  streamFn?: StreamFn,
+  runtime?: AgentCoreStreamRuntimeDeps,
+): Promise<AgentMessage[]> {
+  assertContinuableContext(context);
+  return runAgentLoop([], context, config, emit, signal, streamFn, runtime);
+}
+
+function assertContinuableContext(context: AgentContext): void {
+  const lastMessage = context.messages.at(-1);
+  if (!lastMessage) {
+    throw new Error("Cannot continue: no messages in context");
+  }
+  if (lastMessage.role === "assistant") {
+    throw new TranscriptNotContinuableError(lastMessage.role);
+  }
 }
 
 /**
@@ -472,12 +466,7 @@ async function executeToolCalls(
       }
       batch.validated.set(toolCall, await validateToolCallForBatchAdmission(batch, toolCall));
     }
-    const calls = toolCalls.flatMap((toolCall) => {
-      const validation = batch.validated.get(toolCall);
-      return validation?.kind === "prepared"
-        ? [{ toolCall, args: validation.args, tool: validation.tool }]
-        : [];
-    });
+    const calls = toToolBatchCalls(toolCalls, batch.validated);
     if (calls.length > 0 && !signal?.aborted) {
       const admission = await config.beforeToolBatch(
         { assistantMessage, calls, context: currentContext },
@@ -533,22 +522,15 @@ type ResolvedToolCallOutcome =
   | { kind: "error"; error: unknown };
 
 function hidesToolCallFromChannelProgress(
-  context: AgentContext,
+  batch: ToolBatchContext,
   toolCall: AgentToolCall,
-  resolvedToolCalls: Map<AgentToolCall, ResolvedToolCallOutcome>,
 ): boolean {
-  const resolution = resolvedToolCalls.get(toolCall);
+  const resolution = batch.resolved.get(toolCall);
   const tool =
     resolution?.kind === "resolved"
       ? resolution.tool
-      : context.tools?.find((candidate) => candidate.name === toolCall.name);
+      : batch.currentContext.tools?.find((candidate) => candidate.name === toolCall.name);
   return tool?.hideFromChannelProgress === true;
-}
-
-function validatedToolCallIds(batch: ToolBatchContext, calls: AgentToolCall[]): string[] {
-  return calls
-    .filter((call) => batch.validated.get(call)?.kind === "prepared")
-    .map((call) => call.id);
 }
 
 async function executeToolCallGroups(
@@ -568,7 +550,7 @@ async function executeToolCallGroups(
       steeringMessages = Array.isArray(steering) ? steering : await steering;
     }
     if (steeringMessages.length > 0) {
-      batch.lifecycle?.releaseSkippedCalls(validatedToolCallIds(batch, toolCalls.slice(cursor)));
+      batch.lifecycle?.releaseSkippedCalls(admittedIds(toolCalls.slice(cursor), batch.validated));
       break;
     }
 
@@ -621,8 +603,9 @@ async function executeToolCallGroups(
         }
       };
 
+      // Rejected calls also launch, so a sequential validation failure commits here too.
       const launched =
-        steeringMessages.length > 0 || (sequential && !hasReady)
+        steeringMessages.length > 0
           ? undefined
           : await launchParallelToolCalls(entries, batch.lifecycle);
       // Streamed batches serialize admission until source execution begins.
@@ -644,11 +627,10 @@ async function executeToolCallGroups(
         }
       }
       if (steeringMessages.length > 0 || fatal) {
+        // Unlaunched rejected calls are released with the prepared calls they accompany.
         const skippedIds = [
-          ...entries
-            .slice(skippedIndex)
-            .flatMap((entry) => ("kind" in entry ? [entry.toolCall.id] : [])),
-          ...validatedToolCallIds(batch, toolCalls.slice(cursor)),
+          ...admittedEntryIds(entries.slice(skippedIndex)),
+          ...admittedIds(toolCalls.slice(cursor), batch.validated),
         ];
         if (sequential || fatal || skippedIds.length > 0) {
           batch.lifecycle?.releaseSkippedCalls(skippedIds);
@@ -789,11 +771,7 @@ async function prepareToolCallEntry(
   batch: ToolBatchContext,
   toolCall: AgentToolCall,
 ): Promise<FinalizedToolCallEntry> {
-  const hideFromChannelProgress = hidesToolCallFromChannelProgress(
-    batch.currentContext,
-    toolCall,
-    batch.resolved,
-  );
+  const hideFromChannelProgress = hidesToolCallFromChannelProgress(batch, toolCall);
   await emitToolExecutionStart(batch, toolCall, hideFromChannelProgress);
   const preparation = await prepareToolCall(batch, toolCall);
   if (preparation.kind === "immediate") {
@@ -834,6 +812,7 @@ async function launchParallelToolCalls(
   batchLifecycle: InternalToolBatchLifecycle | undefined,
 ): Promise<ParallelToolCallLaunches> {
   const ready = entries.flatMap((entry, index) => ("kind" in entry ? [{ entry, index }] : []));
+  const launchRejectedBefore = createRejectedToolCallLauncher(entries, batchLifecycle);
   const result: ParallelToolCallLaunches = { started: [], completed: [] };
   let cursor = 0;
   let finish!: () => void;
@@ -848,7 +827,8 @@ async function launchParallelToolCalls(
   });
   const launchNext = () => {
     const current = ready[cursor++];
-    if (!current) {
+    result.rejected ??= launchRejectedBefore(current?.index ?? entries.length);
+    if (!current || result.rejected) {
       finish();
       return;
     }
@@ -1331,11 +1311,7 @@ async function completeToolLoopInterventionBatch(
   const messages: ToolResultMessage[] = [];
   const finalizedCalls: FinalizedToolCallOutcome[] = [];
   for (const toolCall of params.toolCalls) {
-    const hideFromChannelProgress = hidesToolCallFromChannelProgress(
-      batch.currentContext,
-      toolCall,
-      batch.resolved,
-    );
+    const hideFromChannelProgress = hidesToolCallFromChannelProgress(batch, toolCall);
     await emitToolExecutionStart(batch, toolCall, hideFromChannelProgress);
     const isTrigger = toolCall.id === params.intervention.toolCallId;
     const text = params.terminal
@@ -1393,11 +1369,7 @@ async function completeUnstartedToolCall(
     startEmitted?: boolean;
   } = {},
 ): Promise<FinalizedToolCallOutcome> {
-  const hideFromChannelProgress = hidesToolCallFromChannelProgress(
-    batch.currentContext,
-    toolCall,
-    batch.resolved,
-  );
+  const hideFromChannelProgress = hidesToolCallFromChannelProgress(batch, toolCall);
   if (!options.startEmitted) {
     await emitToolExecutionStart(batch, toolCall, hideFromChannelProgress);
   }

@@ -225,6 +225,8 @@ describe("Codex native configuration", () => {
       if (!harness.runAttempt) {
         throw new Error("Registered Codex harness must support run attempts");
       }
+      // Native protocol events own progress; preparation cost is not the model-policy oracle.
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const run = harness.runAttempt(params);
       const settled = run.then(
         () => false,
@@ -485,6 +487,8 @@ describe("Codex native configuration", () => {
           tools: { ...params.config?.tools, web: { search: { enabled: true } } },
         };
       }
+      // Keep the existing attempt budget on the clock owned by this protocol fixture.
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const run = runCodexAppServerAttempt(params, {
         pluginConfig,
         clientFactory,

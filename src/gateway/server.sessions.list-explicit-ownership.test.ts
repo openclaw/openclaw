@@ -194,16 +194,13 @@ test("sessions.list preserves separate registered targets under a fixed store ow
 });
 
 test.for(
-  (["delete", "draft", "join", "leave"] as const).flatMap((change) => [
-    { change, alias: false },
-    { change, alias: true },
-  ]),
+  (["delete", "draft", "join", "leave"] as const).map((change) => ({
+    change,
+    alias: process.platform !== "win32",
+  })),
 )(
   "sessions.list refreshes $change against the selected physical database (alias=$alias)",
-  async ({ change, alias }, context) => {
-    if (alias && process.platform === "win32") {
-      context.skip();
-    }
+  async ({ change, alias }) => {
     const rootStateDir = process.env.OPENCLAW_STATE_DIR;
     if (!rootStateDir) {
       throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");

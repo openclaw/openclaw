@@ -280,5 +280,9 @@ export async function preparePackageActivationJournal(
   await completePackageActivationCustody(anchor, journal, assertCurrent, () =>
     params.options.onPrepared(`${command} status`),
   );
-  return { anchor, journal, command };
+  const initial = journal.read();
+  // Carry in-process entry observations without expanding the durable journal.
+  initial.descriptor.previous = params.previous;
+  initial.descriptor.candidate = candidate;
+  return { anchor, journal, command, initial };
 }

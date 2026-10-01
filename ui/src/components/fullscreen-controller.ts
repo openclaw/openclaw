@@ -35,7 +35,7 @@ export class FullscreenController implements ReactiveController {
   hostDisconnected(): void {
     document.removeEventListener("fullscreenchange", this.onFullscreenChange);
     this.restoreFocus = false;
-    if (this.fullscreenElement() === this.options.section()) {
+    if (this.ownsFullscreen()) {
       void document.exitFullscreen().catch(() => {});
     }
   }
@@ -74,10 +74,14 @@ export class FullscreenController implements ReactiveController {
     }
   }
 
-  private fullscreenElement(): Element | null {
+  private ownsFullscreen(): boolean {
+    const section = this.options.section();
+    if (!section) {
+      return false;
+    }
     const shadowFullscreen =
       this.host.renderRoot instanceof ShadowRoot ? this.host.renderRoot.fullscreenElement : null;
-    return shadowFullscreen ?? document.fullscreenElement;
+    return (shadowFullscreen ?? document.fullscreenElement) === section;
   }
 
   private supported(): boolean {
@@ -86,7 +90,7 @@ export class FullscreenController implements ReactiveController {
 
   private readonly onFullscreenChange = (): void => {
     const wasActive = this.active;
-    this.active = this.fullscreenElement() === this.options.section();
+    this.active = this.ownsFullscreen();
     this.options.onChange();
     this.host.requestUpdate();
     if (wasActive && !this.active && this.restoreFocus) {

@@ -3,6 +3,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { Value } from "typebox/value";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { convertResponsesToolPayload } from "../../../packages/ai/src/providers/openai-responses-tools.js";
+import { SessionsCreateParamsSchema } from "../../../packages/gateway-protocol/src/schema/sessions-create.js";
 import { validateToolArguments } from "../../../packages/llm-core/src/validation.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
@@ -204,14 +205,20 @@ describe("visible session placement and authority", () => {
     },
   );
 
-  it("starts a visible cloud child only after placement is active", async () => {
+  it("starts a visible cloud child with a long task only after placement is active", async () => {
     const os = "windows/wsl2";
+    const task = [
+      "Run the platform tests and investigate any failures.",
+      "Preserve the full task and report the relevant test evidence. ".repeat(30),
+      "Include this final paragraph in the cloud worker assignment.",
+    ].join("\n\n");
     await withTestDir({ prefix: "openclaw-visible-cloud-spawn-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const key = "agent:main:dashboard:cloud-child";
       const placement = { state: "active", environmentId: "cloud-box" };
-      const callGateway = vi.fn(async (method: string) => {
+      const callGateway = vi.fn(async (method: string, request: Record<string, unknown>) => {
         if (method === "sessions.create") {
+          Value.Assert(SessionsCreateParamsSchema, request);
           await upsertSessionEntryCore(
             { agentId: "main", sessionKey: key, storePath },
             { sessionId: "cloud-child", updatedAt: 1 },
@@ -240,7 +247,7 @@ describe("visible session placement and authority", () => {
       });
       const result = await withCloudGateway(() =>
         tool.execute("cloud-spawn", {
-          task: "Run the platform tests",
+          task,
           visible: true,
           worktree: true,
           runTimeoutSeconds: 180,
@@ -254,6 +261,7 @@ describe("visible session placement and authority", () => {
       ]);
       expect(mockCallArg(callGateway, 0, 1, "sessions.create")).toMatchObject({
         model: "mock-provider/child@child-profile",
+        titleSource: task.slice(0, 1000),
       });
       expect(mockCallArg(callGateway, 0, 1, "sessions.create")).not.toHaveProperty("task");
       expect(callGateway).toHaveBeenCalledWith(
@@ -272,7 +280,7 @@ describe("visible session placement and authority", () => {
           sessionKey: key,
           sessionId: "cloud-child",
           expectedExistingSessionId: "cloud-child",
-          message: expect.stringContaining("[Subagent Task]"),
+          message: expect.stringContaining(`[Subagent Task]\n\n${task}\n\nBegin.`),
           timeout: 180,
           deliver: false,
           sessionEffects: "visible",
@@ -288,6 +296,7 @@ describe("visible session placement and authority", () => {
       expectRegisteredSubagentRun(registerRun, {
         runId: "cloud-run",
         childSessionKey: key,
+        task,
       });
     });
   });

@@ -33,6 +33,7 @@ export type SubagentAnnounceDeliveryTestDeps = AnnounceTestDeps & {
   isEmbeddedAgentRunActive: typeof embeddedRuns.isEmbeddedAgentRunActive;
   resolveRequesterSessionAbandonment: typeof deliveryRuntime.resolveSubagentRequesterSessionAbandonment;
   loadSessionEntry: typeof sessionAccessor.loadSessionEntryReadOnly;
+  loadSessionEntryByKey: typeof deliveryRuntime.loadSessionEntryByKey;
   loadRequesterSessionEntry: typeof deliveryRuntime.loadRequesterSessionEntry;
   queueEmbeddedAgentMessageWithOutcome: (
     ...args: Parameters<typeof embeddedRuns.queueEmbeddedAgentMessageWithOutcomeAsync>
@@ -188,6 +189,13 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
       deliveryRuntime.loadRequesterSessionEntry,
       () => vi.spyOn(deliveryRuntime, "loadRequesterSessionEntry"),
       current.loadRequesterSessionEntry,
+    );
+  }
+  if (current.loadSessionEntryByKey) {
+    install(
+      deliveryRuntime.loadSessionEntryByKey,
+      () => vi.spyOn(deliveryRuntime, "loadSessionEntryByKey"),
+      current.loadSessionEntryByKey,
     );
   }
   if (current.getRequesterSessionActivity) {

@@ -23,15 +23,7 @@ export function buildSystemAgentRejoinResult(params: {
   welcome: string;
   optionalWelcome?: boolean;
   welcomeQuestion?: SystemAgentChatResult["question"];
-  engine: {
-    decorateRejoinReply: (reply: { text: string; action: "none" }) => {
-      text: string;
-      sensitive?: boolean;
-      wizardInputPending?: boolean;
-      question?: SystemAgentChatResult["question"];
-      step?: SystemAgentChatResult["step"];
-    };
-  };
+  engine: Pick<SystemAgentChatEngine, "decorateRejoinReply">;
 }): SystemAgentChatResult {
   const rejoin = params.engine.decorateRejoinReply({ text: params.welcome, action: "none" });
   return {

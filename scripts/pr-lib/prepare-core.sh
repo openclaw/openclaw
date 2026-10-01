@@ -437,6 +437,16 @@ verify_correction_publication_authority() {
   verify_correction_review_snapshot "$PREP_PUBLICATION_PR" "$PREP_PUBLICATION_REVIEW_SNAPSHOT"
 }
 
+advance_correction_publication_authority() {
+  local pr="$1" local_head="$2" snapshot="$3"
+  [ -n "${PREP_PUBLICATION_REVIEW_SNAPSHOT:-}" ] || return 0
+  # Only the verified writer's expected receipt may change during publication.
+  # Advance hosted authority after checking the rest of the review stayed fixed.
+  verify_correction_review_snapshot "$pr" "$snapshot" || return 1
+  resolve_prep_publication_target "$pr" "$local_head" || return 1
+  PREP_PUBLICATION_REVIEW_SNAPSHOT="$snapshot"
+}
+
 prepare_push() {
   local pr="$1"
   local observation="${2:-}" resume_run="${3:-}"

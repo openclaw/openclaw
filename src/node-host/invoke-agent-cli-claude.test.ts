@@ -8,7 +8,8 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { loadExecApprovals, saveExecApprovals } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { loadExecApprovals } from "../infra/exec-approvals.js";
 import * as logger from "../logger.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { ProcessExtinctionResult } from "../process/supervisor/types.js";

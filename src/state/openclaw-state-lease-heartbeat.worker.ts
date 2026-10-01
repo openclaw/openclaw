@@ -57,6 +57,7 @@ function openHeartbeatDatabase() {
   throw new Error("state lease heartbeat startup deadline expired or owner stopped");
 }
 const db = openHeartbeatDatabase();
+const CONTENTION_RETRY_MS = 25;
 Atomics.store(shared, state.startupPhase, startupPhase["open-complete"]);
 let processOwner = params.processOwner;
 let heartbeat: ReturnType<typeof setTimeout> | undefined;
@@ -155,7 +156,13 @@ const renewInWorker = (explicit: boolean): number | undefined => {
         renew();
       }
     },
-    Math.max(1, Math.min(params.heartbeatMs, expiresAt - Date.now())),
+    Math.max(
+      1,
+      Math.min(
+        contentionError === undefined ? params.heartbeatMs : CONTENTION_RETRY_MS,
+        expiresAt - Date.now(),
+      ),
+    ),
   );
   // A still-valid old expiry permits automatic retry, not renewal success.
   if (explicit && contentionError !== undefined) {

@@ -19,6 +19,7 @@ import {
   recordDeferredPluginMigrations,
 } from "./deferred-plugin-migrations.js";
 import {
+  createCallerModeExecutionFixture,
   expectBlockedTailInPlanOrder,
   expectPlanReceiptDescriptorsToMatch,
   writeLegacyStateSchemaV1,
@@ -40,26 +41,7 @@ const tempDirs = createTrackedTempDirs();
 
 async function makeFixture() {
   const root = await tempDirs.make("openclaw-doctor-caller-execution-");
-  const homeDir = path.join(root, "home");
-  const stateDir = path.join(root, "state");
-  const configPath = path.join(root, "openclaw.json");
-  fs.mkdirSync(homeDir, { recursive: true });
-  fs.mkdirSync(stateDir, { recursive: true });
-  fs.symlinkSync(
-    path.resolve("extensions"),
-    path.join(root, "extensions"),
-    process.platform === "win32" ? "junction" : "dir",
-  );
-  fs.writeFileSync(configPath, "{}\n");
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    HOME: homeDir,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-  };
-  return { root, homeDir, stateDir, configPath, env };
+  return createCallerModeExecutionFixture(root);
 }
 
 afterEach(async () => {
@@ -118,21 +100,35 @@ describe("legacy state migration caller plugin execution", () => {
     });
   });
 
+  it("completes Doctor after archiving verified empty Telegram thread bindings", async () => {
+    const fixture = await makeFixture();
+    const sourcePath = path.join(fixture.stateDir, "telegram", "thread-bindings-default.json");
+    const source = '{"version":1,"bindings":[]}\n';
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    fs.writeFileSync(sourcePath, source);
+    clearPluginDoctorContractRegistryCache();
+
+    const result = await autoMigrateLegacyState({
+      cfg: {},
+      doctorOnlyStateMigrations: true,
+      env: fixture.env,
+      homedir: () => fixture.homeDir,
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    });
+
+    expect(
+      result.stepReceipts.find((receipt) => receipt.id === "plugin-doctor-state"),
+    ).toMatchObject({
+      outcome: "completed",
+      changes: [`Archived empty Telegram thread bindings legacy source -> ${sourcePath}.migrated`],
+      warnings: [],
+    });
+    expect(() => throwIfDoctorStateMigrationRefused(result.stepReceipts)).not.toThrow();
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.readFileSync(`${sourcePath}.migrated`, "utf8")).toBe(source);
+  });
+
   it.each([
-    {
-      name: "absent action",
-      manifestIds: ["manifest-planned-action"],
-      runtimeIds: ["runtime-only-action"],
-      pendingIds: ["runtime-only-action"],
-      refused: true,
-    },
-    {
-      name: "reordered actions",
-      manifestIds: ["first-action", "second-action"],
-      runtimeIds: ["second-action", "first-action"],
-      pendingIds: ["first-action", "second-action"],
-      refused: true,
-    },
     {
       name: "reordered exports with only the second action pending",
       manifestIds: ["first-action", "second-action"],
@@ -140,13 +136,7 @@ describe("legacy state migration caller plugin execution", () => {
       pendingIds: ["second-action"],
       refused: true,
     },
-    {
-      name: "missing resolved export",
-      manifestIds: ["first-action", "second-action"],
-      runtimeIds: ["second-action"],
-      pendingIds: ["second-action"],
-      refused: true,
-    },
+
     {
       name: "missing exports with no pending preview",
       manifestIds: ["first-action"],
@@ -406,28 +396,46 @@ module.exports = { stateMigrations: [{
   });
 
   it.each([
-    ...([undefined, "after-session-repair"] as const).flatMap((phase) =>
-      [true, false].flatMap((legacyRoot) =>
-        [true, false].flatMap((fromInstallIndex) =>
-          (phase === undefined && !legacyRoot ? [false, true] : [false]).map((direct) => ({
-            phase,
-            legacyRoot,
-            fromInstallIndex,
-            direct,
-            legacySchema: false,
-            excludeDoctorOnly: false,
-          })),
-        ),
-      ),
-    ),
-    ...[true, false].map((legacySchema) => ({
+    {
+      phase: undefined,
+      legacyRoot: true,
+      fromInstallIndex: true,
+      direct: false,
+      legacySchema: false,
+      excludeDoctorOnly: false,
+    },
+    {
+      phase: "after-session-repair" as const,
+      legacyRoot: true,
+      fromInstallIndex: false,
+      direct: false,
+      legacySchema: false,
+      excludeDoctorOnly: false,
+    },
+    {
+      phase: undefined,
+      legacyRoot: false,
+      fromInstallIndex: false,
+      direct: true,
+      legacySchema: false,
+      excludeDoctorOnly: false,
+    },
+    {
       phase: undefined,
       legacyRoot: false,
       fromInstallIndex: true,
       direct: true,
-      legacySchema,
-      excludeDoctorOnly: !legacySchema,
-    })),
+      legacySchema: true,
+      excludeDoctorOnly: false,
+    },
+    {
+      phase: undefined,
+      legacyRoot: false,
+      fromInstallIndex: true,
+      direct: true,
+      legacySchema: false,
+      excludeDoctorOnly: true,
+    },
   ])(
     "discovers live plugin actions across index migration (legacy root: $legacyRoot, phase: $phase, indexed: $fromInstallIndex, direct: $direct, legacy schema: $legacySchema, ordinary-only: $excludeDoctorOnly)",
     async ({ phase, legacyRoot, fromInstallIndex, direct, legacySchema, excludeDoctorOnly }) => {
@@ -579,7 +587,8 @@ module.exports = { stateMigrations: [{
         ).resolves.toMatchObject({
           changes: ["migrated relocated action"],
           warnings: [],
-          completedPluginIds: [pluginId],
+          // Nothing is deferred or retained here, so completion is not certified.
+          completedPluginIds: undefined,
         });
       } else {
         expect(

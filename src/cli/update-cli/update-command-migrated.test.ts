@@ -176,6 +176,7 @@ it.each<{
   backup?: boolean;
   windows?: boolean;
   handback?: boolean;
+  recovered?: boolean;
 }>([
   { pending: true, status: "skipped", windows: true },
   { pending: false, status: "error", windows: true },
@@ -185,8 +186,16 @@ it.each<{
   { pending: false, status: "error", backup: true },
   { pending: false, status: "error", candidateStartAttempted: false },
   { pending: false, status: "error", candidateStartAttempted: false, backup: true, windows: true },
+  {
+    pending: false,
+    status: "error",
+    candidateStartAttempted: true,
+    backup: true,
+    windows: true,
+    recovered: true,
+  },
 ])(
-  "retains the backup across migrated finalization (pending=$pending, status=$status, start=$candidateStartAttempted, backup=$backup, windows=$windows)",
+  "retains the backup across migrated finalization (pending=$pending, status=$status, start=$candidateStartAttempted, backup=$backup, windows=$windows, recovered=$recovered)",
   async ({
     pending,
     status,
@@ -194,6 +203,7 @@ it.each<{
     backup,
     windows = false,
     handback = false,
+    recovered = false,
   }) => {
     const exitCode = status === "skipped" ? 0 : 1;
     const reason = status === "skipped" ? "gateway-readiness-unverified" : "doctor-failed";
@@ -224,6 +234,9 @@ it.each<{
           status,
           reason,
           runId: run.runId,
+          ...(recovered
+            ? { recovery: { serviceRestartSafe: true, version: "2.0.0", service: "healthy" } }
+            : {}),
           steps: pending
             ? [
                 {
@@ -328,8 +341,8 @@ it.each<{
     }
     expect(rollback).not.toHaveBeenCalled();
     if (windows) {
-      expect(windowsRecovery.complete).toHaveBeenCalledWith(pending);
-      expect(windowsRecovery.complete).not.toHaveBeenCalledWith(!pending);
+      expect(windowsRecovery.complete).toHaveBeenCalledWith(pending || recovered);
+      expect(windowsRecovery.complete).not.toHaveBeenCalledWith(!(pending || recovered));
     } else {
       expect(windowsRecovery.complete).not.toHaveBeenCalled();
     }

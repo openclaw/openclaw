@@ -12,7 +12,7 @@ import type {
 import type { NodeWorkerPreparedWorkspaceResult } from "../../worker/node-workspace-prepared-protocol.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
-import type { createGatewayNodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
+import type { GatewayNodeWorkerBundleInstall } from "./node-worker-bundle-installer.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerPreparationArtifacts } from "./preparation-identity.js";
 import type { createWorkerProjectPreparation } from "./project-preparation.js";
@@ -53,7 +53,7 @@ export type WorkerProviderLifecycleInputOptions = {
     keyRef: SecretRef;
     assertAuthorized: () => void;
   }) => Promise<WorkerSshIdentity>;
-  ensureNodeWorkerBundle?: ReturnType<typeof createGatewayNodeWorkerBundleInstaller>;
+  ensureNodeWorkerBundle?: GatewayNodeWorkerBundleInstall;
   prepareNodeBootstrap?: (record: WorkerEnvironmentRecord, signal?: AbortSignal) => Promise<string>;
   prepareNodeRuntime?: (
     record: WorkerEnvironmentRecord,

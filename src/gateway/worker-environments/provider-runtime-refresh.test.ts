@@ -175,7 +175,7 @@ describe("worker environment runtime upgrades", () => {
           database: support.testState.stateDb,
           now: () => support.testState.nowMs,
         });
-        restarted.recoverWorkerSessionToolOperationsAfterRestart();
+        await restarted.recoverWorkerSessionToolOperationsAfterRestart();
         restarted.clearLocalTurnClaimsAfterRestart();
         return { placements: restarted, ...bindService(restarted, true) };
       },
@@ -259,6 +259,74 @@ describe("worker environment runtime upgrades", () => {
       expect(h.destroy).not.toHaveBeenCalled();
     },
   );
+
+  it("exposes an in-flight node refresh and isolates progress listeners until it settles", async () => {
+    const h = await setupUpgrade("node");
+    const installing = createDeferred<() => void>();
+    const installed = createDeferred<typeof currentReceipt>();
+    h.ensureNodeWorkerBundle.mockImplementationOnce(async (params) => {
+      params.assertCurrent?.();
+      installing.resolve(() => params.onProgress?.());
+      return installed.promise;
+    });
+    const recovery = h.service.reconcileOnce();
+    const reportProgress = await installing.promise;
+    const refresh = h.service.readRuntimeRefresh(h.environment.environmentId);
+    const listener = vi.fn();
+    let unsubscribe: (() => void) | undefined;
+    let unsubscribeThrowing: (() => void) | undefined;
+    try {
+      expect(refresh).toBeDefined();
+      unsubscribeThrowing = refresh!.onProgress(() => {
+        throw new Error("progress listener failed");
+      });
+      unsubscribe = refresh!.onProgress(listener);
+      expect(() => reportProgress()).not.toThrow();
+      expect(listener).toHaveBeenCalledOnce();
+      unsubscribe();
+      reportProgress();
+      expect(listener).toHaveBeenCalledOnce();
+    } finally {
+      unsubscribe?.();
+      unsubscribeThrowing?.();
+      installed.resolve(currentReceipt);
+      await recovery;
+    }
+    await expect(refresh!.settled).resolves.toBeUndefined();
+    expect(h.service.readRuntimeRefresh(h.environment.environmentId)).toBeUndefined();
+    expect(support.testState.store.get(h.environment.environmentId)).toMatchObject({
+      bootstrapReceipt: { ...currentReceipt, installKind: "bundle" },
+      lastError: null,
+    });
+    expect(h.placements.get(REQUEST.sessionId)?.workerBundleHash).toBe(currentReceipt.bundleHash);
+  });
+
+  it("settles and clears a failed node refresh while retaining its existing error recovery", async () => {
+    const h = await setupUpgrade("node");
+    const installing = createDeferred();
+    const installed = createDeferred<typeof currentReceipt>();
+    h.install.mockImplementationOnce(async () => {
+      installing.resolve();
+      return installed.promise;
+    });
+    const recovery = h.service.reconcileOnce();
+    await installing.promise;
+    const refresh = h.service.readRuntimeRefresh(h.environment.environmentId);
+    try {
+      expect(refresh).toBeDefined();
+    } finally {
+      installed.reject(new Error("runtime download interrupted"));
+      await recovery;
+    }
+    await expect(refresh!.settled).resolves.toBeUndefined();
+    expect(h.service.readRuntimeRefresh(h.environment.environmentId)).toBeUndefined();
+    expect(support.testState.store.get(h.environment.environmentId)).toMatchObject({
+      state: "attached",
+      bootstrapReceipt: h.environment.bootstrapReceipt,
+      lastError: "runtime download interrupted",
+    });
+    expect(h.placements.get(REQUEST.sessionId)).toEqual(h.placement);
+  });
 
   it("keeps an idle SSH machine through startup recovery when its runtime upgrade must retry", async () => {
     const h = await setupUpgrade("ssh", "attached", {

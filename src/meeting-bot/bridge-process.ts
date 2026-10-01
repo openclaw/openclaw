@@ -40,7 +40,7 @@ export function writeMeetingOutputChunk<TProcess>(
   });
 }
 
-type MeetingBridgeProcess = {
+export type MeetingBridgeProcess = {
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
   kill(signal?: NodeJS.Signals): boolean;

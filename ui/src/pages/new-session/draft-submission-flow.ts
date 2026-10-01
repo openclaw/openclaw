@@ -301,27 +301,9 @@ export class DraftSubmissionFlow {
     ) {
       return this.activeSubmission ? { gate: "submitting" } : undefined;
     }
-    return resolveNewSessionSubmitBlock({
-      gatewayState: this.gateway,
-      placeState: this.place,
-      pendingPlacement: this.pendingPlacement,
-      submitting: this.activeSubmission !== null,
-      message: this.messageValue,
-      submissionOutcomeUnknown: this.submissionOutcomeUnknown,
-      pendingAttachmentReads: this.attachmentDraft.pendingReads,
-      hasDraftAttachments: this.attachmentDraft.attachments.length > 0,
-      hasCapabilityOverrides: this.capabilities.toolOverrides !== null,
-      mentions: this.mentionsValue,
-      visibility: this.visibilityValue,
-      submissionSnapshot: () => this.read(),
-      requiresModelSetup: () => this.requiresModelSetup(),
-      submissionAccess: () => this.submissionAccess(),
-      placementTargetForSubmission: () => this.placement().target,
-      cloudRuntimeUnsupportedReason: () =>
-        this.place.modelControl.cloudRuntimeUnsupportedReason(
-          this.gateway.cloudProfiles.find((profile) => profile.id === this.place.cloudProfileId),
-        ),
-    });
+    return this.activeSubmission
+      ? { gate: "submitting" }
+      : resolveNewSessionSubmitBlock(this.gateway, this.place, this, this.read());
   }
 
   requiresModelSetup = (): boolean =>
@@ -414,12 +396,12 @@ export class DraftSubmissionFlow {
       this.callbacks.requestUpdate();
       return;
     }
-    const preparedTitle = this.callbacks.takePreparedTitle?.();
     this.blockedSubmitGate = null;
     const input = prepareDraftSubmission(context, this, this.place, startup, background);
     if (!input) {
       return;
     }
+    const preparedTitle = this.callbacks.takePreparedTitle?.();
     const requestId = ++this.submitRequestToken;
     const submittedDraft = this.draftPersistence.captureSubmission();
     const submittedAt = startup?.startedAt ?? Date.now();
@@ -449,7 +431,9 @@ export class DraftSubmissionFlow {
         return;
       }
       this.startedSession.current = null;
-      const placementTarget = startup ? null : this.placement().target;
+      const placementTarget = startup
+        ? null
+        : resolveDraftSessionPlacement(this.pendingPlacement, this.place).target;
       promptNewSessionNotifications(
         context,
         input.message,
@@ -522,7 +506,7 @@ export class DraftSubmissionFlow {
       }
       const submissionPlacementRecovery = placementTarget ? this.pendingPlacement.capture() : null;
       if (placementTarget && !submissionPlacementRecovery) {
-        this.setPlacementRecoveryUnavailable();
+        this.setPlacementRecoveryUnavailable("creating");
         return;
       }
       if (input.apiAttachments?.length) {
@@ -583,7 +567,7 @@ export class DraftSubmissionFlow {
             this.gateway.recoveryScope === input.recoveryScope,
           clearRecovery: () => this.clearPendingPlacementRecovery(),
           setError: (error) => this.setError(error),
-          onRecoveryUnavailable: () => this.setPlacementRecoveryUnavailable(),
+          onRecoveryUnavailable: () => this.setPlacementRecoveryUnavailable("created"),
           clearDraft: () => {
             retainSubmittedSession(result.key);
             return this.clearSubmittedDraft(true, submittedDraft);
@@ -701,12 +685,13 @@ export class DraftSubmissionFlow {
     this.composerTextarea.disconnect();
   }
 
-  private placement = () => resolveDraftSessionPlacement(this.pendingPlacement, this.place);
-
-  private setPlacementRecoveryUnavailable() {
-    this.error = t("newSession.placementStartFailed", {
-      error: "placement recovery storage is unavailable",
-    });
+  private setPlacementRecoveryUnavailable(phase: "creating" | "created") {
+    this.error =
+      phase === "creating"
+        ? t("newSession.placementCreateFailed")
+        : t("newSession.placementStartFailed", {
+            error: "placement recovery storage is unavailable",
+          });
   }
 
   private applyRecoveryDraft(recovery: SessionPlacementRecovery | null) {

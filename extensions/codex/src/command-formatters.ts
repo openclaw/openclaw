@@ -11,6 +11,7 @@ import {
   summarizeCodexAccountRateLimits,
   summarizeCodexRateLimits,
 } from "./app-server/rate-limits.js";
+import { isLikelyEmailAddress } from "./command-account-email.js";
 import type { CodexAccountAuthOverview } from "./command-account.js";
 import type { readCodexStatusProbes, SafeValue } from "./command-rpc.js";
 
@@ -171,6 +172,9 @@ export function formatComputerUseStatus(status: CodexComputerUseStatus): string 
 }
 
 function computerUsePluginState(status: CodexComputerUseStatus): string {
+  if (status.installed === null) {
+    return "installation unchecked";
+  }
   if (!status.installed) {
     return "not installed";
   }
@@ -284,10 +288,6 @@ export function formatCodexAccountLine(value: string): string {
   }
   formatted += escapeCodexChatText(safe.slice(lastIndex));
   return formatted;
-}
-
-function isLikelyEmailAddress(value: string): boolean {
-  return /^[^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+$/.test(value);
 }
 
 export function buildHelp(): string {

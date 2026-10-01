@@ -703,3 +703,50 @@ describe("deferred reply supersession", () => {
     expect(h.onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual(["Result:complete"]);
   });
 });
+
+it.each([false, true])("keeps checkpoint delivery nonterminal (buffered=%s)", async (buffered) => {
+  const decide = vi
+    .fn()
+    .mockResolvedValueOnce({ continueCurrentTurn: true })
+    .mockResolvedValueOnce(undefined);
+  const h = setup({ onBeforeTerminalDelivery: decide, deferTerminalDelivery: buffered });
+  h.message(answer("Checkpoint: a repair remains."));
+  await h.drain();
+  expect(h.assistantEvents().some((data) => data.text === "Checkpoint: a repair remains.")).toBe(
+    !buffered,
+  );
+  h.end();
+  await h.drain();
+  expect(h.lifecycleEnded()).toBe(false);
+  expect(h.assistantEvents().some((data) => data.text === "Checkpoint: a repair remains.")).toBe(
+    true,
+  );
+  h.emit({ type: "agent_start" });
+  h.message(answer("All repairs verified."));
+  await h.drain();
+  expect(h.assistantEvents().some((data) => data.text === "All repairs verified.")).toBe(!buffered);
+  h.end();
+  await h.drain();
+  expect(h.lifecycleEnded()).toBe(true);
+  expect(payloads(h.subscription).map((payload) => payload.text)).toEqual([
+    "All repairs verified.",
+  ]);
+});
+
+it("exposes accepted child completion custody to the natural-stop decision", async () => {
+  const decide = vi.fn(async () => undefined);
+  const h = setup({ onBeforeTerminalDelivery: decide, deferTerminalDelivery: false });
+  h.tool("sessions_spawn", {
+    content: [{ type: "text", text: "Accepted" }],
+    details: {
+      status: "accepted",
+      runId: "child-run",
+      childSessionKey: "agent:main:subagent:child",
+      expectsCompletionMessage: true,
+    },
+  });
+  h.message(answer("The child is working."));
+  h.end();
+  await h.drain();
+  expect(decide).toHaveBeenCalledWith(expect.objectContaining({ hasPendingContinuation: true }));
+});

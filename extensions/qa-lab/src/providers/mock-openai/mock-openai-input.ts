@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isInternalRuntimeContextCarrierText } from "../shared/runtime-context.js";
 import {
   type ResponsesInputItem,
@@ -57,6 +58,16 @@ export function extractLatestScenarioFamilyPrompt(
 
 export function extractLastUserText(input: ResponsesInputItem[]) {
   return extractLastMatchingUserTurn(input)?.text ?? "";
+}
+
+export function normalizeResponsesInput(value: unknown): ResponsesInputItem[] {
+  if (Array.isArray(value)) {
+    return value.map(asOptionalRecord).filter((item) => item !== undefined);
+  }
+  if (typeof value === "string") {
+    return [{ role: "user", content: [{ type: "input_text", text: value }] }];
+  }
+  return [];
 }
 
 export function extractLastMatchingUserTurn(input: ResponsesInputItem[], pattern?: RegExp) {
@@ -154,6 +165,13 @@ function isSubagentRecoveryText(text: string): boolean {
   );
 }
 
+export function isMockSubagentSettledWake(text: string): boolean {
+  // Installed-candidate QA can still send the earlier session-wide wording.
+  return /^(?:\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} [^\]\r\n]+\] )?\[Subagent Context\] Every subagent (?:in this batch|spawned from this session) has now settled\b/mu.test(
+    text,
+  );
+}
+
 export function resolveMockSubagentTurn(input: ResponsesInputItem[]):
   | {
       kind: "kickoff" | "worker" | "completion" | "settled" | "other";
@@ -182,11 +200,7 @@ export function resolveMockSubagentTurn(input: ResponsesInputItem[]):
     if (isInternalRuntimeContextCarrierText(current)) {
       continue;
     }
-    if (
-      /^(?:\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} [^\]\r\n]+\] )?\[Subagent Context\] Every subagent spawned from this session has now settled/mu.test(
-        current,
-      )
-    ) {
+    if (isMockSubagentSettledWake(current)) {
       settled = true;
       continue;
     }
@@ -368,6 +382,12 @@ export function extractUserTextAfterLatestToolOutput(input: ResponsesInputItem[]
     .slice(latestToolOutputIndex + 1)
     .filter((item) => item.role === "user")
     .map((item) => extractInputText(item.content))
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function extractFollowthroughEvidenceText(input: ResponsesInputItem[]): string {
+  return [extractAllToolOutputText(input), extractUserTextAfterLatestToolOutput(input)]
     .filter(Boolean)
     .join("\n");
 }
@@ -598,47 +618,34 @@ export function countImageInputs(value: unknown): number {
   return count;
 }
 
-function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
-  const latestUserItem = input.findLast(isUserTurn);
-  if (!latestUserItem) {
-    return { text: "", imageInputCount: 0 };
-  }
-  const imageInputCount = countImageInputs([latestUserItem.content]);
-  if (imageInputCount === 0) {
-    return { text: "", imageInputCount: 0 };
-  }
-  return {
-    text: extractInputText(latestUserItem.content),
-    imageInputCount,
-  };
-}
-
 export function extractCurrentImageRequest(
   input: ResponsesInputItem[],
   body: Record<string, unknown>,
 ) {
   // Match only the current request. Historical image prompts must not override
   // a later non-image turn just because they remain in transcript context.
-  const imageUserTurn = extractLatestImageUserTurn(input);
-  if (imageUserTurn.imageInputCount === 0) {
-    return imageUserTurn;
+  const latestUserItem = input.findLast(isUserTurn);
+  const imageInputCount = countImageInputs([latestUserItem?.content]);
+  if (imageInputCount === 0) {
+    return { text: "", imageInputCount: 0 };
   }
   const developerInstructions = input
     .filter((item) => item.role === "developer")
     .map((item) => extractInputText(item.content))
     .filter(Boolean);
   return {
-    text: [extractInstructionsText(body), ...developerInstructions, imageUserTurn.text]
+    text: [
+      extractInstructionsText(body),
+      ...developerInstructions,
+      extractInputText(latestUserItem?.content),
+    ]
       .filter(Boolean)
       .join("\n"),
-    imageInputCount: imageUserTurn.imageInputCount,
+    imageInputCount,
   };
 }
 
 export function parseToolOutputJson(toolOutput: string): Record<string, unknown> | null {
-  if (!toolOutput.trim()) {
-    return null;
-  }
   try {
     return JSON.parse(toolOutput) as Record<string, unknown>;
   } catch {

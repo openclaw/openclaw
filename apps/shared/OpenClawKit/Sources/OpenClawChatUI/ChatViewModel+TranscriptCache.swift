@@ -101,6 +101,7 @@ extension OpenClawChatViewModel {
     func paintFromCacheIfNeeded(session: SessionSnapshot) {
         guard let transcriptCache else { return }
         if sessions.isEmpty, !hasAppliedLiveSessions {
+            let rosterRead = self.sidebarData?.beginRead()
             Task { [weak self] in
                 let cached = await transcriptCache.loadSessions(agentID: session.deliveryAgentID)
                 guard let self, !cached.isEmpty else { return }
@@ -126,8 +127,12 @@ extension OpenClawChatViewModel {
                 let scoped = ChatSessionSidebarModel.clearingForeignGlobalObserverDigest(
                     in: agentScoped,
                     activeAgentId: session.deliveryAgentID)
-                self.sessions = self.applyingLocalUnreadOverrides(
-                    to: scoped)
+                if let owner = self.sidebarData {
+                    guard let rosterRead else { return }
+                    owner.receive(scoped, read: rosterRead, replacingAgent: session.deliveryAgentID ?? "")
+                } else {
+                    self.sessions = self.applyingLocalUnreadOverrides(to: scoped)
+                }
             }
         }
         guard messages.isEmpty, !hasAppliedLiveHistory else { return }

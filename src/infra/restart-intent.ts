@@ -22,7 +22,8 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { readLockPayloadSync, resolveGatewayLockPaths } from "./gateway-lock.js";
-import { readGatewayOwnerLease, readGatewayOwnerLeaseFromDatabase } from "./gateway-owner-lease.js";
+import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
+import { readGatewayOwnerLeaseFromDatabase } from "./gateway-owner-lease.read.js";
 import { tryAcquireGatewayStateOwner } from "./gateway-state-owner.js";
 import {
   executeSqliteQuerySync,

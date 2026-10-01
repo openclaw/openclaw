@@ -283,7 +283,7 @@ describe("legacy main session node artifact handoff", () => {
         if (
           injected ||
           !isRecord(message) ||
-          message.operation !== "session.lifecycle.reclamation-plan" ||
+          message.operation !== "session.lifecycle.delete-prepare" ||
           message.writer !== "foreground" ||
           message.outcome !== "ok"
         ) {

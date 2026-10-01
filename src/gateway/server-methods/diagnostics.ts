@@ -1,5 +1,3 @@
-// Diagnostics gateway methods expose bounded stability snapshots while keeping
-// malformed queries out of logging internals.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -52,7 +50,6 @@ async function captureProfile(
   }
 }
 
-/** Gateway handlers for bounded runtime diagnostics. */
 export const diagnosticsHandlers: GatewayRequestHandlers = {
   "diagnostics.cpuProfile": async (options) => {
     const { req, respond } = options;

@@ -68,6 +68,7 @@ afterEach(() => {
 
 it.each([
   { supportsTranscriptCommitWait: false },
+  { supportsTranscriptCommitWait: true },
   { supportsTranscriptCommitWait: true, mode: "steer" as const, alternateStore: true },
   { supportsTranscriptCommitWait: true, mode: "steer" as const, hiddenRun: true },
 ])(
@@ -170,6 +171,9 @@ it.each([
         },
       });
 
+      if (mode === "steer") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
       const send = tool.execute("call-run-scoped-caller", {
         mode,
         sessionKey: runScopedCallerKey,
@@ -179,6 +183,19 @@ it.each([
       pending.push(send);
       await Promise.race([queued.promise, send, prompt]);
       expect(session.pendingMessageCount).toBe(1);
+      if (mode === "steer") {
+        // The active response is still held: an admission-only send must not
+        // withdraw guidance when the unrelated reply-wait deadline expires.
+        await vi.advanceTimersByTimeAsync(30_000);
+        vi.useRealTimers();
+        expect((await send).details).toMatchObject({ status: "accepted" });
+        expect(session.pendingMessageCount).toBe(1);
+        expect(
+          SessionManager.open(scope, dir)
+            .getEntries()
+            .filter((entry) => entry.type === "message" && entry.message.role === "user"),
+        ).toHaveLength(1);
+      }
       finishInitialResponse?.();
       const [result] = await Promise.all([send, prompt]);
 
@@ -190,10 +207,15 @@ it.each([
       });
       expect(queueMessage).toHaveBeenCalledOnce();
       expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(
-        supportsTranscriptCommitWait ? true : undefined,
+        mode === "steer" ? false : supportsTranscriptCommitWait ? true : undefined,
       );
       expect(queueMessage.mock.calls[0]?.[1]?.isInboundUserMessage).toBeUndefined();
-      expect(SessionManager.open(scope, dir).getEntries()).toContainEqual(
+      const entries = SessionManager.open(scope, dir).getEntries();
+      expect(
+        entries.filter((entry) => entry.type === "message" && entry.message.role === "user"),
+      ).toHaveLength(2);
+      expect(session.pendingMessageCount).toBe(0);
+      expect(entries).toContainEqual(
         expect.objectContaining({
           type: "message",
           message: expect.objectContaining({
@@ -217,6 +239,7 @@ it.each([
         }),
       ]);
     } finally {
+      vi.useRealTimers();
       // Release even a late provider callback, then join work before fixture teardown.
       closing = true;
       unsubscribe();

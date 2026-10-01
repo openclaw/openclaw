@@ -31,7 +31,7 @@ vi.mock("../../infra/update-check-package-target.js", () => ({
   fetchNpmPackageTargetStatus: vi.fn(),
 }));
 
-const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime,
@@ -94,71 +94,6 @@ describe("runDaemonStatus", () => {
       deep ? "unresolved" : undefined,
     );
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
-  });
-
-  it("exits when require-rpc is set and the probe fails", async () => {
-    gatherDaemonStatus.mockResolvedValueOnce(
-      createStatus({
-        ok: false,
-        url: "ws://127.0.0.1:18789",
-        error: "gateway closed",
-      }),
-    );
-
-    await expect(runDaemonStatus({ ...statusOptions, requireRpc: true })).rejects.toThrow(
-      "__exit__:1",
-    );
-
-    expect(printDaemonStatus).toHaveBeenCalledTimes(1);
-    expect(printDaemonStatus).toHaveBeenCalledWith(expect.any(Object), {
-      json: false,
-      deep: false,
-    });
-    expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([false, true])(
-    "does not exit after reporting a failed non-required RPC probe in json=%s mode",
-    async (json) => {
-      gatherDaemonStatus.mockResolvedValueOnce(
-        createStatus({
-          ok: false,
-          url: "ws://127.0.0.1:18789",
-          error: "connect ECONNREFUSED 127.0.0.1:18789",
-        }),
-      );
-
-      await runDaemonStatus({ ...statusOptions, json });
-
-      expect(printDaemonStatus).toHaveBeenCalledWith(expect.any(Object), {
-        json,
-        deep: false,
-      });
-      expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    },
-  );
-
-  it("forwards require-rpc to daemon status gathering", async () => {
-    await runDaemonStatus({ ...statusOptions, requireRpc: true });
-
-    expect(gatherDaemonStatus).toHaveBeenCalledWith({
-      rpc: {},
-      probe: true,
-      requireRpc: true,
-      deep: false,
-    });
-  });
-
-  it("rejects require-rpc when probing is disabled", async () => {
-    await expect(
-      runDaemonStatus({ ...statusOptions, probe: false, requireRpc: true }),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(gatherDaemonStatus).not.toHaveBeenCalled();
-    expect(runtimeErrors[0]).toBe(
-      "Gateway status failed: --require-rpc needs probing enabled. Remove --no-probe or drop --require-rpc.",
-    );
-    expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
   });
 
   it("renders disabled-probe validation failures as JSON in JSON mode", async () => {

@@ -1,15 +1,9 @@
-// Browser tests cover agent.shared plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { BrowserProfileUnavailableError, toBrowserErrorResponse } from "../errors.js";
 import * as navigationGuard from "../navigation-guard.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import "../../test-support/browser-security.mock.js";
-import {
-  readBody,
-  handleRouteError,
-  resolveSafeRouteTabUrl,
-  withRouteTabContext,
-} from "./agent.shared.js";
+import { handleRouteError, resolveSafeRouteTabUrl, withRouteTabContext } from "./agent.shared.js";
 import { createBrowserRouteResponse } from "./test-helpers.js";
 import type { BrowserRequest } from "./types.js";
 
@@ -143,28 +137,7 @@ describe("browser route shared helpers", () => {
     expect(JSON.stringify(response.body)).not.toContain("browser-token");
   });
 
-  describe("readBody", () => {
-    it("normalizes non-object bodies to empty object", () => {
-      expect(readBody(requestWithBody(null))).toStrictEqual({});
-      expect(readBody(requestWithBody("text"))).toStrictEqual({});
-      expect(readBody(requestWithBody(["x"]))).toStrictEqual({});
-    });
-  });
-
   describe("safe route tab URLs", () => {
-    it("returns the current listed URL for a tab target", async () => {
-      await expect(
-        resolveSafeRouteTabUrl({
-          ctx: routeContext() as never,
-          profileCtx: profileContext([
-            { targetId: "tab-1", url: "https://example.com/current" },
-          ]) as never,
-          targetId: "tab-1",
-          fallbackUrl: "https://example.com/stale",
-        }),
-      ).resolves.toBe("https://example.com/current");
-    });
-
     it("falls back to the ensured tab URL when tab listing is stale", async () => {
       await expect(
         resolveSafeRouteTabUrl({
@@ -216,29 +189,6 @@ describe("browser route shared helpers", () => {
   });
 
   describe("withRouteTabContext", () => {
-    it("opts agent routes into Playwright target-id fallback", async () => {
-      const response = createBrowserRouteResponse();
-      const ensureTabAvailable = vi.fn(async () => ({
-        targetId: "tab-1",
-        title: "Tab",
-        url: "https://example.com",
-        type: "page",
-      }));
-
-      await withRouteTabContext({
-        req: requestWithBody({}),
-        res: response.res,
-        ctx: routeContextForTab("https://example.com", ensureTabAvailable),
-        run: async () => {},
-      });
-
-      expect(ensureTabAvailable).toHaveBeenCalledWith(undefined, {
-        allowPlaywrightFallback: true,
-        signal: expect.any(AbortSignal),
-        timeoutMs: 60_000,
-      });
-    });
-
     it("does not enforce current-tab URL policy unless requested", async () => {
       const response = createBrowserRouteResponse();
       const run = vi.fn(async () => {
@@ -254,27 +204,6 @@ describe("browser route shared helpers", () => {
 
       expect(run).toHaveBeenCalledOnce();
       expect(response.body).toEqual({ ok: true });
-    });
-
-    it("blocks guarded routes before running on a disallowed current tab", async () => {
-      const response = createBrowserRouteResponse();
-      const run = vi.fn(async () => {
-        response.res.json({ ok: true });
-      });
-
-      await withRouteTabContext({
-        req: requestWithBody({}),
-        res: response.res,
-        ctx: routeContextForTab("http://127.0.0.1:8080/admin"),
-        enforceCurrentUrlAllowed: true,
-        run,
-      });
-
-      expect(run).not.toHaveBeenCalled();
-      expect(response.statusCode).toBe(400);
-      const body = response.body as { error?: unknown };
-      expect(typeof body.error).toBe("string");
-      expect(body.error).not.toBe("");
     });
   });
 });

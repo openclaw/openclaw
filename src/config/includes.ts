@@ -609,8 +609,7 @@ export function readConfigIncludeFileWithGuards(params: IncludeFileReadParams): 
 
 const defaultResolver: IncludeResolver = {
   readFile: (p) => fs.readFileSync(p, "utf-8"),
-  readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) =>
-    readConfigIncludeFileWithGuards({ includePath, resolvedPath, rootRealDir }),
+  readFileWithGuards: readConfigIncludeFileWithGuards,
   parseJson: parseJsonWithJson5Fallback,
 };
 

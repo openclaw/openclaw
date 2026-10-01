@@ -36,7 +36,7 @@ export async function withSkillInstallPolicySource<T>(
     () => {},
   );
   try {
-    return await inspect(path.join(source.directory, "0"));
+    return await inspect(source.snapshot.resolvedSkills![0]!.baseDir);
   } finally {
     await source.cleanup();
   }

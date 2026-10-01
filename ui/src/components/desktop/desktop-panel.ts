@@ -517,7 +517,8 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       }
       this.audio.connect(pending.observed, client.gatewayUrl);
       const connection = await this.desktopClientFactory().connect({
-        background: getComputedStyle(target).backgroundColor,
+        // noVNC applies this to a same-document element; retain live theme inheritance.
+        background: "var(--bg)",
         isCurrent: () => pending.operationId === this.operationId,
         wsUrl: pending.observed.wsPath,
         gatewayUrl: client.gatewayUrl,
@@ -638,10 +639,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     }
     const notice = this.pictureInPicture.renderNotice(
       this.fullscreenMode.errorText ?? this.launcher.error ?? this.errorText,
-      this.noticeText ??
-        (this.controlling && this.source?.kind === "environment"
-          ? t("desktop.agentInputPaused")
-          : null),
+      this.noticeText,
       this.sessionSource.desktopAvailability,
     );
     return renderDesktopPresentation({

@@ -8,15 +8,17 @@ import { readCodexPluginConfig } from "./config-parsing.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import { isCodexAppServerProxyLaunch } from "./launch-args.js";
 import { buildCodexRuntimeModelParams } from "./model-runtime.js";
-import { listAllCodexAppServerModels, type CodexAppServerModel } from "./models.js";
+import {
+  DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
+  listAllCodexAppServerModels,
+  type CodexAppServerModel,
+} from "./models.js";
 import { probeCodexNativeAuth } from "./native-auth.js";
 import type { CodexGetAccountResponse } from "./protocol.js";
 import { withCodexAppServerJsonClient } from "./request.js";
+import { isCodexResponsesOAuthCredential } from "./responses-oauth.js";
 import { captureSharedCodexAppServerCatalogLifetime } from "./shared-client.js";
 
-// Manifest contract (openclaw.plugin.json discovery.timeoutMs default): live model
-// discovery is bounded tightly so a wedged app-server degrades to the static catalog.
-const DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS = 2500;
 type ModelInputType = NonNullable<ModelCatalogEntry["input"]>[number];
 const INPUT_TYPES: ReadonlySet<string> = new Set(["text", "image", "audio", "video", "document"]);
 
@@ -117,6 +119,11 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       const authProfileId = authProfileStore
         ? resolveCodexAppServerAuthProfileId({ store: authProfileStore, config: params.config })
         : undefined;
+      // SIWC's public provider owns the account model list. Native Codex sees only a
+      // placeholder API key here, so its bundled catalog cannot describe that account.
+      if (isCodexResponsesOAuthCredential(authProfileStore?.profiles[authProfileId ?? ""])) {
+        return [];
+      }
       const usesNativeHome = ownsLocalProcess && options.start.homeScope === "user";
       const native = usesNativeHome ? await probeCodexNativeAuth({ pluginConfig }) : undefined;
       if ((usesNativeHome && !native) || disposed || observations.get(key) !== observation) {

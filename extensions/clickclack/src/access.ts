@@ -5,10 +5,6 @@ import {
   resolveAllowlistMatchByCandidates,
 } from "openclaw/plugin-sdk/allow-from";
 import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-inbound";
-/**
- * Maps ClickClack senders and conversations onto the shared channel ingress
- * allowlist/command authorization contract.
- */
 import type {
   resolveStableChannelMessageIngress,
   StableChannelIngressIdentityParams,
@@ -211,10 +207,6 @@ async function resolvePreparedInboundRoute(params: {
   };
 }
 
-/**
- * Dispatch and command authorization decision for one inbound ClickClack
- * message.
- */
 export type ClickClackInboundAccess = {
   shouldDispatch: boolean;
   isCurrent: () => boolean;
@@ -231,10 +223,6 @@ export type ClickClackInboundAccess = {
   channelIngress?: Awaited<ReturnType<typeof resolveStableChannelMessageIngress>>;
 };
 
-/**
- * Resolves whether a ClickClack message should enter the agent pipeline and
- * whether its command-style body may run tools.
- */
 export async function resolveClickClackInboundAccess(params: {
   account: ResolvedClickClackAccount;
   config: CoreConfig;

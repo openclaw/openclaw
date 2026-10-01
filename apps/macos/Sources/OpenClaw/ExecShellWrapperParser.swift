@@ -164,7 +164,8 @@ enum ExecShellWrapperParser {
         case .cmd:
             self.extractCmdInlineCommand(command)
         case .powershell:
-            self.extractPowerShellInlineCommand(command)
+            ExecInlineCommandParser.extractInlineCommand(
+                command, flags: self.powershellInlineFlags, allowCombinedC: false)
         }
     }
 
@@ -177,24 +178,5 @@ enum ExecShellWrapperParser {
         let tail = command.suffix(from: command.index(after: idx)).joined(separator: " ")
         let payload = tail.trimmingCharacters(in: .whitespacesAndNewlines)
         return payload.isEmpty ? nil : payload
-    }
-
-    private static func extractPowerShellInlineCommand(_ command: [String]) -> String? {
-        for idx in 1..<command.count {
-            let token = command[idx].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if token.isEmpty {
-                continue
-            }
-            if token == "--" {
-                break
-            }
-            if self.powershellInlineFlags.contains(token) {
-                return ExecInlineCommandParser.extractInlineCommand(
-                    command,
-                    flags: self.powershellInlineFlags,
-                    allowCombinedC: false)
-            }
-        }
-        return nil
     }
 }

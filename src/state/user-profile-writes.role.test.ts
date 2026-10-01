@@ -10,7 +10,8 @@ import {
 import { onUserProfilesChanged } from "./user-profile-events.js";
 import { readUserProfileIdentity, retainUserProfileCatalog } from "./user-profile-list.js";
 import { setCanonicalUserProfileRole } from "./user-profile-writes.js";
-import { ensureProfileForEmail, getUserProfileRole, setUserProfileRole } from "./user-profiles.js";
+import { setUserProfileRole } from "./user-profile-writes.worker.js";
+import { ensureProfileForEmail, getUserProfileRole } from "./user-profiles.js";
 
 const delivery = vi.hoisted(() => ({
   afterResult: undefined as ((index: number) => Promise<void>) | undefined,

@@ -32,6 +32,7 @@ import { assertOutboundHandoffCurrent, OutboundHandoffRejectedError } from "./de
 import {
   createChannelActionContext,
   type MessageActionGateway,
+  type MessageActionInput,
   type MessageActionResult,
   type ResolvedActionContext,
 } from "./message-action-contracts.js";
@@ -67,6 +68,23 @@ const loadMessageActionGatewayRuntime = createLazyRuntimeModule(
 const MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS = 60_000;
 const MESSAGE_ACTION_RECONCILIATION_MAX_MS = 9 * 60_000;
 const MESSAGE_ACTION_INITIAL_SEND_TIMEOUT_MAX_MS = 30_000;
+
+export function assertMessageDeliveryCurrent(input: MessageActionInput): void {
+  throwIfAborted(input.abortSignal);
+  input.assertDirectAdapterHandoff?.();
+  input.messageActionAuthorization?.scheduled?.assertCurrent();
+  input.messageActionAuthorization?.deliveryAttempt?.assertCurrent();
+}
+
+export async function beforeMessageDeliveryAttempt(input: MessageActionInput): Promise<void> {
+  const deliveryAttempt = input.messageActionAuthorization?.deliveryAttempt;
+  if (!deliveryAttempt) {
+    return;
+  }
+  assertMessageDeliveryCurrent(input);
+  await deliveryAttempt.beforeAttempt();
+  assertMessageDeliveryCurrent(input);
+}
 
 async function callGatewayMessageAction<T>(params: {
   gateway?: MessageActionGateway;

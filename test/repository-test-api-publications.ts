@@ -20,9 +20,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/cli-auth-epoch.ts": Symbol.for("openclaw.cliAuthEpochTestApi"),
   "src/agents/cli-backends.ts": Symbol.for("openclaw.cliBackendsTestApi"),
   "src/agents/cli-runner/prepare.ts": Symbol.for("openclaw.cliRunnerPrepareTestApi"),
-  "src/agents/command/attempt-execution.helpers.ts": Symbol.for(
-    "openclaw.attemptExecutionHelpersTestApi",
-  ),
   "src/agents/embedded-agent-runner/context-engine-maintenance.ts": Symbol.for(
     "openclaw.contextEngineMaintenanceTestApi",
   ),

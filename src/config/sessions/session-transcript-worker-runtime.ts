@@ -18,10 +18,8 @@ import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.pa
 import { resolveStateDir } from "../state-dir.js";
 import { loadSessionEntryReadOnlyInScope } from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import type {
-  CapturedSessionEntryReadSource,
-  SessionAccessScope,
-} from "./session-accessor.types.js";
+import type { SessionAccessScope } from "./session-accessor.types.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import {
   sessionHistoryCleanupError,
   unwrapSessionTranscriptWorkerReply,
@@ -260,7 +258,9 @@ export function retainSessionHistoryWorkerDatabase(
         if (
           typeof received !== "boolean" &&
           !Array.isArray(received) &&
-          (received.kind === "session-entry-read" || received.kind === "session-diagnostic-text") &&
+          (received.kind === "session-entry-read" ||
+            received.kind === "session-entry-current" ||
+            received.kind === "session-diagnostic-text") &&
           received.source
         ) {
           const source = received.source;

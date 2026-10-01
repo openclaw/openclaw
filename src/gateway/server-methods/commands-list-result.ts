@@ -1,5 +1,3 @@
-// Command list serialization gathers chat, skill, and plugin commands into the
-// gateway protocol result while clamping names, descriptions, aliases, and args.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
@@ -63,10 +61,7 @@ function resolveNativeName(cmd: ChatCommandDefinition, provider?: string): strin
 }
 
 function supportsNativeProvider(cmd: ChatCommandDefinition, provider?: string): boolean {
-  if (!cmd.nativeProviders?.length) {
-    return true;
-  }
-  if (!provider) {
+  if (!cmd.nativeProviders?.length || !provider) {
     return true;
   }
   return cmd.nativeProviders.some(
@@ -74,32 +69,23 @@ function supportsNativeProvider(cmd: ChatCommandDefinition, provider?: string): 
   );
 }
 
-/** Resolves normalized text aliases, preserving slash-prefixed command names. */
 function resolveTextAliases(cmd: ChatCommandDefinition): string[] {
-  const seen = new Set<string>();
-  const aliases: string[] = [];
+  const aliases = new Set<string>();
   for (const alias of cmd.textAliases) {
     const trimmed = trimClampNonEmpty(alias, COMMAND_NAME_MAX_LENGTH);
     if (!trimmed) {
       continue;
     }
-    const exactAlias = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-    if (seen.has(exactAlias)) {
-      continue;
-    }
-    seen.add(exactAlias);
-    aliases.push(exactAlias);
-    if (aliases.length >= COMMAND_ALIAS_MAX_ITEMS) {
+    aliases.add(trimmed.startsWith("/") ? trimmed : `/${trimmed}`);
+    if (aliases.size >= COMMAND_ALIAS_MAX_ITEMS) {
       break;
     }
   }
-  if (aliases.length > 0) {
-    return aliases;
-  }
-  return [`/${truncateUtf16Safe(cmd.key, COMMAND_NAME_MAX_LENGTH)}`];
+  return aliases.size > 0
+    ? [...aliases]
+    : [`/${truncateUtf16Safe(cmd.key, COMMAND_NAME_MAX_LENGTH)}`];
 }
 
-/** Serializes a command argument into the bounded gateway protocol shape. */
 function serializeArg(arg: CommandArgDefinition): SerializedArg {
   const isDynamic = typeof arg.choices === "function";
   const staticChoices = Array.isArray(arg.choices)
@@ -116,16 +102,15 @@ function serializeArg(arg: CommandArgDefinition): SerializedArg {
 }
 
 function normalizeChoice(choice: CommandArgChoice): { value: string; label: string } {
-  if (typeof choice === "string") {
-    const value = truncateUtf16Safe(choice, COMMAND_CHOICE_VALUE_MAX_LENGTH);
-    return {
-      value,
-      label: truncateUtf16Safe(choice, COMMAND_CHOICE_LABEL_MAX_LENGTH),
-    };
-  }
   return {
-    value: truncateUtf16Safe(choice.value, COMMAND_CHOICE_VALUE_MAX_LENGTH),
-    label: truncateUtf16Safe(choice.label, COMMAND_CHOICE_LABEL_MAX_LENGTH),
+    value: truncateUtf16Safe(
+      typeof choice === "string" ? choice : choice.value,
+      COMMAND_CHOICE_VALUE_MAX_LENGTH,
+    ),
+    label: truncateUtf16Safe(
+      typeof choice === "string" ? choice : choice.label,
+      COMMAND_CHOICE_LABEL_MAX_LENGTH,
+    ),
   };
 }
 
@@ -158,7 +143,6 @@ function mapCommand(
   };
 }
 
-/** Builds plugin command entries from text specs plus provider-native metadata. */
 function buildPluginCommandEntries(params: {
   provider?: string;
   nameSurface: CommandNameSurface;
@@ -195,7 +179,6 @@ function buildPluginCommandEntries(params: {
   return entries;
 }
 
-/** Builds the public commands.list payload for an agent/provider/scope view. */
 export async function buildCommandsListResult(params: {
   sessionEntry?: SessionEntry;
   sessionKey?: string;

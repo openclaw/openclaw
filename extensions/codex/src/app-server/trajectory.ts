@@ -6,22 +6,12 @@ export type CodexTrajectoryRecorder = NonNullable<
   EmbeddedRunAttemptParams["hostCapabilities"]["trajectory"]
 >;
 
-type CodexTrajectoryInit = {
-  attempt: EmbeddedRunAttemptParams;
-  cwd: string;
-  developerInstructions?: string;
-  prompt?: string;
-  trajectory?: CodexTrajectoryRecorder | null;
-  tools?: CodexDynamicToolSpec[];
-};
-
 export function createCodexTrajectoryRecorder(
-  params: CodexTrajectoryInit,
+  trajectory: CodexTrajectoryRecorder | null | undefined,
 ): CodexTrajectoryRecorder | null {
-  if (!params.trajectory) {
+  if (!trajectory) {
     return null;
   }
-  const trajectory = params.trajectory;
 
   return {
     recordEvent: (type, data) => {
@@ -38,7 +28,12 @@ export function createCodexTrajectoryRecorder(
 
 export function recordCodexTrajectoryContext(
   recorder: CodexTrajectoryRecorder | null,
-  params: CodexTrajectoryInit,
+  params: {
+    attempt: EmbeddedRunAttemptParams;
+    developerInstructions?: string;
+    prompt?: string;
+    tools?: CodexDynamicToolSpec[];
+  },
 ): void {
   if (!recorder) {
     return;
@@ -54,7 +49,6 @@ export function recordCodexTrajectoryContext(
 export function recordCodexTrajectoryCompletion(
   recorder: CodexTrajectoryRecorder | null,
   params: {
-    attempt: EmbeddedRunAttemptParams;
     result: EmbeddedRunAttemptResult;
     threadId: string;
     turnId: string;

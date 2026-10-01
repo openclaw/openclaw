@@ -1,4 +1,3 @@
-// Qa Lab plugin entrypoint registers its OpenClaw integration.
 import { aimockProviderDefinition } from "./aimock/index.js";
 import { liveFrontierProviderDefinition } from "./live-frontier/index.js";
 import { mockOpenAiProviderDefinition } from "./mock-openai/index.js";

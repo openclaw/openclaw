@@ -8,7 +8,8 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatMonitorPlan } from "../cron/heartbeat-monitor.js";
 import { heartbeatTaskDeclarationKey, isHeartbeatTaskCronJob } from "../cron/heartbeat-task.js";
-import { readCronJobScratchState, writeCronJobScratch } from "../cron/scratch-store.js";
+import { readCronJobScratchState } from "../cron/scratch-store.js";
+import { writeCronJobScratchForMaintenance } from "../cron/scratch-write.kernel.js";
 import { CronService } from "../cron/service.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { resolveHeartbeatSession } from "../infra/heartbeat-runner-session.js";
@@ -103,7 +104,7 @@ tasks:
   }
   const added = await cron.add(spec.input, { enabledExplicit: true, systemOwned: true });
   const monitor = "job" in added ? added.job : added;
-  writeCronJobScratch({
+  writeCronJobScratchForMaintenance({
     storePath,
     jobId: monitor.id,
     content: scratchContent,
@@ -309,7 +310,7 @@ tasks:
 `;
     const migration = migrate(fixture);
     const current = readScratch(fixture);
-    writeCronJobScratch({
+    writeCronJobScratchForMaintenance({
       storePath: fixture.storePath,
       jobId: fixture.monitor.id,
       content: concurrentScratch,
@@ -398,7 +399,7 @@ tasks:
     interval: 1h
     prompt: Second
 `;
-    writeCronJobScratch({
+    writeCronJobScratchForMaintenance({
       storePath: fixture.storePath,
       jobId: fixture.monitor.id,
       content: duplicate,

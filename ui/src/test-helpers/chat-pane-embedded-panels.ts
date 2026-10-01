@@ -124,9 +124,7 @@ export function createReviewFixture() {
           content,
           host: state,
         }),
-      workspace: renderSessionWorkspaceRail(createSessionWorkspaceProps(state), {
-        embedded: true,
-      }),
+      workspace: renderSessionWorkspaceRail(createSessionWorkspaceProps(state)),
     } as Parameters<typeof sidebarPanelDefinitions>[0]);
     await renderPanelFixture(mount, state.sidebarLayout, definitions, closePanelSlot);
   };

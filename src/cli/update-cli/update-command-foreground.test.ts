@@ -417,6 +417,15 @@ it.each([
     vi.spyOn(managedContext, "readUpdateCandidateSource").mockResolvedValue({
       config: {},
       hash: "unchanged",
+      source: {
+        path: path.join(root, "openclaw.json"),
+        exists: true,
+        raw: "{}",
+        hash: "unchanged",
+        includedPaths: [],
+        includeProvenance: [],
+        sourceConfig: schemaContext("caller").configSnapshot.sourceConfig,
+      },
     });
     vi.spyOn(candidateState, "readUpdateStateSchemaVersions").mockResolvedValue([
       { path: path.join(root, "state", "openclaw.sqlite"), userVersion: migrating ? 14 : 15 },

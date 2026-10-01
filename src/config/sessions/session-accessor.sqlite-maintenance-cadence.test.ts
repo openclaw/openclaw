@@ -651,3 +651,40 @@ it.each(["transcript append", "protected parent"] as const)(
     }
   },
 );
+
+it.each(["active ancestor", "provider", "work-id", "lifecycle-id"] as const)(
+  "refuses a selected row protected by refreshed %s admission",
+  (protection) => {
+    const { database, options, storePath } = createStore(2, Date.now() - 31 * DAY_MS);
+    const childKey = key(1);
+    writeSessionEntry(database, childKey, {
+      sessionId: "cadence-1",
+      updatedAt: Date.now(),
+      parentSessionKey: key(0),
+    });
+    const operation = createSessionMaintenancePlanningOperation({
+      databaseOptions: options,
+      input: {
+        maintenance: resolveMaintenanceConfigFromInput(),
+        storePath,
+        archiveDirectory: path.join(path.dirname(storePath), "archives"),
+        preservation: { providerKeys: [], workIdentities: [], lifecycleIdentities: [] },
+      },
+    });
+    const prepared = prepareSessionMaintenanceInWorker(operation);
+    try {
+      operation.input.activeSessionKeys = protection === "active ancestor" ? [childKey] : [];
+      operation.input.preservation = {
+        providerKeys: protection === "provider" ? [key(0)] : [],
+        workIdentities: protection === "work-id" ? ["cadence-0"] : [],
+        lifecycleIdentities: protection === "lifecycle-id" ? ["cadence-0"] : [],
+      };
+      expect(reclaimSessionMaintenanceInTransaction(operation, {}, prepared)).toEqual({
+        kind: "maintenance-plan-stale",
+      });
+      expect(loadSessionEntry({ storePath, sessionKey: key(0) })?.archivedAt).toBeUndefined();
+    } finally {
+      prepared.release();
+    }
+  },
+);

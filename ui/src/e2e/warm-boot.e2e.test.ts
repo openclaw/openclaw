@@ -13,7 +13,8 @@ const suite = createControlUiE2eSuite({
   name: "Control UI warm reload",
   trackBrowserContexts: true,
 });
-const sessionKey = "agent:main:main";
+// A literal conversation can restore before hello; the shorthand main route needs live defaults.
+const sessionKey = "agent:main:thread:warm-reload";
 const transcriptText = "This conversation is ready before the Gateway reconnects.";
 
 async function expectOwnMessageAlignment(page: Page): Promise<void> {
@@ -114,6 +115,7 @@ suite.define(() => {
           updatedAt: timestamp,
         };
         const gateway = await installMockGateway(page, {
+          sessionKey,
           // The typed hold applies again after reload and releases the normal hello payload.
           heldMethods: ["connect"],
           authMethod: profile === "trusted-proxy" || profile === "device-token" ? profile : "token",

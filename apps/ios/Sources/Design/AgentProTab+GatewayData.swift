@@ -8,14 +8,8 @@ extension AgentProTab {
     }
 
     func agentBadge(for agent: AgentSummary) -> String {
-        if let identity = agent.identity,
-           let emoji = identity["emoji"]?.value as? String,
-           let normalizedEmoji = self.normalized(emoji)
-        {
-            return normalizedEmoji
-        }
-
-        return AgentIdentityPresentation.initialsBadge(for: self.agentName(for: agent))
+        self.normalized(agent.identity?["emoji"]?.value as? String)
+            ?? AgentIdentityPresentation.initialsBadge(for: self.agentName(for: agent))
     }
 
     func agentTint(for agent: AgentSummary, state: AgentRosterState) -> Color {

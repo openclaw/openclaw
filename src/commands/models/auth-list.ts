@@ -1,4 +1,3 @@
-/** Command helpers for listing saved model auth profiles. */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   ensureAuthProfileStore,
@@ -98,7 +97,6 @@ function formatProfileLine(profile: AuthProfileSummary): string {
   return `- ${profile.label} [${details.join("; ")}]${profile.recoveryHint ? ` — ${profile.recoveryHint}` : ""}`;
 }
 
-/** Lists auth profiles for the selected agent, optionally filtered by provider. */
 export async function modelsAuthListCommand(
   opts: { provider?: string; agent?: string; json?: boolean },
   runtime: RuntimeEnv,

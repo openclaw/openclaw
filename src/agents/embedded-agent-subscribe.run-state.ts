@@ -47,7 +47,9 @@ export function createEmbeddedAgentSubscribeState(
     lastStreamedReasoning: undefined,
     lastBlockReplyText: undefined,
     lastDeliveredBlockReplyText: undefined,
-    deferBlockReplyDelivery: typeof params.onBeforeTerminalDelivery === "function",
+    deferBlockReplyDelivery:
+      typeof params.onBeforeTerminalDelivery === "function" &&
+      params.deferTerminalDelivery !== false,
     deferredBlockReplies: [],
     toolExecutionSinceLastBlockReply: false,
     reasoningStreamOpen: false,

@@ -16,7 +16,7 @@ import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { getProfileLifecycle, isProfileRestartRequiredError } from "../server-context.lifecycle.js";
 import { parseSystemProfileDomains } from "../system-profile-domains.js";
 import { dismissSystemProfileImportPrompt } from "../system-profile-import-state.js";
-import { resolveProfileContext } from "./agent.shared.js";
+import { readBody, resolveProfileContext } from "./agent.shared.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import {
   jsonBrowserError,
@@ -47,14 +47,11 @@ function handleBrowserRouteError(res: BrowserResponse, err: unknown) {
   jsonError(res, 500, String(err));
 }
 
-async function sendBasicJsonResponse(params: {
-  res: BrowserResponse;
-  run: () => Promise<unknown>;
-}) {
+async function sendBasicJsonResponse(res: BrowserResponse, run: () => Promise<unknown>) {
   try {
-    params.res.json(await params.run());
+    res.json(await run());
   } catch (err) {
-    return handleBrowserRouteError(params.res, err);
+    return handleBrowserRouteError(res, err);
   }
 }
 
@@ -108,13 +105,11 @@ async function withProfilesServiceMutation(params: {
   ctx: BrowserRouteContext;
   run: (service: ReturnType<typeof createBrowserProfilesService>) => Promise<unknown>;
 }) {
-  await sendBasicJsonResponse({
-    res: params.res,
-    run: () =>
-      withBasicRequestAdmission(params.req, () =>
-        params.run(createBrowserProfilesService(params.ctx)),
-      ),
-  });
+  await sendBasicJsonResponse(params.res, () =>
+    withBasicRequestAdmission(params.req, () =>
+      params.run(createBrowserProfilesService(params.ctx)),
+    ),
+  );
 }
 
 async function buildBrowserStatus(
@@ -330,41 +325,30 @@ function parseHeadlessStartOverride(params: {
 
 export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
   app.get("/system-profiles", async (req, res) => {
-    await sendBasicJsonResponse({
-      res,
-      run: async () => {
-        const service = createBrowserProfilesService(ctx);
-        return {
-          systemProfiles: await service.listSystemProfiles(
-            toStringOrEmpty(req.query.browser) || undefined,
-          ),
-        };
-      },
-    });
+    await sendBasicJsonResponse(res, async () => ({
+      systemProfiles: await createBrowserProfilesService(ctx).listSystemProfiles(
+        toStringOrEmpty(req.query.browser) || undefined,
+      ),
+    }));
   });
 
   app.get("/system-profile-import/status", async (_req, res) => {
-    await sendBasicJsonResponse({
-      res,
-      run: async () => await createBrowserProfilesService(ctx).getSystemProfileImportStatus(),
-    });
+    await sendBasicJsonResponse(res, () =>
+      createBrowserProfilesService(ctx).getSystemProfileImportStatus(),
+    );
   });
 
   app.post("/system-profile-import/dismiss", async (_req, res) => {
-    await sendBasicJsonResponse({
-      res,
-      run: async () => {
-        await dismissSystemProfileImportPrompt();
-        return { ok: true };
-      },
+    await sendBasicJsonResponse(res, async () => {
+      await dismissSystemProfileImportPrompt();
+      return { ok: true };
     });
   });
 
   app.get("/profiles", async (_req, res) => {
-    await sendBasicJsonResponse({
-      res,
-      run: async () => ({ profiles: await createBrowserProfilesService(ctx).listProfiles() }),
-    });
+    await sendBasicJsonResponse(res, async () => ({
+      profiles: await createBrowserProfilesService(ctx).listProfiles(),
+    }));
   });
 
   app.get("/", async (req, res) => {
@@ -447,11 +431,12 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
   });
 
   app.post("/profiles/create", async (req, res) => {
-    const name = toStringOrEmpty((req.body as { name?: unknown })?.name);
-    const color = toStringOrEmpty((req.body as { color?: unknown })?.color);
-    const cdpUrl = toStringOrEmpty((req.body as { cdpUrl?: unknown })?.cdpUrl);
-    const userDataDir = toStringOrEmpty((req.body as { userDataDir?: unknown })?.userDataDir);
-    const driver = toStringOrEmpty((req.body as { driver?: unknown })?.driver);
+    const body = readBody(req);
+    const name = toStringOrEmpty(body.name);
+    const color = toStringOrEmpty(body.color);
+    const cdpUrl = toStringOrEmpty(body.cdpUrl);
+    const userDataDir = toStringOrEmpty(body.userDataDir);
+    const driver = toStringOrEmpty(body.driver);
 
     if (!name) {
       return jsonError(res, 400, "name is required");
@@ -485,7 +470,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
   });
 
   app.post("/profiles/import", async (req, res) => {
-    const body = (req.body ?? {}) as Record<string, unknown>;
+    const body = readBody(req);
     // Fail closed on a malformed domain filter: a caller that meant to scope
     // the import must never silently import every cookie instead.
     let domains: string[] | undefined;

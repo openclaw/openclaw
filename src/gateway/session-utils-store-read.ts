@@ -6,11 +6,11 @@ import {
   loadExactSessionEntryCandidates,
   loadExactSessionEntryCandidatesReadOnlyBatch,
 } from "../config/sessions/session-accessor.js";
+import type { SessionEntryListScope } from "../config/sessions/session-accessor.types.js";
 import type {
   CapturedSessionEntryReadSource,
-  SessionEntryListScope,
   SessionEntryReadSource,
-} from "../config/sessions/session-accessor.types.js";
+} from "../config/sessions/session-entry-read-source.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 
 /** Request-local, read-only views avoid rematerializing a store for each sharing lookup. */

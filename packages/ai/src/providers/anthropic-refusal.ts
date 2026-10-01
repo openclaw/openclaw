@@ -23,20 +23,16 @@ function readAnthropicRefusalDetails(value: unknown): AnthropicRefusalDetails {
   };
 }
 
-function formatAnthropicRefusalMessage(details: AnthropicRefusalDetails): string {
-  const category = details.category ? ` (category: ${details.category})` : "";
-  const explanation = details.explanation ? `: ${details.explanation}` : ".";
-  return `Anthropic refusal${category}${explanation}`;
-}
-
 export function applyAnthropicRefusal(
   output: AnthropicRefusalOutput,
   stopDetails: unknown,
   provider: string,
 ): void {
   const details = readAnthropicRefusalDetails(stopDetails);
+  const category = details.category ? ` (category: ${details.category})` : "";
+  const explanation = details.explanation ? `: ${details.explanation}` : ".";
   output.stopReason = "error";
-  output.errorMessage = formatAnthropicRefusalMessage(details);
+  output.errorMessage = `Anthropic refusal${category}${explanation}`;
   output.diagnostics = [
     ...(output.diagnostics ?? []),
     {

@@ -1,6 +1,8 @@
 import { channel } from "node:diagnostics_channel";
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
 
 vi.mock("node:diagnostics_channel", async (importOriginal) => {
@@ -75,14 +77,81 @@ const input = {
     maxSnapshotBytes: 1024,
   },
 };
-const run = () => nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 });
+let host: LegacyPluginSdkResourceHost;
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+const run = () => host.run(() => nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 }));
+
+beforeEach(() => {
+  host = new LegacyPluginSdkResourceHost();
+  scheduler = createTestGatewayScheduler("fake-timers");
+  host.bindScheduler(scheduler);
+});
 
 afterEach(async () => {
-  fixture.workerUrl += ".next";
-  await run();
+  await host.close();
+  await scheduler.stop();
 });
 
 describe("Node Code Mode worker custody", () => {
+  it("joins its native workers at host close without retiring a sibling host", async () => {
+    const sibling = new LegacyPluginSdkResourceHost();
+    const siblingScheduler = createTestGatewayScheduler();
+    sibling.bindScheduler(siblingScheduler);
+    const released = createDeferred();
+    const retiring = createDeferred();
+    try {
+      await run();
+      const owned = fixture.pools.at(-1)!;
+      await sibling.run(() => nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 }));
+      const survivor = fixture.pools.at(-1)!;
+      expect(survivor).not.toBe(owned);
+      owned.close.mockImplementationOnce(async () => {
+        retiring.resolve();
+        await released.promise;
+        owned.isClosed = true;
+      });
+      const completed = vi.fn();
+      const closing = host.close().then(completed);
+      await retiring.promise;
+      expect(completed).not.toHaveBeenCalled();
+      expect(scheduler.nextWakeAtMs).toBeNull();
+      expect(survivor.isClosed).toBe(false);
+      released.resolve();
+      await closing;
+      const count = fixture.pools.length;
+      await sibling.run(() => nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 }));
+      expect(fixture.pools).toHaveLength(count);
+      expect(survivor.isClosed).toBe(false);
+      await expect(run()).rejects.toThrow("Plugin SDK resource host is closed");
+    } finally {
+      released.resolve();
+      await sibling.close();
+      await siblingScheduler.stop();
+    }
+  });
+
+  it("closes a standalone completed worker without retaining an unowned idle timer", async () => {
+    await nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 });
+    expect(fixture.pools.at(-1)?.isClosed).toBe(true);
+  });
+
+  it("retains a failed host retirement for the next acquisition to join", async () => {
+    const previous = new LegacyPluginSdkResourceHost();
+    const previousScheduler = createTestGatewayScheduler();
+    previous.bindScheduler(previousScheduler);
+    await previous.run(() => nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 }));
+    const retired = fixture.pools.at(-1)!;
+    retired.close.mockRejectedValueOnce(new Error("native exit uncertain"));
+    await expect(previous.close()).rejects.toThrow(
+      "Plugin SDK resources could not all be disposed",
+    );
+    expect(retired.isClosed).toBe(false);
+    await run();
+    expect(retired.close).toHaveBeenCalledTimes(2);
+    expect(retired.isClosed).toBe(true);
+    await previousScheduler.stop();
+  });
+
   it("reuses idle workers within five minutes and expires each after inactivity", async () => {
     vi.useFakeTimers();
     try {
@@ -135,8 +204,10 @@ describe("Node Code Mode worker custody", () => {
       fixture.workerUrl += ".updated";
       const controller = new AbortController();
       let observed: unknown;
-      const execution = nodeCodeModeExecutor
-        .execute(input, { timeoutMs: 3000, signal: controller.signal })
+      const execution = host
+        .run(() =>
+          nodeCodeModeExecutor.execute(input, { timeoutMs: 3000, signal: controller.signal }),
+        )
         .then((result) => {
           observed = result;
           return result;
@@ -206,9 +277,8 @@ describe("Node Code Mode worker custody", () => {
           previous.isClosed = true;
         });
         fixture.workerUrl += ".updated";
-        const result = await nodeCodeModeExecutor.execute(
-          { ...input, executionTimeoutMs: 300 },
-          { timeoutMs: 3000 },
+        const result = await host.run(() =>
+          nodeCodeModeExecutor.execute({ ...input, executionTimeoutMs: 300 }, { timeoutMs: 3000 }),
         );
         if (retirementMs < input.config.timeoutMs) {
           expect(result.status).toBe("completed");

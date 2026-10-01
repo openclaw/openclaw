@@ -1,15 +1,15 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  resolveGpt5PromptOverlayMode,
+  resolveGpt5SystemPromptContribution,
+} from "openclaw/plugin-sdk/provider-model-metadata";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 import { openaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { openAiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
-import {
-  resolveOpenAIPromptOverlayMode,
-  resolveOpenAISystemPromptContribution,
-} from "./prompt-overlay.js";
 import {
   acquireOpenAIQuicksilverBrowserSessionBroker,
   releaseOpenAIQuicksilverBrowserSessionBroker,
@@ -36,11 +36,11 @@ export default definePluginEntry({
         const pluginConfig =
           runtimePluginConfig ??
           (ctx.config ? undefined : (api.pluginConfig as Record<string, unknown>));
-        return resolveOpenAISystemPromptContribution({
+        return resolveGpt5SystemPromptContribution({
           config: ctx.config,
-          legacyPluginConfig: pluginConfig,
-          mode: resolveOpenAIPromptOverlayMode(pluginConfig),
-          modelProviderId: provider.id,
+          legacyPluginConfig: {
+            personality: resolveGpt5PromptOverlayMode(undefined, pluginConfig),
+          },
           modelId: ctx.modelId,
           trigger: ctx.trigger,
         });

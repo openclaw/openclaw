@@ -15,7 +15,10 @@ import {
   buildPlatformRuntimeLogHints,
   buildPlatformServiceStartHints,
 } from "../../daemon/runtime-hints.js";
-import { resolvePinnedDaemonRuntimePath } from "../../daemon/runtime-paths.js";
+import {
+  resolvePinnedDaemonRuntimePath,
+  resolveRecordedDaemonRuntime,
+} from "../../daemon/runtime-paths.js";
 import { readDaemonRuntimePinForInstall } from "../../daemon/runtime-pin-state.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
@@ -46,12 +49,7 @@ import {
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
 import { resolveNodeGatewayOptions } from "./gateway-options.js";
 
-type NodeDaemonInstallOptions = {
-  host?: string;
-  port?: string | number;
-  contextPath?: string;
-  tls?: boolean;
-  tlsFingerprint?: string;
+type NodeDaemonInstallOptions = Parameters<typeof resolveNodeGatewayOptions>[0] & {
   nodeId?: string;
   displayName?: string;
   shareInstalledApps?: boolean;
@@ -202,6 +200,12 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     return;
   }
 
+  const recordedRuntime =
+    opts.runtime === undefined && !pinnedRuntimePath && !installEnv.OPENCLAW_WRAPPER?.trim()
+      ? await resolveRecordedDaemonRuntime(existingManagedCommand?.programArguments[0], installEnv)
+      : undefined;
+  const retainedRuntime = recordedRuntime?.status === "supported" ? recordedRuntime : undefined;
+
   const { programArguments, workingDirectory, environment, environmentValueSources, description } =
     await buildNodeInstallPlan({
       env: installEnv,
@@ -215,7 +219,9 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       installedAppsSharing: opts.shareInstalledApps,
       commands: opts.commands,
       allCommands: opts.allCommands,
-      runtime: runtimeRaw,
+      runtime: retainedRuntime?.runtime ?? runtimeRaw,
+      runtimeExplicit: opts.runtime !== undefined || opts.runtimePath !== undefined,
+      runtimePath: retainedRuntime?.path,
       pinnedRuntimePath,
       warn,
     });
@@ -306,17 +312,12 @@ export async function runNodeDaemonStatus(opts: NodeDaemonOutputOptions = {}) {
     })),
   ]);
 
-  const payload = {
-    service: {
-      ...buildDaemonServiceSnapshot(service, loaded),
-      command,
-      runtime,
-    },
-  };
-
   if (json) {
     defaultRuntime.writeJson({
-      service: projectDaemonServiceForJson(payload.service, { includeDefinitionPaths: true }),
+      service: projectDaemonServiceForJson(
+        { ...buildDaemonServiceSnapshot(service, loaded), command, runtime },
+        { includeDefinitionPaths: true },
+      ),
     });
     return;
   }

@@ -56,7 +56,7 @@ export function renderQuestionOptions(props: QuestionOptionsProps) {
               ${selected ? "✓" : ""}
             </span>
             <span class="chat-question-panel__option-copy">
-              <strong>${option.label}</strong>
+              <strong class="chat-question-panel__option-label">${option.label}</strong>
               ${option.description ? html`<small>${option.description}</small>` : nothing}
             </span>
             ${renderKbd(index + 1)}

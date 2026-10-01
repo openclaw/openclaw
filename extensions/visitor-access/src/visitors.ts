@@ -35,7 +35,11 @@ const identityFields = {
     .optional(),
   email: emailSchema.optional(),
 };
-const revokeSchema = z.strictObject(identityFields);
+const revokeSchema = z.strictObject({
+  ...identityFields,
+  profileId: z.string().trim().min(1).max(128).optional(),
+  grantId: z.uuid().optional(),
+});
 const inviteSchema = z.strictObject({
   ...identityFields,
   days: z.number().int().min(1).max(3650).optional(),
@@ -57,7 +61,7 @@ function parseVisitorInput<T>(schema: z.ZodType<T>, raw: unknown): T {
   const result = schema.safeParse(raw);
   if (!result.success) {
     throw new VisitorAccessError(
-      "Invalid visitor input. Use a valid email or GitHub login, days from 1 to 3650, or forever: true.",
+      "Invalid visitor input. Use a valid email or GitHub login, a profileId or UUID grantId for revocation, days from 1 to 3650, or forever: true.",
     );
   }
   return result.data;
@@ -279,7 +283,7 @@ export class VisitorAccessService {
     });
   }
 
-  private async resolveEmail(input: { email?: string; github?: string }): Promise<string> {
+  private async resolveInviteEmail(input: { email?: string; github?: string }): Promise<string> {
     if (input.email) {
       return input.email;
     }
@@ -340,7 +344,7 @@ export class VisitorAccessService {
         }
         expiresAt = Date.now() + days * DAY_MS;
       }
-      const email = await this.resolveEmail(input);
+      const email = await this.resolveInviteEmail(input);
       const previous = await store.lookup(email);
       const now = Date.now();
       const githubLogin = input.github ?? previous?.githubLogin;
@@ -375,7 +379,8 @@ export class VisitorAccessService {
         previous &&
         grantIdSchema.safeParse(previous.grantId).success &&
         (previous.expiresAt === null || previous.expiresAt > Date.now());
-      grant.grantId = continuous ? previous.grantId : randomUUID();
+      const grantId = continuous && previous.grantId ? previous.grantId : randomUUID();
+      grant.grantId = grantId;
       await this.registerGrant(
         grant,
         continuous
@@ -391,10 +396,11 @@ export class VisitorAccessService {
       );
       const who = grant.githubLogin ? `@${grant.githubLogin} (${email})` : email;
       return {
-        text: `${previous ? "Renewed" : "Invited"} ${who}. Visitor grant expires: ${expiryText(grant.expiresAt)}. ${gatewayAccess}. Sign in at ${SIGN_IN_URL} using Team's existing login with this email. The link itself does not grant access.`,
+        text: `${previous ? "Renewed" : "Invited"} ${who}. Invitation ID: ${grant.grantId}. Visitor grant expires: ${expiryText(grant.expiresAt)}. ${gatewayAccess}. Sign in at ${SIGN_IN_URL} using Team's existing login with this email. The link itself does not grant access.`,
         details: {
           outcome: previous ? "renewed" : "invited",
           email,
+          grantId,
           ...(grant.githubLogin ? { githubLogin: grant.githubLogin } : {}),
           expiresAt: grant.expiresAt === null ? null : new Date(grant.expiresAt).toISOString(),
           gatewayAccess,
@@ -411,48 +417,102 @@ export class VisitorAccessService {
     return this.serialize(async () => {
       const store = this.actionStore(assertCurrent);
       const input = parseVisitorInput(revokeSchema, raw);
-      if (!input.email && !input.github) {
-        throw new VisitorAccessError("Provide an email or GitHub login.");
+      if (
+        (input.profileId || input.grantId) &&
+        Object.values(input).filter((value) => value !== undefined).length !== 1
+      ) {
+        throw new VisitorAccessError(
+          "Choose profileId, grantId, or email/GitHub; do not combine selectors.",
+        );
+      }
+      if (!input.email && !input.github && !input.profileId && !input.grantId) {
+        throw new VisitorAccessError("Provide a profileId, grantId, email, or GitHub login.");
       }
       const entries = await store.entries();
-      const matching = input.email
-        ? [input.email]
-        : entries
-            .filter((entry) => entry.value.githubLogin === input.github)
-            .map((entry) => entry.key);
-      const targets = new Set(matching.length ? matching : [await this.resolveEmail(input)]);
-      const now = Date.now();
-      for (const { key, value } of entries) {
-        if (targets.has(key) && (value.expiresAt === null || value.expiresAt > now)) {
-          // An explicit end must survive a failed or ambiguous provider response.
-          await this.registerGrant({ ...value, expiresAt: now }, store);
+      const access =
+        input.profileId || (!input.email && input.github) ? await this.readAccess() : undefined;
+      assertCurrent();
+      const profile = input.profileId
+        ? access?.resolveProfile(input.profileId)
+        : !input.email && input.github
+          ? access?.resolveGithubProfile(input.github)
+          : undefined;
+      if (input.profileId && !profile) {
+        throw new VisitorAccessError(
+          "Profile not found. Use the current canonical profileId from visitor_list.",
+        );
+      }
+      if (!input.email && input.github && !profile) {
+        throw new VisitorAccessError(
+          "No verified Gateway profile matches this GitHub login. Use the exact invitation email.",
+        );
+      }
+      const targets = new Set(
+        profile
+          ? entries.filter(({ key }) => profile.emails.includes(key)).map(({ key }) => key)
+          : input.grantId
+            ? entries.filter(({ value }) => value.grantId === input.grantId).map(({ key }) => key)
+            : input.email
+              ? [input.email]
+              : [],
+      );
+      if (!input.email && input.github && targets.size === 0) {
+        return {
+          text: `No visitor grant found for @${input.github}; nothing to revoke.`,
+          details: { outcome: "not_found", emails: [], githubLogin: input.github },
+        };
+      }
+      if (input.grantId && targets.size > 1) {
+        throw new VisitorAccessError(
+          "Multiple invitations have that grantId. List visitors and cancel by exact email.",
+        );
+      }
+      const revokeSelected = async (
+        assertProfileCurrent?: () => void,
+      ): Promise<{ text: string; details: VisitorRevokeDetails }> => {
+        const assertRevocationCurrent = () => {
+          assertCurrent();
+          assertProfileCurrent?.();
+        };
+        const currentStore = this.actionStore(assertRevocationCurrent);
+        const now = Date.now();
+        for (const { key, value } of entries) {
+          if (targets.has(key) && (value.expiresAt === null || value.expiresAt > now)) {
+            await this.registerGrant({ ...value, expiresAt: now }, currentStore);
+          }
         }
-      }
-      let removed = false;
-      await this.policy.update((emails) => {
-        removed =
-          emails.some((email) => targets.has(email)) ||
-          entries.some((entry) => targets.has(entry.key));
-        return emails.filter((email) => !targets.has(email));
-      }, assertCurrent);
-      for (const email of targets) {
-        assertCurrent();
-        await this.deleteGrant(email, store);
-      }
-      const who =
-        targets.size > 1
-          ? `@${input.github} (${targets.size} recorded emails)`
-          : [...targets].join(", ");
-      return {
-        text: removed
-          ? `Revoked visitor access for ${who}.`
-          : `No visitor grant found for ${who}; nothing to revoke.`,
-        details: {
-          outcome: removed ? "revoked" : "not_found",
-          emails: [...targets].toSorted(),
-          ...(!input.email && input.github ? { githubLogin: input.github } : {}),
-        },
+        let removed = false;
+        await this.policy.update((emails) => {
+          assertRevocationCurrent();
+          removed =
+            emails.some((email) => targets.has(email)) ||
+            entries.some((entry) => targets.has(entry.key));
+          return emails.filter((email) => !targets.has(email));
+        }, assertRevocationCurrent);
+        for (const email of targets) {
+          await this.deleteGrant(email, currentStore);
+        }
+        const who = input.profileId
+          ? `profile ${input.profileId} (${targets.size} recorded emails)`
+          : input.grantId
+            ? `invitation ${input.grantId}`
+            : targets.size > 1
+              ? `@${input.github} (${targets.size} recorded emails)`
+              : [...targets].join(", ");
+        return {
+          text: removed
+            ? `Revoked visitor access for ${who}.`
+            : `No visitor grant found for ${who}; nothing to revoke.`,
+          details: {
+            outcome: removed ? "revoked" : "not_found",
+            emails: [...targets].toSorted(),
+            ...(!input.email && input.github ? { githubLogin: input.github } : {}),
+          },
+        };
       };
+      return profile && access
+        ? await access.withProfile(profile.id, [...targets], revokeSelected)
+        : await revokeSelected();
     }, assertCurrent);
   }
 
@@ -485,6 +545,7 @@ export class VisitorAccessService {
       > = entries
         .toSorted((a, b) => a.key.localeCompare(b.key))
         .map(({ value: grant }) => {
+          const profileId = access.profileId(grant.email);
           const missingFromPolicy = !emails.has(grant.email);
           const expired = grant.expiresAt !== null && grant.expiresAt <= Date.now();
           const state = missingFromPolicy
@@ -493,11 +554,15 @@ export class VisitorAccessService {
               ? "EXPIRED; provider cleanup pending"
               : "managed";
           const gatewayAccess = access.describe(grant.email);
+          const githubLogin = access.githubLogin(grant.email);
+          const github = `Verified GitHub: ${githubLogin ? `@${githubLogin}` : "unavailable"}`;
           return {
-            line: `${grant.email} | ${grant.githubLogin ? `@${grant.githubLogin}` : "GitHub unknown"} | invited ${new Date(grant.createdAt).toISOString()} | grant expires ${expiryText(grant.expiresAt)} | ${state} | ${gatewayAccess}`,
+            line: `${grant.email} | ${github}${profileId ? ` | profileId ${profileId}` : ""}${grant.grantId ? ` | grantId ${grant.grantId}` : ""} | invited ${new Date(grant.createdAt).toISOString()} | grant expires ${expiryText(grant.expiresAt)} | ${state} | ${gatewayAccess}`,
             grant: {
               email: grant.email,
-              ...(grant.githubLogin ? { githubLogin: grant.githubLogin } : {}),
+              ...(grant.grantId ? { grantId: grant.grantId } : {}),
+              ...(profileId ? { profileId } : {}),
+              ...(githubLogin ? { githubLogin } : {}),
               invitedAt: new Date(grant.createdAt).toISOString(),
               expiresAt: grant.expiresAt === null ? null : new Date(grant.expiresAt).toISOString(),
               state: missingFromPolicy ? "missing_from_policy" : expired ? "expired" : "managed",

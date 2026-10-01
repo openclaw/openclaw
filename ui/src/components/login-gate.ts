@@ -14,6 +14,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
+import { PollController } from "../lit/poll-controller.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { icons } from "./icons.ts";
 import {
@@ -247,6 +248,7 @@ function renderStatusBody(params: {
 }) {
   const { props, feedback } = params;
   const waitingForPairing = feedback.kind === "pairing-required" && props.reconnectPending;
+  const retrySeconds = Math.max(0, Math.ceil(((props.reconnectAt ?? 0) - Date.now()) / 1_000));
   return html`
     <section
       class="login-gate__body login-gate__failure"
@@ -273,6 +275,19 @@ function renderStatusBody(params: {
           : nothing
       }
       ${renderSteps(feedback)}
+      ${
+        feedback.kind === "busy"
+          ? html`
+              <p class="login-gate__retry" aria-live="off">
+                ${
+                  retrySeconds > 0
+                    ? t("login.failure.busy.countdown", { seconds: String(retrySeconds) })
+                    : t("login.failure.busy.retrying")
+                }
+              </p>
+            `
+          : nothing
+      }
       ${
         waitingForPairing
           ? html`<p class="login-gate__failure-summary">
@@ -394,6 +409,13 @@ class LoginGate extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: LoginGateProps;
   @state() private refreshState: RefreshAction["state"] = "idle";
   private refreshAttempt?: { props: LoginGateProps };
+  private readonly retryCountdown = new PollController(
+    this,
+    1_000,
+    () => this.requestUpdate(),
+    false,
+    "visible",
+  );
 
   private ownsRefresh(attempt: { props: LoginGateProps }): boolean {
     const current = this.props;
@@ -422,6 +444,15 @@ class LoginGate extends OpenClawLightDomContentsElement {
   }
 
   override willUpdate() {
+    if (
+      this.props?.reconnectPending &&
+      this.props.lastErrorCode === "GATEWAY_BUSY" &&
+      (this.props.reconnectAt ?? 0) > Date.now()
+    ) {
+      this.retryCountdown.start();
+    } else {
+      this.retryCountdown.stop();
+    }
     if (this.refreshAttempt && !this.ownsRefresh(this.refreshAttempt)) {
       this.cancelRefresh();
     }

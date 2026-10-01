@@ -16,6 +16,7 @@ import {
   clearDeliveryState,
   ensureCompletionState,
   normalizeSubagentRunState,
+  resetRequesterSettleWakeRetry,
 } from "./subagent-delivery-state.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -115,7 +116,9 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     const remapRequesterSettleWake = (
       wake: RequesterSettleWakeState,
     ): RequesterSettleWakeState => ({
-      ...wake,
+      ...(wake === sourceRequesterSettleWake && wake.pauseNotice
+        ? { ...resetRequesterSettleWakeRetry(wake), pauseNotice: undefined }
+        : wake),
       ...(wake.batchRunIds
         ? {
             batchRunIds: wake.batchRunIds
@@ -164,9 +167,6 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       killReconciliation: undefined,
       killIntent: undefined,
       suppressCompletionDelivery: undefined,
-      delivery: {
-        status: source.expectsCompletionMessage === false ? "not_required" : "pending",
-      },
       spawnMode,
       archiveAtMs: undefined,
       runTimeoutSeconds,

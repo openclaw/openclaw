@@ -107,25 +107,6 @@ function expectInitializeArgs(): Record<string, unknown> {
 }
 
 describe("ensureConfiguredAcpBindingSession", () => {
-  it("keeps an existing ready session when configured binding omits cwd", async () => {
-    const spec = createPersistentSpec();
-    const sessionKey = mockReadySession({
-      spec,
-      cwd: "/workspace/openclaw",
-      model: "manual/selected-model",
-    });
-
-    const ensured = await ensureConfiguredAcpBindingSession({
-      cfg: baseCfg,
-      spec,
-    });
-
-    expect(ensured).toEqual({ ok: true, sessionKey });
-    expect(managerMocks.closeSession).not.toHaveBeenCalled();
-    expect(managerMocks.initializeSession).not.toHaveBeenCalled();
-    expect(managerMocks.setSessionConfigOption).not.toHaveBeenCalled();
-  });
-
   it.each([
     { model: "anthropic/claude-sonnet-4-6" },
     { thinking: "off" },

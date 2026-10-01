@@ -40,7 +40,7 @@ type OllamaDiscoveryContext = {
   };
 };
 
-function readOllamaStringValue(value: unknown): string | undefined {
+export function readOllamaStringValue(value: unknown): string | undefined {
   if (typeof value === "string") {
     return normalizeOptionalString(value);
   }
@@ -135,15 +135,9 @@ export function isLocalOllamaBaseUrl(baseUrl: string | undefined | null): boolea
   if (!baseUrl) {
     return true;
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(baseUrl);
-  } catch {
+  const host = readOllamaHostname(baseUrl);
+  if (host === undefined) {
     return false;
-  }
-  let host = parsed.hostname.toLowerCase();
-  if (host.startsWith("[") && host.endsWith("]")) {
-    host = host.slice(1, -1);
   }
   return (
     LOCAL_OLLAMA_HOSTNAMES.has(host) ||
@@ -159,17 +153,17 @@ function isLoopbackOllamaBaseUrl(baseUrl: string | undefined | null): boolean {
   if (!baseUrl) {
     return true;
   }
-  let parsed: URL;
+  const host = readOllamaHostname(baseUrl);
+  return host !== undefined && (LOOPBACK_OLLAMA_HOSTNAMES.has(host) || isLoopbackHost(host));
+}
+
+function readOllamaHostname(baseUrl: string): string | undefined {
   try {
-    parsed = new URL(baseUrl);
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
   } catch {
-    return false;
+    return undefined;
   }
-  let host = parsed.hostname.toLowerCase();
-  if (host.startsWith("[") && host.endsWith("]")) {
-    host = host.slice(1, -1);
-  }
-  return LOOPBACK_OLLAMA_HOSTNAMES.has(host) || isLoopbackHost(host);
 }
 
 function hasExplicitRemoteOllamaApiProvider(
@@ -222,29 +216,16 @@ function hasMeaningfulExplicitOllamaConfig(
   if (baseUrl) {
     return resolveOllamaApiBase(baseUrl) !== OLLAMA_DEFAULT_BASE_URL;
   }
-  if (readOllamaStringValue(providerConfig.apiKey)) {
-    return true;
-  }
-  if (providerConfig.auth) {
-    return true;
-  }
-  if (typeof providerConfig.authHeader === "boolean") {
-    return true;
-  }
-  if (
-    providerConfig.headers &&
-    typeof providerConfig.headers === "object" &&
-    Object.keys(providerConfig.headers).length > 0
-  ) {
-    return true;
-  }
-  if (providerConfig.request) {
-    return true;
-  }
-  if (typeof providerConfig.injectNumCtxForOpenAICompat === "boolean") {
-    return true;
-  }
-  return false;
+  return Boolean(
+    readOllamaStringValue(providerConfig.apiKey) ||
+    providerConfig.auth ||
+    typeof providerConfig.authHeader === "boolean" ||
+    (providerConfig.headers &&
+      typeof providerConfig.headers === "object" &&
+      Object.keys(providerConfig.headers).length > 0) ||
+    providerConfig.request ||
+    typeof providerConfig.injectNumCtxForOpenAICompat === "boolean",
+  );
 }
 
 export async function resolveOllamaDiscoveryResult(params: {

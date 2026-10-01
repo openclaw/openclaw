@@ -139,6 +139,9 @@ if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
     "preserves command-scoped safe.directory through cold provisioning (%s transport)",
     (transport) => {
       const f = coldFixture(false);
+      // Local upload-pack drops client command-scope config; trust only its bare remote.
+      f.env.GIT_CONFIG_GLOBAL = join(f.root, "gitconfig");
+      f.git(f.canonical, "config", "--global", "--add", "safe.directory", f.origin);
       // Git's ownership fixture requires actual command-scope authorization,
       // without changing filesystem ownership or global configuration.
       f.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = "1";

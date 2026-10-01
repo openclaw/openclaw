@@ -82,9 +82,6 @@ export type LegacySessionStoreSaveOptions = {
 type LegacySessionStoreUpdateOptions<T> = LegacySessionStoreSaveOptions & {
   reentrant?: boolean;
   skipSaveWhenResult?: (result: T) => boolean;
-  resolveSingleEntryPersistence?: (
-    result: T,
-  ) => { sessionKey: string; entry: SessionEntry } | null | undefined;
 };
 
 const log = createSubsystemLogger("sessions/legacy-importer");

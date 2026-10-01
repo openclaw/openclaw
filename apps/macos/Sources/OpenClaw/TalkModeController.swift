@@ -72,12 +72,10 @@ final class TalkModeController {
         guard !state.isPreview, state.talkPhaseSoundsEnabled else { return }
         let soundName: String? = switch phase {
         case .thinking:
-            "Tink" // 생각 중: 짧고 가벼운 소리
+            "Tink"
         case .speaking:
-            "Pop" // 대답 시작: 톡 소리
+            "Pop"
         case .listening:
-            // 대답 중단(speaking→listening): 부드러운 종료음
-            // 듣기 시작(thinking→listening 등): 잠수함 소리
             previousPhase == .speaking ? "Bottle" : "Submarine"
         case .idle:
             nil

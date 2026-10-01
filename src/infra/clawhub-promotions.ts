@@ -39,8 +39,6 @@ export type ClawHubPromotion = {
   launchPageUrl?: string;
 };
 
-type ClawHubPromotionDetails = Omit<ClawHubPromotion, "status" | "active">;
-
 // Shell-safe contract for provider/model refs: they are echoed into
 // copy-paste CLI commands, so whitespace and shell metacharacters must fail
 // parsing rather than reach a terminal.
@@ -74,10 +72,11 @@ const CLAWHUB_PROMOTION_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 const CLAWHUB_PROMOTION_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9._@/-]*$/;
 
-function parseClawHubPromotionCore(
-  value: Record<string, unknown>,
-  context: string,
-): ClawHubPromotionDetails {
+function parseClawHubPromotion(value: unknown): ClawHubPromotion {
+  const context = "promotion";
+  if (!isJsonObject(value)) {
+    throw new Error(`Malformed ClawHub ${context}: expected an object.`);
+  }
   const modelsRaw = value.models;
   if (!Array.isArray(modelsRaw) || modelsRaw.length === 0) {
     throw new Error(`Malformed ClawHub ${context}: expected models to be a non-empty array.`);
@@ -91,7 +90,7 @@ function parseClawHubPromotionCore(
   if (endsAt <= startsAt) {
     throw new Error(`Malformed ClawHub ${context}: promotion window must end after it starts.`);
   }
-  const promotion: ClawHubPromotionDetails = {
+  const promotion: Omit<ClawHubPromotion, "status" | "active"> = {
     slug,
     title: readRequiredClawHubStringField(value, "title", context),
     blurb: readRequiredClawHubStringField(value, "blurb", context),
@@ -132,16 +131,8 @@ function parseClawHubPromotionCore(
     }
     promotion.pluginNames = pluginNames;
   }
-  return promotion;
-}
-
-function parseClawHubPromotion(value: unknown): ClawHubPromotion {
-  const context = "promotion";
-  if (!isJsonObject(value)) {
-    throw new Error(`Malformed ClawHub ${context}: expected an object.`);
-  }
   return {
-    ...parseClawHubPromotionCore(value, context),
+    ...promotion,
     status: readRequiredClawHubStringField(value, "status", context),
     active: readRequiredClawHubBooleanField(value, "active", context),
   };

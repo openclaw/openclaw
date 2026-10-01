@@ -227,38 +227,27 @@ const formatDateParts = (year: number, monthIndex: number, day: number): string 
   `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 
 const parseDays = (raw: unknown): number | undefined => {
-  const fromFinite = (n: number): number | undefined => {
-    if (!Number.isFinite(n)) {
-      return undefined;
-    }
-    return Math.min(Math.floor(n), MAX_USAGE_DAYS);
-  };
-  if (typeof raw === "number") {
-    return fromFinite(raw);
-  }
-  if (typeof raw === "string" && raw.trim() !== "") {
-    return fromFinite(Number(raw));
-  }
-  return undefined;
+  const value = typeof raw === "string" && raw.trim() !== "" ? Number(raw) : raw;
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(Math.floor(value), MAX_USAGE_DAYS)
+    : undefined;
 };
 
 const resolveRangeDays = (raw: unknown): number | "all" | undefined => {
-  if (raw === "all") {
-    return "all";
+  switch (raw) {
+    case "all":
+      return "all";
+    case "7d":
+      return 7;
+    case "30d":
+      return 30;
+    case "90d":
+      return 90;
+    case "1y":
+      return 365;
+    default:
+      return undefined;
   }
-  if (raw === "7d") {
-    return 7;
-  }
-  if (raw === "30d") {
-    return 30;
-  }
-  if (raw === "90d") {
-    return 90;
-  }
-  if (raw === "1y") {
-    return 365;
-  }
-  return undefined;
 };
 
 /**

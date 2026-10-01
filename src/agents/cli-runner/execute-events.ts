@@ -4,6 +4,7 @@ import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { markToolExecutionLivenessDiagnosticEvent } from "../../infra/diagnostic-tool-execution-liveness.js";
 import { projectProgressCardChannelUpdate } from "../../session-cards/progress-card-channel-summary.js";
 import { isAgentPlanProgressToolName } from "../../session-cards/progress-card-input.js";
+import { projectAgentActivityItem } from "../agent-activity-presentation.js";
 import type {
   CliCompactionDelta,
   CliStreamingDelta,
@@ -44,6 +45,8 @@ export function createCliEventHandlers(params: {
     }
   };
   let observedCliActivity = false;
+  let compactionActive = false;
+  const compactionChangeListeners = new Set<() => void>();
   let signaledToolExecutionStarted = false;
   let signaledAssistantOutputStarted = false;
   let commentaryCounter = 0;
@@ -55,20 +58,29 @@ export function createCliEventHandlers(params: {
   // progress event would otherwise describe the output instead of the command.
   const toolArgsByCallId = new Map<
     string,
-    { args: Record<string, unknown>; tracked: boolean; startedAt: number }
+    {
+      args: Record<string, unknown>;
+      kind: CliToolUseStartDelta["kind"];
+      tracked: boolean;
+      startedAt: number;
+    }
   >();
   const emitToolEvent = (
     data: Parameters<typeof projectAgentToolActivity>[0] & {
       result?: unknown;
       resultContentSource?: "network";
     },
-    execution?: { args: unknown },
+    execution?: { args: unknown; requestedArgs?: unknown },
   ) => {
-    const item = projectAgentToolActivity({
+    let item = projectAgentToolActivity({
       ...data,
       name: stripOpenClawMcpToolPrefix(data.name),
       args: execution ? execution.args : data.args,
     });
+    if (execution?.args === undefined && execution?.requestedArgs !== undefined) {
+      // Requested arguments can identify a quiet poll without proving command execution.
+      item = projectAgentActivityItem(item, { args: execution.requestedArgs });
+    }
     const activity = { runId: runParams.runId, stream: "item", data: item };
     if (data.phase === "start") {
       emitAgentEvent(activity);
@@ -107,7 +119,12 @@ export function createCliEventHandlers(params: {
   const emitToolUseStart = (event: CliToolUseStartDelta, tracked: boolean) => {
     observedCliActivity = true;
     // Empty arguments are meaningful: progress-card calls use {} to clear the card.
-    toolArgsByCallId.set(event.toolCallId, { args: event.args, tracked, startedAt: Date.now() });
+    toolArgsByCallId.set(event.toolCallId, {
+      args: event.args,
+      kind: event.kind,
+      tracked,
+      startedAt: Date.now(),
+    });
     recordToolSummary(event, false);
     if (!signaledToolExecutionStarted) {
       signaledToolExecutionStarted = true;
@@ -202,7 +219,15 @@ export function createCliEventHandlers(params: {
           ...(tracked && startedArgs ? { args: sanitizeToolArgs(startedArgs) } : {}),
           ...(resultContentSource ? { resultContentSource } : {}),
         },
-        { args: tracked ? executedArgs : startedArgs },
+        // An ambiguous MCP loopback has no authoritative executed args; native tools do.
+        {
+          args:
+            executedArgs ??
+            (startedCall?.kind === "tool_use" && !event.name.startsWith("mcp_")
+              ? startedArgs
+              : undefined),
+          requestedArgs: startedArgs,
+        },
       );
     }
   };
@@ -327,6 +352,16 @@ export function createCliEventHandlers(params: {
   };
   const emitCliCompaction = (event: CliCompactionDelta) => {
     observedCliActivity = true;
+    // Native compaction is silent but busy: the no-output watchdog reads this
+    // between phase boundaries, so an end event must always clear the flag,
+    // even for a failed compaction (`completed: false`).
+    const previous = compactionActive;
+    compactionActive = event.phase === "start";
+    if (compactionActive !== previous) {
+      for (const listener of compactionChangeListeners) {
+        listener();
+      }
+    }
     emitLiveEvent("compaction", () => ({ ...event, backend: context.backendResolved.id }));
   };
   const finalizeParsedTools = () => {
@@ -423,6 +458,11 @@ export function createCliEventHandlers(params: {
     emitCliThinkingDelta,
     emitCliThinkingProgress,
     hasObservedCliActivity: () => observedCliActivity,
+    hasActiveCompaction: () => compactionActive,
+    onCompactionActiveChange: (listener: () => void) => {
+      compactionChangeListeners.add(listener);
+      return () => compactionChangeListeners.delete(listener);
+    },
     activeParsedToolCount: () => activeParsedTools.size,
     isActiveForegroundAgentTool: (toolCallId: string) => {
       const tool = activeParsedTools.get(toolCallId);

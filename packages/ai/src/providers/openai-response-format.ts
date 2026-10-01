@@ -47,13 +47,11 @@ export function resolveOpenAICompletionsResponseFormat(
   if (!responseFormat) {
     return undefined;
   }
-  if (responseFormat.type === "json_object") {
-    return responseFormat;
-  }
-  if (responseFormat.type === "text") {
-    return responseFormat;
-  }
-  if (responseFormat.type === "json_schema" && isRecord(responseFormat.json_schema)) {
+  if (
+    responseFormat.type === "json_object" ||
+    responseFormat.type === "text" ||
+    (responseFormat.type === "json_schema" && isRecord(responseFormat.json_schema))
+  ) {
     return responseFormat;
   }
   if (!supportsJsonSchemaResponseFormat) {

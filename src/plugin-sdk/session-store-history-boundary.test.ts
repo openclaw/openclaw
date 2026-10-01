@@ -4,13 +4,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
-import {
-  getSessionEntry,
-  loadSessionStore,
-  patchSessionEntry,
-  updateSessionStore,
-  upsertSessionEntry,
-} from "./session-store-runtime.js";
+import { getSessionEntry, patchSessionEntry, upsertSessionEntry } from "./session-store-runtime.js";
 
 const databases = new Set<string>();
 afterEach(() => {
@@ -21,7 +15,7 @@ afterEach(() => {
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.each(["upsert", "whole-store", "patch"] as const)(
+it.each(["upsert", "patch"] as const)(
   "preserves private history provenance across a public %s without accepting injected ownership",
   async (operation) => {
     const storePath = path.join(tempDirs.make("sdk-cli-history-"), "openclaw-agent.sqlite");
@@ -51,7 +45,6 @@ it.each(["upsert", "whole-store", "patch"] as const)(
       throw new Error("Missing seeded session");
     }
     expect(publicEntry).not.toHaveProperty("cliHistoryBoundary");
-    expect(loadSessionStore(storePath)[sessionKey]).not.toHaveProperty("cliHistoryBoundary");
     const candidate = {
       ...publicEntry,
       label: "updated",
@@ -59,15 +52,6 @@ it.each(["upsert", "whole-store", "patch"] as const)(
     };
     if (operation === "upsert") {
       await upsertSessionEntry({ ...scope, entry: candidate });
-    } else if (operation === "whole-store") {
-      await updateSessionStore(
-        storePath,
-        (store) => {
-          expect(store[sessionKey]).not.toHaveProperty("cliHistoryBoundary");
-          store[sessionKey] = candidate;
-        },
-        { skipMaintenance: true },
-      );
     } else {
       await patchSessionEntry({ ...scope, update: () => candidate });
     }

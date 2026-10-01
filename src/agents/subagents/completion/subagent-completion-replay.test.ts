@@ -192,12 +192,16 @@ describe("completed requester delivery replay fence", () => {
     const release = createDeferred();
     const reported = createDeferred();
     const runWake = driver.controller.runRequesterSettleWake;
-    driver.controller.runRequesterSettleWake = (entry, run) =>
-      runWake(entry, async () => {
-        admitted.resolve(undefined);
-        await release.promise;
-        return run();
-      });
+    driver.controller.runRequesterSettleWake = (entry, run, isCurrent) =>
+      runWake(
+        entry,
+        async () => {
+          admitted.resolve(undefined);
+          await release.promise;
+          return run();
+        },
+        isCurrent,
+      );
     driver.controller.options.runSubagentAnnounceFlow = vi.fn<
       typeof driver.controller.options.runSubagentAnnounceFlow
     >(async (params) => {

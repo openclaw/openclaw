@@ -19,7 +19,6 @@ import {
   isDynamicToolTerminalDiagnosticEvent,
   isMatchingDynamicToolTerminalDiagnostic,
   resolveDynamicToolCallTimeoutMs,
-  shouldBlockTerminalReleaseForNonTerminalDynamicToolResult,
   toCodexDynamicToolProgressResponse,
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
@@ -377,7 +376,7 @@ export function createCodexAttemptServerRequestController(
             response,
             durationMs: toolDurationMs,
           });
-        } else if (!shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(response)) {
+        } else if (response.asyncStarted === true) {
           scheduleTerminalDynamicToolReleaseCheck();
         } else {
           state.currentTurnHadNonTerminalDynamicToolResult = true;

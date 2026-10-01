@@ -64,6 +64,40 @@ private actor SidebarPreviewCache: OpenClawChatTranscriptCache {
 
 @MainActor
 struct ChatSessionSidebarPreviewsTests {
+    #if os(macOS)
+    @Test func `sidebar server previews win while palette cache consumers keep their existing default`() async throws {
+        let suite = "ChatSessionSidebarPreviewsTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        let model = self.model(defaults: defaults)
+        defer {
+            model.detachTransport()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        let rows = try JSONDecoder().decode([OpenClawChatSessionEntry].self, from: Data(#"""
+        [{"key":"agent:research:server","lastMessagePreview":"  Server answer  "},
+         {"key":"agent:research:cache","lastMessagePreview":"  "}]
+        """#.utf8))
+        let request = ChatSessionSidebarPreviews.Request(viewModel: model, sessions: rows)
+        let cache = SidebarPreviewCache(text: "Older cached answer")
+        let store = ChatSessionSidebarPreviews()
+        await store.refresh(request, cache: cache)
+        var fallbackReads = 0
+        func presentation(_ row: OpenClawChatSessionEntry) -> ChatSessionSidebarRowFacts {
+            ChatSessionSidebarRowFacts(
+                node: ChatSessionSidebarModel.tree(from: [row])[0], isChild: false, attention: nil,
+                showPreview: true, preview: {
+                    fallbackReads += 1
+                    return store.text(for: row, in: request)
+                }(), now: Date(timeIntervalSince1970: 2))
+        }
+        #expect(presentation(rows[0]).subtitle == "Server answer")
+        #expect(fallbackReads == 0)
+        #expect(presentation(rows[1]).subtitle == "Older cached answer")
+        #expect(fallbackReads == 1)
+        #expect(store.text(for: rows[0], in: request) == "Older cached answer")
+    }
+    #endif
+
     @Test(arguments: [false, true])
     func `changing Gateway owners never reuses an identical session preview`(oldLoadPending: Bool) async throws {
         let suite = "ChatSessionSidebarPreviewsTests.\(UUID().uuidString)"

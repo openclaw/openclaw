@@ -29,6 +29,7 @@ import {
 } from "../agents/run-termination.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js";
+import type * as AgentWorkspaceModule from "../agents/workspace.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
@@ -86,6 +87,7 @@ import {
   writeSessionStoreSeed,
 } from "./agent-session.test-support.js";
 import { agentCommand, agentCommandFromIngress } from "./agent.js";
+import { registerAgentReplyPolicyTests } from "./agent.reply-policy.test-support.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const configIoMocks = vi.hoisted(() => ({
@@ -224,11 +226,7 @@ vi.mock("../agents/command/delivery.runtime.js", () => {
       async (params: {
         cfg: OpenClawConfig;
         deps: {
-          sendMessageTelegram?: (
-            to: string,
-            text: string,
-            opts: Record<string, unknown>,
-          ) => Promise<unknown>;
+          telegram?: (to: string, text: string, opts: Record<string, unknown>) => Promise<unknown>;
         };
         runtime: RuntimeEnv;
         opts: {
@@ -248,7 +246,7 @@ vi.mock("../agents/command/delivery.runtime.js", () => {
         }
         if (params.opts.deliver && params.opts.channel === "telegram" && params.opts.to) {
           for (const payload of payloads) {
-            await params.deps.sendMessageTelegram?.(params.opts.to, payload.text ?? "", {
+            await params.deps.telegram?.(params.opts.to, payload.text ?? "", {
               ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
               accountId: undefined,
               verbose: false,
@@ -395,7 +393,6 @@ function expectLastRunProviderModel(provider: string, model: string): void {
   expect(callArgs?.provider).toBe(provider);
   expect(callArgs?.model).toBe(model);
 }
-
 async function runAgentWithSessionKey(sessionKey: string): Promise<void> {
   await agentCommand({ message: "hi", sessionKey }, runtime);
 }
@@ -780,6 +777,45 @@ describe("agentCommand", () => {
         expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
           expect.objectContaining({ watch }),
         );
+      });
+    },
+  );
+
+  it.each([undefined, "agent:main:dashboard:parent"])(
+    "seeds only the configured workspace when a project run is spawned by %s",
+    async (spawnedBy) => {
+      await withTempHome(async (home) => {
+        const project = path.join(home, "project");
+        const workspace = path.join(home, "openclaw");
+        fs.mkdirSync(project);
+        fs.writeFileSync(path.join(project, "AGENTS.md"), "# Project instructions\n");
+        mockConfig(home, path.join(home, "sessions.json"));
+        const actualWorkspace =
+          await vi.importActual<typeof AgentWorkspaceModule>("../agents/workspace.js");
+        vi.mocked(ensureAgentWorkspace).mockImplementationOnce((params) =>
+          actualWorkspace.ensureAgentWorkspace(params),
+        );
+
+        const prepared = await prepareAgentCommandExecution(
+          {
+            message: "inspect this project",
+            agentId: "main",
+            sessionId: "project-bootstrap",
+            workspaceDir: project,
+            cwd: project,
+            spawnedBy,
+          },
+          runtime,
+        );
+
+        expect(prepared.workspaceDir).toBe(project);
+        expect(fs.readdirSync(project)).toEqual(["AGENTS.md"]);
+        expect(fs.readFileSync(path.join(project, "AGENTS.md"), "utf8")).toBe(
+          "# Project instructions\n",
+        );
+        for (const name of ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"]) {
+          expect(fs.existsSync(path.join(workspace, name)), name).toBe(true);
+        }
       });
     },
   );
@@ -1648,7 +1684,7 @@ describe("agentCommand", () => {
           sessionEffects: "internal",
         },
         runtime,
-        { sendMessageTelegram },
+        { telegram: sendMessageTelegram },
       );
 
       expect(sendMessageTelegram).toHaveBeenCalledWith("telegram:+1222", "assistant-visible", {
@@ -1859,60 +1895,7 @@ describe("agentCommand", () => {
     });
   });
 
-  it("keeps synthetic direct-DM delivery mode out of existing CLI binding facts", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      const sessionKey = "agent:main:discord:direct:requester";
-      await writeSessionStoreSeed(store, {
-        [sessionKey]: {
-          sessionId: "requester-session",
-          updatedAt: Date.now(),
-          chatType: "direct",
-          modelProvider: "anthropic",
-          model: "claude-opus-4-6",
-          cliSessionBindings: {
-            "claude-cli": {
-              sessionId: "native-claude-session",
-              messageToolPolicyHash: "automatic-policy-hash",
-            },
-          },
-          delivery: normalizeSessionDeliveryState({
-            context: { channel: "discord", to: "user:requester" },
-            origin: { provider: "discord", chatType: "direct", to: "user:requester" },
-          }),
-        },
-      });
-      const cfg = mockConfig(home, store, {
-        models: {
-          "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
-        },
-      });
-      cfg.messages = { visibleReplies: "automatic" };
-
-      const prepared = await prepareAgentCommandExecution(
-        {
-          message: "child completed",
-          sessionKey,
-          sourceReplyDeliveryMode: "message_tool_only",
-          inputProvenance: {
-            kind: "inter_session",
-            sourceSessionKey: "agent:main:subagent:child",
-            sourceTool: "subagent_announce",
-          },
-        },
-        runtime,
-      );
-
-      expect(prepared.opts.sourceReplyDeliveryMode).toBe("message_tool_only");
-      expect(prepared.opts.cliSessionBindingFacts).toEqual({
-        sourceReplyDeliveryMode: "automatic",
-      });
-      expect(prepared.sessionEntry?.cliSessionBindings?.["claude-cli"]).toMatchObject({
-        sessionId: "native-claude-session",
-        messageToolPolicyHash: "automatic-policy-hash",
-      });
-    });
-  });
+  registerAgentReplyPolicyTests({ withTempHome, mockConfig, runtime });
 
   it("passes resolved session-id resume files to embedded runs", async () => {
     await withTempHome(async (home) => {
@@ -2279,7 +2262,6 @@ describe("agentCommand", () => {
         { id: "claude-opus-4-6", name: "Opus", provider: "anthropic" },
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
       ]);
-
       await runAgentWithSessionKey(sessionKey);
       expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
       expectLastRunProviderModel("anthropic", "claude-opus-4-6");
@@ -2680,7 +2662,6 @@ describe("agentCommand", () => {
           }),
         },
       ]);
-
       await agentCommand(
         { message: "hi", to: sessionKey, deliver: true, channel: "telegram" },
         runtime,

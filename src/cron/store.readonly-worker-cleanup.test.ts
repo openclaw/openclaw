@@ -1,4 +1,3 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -13,6 +12,7 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-d
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { loadCronJobsStoreWithConfigJobsReadOnly } from "./store.js";
+import { installCronSnapshotFaults } from "./store.readonly-worker-faults.test-support.js";
 
 it.each(["worker", "snapshot"] as const)(
   "retries failed %s cleanup through the canonical owner",
@@ -27,13 +27,10 @@ it.each(["worker", "snapshot"] as const)(
         db.close();
         const failure = new Error("controlled worker retirement failure");
         const terminate = vi.spyOn(Worker.prototype, "terminate");
-        const remove = vi.spyOn(fsSync.promises, "rm");
+        const fault =
+          failureStage === "snapshot" ? await installCronSnapshotFaults(state) : undefined;
         if (failureStage === "worker") {
           terminate.mockRejectedValueOnce(failure);
-        } else {
-          remove.mockRejectedValueOnce(
-            Object.assign(new Error("controlled snapshot removal failure"), { code: "EACCES" }),
-          );
         }
         const pools = new Set<WorkerTaskPool<unknown, unknown>>();
         // oxlint-disable-next-line typescript/unbound-method -- call restores the intercepted pool receiver below.
@@ -69,6 +66,9 @@ it.each(["worker", "snapshot"] as const)(
           } else {
             await expect(reading).rejects.toThrow("Cron read-only state snapshot cleanup failed.");
           }
+          if (fault) {
+            expect(fault.count("staging-rm")).toBeGreaterThan(0);
+          }
           expect(directories.length).toBeGreaterThan(0);
           if (failureStage === "worker") {
             await snapshots.cleanupSnapshotOperations();
@@ -79,6 +79,7 @@ it.each(["worker", "snapshot"] as const)(
           }
           expect(terminate).toHaveBeenCalledTimes(1);
 
+          fault?.allowRemoval();
           await closeOpenClawStateDatabaseByPathAsync(databasePath);
           for (const retained of directories) {
             await expect(fs.stat(retained)).rejects.toMatchObject({ code: "ENOENT" });
@@ -91,14 +92,21 @@ it.each(["worker", "snapshot"] as const)(
           expect(next.store.jobs).toEqual([]);
         } finally {
           terminate.mockRestore();
-          remove.mockRestore();
+          fault?.allowRemoval();
           closeSpy.mockRestore();
-          await Promise.all([...pools].map((pool) => pool.close()));
-          for (const release of readers) {
-            release();
+          try {
+            await Promise.all([...pools].map((pool) => pool.close()));
+          } finally {
+            for (const release of readers) {
+              release();
+            }
+            try {
+              await snapshots.cleanupSnapshotOperations();
+            } finally {
+              retainSpy.mockRestore();
+              fault?.restore();
+            }
           }
-          await snapshots.cleanupSnapshotOperations();
-          retainSpy.mockRestore();
         }
       },
     );

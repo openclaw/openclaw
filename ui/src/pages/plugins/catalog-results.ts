@@ -303,12 +303,10 @@ function renderSection(params: {
   title: string;
   items: readonly PluginDiscoveryEntry[];
   loading?: boolean;
-  error?: string | null;
-  onRetry?: () => void;
   onViewAll?: () => void;
   props: PluginCatalogResultsProps;
 }): TemplateResult | typeof nothing {
-  if (!params.loading && !params.error && params.items.length === 0) {
+  if (!params.loading && params.items.length === 0) {
     return nothing;
   }
   return html`<section
@@ -332,15 +330,13 @@ function renderSection(params: {
     ${
       params.loading
         ? renderCatalogGridSkeleton({ cards: SECTION_SIZE })
-        : params.error && params.onRetry
-          ? renderError(params.error, params.onRetry)
-          : html`<div class="plugin-catalog-grid">
-              ${repeat(
-                params.onViewAll ? params.items.slice(0, SECTION_SIZE) : params.items,
-                (plugin) => plugin.id,
-                (plugin) => renderCatalogCard(plugin, params.props),
-              )}
-            </div>`
+        : html`<div class="plugin-catalog-grid">
+            ${repeat(
+              params.onViewAll ? params.items.slice(0, SECTION_SIZE) : params.items,
+              (plugin) => plugin.id,
+              (plugin) => renderCatalogCard(plugin, params.props),
+            )}
+          </div>`
     }
   </section>`;
 }

@@ -300,6 +300,29 @@ export function resolveNodeRuntimeInfo(
   return resolveRuntimeInfo(nodePath, "node", execFileAsync, env, timeoutMs);
 }
 
+/** Probe the recorded executable without substituting a discovered runtime. */
+export async function resolveRecordedDaemonRuntime(
+  runtimePath: string | undefined,
+  env: Record<string, string | undefined>,
+): Promise<(RuntimeInfo & { runtime: "node" | "bun"; path: string }) | undefined> {
+  if (!runtimePath) {
+    return undefined;
+  }
+  const runtime = isBunRuntime(runtimePath)
+    ? "bun"
+    : isNodeRuntime(runtimePath)
+      ? "node"
+      : undefined;
+  if (!runtime) {
+    return undefined;
+  }
+  const info =
+    runtime === "bun"
+      ? await resolveBunRuntimeInfo(runtimePath, undefined, env)
+      : await resolveNodeRuntimeInfo(runtimePath, env);
+  return { ...info, runtime, path: runtimePath };
+}
+
 async function isVersionManagedRealNodePath(
   nodePath: string,
   platform: NodeJS.Platform,

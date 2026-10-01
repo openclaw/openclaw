@@ -1,4 +1,3 @@
-// Coordinates gateway restart requests across supported supervisors.
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { abortPendingChannelReloads } from "../gateway/server-reload-generation.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -92,7 +91,8 @@ function clearPendingScheduledRestart(): void {
   pendingRestartPreparing = false;
 }
 
-function clearPendingRestartSignalAdmission(): boolean {
+/** Releases a signal fence when the run loop rejects or fails to handle the signal. */
+export function rollbackGatewayRestartSignalAdmission(): boolean {
   const lease = pendingRestartSignalAdmission;
   pendingRestartSignalAdmission = null;
   if (lease?.rollback()) {
@@ -102,11 +102,6 @@ function clearPendingRestartSignalAdmission(): boolean {
   // If that still happens, reopen the reversible fence directly so refused or
   // abandoned signals cannot wedge process admission forever.
   return rollbackGatewayRestartSignalFence();
-}
-
-/** Releases a signal fence when the run loop rejects or fails to handle the signal. */
-export function rollbackGatewayRestartSignalAdmission(): boolean {
-  return clearPendingRestartSignalAdmission();
 }
 
 function armPendingRestartTimer(requestedDueAt: number, nowMs: number): void {
@@ -149,7 +144,7 @@ function clearActiveDeferralPolls(): void {
   activeDeferralPolls.clear();
 }
 
-function clearGatewayRestartTransientState(): void {
+export function resetGatewayRestartStateForInProcessRestart(): void {
   restartTransientGeneration += 1;
   restartAuthorizedCount = 0;
   restartAuthorizedUntil = 0;
@@ -161,11 +156,7 @@ function clearGatewayRestartTransientState(): void {
   lastRestartEmittedAt = null;
   clearActiveDeferralPolls();
   clearPendingScheduledRestart();
-  clearPendingRestartSignalAdmission();
-}
-
-export function resetGatewayRestartStateForInProcessRestart(): void {
-  clearGatewayRestartTransientState();
+  rollbackGatewayRestartSignalAdmission();
   // Fence the retiring lifecycle before a successor can create its reload generation.
   abortPendingChannelReloads();
 }
@@ -248,7 +239,7 @@ function emitGatewayRestartWithSignalAdmission(
   const hadUnconsumedRestartSignal = hasUnconsumedRestartSignal();
   const emitted = emitGatewayRestart(reasonOverride, intent);
   if (!emitted && !hadUnconsumedRestartSignal) {
-    clearPendingRestartSignalAdmission();
+    rollbackGatewayRestartSignalAdmission();
   }
   return emitted;
 }
@@ -332,7 +323,7 @@ export function markGatewayRestartHandled(): void {
   // Accepted handlers first promote the fence to one-way restart drain, so
   // this rollback becomes a no-op there. Rejected or test-only handlers must
   // reopen admission or the next restart/root would wait forever.
-  clearPendingRestartSignalAdmission();
+  rollbackGatewayRestartSignalAdmission();
 }
 
 function rollBackGatewayRestartEmission(): false {

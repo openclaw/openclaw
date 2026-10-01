@@ -646,7 +646,7 @@ export function splitOcPathSlots(...slots: readonly (string | undefined)[]): str
 }
 
 /** True iff `seg` is `"..."`. */
-export function isQuotedSeg(seg: string): boolean {
+function isQuotedSeg(seg: string): boolean {
   return seg.length >= 2 && seg.startsWith('"') && seg.endsWith('"');
 }
 

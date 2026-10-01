@@ -236,7 +236,7 @@ extension OpenClawChatViewModel {
 
     func composerSkillEnabled(_ skill: OpenClawChatComposerSkill) -> Bool {
         guard skill.baseEnabled, !skill.missingDependencies, !skill.blocked else { return false }
-        return self.composerToolOverrides.skills[skill.key] ?? (skill.baseEnabled && !skill.agentFiltered)
+        return self.composerToolOverrides.skills[skill.key] ?? !skill.agentFiltered
     }
 
     func composerConnectorEnabled(_ connector: OpenClawChatComposerConnector) -> Bool {
@@ -423,6 +423,14 @@ extension OpenClawChatViewModel {
         let requestID = self.reserveSessionSettingsRequest(for: target)
         self.enqueueSessionSettingsPatch(requestID: requestID, target: target) { [weak self] routeLease in
             guard let self else { return }
+            @MainActor
+            func isCurrentMutation() -> Bool {
+                self.composerCapabilityState.mutationGeneration == mutationGeneration &&
+                    self.composerCapabilityOwnerID == ownerID &&
+                    self.composerCapabilitySessionID == expectedSessionID &&
+                    target == self.currentModelPatchTarget() &&
+                    self.sessionKey == originalSessionKey
+            }
             defer {
                 if self.composerCapabilityState.mutationGeneration == mutationGeneration {
                     self.composerCapabilityState.isMutating = false
@@ -432,22 +440,12 @@ extension OpenClawChatViewModel {
                 guard let routeLease else {
                     throw OpenClawChatTransportSendError.notDispatched
                 }
-                guard self.composerCapabilityState.mutationGeneration == mutationGeneration,
-                      self.composerCapabilityOwnerID == ownerID,
-                      self.composerCapabilitySessionID == expectedSessionID,
-                      target == self.currentModelPatchTarget(),
-                      self.sessionKey == originalSessionKey
-                else { return }
+                guard isCurrentMutation() else { return }
                 if let outbox = self.outbox, let originalOutboxScope {
                     let parked = await outbox.parkQueuedCommands(
                         in: originalOutboxScope,
                         lastError: OpenClawChatSQLiteTranscriptCache.outboxSettingsChangedError)
-                    guard self.composerCapabilityState.mutationGeneration == mutationGeneration,
-                          self.composerCapabilityOwnerID == ownerID,
-                          self.composerCapabilitySessionID == expectedSessionID,
-                          target == self.currentModelPatchTarget(),
-                          self.sessionKey == originalSessionKey
-                    else { return }
+                    guard isCurrentMutation() else { return }
                     guard parked else {
                         throw NSError(
                             domain: "OpenClawChatOutbox",
@@ -462,12 +460,7 @@ extension OpenClawChatViewModel {
                     sessionKey: target.canonicalSessionKey,
                     agentID: target.agentID,
                     patch: scopedPatch)
-                guard self.composerCapabilityState.mutationGeneration == mutationGeneration,
-                      self.composerCapabilityOwnerID == ownerID,
-                      self.composerCapabilitySessionID == expectedSessionID,
-                      target == self.currentModelPatchTarget(),
-                      self.sessionKey == originalSessionKey
-                else { return }
+                guard isCurrentMutation() else { return }
                 guard let index = self.sessionIndexForModelState(sessionKey: originalSessionKey) else { return }
                 if let permissionMode = patch.permissionMode {
                     self.sessions[index].permissionMode = result?.permissionMode ?? permissionMode
@@ -481,24 +474,14 @@ extension OpenClawChatViewModel {
                 if patch.toolOverrides != nil {
                     await self.loadComposerCapabilities(force: true)
                 }
-                guard self.composerCapabilityState.mutationGeneration == mutationGeneration,
-                      self.composerCapabilityOwnerID == ownerID,
-                      self.composerCapabilitySessionID == expectedSessionID,
-                      target == self.currentModelPatchTarget(),
-                      self.sessionKey == originalSessionKey
-                else { return }
+                guard isCurrentMutation() else { return }
                 self.composerCapabilityState.notice = notice
             } catch {
-                let updateVisibleState = self.composerCapabilityState.mutationGeneration == mutationGeneration &&
-                    self.composerCapabilityOwnerID == ownerID &&
-                    self.composerCapabilitySessionID == expectedSessionID &&
-                    target == self.currentModelPatchTarget() &&
-                    self.sessionKey == originalSessionKey
                 await self.recordCapabilityPatchFailure(
                     error,
                     target: target,
                     outboxScope: originalOutboxScope,
-                    updateVisibleState: updateVisibleState)
+                    updateVisibleState: isCurrentMutation())
             }
         }
     }

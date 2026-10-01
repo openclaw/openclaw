@@ -105,7 +105,8 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
 }): Promise<AuthenticatedHttpUserProfile> {
   const readAdmissionPolicy = (cfg: OpenClawConfig) => {
     return {
-      auth: cfg.gateway?.auth,
+      // HTTP admission never consumes WebSocket identity grants.
+      auth: { ...cfg.gateway?.auth, identityScopes: undefined },
       roles: cfg.gateway?.roles,
       trustedProxies: cfg.gateway?.trustedProxies,
       allowRealIpFallback: cfg.gateway?.allowRealIpFallback,

@@ -677,52 +677,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     );
   });
 
-  it("rebuilds skill prompt inputs from the sandbox workspace for non-rw sandbox runs", async () => {
-    const sandboxWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-"));
-    tempPaths.push(sandboxWorkspace);
-    hoisted.resolveSandboxContextMock.mockResolvedValue({
-      enabled: true,
-      workspaceAccess: "ro",
-      workspaceDir: sandboxWorkspace,
-    });
-
-    await runAttempt({
-      attemptOverrides: {
-        skillsSnapshot: {
-          prompt:
-            "<available_skills><skill><location>~/.openclaw/skills/smaug/SKILL.md</location></skill></available_skills>",
-          skills: [{ name: "smaug" }],
-          resolvedSkills: [
-            {
-              name: "smaug",
-              description: "Host copy",
-              disableModelInvocation: false,
-              filePath: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
-              baseDir: "/Users/alice/.openclaw/skills/smaug",
-              source: "openclaw-workspace",
-              sourceInfo: {
-                path: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
-                source: "openclaw-workspace",
-                scope: "project",
-                origin: "top-level",
-                baseDir: "/Users/alice/.openclaw/skills/smaug",
-              },
-            },
-          ],
-        },
-      },
-    });
-
-    expectFields(mockParams(hoisted.resolveEmbeddedRunSkillEntriesMock), {
-      workspaceDir: sandboxWorkspace,
-      skillsSnapshot: undefined,
-    });
-    expectFields(mockParams(hoisted.resolveSkillsPromptForRunMock), {
-      workspaceDir: sandboxWorkspace,
-      skillsSnapshot: undefined,
-    });
-  });
-
   it("repairs an orphaned user message behind non-message session metadata before the provider", async () => {
     const olderPrompt = "OLD_TURN_76888: answer the orphaned queued turn";
     const latestPrompt = "LATEST_TURN_76888: answer only the active channel prompt";

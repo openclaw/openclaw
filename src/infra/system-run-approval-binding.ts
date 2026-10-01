@@ -55,20 +55,13 @@ function normalizeSystemRunEnvEntries(env: unknown): NormalizedSystemRunEnvEntry
   return entries;
 }
 
-function hashSystemRunEnvEntries(entries: NormalizedSystemRunEnvEntry[]): string | null {
-  if (entries.length === 0) {
-    return null;
-  }
-  return sha256Hex(JSON.stringify(entries));
-}
-
 export function buildSystemRunApprovalEnvBinding(env: unknown): {
   envHash: string | null;
   envKeys: string[];
 } {
   const entries = normalizeSystemRunEnvEntries(env);
   return {
-    envHash: hashSystemRunEnvEntries(entries),
+    envHash: entries.length === 0 ? null : sha256Hex(JSON.stringify(entries)),
     envKeys: entries.map(([key]) => key),
   };
 }
@@ -134,24 +127,16 @@ function matchSystemRunApprovalEnvHash(params: {
 }): SystemRunApprovalMatchResult {
   // Fail closed if callers provide inconsistent hash/key state. This guards against
   // normalization drift between approval and execution paths.
-  if (!params.expectedEnvHash && !params.actualEnvHash && params.actualEnvKeys.length > 0) {
-    return {
-      ok: false,
-      code: "APPROVAL_ENV_BINDING_MISSING",
-      message: "approval id missing env binding for requested env overrides",
-      details: { envKeys: params.actualEnvKeys },
-    };
-  }
-  if (!params.expectedEnvHash && !params.actualEnvHash) {
+  if (!params.expectedEnvHash) {
+    if (params.actualEnvHash || params.actualEnvKeys.length > 0) {
+      return {
+        ok: false,
+        code: "APPROVAL_ENV_BINDING_MISSING",
+        message: "approval id missing env binding for requested env overrides",
+        details: { envKeys: params.actualEnvKeys },
+      };
+    }
     return { ok: true };
-  }
-  if (!params.expectedEnvHash && params.actualEnvHash) {
-    return {
-      ok: false,
-      code: "APPROVAL_ENV_BINDING_MISSING",
-      message: "approval id missing env binding for requested env overrides",
-      details: { envKeys: params.actualEnvKeys },
-    };
   }
   if (params.expectedEnvHash !== params.actualEnvHash) {
     return {
@@ -173,16 +158,12 @@ export function matchSystemRunApprovalBinding(params: {
   actual: SystemRunApprovalBinding;
   actualEnvKeys: string[];
 }): SystemRunApprovalMatchResult {
-  if (!argvMatches(params.expected.argv, params.actual.argv)) {
-    return requestMismatch();
-  }
-  if (params.expected.cwd !== params.actual.cwd) {
-    return requestMismatch();
-  }
-  if (params.expected.agentId !== params.actual.agentId) {
-    return requestMismatch();
-  }
-  if (params.expected.sessionKey !== params.actual.sessionKey) {
+  if (
+    !argvMatches(params.expected.argv, params.actual.argv) ||
+    params.expected.cwd !== params.actual.cwd ||
+    params.expected.agentId !== params.actual.agentId ||
+    params.expected.sessionKey !== params.actual.sessionKey
+  ) {
     return requestMismatch();
   }
   return matchSystemRunApprovalEnvHash({
@@ -343,7 +324,7 @@ function prepareMutableFileBindingsForSegments(params: {
         message: "SYSTEM_RUN_DENIED: approval cannot safely bind shell startup environment",
       };
     }
-    if (executable && (executable === "." || executable === "source")) {
+    if (executable === "." || executable === "source") {
       return {
         ok: false,
         message: "SYSTEM_RUN_DENIED: approval cannot safely bind shell source operands",

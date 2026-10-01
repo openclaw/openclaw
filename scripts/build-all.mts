@@ -35,6 +35,7 @@ import {
   TSDOWN_DECLARATION_EXTENSIONS,
   TSDOWN_DECLARATION_TOOL_INPUTS,
   TSDOWN_PACKAGES_CACHE_INPUT,
+  listTsdownOutputRoots,
   resolveTsdownBuildPlan,
 } from "./tsdown-build.mts";
 
@@ -219,7 +220,7 @@ const FULL_RUNTIME_STEP_LABELS = ASSET_RUNTIME_STEP_LABELS.flatMap((step) =>
 );
 const FULL_BUILD_STEP_LABELS = [...FULL_RUNTIME_STEP_LABELS, ...FINAL_BUILD_ARTIFACTS_STEP_LABELS];
 
-export const BUILD_ALL_PROFILES: Record<string, string[]> = {
+const BUILD_ALL_PROFILES: Record<string, string[]> = {
   full: [...FULL_BUILD_STEP_LABELS],
   package: ["clean:dist", ...FULL_BUILD_STEP_LABELS],
   ciArtifacts: [...CI_ARTIFACT_STEP_LABELS],
@@ -242,7 +243,7 @@ const FULL_RUNTIME_ONLY_STEPS = [
   ...BUILD_METADATA_STEP_LABELS,
 ];
 
-export const BUILD_ALL_PROFILE_STEP_ENV: Record<string, Record<string, NodeJS.ProcessEnv>> = {
+const BUILD_ALL_PROFILE_STEP_ENV: Record<string, Record<string, NodeJS.ProcessEnv>> = {
   full: {
     tsdown: {
       OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
@@ -401,7 +402,7 @@ export function resolveBuildAllEnvironment(
   return buildEnv;
 }
 
-export function resolveBuildAllTsdownPlan(
+function resolveBuildAllTsdownPlan(
   profile: string,
   env: NodeJS.ProcessEnv,
   params: Omit<MemoryLimitParams, "env"> = {},
@@ -481,7 +482,7 @@ export function resolveBuildAllStep(step: BuildAllStep, params: BuildAllStepPara
   };
 }
 
-export function resolveBuildAllStepOnCacheHit(step: BuildAllStep) {
+function resolveBuildAllStepOnCacheHit(step: BuildAllStep) {
   if (!step.cache?.runOnHit) {
     return null;
   }
@@ -523,6 +524,8 @@ export async function runBuildAllSteps(
   profile: string,
   params: {
     cacheEnabled?: boolean;
+    signal?: AbortSignal;
+    requireVerifiedGatewayFence?: boolean;
     cwd?: string;
     env?: NodeJS.ProcessEnv;
     finalizeCache?: typeof finalizeBuildStepCache;
@@ -537,7 +540,9 @@ export async function runBuildAllSteps(
     steps?: BuildAllStep[];
   } = {},
 ): Promise<BuildAllResult> {
+  params.signal?.throwIfAborted();
   await preflightInstalledSourceArtifacts(params.env ?? process.env);
+  params.signal?.throwIfAborted();
   const { env: buildEnv, heapShortfall } = resolveBuildAllTsdownPlan(
     profile,
     resolveBuildAllEnvironment(params.env),
@@ -550,7 +555,10 @@ export async function runBuildAllSteps(
   // enter here before clean:dist can delete hashed modules a live Gateway still imports.
   const fence = await resolveLiveManagedGatewayDistFence(params.cwd ?? process.cwd(), {
     env: buildEnv,
+    requireVerified: params.requireVerifiedGatewayFence,
+    outputPaths: listTsdownOutputRoots(),
   });
+  params.signal?.throwIfAborted();
   if (fence.refuse) {
     logger.error(fence.message);
     return {
@@ -578,6 +586,7 @@ export async function runBuildAllSteps(
               ? distArtifactEntryArgs(script, invocation.args.slice(3))
               : invocation.args,
           ...invocation.options,
+          signal: params.signal,
           requireProcessTreeExit: process.platform !== "win32",
         }),
       };
@@ -592,6 +601,7 @@ export async function runBuildAllSteps(
     logger.warn(heapShortfall.message);
   }
   for (const step of steps) {
+    params.signal?.throwIfAborted();
     const cacheStartedAt = now();
     const cacheState = resolveCacheState(step, { env: buildEnv });
     const cacheDurationMs = now() - cacheStartedAt;
@@ -615,6 +625,7 @@ export async function runBuildAllSteps(
     logger.error(`[build-all] ${step.label}${reusedCache ? " (cache restored)" : ""}`);
     const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv });
     const result = await runStep(invocation);
+    params.signal?.throwIfAborted();
     const durationMs = cacheDurationMs + now() - startedAt;
     if (result.status !== 0) {
       timings.push({ label: step.label, status: "failed", durationMs });

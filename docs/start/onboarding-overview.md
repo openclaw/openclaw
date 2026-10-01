@@ -139,6 +139,11 @@ setup verifies a real model reply before saving the provider and activating its
 model. A failed or cancelled check preserves the previous configuration. The
 classic wizard also retains its custom-provider setup.
 
+If the endpoint refuses the connection or its hostname cannot be found, setup
+reports the failed connection immediately instead of waiting through normal
+chat retries. Start the server or correct the URL and network settings on the
+Gateway host, then retry. Ordinary agent sessions keep their connection retries.
+
 ## Related
 
 - [Getting started](/start/getting-started)

@@ -97,12 +97,13 @@ describe("cli json stdout contract", () => {
             ...("configReadFailure" in testCase
               ? [
                   'import fs from "node:fs";',
-                  "const originalExistsSync = fs.existsSync;",
-                  "fs.existsSync = function (target, ...args) {",
+                  "Error.stackTraceLimit = 50;",
+                  "const originalReadFileSync = fs.readFileSync;",
+                  "fs.readFileSync = function (target, ...args) {",
                   '  if (String(target) === process.env.OPENCLAW_CONFIG_PATH && new Error().stack?.includes("readNonObservingHealthConfig")) {',
-                  `    throw new Error(${JSON.stringify(testCase.message)});`,
+                  `    throw Object.assign(new Error(${JSON.stringify(testCase.message)}), { code: "EIO" });`,
                   "  }",
-                  "  return originalExistsSync.call(this, target, ...args);",
+                  "  return originalReadFileSync.call(this, target, ...args);",
                   "};",
                 ]
               : []),
@@ -152,7 +153,13 @@ describe("cli json stdout contract", () => {
         } else {
           expect(JSON.parse(result.stdout)).toEqual({
             ok: false,
-            error: { type: "cli_error", message: testCase.message },
+            error: {
+              type: "cli_error",
+              message:
+                "configReadFailure" in testCase
+                  ? `Config could not be read at ${configPath}:\n- <root>: read failed: Error: ${testCase.message}`
+                  : testCase.message,
+            },
           });
           if ("configReadFailure" in testCase && !("commander" in testCase)) {
             expect(result.stderr).toContain(testCase.message);

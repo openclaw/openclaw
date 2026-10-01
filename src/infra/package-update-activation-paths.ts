@@ -3,9 +3,18 @@ import fs from "node:fs";
 import path from "node:path";
 import type { PackageActivationRecord } from "./package-update-activation-schema.js";
 
+const PACKAGE_ACTIVATION_PREFIX = ".openclaw.package-activation-";
+
 export function resolvePackageActivationAnchor(installKey: string): string {
   const key = createHash("sha256").update(installKey).digest("hex").slice(0, 24);
-  return path.join(path.dirname(installKey), `.openclaw.package-activation-${key}`);
+  return path.join(path.dirname(installKey), `${PACKAGE_ACTIVATION_PREFIX}${key}`);
+}
+
+export function isPackageActivationControlName(name: string): boolean {
+  return (
+    name.startsWith(PACKAGE_ACTIVATION_PREFIX) &&
+    /^[a-f0-9]{24}\.control$/u.test(name.slice(PACKAGE_ACTIVATION_PREFIX.length))
+  );
 }
 
 export function resolvePackageActivationControl(anchor: string): string {

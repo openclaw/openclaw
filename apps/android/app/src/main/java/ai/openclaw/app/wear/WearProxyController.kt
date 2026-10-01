@@ -1,5 +1,6 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.app.node.asArrayOrNull
 import ai.openclaw.app.parseGatewayModelCatalog
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.takeCodePoints
@@ -202,11 +203,7 @@ internal class WearProxyController(
       .firstOrNull { (id) -> id == selected }
       ?.takeIf { selectedAgent -> boundedAgents.none { (id) -> id == selectedAgent.first } }
       ?.let { selectedAgent ->
-        if (boundedAgents.size == MAX_AGENT_COUNT) {
-          boundedAgents[boundedAgents.lastIndex] = selectedAgent
-        } else {
-          boundedAgents += selectedAgent
-        }
+        boundedAgents[boundedAgents.lastIndex] = selectedAgent
       }
     return buildJsonObject {
       put(
@@ -355,7 +352,6 @@ internal class WearProxyController(
         .asArrayOrNull()
         ?.mapNotNull { projectSession(it, agentId) }
         .orEmpty()
-        .toMutableList()
     val selectedSessionValid =
       selectedSessionKey
         ?.takeIf { selectedKey -> sessions.none { session -> session.stringOrNull("key") == selectedKey } }
@@ -671,8 +667,6 @@ private fun JsonObject.optionalBooleanParam(name: String): Boolean? {
 }
 
 private fun JsonElement.asObject(method: String): JsonObject = this as? JsonObject ?: throw WearProxyGatewayException("invalid_response", "$method returned an invalid response")
-
-private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
 
 private fun JsonObject.stringOrNull(name: String): String? = (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
 

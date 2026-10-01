@@ -1,4 +1,3 @@
-// Resolves the LAN host OpenClaw should advertise to nearby devices.
 import { isRfc1918Ipv4Address } from "@openclaw/net-policy/ip";
 import { normalizeLowercaseStringOrEmpty as normalizeInterfaceName } from "@openclaw/normalization-core/string-coerce";
 import { runCommandWithTimeout as defaultRunCommandWithTimeout } from "../process/exec.js";

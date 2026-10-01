@@ -4,24 +4,24 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import type {
+  WorkerOperationContext,
+  WorkerOperationHandlers,
+  WorkerOperations,
+} from "../state/worker-operation-registry.js";
 import type {
   ManagedImageRecord,
   ManagedImageRecordAttachment,
-  ManagedImageRecordMutation,
-  ManagedImageRecordCommand,
   ManagedImageRecordDatabase,
   ManagedImageRecordRow,
   ManagedImageRecordInsert,
   ManagedImageRecordEntry,
-  ManagedImageRecordWorkerOperations,
 } from "./managed-image-record-store.types.js";
 
 const MANAGED_IMAGE_RECORD_COLUMNS = [
@@ -266,71 +266,52 @@ function deleteClaimedManagedImageRecordInDatabase(
   return true;
 }
 
-function executeManagedImageRecordMutation(
-  command: ManagedImageRecordMutation,
-  database: OpenClawStateDatabase,
-): boolean {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      let result: boolean;
-      switch (command.type) {
-        case "managedImages.insert":
-          result = insertManagedImageRecordInDatabase(db, command.input);
-          break;
-        case "managedImages.attach":
-          result = attachManagedImageRecordInDatabase(db, command.input);
-          break;
-        case "managedImages.claimCleanup":
-          result = claimManagedImageRecordCleanupInDatabase(db, command.input);
-          break;
-        case "managedImages.deleteClaimed":
-          result = deleteClaimedManagedImageRecordInDatabase(db, command.input);
-          break;
-      }
-      const receipt = { type: command.type, result };
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: receipt });
-      deferSqliteWorkerCommitReceipt(db, receipt);
-      return result;
-    },
-    { database },
-    { operationLabel: command.type },
-  );
+function mutation<Input>(type: string, apply: (db: DatabaseSync, input: Input) => boolean) {
+  return (input: Input, { open }: WorkerOperationContext) =>
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        const result = apply(db, input);
+        const receipt = { type, result };
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: receipt });
+        deferSqliteWorkerCommitReceipt(db, receipt);
+        return result;
+      },
+      { database: open() },
+      { operationLabel: type },
+    );
 }
 
-export function isManagedImageRecordCommand(command: {
-  type: string;
-}): command is ManagedImageRecordCommand {
-  switch (command.type) {
-    case "managedImages.insert":
-    case "managedImages.attach":
-    case "managedImages.claimCleanup":
-    case "managedImages.deleteClaimed":
-    case "managedImages.read":
-    case "managedImages.entries":
-    case "managedImages.originalMediaIds":
-      return true;
-    default:
-      return false;
-  }
-}
+export const managedImageRecordOperations = {
+  "managedImages.insert": mutation("managedImages.insert", insertManagedImageRecordInDatabase),
+  "managedImages.attach": mutation("managedImages.attach", attachManagedImageRecordInDatabase),
+  "managedImages.claimCleanup": mutation(
+    "managedImages.claimCleanup",
+    claimManagedImageRecordCleanupInDatabase,
+  ),
+  "managedImages.deleteClaimed": mutation(
+    "managedImages.deleteClaimed",
+    deleteClaimedManagedImageRecordInDatabase,
+  ),
+  "managedImages.read": ({ attachmentId }: { attachmentId: string }, { open }) =>
+    readManagedImageRecordInDatabase(open().db, attachmentId),
+  "managedImages.entries": ({ sessionKey }: { sessionKey?: string }, { open }) =>
+    listManagedImageRecordEntriesInDatabase(open().db, sessionKey),
+  "managedImages.originalMediaIds": (_input: undefined, { open }) =>
+    listManagedImageOriginalMediaIdsInDatabase(open().db),
+} satisfies WorkerOperationHandlers;
 
-export function executeManagedImageRecordCommand<Command extends ManagedImageRecordCommand>(
-  command: Command,
-  database: OpenClawStateDatabase,
-): ManagedImageRecordWorkerOperations[Command["type"]]["output"];
-export function executeManagedImageRecordCommand(
-  command: ManagedImageRecordCommand,
-  database: OpenClawStateDatabase,
-) {
-  switch (command.type) {
-    case "managedImages.read":
-      return readManagedImageRecordInDatabase(database.db, command.input.attachmentId);
-    case "managedImages.entries":
-      return listManagedImageRecordEntriesInDatabase(database.db, command.input.sessionKey);
-    case "managedImages.originalMediaIds":
-      return listManagedImageOriginalMediaIdsInDatabase(database.db);
-    default:
-      return executeManagedImageRecordMutation(command, database);
+export type ManagedImageRecordWorkerOperations = WorkerOperations<
+  typeof managedImageRecordOperations
+>;
+
+export type ManagedImageRecordMutation = Extract<
+  SqliteWorkerCommand<ManagedImageRecordWorkerOperations>,
+  {
+    type:
+      | "managedImages.insert"
+      | "managedImages.attach"
+      | "managedImages.claimCleanup"
+      | "managedImages.deleteClaimed";
   }
-}
+>;

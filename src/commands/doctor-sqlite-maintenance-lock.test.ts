@@ -3,7 +3,18 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
+import {
+  acquireGatewayLock,
+  GatewayLockError,
+  resolveGatewayLockPaths,
+} from "../infra/gateway-lock.js";
+import { prepareGithubIssue } from "../infra/github-issue.js";
+import { createSessionSqliteMigrationRun } from "../infra/session-sqlite-migration-manifest.js";
+import {
+  claimSessionSqliteMigrationGithubIssue,
+  createSessionSqliteMigrationFailureIssue,
+  writeSessionSqliteMigrationFailureReports,
+} from "./doctor-session-sqlite-failure.js";
 import {
   DoctorSqliteMaintenanceLockUnavailableError,
   isDestructiveDoctorSessionSqliteMode,
@@ -203,6 +214,44 @@ describe("doctor SQLite maintenance lock", () => {
     expect(retained).toBeDefined();
     expect(() => retained?.assertCurrent()).toThrow(/maintenance authority has expired/);
   });
+
+  it.each(["owner", "projection"] as const)(
+    "refuses recovery receipt writes after %s custody is replaced",
+    async (kind) => {
+      const fixture = await createLockFixture();
+      const { manifestPath } = createSessionSqliteMigrationRun(fixture.env, []);
+      writeSessionSqliteMigrationFailureReports(manifestPath, {
+        reason: "synthetic recovery failure",
+      });
+      const issue = createSessionSqliteMigrationFailureIssue(manifestPath);
+      if (!issue) {
+        throw new Error("expected recovery issue");
+      }
+      const prepared = prepareGithubIssue(issue);
+      const originalManifest = await fs.readFile(manifestPath, "utf8");
+      const paths = resolveGatewayLockPaths(fixture.env, fixture.lockDir);
+      const replacedPath = kind === "owner" ? paths.ownerLockPath : paths.stateLockPath;
+
+      await expect(
+        withDoctorSqliteMaintenanceLock(
+          {
+            env: fixture.env,
+            operation: "session SQLite GitHub issue receipt",
+            protectedPaths: [manifestPath],
+            run: async (authority) => {
+              authority.assertCurrent();
+              await fs.writeFile(replacedPath, "replacement", "utf8");
+              return claimSessionSqliteMigrationGithubIssue(manifestPath, prepared, authority);
+            },
+          },
+          { lockOptions: fixture.lockOptions },
+        ),
+      ).rejects.toThrow(/ownership.*no longer current/);
+
+      await expect(fs.readFile(manifestPath, "utf8")).resolves.toBe(originalManifest);
+      await expect(fs.readFile(replacedPath, "utf8")).resolves.toBe("replacement");
+    },
+  );
 
   it("blocks maintenance when the Gateway used the multi-Gateway override", async () => {
     const fixture = await createLockFixture();

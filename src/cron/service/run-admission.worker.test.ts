@@ -17,7 +17,6 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { clearCronJobActive } from "../active-jobs.js";
 import { loadCronStore, saveCronStore } from "../store.js";
@@ -76,7 +75,10 @@ async function withReservation(
     if (!reserved) {
       throw new Error("Fixture failed to reserve run");
     }
-    const identity = reserveQueuedCronRun(state, job.id, now, { runReceipt: reserved.runReceipt });
+    const identity = reserveQueuedCronRun(state, job.id, now, {
+      runReceipt: reserved.runReceipt,
+      runReceiptContext: reserved.runReceiptContext,
+    });
     const db = openOpenClawStateDatabase();
     expect(db.path.startsWith(fixture.stateDir)).toBe(true);
     try {
@@ -230,6 +232,7 @@ it("fences a replacement local owner between worker preparation and activation c
       () => {
         replacement = reserveQueuedCronRun(state, job.id, owner.markerAtMs, {
           runReceipt: owner.runReceipt,
+          runReceiptContext: owner.runReceiptContext,
         });
       },
     );
@@ -302,6 +305,7 @@ it.each(["before commit", "after publication"] as const)(
           jobId: job.id,
           reservationIdentity: identity,
           runReceipt: activated.runReceipt,
+          runReceiptContext: activated.runReceiptContext,
           reason: "retired occurrence",
         });
         expect(interception.observed()).toBe(true);
@@ -440,9 +444,10 @@ it("preserves durable deletion authority during stopped activation rollback", as
 });
 
 it("releases a settled receipt for recovery when its captured database admission retires", async () => {
-  await withReservation(async ({ state, job }) => {
-    const handle = state.queuedRunReservationsByJobId.get(job.id)!.runReceipt;
-    const context = captureOpenClawStateWorkerContext();
+  await withReservation(async ({ state, job, identity }) => {
+    const ownership = state.queuedRunReservationsByJobId.get(job.id)!;
+    const handle = ownership.runReceipt;
+    const context = ownership.runReceiptContext;
     expect(isCronRunReceiptOwnerStale(handle)).toBe(false);
     await closeOpenClawStateDatabaseAsync();
     await expect(
@@ -452,5 +457,16 @@ it("releases a settled receipt for recovery when its captured database admission
       ),
     ).rejects.toBeInstanceOf(Error);
     expect(isCronRunReceiptOwnerStale(handle)).toBe(true);
+    await expect(
+      cleanupQueuedCronRunReservations({
+        state,
+        reservations: [{ jobId: job.id, reservationIdentity: identity }],
+      }),
+    ).rejects.toBeInstanceOf(Error);
+    expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
+    const receipt = openOpenClawStateDatabase({ path: context.admission.databasePath })
+      .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+      .get(handle.receiptId);
+    expect(receipt).toEqual({ status: "running" });
   });
 });

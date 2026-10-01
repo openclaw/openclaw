@@ -1,6 +1,5 @@
-// Diffs Language Pack plugin module implements plugin behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawPluginApi } from "../api.js";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { VIEWER_ASSET_PREFIX, VIEWER_RUNTIME_PATH, getServedViewerAsset } from "./viewer-assets.js";
 
 const IMMUTABLE_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable";

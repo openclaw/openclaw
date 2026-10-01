@@ -1,11 +1,18 @@
-import { rm } from "node:fs/promises";
+import { lstatSync, realpathSync } from "node:fs";
+import path from "node:path";
+import { assertDirectoryIdentitySync } from "@openclaw/fs-safe/advanced";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
-import { resolveOpenClawReleaseCohortVersion } from "../../../infra/npm-registry-spec.js";
-import { isPackageVersionDowngrade } from "../../../infra/package-update-utils.js";
+import {
+  capturePathRemovalGuard,
+  isRemovalIoError,
+  removePathWithinRoot,
+} from "../../../infra/fs-safe-remove.js";
+import { retainMutationAuthority } from "../../../infra/mutation-authority.js";
 import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
 import {
   normalizePluginsConfig,
@@ -13,7 +20,9 @@ import {
 } from "../../../plugins/config-state.js";
 import { formatSourceBundledPluginNotice } from "../../../plugins/dev-source-root.js";
 import {
+  attachPluginInstallTransaction,
   copyPluginInstallTransactionRequest,
+  retainPluginInstallTransaction,
   withPluginInstallTransactions,
 } from "../../../plugins/install-transaction.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../../../plugins/install-types.js";
@@ -26,23 +35,17 @@ import {
   hasRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
 } from "../../../plugins/managed-npm-retention.js";
-import { resolveTrustedSourceLinkedOfficialNpmInstall } from "../../../plugins/official-external-install-records.js";
 import { isPayloadMissing } from "../../../plugins/payload-verification.js";
 import {
   withPluginLifecycleLease,
   type PluginLifecycleLeaseContext,
 } from "../../../plugins/plugin-lifecycle-lease.js";
 import {
-  detectPluginVersionDrift,
-  resolveOfficialPluginCohortNpmSpecs,
-} from "../../../plugins/plugin-version-drift.js";
-import {
   isClawHubTrustSkippedOutcome,
   updateNpmInstalledPlugins,
   type PluginUpdateOutcome,
 } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
-import { resolveCompatibilityHostVersion } from "../../../version.js";
 import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "./configured-runtime-plugin-installs.js";
 import {
   collectDownloadableInstallCandidates,
@@ -64,7 +67,10 @@ import {
   recordMatchesBundledPackage,
   resolveSafeBrokenOfficialInstallRemovalPath,
 } from "./missing-configured-plugin-install.records.js";
-import { resolveConfiguredPluginCandidateRepair } from "./missing-configured-plugin-install.targets.js";
+import {
+  resolveConfiguredPluginCandidateRepair,
+  resolveConfiguredPluginRepairVersions,
+} from "./missing-configured-plugin-install.targets.js";
 import {
   isLegacyPackageUpdateDoctorPass,
   shouldDeferConfiguredPluginInstallRepair,
@@ -245,6 +251,14 @@ async function repairMissingPluginInstallsWithLease(
   assertCurrent: () => void,
 ): Promise<RepairMissingPluginInstallsResult> {
   const env = params.env ?? process.env;
+  const installContext = await resolveConfiguredPluginInstallContext({
+    cfg: params.cfg,
+    env,
+    configuredPluginIds: params.pluginIds,
+    configuredChannelIds: params.channelIds,
+    blockedPluginIds: params.blockedPluginIds,
+    baselineRecords: params.baselineRecords,
+  });
   const {
     knownIds,
     configuredChannelOwnerPluginIds,
@@ -260,14 +274,7 @@ async function repairMissingPluginInstallsWithLease(
     installedPluginIdsWithRepairablePackages,
     installedPluginMissingRequiredDependencies,
     officialReplacementPluginIds,
-  } = await resolveConfiguredPluginInstallContext({
-    cfg: params.cfg,
-    env,
-    configuredPluginIds: params.pluginIds,
-    configuredChannelIds: params.channelIds,
-    blockedPluginIds: params.blockedPluginIds,
-    baselineRecords: params.baselineRecords,
-  });
+  } = installContext;
   const changes: string[] = [];
   const notices: string[] = [];
   const warnings: string[] = [];
@@ -279,58 +286,14 @@ async function repairMissingPluginInstallsWithLease(
   const deferredRepairDetails: string[] = [];
   const failedPlugins = new Map<string, PluginUpdateOutcome | undefined>();
   const repairedPluginIds = new Set<string>();
-  const coreVersion = resolveCompatibilityHostVersion(env);
-  const cohortSpecs = resolveOfficialPluginCohortNpmSpecs({
-    gatewayVersion: coreVersion,
-    installRecords: records,
-    config: params.cfg,
-  });
-  // A missing payload cannot supply currentVersion to the updater's downgrade guard.
-  const newerRecordedPluginIds = new Set(
-    updateChannel === "stable" || updateChannel === "beta"
-      ? Object.keys(cohortSpecs).filter((pluginId) => {
-          const version = records[pluginId]?.resolvedVersion ?? records[pluginId]?.version;
-          return (
-            version &&
-            isPackageVersionDowngrade(
-              resolveOpenClawReleaseCohortVersion(version),
-              resolveOpenClawReleaseCohortVersion(coreVersion),
-            )
-          );
-        })
-      : [],
-  );
-  const driftedPluginIds = new Set(
-    params.repairVersionDrift && !shouldDeferConfiguredPluginInstallRepair(env)
-      ? detectPluginVersionDrift({
-          gatewayVersion: coreVersion,
-          installRecords: records,
-          config: params.cfg,
-        }).drifts.flatMap(({ pluginId }) => {
-          const record = records[pluginId];
-          if (
-            !record ||
-            !cohortSpecs[pluginId] ||
-            operatorManagedPluginIds.has(pluginId) ||
-            bundledPluginsById.has(pluginId) ||
-            officialReplacementPluginIds.has(pluginId)
-          ) {
-            return [];
-          }
-          // Package-id migrations also change authored policy; the plugin command owns that write.
-          if (
-            resolveTrustedSourceLinkedOfficialNpmInstall({ pluginId, record })?.replacementPluginId
-          ) {
-            warn(
-              `Plugin "${pluginId}" needs a package-id migration. Run ${formatCliCommand(`openclaw plugins update ${cohortSpecs[pluginId]}`, env)}.`,
-              pluginId,
-            );
-            return [];
-          }
-          return [pluginId];
-        })
-      : [],
-  );
+  const { coreVersion, cohortSpecs, newerRecordedPluginIds, driftedPluginIds } =
+    resolveConfiguredPluginRepairVersions({
+      cfg: params.cfg,
+      env,
+      context: installContext,
+      repairVersionDrift: params.repairVersionDrift,
+      onWarning: warn,
+    });
   const deferredPluginIds = new Set<string>();
   const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env);
   let nextRecords = records;
@@ -623,6 +586,17 @@ async function repairMissingPluginInstallsWithLease(
           env,
         })
       : null;
+    // Capture the old payload before replacement planning yields. Its pathname
+    // can be reused before the index commits; cleanup must never adopt that replacement.
+    const assertRemovalPath = removalPath ? capturePathRemovalGuard(removalPath) : undefined;
+    const removalParent = removalPath ? path.dirname(removalPath) : undefined;
+    const assertRemovalParent =
+      assertRemovalPath && removalParent ? capturePathRemovalGuard(removalParent) : undefined;
+    const removalParentReal =
+      assertRemovalParent && removalParent ? realpathSync(removalParent) : undefined;
+    const removalParentIdentity = removalParentReal
+      ? lstatSync(removalParentReal, { bigint: true })
+      : undefined;
     const previousRecords = nextRecords;
     const installed = await installCandidate(
       copyPluginInstallTransactionRequest(params, {
@@ -646,22 +620,63 @@ async function repairMissingPluginInstallsWithLease(
       if (
         replacementSucceeded &&
         removalPath &&
+        assertRemovalPath &&
+        removalParent &&
+        assertRemovalParent &&
+        removalParentReal &&
+        removalParentIdentity &&
         (!installedRecord?.installPath ||
           !installPathsEqual(resolveUserPath(installedRecord.installPath, env), removalPath))
       ) {
-        await params.beforePersistentEffect?.();
-        // Authority refusal is not a package-cleanup warning. Planning may
-        // yield, so both owners must still hold at dispatch without another await.
-        lease.assertOwned();
-        try {
-          await rm(removalPath, { recursive: true, force: true });
-        } catch (error) {
-          await params.beforePersistentEffect?.();
-          lease.assertOwned();
-          warn(
-            `Failed to remove broken installed plugin "${candidate.pluginId}" at ${removalPath}: ${String(error)}`,
-          );
-        }
+        const assertRetirementOwned = retainMutationAuthority(() => {
+          assertCurrent();
+          // Operators may link the extensions root. Keep both that alias and
+          // its canonical directory pinned so retirement cannot adopt a replacement.
+          assertRemovalParent();
+          if (realpathSync(removalParent) !== removalParentReal) {
+            throw new FsSafeError("path-mismatch", "plugin retirement parent changed");
+          }
+          assertDirectoryIdentitySync(removalParentReal, {
+            dev: removalParentIdentity.dev,
+            ino: removalParentIdentity.ino,
+            realPath: removalParentReal,
+          });
+          assertRemovalPath();
+        });
+        // The old path is outside the replacement transaction. Retire it only
+        // after the index commits, so a failed write can roll back to the old payload.
+        retainPluginInstallTransaction(
+          params,
+          attachPluginInstallTransaction(
+            {},
+            {
+              commit: async () => {
+                await params.beforePersistentEffect?.();
+                // Planning may yield; authority refusal must not become a cleanup warning.
+                assertRetirementOwned();
+                try {
+                  await removePathWithinRoot({
+                    rootDir: removalParentReal,
+                    relativePath: path.basename(removalPath),
+                    recursive: true,
+                    force: true,
+                    symlinks: "unlink",
+                    assertBeforeMutation: assertRetirementOwned,
+                  });
+                } catch (error) {
+                  assertRetirementOwned();
+                  if (!isRemovalIoError(error)) {
+                    throw error;
+                  }
+                  warn(
+                    `Failed to remove broken installed plugin "${candidate.pluginId}" at ${removalPath}: ${String(error)}`,
+                  );
+                }
+              },
+              rollback: async () => {},
+            },
+          ),
+        );
       }
     }
     nextRecords = installed.records;

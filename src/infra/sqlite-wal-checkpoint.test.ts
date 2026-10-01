@@ -34,6 +34,7 @@ describe("SQLite WAL checkpoint observations", () => {
     try {
       expect(owner.checkpoint("PASSIVE")).toBe(true);
       const completed = owner.snapshot!;
+      expect(completed.lastCompletedAtNs).toBe(completed.observedAtNs);
       replacement.adopt(completed);
       reader.exec("BEGIN");
       reader.prepare("SELECT value FROM events").all();
@@ -47,6 +48,7 @@ describe("SQLite WAL checkpoint observations", () => {
       });
       expect(owner.checkpoint("PASSIVE")).toBe(false);
       const blocked = owner.snapshot;
+      expect(blocked?.lastCompletedAtNs).toBe(completed.observedAtNs);
       owner.adopt(completed);
       expect(owner.snapshot).toEqual(blocked);
       expect(owner.health).toMatchObject({ consecutiveBlocked: 2, warning: true });
@@ -54,6 +56,21 @@ describe("SQLite WAL checkpoint observations", () => {
       expect(owner.checkpoint("PASSIVE")).toBe(true);
       owner.adopt(replacement.snapshot!);
       expect(owner.health).toMatchObject({ state: "complete", consecutiveBlocked: 0 });
+      const recovered = owner.snapshot!;
+      const delayed = createSqliteWalCheckpoint(database, { databasePath }, 64 * 1024 * 1024);
+      reader.exec("BEGIN");
+      reader.prepare("SELECT value FROM events").all();
+      database.exec("INSERT INTO events VALUES ('newer')");
+      expect(delayed.checkpoint("PASSIVE")).toBe(false);
+      const newerBlocked = delayed.snapshot!;
+      delayed.adopt(recovered);
+      expect(delayed.snapshot).toMatchObject({
+        observedAtNs: newerBlocked.observedAtNs,
+        lastCompletedAtNs: recovered.observedAtNs,
+        health: { state: "blocked" },
+      });
+      owner.adopt(newerBlocked);
+      expect(owner.snapshot?.lastCompletedAtNs).toBe(recovered.observedAtNs);
     } finally {
       reader.close();
       database.close();

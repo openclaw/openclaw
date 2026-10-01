@@ -1,4 +1,3 @@
-// Provider catalog helpers normalize, hash, and expose model catalogs for provider plugins.
 import { createHash } from "node:crypto";
 import { addAbortListener } from "node:events";
 import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";

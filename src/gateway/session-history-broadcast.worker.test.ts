@@ -131,6 +131,7 @@ it.each(["by-id", "count"] as const)(
             }),
           }),
           expect.any(Set),
+          { prepareSessionProjection: expect.any(Function) },
         );
         expect(progressedBeforeDelivery).toBe(true);
         sql.expectIdle();
@@ -230,6 +231,7 @@ it.each([
             message: expect.objectContaining({ content: "Stored answer" }),
           }),
           expect.any(Set),
+          { prepareSessionProjection: expect.any(Function) },
         );
       }
       expect(registryReads).toBe(0);

@@ -10,6 +10,7 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerThreadExecArgv,
   resolveRuntimeWorkerUrl,
+  runtimeNeedsTypeScriptLoader,
 } from "./runtime-worker-url.js";
 
 const requireFromHere = createRequire(import.meta.url);
@@ -148,6 +149,7 @@ describe("resolveRuntimeWorkerArgv", () => {
           expect(resolveRuntimeWorkerThreadExecArgv(url, selected)).toEqual(
             needsLoader ? ["--import", import.meta.resolve("tsx/esm")] : [],
           );
+          expect(runtimeNeedsTypeScriptLoader(fileURLToPath(url), selected)).toBe(needsLoader);
         }
       }
     } finally {

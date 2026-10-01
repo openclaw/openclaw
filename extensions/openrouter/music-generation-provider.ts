@@ -15,7 +15,12 @@ import {
   resolveProviderOperationTimeoutMs,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { resolveOpenRouterGenerationRequestContext } from "./generation-request-context.js";
 
 const DEFAULT_OPENROUTER_MUSIC_MODEL = "google/lyria-3-pro-preview";
@@ -88,23 +93,10 @@ function buildOpenRouterMessageContent(
 }
 
 function readDeltaAudio(part: unknown): { data?: string; transcript?: string } | undefined {
-  if (!isRecord(part)) {
-    return undefined;
-  }
-  const choices = part.choices;
-  if (!Array.isArray(choices)) {
-    return undefined;
-  }
-  const first = choices[0];
-  if (!isRecord(first)) {
-    return undefined;
-  }
-  const delta = first.delta;
-  if (!isRecord(delta)) {
-    return undefined;
-  }
-  const audio = delta.audio;
-  if (!isRecord(audio)) {
+  const choices = asOptionalRecord(part)?.choices;
+  const first = Array.isArray(choices) ? asOptionalRecord(choices[0]) : undefined;
+  const audio = asOptionalRecord(asOptionalRecord(first?.delta)?.audio);
+  if (!audio) {
     return undefined;
   }
   return {
@@ -217,21 +209,9 @@ async function readOpenRouterStreamChunk(
   deadline: ProviderOperationDeadline,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   const timeoutMs = resolveOpenRouterStreamRemainingMs(deadline);
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      reader.read(),
-      new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          reject(new Error(`${deadline.label} timed out after ${deadline.timeoutMs}ms`));
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-  }
+  return await withTimeout(reader.read(), timeoutMs, {
+    createError: () => new Error(`${deadline.label} timed out after ${deadline.timeoutMs}ms`),
+  });
 }
 
 async function readOpenRouterAudioStream(

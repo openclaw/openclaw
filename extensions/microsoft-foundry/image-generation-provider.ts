@@ -87,8 +87,6 @@ function resolveMaiImageSize(size: string | undefined): { width: number; height:
   const width = Number(match[1]);
   const height = Number(match[2]);
   if (
-    !Number.isInteger(width) ||
-    !Number.isInteger(height) ||
     width < MAI_MIN_IMAGE_SIDE_PX ||
     height < MAI_MIN_IMAGE_SIDE_PX ||
     width * height > MAI_MAX_IMAGE_PIXELS

@@ -178,14 +178,10 @@ internal fun SkillWorkshopSettingsScreen(
     )
 
     noticeText?.let { message ->
-      ClawPanel {
-        Text(text = message, style = ClawTheme.type.body, color = ClawTheme.colors.success)
-      }
+      SettingsMessagePanel(text = message, color = ClawTheme.colors.success)
     }
     errorText?.let { message ->
-      ClawPanel {
-        Text(text = message, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
-      }
+      SettingsMessagePanel(text = message, color = ClawTheme.colors.warning)
     }
 
     when {
@@ -315,41 +311,39 @@ private fun SkillWorkshopControls(
   isConnected: Boolean,
   onRefresh: () -> Unit,
 ) {
-  ClawPanel {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        SkillWorkshopAgentMenu(
-          agents = agents,
-          defaultAgentId = defaultAgentId,
-          selectedAgentId = selectedAgentId,
-          onAgentChange = onAgentChange,
-          modifier = Modifier.weight(1f),
-        )
-        ClawSecondaryButton(
-          text = if (refreshing) nativeString("Refreshing") else nativeString("Refresh"),
-          onClick = onRefresh,
-          enabled = isConnected && !refreshing,
-          icon = Icons.Default.Refresh,
-        )
-      }
-      ClawSegmentedControl(
-        options = skillWorkshopFilters.map { (_, label) -> nativeString(label) },
-        selected = nativeString(skillWorkshopFilters.firstOrNull { it.first == statusFilter }?.second ?: "All"),
-        onSelect = { label ->
-          onStatusFilterChange(skillWorkshopFilters.firstOrNull { nativeString(it.second) == label }?.first ?: "all")
-        },
-        maxOptionsPerRow = 4,
+  ClawPanel(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      SkillWorkshopAgentMenu(
+        agents = agents,
+        defaultAgentId = defaultAgentId,
+        selectedAgentId = selectedAgentId,
+        onAgentChange = onAgentChange,
+        modifier = Modifier.weight(1f),
       )
-      ClawTextField(
-        value = query,
-        onValueChange = onQueryChange,
-        placeholder = nativeString("Search proposals"),
+      ClawSecondaryButton(
+        text = if (refreshing) nativeString("Refreshing") else nativeString("Refresh"),
+        onClick = onRefresh,
+        enabled = isConnected && !refreshing,
+        icon = Icons.Default.Refresh,
       )
     }
+    ClawSegmentedControl(
+      options = skillWorkshopFilters.map { (_, label) -> nativeString(label) },
+      selected = nativeString(skillWorkshopFilters.firstOrNull { it.first == statusFilter }?.second ?: "All"),
+      onSelect = { label ->
+        onStatusFilterChange(skillWorkshopFilters.firstOrNull { nativeString(it.second) == label }?.first ?: "all")
+      },
+      maxOptionsPerRow = 4,
+    )
+    ClawTextField(
+      value = query,
+      onValueChange = onQueryChange,
+      placeholder = nativeString("Search proposals"),
+    )
   }
 }
 
@@ -581,11 +575,9 @@ private fun SkillWorkshopEmptyPanel(
   title: String,
   detail: String,
 ) {
-  ClawPanel {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-      Text(text = title, style = ClawTheme.type.title, color = ClawTheme.colors.text)
-      Text(text = detail, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-    }
+  ClawPanel(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Text(text = title, style = ClawTheme.type.title, color = ClawTheme.colors.text)
+    Text(text = detail, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
   }
 }
 

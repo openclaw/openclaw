@@ -22,7 +22,6 @@ const EMBEDDED_AGENT_EXECUTION_PHASE_LABELS = {
 
 export type EmbeddedAgentExecutionPhase = keyof typeof EMBEDDED_AGENT_EXECUTION_PHASE_LABELS;
 
-/** Converts an internal phase id into the compact label used in status output. */
 export function formatEmbeddedAgentExecutionPhase(
   phase?: EmbeddedAgentExecutionPhase,
 ): string | undefined {

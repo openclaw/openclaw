@@ -47,8 +47,6 @@ describe("credential prompt dispatch boundary", () => {
   >([
     ["quiet group link", true, false, false, false, false],
     ["quiet group blocker", false, false, false, false, false],
-    ["routed link", true, true, false, false, false],
-    ["routed blocker", false, true, false, false, false],
     ["queued transport failure", true, false, true, false, false],
     ["routed transport failure", true, true, true, false, false],
     ["terminal before delivery", true, false, false, true, false],

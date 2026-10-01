@@ -1,5 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import type { NodePath } from "@babel/traverse";
+import type { CallExpression, Node, Program as BabelProgram } from "@babel/types";
 import { parse, type AnyNode, type Program } from "acorn";
 import type { createJiti } from "jiti";
 
@@ -41,29 +43,8 @@ function staticString(node: StaticStringNode | null | undefined): string | undef
   return undefined;
 }
 
-type RequireReferencePath = {
-  node:
-    | (StaticStringNode & {
-        name?: string;
-        computed?: boolean;
-        source?: StaticStringNode;
-        specifiers?: readonly unknown[];
-      })
-    | null;
-  scope: {
-    getBinding(name: string): { constant: boolean; path: RequireReferencePath } | undefined;
-  };
-  key: string | number | null;
-  parentPath: RequireReferencePath | null;
-  get(key: "arguments"): RequireReferencePath[];
-  get(key: string): RequireReferencePath;
-  referencesImport(source: string, name: string): boolean;
-  matchesPattern(pattern: string): boolean;
-  replaceWith(node: { type: "Identifier"; name: string }): void;
-};
-
 /** Whether this expression receives a value, directly or through a destructuring pattern. */
-function isAssignmentTarget(target: RequireReferencePath): boolean {
+function isAssignmentTarget(target: NodePath): boolean {
   let child = target;
   for (let parent = target.parentPath; parent?.node; parent = parent.parentPath) {
     switch (parent.node.type) {
@@ -91,18 +72,15 @@ function isAssignmentTarget(target: RequireReferencePath): boolean {
   return false;
 }
 
-function unwrapReferenceArgument(input: RequireReferencePath | undefined) {
+function unwrapReferenceArgument(input: NodePath | undefined) {
   let argument = input;
   // TypeScript erases these wrappers without evaluating another value.
   while (
-    argument &&
-    [
-      "TSAsExpression",
-      "TSTypeAssertion",
-      "TSNonNullExpression",
-      "TSSatisfiesExpression",
-      "TSInstantiationExpression",
-    ].includes(argument.node?.type ?? "")
+    argument?.isTSAsExpression() ||
+    argument?.isTSTypeAssertion() ||
+    argument?.isTSNonNullExpression() ||
+    argument?.isTSSatisfiesExpression() ||
+    argument?.isTSInstantiationExpression()
   ) {
     argument = argument.get("expression");
   }
@@ -131,17 +109,7 @@ export function inspectPluginTypeScriptExecutionFacts(
     babel: {
       plugins: [
         {
-          pre(file: {
-            path: {
-              traverse(visitor: {
-                CallExpression(call: RequireReferencePath): void;
-                ImportDeclaration(declaration: RequireReferencePath): void;
-                ExportNamedDeclaration(declaration: RequireReferencePath): void;
-                ExportAllDeclaration(declaration: RequireReferencePath): void;
-                ImportExpression(expression: RequireReferencePath): void;
-              }): void;
-            };
-          }) {
+          pre(file: { path: NodePath<BabelProgram> }) {
             file.path.traverse({
               ImportDeclaration(declaration) {
                 const specifier = staticString(declaration.get("source").node);
@@ -191,23 +159,23 @@ export function inspectPluginTypeScriptExecutionFacts(
 }
 
 /** Read the native factory binding before Jiti rewrites modules and import.meta. */
-function isCurrentFileRequire(call: RequireReferencePath): boolean {
+function isCurrentFileRequire(call: NodePath<CallExpression>): boolean {
   const callee = call.get("callee");
   const reference =
-    callee.node?.type === "MemberExpression" &&
+    callee.isMemberExpression() &&
     !callee.node.computed &&
-    callee.get("property").node?.name === "resolve"
+    callee.get("property").isIdentifier({ name: "resolve" })
       ? callee.get("object")
       : callee;
-  let init = reference;
-  if (reference.node?.type === "Identifier" && reference.node.name) {
+  let init: NodePath<Node | null> = reference;
+  if (reference.isIdentifier() && reference.node.name) {
     const binding = reference.scope.getBinding(reference.node.name);
-    if (!binding?.constant || binding.path.node?.type !== "VariableDeclarator") {
+    if (!binding?.constant || !binding.path.isVariableDeclarator()) {
       return false;
     }
     init = binding.path.get("init");
   }
-  if (init.node?.type !== "CallExpression") {
+  if (!init.isCallExpression()) {
     return false;
   }
   const args = init.get("arguments");
@@ -215,7 +183,7 @@ function isCurrentFileRequire(call: RequireReferencePath): boolean {
   if (
     !anchor ||
     !(
-      (anchor.node?.type === "MemberExpression" &&
+      (anchor.isMemberExpression() &&
         !anchor.node.computed &&
         anchor.get("object").node?.type === "MetaProperty" &&
         anchor.matchesPattern("import.meta.url")) ||
@@ -230,9 +198,9 @@ function isCurrentFileRequire(call: RequireReferencePath): boolean {
   return ["module", "node:module"].some(
     (source) =>
       factory.referencesImport(source, "createRequire") ||
-      (factory.node?.type === "MemberExpression" &&
+      (factory.isMemberExpression() &&
         !factory.node.computed &&
-        factory.get("property").node?.name === "createRequire" &&
+        factory.get("property").isIdentifier({ name: "createRequire" }) &&
         factory.get("object").referencesImport(source, "default")),
   );
 }
@@ -406,14 +374,7 @@ export function visitPluginSourceReferences(
         babel: {
           plugins: [
             {
-              pre(file: {
-                path: {
-                  traverse(visitor: {
-                    CallExpression(call: RequireReferencePath): void;
-                    MemberExpression(member: RequireReferencePath): void;
-                  }): void;
-                };
-              }) {
+              pre(file: { path: NodePath<BabelProgram> }) {
                 file.path.traverse({
                   MemberExpression(member) {
                     // Jiti inlines import.meta.url, dirname and filename as strings, also
@@ -431,15 +392,14 @@ export function visitPluginSourceReferences(
                     // Jiti replaces this anchor with a string; capture its meaning before rewriting.
                     if (unwrapReferenceArgument(args[0])?.matchesPattern("import.meta.dirname")) {
                       const callee = call.get("callee");
-                      const member =
-                        callee.node?.type === "MemberExpression" ? callee.get("property") : callee;
+                      const member = callee.isMemberExpression() ? callee.get("property") : callee;
                       const name =
                         ["join", "resolve"].find((method) =>
                           ["path", "node:path"].some((moduleName) =>
                             callee.referencesImport(moduleName, method),
                           ),
                         ) ??
-                        member.node?.name ??
+                        (member.isIdentifier() ? member.node.name : undefined) ??
                         "";
                       visitDirectoryAsset(
                         name,

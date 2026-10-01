@@ -1,5 +1,6 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { Type, type Static } from "typebox";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
@@ -316,10 +317,7 @@ export function createAgentsWaitTool(opts: {
           Boolean(key?.trim()),
         ),
       );
-      const requestedTimeout =
-        typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
-          ? params.timeoutSeconds
-          : 30;
+      const requestedTimeout = asFiniteNumber(params.timeoutSeconds) ?? 30;
       const timeoutSeconds = Math.min(Math.max(0, requestedTimeout), swarm.waitTimeoutSecondsMax);
       const result = await waitForCollector({
         ids,

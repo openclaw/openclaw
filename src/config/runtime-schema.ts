@@ -1,4 +1,3 @@
-// Builds runtime config schema defaults from agent and workspace state.
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   collectChannelSchemaMetadataCore,

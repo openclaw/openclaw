@@ -31,7 +31,7 @@ import {
   CronSessionLifecycleClaimError,
   createCronRunContinuationSession,
   createPersistCronSessionEntry,
-  markCronSessionPreRun,
+  setCronSessionRuntimeModel,
   resolveCronLifecycleRevisionIdentity,
   syncCronSessionLiveSelection,
   type CronSessionRowWriter,
@@ -72,7 +72,7 @@ function makeGuardedPersistSessionEntry(persistedStore: Record<string, SessionEn
   });
 }
 
-describe("markCronSessionPreRun", () => {
+describe("setCronSessionRuntimeModel", () => {
   it("clears model-derived state when the selected model changes", () => {
     const entry = makeSessionEntry({
       modelProvider: "openai",
@@ -82,7 +82,7 @@ describe("markCronSessionPreRun", () => {
       contextBudgetStatus: {} as NonNullable<SessionEntry["contextBudgetStatus"]>,
     });
 
-    markCronSessionPreRun({ entry, provider: "openai", model: "gpt-5.4" });
+    setCronSessionRuntimeModel({ entry, provider: "openai", model: "gpt-5.4" });
 
     expect(entry.modelProvider).toBe("openai");
     expect(entry.model).toBe("gpt-5.4");
@@ -101,7 +101,7 @@ describe("markCronSessionPreRun", () => {
       contextBudgetStatus,
     });
 
-    markCronSessionPreRun({ entry, provider: "openai", model: "gpt-5.4" });
+    setCronSessionRuntimeModel({ entry, provider: "openai", model: "gpt-5.4" });
 
     expect(entry.contextTokens).toBe(272_000);
     expect(entry.contextTokensSource).toBe("runtime");

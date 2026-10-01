@@ -1,10 +1,15 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { resolveNodeRuntimeInfo } from "../../daemon/runtime-paths.js";
+import {
+  resolveNodeRuntimeInfo,
+  resolvePinnedDaemonRuntimePath,
+} from "../../daemon/runtime-paths.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 
 const state = vi.hoisted(() => ({
   calls: [] as string[][],
+  manager: "npm" as "npm" | "bun",
+  sqliteText: true,
 }));
 vi.mock("../../infra/update-global.js", async (original) => {
   const actual = await original<typeof import("../../infra/update-global.js")>();
@@ -31,7 +36,7 @@ vi.mock("./shared.js", async (importOriginal) => ({
   normalizeTag: () => null,
   readPackageName: async () => "openclaw",
   readPackageVersion: async () => "2026.9.4",
-  resolveGlobalManager: async () => "npm",
+  resolveGlobalManager: async () => state.manager,
   resolveNodeRunner: () => "/current/node",
   resolveTargetVersion: vi.fn(),
   UpdatePreMutationError: class extends Error {},
@@ -53,7 +58,20 @@ vi.mock("../../infra/update-check.js", async (original) => ({
 vi.mock("../../infra/update-check-package-target.js", () => ({
   fetchNpmPackageTargetStatus: async () => ({ version: "2027.1.0", nodeEngine: ">=26.1.0" }),
 }));
-vi.mock("../../daemon/runtime-paths.js", () => ({ resolveNodeRuntimeInfo: vi.fn() }));
+vi.mock("../../../node-sqlite.mjs", async (original) => ({
+  ...(await original<typeof import("../../../node-sqlite.mjs")>()),
+  detectCurrentSqliteCapabilities: async () => ({
+    available: true,
+    version: "3.53.4",
+    text: state.sqliteText,
+    blob: true,
+    json: true,
+  }),
+}));
+vi.mock("../../daemon/runtime-paths.js", () => ({
+  resolveNodeRuntimeInfo: vi.fn(),
+  resolvePinnedDaemonRuntimePath: vi.fn(async (value) => value),
+}));
 vi.mock("./update-command-node-runtime-resolution.js", () => ({
   resolveTargetNodeRuntime: async () => undefined,
 }));
@@ -61,6 +79,8 @@ import { resolveUpdateCommandTarget } from "./update-command-target.js";
 
 beforeEach(() => {
   state.calls = [];
+  state.manager = "npm";
+  state.sqliteText = true;
   vi.mocked(resolveNodeRuntimeInfo).mockReset();
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -161,3 +181,55 @@ it("does not reinterpret an unowned direct project as a selected global target",
   expect(selected.packageInstallTarget?.packageRoot).toBe(rootA);
   expect(state.calls.some((argv) => argv[1] === "root")).toBe(true);
 });
+
+it.each([
+  { node: "24.16.0", sqliteText: true, admitted: false },
+  { node: "26.1.0", sqliteText: false, admitted: false },
+  { node: "26.1.0", sqliteText: true, admitted: true },
+])(
+  "checks updater Node $node (SQLite text=$sqliteText) before a Bun service-root update",
+  async ({ node, sqliteText, admitted }) => {
+    vi.stubGlobal(
+      "process",
+      Object.create(process, {
+        execPath: { value: "/current/node" },
+        versions: { value: { ...process.versions, node, bun: undefined } },
+      }),
+    );
+    state.sqliteText = sqliteText;
+    state.manager = "bun";
+    const serviceRoot = path.resolve(".n1-fixture/service/install/global/node_modules/openclaw");
+    const bun = "/service/bin/bun";
+    const target = await resolve({
+      rootRedirect: { root: serviceRoot, previousRoot: rootB },
+      nodeRunner: bun,
+    });
+    expect(target.root).toBe(serviceRoot);
+    expect(target.packageUpdateNodeRunner).toBe(bun);
+    expect(target.packageInstallTarget).toMatchObject({
+      manager: "bun",
+      command: bun,
+      packageRoot: serviceRoot,
+    });
+    const result = await preparePackageUpdateRuntime({
+      ...target,
+      shouldRestart: true,
+      opts: { json: true },
+      executor: { enter: async () => ({ assertCurrent: vi.fn() }) },
+      timeoutMs: 1000,
+    });
+    expect(result).toMatchObject(
+      admitted
+        ? { ok: true, value: { nodeRunner: bun } }
+        : {
+            ok: false,
+            error: expect.stringContaining(
+              `requires Node >=26.1.0; selected runtime is Node ${node}`,
+            ),
+            failureFacts: [{ check: "node-runtime", code: "node-runtime-preflight" }],
+          },
+    );
+    expect(resolvePinnedDaemonRuntimePath).toHaveBeenCalledWith(bun, "bun", process.env);
+    expect(resolveNodeRuntimeInfo).not.toHaveBeenCalled();
+  },
+);

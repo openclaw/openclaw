@@ -6,10 +6,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   cliMessageExitEntrypoints,
   cliRecoveryEntrypoints,
@@ -129,6 +131,8 @@ async function runCliProcess(params: {
   }
   const expectedExitCode = params.expectedExitCode ?? 0;
   const exit = await runCliProcessChild({
+    nodeExecutable:
+      params.forbidTlsImport || params.failRunMainImport ? resolveTestNodeExecPath() : undefined,
     nodeArgs: [
       // Prepared entrypoints still load source-checkout plugins; keep the same TSX loader.
       "--import",
@@ -418,6 +422,7 @@ describe("message broadcast process exit", () => {
       const entryPath = path.join(root, "run-message-broadcast.mjs");
       const largePayload = "x".repeat(8_388_608);
       const helpersUrl = resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.helpers);
+      const nodeExecutable = resolveTestNodeExecPath();
       const commandSpecifier = /\.[cm]?ts$/u.test(helpersUrl.pathname)
         ? "../../../commands/message.js"
         : resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.command).href;
@@ -471,7 +476,11 @@ await runCliWithExitFinalization({
       const spawned: { child?: ChildProcess } = {};
       const child = await lifetime.track(
         runNodeScript(
-          [...resolveRuntimeWorkerArgv(helpersUrl).slice(0, -1), entryPath],
+          [
+            ...resolveVitestNodeArgs(),
+            ...resolveRuntimeWorkerArgv(helpersUrl, nodeExecutable).slice(0, -1),
+            entryPath,
+          ],
           {
             PATH: process.env.PATH,
             SystemRoot: process.env.SystemRoot,
@@ -492,6 +501,7 @@ await runCliWithExitFinalization({
           },
           CLI_PROCESS_DEADLOCK_GUARD_MS,
           {
+            executable: nodeExecutable,
             cwd: path.resolve("."),
             maxBuffer,
             signal: AbortSignal.any([signal, finished.signal, overflow.signal]),

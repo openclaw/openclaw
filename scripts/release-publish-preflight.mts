@@ -103,6 +103,13 @@ export async function runReleasePublishPreflight(
     "Publication inputs are consistent.",
     "Correct the named dispatch inputs and repeat preflight.",
     () => {
+      if (
+        options.tag.includes("-alpha.") ||
+        options.npmDistTag === "alpha" ||
+        options.workflowRef.includes("tideclaw/alpha/")
+      ) {
+        throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+      }
       if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(options.repo)) {
         throw new Error("repo must be owner/name.");
       }
@@ -113,7 +120,7 @@ export async function runReleasePublishPreflight(
         throw new Error("A workflow ref or workflow SHA is required.");
       }
       if (
-        !/^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$/u.test(
+        !/^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$/u.test(
           options.tag,
         )
       ) {
@@ -227,17 +234,6 @@ export async function runReleasePublishPreflight(
           workflowSha: toolingSha,
           runGh,
         });
-      } else if (
-        options.tag.includes("-alpha.") &&
-        options.npmDistTag === "alpha" &&
-        /^tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$/u.test(workflowRef)
-      ) {
-        const ref = requirePreflightRecord(api(`git/ref/heads/${workflowRef}`), "Tideclaw ref");
-        const object = requirePreflightRecord(ref.object, "Tideclaw ref object");
-        if (object.type !== "commit" || typeof object.sha !== "string" || !SHA.test(object.sha)) {
-          throw new Error("Invalid Tideclaw workflow commit.");
-        }
-        toolingSha = object.sha;
       } else if (workflowRef === "main") {
         const main = requirePreflightRecord(
           requirePreflightRecord(api("git/ref/heads/main"), "main").object,
@@ -253,7 +249,7 @@ export async function runReleasePublishPreflight(
         warn("publisher.planned-tooling", "Protected tooling tag is still pending.", remediation);
       } else {
         throw new Error(
-          "This preflight supports the regular protected-tag publication route; use the alpha or extended-stable owner workflow for other routes.",
+          "This preflight supports the regular protected-tag publication route; use the extended-stable owner workflow for other routes.",
         );
       }
     },
@@ -356,9 +352,7 @@ export async function runReleasePublishPreflight(
       for (const consumer of [
         "publisher",
         ...(options.publishOpenclawNpm === false ? [] : ["core-npm"]),
-        ...(!options.tag.includes("-alpha.") &&
-        !options.tag.includes("-beta.") &&
-        options.publishOpenclawNpm !== false
+        ...(!options.tag.includes("-beta.") && options.publishOpenclawNpm !== false
           ? ["stable-closeout"]
           : []),
       ] as const) {
@@ -385,11 +379,9 @@ export async function runReleasePublishPreflight(
                 route:
                   options.publicationRoute === "prepared"
                     ? "prepared"
-                    : options.npmDistTag === "alpha"
-                      ? "alpha"
-                      : options.npmDistTag === "extended-stable"
-                        ? "extended-stable"
-                        : "normal",
+                    : options.npmDistTag === "extended-stable"
+                      ? "extended-stable"
+                      : "normal",
                 npmDistTag: options.npmDistTag,
                 publishOpenclawNpm: options.publishOpenclawNpm !== false,
                 pluginPublishScope: options.pluginPublishScope,
@@ -638,11 +630,7 @@ export async function runReleasePublishPreflight(
       );
     }
   }
-  if (
-    !options.tag.includes("-alpha.") &&
-    !options.tag.includes("-beta.") &&
-    options.publishOpenclawNpm !== false
-  ) {
+  if (!options.tag.includes("-beta.") && options.publishOpenclawNpm !== false) {
     if (sourceSha) {
       rows.push(
         ...inspectStableCloseoutPreflight({

@@ -15,6 +15,9 @@ import type { MatrixQaObservedEvent } from "./events.js";
 
 const runtimeFixture = vi.hoisted(() => ({
   logging: undefined as PluginRuntime["logging"] | undefined,
+  unexpectedOperation: async () => {
+    throw new Error("Logging fixture does not perform Matrix client operations");
+  },
 }));
 
 vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({
@@ -24,6 +27,13 @@ vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({
     },
     SqliteBackedMatrixSyncStore: { create: async () => ({}) },
     MatrixClient: class {
+      bootstrapOwnDeviceVerification = runtimeFixture.unexpectedOperation;
+      deleteOwnDevices = runtimeFixture.unexpectedOperation;
+      getDeviceVerificationStatus = runtimeFixture.unexpectedOperation;
+      listOwnDevices = runtimeFixture.unexpectedOperation;
+      resetRoomKeyBackup = runtimeFixture.unexpectedOperation;
+      restoreRoomKeyBackup = runtimeFixture.unexpectedOperation;
+      verifyWithRecoveryKey = runtimeFixture.unexpectedOperation;
       on() {}
       off() {}
       async start() {}

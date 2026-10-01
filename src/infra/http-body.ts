@@ -22,7 +22,7 @@ export {
 } from "./http-response-body.js";
 
 export const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
-export const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 
 export type RequestBodyLimitErrorCode =
   | "PAYLOAD_TOO_LARGE"
@@ -96,24 +96,13 @@ export type ReadRequestBodyOptions = {
   destroyOnLimit?: boolean;
 };
 
-type RequestBodyLimitValues = {
-  maxBytes: number;
-  timeoutMs: number;
-};
-
-function resolveRequestBodyLimitValues(options: {
-  maxBytes: number;
-  timeoutMs?: number;
-}): RequestBodyLimitValues {
+function resolveRequestBodyLimitValues(options: { maxBytes: number; timeoutMs?: number }) {
   const maxBytes = Number.isFinite(options.maxBytes)
     ? Math.max(1, Math.floor(options.maxBytes))
     : 1;
   const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_WEBHOOK_BODY_TIMEOUT_MS);
   return { maxBytes, timeoutMs };
 }
-
-export const testApi = { resolveRequestBodyLimitValues };
-export { testApi as __test__ };
 
 function stopRequestBodyAfterLimit(req: IncomingMessage, destroyOnLimit: boolean): void {
   if (req.destroyed) {
@@ -264,13 +253,13 @@ export async function readJsonBodyWithLimit(
   }
 }
 
-export type RequestBodyLimitGuard = {
+type RequestBodyLimitGuard = {
   dispose: () => void;
   isTripped: () => boolean;
   code: () => RequestBodyLimitErrorCode | null;
 };
 
-export type RequestBodyLimitGuardOptions = {
+type RequestBodyLimitGuardOptions = {
   maxBytes: number;
   timeoutMs?: number;
   responseFormat?: "json" | "text";

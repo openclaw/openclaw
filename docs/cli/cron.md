@@ -130,7 +130,7 @@ Agent-turn jobs default to the creating conversation when session context is ava
   </Accordion>
 </AccordionGroup>
 
-Removing an isolated automation stops future runs and cleans up its reusable session after active work stops. The JSON removal response includes `sessionCleanup: "pending"` while that cleanup is deferred. Run history is retained.
+When an operator removes an automation with an active run, OpenClaw requests cancellation of that run. An admitted automation can remove its own job without cancelling the active run. The JSON removal response includes `activeRunCancellationRequested: true` when cancellation was requested. For an isolated automation, reusable-session cleanup then waits for the active run to stop and reports `sessionCleanup: "pending"` while cleanup is deferred. Run history is retained.
 
 If session cleanup fails, the error is logged. A removal with no active run also returns the cleanup error to the caller. Use `openclaw sessions list --json` to find the remaining session, then `openclaw sessions delete <key> --yes` to retry cleanup after the Gateway or worker recovers.
 
@@ -173,7 +173,7 @@ Failure notifications resolve in this order:
 
 Jobs with one of those routes default to an execution-failure alert after 2 consecutive failures and a 1-hour cooldown. A per-job or global `failureAlert` object explicitly activates/tunes the policy even without an existing route. `failureAlert: false` disables execution and required-delivery failure alerts for the job, but not the auto-disable safety notification. Global `enabled: false` disables inheritance unless the job has its own `failureAlert` object. `delivery.bestEffort: true` suppresses inherited/default execution alerts, but not an explicit per-job policy.
 
-Repeated failures with the same cause stay grouped into one incident across Gateway restarts. A changed cause or destination can notify after the cooldown, and successful completion sends one recovery notice. Skipped runs and unknown delivery outcomes do not count as recovery. If script setup cannot refresh tools after a plugin reload, the alert explains that automatic recovery failed before the script ran.
+Repeated failures with the same cause stay grouped into one incident across Gateway restarts. A changed cause or destination can notify after the cooldown. Successful completion clears the incident silently; the recovery stays in automation history. Skipped runs and unknown delivery outcomes do not count as recovery. If script setup cannot refresh tools after a plugin reload, the alert explains that automatic recovery failed before the script ran.
 
 <Note>
 Main-session jobs may only use `delivery.failureDestination` when primary delivery mode is `webhook`. Isolated jobs accept it in all modes.
@@ -185,7 +185,7 @@ Isolated automation runs treat run-level agent failures as job errors, even when
 
 Command jobs do not start an isolated agent turn. A zero exit code records `ok`. Non-zero exit, signal, timeout, or no-output timeout records `error`, and can trigger the same failure notification path.
 
-Required completion delivery is separate: `status: "ok"` with `completionStatus: "failed"` does not increment the execution streak or backoff. Delivery-failure alerts use a resolved alternate failure destination without the `after` threshold and group repeated failures into one incident. Alerts for changed failures honor the shared job/global `failureAlert.cooldownMs` (default 1 hour), including the first delivery failure after an execution alert. Recovery notices do not wait for the cooldown. An alert never retries the primary route that just failed.
+Required completion delivery is separate: `status: "ok"` with `completionStatus: "failed"` does not increment the execution streak or backoff. Delivery-failure alerts use a resolved alternate failure destination without the `after` threshold and group repeated failures into one incident. Alerts for changed failures honor the shared job/global `failureAlert.cooldownMs` (default 1 hour), including the first delivery failure after an execution alert. An alert never retries the primary route that just failed.
 
 If an isolated run times out before the first model request, `openclaw automations show` and `openclaw automations runs` include a phase-specific error. Examples are `setup timed out before runner start`, or a stall message naming the last-known startup phase such as `context-engine`. For CLI-backed providers, the pre-model watchdog stays active until the external CLI turn starts. Session lookup, hook, auth, prompt, and CLI setup stalls are therefore reported as pre-model automation failures.
 
@@ -375,6 +375,7 @@ Manual run and inspection:
 ```bash
 openclaw automations list
 openclaw automations list --agent ops
+openclaw automations list --all --agent ops --query backup --json
 openclaw automations get <job-id>
 openclaw automations get <job-id> --json
 openclaw automations show <job-id>
@@ -401,6 +402,14 @@ newest-first order, and `--offset <n>` advances through the result set using the
 page metadata returned by the previous command.
 
 `openclaw automations list` shows enabled jobs across agents by default, including jobs whose owner cannot be resolved. Pass `--all` to include disabled jobs, or `--agent <id>` to filter by the effective normalized agent ID. Ownership resolves from the job's declared agent, its agent-scoped session key, then the configured system-agent owner. Unresolved jobs do not match an agent filter. The `cron list` alias has the same behavior.
+
+Use `--query <text>` to search job IDs, names, descriptions, declared agent IDs,
+and display names. Matching is case-insensitive and uses the Gateway's existing
+inventory filter before paging; the CLI reads every bounded matching page with
+the same query. It combines with `--all`, `--agent`, and either text or `--json`
+output. Omitting the flag or passing only whitespace keeps the existing listing.
+This searches job metadata, not message or script payloads; use `automations runs
+<job-id> --query <text>` to search run summaries and errors instead.
 
 The human-readable Agent ID column shows the effective owner. JSON list rows preserve the declared `agentId` and include `effectiveAgentId`, which is `null` when ownership is unresolved.
 
@@ -457,6 +466,20 @@ openclaw automations edit <job-id> --best-effort-deliver
 openclaw automations edit <job-id> --no-best-effort-deliver
 openclaw automations edit <job-id> --no-deliver
 ```
+
+### History across automations
+
+Use `openclaw automations runs --all` to query the existing Gateway history across
+visible automations without looking up each job ID. Filters and pagination apply
+to the combined history:
+
+```bash
+openclaw automations runs --all --status error --limit 20
+openclaw automations runs --all --sort asc --offset 20 --limit 20
+```
+
+Do not combine `--all` with a positional job ID or `--id`. Omitting `--all` keeps
+the existing per-job query. Gateway permissions and visibility rules are unchanged.
 
 ## Related
 
