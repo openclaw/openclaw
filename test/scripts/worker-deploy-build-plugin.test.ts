@@ -161,6 +161,13 @@ export { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";`;
         expect(bundles.flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName))).toEqual([
           "worker/worker.mjs",
         ]);
+        expect(
+          bundles.flatMap((bundle) =>
+            bundle.chunks.flatMap((chunk) =>
+              chunk.type === "chunk" ? [...chunk.imports, ...chunk.dynamicImports] : [],
+            ),
+          ),
+        ).not.toContain("ws");
         const { collectWorkerDeployArtifactErrors } =
           await import("../../scripts/check-cli-bootstrap-imports.mts");
         expect(
@@ -393,6 +400,7 @@ console.log("relocated worker facade activation follows the shared config snapsh
       const result = await promisify(execFile)(
         process.execPath,
         [
+          ...(process.versions.bun ? ["--no-install"] : []),
           "--input-type=module",
           "--eval",
           `

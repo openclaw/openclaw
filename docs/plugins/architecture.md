@@ -221,7 +221,11 @@ without copying the surrounding workspace. Compiled bundled runtime and setup
 modules share the host's code identity; each inventory still owns its registered
 callbacks and cleanup. Replacing that compiled code requires a build and Gateway
 restart. Conditional package aliases retain their package metadata, and native
-Node conditions select the target from that captured metadata. Legacy packages
+Node conditions, including `module-sync`, select the target from that captured metadata.
+Source inspection uses the same synchronous-module condition without evaluating plugin code.
+Captured source retains the difference between authored imports and require calls, so Bun's
+compiler resolution previews do not acquire a deferred dependency before its first call.
+Missing selected targets remain absent for that captured generation. Legacy packages
 without an exports map also admit their existing main or index entry without
 executing unselected code. Native entries reuse the recorded admission below.
 The selected package's remaining body is captured before execution.
