@@ -268,7 +268,8 @@ type AgentCommandGatewayOnlyKey =
   | "cronCreatorAuthorityCapability"
   | "onAdmittedRunContext"
   | "onPostAdmittedRunContext"
-  | "beforeTerminalDelivery";
+  | "beforeTerminalDelivery"
+  | "internalDeliverySuppressErrors";
 
 /** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<
