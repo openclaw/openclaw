@@ -127,6 +127,32 @@ it("stops input-change retries without automatic maintenance warnings during Gat
   );
 });
 
+it.each([
+  ["a drain-refused commit", false],
+  ["an unrelated failure", true],
+] as const)("classifies %s that settles during Gateway drain", async (outcome, warns) => {
+  const { request } = createStore();
+  const logger = logging.getChildLogger({ subsystem: "session-sqlite" });
+  vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
+  const warn = vi.spyOn(logger, "warn");
+  vi.mocked(reclamationRun.runSqliteSessionReclamation).mockImplementationOnce(async (params) => {
+    markGatewayRestartDraining("stop (SIGTERM)");
+    if (outcome === "a drain-refused commit") {
+      params.assertCommitAllowed?.();
+    }
+    throw new Error("disk I/O error");
+  });
+  kickSessionEntryMaintenanceAfterWrite(request);
+  await yieldToEventLoop();
+  await vi.advanceTimersByTimeAsync(1);
+  const failure = expect.objectContaining({ error: expect.any(Error) });
+  if (warns) {
+    expect(warn).toHaveBeenCalledWith("SQLite automatic session maintenance failed", failure);
+  } else {
+    expect(warn).not.toHaveBeenCalledWith("SQLite automatic session maintenance failed", failure);
+  }
+});
+
 it("resumes automatic maintenance after Gateway work admission resets", async () => {
   const { request, storePath } = createStore();
   kickSessionEntryMaintenanceAfterWrite(request);

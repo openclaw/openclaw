@@ -1,7 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import { getChildLogger } from "../../logging/logger.js";
-import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
+import {
+  GatewayDrainingError,
+  getGatewayRestartDrainSignal,
+  isGatewayRestartDrainError,
+} from "../../process/gateway-work-admission.js";
 import { isOpenClawAgentDatabasePathCurrent } from "../../state/openclaw-agent-db-identity.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
@@ -215,7 +219,9 @@ async function runPendingMaintenance(
     let admitted = false;
     const assertInputsCurrent = () => {
       if (!isCurrent()) {
-        throw new Error("SQLite automatic maintenance owner retired");
+        throw getGatewayRestartDrainSignal().aborted
+          ? new GatewayDrainingError()
+          : new Error("SQLite automatic maintenance owner retired");
       }
       if (
         (admitted &&
@@ -345,7 +351,11 @@ async function runPendingMaintenance(
       }
       return;
     }
-    if (!getGatewayRestartDrainSignal().aborted) {
+    // Drain cancels discretionary work; independent failures stay visible.
+    if (
+      !isGatewayRestartDrainError(error) &&
+      !(planningChanged && getGatewayRestartDrainSignal().aborted)
+    ) {
       getChildLogger({ subsystem: "session-sqlite" }).warn(
         "SQLite automatic session maintenance failed",
         { error, path: databasePath },
