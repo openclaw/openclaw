@@ -470,3 +470,24 @@ it("releases a settled receipt for recovery when its captured database admission
     expect(receipt).toEqual({ status: "running" });
   });
 });
+
+it("runs one queued job without reloading the whole persisted cron store", async () => {
+  await withReservation(async ({ state, job, identity }) => {
+    const fullStoreRead = vi.spyOn(cronStore, "loadCronJobsStoreWithConfigJobs");
+    try {
+      await executeQueuedCronRun({
+        state,
+        jobId: job.id,
+        reservedAtMs: state.queuedRunReservationsByJobId.get(job.id)!.markerAtMs,
+        reservationIdentity: identity,
+        isUnavailable: () => true,
+        onUnavailable: () => {},
+        onNotRunnable: async () => {},
+      });
+      expect(state.store?.jobs.some((entry) => entry.id === job.id)).toBe(true);
+      expect(fullStoreRead).not.toHaveBeenCalled();
+    } finally {
+      fullStoreRead.mockRestore();
+    }
+  });
+});
