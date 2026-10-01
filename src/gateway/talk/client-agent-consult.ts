@@ -155,14 +155,18 @@ function createTalkClientAgentRuntime(params: {
         }),
       });
     } finally {
-      runParams.abortSignal?.removeEventListener("abort", close);
-      // Abort revokes authority immediately. Normal completion joins accepted
-      // terminal writes first, matching the ordinary agent runner.
-      await settleTalkConsultAdmission({
-        aborted: runParams.abortSignal?.aborted === true,
-        operationalRunInstance,
-        close,
-      });
+      // Keep abort revocation registered through drain. Removing the listener
+      // before awaiting pending writes left write authority live if cancel
+      // arrived mid-settlement.
+      try {
+        await settleTalkConsultAdmission({
+          aborted: runParams.abortSignal?.aborted === true,
+          operationalRunInstance,
+          close,
+        });
+      } finally {
+        runParams.abortSignal?.removeEventListener("abort", close);
+      }
     }
   };
   Object.defineProperty(agentRuntime, "runEmbeddedAgent", {
