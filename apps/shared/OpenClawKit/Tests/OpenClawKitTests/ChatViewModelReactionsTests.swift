@@ -50,6 +50,7 @@ private actor ReactionTestTransport: OpenClawChatTransport {
     let listGate: ReactionRequestGate?
     let setGate: ReactionRequestGate?
     let setFails: Bool
+    let listOmitsMessage: Bool
     let initial: [OpenClawChatReactionSummary]
     var routeID = UUID()
     private(set) var listCount = 0
@@ -60,6 +61,7 @@ private actor ReactionTestTransport: OpenClawChatTransport {
         listGate: ReactionRequestGate? = nil,
         setGate: ReactionRequestGate? = nil,
         setFails: Bool = false,
+        listOmitsMessage: Bool = false,
         initial: [OpenClawChatReactionSummary] = [])
     {
         self.access = OpenClawChatReactionAccess(
@@ -68,6 +70,7 @@ private actor ReactionTestTransport: OpenClawChatTransport {
         self.listGate = listGate
         self.setGate = setGate
         self.setFails = setFails
+        self.listOmitsMessage = listOmitsMessage
         self.initial = initial
     }
 
@@ -95,7 +98,7 @@ private actor ReactionTestTransport: OpenClawChatTransport {
     private func list(_ key: String) async -> OpenClawChatReactionsListResult {
         self.listCount += 1
         if self.listCount == 1 { await self.listGate?.wait() }
-        return .init(sessionID: "session-\(key)", reactions: ["saved": self.initial])
+        return .init(sessionID: "session-\(key)", reactions: self.listOmitsMessage ? [:] : ["saved": self.initial])
     }
 
     private func set(_ request: Write) async throws -> OpenClawChatReactionsSetResult {
@@ -273,7 +276,7 @@ struct ChatViewModelReactionsTests {
         #expect(fixture.model.viewerReactionUserID == "self")
         let write = Task { await fixture.model.toggleMessageReaction(message: prompt, emoji: "👍") }
         await gate.waitForArrival()
-        #expect(fixture.model.isReactionPending(for: prompt))
+        #expect(fixture.model.isReactionPending(for: prompt, emoji: "👍"))
         await fixture.model.toggleMessageReaction(message: prompt, emoji: "👍")
         #expect(await transport.writes.count == 1)
         let newer = self.summary("👀", identity: "someone")
@@ -281,11 +284,97 @@ struct ChatViewModelReactionsTests {
         await gate.release()
         await write.value
         #expect(fixture.model.messageReactions(for: prompt) == [newer])
-        #expect(!fixture.model.isReactionPending(for: prompt))
+        #expect(!fixture.model.isReactionPending(for: prompt, emoji: "👍"))
         #expect(await transport.writes.first == .init(
             sessionKey: "agent:main:a", agentID: "main", messageID: "saved", emoji: "👍", remove: true))
         await fixture.model.toggleMessageReaction(message: prompt, emoji: "🚀")
         #expect(fixture.model.messageReactions(for: prompt) == [self.summary("🚀", identity: "self")])
+    }
+
+    @Test(arguments: [false, true])
+    func `independent emoji writes stay FIFO after success or failure`(setFails: Bool) async throws {
+        let gate = ReactionRequestGate()
+        let transport = ReactionTestTransport(
+            setGate: gate, setFails: setFails, initial: [self.summary("🎉", identity: "self")])
+        let fixture = ReactionViewModelFixture(transport: transport)
+        defer { fixture.close() }
+        await fixture.load()
+        let prompt = try #require(fixture.model.messages.first)
+        let first = await self.startReaction(fixture.model, message: prompt, emoji: "👍")
+        await gate.waitForArrival()
+        let second = await self.startReaction(fixture.model, message: prompt, emoji: "🎉")
+        let third = await self.startReaction(fixture.model, message: prompt, emoji: "🚀")
+        #expect(fixture.model.isReactionPending(for: prompt, emoji: "👍"))
+        #expect(fixture.model.isReactionPending(for: prompt, emoji: "🎉"))
+        #expect(fixture.model.isReactionPending(for: prompt, emoji: "🚀"))
+        #expect(!fixture.model.isReactionPending(for: prompt, emoji: "👀"))
+        await fixture.model.toggleMessageReaction(message: prompt, emoji: "👍")
+        #expect(await transport.writes.map(\.emoji) == ["👍"])
+        fixture.model.handleTransportEvent(.sessionReaction(self.event(reactions: [])))
+        await gate.release()
+        await first.value
+        await second.value
+        await third.value
+        #expect(await transport.writes == [
+            .init(sessionKey: "agent:main:a", agentID: "main", messageID: "saved", emoji: "👍", remove: false),
+            .init(sessionKey: "agent:main:a", agentID: "main", messageID: "saved", emoji: "🎉", remove: true),
+            .init(sessionKey: "agent:main:a", agentID: "main", messageID: "saved", emoji: "🚀", remove: false),
+        ])
+    }
+
+    @Test(arguments: [false, true])
+    func `an applied list snapshot outranks a late set response including omitted messages`(
+        omitsMessage: Bool) async throws
+    {
+        let listGate = ReactionRequestGate()
+        let setGate = ReactionRequestGate()
+        let listed = self.summary("👀", identity: "someone")
+        let transport = ReactionTestTransport(
+            listGate: listGate, setGate: setGate, listOmitsMessage: omitsMessage, initial: [listed])
+        let fixture = ReactionViewModelFixture(transport: transport)
+        defer { fixture.close() }
+        fixture.model.load()
+        await fixture.model.bootstrapTask?.value
+        await listGate.waitForArrival()
+        let read = fixture.model.reactionState.refreshTask
+        let prompt = try #require(fixture.model.messages.first)
+        let write = await self.startReaction(fixture.model, message: prompt, emoji: "👍")
+        await setGate.waitForArrival()
+        await listGate.release()
+        await read?.value
+        let expected = omitsMessage ? [] : [listed]
+        #expect(fixture.model.messageReactions(for: prompt) == expected)
+        await setGate.release()
+        await write.value
+        #expect(fixture.model.messageReactions(for: prompt) == expected)
+    }
+
+    @Test func `switching sessions retires queued writes without blocking the new session`() async throws {
+        let gate = ReactionRequestGate()
+        let transport = ReactionTestTransport(setGate: gate)
+        let fixture = ReactionViewModelFixture(transport: transport)
+        defer { fixture.close() }
+        await fixture.load()
+        let prompt = try #require(fixture.model.messages.first)
+        let first = await self.startReaction(fixture.model, message: prompt, emoji: "👍")
+        await gate.waitForArrival()
+        let queued = await self.startReaction(fixture.model, message: prompt, emoji: "🎉")
+        fixture.model.switchSession(to: "agent:main:b")
+        await fixture.model.bootstrapTask?.value
+        await fixture.model.reactionState.refreshTask?.value
+        let nextPrompt = try #require(fixture.model.messages.first)
+        let current = await self.startReaction(fixture.model, message: nextPrompt, emoji: "🚀")
+        await current.value
+        let expected: [ReactionTestTransport.Write] = [
+            .init(sessionKey: "agent:main:a", agentID: "main", messageID: "saved", emoji: "👍", remove: false),
+            .init(sessionKey: "agent:main:b", agentID: "main", messageID: "saved", emoji: "🚀", remove: false),
+        ]
+        #expect(await transport.writes == expected)
+        await gate.release()
+        await first.value
+        await queued.value
+        #expect(await transport.writes == expected)
+        #expect(fixture.model.reactionError(for: nextPrompt) == nil)
     }
 
     @Test(arguments: [false, true])
@@ -307,7 +396,7 @@ struct ChatViewModelReactionsTests {
         #expect(fixture.model.sessionKey == "agent:main:b")
         #expect(fixture.model.messageReactions(for: nextPrompt).isEmpty)
         #expect(fixture.model.reactionError(for: nextPrompt) == nil)
-        #expect(!fixture.model.isReactionPending(for: nextPrompt))
+        #expect(!fixture.model.isReactionPending(for: nextPrompt, emoji: "🎉"))
     }
 
     @Test func `a new transcript instance invalidates writes before its session row refreshes`() async throws {
@@ -343,7 +432,7 @@ struct ChatViewModelReactionsTests {
         await fixture.model.toggleMessageReaction(message: prompt, emoji: "👍")
         #expect(fixture.model.reactionError(for: prompt) == "Reaction was rejected")
         #expect(fixture.model.reactionError(for: reply) == nil)
-        #expect(!fixture.model.isReactionPending(for: prompt))
+        #expect(!fixture.model.isReactionPending(for: prompt, emoji: "👍"))
         fixture.model.handleTransportEvent(.health(ok: false))
         #expect(fixture.model.reactionError(for: prompt) == nil)
         #expect(!fixture.model.canReact(to: prompt))
@@ -425,6 +514,22 @@ struct ChatViewModelReactionsTests {
     @Test(arguments: ["", "a", "1", " ", "👍 ", " 👍", "👍\n", "👍👍", "🇦", "🏽", "👍a", "1️"])
     func `the custom picker rejects text multiple emoji and incomplete sequences`(text: String) {
         #expect(!OpenClawChatReactionEmoji.isValid(text))
+    }
+
+    private func startReaction(
+        _ model: OpenClawChatViewModel,
+        message: OpenClawChatMessage,
+        emoji: String) async -> Task<Void, Never>
+    {
+        let (started, continuation) = AsyncStream<Void>.makeStream()
+        let task = Task {
+            continuation.yield(())
+            continuation.finish()
+            await model.toggleMessageReaction(message: message, emoji: emoji)
+        }
+        var iterator = started.makeAsyncIterator()
+        _ = await iterator.next()
+        return task
     }
 
     private func access(

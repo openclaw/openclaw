@@ -44,7 +44,7 @@ struct ChatMessageReactions: View {
                             self.chip(reaction, selected: selected)
                         }
                         .buttonStyle(.plain)
-                        .disabled(self.viewModel.isReactionPending(for: self.message))
+                        .disabled(self.viewModel.isReactionPending(for: self.message, emoji: reaction.emoji))
                     } else {
                         self.chip(reaction, selected: selected)
                     }
@@ -95,7 +95,6 @@ struct ChatMessageReactionAction: View {
                 Label("Add Reaction", systemImage: "face.smiling")
                     .font(OpenClawChatTypography.body)
             }
-            .disabled(self.viewModel.isReactionPending(for: self.message))
             .accessibilityIdentifier("chat-add-reaction")
         }
     }
@@ -126,6 +125,7 @@ struct ChatMessageReactionPicker: View {
                                     in: RoundedRectangle(cornerRadius: 12))
                         }
                         .buttonStyle(.plain)
+                        .disabled(self.viewModel.isReactionPending(for: self.message, emoji: emoji))
                         .accessibilityLabel(emoji)
                         .accessibilityAddTraits(selected ? .isSelected : [])
                         .accessibilityIdentifier("chat-reaction-choice-\(emoji)")
@@ -156,7 +156,7 @@ struct ChatMessageReactionPicker: View {
                     }
                 }
             }
-            .disabled(!self.viewModel.canReact(to: self.message) || self.viewModel.isReactionPending(for: self.message))
+            .disabled(!self.viewModel.canReact(to: self.message))
         }
         .presentationDetents([.height(self.showsCustom ? 300 : 220)])
         .accessibilityIdentifier("chat-reaction-picker")
@@ -184,6 +184,9 @@ struct ChatMessageReactionPicker: View {
                 Button { self.applyCustom() } label: {
                     Text("React").font(OpenClawChatTypography.body)
                 }
+                .disabled(self.viewModel.isReactionPending(
+                    for: self.message,
+                    emoji: self.emoji.trimmingCharacters(in: .whitespacesAndNewlines)))
                 .accessibilityIdentifier("chat-reaction-submit")
             }
             Text(self.invalid ? String(localized: "Enter one emoji.") : String(localized: "Type or paste one emoji."))

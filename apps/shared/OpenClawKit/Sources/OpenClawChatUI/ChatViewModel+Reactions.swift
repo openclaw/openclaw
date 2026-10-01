@@ -9,9 +9,29 @@ final class ChatMessageReactionState {
         let sessionID: String
     }
 
+    struct WriteKey: Hashable {
+        let messageID: String
+        let emoji: String
+    }
+
+    struct Write {
+        let key: WriteKey
+        let operation: UUID
+        let remove: Bool
+        let message: OpenClawChatMessage
+        let target: Target
+        let lease: OpenClawChatReactionsRouteLease
+    }
+
+    struct WriteTail {
+        let operation: UUID
+        let task: Task<Void, Never>
+    }
+
     var summaries: [String: [OpenClawChatReactionSummary]] = [:]
     var errors: [String: String] = [:]
-    var writes: [String: UUID] = [:]
+    var writes: [WriteKey: UUID] = [:]
+    @ObservationIgnored var writeTails: [String: WriteTail] = [:]
     var lease: OpenClawChatReactionsRouteLease?
     var target: Target?
     @ObservationIgnored var revisions: [String: UInt64] = [:]
@@ -28,6 +48,8 @@ final class ChatMessageReactionState {
         self.summaries = [:]
         self.errors = [:]
         self.writes = [:]
+        // Queued tasks retain their predecessors; a new session must not wait on the old scope.
+        self.writeTails = [:]
         self.revisions = [:]
         self.readUpdates = nil
     }
@@ -49,8 +71,10 @@ extension OpenClawChatViewModel {
         return self.reactionState.summaries[messageID] ?? []
     }
 
-    public func isReactionPending(for message: OpenClawChatMessage) -> Bool {
-        message.transcriptMessageID.map { self.reactionState.writes[$0] != nil } ?? false
+    public func isReactionPending(for message: OpenClawChatMessage, emoji: String) -> Bool {
+        message.transcriptMessageID.map {
+            self.reactionState.writes[.init(messageID: $0, emoji: emoji)] != nil
+        } ?? false
     }
 
     public func reactionError(for message: OpenClawChatMessage) -> String? {
@@ -76,49 +100,66 @@ extension OpenClawChatViewModel {
         guard OpenClawChatReactionEmoji.isValid(emoji),
               self.canReact(to: message),
               let messageID = self.savedReactionMessageID(message),
-              self.reactionState.writes[messageID] == nil,
               let target = self.reactionState.target,
               let lease = self.reactionState.lease
         else { return }
-        let operation = UUID()
-        self.reactionState.writes[messageID] = operation
-        self.reactionState.errors[messageID] = nil
-        defer {
-            if self.reactionState.writes[messageID] == operation {
-                self.reactionState.writes[messageID] = nil
-            }
-        }
-        guard await lease.isCurrent(),
-              self.isCurrentReactionWrite(target, routeID: lease.routeID, messageID: messageID, operation: operation),
-              self.canReact(to: message)
-        else { return }
-        let revision = self.reactionState.revisions[messageID, default: 0]
+        let key = ChatMessageReactionState.WriteKey(messageID: messageID, emoji: emoji)
+        guard self.reactionState.writes[key] == nil else { return }
         let remove = self.messageReactions(for: message).contains { summary in
             summary.emoji == emoji && summary.identities.contains { $0.id == lease.access.userID }
         }
+        let write = ChatMessageReactionState.Write(
+            key: key, operation: UUID(), remove: remove, message: message, target: target, lease: lease)
+        self.reactionState.writes[key] = write.operation
+        let previous = self.reactionState.writeTails[messageID]?.task
+        let task = Task { [weak self] in
+            await previous?.value
+            guard let self else { return }
+            await self.performMessageReaction(write)
+            self.finishMessageReaction(write)
+        }
+        self.reactionState.writeTails[messageID] = .init(operation: write.operation, task: task)
+        await task.value
+    }
+
+    private func performMessageReaction(_ write: ChatMessageReactionState.Write) async {
+        let messageID = write.key.messageID
+        guard await write.lease.isCurrent(),
+              self.isCurrentReactionWrite(write),
+              self.canReact(to: write.message)
+        else { return }
+        self.reactionState.errors[messageID] = nil
+        let revision = self.reactionState.revisions[messageID, default: 0]
         do {
-            let result = try await lease.set(
-                sessionKey: target.session.key,
-                agentID: target.session.deliveryAgentID,
+            let result = try await write.lease.set(
+                sessionKey: write.target.session.key,
+                agentID: write.target.session.deliveryAgentID,
                 messageID: messageID,
-                emoji: emoji,
-                remove: remove)
-            guard await lease.isCurrent(),
-                  self.isCurrentReactionWrite(
-                      target, routeID: lease.routeID, messageID: messageID, operation: operation),
-                  self.savedReactionMessageID(message) != nil,
+                emoji: write.key.emoji,
+                remove: write.remove)
+            guard await write.lease.isCurrent(),
+                  self.isCurrentReactionWrite(write),
+                  self.savedReactionMessageID(write.message) != nil,
                   result.messageID == messageID,
                   self.reactionState.revisions[messageID, default: 0] == revision
             else { return }
             self.reactionState.summaries[messageID] = result.reactions
             self.reactionState.readUpdates?[messageID] = result.reactions
         } catch {
-            guard await lease.isCurrent(),
-                  self.isCurrentReactionWrite(
-                      target, routeID: lease.routeID, messageID: messageID, operation: operation),
-                  self.savedReactionMessageID(message) != nil
+            guard await write.lease.isCurrent(),
+                  self.isCurrentReactionWrite(write),
+                  self.savedReactionMessageID(write.message) != nil
             else { return }
             self.reactionState.errors[messageID] = error.localizedDescription
+        }
+    }
+
+    private func finishMessageReaction(_ write: ChatMessageReactionState.Write) {
+        if self.reactionState.writes[write.key] == write.operation {
+            self.reactionState.writes[write.key] = nil
+        }
+        if self.reactionState.writeTails[write.key.messageID]?.operation == write.operation {
+            self.reactionState.writeTails[write.key.messageID] = nil
         }
     }
 
@@ -193,14 +234,9 @@ extension OpenClawChatViewModel {
         self.sessionId.map { $0 == target.sessionID } ?? true
     }
 
-    private func isCurrentReactionWrite(
-        _ target: ChatMessageReactionState.Target,
-        routeID: UUID,
-        messageID: String,
-        operation: UUID) -> Bool
-    {
-        self.isCurrentReactionTarget(target) && self.reactionState.lease?.routeID == routeID &&
-            self.reactionState.writes[messageID] == operation
+    private func isCurrentReactionWrite(_ write: ChatMessageReactionState.Write) -> Bool {
+        self.isCurrentReactionTarget(write.target) && self.reactionState.lease?.routeID == write.lease.routeID &&
+            self.reactionState.writes[write.key] == write.operation
     }
 
     private func loadSessionReactions(
@@ -233,9 +269,14 @@ extension OpenClawChatViewModel {
                   result.sessionID == target.sessionID
             else { return }
             // Events committed after the read began outrank its older snapshot.
-            self.reactionState.summaries = result.reactions.merging(self.reactionState.readUpdates ?? [:]) { _, new in
-                new
+            let merged = result.reactions.merging(self.reactionState.readUpdates ?? [:]) { _, new in new }
+            // The snapshot also supersedes pending writes for messages it omits.
+            let messageIDs = Set(self.reactionState.summaries.keys).union(merged.keys)
+                .union(self.reactionState.writes.keys.map(\.messageID))
+            for messageID in messageIDs {
+                self.reactionState.revisions[messageID, default: 0] &+= 1
             }
+            self.reactionState.summaries = merged
         } catch {
             guard await lease.isCurrent(),
                   self.reactionState.refreshID == refreshID,
