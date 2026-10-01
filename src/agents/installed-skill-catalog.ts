@@ -38,7 +38,17 @@ function assertCatalogCurrent(skills: readonly InstalledSkill[], signal?: AbortS
   }
 }
 
-async function buildIndex(skills: readonly InstalledSkill[], signal?: AbortSignal) {
+function assertBodyReadable(canReadInstructions: () => boolean) {
+  if (!canReadInstructions()) {
+    throw new ToolInputError("Skill instruction-read permission changed during search.");
+  }
+}
+
+async function buildIndex(
+  skills: readonly InstalledSkill[],
+  canReadInstructions: () => boolean,
+  signal?: AbortSignal,
+) {
   const selected = skills
     .toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
     .slice(0, MAX_BODY_SKILLS);
@@ -54,9 +64,11 @@ async function buildIndex(skills: readonly InstalledSkill[], signal?: AbortSigna
         try {
           signal?.throwIfAborted();
           skill.assertCurrent?.();
+          assertBodyReadable(canReadInstructions);
           const body = await readSearchBody(skill, bodyBytes, signal);
           signal?.throwIfAborted();
           skill.assertCurrent?.();
+          assertBodyReadable(canReadInstructions);
           if (!body) {
             return undefined;
           }
@@ -69,6 +81,7 @@ async function buildIndex(skills: readonly InstalledSkill[], signal?: AbortSigna
           // propagate instead of becoming partial search coverage.
           signal?.throwIfAborted();
           skill.assertCurrent?.();
+          assertBodyReadable(canReadInstructions);
           return undefined;
         }
       }),
@@ -84,6 +97,7 @@ async function buildIndex(skills: readonly InstalledSkill[], signal?: AbortSigna
     }
   }
   assertCatalogCurrent(skills, signal);
+  assertBodyReadable(canReadInstructions);
   return {
     metadata: buildMetadataIndex(skills),
     bodies: buildLexicalIndex(documents),
@@ -130,6 +144,7 @@ export async function searchInstalledSkills(
   query: string,
   limit = 5,
   signal?: AbortSignal,
+  canReadInstructions: () => boolean = () => false,
 ): Promise<{
   skills: Array<{ name: string; description: string; location: string }>;
   hasMore: boolean;
@@ -143,40 +158,51 @@ export async function searchInstalledSkills(
     throw new ToolInputError(`limit must be an integer between 1 and ${MAX_RESULTS}.`);
   }
   assertCatalogCurrent(skills, signal);
+  const includeBodies = canReadInstructions();
   let index = indexes.get(skills);
-  while (!index) {
-    const pending = pendingIndexes.get(skills);
-    if (pending) {
-      await racePromiseWithAbortSignal(pending, signal);
-      assertCatalogCurrent(skills, signal);
-      index = indexes.get(skills);
-      continue;
-    }
-    // One caller owns the bounded reads. Other callers can cancel their wait
-    // independently or build afresh after a cancelled owner's reads have joined.
-    const build = buildIndex(skills, signal);
-    pendingIndexes.set(
-      skills,
-      build.then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
-    try {
-      index = await build;
-      indexes.set(skills, index);
-    } finally {
-      pendingIndexes.delete(skills);
+  if (includeBodies) {
+    while (!index) {
+      const pending = pendingIndexes.get(skills);
+      if (pending) {
+        await racePromiseWithAbortSignal(pending, signal);
+        assertCatalogCurrent(skills, signal);
+        assertBodyReadable(canReadInstructions);
+        index = indexes.get(skills);
+        continue;
+      }
+      // One caller owns the bounded reads. Other callers can cancel their wait
+      // independently or build afresh after a cancelled owner's reads have joined.
+      const build = buildIndex(skills, canReadInstructions, signal);
+      pendingIndexes.set(
+        skills,
+        build.then(
+          () => undefined,
+          () => undefined,
+        ),
+      );
+      try {
+        index = await build;
+        assertBodyReadable(canReadInstructions);
+        indexes.set(skills, index);
+      } finally {
+        pendingIndexes.delete(skills);
+      }
     }
   }
   // Tool-intent expansions (web, cron, etc.) do not belong to skill matching.
   const terms = [...new Set(tokenizeDocument(needle))].map((term) => ({ term, weight: 1 }));
   const scores = new Map<InstalledSkill, number>();
-  for (const { value, score } of scoreLexical(index.metadata, terms)) {
+  for (const { value, score } of scoreLexical(
+    index?.metadata ?? buildMetadataIndex(skills),
+    terms,
+  )) {
     scores.set(value, score * 2);
   }
-  for (const { value, score } of scoreLexical(index.bodies, terms)) {
-    scores.set(value, (scores.get(value) ?? 0) + score);
+  if (includeBodies && index) {
+    assertBodyReadable(canReadInstructions);
+    for (const { value, score } of scoreLexical(index.bodies, terms)) {
+      scores.set(value, (scores.get(value) ?? 0) + score);
+    }
   }
   const ranked = [...scores].map(([value, score]) => ({ value, score }));
   const exact = skills.find((skill) => skill.name.toLowerCase() === needle.toLowerCase());
@@ -204,12 +230,17 @@ export async function searchInstalledSkills(
     results.push(result);
   }
   assertCatalogCurrent(skills, signal);
+  if (includeBodies) {
+    assertBodyReadable(canReadInstructions);
+  }
+  const coverage =
+    includeBodies && index
+      ? index.coverage
+      : { bodyIndexed: 0, metadataOnly: skills.length, truncatedBodies: 0 };
   return {
     skills: results,
     hasMore: ranked.length > results.length,
-    ...(index.coverage.metadataOnly || index.coverage.truncatedBodies
-      ? { coverage: index.coverage }
-      : {}),
+    ...(coverage.metadataOnly || coverage.truncatedBodies ? { coverage } : {}),
   };
 }
 

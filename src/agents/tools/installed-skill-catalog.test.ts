@@ -33,6 +33,7 @@ describe("installed skill catalog", () => {
     expect(await searchInstalledSkills(skills, "unrelated")).toEqual({
       skills: [],
       hasMore: false,
+      coverage: { bodyIndexed: 0, metadataOnly: 3, truncatedBodies: 0 },
     });
   });
 
@@ -91,7 +92,7 @@ describe("installed skill catalog", () => {
     guide.source = { filePath };
     expect(await readInstalledSkill([guide], "guide")).toBe("Complete instructions");
     await fs.writeFile(filePath, `Canary ${"x".repeat(16 * 1024)}`);
-    expect(await searchInstalledSkills([guide], "canary")).toMatchObject({
+    expect(await searchInstalledSkills([guide], "canary", 5, undefined, () => true)).toMatchObject({
       skills: [],
       coverage: { bodyIndexed: 0, metadataOnly: 1 },
     });

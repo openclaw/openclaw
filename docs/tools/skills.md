@@ -852,6 +852,11 @@ ineligible, and model-hidden skills are not added by search. Existing explicit
 user references remain separate. Search does not query ClawHub, install a
 skill, or grant permission to execute its commands.
 
+Instruction-body indexing requires the effective native `skills_read` tool.
+When reads are denied or shadowed, search uses metadata only and performs no
+instruction-body reads. Revocation also excludes cached body matches and rejects
+in-flight indexing started under the previous grant.
+
 In OpenClaw Code Mode, use `await skills.search(query, limit)` and
 `await skills.read(name)`. These calls dispatch through the same tools and
 policies. `await skills.list(offset)` returns up to 20 directory entries;

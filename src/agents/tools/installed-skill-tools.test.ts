@@ -1,7 +1,91 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
+import { readLocalFileSafely } from "../../infra/fs-safe.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { withTempDir } from "../../test-utils/temp-dir.js";
+import {
+  finalizeAgentToolAvailability,
+  markAgentToolExecutionUnavailable,
+} from "../agent-tool-availability.js";
 import { createInstalledSkillTools } from "./installed-skill-tools.js";
+
+it("requires the effective native read tool for body I/O and cached body matches", async () => {
+  await withTempDir("installed-skill-authority-", async (dir) => {
+    const filePath = path.join(dir, "SKILL.md");
+    await writeFile(filePath, "Private canary deployment instructions");
+    let reads = 0;
+    const tools = createInstalledSkillTools([
+      {
+        name: "guide",
+        description: "Operations",
+        location: filePath,
+        source: { filePath },
+        readSearchContent: async (maxBytes) => {
+          reads += 1;
+          return (await readLocalFileSafely({ filePath, maxBytes })).buffer.toString("utf8");
+        },
+      },
+    ]);
+    const search = expectDefined(tools[0], "search");
+    const read = expectDefined(tools[1], "read");
+    finalizeAgentToolAvailability([search]);
+    expect((await search.execute("denied", { query: "canary" })).details).toMatchObject({
+      skills: [],
+      coverage: { bodyIndexed: 0, metadataOnly: 1 },
+    });
+    expect((await search.execute("metadata", { query: "operations" })).details).toMatchObject({
+      skills: [{ name: "guide" }],
+    });
+    expect(reads).toBe(0);
+    finalizeAgentToolAvailability(tools);
+    expect((await search.execute("allowed", { query: "canary" })).details).toMatchObject({
+      skills: [{ name: "guide" }],
+    });
+    expect(reads).toBe(1);
+    finalizeAgentToolAvailability(tools, { toolExecutionAllow: ["skills_search"] });
+    expect((await search.execute("revoked", { query: "canary" })).details).toMatchObject({
+      skills: [],
+    });
+    finalizeAgentToolAvailability([search, { ...read }]);
+    expect((await search.execute("shadowed", { query: "canary" })).details).toMatchObject({
+      skills: [],
+    });
+    markAgentToolExecutionUnavailable(read);
+    finalizeAgentToolAvailability(tools);
+    expect((await search.execute("execution-denied", { query: "canary" })).details).toMatchObject({
+      skills: [],
+    });
+    expect(reads).toBe(1);
+  });
+});
+
+it("does not publish an in-flight body index across read revocation and regrant", async () => {
+  const body = createDeferredCore<string>();
+  const reader = vi.fn(() => body.promise);
+  const tools = createInstalledSkillTools([
+    {
+      name: "guide",
+      description: "Operations",
+      location: "/skills/guide/SKILL.md",
+      source: { filePath: "/skills/guide/SKILL.md" },
+      readSearchContent: reader,
+    },
+  ]);
+  const search = expectDefined(tools[0], "search");
+  finalizeAgentToolAvailability(tools);
+  const pending = search.execute("in-flight", { query: "canary" });
+  const rejected = expect(pending).rejects.toThrow("permission changed");
+  finalizeAgentToolAvailability([search]);
+  finalizeAgentToolAvailability(tools);
+  body.resolve("Canary deployment");
+  await rejected;
+  expect((await search.execute("regranted", { query: "canary" })).details).toMatchObject({
+    skills: [{ name: "guide" }],
+  });
+  expect(reader).toHaveBeenCalledTimes(2);
+});
 
 it("searches and reads through the model-facing tool contract without reading other paths", async () => {
   const tools = createInstalledSkillTools([
@@ -15,6 +99,7 @@ it("searches and reads through the model-facing tool contract without reading ot
       },
     },
   ]);
+  finalizeAgentToolAvailability(tools);
   const search = expectDefined(tools[0], "installed skill search tool");
   const read = expectDefined(tools[1], "installed skill read tool");
   expect((await search.execute("find", { query: "publish release" })).details).toEqual({
@@ -50,6 +135,7 @@ it("discovers a body-only capability through its reader without exposing instruc
       readSearchContent: reader,
     },
   ]);
+  finalizeAgentToolAvailability(tools);
   const search = expectDefined(tools[0], "search tool");
   const read = expectDefined(tools[1], "read tool");
   const first = await search.execute("body-search", { query: "canary" });
@@ -86,6 +172,7 @@ it("does not serve a cached body index after its owner loses authority", async (
       },
     },
   ]);
+  finalizeAgentToolAvailability(tools);
   const search = expectDefined(tools[0], "search tool");
   await search.execute("first", { query: "canary" });
   current = false;
@@ -113,6 +200,7 @@ it("reports unreadable and bounded bodies while preserving metadata search and w
       },
     },
   ]);
+  finalizeAgentToolAvailability(tools);
   const search = expectDefined(tools[0], "search tool");
   const read = expectDefined(tools[1], "read tool");
   expect((await search.execute("partial", { query: "deployment" })).details).toMatchObject({
@@ -142,6 +230,7 @@ it("does not cache a cancelled read as an empty body", async () => {
       readSearchContent: (_maxBytes, signal) => reader({ signal }),
     },
   ]);
+  finalizeAgentToolAvailability(tools);
   const search = expectDefined(tools[0], "search tool");
   const cancelled = search.execute("cancelled", { query: "canary" }, controller.signal);
   const healthy = search.execute("healthy", { query: "canary" });
@@ -164,6 +253,7 @@ it("lets a waiting caller cancel without cancelling the cold index owner", async
       readSearchContent: reader,
     },
   ]);
+  finalizeAgentToolAvailability(tools);
   const search = expectDefined(tools[0], "search tool");
   const controller = new AbortController();
   const owner = search.execute("owner", { query: "canary" });
@@ -200,6 +290,7 @@ it("bounds concurrent cold searches and retains metadata outside the body budget
       readSearchContent: reader,
     })).toReversed(),
   );
+  finalizeAgentToolAvailability(tools);
   const search = expectDefined(tools[0], "search tool");
   const [result] = await Promise.all([
     search.execute("budget", { query: "guide-1024", limit: 1 }),

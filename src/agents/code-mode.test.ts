@@ -381,6 +381,7 @@ it.each(["skills_read", "skills_search"])(
         return {
           listed: await outcome(() => skills.list()),
           found: await outcome(() => skills.search("guide")),
+          bodyMatch: await outcome(() => skills.search("private")),
           body: await outcome(() => skills.read("guide")),
         };
       `,
@@ -394,6 +395,7 @@ it.each(["skills_read", "skills_search"])(
               ? unavailable
               : [{ name: "guide", description: "Guide", location: "/skills/guide/SKILL.md" }],
           found: denied === "skills_search" ? unavailable : { skills: [{ name: "guide" }] },
+          bodyMatch: denied === "skills_search" ? unavailable : { skills: [] },
           body: denied === "skills_read" ? unavailable : "Private instructions",
         },
       });
