@@ -712,7 +712,7 @@ export async function dispatchCronDelivery(
       timeoutMs: params.timeoutMs,
       abortSignal: params.abortSignal,
     });
-    if (!settled?.reply) {
+    if (!settled?.reply || params.isAborted()) {
       return buildDeliveryState({
         kind: "error",
         error: params.isAborted()
