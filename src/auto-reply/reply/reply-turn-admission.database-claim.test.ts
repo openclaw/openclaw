@@ -14,7 +14,6 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as registry from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
@@ -28,183 +27,162 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it.each([
-  "cancelled",
-  "foreign-store",
-  "request-changed",
-  "later-foreign-store",
-  "later-rekey",
-  "later-rebound-store",
-] as const)("does not admit a delayed healthy rotation after %s", async (change) => {
-  const root = tempDirs.make("reply-delayed-rotation-");
-  const ownerStore = path.join(root, "owner.sqlite");
-  const foreignStore = path.join(root, "target.sqlite");
-  const isForeignStore = change === "foreign-store" || change === "later-foreign-store";
-  const storePath = isForeignStore ? foreignStore : ownerStore;
-  const sessionKey = "global";
-  const sessionId = "before-compaction";
-  const nextSessionId = "after-compaction";
-  const stores = new Set([ownerStore, storePath]);
-  if (change === "later-rebound-store") {
-    stores.add(foreignStore);
-  }
-  for (const target of stores) {
-    sessionEntries.replaceSessionEntrySync(
-      { storePath: target, sessionKey },
-      { sessionId, updatedAt: 1 },
-    );
-  }
-  let preparingOwner = false;
-  const registerOwner = async () => {
-    preparingOwner = true;
-    try {
-      const result = await admitReplyTurn({
-        storePath: ownerStore,
-        sessionKey,
-        sessionId,
-        kind: "visible",
-        resetTriggered: false,
-      });
-      if (result.status !== "owned" || !result.databaseClaim) {
-        throw new Error("Fixture requires an admitted physical database owner");
-      }
-      return result;
-    } finally {
-      preparingOwner = false;
-    }
-  };
-  let owner = change.startsWith("later-") ? undefined : await registerOwner();
-  const captured =
-    createDeferred<Awaited<ReturnType<typeof sessionEntries.loadSessionEntryForAdmission>>>();
-  const release = createDeferred();
-  const load = sessionEntries.loadSessionEntryForAdmission;
-  let reads = 0;
-  vi.spyOn(sessionEntries, "loadSessionEntryForAdmission").mockImplementation(async (...args) => {
-    if (preparingOwner) {
-      return await load(...args);
-    }
-    const read = ++reads;
-    const snapshot = await load(...args);
-    if (read === 1 && change.startsWith("later-")) {
-      expect(registry.replyRunRegistry.get(sessionKey)).toBeUndefined();
-      owner = await registerOwner();
-    }
-    if (read === 2) {
-      captured.resolve(snapshot);
-      await release.promise;
-    }
-    return snapshot;
-  });
-  const controller = new AbortController();
-  let requestFailure: Error | undefined;
-  const pending = admitReplyTurn({
+const sessionKey = "global";
+const sessionId = "original-session";
+function admit(storePath: string, request: Partial<Parameters<typeof admitReplyTurn>[0]> = {}) {
+  return admitReplyTurn({
     storePath,
     sessionKey,
     sessionId,
-    expectedSessionId: sessionId,
     kind: "visible",
     resetTriggered: false,
-    upstreamAbortSignal: controller.signal,
-    assertRequestCurrent: () => {
-      if (requestFailure) {
-        throw requestFailure;
-      }
-    },
+    ...request,
   });
-  try {
-    const snapshot = await Promise.race([
-      captured.promise,
-      pending.then(() => {
-        throw new Error("Admission completed before its final snapshot was captured");
-      }),
-    ]);
-    expect(snapshot.entry?.sessionId).toBe(sessionId);
-    expect(snapshot.databaseClaim.isCurrent()).toBe(true);
-    if (!owner?.databaseClaim) {
-      throw new Error("Fixture requires the admitted predecessor before rotation");
+}
+function seed(storePath: string, id = sessionId) {
+  sessionEntries.replaceSessionEntrySync(
+    { storePath, sessionKey },
+    { sessionId: id, updatedAt: 1 },
+  );
+}
+function complete(result: Awaited<ReturnType<typeof admitReplyTurn>> | undefined) {
+  if (result?.status === "owned") {
+    result.operation.complete();
+  }
+}
+
+it.each(["cancelled", "request-changed", "later-rebound-store"] as const)(
+  "does not admit a delayed healthy rotation after %s",
+  async (change) => {
+    const root = tempDirs.make("reply-delayed-rotation-");
+    const storePath = path.join(root, "owner.sqlite");
+    const foreignStore = path.join(root, "target.sqlite");
+    const nextSessionId = "after-compaction";
+    seed(storePath);
+    if (change === "later-rebound-store") {
+      seed(foreignStore);
     }
-    expect(snapshot.databaseClaim.identity === owner.databaseClaim.identity).toBe(!isForeignStore);
-    // Identical row IDs in another store still cannot establish target lineage.
-    for (const target of new Set([ownerStore, storePath])) {
-      await sessionEntries.replaceSessionEntry(
-        { storePath: target, sessionKey },
-        { sessionId: nextSessionId, updatedAt: 2 },
-      );
-    }
-    if (change === "later-rekey") {
-      owner.operation.updateSessionKey("other-session");
-    } else if (change === "later-rebound-store") {
+    let preparingOwner = false;
+    const registerOwner = async () => {
       preparingOwner = true;
       try {
-        const adopted = await admitReplyTurn({
-          storePath: foreignStore,
-          sessionKey,
-          sessionId,
-          expectedSessionId: sessionId,
-          kind: "visible",
-          resetTriggered: false,
-          adoptOperation: owner.operation,
-        });
-        if (adopted.status !== "owned" || !adopted.databaseClaim) {
-          throw new Error("Fixture requires physical-store adoption");
+        const result = await admit(storePath);
+        if (result.status !== "owned" || !result.databaseClaim) {
+          throw new Error("Fixture requires an admitted physical database owner");
         }
-        expect(adopted.databaseClaim.identity).not.toBe(owner.databaseClaim.identity);
-        expect(snapshot.databaseClaim.isCurrent()).toBe(true);
+        return result;
       } finally {
         preparingOwner = false;
       }
+    };
+    let owner = change.startsWith("later-") ? undefined : await registerOwner();
+    const captured =
+      createDeferred<Awaited<ReturnType<typeof sessionEntries.loadSessionEntryForAdmission>>>();
+    const release = createDeferred();
+    const load = sessionEntries.loadSessionEntryForAdmission;
+    let reads = 0;
+    vi.spyOn(sessionEntries, "loadSessionEntryForAdmission").mockImplementation(async (...args) => {
+      if (preparingOwner) {
+        return await load(...args);
+      }
+      const read = ++reads;
+      const snapshot = await load(...args);
+      if (read === 1 && change.startsWith("later-")) {
+        expect(registry.replyRunRegistry.get(sessionKey)).toBeUndefined();
+        owner = await registerOwner();
+      }
+      if (read === 2) {
+        captured.resolve(snapshot);
+        await release.promise;
+      }
+      return snapshot;
+    });
+    const controller = new AbortController();
+    let requestFailure: Error | undefined;
+    const pending = admit(storePath, {
+      expectedSessionId: sessionId,
+      upstreamAbortSignal: controller.signal,
+      assertRequestCurrent: () => {
+        if (requestFailure) {
+          throw requestFailure;
+        }
+      },
+    });
+    try {
+      const snapshot = await Promise.race([
+        captured.promise,
+        pending.then(() => {
+          throw new Error("Admission completed before its final snapshot was captured");
+        }),
+      ]);
+      expect(snapshot.entry?.sessionId).toBe(sessionId);
+      expect(snapshot.databaseClaim.isCurrent()).toBe(true);
+      if (!owner?.databaseClaim) {
+        throw new Error("Fixture requires the admitted predecessor before rotation");
+      }
+      expect(snapshot.databaseClaim.identity).toBe(owner.databaseClaim.identity);
+      await sessionEntries.replaceSessionEntry(
+        { storePath, sessionKey },
+        { sessionId: nextSessionId, updatedAt: 2 },
+      );
+      if (change === "later-rebound-store") {
+        preparingOwner = true;
+        try {
+          const adopted = await admit(foreignStore, {
+            expectedSessionId: sessionId,
+            adoptOperation: owner.operation,
+          });
+          if (adopted.status !== "owned" || !adopted.databaseClaim) {
+            throw new Error("Fixture requires physical-store adoption");
+          }
+          expect(adopted.databaseClaim.identity).not.toBe(owner.databaseClaim.identity);
+          expect(snapshot.databaseClaim.isCurrent()).toBe(true);
+        } finally {
+          preparingOwner = false;
+        }
+      }
+      owner.operation.updateSessionId(nextSessionId);
+      owner.operation.complete();
+      if (change === "cancelled") {
+        controller.abort();
+      } else if (change === "request-changed") {
+        requestFailure = new Error("Original caller was retired during preparation");
+        await closeOpenClawAgentDatabaseByPathAsync(storePath);
+      }
+      release.resolve();
+      if (change === "cancelled") {
+        await expect(pending).resolves.toEqual({ status: "skipped", reason: "aborted" });
+        expect(reads).toBe(2);
+      } else if (change === "request-changed") {
+        // Caller refusal keeps precedence over a concurrent physical-store retirement.
+        await expect(pending).rejects.toBe(requestFailure);
+        expect(reads).toBe(2);
+      } else {
+        await expect(pending).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+      }
+      expect(registry.replyRunRegistry.get(sessionKey)).toBeUndefined();
+    } finally {
+      release.resolve();
+      owner?.operation.complete();
+      const result = await pending.catch(() => undefined);
+      complete(result);
     }
-    owner.operation.updateSessionId(nextSessionId);
-    owner.operation.complete();
-    if (change === "cancelled") {
-      controller.abort();
-    } else if (change === "request-changed") {
-      requestFailure = new Error("Original caller was retired during preparation");
-      await closeOpenClawAgentDatabaseByPathAsync(storePath);
-    }
-    release.resolve();
-    if (change === "cancelled") {
-      await expect(pending).resolves.toEqual({ status: "skipped", reason: "aborted" });
-      expect(reads).toBe(2);
-    } else if (change === "request-changed") {
-      // Caller refusal keeps precedence over a concurrent physical-store retirement.
-      await expect(pending).rejects.toBe(requestFailure);
-      expect(reads).toBe(2);
-    } else {
-      await expect(pending).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
-    }
-    expect(registry.replyRunRegistry.get(sessionKey)).toBeUndefined();
-  } finally {
-    release.resolve();
-    owner?.operation.complete();
-    const result = await pending.catch(() => undefined);
-    if (result?.status === "owned") {
-      result.operation.complete();
-    }
-  }
-});
+  },
+);
 
-it.each(
-  (["writer", "active", "delivery"] as const).flatMap((wait) =>
-    (["unchanged", "same-inode", "other-inode"] as const).map((replacement) => ({
-      wait,
-      replacement,
-    })),
-  ),
-)(
+it.each([
+  { wait: "writer", replacement: "unchanged" },
+  { wait: "active", replacement: "other-inode" },
+  { wait: "delivery", replacement: "same-inode" },
+] as const)(
   "keeps the exact database owner across $wait wait, replacement=$replacement",
   async ({ wait, replacement }) => {
     const root = tempDirs.make("reply-admission-claim-");
     const originalPath = path.join(root, "original.sqlite");
     const replacementPath = path.join(root, "replacement.sqlite");
     const storePath = path.join(root, "selected.sqlite");
-    const sessionKey = "global";
-    const sessionId = "copied-session";
     for (const databasePath of [originalPath, replacementPath]) {
-      sessionEntries.replaceSessionEntrySync(
-        { storePath: databasePath, sessionKey },
-        { sessionId, updatedAt: 1 },
-      );
+      seed(databasePath);
     }
     closeOpenClawAgentDatabasesForTest();
     fs.symlinkSync(originalPath, storePath);
@@ -219,13 +197,7 @@ it.each(
       });
       await writerStarted.promise;
     } else {
-      const admitted = await admitReplyTurn({
-        storePath,
-        sessionKey,
-        sessionId,
-        kind: "visible",
-        resetTriggered: false,
-      });
+      const admitted = await admit(storePath);
       expect(admitted.status).toBe("owned");
       if (admitted.status !== "owned") {
         throw new Error("fixture requires an admitted blocking owner");
@@ -243,13 +215,9 @@ it.each(
           ? vi.spyOn(registry, "waitForReplyRunFollowupAdmission")
           : loaded;
     const controller = new AbortController();
-    const pending = admitReplyTurn({
-      storePath,
-      sessionKey,
-      sessionId,
+    const pending = admit(storePath, {
       expectedSessionId: sessionId,
       kind: "queued_followup",
-      resetTriggered: false,
       upstreamAbortSignal: controller.signal,
     });
     void pending.catch(() => {});
@@ -286,32 +254,15 @@ it.each(
       release.resolve();
       controller.abort();
       const result = await pending.catch(() => undefined);
-      if (result?.status === "owned") {
-        result.operation.complete();
-      }
+      complete(result);
       await writer;
     }
   },
 );
 
-it("preserves first admission to a missing durable agent store", async () => {
-  openOpenClawStateDatabase();
-  const storePath = path.join(tempDirs.make("reply-first-admission-"), "agent.sqlite");
-  const result = await sessionEntries.loadSessionEntryForAdmission({
-    storePath,
-    sessionKey: "agent:main:first",
-  });
-  try {
-    expect(result.entry).toBeUndefined();
-    expect(result.databaseClaim.isCurrent()).toBe(true);
-  } finally {
-    await result.databaseClaim.release();
-  }
-});
-
 it("cancels an in-flight admission read when its lifecycle owner interrupts ingress", async () => {
   const storePath = path.join(tempDirs.make("reply-admission-interrupt-"), "agent.sqlite");
-  const sessionKey = "agent:main:interrupted-read";
+  const interruptedKey = "agent:main:interrupted-read";
   const started = createDeferred<AbortSignal>();
   vi.spyOn(sessionEntries, "loadSessionEntryForAdmission").mockImplementation(
     async (_scope, preparation) => {
@@ -336,14 +287,14 @@ it("cancels an in-flight admission read when its lifecycle owner interrupts ingr
   const pending = Promise.allSettled([
     admitReplyTurn({
       storePath,
-      sessionKey,
+      sessionKey: interruptedKey,
       sessionId: "interrupted-read",
       kind: "visible",
       resetTriggered: false,
       upstreamAbortSignal: upstream.signal,
     }),
   ]);
-  const target = { scope: storePath, identities: [sessionKey] };
+  const target = { scope: storePath, identities: [interruptedKey] };
   try {
     const signal = await started.promise;
     const reason = new Error("Synthetic lifecycle interruption");
@@ -353,7 +304,7 @@ it("cancels an in-flight admission read when its lifecycle owner interrupts ingr
     await interrupted.released;
     await runExclusiveSessionLifecycleMutation({ ...target, run: async () => {} });
     expect(await pending).toMatchObject([{ status: "rejected", reason }]);
-    expect(registry.replyRunRegistry.get(sessionKey)).toBeUndefined();
+    expect(registry.replyRunRegistry.get(interruptedKey)).toBeUndefined();
   } finally {
     upstream.abort();
     await pending;

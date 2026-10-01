@@ -346,7 +346,6 @@ src/auto-reply/reply/inbound-meta.test.ts
 src/auto-reply/reply/queue.collect.test.ts
 src/auto-reply/reply/queue/drain.ts
 src/auto-reply/reply/reply-run-registry.test.ts
-src/auto-reply/reply/reply-turn-admission.test.ts
 src/auto-reply/reply/session.test.ts
 src/auto-reply/reply/session.ts
 src/auto-reply/status.test.ts
