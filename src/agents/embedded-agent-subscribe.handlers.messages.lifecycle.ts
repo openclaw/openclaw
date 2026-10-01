@@ -97,7 +97,9 @@ export function handleMessageEnd(
   // Progress sent as the last tool batch was written after every other tool
   // result. An empty stop after it leaves nothing to add, so it is the reply.
   const progressEndsTurn = ctx.state.toolBatchSourceProgress === "progress";
-  const startsToolBatch = assistantMessage.content.some((block) => block.type === "toolCall");
+  const startsToolBatch =
+    Array.isArray(assistantMessage.content) &&
+    assistantMessage.content.some((block) => block.type === "toolCall");
   ctx.state.toolBatchSourceProgress = startsToolBatch ? "open" : undefined;
   const closingText = extractEmbeddedAssistantText(assistantMessage).trim();
   if (
