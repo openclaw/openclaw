@@ -14,12 +14,12 @@ import {
   quiesceCodexApprovalAgentRun,
   resolveCodexFileApprovalTargetPath,
 } from "./slack-live.codex-approval.js";
-import {
-  type SlackQaCodexApprovalScenarioRun,
-  type SlackQaApprovalContext,
-  type SlackQaScenarioMetadata,
-  type SlackObservedMessage,
-  type SlackApprovalArtifact,
+import type {
+  SlackQaCodexApprovalScenarioRun,
+  SlackQaApprovalContext,
+  SlackQaScenarioMetadata,
+  SlackObservedMessage,
+  SlackApprovalArtifact,
 } from "./slack-live.contracts.js";
 
 export async function runSlackCodexApprovalScenario(params: {

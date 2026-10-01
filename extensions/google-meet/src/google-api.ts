@@ -12,7 +12,7 @@ export async function readGoogleApiErrorDetail(response: Response): Promise<stri
   return await readResponseTextLimited(response, GOOGLE_API_ERROR_BODY_LIMIT_BYTES);
 }
 
-export async function googleApiError(params: {
+async function googleApiError(params: {
   response: Response;
   prefix: string;
   scopes?: readonly string[];
