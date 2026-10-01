@@ -110,7 +110,7 @@ describe("credential prompt dispatch boundary", () => {
       const progress = vi.fn();
       let toolOutcome: Promise<unknown> | undefined;
       let unsubscribe: (() => void) | undefined;
-      let producerPayload: ReplyPayload | undefined;
+      const producerCalled = createDeferred();
       const callbackFinished = createDeferred();
       const dispatch = dispatchReplyFromConfig({
         ctx: buildTestCtx({
@@ -143,7 +143,7 @@ describe("credential prompt dispatch boundary", () => {
             messageChannel: "telegram",
             config: cfg,
             onToolResult: async (payload) => {
-              producerPayload = payload;
+              producerCalled.resolve();
               if (terminal) {
                 questionStatus = "cancelled";
               }
@@ -175,7 +175,7 @@ describe("credential prompt dispatch boundary", () => {
         (error: unknown) => ({ error }),
       );
       try {
-        await vi.waitFor(() => expect(producerPayload).toBeDefined());
+        await producerCalled.promise;
         if (terminal || deny) {
           transport.resolve();
           await callbackFinished.promise;
@@ -183,8 +183,8 @@ describe("credential prompt dispatch boundary", () => {
           expect(mocks.routeReply).not.toHaveBeenCalled();
           answer.resolve({ status: "cancelled" });
         } else {
-          await vi.waitFor(() => expect(route ? mocks.routeReply : deliver).toHaveBeenCalledOnce());
           const payload = asNullableRecord(await received.promise);
+          expect(route ? mocks.routeReply : deliver).toHaveBeenCalledOnce();
           expect(payload?.channelData).toEqual({ askUser: { questionId } });
           expect(payload).not.toHaveProperty("presentation");
           expect(payload).not.toHaveProperty("interactive");
@@ -215,7 +215,6 @@ describe("credential prompt dispatch boundary", () => {
             expect(questionStatus).toBe("cancelled");
           }
         }
-        expect(producerPayload).toBeDefined();
         expect(progress).not.toHaveBeenCalled();
         await expect(dispatch).resolves.toHaveProperty("result");
       } finally {
