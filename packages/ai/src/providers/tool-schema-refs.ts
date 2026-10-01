@@ -96,7 +96,7 @@ function resolveLocalJsonPointer(rootDocument: unknown, ref: string): unknown {
   if (!ref.startsWith("#/")) {
     return undefined;
   }
-  return resolveJsonPointerPath(rootDocument, ref.slice(2).split("/"));
+  return resolveJsonPointerPath(rootDocument, ref.slice(2).split("/").map(decodeJsonPointerSegment));
 }
 
 export const SCHEMA_MAP_KEYS = new Set([
