@@ -23,8 +23,10 @@ import {
   waitUntilCompleted,
 } from "./code-mode.test-support.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "./harness/tool-surface-bridge.js";
+import { prepareInstalledSkillCatalog } from "./installed-skill-runtime.js";
 import { createReadTool, type ToolDefinition } from "./sessions/index.js";
 import { readToolInputSchema } from "./sessions/tools/tool-schemas.js";
+import { filterToolsByPolicy } from "./tool-policy-match.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
@@ -391,6 +393,61 @@ it.each(["skills_read", "skills_search"])(
     } finally {
       runtime.cleanup();
     }
+  },
+);
+
+it.each([undefined, "read", "skills_read"])(
+  "preserves prompt-listed whole reads under read grants with explicit denial=%s",
+  async (denied) => {
+    const guide = createFixtureSkillEntry("guide");
+    const hidden = createFixtureSkillEntry("hidden");
+    const body = `${"x".repeat(256 * 1024)}complete tail`;
+    guide.skill.readContent = body;
+    hidden.skill.readContent = body;
+    const skills = prepareInstalledSkillCatalog({
+      workspaceDir: "/workspace",
+      snapshot: {
+        prompt: await resolveSkillsPrompt({ entries: [guide], workspaceDir: "/workspace" }),
+        skills: [{ name: "guide" }, { name: "hidden" }],
+        discoverySkills: [guide.skill, hidden.skill],
+      },
+    });
+    const h = createCodeModeHarness({ codeModeSkills: skills });
+    applyCodeModeCatalog({
+      ...h.ctx,
+      tools: [
+        ...h.tools,
+        ...filterToolsByPolicy(createInstalledSkillTools(skills), {
+          allow: ["read", "exec"],
+          deny: denied ? [denied] : [],
+        }),
+      ],
+    });
+    const result = await runUntilCompleted({
+      execTool: h.tools[0]!,
+      waitTool: h.tools[1]!,
+      code: `
+        let body;
+        let hidden;
+        try {
+          const content = await skills.read("guide");
+          body = { length: content.length, tail: content.slice(-13) };
+        } catch (error) { body = error.message; }
+        try { await skills.read("hidden"); } catch (error) { hidden = error.message; }
+        return { body, hidden };
+      `,
+    });
+    expect(result).toMatchObject({
+      status: "completed",
+      value: {
+        body: denied
+          ? "skills_read is not available in this run."
+          : { length: body.length, tail: "complete tail" },
+        hidden: denied
+          ? "skills_read is not available in this run."
+          : 'Skill "hidden" exceeds the 262144-byte instruction limit.',
+      },
+    });
   },
 );
 

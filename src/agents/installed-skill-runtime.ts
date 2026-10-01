@@ -20,13 +20,10 @@ export function prepareInstalledSkillCatalog(params: {
     return [];
   }
   const candidates = snapshot.discoverySkills ?? snapshot.resolvedSkills ?? [];
-  const fallback = snapshot.discoverySkills
-    ? undefined
-    : new Set(
-        resolveCodeModeSkills({ skillsPrompt: snapshot.prompt, candidates }).map(
-          (skill) => skill.name,
-        ),
-      );
+  const promptListed = new Set(
+    resolveCodeModeSkills({ skillsPrompt: snapshot.prompt, candidates }).map((skill) => skill.name),
+  );
+  const fallback = snapshot.discoverySkills ? undefined : promptListed;
   const keys = new Map(snapshot.skills.map((skill) => [skill.name, skill.skillKey]));
   const unavailableOwners = hasUnavailableSkillSecretOwners();
   const workspace = !sandbox?.enabled
@@ -53,7 +50,7 @@ export function prepareInstalledSkillCatalog(params: {
             filePath: location,
             cwd: sandbox.containerWorkdir,
             signal,
-            maxBytes: MAX_SKILL_INSTRUCTION_BYTES,
+            maxBytes: promptListed.has(skill.name) ? undefined : MAX_SKILL_INSTRUCTION_BYTES,
           });
           params.assertCurrent?.();
           return content.toString("utf8");
@@ -78,6 +75,7 @@ export function prepareInstalledSkillCatalog(params: {
       }
       return {
         name: skill.name,
+        promptListed: promptListed.has(skill.name),
         description: [skill.description, skill.locationNote].filter(Boolean).join("\n"),
         location: skill.filePath,
         source: {

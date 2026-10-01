@@ -841,8 +841,10 @@ Small catalogs continue to appear in full.
   1-1,000 characters. Results contain names, locations, and shortened descriptions, not
   instructions. `hasMore` indicates that additional matches exist.
 - `skills_read({ name })` loads the complete `SKILL.md` for an exact name.
-  Search is not required when the name is already known. Instructions larger
-  than 256 KiB are rejected, not truncated.
+  Search is not required when the name is already known. Instructions omitted
+  from the prompt directory are limited to 256 KiB and rejected if larger, not
+  truncated. Prompt-listed instructions retain the existing whole-read contract,
+  including Code Mode's separate program-data limits.
 
 Both tools use the current session's eligible catalog. Disabled, filtered,
 ineligible, and model-hidden skills are not added by search. Existing explicit
@@ -854,6 +856,8 @@ In OpenClaw Code Mode, use `await skills.search(query, limit)` and
 policies. `await skills.list(offset)` returns up to 20 directory entries;
 the default offset is 0. Codex receives the OpenClaw tools through its dynamic
 tool surface; these are distinct from Codex's native skill-resource tools.
+An existing `read` policy grant also permits `skills_read`. An explicit
+`skills_read` denial still wins; search permission alone does not grant reads.
 
 Search uses an in-memory lexical index of the prepared catalog. It follows the
 existing [snapshot and refresh rules](/tools/skills#snapshots-and-refresh), with
