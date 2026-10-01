@@ -159,7 +159,7 @@ it.each(["auto", "off"] as const)(
     if (process.platform !== "win32") {
       expect(snapshot.mode & 0o777n).toBe(0o444n);
     }
-    expect(await fs.readdir(f.destination)).toEqual([
+    expect((await fs.readdir(f.destination)).toSorted()).toEqual([
       "nested",
       "payload.txt",
       "payload.txt.linked",

@@ -1,13 +1,9 @@
 import { Type } from "typebox";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
+import { requesterProfileSchema } from "../schema/typebox.js";
 
 export const SessionsSendToolSchema = Type.Object({
-  user: Type.Optional(
-    Type.String({
-      description:
-        "The person's requester_profile.id, required when several people have steered this turn.",
-    }),
-  ),
+  user: requesterProfileSchema(),
   sessionKey: Type.Optional(Type.String()),
   label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),

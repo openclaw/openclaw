@@ -40,7 +40,8 @@ export const triageFailureSchema = z.strictObject({
 const text = managedHandoffLeaseText;
 
 type LeaseRead =
-  | { kind: "absent" | "unreadable" }
+  | { kind: "absent" }
+  | { kind: "unreadable"; error: unknown }
   | { kind: "current"; lease: ManagedHandoffLease };
 
 export function createManagedHandoffLeaseRows(
@@ -136,8 +137,8 @@ export function createManagedHandoffLeaseRows(
         const value = row(db, root);
         return value ? { kind: "current", lease: handle(root, value) } : { kind: "absent" };
       });
-    } catch {
-      return { kind: "unreadable" };
+    } catch (error) {
+      return { kind: "unreadable", error };
     }
   }
   function readRetainedSources(): ManagedHandoffLease[] {

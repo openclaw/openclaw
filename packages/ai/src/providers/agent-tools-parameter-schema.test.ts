@@ -255,6 +255,33 @@ describe("compact OpenAI tool references", () => {
   });
 });
 
+describe("percent-encoded local references", () => {
+  const filter = { type: "object", properties: { limit: { type: "number" } } };
+
+  it.each([
+    { modelProvider: "google", modelId: "gemini-2.5-pro" },
+    { modelProvider: "anthropic", modelId: "claude-sonnet-4-6" },
+  ])("inlines encoded definition references for $modelProvider", (options) => {
+    for (const ref of [
+      "#/definitions/Partial<Filter>",
+      "#/definitions/Partial%3CFilter%3E",
+      "#%2Fdefinitions%2FPartial%3CFilter%3E",
+    ]) {
+      const schema = {
+        type: "object",
+        properties: { filter: { $ref: ref } },
+        required: ["filter"],
+        definitions: { "Partial<Filter>": filter },
+      };
+      expect(normalizeToolParameterSchema(schema, options)).toEqual({
+        type: "object",
+        properties: { filter },
+        required: ["filter"],
+      });
+    }
+  });
+});
+
 describe("root unions with preset and custom strings", () => {
   const presets = Type.Object({
     action: Type.Literal("preset"),
