@@ -14,9 +14,18 @@ import {
 } from "./session-cold-storage-maintenance.js";
 
 const { sweep, inventory } = vi.hoisted(() => ({ sweep: vi.fn(), inventory: vi.fn() }));
+vi.mock("../config/sessions/session-cold-storage-status.js", () => ({
+  getSessionColdStorageStatus: inventory,
+}));
 vi.mock("../config/sessions/session-cold-storage.js", () => ({
   runSessionColdStorageMaintenance: sweep,
-  getSessionColdStorageStatus: inventory,
+}));
+vi.mock("../config/sessions.js", () => ({
+  runSessionsCleanup: vi.fn(),
+  serializeSessionCleanupResult: vi.fn(),
+}));
+vi.mock("./server-methods/session-change-event.js", () => ({
+  emitSessionsChanged: vi.fn(),
 }));
 
 let clock: ReturnType<typeof createGatewaySchedulerClock>;
@@ -140,7 +149,7 @@ it.each(["periodic", "manual"] as const)(
 );
 
 it("acknowledges Run now before worker completion and exposes committed progress after failure", async () => {
-  const { sessionReadHandlers } = await import("./server-methods/sessions-read.js");
+  const { sessionMaintenanceHandlers } = await import("./server-methods/sessions-maintenance.js");
   let config: OpenClawConfig = {};
   const getRuntimeConfig = () => config;
   maintenance = startSessionColdStorageMaintenance({
@@ -169,7 +178,7 @@ it("acknowledges Run now before worker completion and exposes committed progress
     },
   );
   const respond = vi.fn();
-  const request = sessionReadHandlers["sessions.storage.run"]!({
+  const request = sessionMaintenanceHandlers["sessions.storage.run"]!({
     params: {},
     context: { getRuntimeConfig },
     respond,
@@ -195,7 +204,7 @@ it("acknowledges Run now before worker completion and exposes committed progress
       lastError: "second batch failed",
     });
     respond.mockClear();
-    await sessionReadHandlers["sessions.storage.status"]!({
+    await sessionMaintenanceHandlers["sessions.storage.status"]!({
       params: {},
       context: { getRuntimeConfig },
       respond,
@@ -217,34 +226,37 @@ it("acknowledges Run now before worker completion and exposes committed progress
   }
 });
 
-it("does not accept Run now if request authority expires during inventory", async () => {
-  const { sessionReadHandlers } = await import("./server-methods/sessions-read.js");
-  let config: OpenClawConfig = {};
-  const getRuntimeConfig = () => config;
-  maintenance = startSessionColdStorageMaintenance({
-    scheduler,
-    getRuntimeConfig,
-    onError: vi.fn(),
-  });
-  config = { session: { maintenance: { coldStorage: { enabled: true } } } };
-  let current = true;
-  inventory.mockImplementation(async () => {
-    current = false;
-    return [];
-  });
-  const respond = vi.fn();
-  await sessionReadHandlers["sessions.storage.run"]!({
-    params: {},
-    context: { getRuntimeConfig },
-    respond,
-    hasCurrentClientAuthority: () => current,
-  } as never);
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({
-      message: expect.stringContaining("no longer authorized"),
-    }),
-  );
-  expect(sweep).not.toHaveBeenCalled();
-});
+it.each(["sessions.storage.status", "sessions.storage.run"] as const)(
+  "%s rejects expired request authority after inventory",
+  async (method) => {
+    const { sessionMaintenanceHandlers } = await import("./server-methods/sessions-maintenance.js");
+    let config: OpenClawConfig = {};
+    const getRuntimeConfig = () => config;
+    maintenance = startSessionColdStorageMaintenance({
+      scheduler,
+      getRuntimeConfig,
+      onError: vi.fn(),
+    });
+    config = { session: { maintenance: { coldStorage: { enabled: true } } } };
+    let current = true;
+    inventory.mockImplementation(async () => {
+      current = false;
+      return [];
+    });
+    const respond = vi.fn();
+    await sessionMaintenanceHandlers[method]!({
+      params: {},
+      context: { getRuntimeConfig },
+      respond,
+      hasCurrentClientAuthority: () => current,
+    } as never);
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("no longer authorized"),
+      }),
+    );
+    expect(sweep).not.toHaveBeenCalled();
+  },
+);

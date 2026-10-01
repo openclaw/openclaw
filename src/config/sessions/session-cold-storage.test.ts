@@ -41,8 +41,8 @@ import {
 } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
+import { getSessionColdStorageStatus } from "./session-cold-storage-status.js";
 import {
-  getSessionColdStorageStatus,
   restoreSessionColdTranscript,
   runSessionColdStorageMaintenance,
 } from "./session-cold-storage.js";

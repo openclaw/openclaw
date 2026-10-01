@@ -115,6 +115,12 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "cold-metadata", ...input }),
       (value) => value,
     ),
+    readColdStorageInventory: reader(
+      "cold-storage-inventory",
+      "cold storage inventory",
+      (input) => ({ kind: "cold-storage-inventory", ...input }),
+      (value) => value,
+    ),
     searchTranscripts: reader(
       "transcript-search",
       "search",
