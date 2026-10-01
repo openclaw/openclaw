@@ -1,6 +1,7 @@
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
+import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { resolvePacedNextRunAtMs } from "../pacing.js";
 import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
@@ -186,7 +187,16 @@ export function applyJobResult(
   };
   const alertConfig = resolveFailureAlert(state, job);
   if (result.status === "error") {
-    job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
+    // A silent job's agent-reported blocked outcome stays in history and status, but no
+    // notification owner exists for it, so it must not build toward the auto-disable streak.
+    const silentReportedFailure =
+      result.errorClassification?.kind === "permanent" &&
+      result.errorClassification.reportedByAgent === true &&
+      alertConfig === null &&
+      !resolveCronDeliveryPlan(job).requested;
+    if (!silentReportedFailure) {
+      job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
+    }
     job.state.consecutiveSkipped = 0;
   } else if (result.status === "skipped") {
     job.state.consecutiveErrors = 0;

@@ -174,6 +174,51 @@ describe("cron timer outcome and failure policy regressions", () => {
     expect(sendCronFailureAlert).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { name: "silent job", delivery: { mode: "none" as const }, disables: false },
+    { name: "announce job", delivery: undefined, disables: true },
+  ])(
+    "counts agent-reported failures toward auto-disable only with a notification owner: $name",
+    ({ delivery, disables }) => {
+      const startedAt = Date.parse("2026-08-01T12:00:00.000Z");
+      const deferredNotifications: DeferredCronNotifications = [];
+      const state = createCronServiceState({
+        storePath: "/tmp/cron-reported-failure-threshold.json",
+        nowMs: () => startedAt,
+        enqueueSystemEvent: vi.fn(),
+        runIsolatedAgentJob: createDefaultIsolatedRunner(),
+      });
+      const job = createIsolatedRegressionJob({
+        id: "recurring-reported-failure",
+        name: "recurring reported failure",
+        scheduledAt: startedAt,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: startedAt },
+        payload: { kind: "agentTurn", message: "report" },
+        state: { consecutiveErrors: 9 },
+      });
+      job.delivery = delivery;
+
+      applyJobResult(
+        state,
+        job,
+        {
+          status: "error",
+          error: "No shell tool is available in this run.",
+          errorClassification: { kind: "permanent", reportedByAgent: true },
+          startedAt,
+          endedAt: startedAt + 10,
+        },
+        { deferredNotifications },
+      );
+
+      expect(job.state.lastRunStatus).toBe("error");
+      expect(job.state.lastError).toBe("No shell tool is available in this run.");
+      expect(job.enabled).toBe(!disables);
+      expect(job.state.consecutiveErrors).toBe(disables ? 10 : 9);
+      expect(deferredNotifications.some((n) => n.kind === "auto-disabled")).toBe(disables);
+    },
+  );
+
   it("resets the auto-disable streak after a successful recurring run", () => {
     const startedAt = Date.parse("2026-08-01T13:00:00.000Z");
     const state = createCronServiceState({
