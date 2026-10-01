@@ -69,7 +69,10 @@ function resolveCatalogAuthProfileOrder(params: {
   });
 }
 
-function resolveCatalogDirectAuthMode(config: OpenClawConfig | undefined, provider: string) {
+function resolveCatalogDirectAuthMode(
+  config: OpenClawConfig | undefined,
+  provider: string,
+): NonNullable<ReturnType<ProviderApiKeyResolver>["mode"]> {
   const mode = resolveDirectProviderCredentialMode({
     cfg: config,
     provider,
@@ -280,7 +283,7 @@ function resolveDirectCatalogAuth(
     env: NodeJS.ProcessEnv;
     lookupCaches: ProviderAuthLookupCaches;
   },
-) {
+): (ReturnType<typeof resolveConfigBackedProviderAuth> & { source: "env" | "none" }) | undefined {
   const envVar = resolveEnvApiKeyVarName(params.provider, params.env, {
     aliasMap: params.lookupCaches.aliasMap,
     candidateMap: params.lookupCaches.envCandidateMap,
