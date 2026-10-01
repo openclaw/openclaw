@@ -1,10 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseLegacyCredentialEntry } from "../../agents/auth-profiles/legacy-flat-credential.js";
+import { OPENAI_PROVIDER_ID } from "../../agents/openai-routing.js";
 import { resolveLegacyRuntimeModelProviderAlias } from "./shared/legacy-runtime-model-providers.js";
 
 const LEGACY_OPENAI_CODEX_PROVIDER_ID = "openai-codex";
-export const OPENAI_PROVIDER_ID = "openai";
 
 export function isLegacyOpenAICodexProvider(value: unknown): boolean {
   return (

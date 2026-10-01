@@ -67,6 +67,7 @@ import type {
 } from "../agents/auth-profiles/types.js";
 import { resolveLegacyInheritedAuthAgentDir } from "../agents/legacy-inherited-auth-dir.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import { OPENAI_PROVIDER_ID } from "../agents/openai-routing.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { AuthProfileConfig } from "../config/types.auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -114,7 +115,6 @@ import {
   type AuthAliasStoreSnapshot,
 } from "./doctor/auth-alias-receipt.js";
 import {
-  OPENAI_PROVIDER_ID,
   isLegacyOpenAICodexProvider,
   isLegacyOpenAICodexProfileId,
   canonicalLegacyAuthProvider,
