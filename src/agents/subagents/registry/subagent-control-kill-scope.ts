@@ -60,7 +60,9 @@ export type KillScope = {
   stateContext: OpenClawStateWorkerContext;
 };
 
-export type KillPublicationPreparation = (publish: () => void) => Promise<void>;
+export type KillPublicationPreparation = (
+  publish: (prepareRows?: (publishResult: () => void) => Promise<void>) => Promise<void>,
+) => Promise<void>;
 
 export async function withSubagentKillScope<T>(
   params: KillSelection,
@@ -340,20 +342,27 @@ export async function withSubagentKillScope<T>(
         published = publish(result, trees);
       }
     };
-    const prepareResult = async () => {
-      if (preparePublication) {
-        await preparePublication(publishResult);
-      } else {
-        publishResult();
-      }
-    };
     // Exact-run cancellation publishes one root's outcome. Join session writers
     // through row preparation and the synchronous generation check, after drain.
     const publicationSession = publish ? trees[0]?.session : undefined;
-    if (publicationSession) {
-      await publicationSession.withPublication(prepareResult);
+    const publishPrepared = async (prepareRows?: (publishResult: () => void) => Promise<void>) => {
+      const prepareResult = async () => {
+        if (prepareRows) {
+          await prepareRows(publishResult);
+        } else {
+          publishResult();
+        }
+      };
+      if (publicationSession) {
+        await publicationSession.withPublication(prepareResult);
+      } else {
+        await prepareResult();
+      }
+    };
+    if (preparePublication) {
+      await preparePublication(publishPrepared);
     } else {
-      await prepareResult();
+      await publishPrepared();
     }
     if (!publicationConsumed) {
       throw new Error("Subagent cancellation publication did not consume its prepared scope");
