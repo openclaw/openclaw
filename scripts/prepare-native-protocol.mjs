@@ -30,7 +30,7 @@ function listInputs() {
       }
     }
   }
-  return [...inputs].sort();
+  return [...inputs].toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 }
 
 function fingerprint(files) {
@@ -69,7 +69,7 @@ export async function prepareNativeProtocol({ language = "all", out, check = fal
       const { build } = require("esbuild");
       const bundle = await build({
         absWorkingDir: root,
-        entryPoints: ["scripts/protocol-gen-native.ts"],
+        entryPoints: ["packages/gateway-protocol/scripts/native-codegen.ts"],
         bundle: true,
         format: "esm",
         platform: "node",

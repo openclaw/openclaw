@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { assertNativeProtocolContract } from "../../scripts/protocol-gen-native.js";
+import { assertNativeProtocolContract } from "../../packages/gateway-protocol/scripts/native-codegen.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const root = path.resolve(import.meta.dirname, "../..");

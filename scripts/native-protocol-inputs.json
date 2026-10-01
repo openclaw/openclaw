@@ -12,7 +12,7 @@
     "packages/normalization-core/package.json",
     "scripts/native-protocol-inputs.json",
     "scripts/prepare-native-protocol.mjs",
-    "scripts/protocol-gen-native.ts",
+    "packages/gateway-protocol/scripts/native-codegen.ts",
     "scripts/protocol-gen-swift.ts",
     "scripts/protocol-gen-kotlin.ts",
     "scripts/runtime-postbuild-shared.mjs",

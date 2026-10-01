@@ -1,11 +1,12 @@
-import { ProtocolSchemas } from "../packages/gateway-protocol/src/schema/protocol-schemas.js";
+import { IsLiteralString, IsObject, IsUnion } from "typebox";
+import { generateKotlinProtocol } from "../../../scripts/protocol-gen-kotlin.js";
+import { generateSwiftProtocol } from "../../../scripts/protocol-gen-swift.js";
+import { ProtocolSchemas } from "../src/schema/protocol-schemas.js";
 import {
   MIN_CLIENT_PROTOCOL_VERSION,
   MIN_NODE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
-} from "../packages/gateway-protocol/src/version.js";
-import { generateKotlinProtocol } from "./protocol-gen-kotlin.js";
-import { generateSwiftProtocol } from "./protocol-gen-swift.js";
+} from "../src/version.js";
 
 export type NativeProtocolLanguage = "swift" | "kotlin";
 
@@ -47,21 +48,21 @@ export function assertNativeProtocolContract(
     return;
   }
   for (const [name, schema] of Object.entries(ProtocolSchemas)) {
-    if (schema.type === "object" && !source.includes(`public struct ${name}:`)) {
+    if (IsObject(schema) && !source.includes(`public struct ${name}:`)) {
       throw new Error(`Missing Swift model for ProtocolSchemas.${name}`);
     }
-    const variants = schema.oneOf ?? schema.anyOf;
-    if (!Array.isArray(variants) || variants.length < 2) {
+    const variants = IsUnion(schema) ? schema.anyOf : undefined;
+    if (!variants || variants.length < 2 || !variants.every(IsLiteralString)) {
       continue;
     }
     const values = variants.map((variant) => variant.const);
-    if (!values.every((value) => typeof value === "string")) {
-      continue;
-    }
     const start = source.indexOf(`public enum ${name}: String, Codable, Sendable {`);
     const end = source.indexOf("\n}\n", start);
     const declaration = source.slice(start, end);
-    if (start < 0 || values.some((value) => !declaration.includes(`= ${JSON.stringify(value)}`))) {
+    const emittedValues = new Set(
+      Array.from(declaration.matchAll(/^\s+case \w+ = (".*")$/gm), (match) => match[1]),
+    );
+    if (start < 0 || values.some((value) => !emittedValues.has(JSON.stringify(value)))) {
       throw new Error(`Swift enum ${name} differs from its schema literals`);
     }
   }
