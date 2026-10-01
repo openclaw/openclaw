@@ -136,9 +136,14 @@ console.log(stageOnly ? "Synthetic notes staged" : "Synthetic store upload accep
       firebasePreload,
       String.raw`
 import fs from "node:fs";
+import { registerHooks } from "node:module";
+registerHooks({ resolve(specifier, context, nextResolve) {
+  return specifier === "undici" ? { url: import.meta.url, shortCircuit: true } : nextResolve(specifier, context);
+} });
+export class Agent { async close() {} }
 const app = "projects/123/apps/1:123:android:abc123";
 const response = (body, status = 200) => new Response(JSON.stringify(body), { status });
-globalThis.fetch = async (url, options = {}) => {
+export const fetch = async (url, options = {}) => {
   const pathname = new URL(url).pathname;
   if (pathname === "/token") return response({ access_token: "synthetic-token", expires_in: 3600 });
   if (pathname.endsWith("/aabInfo")) return response({ integrationState: "INTEGRATED" });
