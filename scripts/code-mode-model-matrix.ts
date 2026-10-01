@@ -48,6 +48,7 @@ import {
 } from "./lib/code-mode-matrix-provider.ts";
 import type { MatrixUsageAccounting } from "./lib/code-mode-matrix-usage.ts";
 import { previewForDevToolLog, redactJsonValueForDevToolLog } from "./lib/dev-tooling-safety.ts";
+import { groupBy } from "./lib/group-by.mts";
 
 export { validateQaEvidenceSummaryJson };
 
@@ -333,7 +334,7 @@ export function parseCodeModeMatrixOptions(
       "--max-known-cost-usd": "maxKnownCostUsd",
       "--max-wall-seconds": "maxWallSeconds",
     };
-    const admissionKey = admissionKeys[arg];
+    const admissionKey = Object.hasOwn(admissionKeys, arg) ? admissionKeys[arg] : undefined;
     if (admissionKey) {
       recordOnce(arg);
       const raw = requireOptionArgument(argv, index, arg);
@@ -1377,13 +1378,7 @@ function summarizeMetric(values: (number | undefined)[]) {
 }
 
 function summarizeResults(results: CodeModeMatrixCellResult[]) {
-  const groups = new Map<string, CodeModeMatrixCellResult[]>();
-  for (const result of results) {
-    const key = `${result.model}\0${result.mode}\0${result.task}`;
-    const group = groups.get(key) ?? [];
-    group.push(result);
-    groups.set(key, group);
-  }
+  const groups = groupBy(results, (result) => `${result.model}\0${result.mode}\0${result.task}`);
   return [...groups.entries()].map(([key, group]) => {
     const [model, mode, task] = key.split("\0");
     const passed = group.filter((result) => result.passed);
@@ -1953,11 +1948,7 @@ async function main(): Promise<void> {
   }
 }
 
-function isCliEntrypoint(): boolean {
-  const entrypoint = process.argv[1];
-  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
-}
-
-if (isCliEntrypoint()) {
+const entrypoint = process.argv[1];
+if (entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href) {
   await main();
 }

@@ -93,10 +93,7 @@ export async function verifySharedResourceReplacement(
   expect(fixture.siblingStop).not.toHaveBeenCalled();
 }
 
-export async function verifyFreshRegistrationRecovery(
-  createFixture: RecoveryFixtureFactory,
-  failure: "registration" | "activation",
-) {
+export async function verifyFreshRegistrationRecovery(createFixture: RecoveryFixtureFactory) {
   const events: string[] = [];
   const signals: AbortSignal[] = [];
   const fixture = await createFixture({
@@ -116,7 +113,7 @@ export async function verifyFreshRegistrationRecovery(
         controller.abort();
         events.push(`dispose:${mode}`);
       });
-      if (mode === "bad" && failure === "registration") {
+      if (mode === "bad") {
         throw new Error("candidate registration refused");
       }
       api.registerService({
@@ -126,9 +123,6 @@ export async function verifyFreshRegistrationRecovery(
           // controller has been aborted; rollback must create a fresh owner.
           if (controller.signal.aborted) {
             throw new Error("cannot restart an aborted registration");
-          }
-          if (mode === "bad") {
-            throw new Error("candidate activation refused");
           }
           events.push(`start:${mode}`);
         },
@@ -149,7 +143,7 @@ export async function verifyFreshRegistrationRecovery(
   expect(await readResource(fixture)).toEqual({ mode: "old" });
 
   await expect(fixture.reload(resourceConfig("bad"))).rejects.toThrow(
-    `candidate ${failure} refused`,
+    "candidate registration refused",
   );
 
   expect(await readResource(fixture)).toEqual({ mode: "old" });

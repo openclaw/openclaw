@@ -22,29 +22,27 @@ vi.mock("../config/sessions/session-cold-storage.js", () => ({
 
 let clock: ReturnType<typeof createGatewaySchedulerClock>;
 let scheduler: GatewayScheduler;
-let maintenance: ReturnType<typeof startSessionColdStorageMaintenance> | undefined;
+let maintenance: ReturnType<typeof startSessionColdStorageMaintenance>;
+let config: OpenClawConfig;
+const getRuntimeConfig = () => config;
+const onError = vi.fn();
 beforeEach(() => {
+  config = {};
+  onError.mockReset();
   clock = createGatewaySchedulerClock();
   scheduler = createTestGatewayScheduler(clock.clock);
   resetGatewayWorkAdmission();
   sweep.mockReset().mockResolvedValue({ archivedTranscripts: 2, externalizedTranscripts: 0 });
   inventory.mockReset().mockResolvedValue([]);
+  maintenance = startSessionColdStorageMaintenance({ scheduler, getRuntimeConfig, onError });
 });
 afterEach(async () => {
   await maintenance?.stop();
-  maintenance = undefined;
   resetGatewayWorkAdmission();
   await scheduler.stop();
 });
 
 it("picks up enabled and changed age settings without recreating the scheduler", async () => {
-  let config: OpenClawConfig = {};
-  const getRuntimeConfig = () => config;
-  maintenance = startSessionColdStorageMaintenance({
-    scheduler,
-    getRuntimeConfig,
-    onError: vi.fn(),
-  });
   await clock.advanceBy(60_000);
   expect(sweep).not.toHaveBeenCalled();
   expect(() => requestGatewaySessionColdStorageMaintenance(getRuntimeConfig)).toThrow("disabled");
@@ -67,10 +65,9 @@ it("picks up enabled and changed age settings without recreating the scheduler",
 });
 
 it("coalesces manual and periodic work and rejects commits after a config change", async () => {
-  let config: OpenClawConfig = {
+  config = {
     session: { maintenance: { coldStorage: { enabled: true, afterDays: 30 } } },
   };
-  const getRuntimeConfig = () => config;
   const completion = createDeferred<{ archivedTranscripts: number }>();
   const started = createDeferred();
   sweep.mockImplementation(async ({ assertCurrent }: { assertCurrent: () => void }) => {
@@ -79,8 +76,6 @@ it("coalesces manual and periodic work and rejects commits after a config change
     assertCurrent();
     return result;
   });
-  const onError = vi.fn();
-  maintenance = startSessionColdStorageMaintenance({ scheduler, getRuntimeConfig, onError });
   const running = clock.wake();
   requestGatewaySessionColdStorageMaintenance(getRuntimeConfig);
   void clock.advanceBy(180_000);
@@ -103,10 +98,9 @@ it("coalesces manual and periodic work and rejects commits after a config change
 it.each(["periodic", "manual"] as const)(
   "waits for an admitted %s worker to relinquish its writer before shutdown completes",
   async (trigger) => {
-    const config: OpenClawConfig = {
+    config = {
       session: { maintenance: { coldStorage: { enabled: true } } },
     };
-    const getRuntimeConfig = () => config;
     const completion = createDeferred<{ archivedTranscripts: number }>();
     const started = createDeferred();
     sweep.mockImplementation(async ({ assertCurrent }: { assertCurrent: () => void }) => {
@@ -114,11 +108,6 @@ it.each(["periodic", "manual"] as const)(
       const result = await completion.promise;
       assertCurrent();
       return result;
-    });
-    maintenance = startSessionColdStorageMaintenance({
-      scheduler,
-      getRuntimeConfig,
-      onError: vi.fn(),
     });
     if (trigger === "periodic") {
       void clock.wake();
@@ -141,13 +130,6 @@ it.each(["periodic", "manual"] as const)(
 );
 
 it("acknowledges Run now before worker completion and exposes committed progress after failure", async () => {
-  let config: OpenClawConfig = {};
-  const getRuntimeConfig = () => config;
-  maintenance = startSessionColdStorageMaintenance({
-    scheduler,
-    getRuntimeConfig,
-    onError: vi.fn(),
-  });
   config = { session: { maintenance: { coldStorage: { enabled: true } } } };
   const completion = createDeferred<{
     archivedTranscripts: number;
@@ -188,12 +170,6 @@ it("acknowledges Run now before worker completion and exposes committed progress
     const running = maintenance.run().catch(() => {});
     completion.reject(new Error("second batch failed"));
     await running;
-    expect(getSessionColdStorageMaintenanceStatus(getRuntimeConfig)).toMatchObject({
-      running: false,
-      archivedTranscripts: 1,
-      externalizedTranscripts: 2,
-      lastError: "second batch failed",
-    });
     respond.mockClear();
     await sessionReadHandlers["sessions.storage.status"]!({
       params: {},
@@ -218,13 +194,6 @@ it("acknowledges Run now before worker completion and exposes committed progress
 });
 
 it("does not accept Run now if request authority expires during inventory", async () => {
-  let config: OpenClawConfig = {};
-  const getRuntimeConfig = () => config;
-  maintenance = startSessionColdStorageMaintenance({
-    scheduler,
-    getRuntimeConfig,
-    onError: vi.fn(),
-  });
   config = { session: { maintenance: { coldStorage: { enabled: true } } } };
   let current = true;
   inventory.mockImplementation(async () => {

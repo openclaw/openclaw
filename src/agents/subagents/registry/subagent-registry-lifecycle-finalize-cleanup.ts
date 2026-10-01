@@ -1,3 +1,4 @@
+import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { SubagentAnnounceFlowOutcome } from "../announce/subagent-announce.js";
 import {
@@ -127,7 +128,12 @@ export const finalizeSubagentCleanup = async (
       } else {
         // A handoff stays pending for requester-settle; explicit suppression is
         // terminal and must not start another turn that overrides the decision.
-        delivery.status = terminalNonDelivery ? "failed" : "pending";
+        // Nothing wakes a cron run requester: it reads this row itself.
+        delivery.status = terminalNonDelivery
+          ? "failed"
+          : isCronRunSessionKey(entry.requesterSessionKey)
+            ? "not_required"
+            : "pending";
         delivery.disposition = "intentional_non_delivery";
         delivery.payload = undefined;
         delivery.createdAt = undefined;
