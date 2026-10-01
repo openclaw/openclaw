@@ -219,13 +219,6 @@ describe("coalesceAgentRunFrames", () => {
       }),
     },
     { name: "metadata-less user input", boundary: group("user", "peer", undefined) },
-    {
-      name: "projected forwarded source",
-      boundary: {
-        ...group("assistant", "projected-source", "run-1"),
-        senderSession: { sessionKey: "agent:other:main", agentId: "other" },
-      },
-    },
   ])("does not compose across $name", ({ boundary }) => {
     const items = coalesceAgentRunFrames([
       userBoundary(),

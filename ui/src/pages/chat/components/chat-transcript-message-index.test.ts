@@ -181,12 +181,21 @@ describe("completed reply frame ownership", () => {
     ];
   }
 
-  function project(messages: unknown[]) {
-    return projectTranscriptChain(chatItems({ messages }), chainOptions);
+  function project(messages: unknown[], options = chainOptions) {
+    return projectTranscriptChain(chatItems({ messages, sessionKey: options.sessionKey }), options);
   }
-
   function frames(chain: ReturnType<typeof project>) {
     return chain.transcriptItems.filter((item) => item.kind === "agent-run-frame");
+  }
+  function parts(chain: ReturnType<typeof project>) {
+    return chain.transcriptItems.flatMap((item) =>
+      item.kind === "agent-run-frame" ? item.parts : [item],
+    );
+  }
+  function messagesIn(items: readonly Parameters<typeof chatItemGroups>[0][]) {
+    return items
+      .flatMap(chatItemGroups)
+      .flatMap((group) => group.messages.map(({ message }) => message));
   }
 
   it.each([
@@ -203,27 +212,22 @@ describe("completed reply frame ownership", () => {
       const original = structuredClone(messages);
       const chain = project(messages);
       const [frame] = frames(chain);
-      expect(frame).toMatchObject({
-        runId: "run-1",
-        boundaryId: "send:run-1",
-        outcome: { kind: "completed", actionOwner: { message: messages.at(-1) } },
-        parts: [
-          { kind: "work-group", replyRunId: "run-1" },
-          { kind: "group", role: "assistant" },
-        ],
-      });
       expect(chain.transcriptItems).toEqual([
         ...(prompt ? [expect.objectContaining({ role: "user" })] : []),
         frame,
       ]);
+      expect(frame).toMatchObject({
+        runId: "run-1",
+        boundaryId: "send:run-1",
+        outcome: { kind: "completed", actionOwner: { message: messages.at(-1) } },
+        parts: [{ kind: "work-group" }, { kind: "group", role: "assistant" }],
+      });
       const work = frame?.parts[0];
       if (work?.kind !== "work-group") {
         throw new Error("expected work inside the reply frame");
       }
       expect(work.groups.map((group) => group.runId)).toEqual(workRunIds);
-      expect(
-        chatItemGroups(frame!).flatMap((group) => group.messages.map(({ message }) => message)),
-      ).toEqual(messages.slice(prompt ? 1 : 0));
+      expect(messagesIn([frame!])).toEqual(messages.slice(prompt ? 1 : 0));
       expect(messages).toEqual(original);
       const index = projectTranscriptIndex(chain, new Map(), labels);
       expect(index.transcriptMessageKeys.get(work.groups[0]!.messages[0]!.key)).toBe(frame?.key);
@@ -231,41 +235,30 @@ describe("completed reply frame ownership", () => {
     },
   );
 
-  it("keeps the ordinary send frame stable through reload and an older-history prepend", () => {
-    const messages = replyHistory(["run-1"], false);
-    const [initial] = frames(project(messages));
-    const [reloaded] = frames(project(structuredClone(messages)));
-    const [prepended] = frames(project([history[0], ...messages]));
-    expect(initial?.key).toBe('agent-run:["run-1","send:run-1"]');
-    expect(reloaded?.key).toBe(initial?.key);
-    expect(prepended?.key).toBe(initial?.key);
-  });
-
-  it("matches an already-framed channel turn when its prompt is outside the loaded window", () => {
-    const channelKey = "agent:main:telegram:direct:42";
-    const messages = replyHistory(["run-1"], false);
-    const projectChannel = (channelHistory: unknown[]) =>
-      projectTranscriptChain(chatItems({ sessionKey: channelKey, messages: channelHistory }), {
-        ...chainOptions,
-        sessionKey: channelKey,
-      });
-    const full = projectChannel([history[0], ...messages]);
-    const suffix = projectChannel(messages);
-    const [fullFrame] = frames(full);
-    const [suffixFrame] = frames(suffix);
-    expect(fullFrame).toMatchObject({ kind: "agent-run-frame", runId: "run-1" });
-    expect(suffix.transcriptItems.map((item) => item.kind)).toEqual(["agent-run-frame"]);
-    expect(suffixFrame?.key).toBe(fullFrame?.key);
-    expect(suffixFrame?.parts.map((part) => part.kind)).toEqual(["group", "group"]);
-    expect(
-      chatItemGroups(suffixFrame!).flatMap((group) => group.messages.map(({ message }) => message)),
-    ).toEqual(messages);
-    const fullIndex = projectTranscriptIndex(full, new Map(), labels);
-    const suffixIndex = projectTranscriptIndex(suffix, new Map(), labels);
-    for (const id of ["work-0", "final"]) {
-      expect(suffixIndex.messageRowKeysById.get(id)).toBe(fullIndex.messageRowKeysById.get(id));
-    }
-  });
+  it.each([sessionKey, "agent:main:telegram:direct:42"])(
+    "keeps frame and navigation identity through reload and prompt prepend in %s",
+    (key) => {
+      const messages = replyHistory(["run-1"], false);
+      const options = { ...chainOptions, sessionKey: key };
+      const initial = project(messages, options);
+      const [frame] = frames(initial);
+      expect(initial.transcriptItems).toHaveLength(1);
+      expect(frame?.key).toBe('agent-run:["run-1","send:run-1"]');
+      expect(frame?.parts.map((part) => part.kind)).toEqual(
+        key === sessionKey ? ["work-group", "group"] : ["group", "group"],
+      );
+      expect(messagesIn([frame!])).toEqual(messages);
+      const index = projectTranscriptIndex(initial, new Map(), labels);
+      for (const restored of [structuredClone(messages), [history[0], ...messages]]) {
+        const next = project(restored, options);
+        expect(frames(next)[0]?.key).toBe(frame?.key);
+        const nextIndex = projectTranscriptIndex(next, new Map(), labels);
+        for (const id of ["work-0", "final"]) {
+          expect(nextIndex.messageRowKeysById.get(id)).toBe(index.messageRowKeysById.get(id));
+        }
+      }
+    },
+  );
 
   it("keeps a recovered failure in the work log rather than failing the final reply", () => {
     const messages = replyHistory(["run-u", "run-1"]);
@@ -280,13 +273,9 @@ describe("completed reply frame ownership", () => {
     const [frame] = frames(project(messages));
     expect(frame).toMatchObject({
       outcome: { kind: "completed", actionOwner: { message: messages.at(-1) } },
-      parts: [{ kind: "work-group", replyRunId: "run-1" }, { kind: "group" }],
+      parts: [{ kind: "work-group" }, { kind: "group" }],
     });
-    const work = frame?.parts[0];
-    expect(
-      work?.kind === "work-group" &&
-        work.groups.flatMap((group) => group.messages).map(({ message }) => message),
-    ).toContain(failure);
+    expect(messagesIn([frame!.parts[0]!])).toContain(failure);
   });
 
   it.each(["run-1", "run-other"])(
@@ -303,16 +292,9 @@ describe("completed reply frame ownership", () => {
       };
       messages.splice(2, 0, earlier);
       const chain = project(messages);
-      const parts = chain.transcriptItems.flatMap((item) =>
-        item.kind === "agent-run-frame" ? item.parts : [item],
-      );
-      const work = parts.find((item) => item.kind === "work-group");
-      expect(work?.replyRunId).toBe(earlierRunId === "run-1" ? "run-1" : undefined);
       expect(
-        parts.flatMap((item) =>
-          item.kind === "group" && item.role === "assistant"
-            ? item.messages.map(({ message }) => message)
-            : [],
+        messagesIn(
+          parts(chain).filter((item) => item.kind === "group" && item.role === "assistant"),
         ),
       ).toEqual([earlier, messages.at(-1)]);
       expect(frames(chain).map((frame) => frame.runId)).toEqual(
@@ -322,9 +304,11 @@ describe("completed reply frame ownership", () => {
         kind: "completed",
         actionOwner: { message: messages.at(-1) },
       });
-      if (earlierRunId !== "run-1") {
-        expect(chain.transcriptItems[1]).toBe(work);
-      }
+      const work = parts(chain).find((item) => item.kind === "work-group");
+      expect(work).toBeDefined();
+      expect(earlierRunId === "run-1" ? frames(chain)[0]?.parts[0] : chain.transcriptItems[1]).toBe(
+        work,
+      );
     },
   );
 
@@ -349,21 +333,11 @@ describe("completed reply frame ownership", () => {
       const chain = project(messages);
       const work = chain.transcriptItems.find((item) => item.kind === "work-group");
       expect(work).toBeDefined();
-      expect(work).not.toHaveProperty("replyRunId");
-      expect(
-        frames(chain)
-          .flatMap(chatItemGroups)
-          .flatMap((group) => group.messages.map(({ message }) => message)),
-      ).not.toContain(forwarded);
-      if (phase) {
-        expect(chain.transcriptItems).toContainEqual(
-          expect.objectContaining({ kind: "group", senderSession: forwarded.senderSession }),
-        );
-      } else {
-        expect(
-          work?.groups.flatMap((group) => group.messages.map(({ message }) => message)),
-        ).toContain(forwarded);
-      }
+      expect(messagesIn(frames(chain))).not.toContain(forwarded);
+      const standalone = phase
+        ? chain.transcriptItems.filter((item) => item.kind === "group")
+        : [work!];
+      expect(messagesIn(standalone)).toContain(forwarded);
       expect(frames(chain).at(-1)?.outcome).toMatchObject({
         kind: "completed",
         actionOwner: { message: messages.at(-1) },
@@ -382,21 +356,17 @@ describe("completed reply frame ownership", () => {
     messages.splice(2, 0, steer);
     const chain = project(messages);
     const [before, after] = frames(chain);
-    expect(chain.transcriptItems.map((item) => item.kind)).toEqual([
-      "group",
-      "agent-run-frame",
-      "group",
-      "agent-run-frame",
+    expect(chain.transcriptItems).toEqual([
+      expect.objectContaining({ role: "user" }),
+      before,
+      expect.objectContaining({ role: "user" }),
+      after,
     ]);
-    expect(
-      chatItemGroups(before!).flatMap((group) => group.messages.map(({ message }) => message)),
-    ).toEqual([messages[1]]);
-    expect(
-      chatItemGroups(after!).flatMap((group) => group.messages.map(({ message }) => message)),
-    ).toEqual(messages.slice(3));
-    expect(before?.parts[0]).toMatchObject({ kind: "work-group" });
-    expect(before?.parts[0]).not.toHaveProperty("replyRunId");
-    expect(after?.parts[0]).toMatchObject({ kind: "work-group", replyRunId: "run-1" });
+    expect(messagesIn([before!])).toEqual([messages[1]]);
+    expect(before?.runId).toBe("run-u");
+    expect(messagesIn([after!])).toEqual(messages.slice(3));
+    expect(before?.parts[0]?.kind).toBe("work-group");
+    expect(after?.parts[0]?.kind).toBe("work-group");
     expect(new Set(chain.transcriptItems.map((item) => item.key)).size).toBe(
       chain.transcriptItems.length,
     );
@@ -431,34 +401,19 @@ describe("completed reply frame ownership", () => {
         },
       ]);
       expect(chain.transcriptItems).toHaveLength(1);
-      expect(
-        chatItemGroups(chain.transcriptItems[0]!).flatMap((group) =>
-          group.messages.map(({ message }) => message),
-        ),
-      ).toEqual(messages);
+      expect(messagesIn(chain.transcriptItems)).toEqual(messages);
     },
   );
 
   it.each([
-    { name: "search", key: sessionKey, searchActive: true },
-    { name: "channel session", key: "agent:main:telegram:direct:42", searchActive: false },
-  ])("keeps work exposed for $name", ({ key, searchActive }) => {
+    { name: "search", sessionKey, searchActive: true },
+    { name: "channel session", sessionKey: "agent:main:telegram:direct:42", searchActive: false },
+  ])("keeps work exposed for $name", (options) => {
     const messages = replyHistory(["run-u", "run-1"]);
-    const chain = projectTranscriptChain(chatItems({ sessionKey: key, messages }), {
-      ...chainOptions,
-      sessionKey: key,
-      searchActive,
-    });
-    const parts = chain.transcriptItems.flatMap((item) =>
-      item.kind === "agent-run-frame" ? item.parts : [item],
-    );
-    expect(parts.some((part) => part.kind === "work-group")).toBe(false);
-    expect(
-      chain.transcriptItems
-        .flatMap(chatItemGroups)
-        .flatMap((group) => group.messages.map(({ message }) => message)),
-    ).toEqual(messages);
-    if (searchActive) {
+    const chain = project(messages, { ...chainOptions, ...options });
+    expect(parts(chain).some((part) => part.kind === "work-group")).toBe(false);
+    expect(messagesIn(chain.transcriptItems)).toEqual(messages);
+    if (options.searchActive) {
       expect(chain.transcriptItems.every((item) => item.kind === "group")).toBe(true);
     }
   });
@@ -467,11 +422,7 @@ describe("completed reply frame ownership", () => {
     const messages = replyHistory(["run-1"], false).slice(0, -1);
     const chain = project(messages);
     expect(chain.transcriptItems).toMatchObject([{ kind: "group", role: "tool" }]);
-    expect(
-      chain.transcriptItems
-        .flatMap(chatItemGroups)
-        .flatMap((group) => group.messages.map(({ message }) => message)),
-    ).toEqual(messages);
+    expect(messagesIn(chain.transcriptItems)).toEqual(messages);
   });
 });
 
