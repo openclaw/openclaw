@@ -1,5 +1,6 @@
 // Plugin registry CLI tests cover canonical process-root load scopes.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ensurePluginRegistryLoaded } from "./plugin-registry.js";
 
 const logger = {
   info: vi.fn(),
@@ -92,8 +93,6 @@ const mocks = vi.hoisted(() => ({
     >(),
 }));
 
-let ensurePluginRegistryLoaded: typeof import("./plugin-registry.js").ensurePluginRegistryLoaded;
-
 vi.mock("../plugins/loader.js", () => ({
   loadOpenClawPlugins: (...args: Parameters<typeof mocks.loadOpenClawPlugins>) =>
     mocks.loadOpenClawPlugins(...args),
@@ -141,11 +140,6 @@ vi.mock("../plugins/runtime/load-context.js", () => ({
 }));
 
 describe("ensurePluginRegistryLoaded", () => {
-  beforeAll(async () => {
-    const mod = await import("./plugin-registry.js");
-    ensurePluginRegistryLoaded = mod.ensurePluginRegistryLoaded;
-  });
-
   beforeEach(() => {
     mocks.loadOpenClawPlugins.mockReset();
     mocks.resolveConfiguredChannelPluginIds.mockReset();

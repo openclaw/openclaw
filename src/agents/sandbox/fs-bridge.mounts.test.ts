@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { resolveSandboxDockerConfig } from "./config.js";
 import { resolveSandboxFileIdentity } from "./file-mutation-identity.js";
 import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";

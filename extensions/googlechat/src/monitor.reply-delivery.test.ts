@@ -4,6 +4,7 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { deliverGoogleChatReply } from "./monitor-reply-delivery.js";
 import type { GoogleChatCoreRuntime } from "./monitor-types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -45,13 +46,10 @@ function createCore(params?: {
   } as unknown as GoogleChatCoreRuntime;
 }
 
-let deliverGoogleChatReply: typeof import("./monitor-reply-delivery.js").deliverGoogleChatReply;
-
-beforeEach(async () => {
+beforeEach(() => {
   vi.clearAllMocks();
   mocks.sendGoogleChatMessage.mockResolvedValue(null);
   mocks.updateGoogleChatMessage.mockResolvedValue({});
-  ({ deliverGoogleChatReply } = await import("./monitor-reply-delivery.js"));
 });
 
 afterAll(() => {

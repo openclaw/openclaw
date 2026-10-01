@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../../src/test-utils/prepare-compiled-subprocesses.js";
 
 const fixtures = [
   { owner: "setup", name: "forwards output and SIGTERM through the runner process group" },

@@ -1,9 +1,20 @@
 // Covers plugin status reporting from config, discovery, and registry state.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import {
+  buildPluginSnapshotReport,
+  withPluginDiagnosticsReport,
+  buildPluginInspectReport,
+  buildAllPluginInspectReports,
+  buildPluginCompatibilityNotices,
+  buildPluginCompatibilityWarnings,
+  buildPluginCompatibilitySnapshotNotices,
+  formatPluginCompatibilityNotice,
+  summarizePluginCompatibility,
+} from "./status.js";
 import {
   createAutoEnabledStatusConfig,
   createCompatChainFixture,
@@ -43,15 +54,6 @@ const resolveBundledProviderCompatPluginIdsMock = vi.fn();
 const withBundledPluginEnablementCompatMock = vi.fn();
 const listImportedBundledPluginFacadeIdsMock = vi.fn();
 const listImportedRuntimePluginIdsMock = vi.fn();
-let buildPluginSnapshotReport: typeof import("./status.js").buildPluginSnapshotReport;
-let withPluginDiagnosticsReport: typeof import("./status.js").withPluginDiagnosticsReport;
-let buildPluginInspectReport: typeof import("./status.js").buildPluginInspectReport;
-let buildAllPluginInspectReports: typeof import("./status.js").buildAllPluginInspectReports;
-let buildPluginCompatibilityNotices: typeof import("./status.js").buildPluginCompatibilityNotices;
-let buildPluginCompatibilityWarnings: typeof import("./status.js").buildPluginCompatibilityWarnings;
-let buildPluginCompatibilitySnapshotNotices: typeof import("./status.js").buildPluginCompatibilitySnapshotNotices;
-let formatPluginCompatibilityNotice: typeof import("./status.js").formatPluginCompatibilityNotice;
-let summarizePluginCompatibility: typeof import("./status.js").summarizePluginCompatibility;
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => loadConfigMock(),
@@ -251,20 +253,6 @@ function expectInspectShape(
 }
 
 describe("plugin status reports", () => {
-  beforeAll(async () => {
-    ({
-      buildAllPluginInspectReports,
-      buildPluginCompatibilityNotices,
-      buildPluginCompatibilityWarnings,
-      buildPluginCompatibilitySnapshotNotices,
-      withPluginDiagnosticsReport,
-      buildPluginInspectReport,
-      buildPluginSnapshotReport,
-      formatPluginCompatibilityNotice,
-      summarizePluginCompatibility,
-    } = await import("./status.js"));
-  });
-
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
     loadConfigMock.mockReset();

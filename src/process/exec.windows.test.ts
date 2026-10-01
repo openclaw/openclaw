@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 

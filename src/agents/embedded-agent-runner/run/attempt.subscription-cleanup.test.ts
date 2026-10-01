@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../../../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 
 const mocks = vi.hoisted(() => ({ warn: vi.fn() }));

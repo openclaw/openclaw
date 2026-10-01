@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import type { collectGatewayHealthSnapshot } from "../gateway/health/collector.js";

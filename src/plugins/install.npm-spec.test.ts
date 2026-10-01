@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import {
   expectIntegrityDriftRejected,
   mockNpmViewMetadataResult,
@@ -79,14 +80,7 @@ function successfulSpawn(stdout = "") {
 }
 
 function failedSpawn(stderr: string, stdout = "") {
-  return {
-    code: 1,
-    stdout,
-    stderr,
-    signal: null,
-    killed: false,
-    termination: "exit" as const,
-  };
+  return { ...successfulSpawn(stdout), code: 1, stderr };
 }
 
 function npmViewArgv(spec: string): string[] {

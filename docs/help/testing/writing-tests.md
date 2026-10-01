@@ -89,6 +89,13 @@ measured with `pnpm test <file> --maxWorkers=1` on one worker:
   booting per test; import the narrow test API of a plugin or module rather than
   its full barrel. Do not add a serial Vitest config or a worker pin: fix the
   shared state that would need one.
+- Load compiled-subprocess declarations (`scripts/lib/vitest-worker-declarations.mts`)
+  at collection. The first such load in a Vitest invocation prepares the whole
+  compiled worker generation (tens of seconds warm, minutes cold), so an
+  `await import()` in a test or hook whose graph reaches a declaration spends
+  that preparation inside the test or hook deadline. Import the subject
+  statically; suites that re-import it per test add a side-effect import of
+  `src/test-utils/prepare-compiled-subprocesses.ts`.
 - State the measured cost in the PR for every new or materially changed test
   file, and the CI seconds once the run exists.
 

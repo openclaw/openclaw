@@ -1,6 +1,7 @@
 // Covers context-token lookup caches, catalog warmup, and provider-qualified
 // model resolution.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { replaceDiscoveredContextTokenCache } from "./context-cache.js";

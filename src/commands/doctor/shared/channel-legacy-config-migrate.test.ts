@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../../../test-utils/prepare-compiled-subprocesses.js";
 // Channel legacy config migration tests cover doctor repair of old channel config shapes.
 import type { OpenClawConfig } from "../../../config/types.js";
 

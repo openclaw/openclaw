@@ -1,6 +1,7 @@
 import { ChannelType, type GatewayThreadDeleteDispatchData } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as listeners from "./listeners.js";
 
 const lifecycleMocks = vi.hoisted(() => {
   const unbindThread = vi.fn();
@@ -22,7 +23,6 @@ vi.mock("./thread-bindings.manager.js", () => ({
 }));
 
 async function createThreadDeleteListener() {
-  const listeners = await import("./listeners.js");
   expect(listeners).toHaveProperty("DiscordThreadDeleteListener");
   const Listener = (
     listeners as unknown as {

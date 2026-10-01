@@ -24,6 +24,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { mainLanes } from "../../scripts/lib/docker-e2e-scenarios.mts";
+import { readSystemdServiceExecStart } from "../../src/daemon/systemd-service-files.js";
 import { buildSystemdUnit } from "../../src/daemon/systemd-unit.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -5748,8 +5749,6 @@ done
       busctl: readFileSync(DOCTOR_SWITCH_BUSCTL_SHIM_PATH, "utf8"),
       "systemd-exec-start.mjs": readFileSync(DOCTOR_SWITCH_SYSTEMD_EXEC_START_PATH, "utf8"),
     });
-    const { readSystemdServiceExecStart } =
-      await import("../../src/daemon/systemd-service-files.js");
     const loadedEnv = {
       HOME: home,
       PATH: `${binDir}:${process.env.PATH}`,
@@ -5815,8 +5814,6 @@ done
       XDG_RUNTIME_DIR: join(home, "runtime"),
       DBUS_SESSION_BUS_ADDRESS: `unix:path=${join(home, "runtime", "bus")}`,
     };
-    const { readSystemdServiceExecStart } =
-      await import("../../src/daemon/systemd-service-files.js");
     expect(
       await readSystemdServiceExecStart(env, { requireEffective: true, timeoutMs: 30_000 }),
     ).toBeNull();

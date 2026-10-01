@@ -1,5 +1,6 @@
 // PTY command supervisor tests cover supervised terminal command lifecycles.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createProcessSupervisor } from "./supervisor.js";
 import { createStubChildAdapter } from "./supervisor.test-support.js";
 
 const { createPtyAdapterMock } = vi.hoisted(() => ({
@@ -11,12 +12,6 @@ vi.mock("./adapters/pty.js", () => ({
 }));
 
 describe("process supervisor PTY command contract", () => {
-  let createProcessSupervisor: typeof import("./supervisor.js").createProcessSupervisor;
-
-  beforeAll(async () => {
-    ({ createProcessSupervisor } = await import("./supervisor.js"));
-  });
-
   beforeEach(() => {
     createPtyAdapterMock.mockClear();
   });

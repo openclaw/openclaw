@@ -1,13 +1,7 @@
 // Discord tests cover listeners plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeAll, describe, expect, it, vi } from "vitest";
-
-let DiscordMessageListener: typeof import("./listeners.js").DiscordMessageListener;
-let DiscordInteractionListener: typeof import("./listeners.js").DiscordInteractionListener;
-
-beforeAll(async () => {
-  ({ DiscordMessageListener, DiscordInteractionListener } = await import("./listeners.js"));
-});
+import { describe, expect, it, vi } from "vitest";
+import { DiscordMessageListener, DiscordInteractionListener } from "./listeners.js";
 
 function createLogger() {
   return {

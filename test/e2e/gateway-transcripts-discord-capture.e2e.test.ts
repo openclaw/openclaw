@@ -1,3 +1,4 @@
+import "../../src/test-utils/prepare-compiled-subprocesses.js";
 import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
 import fs from "node:fs/promises";
