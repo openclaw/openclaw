@@ -23,6 +23,7 @@ import { printResult } from "./progress.js";
 import { parseUpdateTimeoutMs, type UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import type { MigratedUpdateFinalizationResult } from "./update-command-migrated-types.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   recordUpdateResultNextAction,
@@ -60,6 +61,46 @@ export function deferUpdateCommandTerminalResult(
   }
   owner.publish = publish;
   return true;
+}
+
+/** Deliver candidate-owned facts only after the retained parent's executor settles. */
+export function deferMigratedUpdateCommandTerminalResult(
+  run: Run,
+  prepared: Pick<MigratedUpdateFinalizationResult, "result" | "exitCode" | "automaticTriage">,
+  stdout: string,
+): UpdateCommandFailure | undefined {
+  const expectedFailure =
+    prepared.exitCode === 0
+      ? undefined
+      : new UpdateCommandFailure(prepared.result, prepared.exitCode, undefined, {
+          automaticTriage: prepared.automaticTriage,
+        });
+  const pending = (cause: unknown) =>
+    new UpdateCommandPendingRecoveryFailure(prepared.result, formatErrorMessage(cause), { cause });
+  if (
+    !deferUpdateCommandTerminalResult(run, async (failure) => {
+      // Only the exact candidate failure is expected. Cleanup and release errors
+      // must suppress its output without reopening the newer ledger in this parent.
+      if (failure !== expectedFailure) {
+        throw pending(
+          failure === undefined
+            ? new Error("Update continuation did not propagate its prepared failure.")
+            : failure,
+        );
+      }
+      try {
+        if (stdout) {
+          process.stdout.write(stdout);
+        }
+      } catch (cause) {
+        throw pending(cause);
+      }
+      return prepared.result;
+    })
+  ) {
+    throw pending(new Error("Migrated update result has no terminal publication owner."));
+  }
+  return expectedFailure;
 }
 
 export function hasDeferredUpdateCommandTerminalResult(run: Run): boolean {

@@ -28,7 +28,6 @@ import type { InitializedUpdate } from "./update-command-initialization.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
 import {
-  UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,
   withUpdateAdmissionReporting,
 } from "./update-command-result.js";
@@ -624,11 +623,8 @@ async function runResolvedUpdate(
       return;
     }
     recoveryState.ledgerHandoffCompleted = true;
-    opts.onResult?.(continued.result);
-    if (continued.exitCode !== 0) {
-      throw new UpdateCommandFailure(continued.result, continued.exitCode, undefined, {
-        automaticTriage: continued.automaticTriage,
-      });
+    if (continued.preparedFailure) {
+      throw continued.preparedFailure;
     }
     return;
   }

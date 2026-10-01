@@ -371,12 +371,46 @@ process.exitCode = await new Promise((resolve, reject) => {
           writeFileSync(path.join(cacheRoot, "0-sentinel"), "keep");
         }
         const accessLog = path.join(fixtureRoot, "cache-access.log");
+        const lifecycleLog = path.join(fixtureRoot, "cache-lifecycle.log");
+        writeFileSync(lifecycleLog, "");
         const guard = path.join(fixtureRoot, "cache-guard.cjs");
         writeFileSync(
           guard,
           `
 const fs = require("node:fs");
 const path = require("node:path");
+// Observe process settlement without adding timers or changing failure stderr.
+// Loader workers inherit this preload; only main threads own these child events.
+if (require("node:worker_threads").isMainThread) {
+  let records = 0;
+  const record = (stage, details = {}) => {
+    if (records++ < 32) fs.appendFileSync(${JSON.stringify(lifecycleLog)}, JSON.stringify({
+      pid: process.pid, ppid: process.ppid, atMs: Date.now(), stage, ...details,
+    }) + "\\n");
+  };
+  record("started");
+  process.once("beforeExit", code => record("before-exit", { code }));
+  process.once("exit", code => record("exit", { code }));
+  const cp = require("node:child_process");
+  const spawn = cp.spawn;
+  cp.spawn = function (...args) {
+    record("spawn-enter");
+    const child = Reflect.apply(spawn, this, args);
+    record("spawn-return", { childPid: child.pid });
+    for (const event of ["exit", "close"]) {
+      child.once(event, (code, signal) => record("child-" + event, { childPid: child.pid, code, signal }));
+    }
+    return child;
+  };
+  const spawnSync = cp.spawnSync;
+  cp.spawnSync = function (...args) {
+    record("spawn-sync-enter");
+    const result = Reflect.apply(spawnSync, this, args);
+    record("spawn-sync-return", { childPid: result.pid, code: result.status, signal: result.signal });
+    return result;
+  };
+  require("node:module").syncBuiltinESMExports();
+}
 const readdirSync = fs.readdirSync;
 fs.readdirSync = function (directory, ...args) {
   if (/^tsx(?:-|$)/.test(path.basename(String(directory)))) {
@@ -409,6 +443,10 @@ console.log(JSON.stringify({
   cwd: process.cwd(),
   env: Object.fromEntries(${JSON.stringify(Object.keys(preservedEnv))}.map(key => [key, process.env[key]])),
 }));
+import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(lifecycleLog)}, JSON.stringify({
+  pid: process.pid, ppid: process.ppid, atMs: Date.now(), stage: "snapshot-write-returned",
+}) + "\\n");
 `;
         writeFileSync(childPath, `${snapshotSource}\nprocess.exitCode = 17;\n`);
         writeFileSync(
@@ -447,10 +485,46 @@ process.exitCode = child.status ?? 1;
             env.TSX_DISABLE_CACHE = cacheFlag;
           }
           for (const launch of launches) {
+            const traceStart = readFileSync(lifecycleLog).byteLength;
+            const startedAtMs = Date.now();
+            const ownerEvents: Array<{ stage: string; atMs: number; code?: number | null }> = [];
             const result = await runNode(
               [...launch, "argument with spaces", "--proof"],
               env,
               process.cwd(),
+              (child) => {
+                // The Windows Job launcher strips NODE_OPTIONS. Observe its actual
+                // exit and pipe closure here instead of inferring them from child output.
+                ownerEvents.push({ stage: "owner-ready", atMs: Date.now() });
+                for (const event of ["exit", "close"] as const) {
+                  child.once(event, (code) => {
+                    ownerEvents.push({ stage: `owner-${event}`, atMs: Date.now(), code });
+                  });
+                }
+                for (const [name, pipe] of [
+                  ["stdout", child.stdout],
+                  ["stderr", child.stderr],
+                ] as const) {
+                  pipe?.once("close", () => {
+                    ownerEvents.push({ stage: `owner-${name}-close`, atMs: Date.now() });
+                  });
+                }
+              },
+            );
+            // Successful runs need the same phase evidence as timeouts. Read only this
+            // launch after managed settlement, before assertions can release the fixture.
+            console.log(
+              "cache lifecycle:",
+              JSON.stringify({
+                entrypoint,
+                cacheFlag: cacheFlag === undefined ? "unset" : "empty",
+                elapsedMs: Date.now() - startedAtMs,
+                status: result.status,
+                ownerEvents,
+                children: readFileSync(lifecycleLog)
+                  .subarray(traceStart, traceStart + 65_536)
+                  .toString("utf8"),
+              }),
             );
             expect(result.error, formatShimResult(result)).toBeUndefined();
             expect(result.status, formatShimResult(result)).toBe(17);

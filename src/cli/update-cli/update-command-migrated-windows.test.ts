@@ -22,7 +22,13 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import type { MigratedUpdateFinalizationInput } from "./update-command-migrated-types.js";
 import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
+import { readMigratedUpdateRunRow } from "./update-command-migrated.test-support.js";
+import {
+  UpdateCommandFailure,
+  UpdateCommandPendingRecoveryFailure,
+} from "./update-command-result.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
+import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 
 const mocks = vi.hoisted(() => ({
   service: vi.fn<() => GatewayService>(),
@@ -94,6 +100,7 @@ it.each([
   "failed terminal result",
   "replaced task",
   "changed protected task",
+  "terminal compensation refusal",
 ] as const)("hands off migrated Windows updates: %s", async (outcome) => {
   const home = await fs.realpath(dirs.make("migrated-windows-"));
   await withEnvAsync(
@@ -164,6 +171,12 @@ it.each([
       database.close();
       expect(() => getUpdateRun(runId)).toThrow(/newer schema version/);
       let enabledAtWorkerStart: boolean | undefined;
+      const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+      const onResult = vi.fn();
+      let terminalFromCandidate: unknown;
+      let databaseCountAtTerminal = 0;
+      const inspectTerminal = () =>
+        readMigratedUpdateRunRow(resolveOpenClawStateSqlitePath(), runId);
       vi.mocked(runUtf8CommandWithTimeout).mockImplementationOnce(async (_argv, options) => {
         assert(typeof options === "object");
         expect(options.timeoutMs).toBe(activationTimeoutMs);
@@ -225,8 +238,30 @@ it.each([
           mocks.enabled = true;
           running = true;
         }
+        if (outcome === "terminal compensation refusal") {
+          // The candidate restored autostart, but another owner replaced the
+          // task before the parent can compensate the failed terminal result.
+          mocks.enabled = true;
+          programArguments = [
+            process.execPath,
+            path.join(home, "other-install", "openclaw.mjs"),
+            "gateway",
+          ];
+          const candidateDatabase = new DatabaseSync(resolveOpenClawStateSqlitePath());
+          try {
+            candidateDatabase
+              .prepare(
+                "UPDATE update_runs SET status = 'failed', phase = 'finished', finished_at_ms = ?, reason = 'plugin-convergence-failed' WHERE run_id = ?",
+              )
+              .run(Date.now(), runId);
+          } finally {
+            candidateDatabase.close();
+          }
+          terminalFromCandidate = inspectTerminal();
+          databaseCountAtTerminal = databases.length;
+        }
         return {
-          stdout: "",
+          stdout: outcome === "terminal compensation refusal" ? "candidate terminal result\n" : "",
           stderr: "",
           code: 0,
           signal: null,
@@ -235,44 +270,75 @@ it.each([
           cleanup: "normal",
         };
       });
-      const operation = continueMigratedUpdateInFreshProcess(
-        {
-          mutationStarted: true,
-          root,
-          result: { status: "ok", mode: "npm", root, runId, steps: [], durationMs: 0 },
-          installKindChanged: false,
-          configSnapshot: {
-            path: path.join(home, "openclaw.json"),
-            exists: false,
-            raw: null,
-            parsed: {},
-            sourceConfig: asResolvedSourceConfig({}),
-            resolved: asResolvedSourceConfig({}),
-            valid: true,
-            runtimeConfig: asRuntimeConfig({}),
-            config: asRuntimeConfig({}),
-            issues: [],
-            warnings: [],
-            legacyIssues: [],
+      const continueUpdate = () =>
+        continueMigratedUpdateInFreshProcess(
+          {
+            mutationStarted: true,
+            root,
+            result: { status: "ok", mode: "npm", root, runId, steps: [], durationMs: 0 },
+            installKindChanged: false,
+            configSnapshot: {
+              path: path.join(home, "openclaw.json"),
+              exists: false,
+              raw: null,
+              parsed: {},
+              sourceConfig: asResolvedSourceConfig({}),
+              resolved: asResolvedSourceConfig({}),
+              valid: true,
+              runtimeConfig: asRuntimeConfig({}),
+              config: asRuntimeConfig({}),
+              issues: [],
+              warnings: [],
+              legacyIssues: [],
+            },
+            requestedChannel: null,
+            storedChannel: "stable",
+            channel: "stable",
+            downgradeRisk: false,
+            shouldRestart: true,
+            opts: { json: true, run },
+            preManagedServiceStop: stopped,
+            controlPlaneUpdateSentinelMeta: null,
+            preUpdatePluginInstallRecords: {},
+            startedAt: Date.now(),
+            packageUpdateNodeRunner: process.execPath,
+            updateStepTimeoutMs: 1_000,
+            rollbackBlockedReason: "state-migrated-no-rollback",
           },
-          requestedChannel: null,
-          storedChannel: "stable",
-          channel: "stable",
-          downgradeRisk: false,
-          shouldRestart: true,
-          opts: { json: true, run },
-          preManagedServiceStop: stopped,
-          controlPlaneUpdateSentinelMeta: null,
-          preUpdatePluginInstallRecords: {},
-          startedAt: Date.now(),
-          packageUpdateNodeRunner: process.execPath,
-          updateStepTimeoutMs: 1_000,
-          rollbackBlockedReason: "state-migrated-no-rollback",
-        },
-        [],
-      );
+          [],
+        );
+      const refusesBeforeReceipt =
+        outcome === "launch failure" ||
+        outcome === "replaced task" ||
+        outcome === "changed protected task";
+      const operation = refusesBeforeReceipt
+        ? continueUpdate()
+        : withUpdateCommandTerminalResult(
+            async (registerRun) => {
+              registerRun(run);
+              const continued = await continueUpdate();
+              if (continued.preparedFailure) {
+                throw continued.preparedFailure;
+              }
+              return continued;
+            },
+            { json: true, onResult },
+          );
       try {
-        if (outcome === "launch failure") {
+        if (outcome === "terminal compensation refusal") {
+          const failure = await operation.catch((error: unknown) => error);
+          expect(terminalFromCandidate).toMatchObject({
+            status: "failed",
+            phase: "finished",
+            reason: "plugin-convergence-failed",
+            finished_at_ms: expect.any(Number),
+          });
+          expect(failure).toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
+          expect(stdout).not.toHaveBeenCalled();
+          expect(onResult).not.toHaveBeenCalled();
+          expect(inspectTerminal()).toEqual(terminalFromCandidate);
+          expect(databases).toHaveLength(databaseCountAtTerminal);
+        } else if (outcome === "launch failure") {
           await expect(operation).rejects.toThrow("candidate finalizer unavailable");
         } else if (outcome === "replaced task" || outcome === "changed protected task") {
           await expect(operation).rejects.toThrow(/ownership or manager identity changed/);
@@ -282,10 +348,17 @@ it.each([
             result: { status: "ok", postUpdate: { plugins: { status: "warning" } } },
           });
         } else {
-          await expect(operation).resolves.toMatchObject({ exitCode: 1 });
+          await expect(operation).rejects.toMatchObject({
+            result: expect.objectContaining({ status: "error" }),
+            exitCode: 1,
+          });
+          await expect(operation).rejects.toBeInstanceOf(UpdateCommandFailure);
         }
         expect(enabledAtWorkerStart).toBe(false);
-        const replaced = outcome === "replaced task" || outcome === "changed protected task";
+        const replaced =
+          outcome === "replaced task" ||
+          outcome === "changed protected task" ||
+          outcome === "terminal compensation refusal";
         expect(mocks.enabled).toBe(replaced || outcome === "plugin warning");
         await recovery?.restore();
         expect(mocks.enabled).toBe(replaced || outcome === "plugin warning");

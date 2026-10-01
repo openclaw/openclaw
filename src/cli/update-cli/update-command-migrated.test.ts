@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -10,6 +11,7 @@ import { createConfigIO } from "../../config/io.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { appendTranscriptEventsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { readDaemonRuntimePin } from "../../daemon/runtime-pin-state.js";
+import * as nodeSqlite from "../../infra/node-sqlite.js";
 import {
   createPackageIntegrityReader,
   type PackageLauncherFingerprint,
@@ -29,6 +31,10 @@ import {
   finishUpdateRun,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../../process/exec-result.js";
 import * as childCommands from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
@@ -53,8 +59,14 @@ import {
   continueMigratedUpdateInFreshProcess,
   inspectActivatedUpdateState,
 } from "./update-command-migrated.js";
+import { readMigratedUpdateRunRow } from "./update-command-migrated.test-support.js";
 import { taskRecovery } from "./update-command-post-update.test-support.js";
+import {
+  UpdateCommandFailure,
+  UpdateCommandPendingRecoveryFailure,
+} from "./update-command-result.js";
 import { createUpdateRunProgress } from "./update-command-run.js";
+import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 
 // Model the already-running updater's older schema contract. The candidate
 // worker is a real unmocked process with the checkout's current contract.
@@ -171,11 +183,12 @@ it.each([
 
 it.each<{
   pending: boolean;
-  status: "error" | "skipped";
+  status: "ok" | "error" | "skipped";
   candidateStartAttempted?: boolean;
   backup?: boolean;
   windows?: boolean;
   handback?: boolean;
+  completion?: "success" | "failure";
   recovered?: boolean;
 }>([
   { pending: true, status: "skipped", windows: true },
@@ -186,6 +199,8 @@ it.each<{
   { pending: false, status: "error", backup: true },
   { pending: false, status: "error", candidateStartAttempted: false },
   { pending: false, status: "error", candidateStartAttempted: false, backup: true, windows: true },
+  { pending: false, status: "ok", completion: "success" },
+  { pending: false, status: "ok", completion: "failure" },
   {
     pending: false,
     status: "error",
@@ -195,7 +210,7 @@ it.each<{
     recovered: true,
   },
 ])(
-  "retains the backup across migrated finalization (pending=$pending, status=$status, start=$candidateStartAttempted, backup=$backup, windows=$windows, recovered=$recovered)",
+  "retains the backup across migrated finalization (pending=$pending, status=$status, start=$candidateStartAttempted, backup=$backup, windows=$windows, completion=$completion, recovered=$recovered)",
   async ({
     pending,
     status,
@@ -203,10 +218,16 @@ it.each<{
     backup,
     windows = false,
     handback = false,
+    completion,
     recovered = false,
   }) => {
-    const exitCode = status === "skipped" ? 0 : 1;
-    const reason = status === "skipped" ? "gateway-readiness-unverified" : "doctor-failed";
+    const exitCode = status === "error" ? 1 : 0;
+    const reason =
+      status === "ok"
+        ? "updated"
+        : status === "skipped"
+          ? "gateway-readiness-unverified"
+          : "doctor-failed";
     const base = dirs.make("migrated-readiness-pending-");
     const { transaction, packageRoot } = await createRetainedPackageSwap(base);
     const env = { OPENCLAW_STATE_DIR: path.join(base, "state") };
@@ -217,10 +238,36 @@ it.each<{
     };
     const configSnapshot = await createConfigIO({ env, observe: false }).readConfigFileSnapshot();
     const windowsRecovery = taskRecovery();
+    const settlePackage = transaction.complete.bind(transaction);
     const complete = vi.spyOn(transaction, "complete");
     const rollback = vi.spyOn(transaction, "rollback");
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    const onResult = vi.fn();
+    if (recovered) {
+      windowsRecovery.complete.mockImplementationOnce(async () => {
+        expect(stdout).not.toHaveBeenCalled();
+        expect(onResult).not.toHaveBeenCalled();
+      });
+    }
+    let stdoutAtCompletion: number | undefined;
+    let observedAtCompletion: number | undefined;
+    let candidateRow: unknown;
+    const oldRuntimeOpens: string[] = [];
+    const databasePath = path.join(env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite");
+    const readCandidateRow = () => readMigratedUpdateRunRow(databasePath, run.runId);
+    if (completion) {
+      // Keep the successful package owner's real completion; inject only the
+      // ordinary error that the canonical completion policy must classify.
+      complete.mockImplementation(async (...args) => {
+        stdoutAtCompletion = stdout.mock.calls.length;
+        observedAtCompletion = onResult.mock.calls.length;
+        if (completion === "failure") {
+          throw new Error("fixture package completion unavailable");
+        }
+        return await settlePackage(...args);
+      });
+    }
     // Keep the real parent and package owner; model only the completed candidate's JSON reply.
     vi.spyOn(childCommands, "runUtf8CommandWithTimeout").mockImplementation(
       async (_argv, options) => {
@@ -257,9 +304,30 @@ it.each<{
         };
         finishUpdateRun(
           run.runId,
-          { status: status === "skipped" ? "skipped" : "failed", reason },
+          {
+            status: status === "ok" ? "succeeded" : status === "skipped" ? "skipped" : "failed",
+            reason,
+          },
           { env },
         );
+        if (completion) {
+          candidateRow = readCandidateRow();
+          closeOpenClawStateDatabaseForTest();
+          const migrated = new DatabaseSync(databasePath);
+          migrated.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+          migrated.close();
+          const open = nodeSqlite.openNodeSqliteDatabase;
+          vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+            const openedPath = args[0];
+            if (
+              (openedPath.startsWith("file:") ? fileURLToPath(openedPath) : openedPath) ===
+              databasePath
+            ) {
+              oldRuntimeOpens.push(args[0]);
+            }
+            return open(...args);
+          });
+        }
         await fs.writeFile(
           input.resultPath,
           JSON.stringify({ result, exitCode, terminalRunId: run.runId, candidateStartAttempted }),
@@ -276,49 +344,93 @@ it.each<{
       },
     );
 
-    const outcome = await continueMigratedUpdateInFreshProcess(
-      {
-        mutationStarted: true,
-        result: { status: "ok", mode: "npm", root: packageRoot, steps: [], durationMs: 1 },
-        root: packageRoot,
-        installKindChanged: false,
-        configSnapshot,
-        requestedChannel: null,
-        storedChannel: "stable",
-        channel: "stable",
-        downgradeRisk: false,
-        shouldRestart: true,
-        opts: { json: true, run },
-        preManagedServiceStop: {
-          stopped: true,
-          inspected: true,
-          runtimeInspected: true,
-          running: true,
-          serviceEnv: env,
-          ...(windows ? { windowsTaskAutoStartRecovery: windowsRecovery } : {}),
+    const continueUpdate = () =>
+      continueMigratedUpdateInFreshProcess(
+        {
+          mutationStarted: true,
+          result: { status: "ok", mode: "npm", root: packageRoot, steps: [], durationMs: 1 },
+          root: packageRoot,
+          installKindChanged: false,
+          configSnapshot,
+          requestedChannel: null,
+          storedChannel: "stable",
+          channel: "stable",
+          downgradeRisk: false,
+          shouldRestart: true,
+          opts: { json: true, run },
+          preManagedServiceStop: {
+            stopped: true,
+            inspected: true,
+            runtimeInspected: true,
+            running: true,
+            serviceEnv: env,
+            ...(windows ? { windowsTaskAutoStartRecovery: windowsRecovery } : {}),
+          },
+          packageTransaction: transaction,
+          ...(backup
+            ? {
+                databaseBackup: {
+                  directory: path.join(transaction.backupRoot, "databases"),
+                  databases: [],
+                  missingPaths: [],
+                  sourcePaths: [],
+                  sourceGenerations: {},
+                  warnings: [],
+                },
+              }
+            : {}),
+          controlPlaneUpdateSentinelMeta: null,
+          preUpdatePluginInstallRecords: {},
+          startedAt: Date.now(),
+          packageUpdateNodeRunner: process.execPath,
+          updateStepTimeoutMs: 90_000,
         },
-        packageTransaction: transaction,
-        ...(backup
-          ? {
-              databaseBackup: {
-                directory: path.join(transaction.backupRoot, "databases"),
-                databases: [],
-                missingPaths: [],
-                sourcePaths: [],
-                sourceGenerations: {},
-                warnings: [],
-              },
-            }
-          : {}),
-        controlPlaneUpdateSentinelMeta: null,
-        preUpdatePluginInstallRecords: {},
-        startedAt: Date.now(),
-        packageUpdateNodeRunner: process.execPath,
-        updateStepTimeoutMs: 90_000,
+        [],
+      );
+    let continuedResult: Awaited<ReturnType<typeof continueUpdate>> | undefined;
+    const operation = withUpdateCommandTerminalResult(
+      async (registerRun) => {
+        registerRun(run);
+        continuedResult = await continueUpdate();
+        if (continuedResult.preparedFailure) {
+          throw continuedResult.preparedFailure;
+        }
+        return continuedResult;
       },
-      [],
+      { json: true, onResult },
     );
-
+    const settled = await operation.catch((error: unknown) => error);
+    if (completion) {
+      expect.soft(stdoutAtCompletion).toBe(0);
+      expect.soft(observedAtCompletion).toBe(0);
+      expect.soft(readCandidateRow()).toEqual(candidateRow);
+      expect.soft(candidateRow).toMatchObject({ status: "succeeded", reason: "updated" });
+      expect.soft(oldRuntimeOpens).toEqual([]);
+      expect(rollback).not.toHaveBeenCalled();
+      if (completion === "failure") {
+        expect.soft(settled).toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
+        expect.soft(settled).toMatchObject({
+          cause: expect.objectContaining({
+            result: expect.objectContaining({ reason: "package-backup-retention-failed" }),
+          }),
+        });
+        expect.soft(stdout).not.toHaveBeenCalled();
+        expect(onResult).not.toHaveBeenCalled();
+        await expect(fs.access(transaction.backupRoot)).resolves.toBeUndefined();
+      } else {
+        expect(settled).toMatchObject({ exitCode: 0, result: { status: "ok" } });
+        expect(stdout).toHaveBeenCalledExactlyOnceWith("candidate finalization result\n");
+        expect(onResult).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ status: "ok" }));
+      }
+      return;
+    }
+    if (exitCode !== 0 && !handback) {
+      expect(settled).toBeInstanceOf(UpdateCommandFailure);
+      expect(settled).not.toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
+    } else {
+      expect(settled).toBe(continuedResult);
+    }
+    const outcome = continuedResult!;
     expect(outcome).toMatchObject({
       exitCode,
       result: { status },
@@ -328,8 +440,10 @@ it.each<{
     expect(outcome.databaseRollbackAvailable).toBe(handback ? true : undefined);
     if (handback) {
       expect(stdout).not.toHaveBeenCalled();
+      expect(onResult).not.toHaveBeenCalled();
     } else {
-      expect(stdout).toHaveBeenCalledWith("candidate finalization result\n");
+      expect(stdout).toHaveBeenCalledExactlyOnceWith("candidate finalization result\n");
+      expect(onResult).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ status }));
     }
     if (pending || handback) {
       expect(complete).not.toHaveBeenCalled();
@@ -441,8 +555,15 @@ it.each([
   { json: true, legacy: false, parentOwns: true, retained: true, original: true },
   { json: true, legacy: false, parentOwns: true, checkWorkMs: 31_000, stepBudgetMs: 120_000 },
   { json: true, legacy: false, parentOwns: true, checkWorkMs: 31_000, stepBudgetMs: 20_000 },
+  { json: true, legacy: false, parentOwns: true, settlement: "healthy" },
+  { json: true, legacy: false, parentOwns: true, settlement: "package" },
+  { json: true, legacy: false, parentOwns: true, settlement: "scratch" },
+  { json: true, legacy: false, parentOwns: true, settlement: "release" },
+  { json: true, legacy: false, parentOwns: true, settlement: "no-owner" },
+  { json: true, legacy: false, parentOwns: true, settlement: "swallowed" },
+  { json: true, legacy: false, parentOwns: true, settlement: "uncertain-cleanup" },
 ])(
-  "fences migrated candidate finalization (json=$json, legacy=$legacy, parentOwns=$parentOwns, foreground=$foreground, retained=$retained, original=$original, check=$checkWorkMs, budget=$stepBudgetMs)",
+  "fences migrated candidate finalization (json=$json, legacy=$legacy, parentOwns=$parentOwns, foreground=$foreground, retained=$retained, original=$original, check=$checkWorkMs, budget=$stepBudgetMs, settlement=$settlement)",
   async ({
     json,
     legacy,
@@ -452,6 +573,7 @@ it.each([
     original,
     checkWorkMs,
     stepBudgetMs,
+    settlement,
   }) => {
     const stateDir = await fs.realpath(dirs.make("migrated-update-"));
     const env = {
@@ -537,6 +659,12 @@ it.each([
     vi.useRealTimers();
     const rollback = vi.fn();
     let terminalAtCleanup: unknown;
+    let terminalFromCandidate: unknown;
+    let stdoutAtCleanup: string | undefined;
+    let stdoutAtExecutorSettlement: string | undefined;
+    const oldRuntimeOpens: string[] = [];
+    const onResult = vi.fn();
+    let settledResult: Awaited<ReturnType<typeof continueMigratedUpdateInFreshProcess>> | undefined;
     let stdout = "";
     vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
       stdout += String(chunk);
@@ -546,6 +674,16 @@ it.each([
     const control = path.join(stateDir, "executor-control");
     await fs.mkdir(control);
     vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+    const inspectTerminal = () => readMigratedUpdateRunRow(database.path, created.runId);
+    if (settlement === "scratch") {
+      const remove = fs.rm;
+      vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+        await remove(...args);
+        if (path.basename(String(args[0])).startsWith("openclaw-update-migrated-")) {
+          throw new Error("fixture migrated scratch cleanup refused");
+        }
+      });
+    }
     const family = async () =>
       Promise.all(
         [database.path, database.path + "-wal", database.path + "-shm"].map((file) =>
@@ -575,6 +713,20 @@ it.each([
           options,
         );
         const allowance = typeof options === "number" ? options : options.timeoutMs;
+        if (settlement && argv.at(-1) !== "--check") {
+          terminalFromCandidate = inspectTerminal();
+          const open = nodeSqlite.openNodeSqliteDatabase;
+          vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+            const openedPath = args[0];
+            if (
+              (openedPath.startsWith("file:") ? fileURLToPath(openedPath) : openedPath) ===
+              database.path
+            ) {
+              oldRuntimeOpens.push(args[0]);
+            }
+            return open(...args);
+          });
+        }
         // Keep the native admission/cleanup flow; model cold-start work in this phase only.
         return checkWorkMs !== undefined &&
           argv.at(-1) === "--check" &&
@@ -583,118 +735,198 @@ it.each([
           : child;
       },
     );
-    const work = withUpdateCommandExecutor(run.runId, async (executor) => {
-      const serviceRoot = retained ? path.join(stateDir, "service-A") : undefined;
-      if (serviceRoot) {
-        await fs.mkdir(serviceRoot);
-        if (original) {
-          await fs.writeFile(
-            path.join(serviceRoot, "package.json"),
-            JSON.stringify({
-              name: "openclaw",
-              version: "2026.9.3",
-              type: "module",
-            }),
-          );
+    const uncertainCleanup = new CommandProcessCleanupError();
+    const execute = (
+      registerRun?: Parameters<Parameters<typeof withUpdateCommandTerminalResult>[0]>[0],
+    ) =>
+      withUpdateCommandExecutor(run.runId, async (executor) => {
+        const serviceRoot = retained ? path.join(stateDir, "service-A") : undefined;
+        if (serviceRoot) {
+          await fs.mkdir(serviceRoot);
+          if (original) {
+            await fs.writeFile(
+              path.join(serviceRoot, "package.json"),
+              JSON.stringify({
+                name: "openclaw",
+                version: "2026.9.3",
+                type: "module",
+              }),
+            );
+          }
         }
-      }
-      const originalFingerprint =
-        original && serviceRoot
-          ? await createPackageIntegrityReader().tree(serviceRoot)
-          : undefined;
-      const unverifiedLauncher: PackageLauncherFingerprint = {
-        type: "file",
-        mode: "33188",
-        uid: "0",
-        gid: "0",
-        contents: "unverified",
-      };
-      const executorFence = await executor.enter(root, { serviceRoot });
-      return await continueMigratedUpdateInFreshProcess(
-        {
-          mutationStarted: true,
-          ...(originalFingerprint && serviceRoot
-            ? {
-                originalManagedServiceRuntime: {
-                  root: serviceRoot,
-                  nodeRunner: process.execPath,
-                  version: "2026.9.3",
-                  verified: false,
-                  definition: {
-                    command: { programArguments: [] },
-                    fingerprint: "unverified",
-                    runtimePin: originalRuntimePin!,
+        const originalFingerprint =
+          original && serviceRoot
+            ? await createPackageIntegrityReader().tree(serviceRoot)
+            : undefined;
+        const unverifiedLauncher: PackageLauncherFingerprint = {
+          type: "file",
+          mode: "33188",
+          uid: "0",
+          gid: "0",
+          contents: "unverified",
+        };
+        const executorFence = await executor.enter(root, { serviceRoot });
+        const scopedRun = { ...run, executorFence };
+        if (settlement !== "no-owner") {
+          registerRun?.(scopedRun);
+        }
+        const continued = await continueMigratedUpdateInFreshProcess(
+          {
+            mutationStarted: true,
+            ...(originalFingerprint && serviceRoot
+              ? {
+                  originalManagedServiceRuntime: {
+                    root: serviceRoot,
+                    nodeRunner: process.execPath,
+                    version: "2026.9.3",
+                    verified: false,
+                    definition: {
+                      command: { programArguments: [] },
+                      fingerprint: "unverified",
+                      runtimePin: originalRuntimePin!,
+                    },
+                    service: { serviceEnv: env },
+                    packageFingerprint: originalFingerprint,
+                    packageIdentity: originalFingerprint,
+                    // Deliberately uncertified; these fields must not grant recovery.
+                    launcher: {
+                      path: path.join(serviceRoot, "unverified-launcher"),
+                      realPath: path.join(serviceRoot, "unverified-launcher"),
+                      fingerprint: unverifiedLauncher,
+                      targetFingerprint: unverifiedLauncher,
+                    },
+                    nodeIdentity: "unverified-original-service-fixture",
                   },
-                  service: { serviceEnv: env },
-                  packageFingerprint: originalFingerprint,
-                  packageIdentity: originalFingerprint,
-                  // Deliberately uncertified; these fields must not grant recovery.
-                  launcher: {
-                    path: path.join(serviceRoot, "unverified-launcher"),
-                    realPath: path.join(serviceRoot, "unverified-launcher"),
-                    fingerprint: unverifiedLauncher,
-                    targetFingerprint: unverifiedLauncher,
-                  },
-                  nodeIdentity: "unverified-original-service-fixture",
-                },
-              }
-            : {}),
-          result: {
-            status: "error",
-            reason: "doctor-failed",
-            rollbackOutcome,
-            mode: "npm",
-            root,
-            steps: [],
-            durationMs: 0,
-          },
-          root,
-          installKindChanged: false,
-          configSnapshot: {
-            path: path.join(stateDir, "openclaw.json"),
-            exists: false,
-            raw: null,
-            parsed: {},
-            sourceConfig: asResolvedSourceConfig({}),
-            resolved: asResolvedSourceConfig({}),
-            valid: true,
-            runtimeConfig: asRuntimeConfig({}),
-            config: asRuntimeConfig({}),
-            issues: [],
-            warnings: [],
-            legacyIssues: [],
-          },
-          requestedChannel: null,
-          storedChannel: "stable",
-          channel: "stable",
-          downgradeRisk: false,
-          shouldRestart: false,
-          opts: { json, run: { ...run, executorFence } },
-          packageTransaction: {
-            backupRoot: path.join(stateDir, "retained-package"),
-            rollback,
-            complete: async () => {
-              const inspected = new DatabaseSync(database.path, { readOnly: true });
-              try {
-                terminalAtCleanup = inspected
-                  .prepare("SELECT status, reason FROM update_runs WHERE run_id = ?")
-                  .get(created.runId);
-              } finally {
-                inspected.close();
-              }
+                }
+              : {}),
+            result: {
+              status: "error",
+              reason: "doctor-failed",
+              rollbackOutcome,
+              mode: "npm",
+              root,
+              steps: [],
+              durationMs: 0,
             },
+            root,
+            installKindChanged: false,
+            configSnapshot: {
+              path: path.join(stateDir, "openclaw.json"),
+              exists: false,
+              raw: null,
+              parsed: {},
+              sourceConfig: asResolvedSourceConfig({}),
+              resolved: asResolvedSourceConfig({}),
+              valid: true,
+              runtimeConfig: asRuntimeConfig({}),
+              config: asRuntimeConfig({}),
+              issues: [],
+              warnings: [],
+              legacyIssues: [],
+            },
+            requestedChannel: null,
+            storedChannel: "stable",
+            channel: "stable",
+            downgradeRisk: false,
+            shouldRestart: false,
+            opts: { json, run: scopedRun },
+            packageTransaction: {
+              backupRoot: path.join(stateDir, "retained-package"),
+              rollback,
+              complete: async () => {
+                stdoutAtCleanup = stdout;
+                const inspected = new DatabaseSync(database.path, { readOnly: true });
+                try {
+                  terminalAtCleanup = inspected
+                    .prepare("SELECT status, reason FROM update_runs WHERE run_id = ?")
+                    .get(created.runId);
+                } finally {
+                  inspected.close();
+                }
+                if (settlement === "package") {
+                  throw new UpdateCommandPendingRecoveryFailure(
+                    {
+                      status: "error",
+                      mode: "npm",
+                      root,
+                      runId: run.runId,
+                      steps: [],
+                      durationMs: 0,
+                    },
+                    "fixture migrated package completion refused",
+                  );
+                }
+              },
+            },
+            controlPlaneUpdateSentinelMeta: null,
+            preUpdatePluginInstallRecords: {},
+            startedAt: Date.now(),
+            packageUpdateNodeRunner: process.execPath,
+            updateStepTimeoutMs: stepBudgetMs ?? 30_000,
+            rollbackBlockedReason: "state-migrated-no-rollback",
           },
-          controlPlaneUpdateSentinelMeta: null,
-          preUpdatePluginInstallRecords: {},
-          startedAt: Date.now(),
-          packageUpdateNodeRunner: process.execPath,
-          updateStepTimeoutMs: stepBudgetMs ?? 30_000,
-          rollbackBlockedReason: "state-migrated-no-rollback",
-        },
-        progress.pendingSteps,
-      );
-    });
+          progress.pendingSteps,
+        );
+        settledResult = continued;
+        stdoutAtExecutorSettlement = stdout;
+        if (settlement === "release") {
+          const leases = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
+          try {
+            // Refuse the real owner's final DELETE, after the delegated child has settled.
+            leases.exec(
+              "CREATE TRIGGER deny_migrated_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, 'fixture migrated release refused'); END",
+            );
+          } finally {
+            leases.close();
+          }
+        }
+        if (settlement === "uncertain-cleanup") {
+          throw uncertainCleanup;
+        }
+        if (continued.preparedFailure && settlement !== "swallowed") {
+          throw continued.preparedFailure;
+        }
+        return continued;
+      });
+    const refusesBeforeHandoff =
+      legacy ||
+      (checkWorkMs !== undefined && stepBudgetMs !== undefined && stepBudgetMs < checkWorkMs);
+    const work = refusesBeforeHandoff
+      ? execute()
+      : withUpdateCommandTerminalResult(execute, { json, onResult });
     void runtimeFixture.track(work);
+    if (settlement) {
+      const failure = await work.catch((error: unknown) => error);
+      expect.soft(stdoutAtCleanup).toBe(settlement === "no-owner" ? undefined : "");
+      if (
+        settlement === "healthy" ||
+        settlement === "release" ||
+        settlement === "swallowed" ||
+        settlement === "uncertain-cleanup"
+      ) {
+        expect.soft(stdoutAtExecutorSettlement).toBe("");
+      }
+      expect.soft(oldRuntimeOpens).toEqual([]);
+      expect.soft(inspectTerminal()).toEqual(terminalFromCandidate);
+      expect
+        .soft(terminalFromCandidate)
+        .toMatchObject({ status: "failed", reason: "state-migrated-no-rollback" });
+      if (settlement !== "healthy") {
+        if (settlement === "uncertain-cleanup") {
+          expect.soft(hasCommandProcessCleanupError(failure)).toBe(true);
+          expect.soft(collectNestedErrorCandidates(failure)).toContain(uncertainCleanup);
+        } else {
+          expect.soft(failure).toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
+        }
+        expect.soft(stdout).toBe("");
+        expect.soft(onResult).not.toHaveBeenCalled();
+        expect(rollback).not.toHaveBeenCalled();
+        return;
+      }
+      expect(failure).toBeInstanceOf(UpdateCommandFailure);
+      expect(failure).not.toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
+      expect(onResult).toHaveBeenCalledExactlyOnceWith(settledResult?.result);
+    }
     if (checkWorkMs !== undefined && stepBudgetMs !== undefined && stepBudgetMs < checkWorkMs) {
       await expect(work).rejects.toThrow(/delegation capability could not be inspected/);
       expect(terminalAtCleanup).toBeUndefined();
@@ -710,7 +942,10 @@ it.each([
       expect(terminalAtCleanup).toBeUndefined();
       return;
     }
-    const result = await work;
+    if (!settlement) {
+      await expect(work).rejects.toBeInstanceOf(UpdateCommandFailure);
+    }
+    const result = settledResult!;
     expect(result.candidateStartAttempted).toBe(false);
     expect(result.automaticTriage).toMatchObject({
       kind: "update",

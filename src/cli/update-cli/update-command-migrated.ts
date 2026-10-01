@@ -39,7 +39,10 @@ import {
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
-import { recordUpdatePackageCompletion } from "./update-command-terminal.js";
+import {
+  deferMigratedUpdateCommandTerminalResult,
+  recordUpdatePackageCompletion,
+} from "./update-command-terminal.js";
 
 /** Inspect private state copies without reopening migrated state through the previous runtime. */
 export async function inspectActivatedUpdateState(
@@ -115,7 +118,7 @@ export async function continueMigratedUpdateInFreshProcess(
   Pick<
     MigratedUpdateFinalizationResult,
     "result" | "exitCode" | "automaticTriage" | "candidateStartAttempted"
-  > & { databaseRollbackAvailable?: true }
+  > & { databaseRollbackAvailable?: true; preparedFailure?: UpdateCommandFailure }
 > {
   if (params.opts.recovery) {
     throw new UpdateCommandRecoveryPendingError("Full-state checkpoint recovery is deferred.");
@@ -320,9 +323,7 @@ export async function continueMigratedUpdateInFreshProcess(
       // lifecycle. Its database restoration and rollback publish the final result.
       return { ...finalization, databaseRollbackAvailable: true };
     }
-    if (child.stdout) {
-      process.stdout.write(child.stdout);
-    }
+    const preparedFailure = deferMigratedUpdateCommandTerminalResult(run, response, child.stdout);
     try {
       await windowsRecovery?.complete(
         response.result.status === "ok" ||
@@ -346,7 +347,7 @@ export async function continueMigratedUpdateInFreshProcess(
     if (cleanupFailure) {
       throw cleanupFailure;
     }
-    return finalization;
+    return { ...finalization, preparedFailure };
   } catch (error) {
     if (error instanceof UpdateCommandRecoveryPendingError) {
       // A refused compatibility/admission check is not delegated completion and

@@ -86,7 +86,12 @@ export async function withShimFixture<T>(
     fixtureRoot: string;
     implementationPath: string;
     wrapperPath: string;
-    runNode: (args: string[], env: NodeJS.ProcessEnv, cwd: string) => Promise<NodeResult>;
+    runNode: (
+      args: string[],
+      env: NodeJS.ProcessEnv,
+      cwd: string,
+      onReady?: NonNullable<Parameters<typeof runNodeScript>[3]>["onReady"],
+    ) => Promise<NodeResult>;
   }) => T,
 ) {
   // spawnOwnedVitestProcess gives POSIX Vitest a disposable temp namespace.
@@ -122,8 +127,8 @@ export async function withShimFixture<T>(
         fixtureRoot,
         implementationPath,
         wrapperPath,
-        runNode(args, env, cwd) {
-          const command = runNodeScript(args, env, 10_000, { cwd });
+        runNode(args, env, cwd, onReady) {
+          const command = runNodeScript(args, env, 10_000, { cwd, onReady });
           commands.push(command);
           return command;
         },
