@@ -2349,7 +2349,6 @@ src/infra/file-lock-sync.ts	1
 src/infra/fs-safe-remove.ts	4
 src/infra/gateway-lock.ts	2
 src/infra/gateway-processes.ts	1
-src/infra/gemini-auth.ts	1
 src/infra/git-commit.ts	1
 src/infra/heartbeat-outcome-store.ts	1
 src/infra/heartbeat-runner-config.ts	1
@@ -2409,7 +2408,6 @@ src/infra/restart-handoff.ts	1
 src/infra/restart-sentinel.ts	1
 src/infra/restart-stale-pids.ts	2
 src/infra/retry-policy.ts	3
-src/infra/session-cost-usage-cache.sqlite.ts	1
 src/infra/session-cost-usage-collection.ts	3
 src/infra/session-cost-usage-pricing.ts	4
 src/infra/session-cost-usage-reporting.ts	5
