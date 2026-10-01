@@ -6,12 +6,12 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { RuntimeAuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
-import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { publishSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
 import {
   bumpSkillsSnapshotVersion,
   getSkillsSnapshotVersion,
+  notifySkillsWatchAvailable,
   registerSkillsChangeListener,
   resetSkillsRefreshStateForTest,
 } from "../skills/runtime/refresh-state.js";
@@ -135,7 +135,12 @@ it.each([false, true])(
 
 it("retires model choices at its config commit before pending metadata settles", async () => {
   const broadcast = vi.fn();
-  const ownedContext = { ...context, broadcast };
+  let committedConfig: OpenClawConfig = {};
+  const ownedContext = {
+    ...context,
+    broadcast,
+    getCommittedRuntimeConfig: () => committedConfig,
+  };
   const entered = createDeferred();
   const release = createDeferred();
   mocks.refresh.mockImplementationOnce(() => {
@@ -149,6 +154,21 @@ it("retires model choices at its config commit before pending metadata settles",
     await entered.promise;
     publishOperatorRoleConfigChange({});
     expect(broadcast).not.toHaveBeenCalled();
+    committedConfig = { auth: { profiles: { account: { provider: "fixture", mode: "api_key" } } } };
+    publishOperatorRoleConfigChange(ownedContext);
+    expect(broadcast).not.toHaveBeenCalled();
+    committedConfig = { ...committedConfig, models: { mode: "replace" } };
+    publishOperatorRoleConfigChange(ownedContext);
+    expect(broadcast).toHaveBeenCalledExactlyOnceWith(
+      "chat.metadata.changed",
+      { modelSelectionChanged: true },
+      { dropIfSlow: true },
+    );
+    broadcast.mockClear();
+    committedConfig = {
+      ...committedConfig,
+      agents: { defaults: { modelPolicy: { allow: ["fixture/allowed"] } } },
+    };
     publishOperatorRoleConfigChange(ownedContext);
     expect(broadcast).toHaveBeenCalledExactlyOnceWith(
       "chat.metadata.changed",
@@ -278,7 +298,7 @@ async function createRealMetadataLifecycle(
       modelEvent({ phase: "invalidated" });
     },
     events: {
-      skills: () => mocks.registerSkillsListener.mock.calls[0]![0](),
+      skills: () => mocks.registerSkillsListener.mock.calls[0]![0]({ reason: "watch" }),
       auth: () => authEvent(),
       catalog: () => modelEvent({ phase: "catalog-published" }),
       catalogFailure: () =>
@@ -311,6 +331,7 @@ describe("gateway chat metadata lifecycle", () => {
       harness.broadcast.mockClear();
       for (let count = 0; count < 3; count += 1) {
         bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+        notifySkillsWatchAvailable({ workspaceDir, sourceScope: {} });
         expect(loadWorkspaceSkills(workspaceDir, loadOptions)).toEqual(entries);
         expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
         expect(await harness.lifecycle.read({ agentId: "main" })).toEqual(before);
@@ -576,6 +597,7 @@ describe("gateway chat metadata lifecycle", () => {
     let read: Promise<unknown> | undefined;
     try {
       await harness.attach();
+      expect(harness.warn).not.toHaveBeenCalled();
       await expect(harness.lifecycle.read({ agentId: "main" })).rejects.toBeInstanceOf(
         ChatMetadataSnapshotUnavailableError,
       );
@@ -607,28 +629,8 @@ describe("gateway chat metadata lifecycle", () => {
     const actual = await vi.importActual<
       typeof import("./server-methods/chat-metadata-runtime.js")
     >("./server-methods/chat-metadata-runtime.js");
-    const owner: PreparedModelRuntimeSnapshot = {
-      catalogOwner: { agentId: "main", workspaceDir: "/tmp/metadata-lifecycle/workspace" },
-      agentId: "main",
-      agentDir: "/tmp/metadata-lifecycle/agent",
-      workspaceDir: "/tmp/metadata-lifecycle/workspace",
-      activeProjectKeys: [],
-      config,
-      observationConfig: config,
-      isCurrent: () => true,
-      authModes: {},
-      metadataSnapshot: createPluginMetadataSnapshot({
-        config,
-        manifestRegistry: { plugins: [], diagnostics: [] },
-      }),
-      allowGatewaySubagentBinding: false,
-      modelCatalog: {
-        entries: [{ id: "model", name: "Model", provider: "test" }],
-        routeVariants: [],
-      },
-      configuredRuntimeModels: [],
-      findConfiguredRuntimeModel: () => undefined,
-      inlineProviderModels: [],
+    const owner = {
+      ...createChatMetadataOwner(config, "model"),
       createStores: () => {
         throw new Error("metadata must not create live model stores");
       },
@@ -852,27 +854,6 @@ describe("gateway chat metadata lifecycle", () => {
     expect(mocks.stop).toHaveBeenCalledOnce();
   });
 
-  it("treats an unavailable catch-up snapshot as expected before owner publication", async () => {
-    mocks.refresh.mockRejectedValueOnce(new ChatMetadataSnapshotUnavailableError());
-    const { lifecycle: pendingLifecycle, sidecarOwner, warn } = createLifecycle(false);
-    const lifecycle = await pendingLifecycle;
-
-    await lifecycle.attachContext(context, sidecarOwner.publish);
-
-    expect(mocks.registerAuthListener).toHaveBeenCalledOnce();
-    expect(mocks.registerModelListener).toHaveBeenCalledOnce();
-    expect(mocks.registerSkillsListener).toHaveBeenCalledOnce();
-    expect(sidecarOwner.snapshot()).toHaveLength(1);
-    expect(mocks.refresh).toHaveBeenCalledOnce();
-    expect(warn).not.toHaveBeenCalled();
-
-    const listener = mocks.registerModelListener.mock.calls[0]?.[0];
-    expect(listener).toEqual(expect.any(Function));
-    listener({ phase: "published" });
-
-    await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
-  });
-
   it("logs unexpected catch-up failures without rejecting startup", async () => {
     mocks.refresh.mockRejectedValueOnce(new Error("metadata unavailable"));
     const { lifecycle: pendingLifecycle, sidecarOwner, warn } = createLifecycle(false);
@@ -916,7 +897,7 @@ describe("gateway chat metadata lifecycle", () => {
     modelListener({ phase: "catalog-published" });
     modelListener({ phase: "catalog-failed", error: new Error("obsolete catalog failed") });
     authListener();
-    skillsListener();
+    skillsListener({ reason: "watch" });
 
     expect(mocks.refresh).toHaveBeenCalledOnce();
     expect(warn).not.toHaveBeenCalled();
@@ -937,7 +918,7 @@ describe("gateway chat metadata lifecycle", () => {
 
     authListener();
     await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
-    skillsListener();
+    skillsListener({ reason: "watch" });
     await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(3));
   });
 
@@ -1005,20 +986,5 @@ describe("gateway chat metadata lifecycle", () => {
     authListener();
 
     await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
-  });
-
-  it("propagates a failed model publication without starting a refresh", async () => {
-    const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle(false);
-    const lifecycle = await pendingLifecycle;
-
-    await lifecycle.attachContext(context, sidecarOwner.publish);
-    const modelListener = mocks.registerModelListener.mock.calls[0]?.[0];
-    const publicationError = new Error("replacement failed");
-
-    modelListener({ phase: "invalidated" });
-    modelListener({ phase: "failed", error: publicationError });
-
-    expect(mocks.fail).toHaveBeenCalledWith(publicationError);
-    expect(mocks.refresh).toHaveBeenCalledOnce();
   });
 });

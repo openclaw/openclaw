@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   buildRestartRecoveryClaimCleanupPatch,
@@ -8,7 +9,6 @@ import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clea
 import type { MainSessionRecoveryReservation } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import type { RestartRecoveryTerminalStatus } from "./main-session-restart-dispatch-start.js";
-import { normalizeFiniteTimestamp } from "./main-session-restart-recovery-shared.js";
 
 async function settleRestartRecoveryDispatch(params: {
   agentId?: string;
@@ -52,7 +52,7 @@ async function settleRestartRecoveryDispatch(params: {
               ? "timeout"
               : "failed";
         entry.endedAt = now;
-        const startedAt = normalizeFiniteTimestamp(entry.startedAt);
+        const startedAt = asFiniteNumber(entry.startedAt);
         if (startedAt !== undefined) {
           entry.runtimeMs = Math.max(0, now - startedAt);
         }

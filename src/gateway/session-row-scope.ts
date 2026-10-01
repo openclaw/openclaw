@@ -1,11 +1,14 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { listAgentIds } from "../agents/agent-scope-config.js";
+import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveGatewaySessionStoreTargets } from "../config/sessions/combined-store-gateway.js";
+import type { GatewaySessionStoreDiscovery } from "../config/sessions/combined-store-paths.js";
+import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openclaw-agent-db-registry-listing.js";
+import { SessionRowFactsPending } from "./session-row-prepared-read.js";
 import * as records from "./session-row-projection-record.js";
 
 type SessionRowScopeTarget = {
@@ -17,8 +20,9 @@ type SessionRowScope =
   | Pick<ReturnType<typeof prepareSessionRowScopes>, "physicalPaths">
   | undefined;
 
-/** The projection retains registry authority only for its current physical-store snapshot. */
+/** Witness repeated registrations without replacing the topology owner's discovery snapshot. */
 export function createSessionRowRegistryRead(owner: {
+  env: NodeJS.ProcessEnv;
   stores: () => ReadonlyMap<string, records.SessionRowStore>;
   isActive: () => boolean;
   runAsOwner: <T>(run: () => T) => T;
@@ -33,7 +37,41 @@ export function createSessionRowRegistryRead(owner: {
       pending ??= owner
         .runAsOwner(async () => {
           const stores = owner.stores();
-          const assertCurrent = await prepareSessionRowRegistryRead(stores);
+          const captured = [...stores.values()];
+          const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead(
+            { env: owner.env, includeIncompatibleSchemaVersions: true },
+            (mutation, entries) =>
+              mutation.kind === "upsert" &&
+              mutation.sources.every(
+                (source) =>
+                  entries?.some(
+                    (entry) =>
+                      entry.agentId === source.agentId &&
+                      entry.schemaVersion === source.schemaVersion &&
+                      (entry.path === source.path || entry.path === source.physicalPath),
+                  ) &&
+                  captured.some((store) => {
+                    if (
+                      typeof store.identity !== "string" ||
+                      `file:${store.identity}` !== source.identity ||
+                      store.target.agentId !== source.agentId
+                    ) {
+                      return false;
+                    }
+                    try {
+                      return [...new Set([store.filename, source.path, source.physicalPath])].every(
+                        (filename) => {
+                          const file = readDatabasePathIdentitySync(filename);
+                          return file.key === source.identity && file.birthtime === store.birthtime;
+                        },
+                      );
+                    } catch {
+                      return false;
+                    }
+                  }),
+              ),
+          );
+          const { assertCurrent } = await registry.read();
           if (owner.isActive() && owner.stores() === stores) {
             ready = { stores, assertCurrent };
           }
@@ -58,44 +96,6 @@ export function createSessionRowRegistryRead(owner: {
       ready = undefined;
     },
   };
-}
-
-/** Full-roster discovery can ignore only repeated registration of an already captured store. */
-async function prepareSessionRowRegistryRead(stores: ReadonlyMap<string, records.SessionRowStore>) {
-  const captured = [...stores.values()];
-  const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead(
-    { includeIncompatibleSchemaVersions: true },
-    (mutation, entries) =>
-      mutation.kind === "upsert" &&
-      mutation.sources.every(
-        (source) =>
-          entries?.some(
-            (entry) =>
-              entry.agentId === source.agentId &&
-              entry.schemaVersion === source.schemaVersion &&
-              (entry.path === source.path || entry.path === source.physicalPath),
-          ) &&
-          captured.some((store) => {
-            if (
-              typeof store.identity !== "string" ||
-              `file:${store.identity}` !== source.identity ||
-              store.target.agentId !== source.agentId
-            ) {
-              return false;
-            }
-            try {
-              return [...new Set([store.filename, source.path])].every((filename) => {
-                const file = readDatabasePathIdentitySync(filename);
-                return file.key === source.identity && file.birthtime === store.birthtime;
-              });
-            } catch {
-              // Uninspectable aliases cannot certify a repeated physical generation.
-              return false;
-            }
-          }),
-      ),
-  );
-  return (await registry.read()).assertCurrent;
 }
 
 /** Early publications retain literal paths until topology has prepared their aliases. */
@@ -164,6 +164,7 @@ export function prepareSessionRowScopes(
   cfg: OpenClawConfig,
   agentIds: Iterable<string>,
   residentPaths: ReadonlyMap<string, string>,
+  discovery?: GatewaySessionStoreDiscovery,
 ) {
   const residentPath = (pathname: string) => residentPaths.get(pathname) ?? pathname;
   const filenames = new Map([...residentPaths].map(([filename, locator]) => [locator, filename]));
@@ -172,6 +173,7 @@ export function prepareSessionRowScopes(
     try {
       const resolved = resolveGatewaySessionStoreTargets(cfg, {
         ...options,
+        discovery,
         includeIncognito: false,
       });
       for (const [identity, physical] of resolved.physicalTargets) {
@@ -242,66 +244,121 @@ export function prepareSessionRowScopes(
   };
 }
 
+type SessionRowEntrySelection = {
+  cfg: OpenClawConfig;
+  scope: SessionRowScope;
+  byAgent: ReadonlyMap<string, ReadonlySet<string>>;
+  byParent: ReadonlyMap<string, ReadonlySet<string>>;
+  rows: ReadonlyMap<string, records.Row>;
+  dirty: ReadonlySet<string>;
+  matching: (query: records.Query, kind?: string) => records.Row[];
+  acquire: (row: records.Row) => records.Row | undefined;
+  referenced: (reference: string) => records.Row | undefined;
+};
+
+/** Selection consumes prepared metadata in the projection's synchronous owner frame. */
+export function createSessionRowEntrySelector(owner: {
+  isActive: () => boolean;
+  runAsOwner: <T>(read: () => T) => T;
+  prepare: () => boolean;
+  state: () => SessionRowEntrySelection;
+}) {
+  const noDirtyRows = new Set<string>();
+  return (query: records.Query = {}, metadataPrepared = false) => {
+    if (!owner.isActive()) {
+      return [];
+    }
+    return owner.runAsOwner(() => {
+      if (!owner.prepare()) {
+        throw new Error("Session row topology changed; prepare current facts before reading");
+      }
+      const state = owner.state();
+      return withAgentRosterFactsBatch(state.cfg, () =>
+        selectSessionRowEntries(metadataPrepared ? { ...state, dirty: noDirtyRows } : state, query),
+      );
+    });
+  };
+}
+
 /** Select metadata before federation, visibility, and reader-only materialization. */
-export function selectSessionRowEntries(
-  params: {
-    cfg: OpenClawConfig;
-    scope: SessionRowScope;
-    byAgent: ReadonlyMap<string, ReadonlySet<string>>;
-    byParent: ReadonlyMap<string, ReadonlySet<string>>;
-    rows: ReadonlyMap<string, records.Row>;
-    dirty: ReadonlySet<string>;
-    matching: (query: records.Query, kind?: string) => records.Row[];
-    acquire: (row: records.Row) => records.Row | undefined;
-    referenced: (reference: string) => records.Row | undefined;
-  },
-  query: records.Query,
-) {
+function selectSessionRowEntries(params: SessionRowEntrySelection, query: records.Query) {
   const { cfg, scope, byAgent, byParent, rows, dirty, matching, acquire } = params;
   const matches = createSessionRowScopeMatcher(query, scope, true);
   const parent = query.parentSessionKey;
   const owner = parent && parseAgentSessionKey(parent)?.agentId;
   const agents = owner ? [owner] : query.agentId ? [query.agentId] : byAgent.keys();
-  const children = new Set<string>();
+  const childKeys = new Set<string>();
   if (parent) {
-    for (const ref of [
-      ...[...agents].map((agentId) =>
-        records.parentReference(cfg, parent, agentId, undefined, params.referenced),
-      ),
-      ...matching({ ...query, key: parent }).map((row) =>
-        records.physical(row.storeTarget.storePath, parent),
-      ),
-    ]) {
+    const sentinel = parent === "global" || parent === "unknown";
+    const references = sentinel
+      ? byParent.keys()
+      : [
+          ...[...agents].map((agentId) =>
+            records.parentReference(cfg, parent, agentId, undefined, params.referenced),
+          ),
+          ...matching({ ...query, key: parent }).map((row) =>
+            records.physical(row.storeTarget.storePath, parent),
+          ),
+        ];
+    for (const ref of references) {
+      // Sentinels retain physical and cross-agent alias links even without a parent row.
+      if (sentinel && ref.slice(ref.indexOf("\0") + 1) !== parent) {
+        continue;
+      }
       for (const id of byParent.get(ref) ?? []) {
-        children.add(id);
+        const row = rows.get(id);
+        if (row) {
+          childKeys.add(row.key);
+        }
       }
     }
   }
   const sessionIdOrKey = query.sessionIdOrKey;
-  let keys: Set<string> | undefined;
+  let keys: Set<string> | undefined = parent ? childKeys : undefined;
   if (sessionIdOrKey) {
     // Broad publications can change IDs before the resident index has caught up.
     for (const id of dirty) {
       const row = rows.get(id);
-      if (row && matches(row)) {
+      // Category cannot change an ID; unrelated uncertain categories do not
+      // participate in the structural refresh needed to resolve this lookup.
+      if (row && row.unresolvedDatabaseFacts !== "category" && matches(row)) {
         acquire(row);
       }
     }
     const indexed = { ...query, key: sessionIdOrKey };
     keys = new Set([...matching(indexed, "id"), ...matching(indexed)].map((row) => row.key));
   }
-  // Keep every physical competitor; federation precedes ID and visibility filtering.
+  // Keep every physical competitor; federation precedes ID, parent, and visibility filtering.
   const candidates = keys
     ? [...keys].flatMap((key) => matching({ ...query, key }))
-    : parent
-      ? [...children].map((id) => rows.get(id))
-      : matching(query);
+    : matching(query);
+  const pending: records.Lookup[] = [];
+  for (const row of candidates) {
+    if (row?.unresolvedDatabaseFacts === "category" && matches(row)) {
+      pending.push({ agentId: row.agentId, key: row.key, storePath: row.storeTarget.storePath });
+      if (pending.length === MAX_SESSION_ROW_FACTS_KEYS) {
+        break;
+      }
+    }
+  }
+  // Synchronous selection cannot consume unresolved categories, even when a
+  // metadata-only caller omits dirty rows. Exact preparation remains bounded.
+  if (pending.length > 0) {
+    throw new SessionRowFactsPending(pending);
+  }
   const acquired =
     sessionIdOrKey || dirty.size === 0
       ? candidates
       : candidates.map((row) => (row && dirty.has(records.identity(row)) ? acquire(row) : row));
-  const selected = acquired.filter(
-    (row): row is records.EntryRow => records.hasEntry(row) && matches(row),
-  );
-  return records.sort(selected, query.sortBy);
+  // Each candidate path returns an owned array. Finish all acquisitions before
+  // compacting it, since acquiring one dirty row can update another row's facts.
+  let selectedCount = 0;
+  acquired.forEach((row) => {
+    if (records.hasEntry(row) && matches(row)) {
+      acquired[selectedCount++] = row;
+    }
+  });
+  acquired.length = selectedCount;
+  // SAFETY: The compacted prefix contains only rows accepted by records.hasEntry.
+  return records.sort(acquired as records.EntryRow[], query.sortBy);
 }

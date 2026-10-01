@@ -17,6 +17,11 @@ export async function createDiskSwap(sourceRoot, base) {
   ).version;
   assert.equal(installed, expected, "filesystem dependency must match the candidate manifest");
   const atomic = await import(pathToFileURL(require.resolve("@openclaw/fs-safe/atomic")).href);
+  const fsSafe = new Map();
+  for (const subpath of ["errors", "root"]) {
+    const specifier = `@openclaw/fs-safe/${subpath}`;
+    fsSafe.set(specifier, await import(pathToFileURL(require.resolve(specifier)).href));
+  }
   const unexpected = [];
   // Logging, failure-fact presentation, and manifest parsing are bounded seams.
   // Package fingerprints, rename/copy/removal, transaction policy and deadlines
@@ -40,13 +45,21 @@ export async function createDiskSwap(sourceRoot, base) {
     Date,
     Error,
     AggregateError,
+    AbortController,
     Buffer,
     performance,
     setTimeout,
     clearTimeout,
   });
   const files = [
+    "infra/errno",
+    "infra/fs-safe-remove",
+    "infra/mutation-authority",
+    "infra/package-update-backup-paths",
     "infra/package-update-swap",
+    "infra/package-update-swap-results",
+    "infra/package-update-swap-target",
+    "infra/package-update-swap-retirement",
     "infra/package-update-filesystem",
     "infra/package-update-integrity",
     "infra/package-update-npm-root",
@@ -66,10 +79,14 @@ export async function createDiskSwap(sourceRoot, base) {
       format: "esm",
       tsconfigRaw: { compilerOptions: { verbatimModuleSyntax: true } },
     }).code;
-    modules.set(
-      path.basename(name) + ".js",
-      new vm.SourceTextModule(code, { context, identifier: filename }),
-    );
+    const mod = new vm.SourceTextModule(code, { context, identifier: filename });
+    modules.set(path.basename(name) + ".js", mod);
+    // Native namespaces must survive mixed, namespace, and side-effect imports.
+    for (const specifier of mod.dependencySpecifiers) {
+      if (specifier.startsWith("node:") || fsSafe.has(specifier)) {
+        external.set(specifier, new Set());
+      }
+    }
     for (const match of code.matchAll(
       /(?:import|export)\s*\{([^}]+)\}\s*from\s*["']([^"']+)["']/gs,
     )) {
@@ -94,8 +111,8 @@ export async function createDiskSwap(sourceRoot, base) {
     if (modules.has(path.basename(specifier))) {
       continue;
     }
-    const names = [...namesSet];
-    const builtin = specifier.startsWith("node:") ? await import(specifier) : undefined;
+    const native = specifier.startsWith("node:") ? await import(specifier) : fsSafe.get(specifier);
+    const names = native ? Object.keys(native) : [...namesSet];
     stubs.set(
       specifier,
       new vm.SyntheticModule(
@@ -104,8 +121,8 @@ export async function createDiskSwap(sourceRoot, base) {
           for (const name of names) {
             this.setExport(
               name,
-              builtin
-                ? builtin[name]
+              native
+                ? native[name]
                 : Object.hasOwn(values, name)
                   ? values[name]
                   : function () {

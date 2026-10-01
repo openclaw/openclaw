@@ -5,12 +5,18 @@ type ChannelReadResource = {
   key: string;
   settle: (accepted: boolean) => Promise<void>;
   assertCurrent?: () => void;
+  onDelegated?: (assertCurrent?: () => void) => void;
 };
 
 type ChannelReadScope = {
   assertCurrent: () => void;
   signal?: AbortSignal;
   registerResource: (resource: ChannelReadResource) => void;
+  delegateResource: (
+    key: string,
+    settle: (accepted: boolean, settleResource: ChannelReadResource["settle"]) => Promise<void>,
+    assertCurrent?: () => void,
+  ) => boolean;
   discardResource: (key: string) => Promise<boolean>;
 };
 
@@ -101,6 +107,7 @@ export async function withChannelReadAuthority<T>(
         resources.add({
           key: resource.key,
           settle: resource.settle,
+          onDelegated: resource.onDelegated,
           // Keep the originating provider check after the inner callable closes.
           assertCurrent: () => {
             sourceSignal?.throwIfAborted();
@@ -108,6 +115,26 @@ export async function withChannelReadAuthority<T>(
             resource.assertCurrent?.();
           },
         });
+      },
+      delegateResource: (
+        key: string,
+        settle: (accepted: boolean, settleResource: ChannelReadResource["settle"]) => Promise<void>,
+        assertResourceCurrent?: () => void,
+      ) => {
+        assertAuthority();
+        const resource = Array.from(resources).find((entry) => entry.key === key);
+        if (!resource) {
+          return parentCompletion?.delegateResource(key, settle, assertResourceCurrent) ?? false;
+        }
+        const original = resource.settle;
+        const assertOriginal = resource.assertCurrent;
+        resource.onDelegated?.(assertResourceCurrent);
+        resource.settle = (accepted) => settle(accepted, original);
+        resource.assertCurrent = () => {
+          assertOriginal?.();
+          assertResourceCurrent?.();
+        };
+        return true;
       },
       discardResource: async (key: string) => {
         const resource = Array.from(resources).find((entry) => entry.key === key);

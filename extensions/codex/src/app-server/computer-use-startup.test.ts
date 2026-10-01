@@ -119,7 +119,12 @@ describe.each(["service", "cache"])("createIsolatedCodexAppServerClient %s refre
       const copy = fs.cp.bind(fs);
       vi.spyOn(fs, "cp").mockImplementation(async (...args) => {
         await copy(...args);
-        if (args[0] === (artifact === "service" ? sourceService : pluginRoot)) {
+        // The managed marketplace can alias the desktop plugin through a symlink.
+        const copiedArtifact =
+          artifact === "service"
+            ? args[0] === sourceService
+            : (await fs.realpath(args[0])) === pluginRoot;
+        if (copiedArtifact) {
           if (desktopChanged) {
             fingerprint = "desktop-replaced";
           }

@@ -5,13 +5,12 @@ import { WORKER_INFERENCE_MAX_CONTEXT_MESSAGES } from "../../packages/gateway-pr
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionWriteSettlementRunner } from "../agents/sessions/agent-session.js";
 import type { Context, Message } from "../llm/types.js";
+import { projectWorkerTextOrImageContent } from "./assistant-message-projection.js";
 import {
   windowWorkerReplayMessages,
   type WorkerReplayMessageWindowUnavailable,
 } from "./replay-message-window.js";
 import {
-  cloneImageContent,
-  cloneTextContent,
   isWorkerTranscriptMessageFrameSafe,
   toWorkerTranscriptMessage,
   type WorkerMessageProjection,
@@ -29,9 +28,7 @@ function toWorkerInferenceMessage(
         content:
           typeof message.content === "string"
             ? message.content
-            : message.content.map((part) =>
-                part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
-              ),
+            : message.content.map(projectWorkerTextOrImageContent),
         timestamp: message.timestamp,
         ...(message.runtimeContextCarrier ? { runtimeContextCarrier: true } : {}),
       },
@@ -85,7 +82,7 @@ export function toWorkerInferenceContext(context: Context): WorkerInferenceConte
   };
 }
 
-type WorkerTranscriptClient = {
+export type WorkerTranscriptClient = {
   commit: (messages: WorkerTranscriptMessage[]) => Promise<void>;
 };
 

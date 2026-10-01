@@ -2,7 +2,11 @@ import path from "node:path";
 import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
-import type { SessionIngestionFileState } from "./dreaming-ingestion-state.js";
+import {
+  readSessionIngestionState,
+  writeSessionIngestionState,
+  type SessionIngestionFileState,
+} from "./dreaming-ingestion-state.js";
 import {
   listMemorySessionTombstones,
   recordMemoryEntryOrigins,
@@ -31,13 +35,11 @@ import {
   appendSessionCorpusLines,
   foreignSessionIngestionSource,
   mergeTrackedMessageHashes,
-  readSessionIngestionState,
   resolveAdmissionPolicy,
   scanSessionIngestionSource,
   sessionExclusionReason,
   sessionIngestionSourceFromCorpus,
   trimTrackedSessionScopes,
-  writeSessionIngestionState,
   type SessionIngestionCandidate,
   type SessionIngestionSource,
   type SessionAdmissionPolicy,
@@ -95,7 +97,9 @@ async function listSessionBackfillSources(params: {
     includeRetainedSqlite: true,
   });
   const forgottenSessionIds = new Set(
-    listMemorySessionTombstones({ agentId: params.agentId }).map((entry) => entry.sessionId),
+    (await listMemorySessionTombstones({ agentId: params.agentId })).map(
+      (entry) => entry.sessionId,
+    ),
   );
   const sources = corpus
     .map(sessionIngestionSourceFromCorpus)
@@ -233,7 +237,7 @@ function summarizeDay(day: string, candidates: SessionIngestionCandidate[]): Ses
   };
 }
 
-function buildSessionBackfillDiaryEntries(params: {
+async function buildSessionBackfillDiaryEntries(params: {
   agentId: string;
   days: Array<{ day: string; candidates: SessionIngestionCandidate[] }>;
   rem?: boolean;
@@ -297,7 +301,7 @@ function buildSessionBackfillDiaryEntries(params: {
     return { isoDay: day, sourcePath: `memory/.dreams/session-corpus/${day}.txt`, bodyLines };
   });
   // Reserve lineage before publication, even when subsequent corpus/staging work fails.
-  recordMemoryEntryOrigins({ agentId: params.agentId, origins });
+  await recordMemoryEntryOrigins({ agentId: params.agentId, origins });
   return entries;
 }
 
@@ -467,7 +471,7 @@ async function executeSessionBackfillBatchCore(
   let stagedEntries = 0;
 
   if (selectedDays.length > 0 && (params.rem || params.apply)) {
-    const diaryEntries = buildSessionBackfillDiaryEntries({
+    const diaryEntries = await buildSessionBackfillDiaryEntries({
       agentId: params.agentId,
       days: selectedDays,
       rem: params.rem,

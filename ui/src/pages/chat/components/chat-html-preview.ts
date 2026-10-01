@@ -10,8 +10,6 @@ import type { FileViewControls } from "./chat-sidebar-file-view.ts";
 
 registerFilePreviewEnglish();
 
-export { LazyCustomElementRequestController };
-
 export function isHtmlDocument(mimeType: string, filename: string): boolean {
   return (
     mimeType.split(";", 1)[0]?.trim().toLowerCase() === "text/html" || /\.html?$/i.test(filename)

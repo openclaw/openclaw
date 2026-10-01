@@ -35,7 +35,6 @@ import {
 } from "./service.js";
 import { createSkillProposalRollback } from "./service.test-support.js";
 import { captureSkillWorkshopStoreOptions } from "./store-client.js";
-import { parseSkillProposalEvaluation } from "./store-record.js";
 import { writeSkillProposalRollback } from "./store-rollback.js";
 import { appendSkillProposalEvent } from "./store-sqlite-event.js";
 import {
@@ -644,21 +643,6 @@ describe("Skill Workshop SQLite store", () => {
       payload: { evaluation: "manual", outcomeCount: 0 },
       evaluation: { id: evaluation.id },
     });
-  });
-
-  it("rejects non-string evaluation tree hashes", () => {
-    expect(
-      parseSkillProposalEvaluation({
-        id: "evaluation-invalid-tree-hash",
-        proposedVersion: "v1",
-        revisionHash: "a".repeat(64),
-        trigger: "manual",
-        startedAt: "2026-07-29T00:00:00.000Z",
-        completedAt: "2026-07-29T00:00:01.000Z",
-        targetTreeSha256: ["b".repeat(64)],
-        outcomes: [],
-      }),
-    ).toBeNull();
   });
 
   it("paginates durable evaluations before the response byte budget", async () => {

@@ -108,7 +108,7 @@ Agent use:
 - If you use a custom existing-session profile, pass that explicit profile name.
 - Only choose this mode when the user is at the computer to approve the attach
   prompt.
-- The Gateway or node host can start the packaged Chrome DevTools MCP server with Node.js.
+- The Gateway or node host starts the packaged Chrome DevTools MCP server on its own runtime, Node or Bun.
 
 Notes:
 
@@ -144,8 +144,9 @@ Notes:
 
 ### Custom Chrome MCP launch
 
-OpenClaw includes an exact-pinned Chrome DevTools MCP 1.8.0 dependency with a
-temporary document-identity patch and starts its CLI directly with Node.js.
+OpenClaw includes an exact-pinned Chrome DevTools MCP 1.9.0 dependency with a
+temporary document-identity patch and starts its CLI directly with the runtime
+running OpenClaw, Node or Bun.
 The npm package carries the patched dependency; source checkouts obtain it through
 `pnpm install`. This keeps the server used at runtime aligned with OpenClaw's
 browser contract tests. The patch is tracked in

@@ -36,7 +36,7 @@ import { isInternalSessionEffectsKey } from "../config/sessions/internal-session
 import type { SessionEntryListScope } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecPolicyForMode } from "../infra/exec-approvals-core.js";
-import { loadExecApprovals } from "../infra/exec-approvals-store.js";
+import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
@@ -46,8 +46,8 @@ import type { GatewayAgentOwnership } from "./agent-list.js";
 import { resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
+import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
-  type GatewaySessionStoreDiscoveryCache,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
@@ -314,9 +314,11 @@ export async function listAgentsForGateway(
   scope: SessionScope;
   agents: GatewayAgentRow[];
 }> {
-  const basic = listGatewayAgentsBasic(cfg);
-  const provenanceRecords = await listAgentProvenance();
-  const execApprovals = loadExecApprovals();
+  const [basic, provenanceRecords, execApprovals] = await Promise.all([
+    listGatewayAgentsBasic(cfg),
+    listAgentProvenance(),
+    loadExecApprovalsReadOnlyAsync(),
+  ]);
   const identityById = new Map<string, GatewayAgentRow["identity"]>();
   for (const entry of listAgentEntries(cfg)) {
     if (!entry?.id) {
@@ -326,13 +328,15 @@ export async function listAgentsForGateway(
     const avatar = normalizeOptionalString(entry.identity?.avatar);
     const httpAvatar =
       avatar && options?.httpAvatarBasePath !== undefined
-        ? resolveGatewayAssistantAvatar({
-            cfg,
-            identity: { agentId, avatar },
-            httpBasePath: options.httpAvatarBasePath,
-          }).avatar
+        ? (
+            await resolveGatewayAssistantAvatar({
+              cfg,
+              identity: { agentId, avatar },
+              httpBasePath: options.httpAvatarBasePath,
+            })
+          ).avatar
         : undefined;
-    const avatarUrl = httpAvatar ?? resolveAgentAvatarUrlFromSource(cfg, agentId, avatar);
+    const avatarUrl = httpAvatar ?? (await resolveAgentAvatarUrlFromSource(cfg, agentId, avatar));
     const identity = entry.identity
       ? {
           name: normalizeOptionalString(entry.identity.name),

@@ -1,8 +1,3 @@
-/**
- * Simple completion transport preparation.
- *
- * Registers provider-specific stream functions and rewrites models that need OpenClaw-managed transport semantics.
- */
 import { randomUUID } from "node:crypto";
 import type { Api, Model, StreamFn, StreamOptions } from "@openclaw/llm-core";
 import type { ApiRegistry } from "../api-registry.js";
@@ -101,12 +96,16 @@ export function normalizeCodexResponsesBaseUrlForOpenAISdk(baseUrl?: string): st
 function resolveProviderSimpleCompletionApi(
   model: Model,
   auth?: AiProviderStreamHookContext["auth"],
+  agentId?: string,
 ): Api {
   const parts = [model.provider, model.id, model.api, model.baseUrl || "default"];
   // Registered wrappers retain their preparation context. A credential switch
   // must select its own policy instead of reusing another grant's wrapper.
   if (auth) {
     parts.push(auth.mode, auth.authFlow ?? "");
+  }
+  if (agentId) {
+    parts.push("agent", agentId);
   }
   return `${PROVIDER_SIMPLE_COMPLETION_API_PREFIX}${parts
     .map((part) => encodeURIComponent(part))
@@ -124,6 +123,7 @@ function applyProviderSimpleCompletionWrapper(
   cfg?: unknown,
   hookSourceApi: Api = model.api,
   auth?: AiProviderStreamHookContext["auth"],
+  agentId?: string,
 ): Model {
   if (model.api.startsWith(PROVIDER_SIMPLE_COMPLETION_API_PREFIX)) {
     return model;
@@ -146,6 +146,7 @@ function applyProviderSimpleCompletionWrapper(
       model,
       sourceApi: hookSourceApi,
       auth,
+      agentId,
       streamFn: sourceStreamFn,
     },
   });
@@ -153,8 +154,17 @@ function applyProviderSimpleCompletionWrapper(
     return model;
   }
 
-  const api = resolveProviderSimpleCompletionApi(model, auth);
-  return registerCustomApi(registry, api, streamFn) ? projectModel(model, { api }) : model;
+  // The registered simple-completion alias is only a dispatch key. Keep the
+  // original wire API visible while the wrapped stream applies request-body
+  // policy; the source stream projects back to dispatchApi before calling the
+  // provider, so provider routing still uses its registered alias.
+  const registeredStreamFn: StreamFn = (runtimeModel, context, options) =>
+    streamFn(projectModel(runtimeModel, { api: hookSourceApi }), context, options);
+
+  const api = resolveProviderSimpleCompletionApi(model, auth, agentId);
+  return registerCustomApi(registry, api, registeredStreamFn)
+    ? projectModel(model, { api })
+    : model;
 }
 
 function prepareCodexSimpleTransportModel<TApi extends Api>(
@@ -264,41 +274,26 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
   model: Model<TApi>;
   cfg?: unknown;
   auth?: AiProviderStreamHookContext["auth"];
+  agentId?: string;
 }): Model {
-  const { apiRegistry, model, cfg, auth } = params;
+  const { apiRegistry, model, cfg, auth, agentId } = params;
+  const wrap = (prepared: Model) =>
+    applyProviderSimpleCompletionWrapper(apiRegistry, prepared, cfg, model.api, auth, agentId);
   const providerStreamModel = prepareProviderStreamModel({ model, cfg, apiRegistry });
   if (providerStreamModel) {
-    return applyProviderSimpleCompletionWrapper(
-      apiRegistry,
-      providerStreamModel,
-      cfg,
-      model.api,
-      auth,
-    );
+    return wrap(providerStreamModel);
   }
 
   const codexTransportModel = prepareCodexSimpleTransportModel(apiRegistry, model, cfg);
   if (codexTransportModel) {
-    return applyProviderSimpleCompletionWrapper(
-      apiRegistry,
-      codexTransportModel,
-      cfg,
-      model.api,
-      auth,
-    );
+    return wrap(codexTransportModel);
   }
 
   const transportAwareModel = prepareTransportAwareSimpleModel(model, { cfg });
   if (transportAwareModel !== model) {
     const streamFn = buildTransportAwareSimpleStreamFn(model, { cfg });
     if (streamFn && registerCustomApi(apiRegistry, transportAwareModel.api, streamFn)) {
-      return applyProviderSimpleCompletionWrapper(
-        apiRegistry,
-        transportAwareModel,
-        cfg,
-        model.api,
-        auth,
-      );
+      return wrap(transportAwareModel);
     }
   }
 
@@ -307,16 +302,9 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
     const host = getAiTransportHost();
     const streamFn = host.plugin.createAnthropicVertexStream(model);
     if (registerCustomApi(apiRegistry, api, streamFn)) {
-      const transportModel = projectModel(model, { api });
-      return applyProviderSimpleCompletionWrapper(
-        apiRegistry,
-        transportModel,
-        cfg,
-        model.api,
-        auth,
-      );
+      return wrap(projectModel(model, { api }));
     }
   }
 
-  return applyProviderSimpleCompletionWrapper(apiRegistry, model, cfg, model.api, auth);
+  return wrap(model);
 }

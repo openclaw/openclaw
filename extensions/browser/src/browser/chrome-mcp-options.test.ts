@@ -1,38 +1,17 @@
-import { execFileSync } from "node:child_process";
-import { realpathSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
 
 describe("Chrome MCP profile options", () => {
   it.each([undefined, "npx"])(
-    "launches the packaged Chrome MCP with Node for HTTP endpoints with command %s",
+    "launches the packaged Chrome MCP on the current runtime for HTTP endpoints with command %s",
     (mcpCommand) => {
-      const { command, args } = normalizeChromeMcpOptions({
+      const { command, args, env } = normalizeChromeMcpOptions({
         cdpUrl: "http://127.0.0.1:9222",
         mcpCommand,
       });
 
-      const identity = JSON.parse(
-        execFileSync(
-          command,
-          [
-            "--eval",
-            'process.stdout.write(JSON.stringify({ executable: require("node:fs").realpathSync(process.execPath), runtime: process.versions.bun ? "bun" : "node" }))',
-          ],
-          {
-            encoding: "utf8",
-            env: {
-              SystemRoot: process.env.SystemRoot,
-              SYSTEMROOT: process.env.SYSTEMROOT,
-              WINDIR: process.env.WINDIR,
-              TEMP: process.env.TEMP,
-              TMP: process.env.TMP,
-              TMPDIR: process.env.TMPDIR,
-            },
-          },
-        ),
-      );
-      expect(identity).toEqual({ executable: realpathSync(command), runtime: "node" });
+      expect(command).toBe(process.execPath);
+      expect(env).toEqual({ CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: "1" });
       expect(args[0]).toMatch(
         /[/\\]chrome-devtools-mcp[/\\]build[/\\]src[/\\]bin[/\\]chrome-devtools-mcp\.js$/,
       );
@@ -88,6 +67,7 @@ describe("Chrome MCP profile options", () => {
     const options = normalizeChromeMcpOptions({ mcpCommand: "custom-chrome-mcp", mcpArgs });
 
     expect(options.command).toBe("custom-chrome-mcp");
+    expect(options.env).toBeUndefined();
     expect(options.args).toEqual([
       "--autoConnect",
       "--no-usage-statistics",

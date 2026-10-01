@@ -23,6 +23,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAgentHarnessToolSurfaceRuntime } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { toStringifiedError as toCopilotToolError } from "openclaw/plugin-sdk/error-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { isRawCopilotModelRun } from "./attempt-mode.js";
 
 type CreateOpenClawCodingTools =
@@ -37,14 +38,7 @@ type ScheduleToolExecution = (
   execute: () => Promise<ToolResultObject>,
 ) => Promise<ToolResultObject>;
 
-/**
- * Mutable holder populated by `attempt.ts` *after* `client.createSession()`
- * (or `client.resumeSession()`) succeeds, so that the tool bridge — which is
- * constructed *before* the SDK session exists — can route `onYield` events
- * to the live session's `abort()` later in the run. Bridged tools cannot
- * execute before the SDK session is up, so reading `current === undefined`
- * inside `onYield` is a no-op by design.
- */
+/** Populated after SDK session creation so tools built earlier can abort it on yield. */
 interface CopilotSessionHolder {
   current: { abort?: () => unknown } | undefined;
 }
@@ -78,12 +72,7 @@ interface CopilotToolBridgeInput {
   agentDir?: string;
   workspaceDir?: string;
   cwd?: string;
-  /**
-   * Sandbox context resolved by the caller (typically `attempt.ts` via
-   * `resolveSandboxContext` from the plugin-sdk). When provided, wrapped
-   * tools see the same sandbox-aware behavior PI provides. `null` (or
-   * omitted) means sandbox is disabled.
-   */
+  /** Prepared by the attempt owner; null or omitted means no sandbox. */
   sandbox?: SandboxContext | null;
   /**
    * Spawn workspace prepared by the attempt from the original workspace.
@@ -91,20 +80,8 @@ interface CopilotToolBridgeInput {
    */
   spawnWorkspaceDir: string | undefined;
   attemptParams: CopilotToolAttemptParams;
-  /**
-   * Mutable session holder used to wire `onYield` to the live
-   * `session.abort()` once the SDK session is established. See
-   * {@link CopilotSessionHolder}.
-   */
   sessionRef?: CopilotSessionHolder;
-  /**
-   * Invoked when a wrapped tool fires `sessions_yield`. The bridge
-   * always also calls `sessionRef.current?.abort?.()` to interrupt
-   * the in-flight SDK session; this callback lets the caller track
-   * the yield so the final attempt result can carry
-   * `yieldDetected: true` (the parent runner uses it to mark
-   * liveness as paused and stop_reason as `end_turn`).
-   */
+  /** Records yield before the bridge aborts the SDK session. */
   onYieldDetected?: (message?: string, acknowledgment?: string) => void;
   onToolCompleted?: (completion: CopilotToolCompletion) => void | Promise<void>;
 }
@@ -257,10 +234,7 @@ export async function createCopilotToolBridge(
   );
   return {
     cleanup: toolSurfaceRuntime.cleanup,
-    // Harness runs resolve `tools.codeMode: "auto"` inside the tool surface
-    // bridge, so this is the only place that knows whether the turn actually
-    // got code-mode controls. Without it the run reports `codeModeEngaged`
-    // as unset and telemetry cannot tell "off" from "harness did not report".
+    // Report the resolved auto mode, which only the tool-surface owner knows.
     codeModeEngaged: toolSurfaceRuntime.codeModeControlsEnabled,
     promptToolPolicy: {
       requireExplicitMessageTarget: toolOptions.requireExplicitMessageTarget,
@@ -390,12 +364,6 @@ function buildOpenClawCodingToolsOptions(
       } catch (error) {
         console.warn("[copilot-tool-bridge] onYieldDetected handler threw; continuing", error);
       }
-      // The SDK session does not exist at bridge-construction time, so
-      // we route yield events through a mutable holder populated by
-      // attempt.ts immediately after `createSession()` /
-      // `resumeSession()` resolves. Bridged tools cannot execute before
-      // the SDK session is up, so a missing `current` is a no-op by
-      // design (e.g. early aborts handled by the abortSignal path).
       const target = input.sessionRef?.current;
       void target?.abort?.();
     },
@@ -455,10 +423,7 @@ function convertOpenClawToolToSdkTool(
       ...(ownerMutation ? { ownerMutation } : {}),
     });
     notifyToolResult(
-      sanitizeToolResult({
-        content: [{ type: "text", text: message }],
-        details: { status: "failed", error: errorMessage },
-      }),
+      sanitizeToolResult(textResult(message, { status: "failed", error: errorMessage })),
       true,
     );
     notifyToolCompleted({
@@ -632,10 +597,7 @@ async function executeCatalogTool(
       });
       preparedArgs = terminal?.executedArguments ?? preparedArgs;
     }
-    const failure = sanitizeToolResult({
-      content: [{ type: "text", text: message }],
-      details: { status: "failed", error: message },
-    });
+    const failure = sanitizeToolResult(textResult(message, { status: "failed", error: message }));
     input.attemptParams?.onAgentToolResult?.({
       toolName: params.toolName,
       result: failure,

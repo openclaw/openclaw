@@ -1,34 +1,22 @@
-// Builds documentation baselines from config schema metadata.
-import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveRepoBundledPluginEnv } from "./repo-bundled-plugin-env.js";
 import type { ConfigSchemaResponse } from "./schema.js";
-import { schemaHasChildren } from "./schema.shared.js";
+import {
+  asSchemaObject,
+  countMatchingHintWildcards,
+  type ConfigJsonSchemaObject as JsonSchemaObject,
+  schemaHasChildren,
+} from "./schema.shared.js";
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
-
-type JsonSchemaNode = Record<string, unknown>;
-
-type JsonSchemaObject = JsonSchemaNode & {
-  type?: string | string[];
-  properties?: Record<string, JsonSchemaObject>;
-  required?: string[];
-  additionalProperties?: JsonSchemaObject | boolean;
-  items?: JsonSchemaObject | JsonSchemaObject[];
-  enum?: unknown[];
-  default?: unknown;
-  deprecated?: boolean;
-  anyOf?: JsonSchemaObject[];
-  allOf?: JsonSchemaObject[];
-  oneOf?: JsonSchemaObject[];
-};
 
 type ConfigDocBaselineKind = "core" | "channel" | "plugin";
 
@@ -81,18 +69,15 @@ type ConfigDocBaselineArtifactsRender = {
   json: ConfigDocBaselineArtifacts;
 };
 
-type ConfigDocBaselineArtifactPaths = {
-  combined: string;
-  core: string;
-  channel: string;
-  plugin: string;
-};
+type ConfigDocBaselinePathOptions = Partial<
+  Record<`${keyof ConfigDocBaselineArtifacts}Path`, string>
+>;
 
 type ConfigDocBaselineArtifactsWriteResult = {
   changed: boolean;
   hashChanged: boolean;
   wrote: boolean;
-  jsonPaths: ConfigDocBaselineArtifactPaths;
+  jsonPaths: ConfigDocBaselineArtifacts;
   hashPath: string;
   countsPath: string;
   countViolations: ConfigDocBaselineCountViolation[];
@@ -110,10 +95,7 @@ const DEFAULT_COUNTS_OUTPUT = "docs/.generated/config-baseline.counts.json";
 let cachedConfigDocBaselinePromise: Promise<ConfigDocBaseline> | null = null;
 const uiHintIndexCache = new WeakMap<
   ConfigSchemaResponse["uiHints"],
-  Map<
-    number,
-    Array<{ path: string; parts: string[]; hint: ConfigSchemaResponse["uiHints"][string] }>
-  >
+  Map<number, Array<{ parts: string[]; hint: ConfigSchemaResponse["uiHints"][string] }>>
 >();
 const schemaHasChildrenCache = new WeakMap<JsonSchemaObject, boolean>();
 
@@ -154,10 +136,9 @@ function normalizeJsonValue(value: unknown): JsonValue | undefined {
     return Number.isFinite(value) ? value : undefined;
   }
   if (Array.isArray(value)) {
-    const normalized = value
+    return value
       .map((entry) => normalizeJsonValue(entry))
       .filter((entry): entry is JsonValue => entry !== undefined);
-    return normalized;
   }
   if (!value || typeof value !== "object") {
     return undefined;
@@ -184,10 +165,6 @@ function normalizeEnumValues(values: unknown[] | undefined): JsonValue[] | undef
   return normalized.length > 0 ? normalized : undefined;
 }
 
-function asSchemaObject(value: unknown): JsonSchemaObject | null {
-  return asNullableRecord(value) as JsonSchemaObject | null;
-}
-
 function splitHintLookupPath(pathResult: string): string[] {
   const normalized = normalizeBaselinePath(pathResult);
   return normalized ? normalized.split(".").filter(Boolean) : [];
@@ -207,13 +184,9 @@ function resolveUiHintMatch(
     index = new Map();
     for (const [hintPath, hint] of Object.entries(uiHints)) {
       const parts = splitHintLookupPath(hintPath);
-      const bucket = index.get(parts.length);
-      const entry = { path: hintPath, parts, hint };
-      if (bucket) {
-        bucket.push(entry);
-      } else {
-        index.set(parts.length, [entry]);
-      }
+      const group = index.get(parts.length) ?? [];
+      group.push({ parts, hint });
+      index.set(parts.length, group);
     }
     uiHintIndexCache.set(uiHints, index);
   }
@@ -231,22 +204,8 @@ function resolveUiHintMatch(
     | undefined;
 
   for (const candidate of candidates) {
-    let wildcardCount = 0;
-    let matches = true;
-    for (let indexLocal = 0; indexLocal < candidate.parts.length; indexLocal += 1) {
-      const hintPart = candidate.parts[indexLocal];
-      const targetPart = targetParts[indexLocal];
-      if (hintPart === targetPart) {
-        continue;
-      }
-      if (hintPart === "*") {
-        wildcardCount += 1;
-        continue;
-      }
-      matches = false;
-      break;
-    }
-    if (!matches) {
+    const wildcardCount = countMatchingHintWildcards(candidate.parts, targetParts);
+    if (wildcardCount === undefined) {
       continue;
     }
     if (!bestMatch || wildcardCount < bestMatch.wildcardCount) {
@@ -285,24 +244,7 @@ function mergeTypeValues(
   left: string | string[] | undefined,
   right: string | string[] | undefined,
 ): string | string[] | undefined {
-  const merged = new Set<string>();
-  for (const value of [left, right]) {
-    if (!value) {
-      continue;
-    }
-    if (Array.isArray(value)) {
-      for (const entry of value) {
-        merged.add(entry);
-      }
-      continue;
-    }
-    merged.add(value);
-  }
-  return normalizeTypeValue([...merged]);
-}
-
-function areJsonValuesEqual(left: JsonValue | undefined, right: JsonValue | undefined): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return normalizeTypeValue([left, right].flatMap((value) => value || []));
 }
 
 function mergeJsonValueArrays(
@@ -329,11 +271,10 @@ function mergeConfigDocBaselineEntry(
   current: ConfigDocBaselineEntry,
   next: ConfigDocBaselineEntry,
 ): ConfigDocBaselineEntry {
-  const label = current.label === next.label ? current.label : (current.label ?? next.label);
-  const help = current.help === next.help ? current.help : (current.help ?? next.help);
-  const defaultValue = areJsonValuesEqual(current.defaultValue, next.defaultValue)
-    ? (current.defaultValue ?? next.defaultValue)
-    : undefined;
+  const defaultValue =
+    JSON.stringify(current.defaultValue) === JSON.stringify(next.defaultValue)
+      ? current.defaultValue
+      : undefined;
 
   return {
     path: current.path,
@@ -345,8 +286,8 @@ function mergeConfigDocBaselineEntry(
     deprecated: current.deprecated || next.deprecated,
     sensitive: current.sensitive || next.sensitive,
     tags: sortUniqueStrings([...current.tags, ...next.tags]),
-    label,
-    help,
+    label: current.label ?? next.label,
+    help: current.help ?? next.help,
     hasChildren: current.hasChildren || next.hasChildren,
   };
 }
@@ -484,30 +425,6 @@ function dedupeConfigDocBaselineEntries(
   );
 }
 
-function splitConfigDocBaselineEntries(entries: ConfigDocBaselineEntry[]): {
-  coreEntries: ConfigDocBaselineEntry[];
-  channelEntries: ConfigDocBaselineEntry[];
-  pluginEntries: ConfigDocBaselineEntry[];
-} {
-  const coreEntries: ConfigDocBaselineEntry[] = [];
-  const channelEntries: ConfigDocBaselineEntry[] = [];
-  const pluginEntries: ConfigDocBaselineEntry[] = [];
-
-  for (const entry of entries) {
-    if (entry.kind === "channel") {
-      channelEntries.push(entry);
-      continue;
-    }
-    if (entry.kind === "plugin") {
-      pluginEntries.push(entry);
-      continue;
-    }
-    coreEntries.push(entry);
-  }
-
-  return { coreEntries, channelEntries, pluginEntries };
-}
-
 async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
   if (cachedConfigDocBaselinePromise) {
     return await cachedConfigDocBaselinePromise;
@@ -521,13 +438,16 @@ async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
     const entries = dedupeConfigDocBaselineEntries(
       collectConfigDocBaselineEntries(schemaRoot, response.uiHints),
     );
-    const { coreEntries, channelEntries, pluginEntries } = splitConfigDocBaselineEntries(entries);
-    return {
+    const baseline: ConfigDocBaseline = {
       generatedBy: GENERATED_BY,
-      coreEntries,
-      channelEntries,
-      pluginEntries,
+      coreEntries: [],
+      channelEntries: [],
+      pluginEntries: [],
     };
+    for (const entry of entries) {
+      baseline[`${entry.kind}Entries`].push(entry);
+    }
+    return baseline;
   })();
   try {
     return await cachedConfigDocBaselinePromise;
@@ -553,14 +473,13 @@ export async function renderConfigDocBaselineArtifacts(
   baseline?: ConfigDocBaseline | Promise<ConfigDocBaseline>,
 ): Promise<ConfigDocBaselineArtifactsRender> {
   const resolvedBaseline = baseline ? await baseline : await buildConfigDocBaseline();
-  const json: ConfigDocBaselineArtifacts = {
-    combined: `${JSON.stringify(resolvedBaseline, null, 2)}\n`,
-    core: renderKindBaseline("core", resolvedBaseline.coreEntries),
-    channel: renderKindBaseline("channel", resolvedBaseline.channelEntries),
-    plugin: renderKindBaseline("plugin", resolvedBaseline.pluginEntries),
-  };
   return {
-    json,
+    json: {
+      combined: `${JSON.stringify(resolvedBaseline, null, 2)}\n`,
+      core: renderKindBaseline("core", resolvedBaseline.coreEntries),
+      channel: renderKindBaseline("channel", resolvedBaseline.channelEntries),
+      plugin: renderKindBaseline("plugin", resolvedBaseline.pluginEntries),
+    },
     baseline: resolvedBaseline,
   };
 }
@@ -583,17 +502,13 @@ function writeFileAtomic(filePath: string, content: string): void {
   });
 }
 
-function sha256(content: string): string {
-  return createHash("sha256").update(content, "utf8").digest("hex");
-}
-
 /** Build the sha256 hash file content for all config baseline artifacts. */
 function computeConfigBaselineHashFileContent(json: ConfigDocBaselineArtifacts): string {
   const lines = [
-    `${sha256(json.combined)}  config-baseline.json`,
-    `${sha256(json.core)}  config-baseline.core.json`,
-    `${sha256(json.channel)}  config-baseline.channel.json`,
-    `${sha256(json.plugin)}  config-baseline.plugin.json`,
+    `${sha256Hex(json.combined)}  config-baseline.json`,
+    `${sha256Hex(json.core)}  config-baseline.core.json`,
+    `${sha256Hex(json.channel)}  config-baseline.channel.json`,
+    `${sha256Hex(json.plugin)}  config-baseline.plugin.json`,
   ];
   return `${lines.join("\n")}\n`;
 }
@@ -606,19 +521,14 @@ function computeConfigBaselineCounts(baseline: ConfigDocBaseline): ConfigDocBase
   };
 }
 
-function renderConfigBaselineCounts(counts: ConfigDocBaselineCounts): string {
-  return `${JSON.stringify(counts, null, 2)}\n`;
-}
-
 function parseConfigBaselineCounts(content: string | null): ConfigDocBaselineCounts {
   if (content === null) {
     throw new Error("count budget file is missing");
   }
-  const parsed = JSON.parse(content) as unknown;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  const record = asNullableRecord(JSON.parse(content));
+  if (!record) {
     throw new Error("count budget must be a JSON object");
   }
-  const record = parsed as Record<string, unknown>;
   for (const kind of ["core", "channel", "plugin"] as const) {
     if (!Number.isInteger(record[kind]) || (record[kind] as number) < 0) {
       throw new Error(`${kind} budget must be a non-negative integer`);
@@ -656,13 +566,8 @@ function collectConfigBaselineCountViolations(
 
 function resolveBaselineArtifactPaths(
   repoRoot: string,
-  params?: {
-    combinedPath?: string;
-    corePath?: string;
-    channelPath?: string;
-    pluginPath?: string;
-  },
-): ConfigDocBaselineArtifactPaths {
+  params?: ConfigDocBaselinePathOptions,
+): ConfigDocBaselineArtifacts {
   return {
     combined: path.resolve(repoRoot, params?.combinedPath ?? DEFAULT_COMBINED_OUTPUT),
     core: path.resolve(repoRoot, params?.corePath ?? DEFAULT_CORE_OUTPUT),
@@ -671,17 +576,15 @@ function resolveBaselineArtifactPaths(
   };
 }
 
-export async function writeConfigDocBaselineArtifacts(params?: {
-  repoRoot?: string;
-  check?: boolean;
-  combinedPath?: string;
-  corePath?: string;
-  channelPath?: string;
-  pluginPath?: string;
-  hashPath?: string;
-  countsPath?: string;
-  rendered?: ConfigDocBaselineArtifactsRender | Promise<ConfigDocBaselineArtifactsRender>;
-}): Promise<ConfigDocBaselineArtifactsWriteResult> {
+export async function writeConfigDocBaselineArtifacts(
+  params?: ConfigDocBaselinePathOptions & {
+    repoRoot?: string;
+    check?: boolean;
+    hashPath?: string;
+    countsPath?: string;
+    rendered?: ConfigDocBaselineArtifactsRender | Promise<ConfigDocBaselineArtifactsRender>;
+  },
+): Promise<ConfigDocBaselineArtifactsWriteResult> {
   const repoRoot = params?.repoRoot ?? resolveRepoRoot();
   const jsonPaths = resolveBaselineArtifactPaths(repoRoot, params);
   const hashPath = path.resolve(repoRoot, params?.hashPath ?? DEFAULT_HASH_OUTPUT);
@@ -692,7 +595,7 @@ export async function writeConfigDocBaselineArtifacts(params?: {
 
   const nextHashContent = computeConfigBaselineHashFileContent(rendered.json);
   const counts = computeConfigBaselineCounts(rendered.baseline);
-  const nextCountsContent = renderConfigBaselineCounts(counts);
+  const nextCountsContent = `${JSON.stringify(counts, null, 2)}\n`;
   const currentHashContent = readFileIfExists(hashPath);
   const hashChanged = currentHashContent !== nextHashContent;
   let countBudgetError: string | undefined;
@@ -707,35 +610,22 @@ export async function writeConfigDocBaselineArtifacts(params?: {
   }
   const changed = hashChanged || countBudgetError !== undefined || countViolations.length > 0;
 
-  if (params?.check) {
-    return {
-      changed,
-      hashChanged,
-      wrote: false,
-      jsonPaths,
-      hashPath,
-      countsPath,
-      countViolations,
-      ...(countBudgetError ? { countBudgetError } : {}),
-    };
-  }
-
-  // Write tracked drift-detection artifacts.
-  writeFileAtomic(hashPath, nextHashContent);
-  writeFileAtomic(countsPath, nextCountsContent);
-
-  // Write full JSON artifacts locally (gitignored, useful for inspection)
-  for (const key of Object.keys(jsonPaths) as Array<keyof ConfigDocBaselineArtifacts>) {
-    writeFileAtomic(jsonPaths[key], rendered.json[key]);
+  if (!params?.check) {
+    writeFileAtomic(hashPath, nextHashContent);
+    writeFileAtomic(countsPath, nextCountsContent);
+    for (const key of Object.keys(jsonPaths) as Array<keyof ConfigDocBaselineArtifacts>) {
+      writeFileAtomic(jsonPaths[key], rendered.json[key]);
+    }
   }
 
   return {
     changed,
     hashChanged,
-    wrote: true,
+    wrote: !params?.check,
     jsonPaths,
     hashPath,
     countsPath,
-    countViolations: [],
+    countViolations: params?.check ? countViolations : [],
+    ...(params?.check && countBudgetError ? { countBudgetError } : {}),
   };
 }

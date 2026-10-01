@@ -1,4 +1,3 @@
-// Display-metadata mutations for sessions.patch.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -18,32 +17,23 @@ export function applySessionsPatchDisplayMetadata(params: {
 }): string | undefined {
   const { patch, next } = params;
 
-  if ("autoLabel" in patch) {
-    if (patch.autoLabel === null) {
-      delete next.autoLabel;
-    } else if (patch.autoLabel !== undefined) {
-      const parsed = parseSessionLabel(patch.autoLabel);
-      if (!parsed.ok) {
-        return parsed.error;
-      }
-      // Device names are presentation metadata, not unique custom-label claims.
-      next.autoLabel = parsed.label;
+  for (const field of ["autoLabel", "label"] as const) {
+    if (!(field in patch)) {
+      continue;
     }
-  }
-
-  if ("label" in patch) {
-    const raw = patch.label;
+    const raw = patch[field];
     if (raw === null) {
-      delete next.label;
+      delete next[field];
     } else if (raw !== undefined) {
       const parsed = parseSessionLabel(raw);
       if (!parsed.ok) {
         return parsed.error;
       }
-      if (params.isLabelInUse(parsed.label)) {
+      // Device names are presentation metadata, not unique custom-label claims.
+      if (field === "label" && params.isLabelInUse(parsed.label)) {
         return `label already in use: ${parsed.label}`;
       }
-      next.label = parsed.label;
+      next[field] = parsed.label;
     }
   }
 

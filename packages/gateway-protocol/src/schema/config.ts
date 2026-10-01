@@ -43,10 +43,8 @@ const ConfigApplyLikeParamProperties = {
   restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
 } as const;
 
-const ConfigApplyLikeParamsSchema = closedObject(ConfigApplyLikeParamProperties);
-
 /** Raw config apply request that may schedule a restart. */
-export const ConfigApplyParamsSchema = ConfigApplyLikeParamsSchema;
+export const ConfigApplyParamsSchema = closedObject(ConfigApplyLikeParamProperties);
 /** Raw config patch request that may schedule a restart. */
 export const ConfigPatchParamsSchema = closedObject({
   ...ConfigApplyLikeParamProperties,
@@ -318,9 +316,7 @@ const ConfigSchemaLookupChildSchema = closedObject({
 export const ConfigSchemaLookupResultSchema = closedObject({
   path: NonEmptyString,
   schema: Type.Unknown(),
-  reloadKind: Type.Optional(
-    Type.Union([Type.Literal("restart"), Type.Literal("hot"), Type.Literal("none")]),
-  ),
+  reloadKind: ConfigSchemaLookupChildSchema.properties.reloadKind,
   hint: Type.Optional(ConfigUiHintSchema),
   hintPath: Type.Optional(Type.String()),
   children: Type.Array(ConfigSchemaLookupChildSchema),

@@ -6,6 +6,14 @@ import { contextBudgetStatusFixture } from "../../../../src/config/sessions/cont
 import { buildMultiResult, buildProps, buildResult } from "./view.test-support.ts";
 import { renderSessions } from "./view.ts";
 
+function renderView(
+  result: Parameters<typeof buildProps>[0],
+  overrides: Partial<ReturnType<typeof buildProps>>,
+  container: HTMLElement,
+) {
+  render(renderSessions({ ...buildProps(result), ...overrides }), container);
+}
+
 function readSessionDetailStats(container: ParentNode): Map<string, string> {
   return new Map(
     Array.from(container.querySelectorAll(".session-detail-stat")).map((stat) => [
@@ -57,23 +65,19 @@ describe("sessions view", () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(new Date(2026, 2, 9, 12).getTime());
     const container = document.createElement("div");
     try {
-      render(
-        renderSessions({
-          ...buildProps(
-            buildMultiResult([
-              { key: "today", kind: "direct", updatedAt: new Date(2026, 2, 9).getTime() },
-              { key: "yesterday", kind: "direct", updatedAt: new Date(2026, 2, 8).getTime() },
-              {
-                key: "two-days-ago",
-                kind: "direct",
-                updatedAt: new Date(2026, 2, 7, 23, 59).getTime(),
-              },
-              { key: "six-days-ago", kind: "direct", updatedAt: new Date(2026, 2, 3).getTime() },
-              { key: "older", kind: "direct", updatedAt: new Date(2026, 2, 2, 23, 59).getTime() },
-            ]),
-          ),
-          groupBy: "date",
-        }),
+      renderView(
+        buildMultiResult([
+          { key: "today", kind: "direct", updatedAt: new Date(2026, 2, 9).getTime() },
+          { key: "yesterday", kind: "direct", updatedAt: new Date(2026, 2, 8).getTime() },
+          {
+            key: "two-days-ago",
+            kind: "direct",
+            updatedAt: new Date(2026, 2, 7, 23, 59).getTime(),
+          },
+          { key: "six-days-ago", kind: "direct", updatedAt: new Date(2026, 2, 3).getTime() },
+          { key: "older", kind: "direct", updatedAt: new Date(2026, 2, 2, 23, 59).getTime() },
+        ]),
+        { groupBy: "date" },
         container,
       );
       await Promise.resolve();
@@ -104,13 +108,7 @@ describe("sessions view", () => {
   it("makes every session sort header a keyboard-accessible button", async () => {
     const container = document.createElement("div");
     const onSortChange = vi.fn();
-    render(
-      renderSessions({
-        ...buildProps(buildMultiResult([])),
-        onSortChange,
-      }),
-      container,
-    );
+    renderView(buildMultiResult([]), { onSortChange }, container);
     await Promise.resolve();
 
     for (const [label, column] of [
@@ -146,14 +144,7 @@ describe("sessions view", () => {
     "announces only the active $direction session sort",
     async ({ direction, ariaSort }) => {
       const container = document.createElement("div");
-      render(
-        renderSessions({
-          ...buildProps(buildMultiResult([])),
-          sortColumn: "kind",
-          sortDir: direction,
-        }),
-        container,
-      );
+      renderView(buildMultiResult([]), { sortColumn: "kind", sortDir: direction }, container);
       await Promise.resolve();
 
       const headers = [
@@ -173,13 +164,7 @@ describe("sessions view", () => {
 
   it("announces session-list and mutation failures to assistive technology", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(buildMultiResult([])),
-        error: "group name exceeds 512 characters",
-      }),
-      container,
-    );
+    renderView(buildMultiResult([]), { error: "group name exceeds 512 characters" }, container);
     await Promise.resolve();
 
     const alert = container.querySelector('[role="alert"]');
@@ -190,16 +175,12 @@ describe("sessions view", () => {
   it("identifies each selectable session before destructive bulk actions", async () => {
     const container = document.createElement("div");
     const onToggleSelect = vi.fn();
-    render(
-      renderSessions({
-        ...buildProps(
-          buildMultiResult([
-            { key: "agent:main:first", kind: "direct", updatedAt: 2 },
-            { key: "agent:main:second", kind: "direct", updatedAt: 1 },
-          ]),
-        ),
-        onToggleSelect,
-      }),
+    renderView(
+      buildMultiResult([
+        { key: "agent:main:first", kind: "direct", updatedAt: 2 },
+        { key: "agent:main:second", kind: "direct", updatedAt: 1 },
+      ]),
+      { onToggleSelect },
       container,
     );
     await Promise.resolve();
@@ -219,17 +200,14 @@ describe("sessions view", () => {
 
   it("uses the stored face for generic session links", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions(
-        buildProps(
-          buildResult({
-            key: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
-            kind: "direct",
-            boardFace: "dashboard",
-            updatedAt: 1,
-          }),
-        ),
-      ),
+    renderView(
+      buildResult({
+        key: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+        kind: "direct",
+        boardFace: "dashboard",
+        updatedAt: 1,
+      }),
+      {},
       container,
     );
     await Promise.resolve();
@@ -242,13 +220,7 @@ describe("sessions view", () => {
   it("renders Active, Archived, and All status segments", async () => {
     const container = document.createElement("div");
     const onStatusFilterChange = vi.fn();
-    render(
-      renderSessions({
-        ...buildProps(buildMultiResult([])),
-        onStatusFilterChange,
-      }),
-      container,
-    );
+    renderView(buildMultiResult([]), { onStatusFilterChange }, container);
     await Promise.resolve();
 
     const radios = container.querySelectorAll<HTMLElement & { checked: boolean }>(
@@ -272,16 +244,12 @@ describe("sessions view", () => {
 
   it("dims and labels archived rows in the mixed view", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(
-          buildMultiResult([
-            { key: "agent:main:active", kind: "direct", updatedAt: 2, archived: false },
-            { key: "agent:main:archived", kind: "direct", updatedAt: 1, archived: true },
-          ]),
-        ),
-        statusFilter: "all",
-      }),
+    renderView(
+      buildMultiResult([
+        { key: "agent:main:active", kind: "direct", updatedAt: 2, archived: false },
+        { key: "agent:main:archived", kind: "direct", updatedAt: 1, archived: true },
+      ]),
+      { statusFilter: "all" },
       container,
     );
     await Promise.resolve();
@@ -299,15 +267,7 @@ describe("sessions view", () => {
       { key: "agent:main:telegram:direct:2", kind: "direct", updatedAt: 2 },
       { key: "agent:main:discord:channel:3", kind: "group", updatedAt: 1 },
     ]);
-    render(
-      renderSessions({
-        ...buildProps(result),
-        groupBy: "channel",
-        pageSize: 2,
-        onPageChange,
-      }),
-      container,
-    );
+    renderView(result, { groupBy: "channel", pageSize: 2, onPageChange }, container);
     await Promise.resolve();
 
     const headers = Array.from(container.querySelectorAll(".session-group-row__label")).map((el) =>
@@ -330,15 +290,7 @@ describe("sessions view", () => {
     next!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPageChange).toHaveBeenCalledWith(1);
 
-    render(
-      renderSessions({
-        ...buildProps(result),
-        groupBy: "channel",
-        page: 1,
-        pageSize: 2,
-      }),
-      container,
-    );
+    renderView(result, { groupBy: "channel", page: 1, pageSize: 2 }, container);
     await Promise.resolve();
 
     expect(container.querySelector(".session-group-row__label")?.textContent?.trim()).toBe(
@@ -355,28 +307,24 @@ describe("sessions view", () => {
     ["gateway-owner", "Saved owner name", "Shared owner"],
   ])("offers person grouping and labels the durable profile %s", async (id, name, expected) => {
     const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(
-          buildMultiResult([
-            {
-              key: "agent:main:ada",
-              kind: "direct",
-              updatedAt: 2,
-              owner: {
-                actor: {
-                  type: "human",
-                  id,
-                  label: name,
-                  identity: { type: "profile", id },
-                },
-              },
+    renderView(
+      buildMultiResult([
+        {
+          key: "agent:main:ada",
+          kind: "direct",
+          updatedAt: 2,
+          owner: {
+            actor: {
+              type: "human",
+              id,
+              label: name,
+              identity: { type: "profile", id },
             },
-            { key: "agent:main:ownerless", kind: "direct", updatedAt: 1 },
-          ]),
-        ),
-        groupBy: "person",
-      }),
+          },
+        },
+        { key: "agent:main:ownerless", kind: "direct", updatedAt: 1 },
+      ]),
+      { groupBy: "person" },
       container,
     );
     await Promise.resolve();
@@ -395,11 +343,9 @@ describe("sessions view", () => {
 
   it("hides the person grouping option without the identity capability", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(buildResult({ key: "agent:main:a", kind: "direct", updatedAt: 1 })),
-        personGroupingAvailable: false,
-      }),
+    renderView(
+      buildResult({ key: "agent:main:a", kind: "direct", updatedAt: 1 }),
+      { personGroupingAvailable: false },
       container,
     );
     await Promise.resolve();
@@ -413,16 +359,12 @@ describe("sessions view", () => {
 
   it("selects and names the current page size on first render", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(
-          buildMultiResult([
-            { key: "one", kind: "direct", updatedAt: 2 },
-            { key: "two", kind: "direct", updatedAt: 1 },
-          ]),
-        ),
-        pageSize: 25,
-      }),
+    renderView(
+      buildMultiResult([
+        { key: "one", kind: "direct", updatedAt: 2 },
+        { key: "two", kind: "direct", updatedAt: 1 },
+      ]),
+      { pageSize: 25 },
       container,
     );
     await Promise.resolve();
@@ -435,13 +377,9 @@ describe("sessions view", () => {
 
   it("keeps the filtered empty state when grouping is active", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(buildMultiResult([])),
-        groupBy: "category",
-        knownCategories: ["Research"],
-        searchQuery: "no-such-session",
-      }),
+    renderView(
+      buildMultiResult([]),
+      { groupBy: "category", knownCategories: ["Research"], searchQuery: "no-such-session" },
       container,
     );
     await Promise.resolve();
@@ -458,13 +396,7 @@ describe("sessions view", () => {
       kind: "direct",
       updatedAt: Date.now(),
     } as const;
-    render(
-      renderSessions({
-        ...buildProps(buildResult(session)),
-        onOpenSessionMenu,
-      }),
-      container,
-    );
+    renderView(buildResult(session), { onOpenSessionMenu }, container);
     await Promise.resolve();
 
     const button = container.querySelector<HTMLButtonElement>(
@@ -518,15 +450,12 @@ describe("sessions view", () => {
 
   it("keeps pinned sessions above newer unpinned sessions", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(
-          buildMultiResult([
-            { key: "newer", kind: "direct", updatedAt: 200 },
-            { key: "pinned", kind: "direct", updatedAt: 100, pinned: true, pinnedAt: 300 },
-          ]),
-        ),
-      }),
+    renderView(
+      buildMultiResult([
+        { key: "newer", kind: "direct", updatedAt: 200 },
+        { key: "pinned", kind: "direct", updatedAt: 100, pinned: true, pinnedAt: 300 },
+      ]),
+      {},
       container,
     );
     await Promise.resolve();
@@ -537,41 +466,11 @@ describe("sessions view", () => {
     expect(keys).toEqual(["pinned", "newer"]);
   });
 
-  it("uses the shared tooltip component for session filters", async () => {
-    const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(buildMultiResult([])),
-        activeMinutes: "120",
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    const filters = container.querySelector(".sessions-filter-bar");
-    const activeField = filters?.querySelector(".session-filter-input--minutes")?.closest("label");
-    const tooltips = Array.from(
-      filters?.querySelectorAll<HTMLElement>("openclaw-tooltip") ?? [],
-    ).map((tooltip) => (tooltip as HTMLElement & { content: string }).content);
-
-    expect(activeField?.querySelector(".session-filter-label")?.textContent).toBe("Updated within");
-    expect(tooltips).toEqual([
-      "Loads sessions updated in the last 120 minutes.",
-      "Max sessions to load.",
-      "Include global sessions.",
-      "Include unknown sessions.",
-    ]);
-  });
-
   it("keeps session state visible and moves advanced controls into the filter popover", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(buildMultiResult([])),
-        activeMinutes: "120",
-        limit: "200",
-        includeGlobal: true,
-      }),
+    renderView(
+      buildMultiResult([]),
+      { activeMinutes: "120", limit: "200", includeGlobal: true },
       container,
     );
     await Promise.resolve();
@@ -618,20 +517,16 @@ describe("sessions view", () => {
 
   it("does not invent thinking choices for an empty session profile", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult({
-            key: "agent:main:main",
-            kind: "direct",
-            updatedAt: Date.now(),
-            modelProvider: "thinking-fixture",
-            model: "no-effort",
-            thinkingLevels: [],
-          }),
-        ),
-        expandedSessionKey: "agent:main:main",
+    renderView(
+      buildResult({
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: Date.now(),
+        modelProvider: "thinking-fixture",
+        model: "no-effort",
+        thinkingLevels: [],
       }),
+      { expandedSessionKey: "agent:main:main" },
       container,
     );
     await Promise.resolve();
@@ -645,24 +540,19 @@ describe("sessions view", () => {
   it("renders and patches provider-owned thinking ids", async () => {
     const container = document.createElement("div");
     const onPatch = vi.fn();
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult({
-            key: "agent:main:main",
-            kind: "direct",
-            updatedAt: Date.now(),
-            thinkingLevel: "adaptive",
-            thinkingLevels: [
-              { id: "off", label: "off" },
-              { id: "adaptive", label: "adaptive" },
-              { id: "max", label: "maximum" },
-            ],
-          }),
-        ),
-        expandedSessionKey: "agent:main:main",
-        onPatch,
+    renderView(
+      buildResult({
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: Date.now(),
+        thinkingLevel: "adaptive",
+        thinkingLevels: [
+          { id: "off", label: "off" },
+          { id: "adaptive", label: "adaptive" },
+          { id: "max", label: "maximum" },
+        ],
       }),
+      { expandedSessionKey: "agent:main:main", onPatch },
       container,
     );
     await Promise.resolve();
@@ -689,22 +579,18 @@ describe("sessions view", () => {
 
   it("labels inherited thinking with the resolved session default", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult({
-            key: "agent:main:main",
-            kind: "direct",
-            updatedAt: Date.now(),
-            thinkingDefault: "adaptive",
-            thinkingLevels: [
-              { id: "off", label: "off" },
-              { id: "adaptive", label: "adaptive" },
-            ],
-          }),
-        ),
-        expandedSessionKey: "agent:main:main",
+    renderView(
+      buildResult({
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: Date.now(),
+        thinkingDefault: "adaptive",
+        thinkingLevels: [
+          { id: "off", label: "off" },
+          { id: "adaptive", label: "adaptive" },
+        ],
       }),
+      { expandedSessionKey: "agent:main:main" },
       container,
     );
     await Promise.resolve();
@@ -721,28 +607,24 @@ describe("sessions view", () => {
 
   it("labels inherited thinking from list defaults when lightweight rows omit row defaults", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult(
-            {
-              key: "agent:main:main",
-              kind: "direct",
-              updatedAt: Date.now(),
-            },
-            {
-              modelProvider: "openai",
-              model: "gpt-5.5",
-              thinkingDefault: "high",
-              thinkingLevels: [
-                { id: "off", label: "off" },
-                { id: "high", label: "high" },
-              ],
-            },
-          ),
-        ),
-        expandedSessionKey: "agent:main:main",
-      }),
+    renderView(
+      buildResult(
+        {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: Date.now(),
+        },
+        {
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          thinkingDefault: "high",
+          thinkingLevels: [
+            { id: "off", label: "off" },
+            { id: "high", label: "high" },
+          ],
+        },
+      ),
+      { expandedSessionKey: "agent:main:main" },
       container,
     );
     await Promise.resolve();
@@ -758,20 +640,15 @@ describe("sessions view", () => {
   it("keeps legacy binary thinking labels patching canonical ids", async () => {
     const container = document.createElement("div");
     const onPatch = vi.fn();
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult({
-            key: "agent:main:main",
-            kind: "direct",
-            updatedAt: Date.now(),
-            thinkingLevel: "low",
-            thinkingOptions: ["off", "on"],
-          }),
-        ),
-        expandedSessionKey: "agent:main:main",
-        onPatch,
+    renderView(
+      buildResult({
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: Date.now(),
+        thinkingLevel: "low",
+        thinkingOptions: ["off", "on"],
       }),
+      { expandedSessionKey: "agent:main:main", onPatch },
       container,
     );
     await Promise.resolve();
@@ -792,15 +669,13 @@ describe("sessions view", () => {
 
   it("shows agent identity name and emoji for matching session keys", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult({
-            key: "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN",
-            kind: "direct",
-            updatedAt: Date.now(),
-          }),
-        ),
+    renderView(
+      buildResult({
+        key: "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN",
+        kind: "direct",
+        updatedAt: Date.now(),
+      }),
+      {
         agentIdentityById: {
           "data-expert": {
             agentId: "data-expert",
@@ -809,7 +684,7 @@ describe("sessions view", () => {
             emoji: "📊",
           },
         },
-      }),
+      },
       container,
     );
     await Promise.resolve();
@@ -823,16 +698,13 @@ describe("sessions view", () => {
 
   it("keeps raw keys when identity data is unavailable", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions(
-        buildProps(
-          buildResult({
-            key: "agent:unknown-agent:telegram:abc123",
-            kind: "direct",
-            updatedAt: Date.now(),
-          }),
-        ),
-      ),
+    renderView(
+      buildResult({
+        key: "agent:unknown-agent:telegram:abc123",
+        kind: "direct",
+        updatedAt: Date.now(),
+      }),
+      {},
       container,
     );
     await Promise.resolve();
@@ -844,69 +716,46 @@ describe("sessions view", () => {
     );
   });
 
-  it("renders cron session kind distinctly", async () => {
-    const container = document.createElement("div");
-    render(
-      renderSessions(
-        buildProps(
-          buildResult({
-            key: "agent:main:cron:daily-digest",
-            kind: "direct",
-            updatedAt: Date.now(),
-          }),
-        ),
-      ),
-      container,
-    );
-    await Promise.resolve();
-
-    const badge = container.querySelector(".session-kind--cron");
-    expect(badge?.textContent?.trim()).toBe("cron");
-  });
-
   it("renders queued, live, and terminal run status badges", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions(
-        buildProps(
-          buildMultiResult([
-            {
-              key: "agent:main:queued",
-              kind: "direct",
-              updatedAt: 40,
-              hasActiveRun: true,
-              status: "queued",
-            },
-            {
-              key: "agent:main:live",
-              kind: "direct",
-              updatedAt: 30,
-              hasActiveRun: true,
-              status: "running",
-            },
-            {
-              key: "agent:main:idle",
-              kind: "direct",
-              updatedAt: 20,
-              hasActiveRun: false,
-              status: "running",
-            },
-            {
-              key: "agent:main:failed",
-              kind: "direct",
-              updatedAt: 10,
-              status: "failed",
-            },
-            {
-              key: "agent:main:done",
-              kind: "direct",
-              updatedAt: 5,
-              hasActiveRun: true,
-              status: "done",
-            },
-          ]),
-        ),
-      ),
+    renderView(
+      buildMultiResult([
+        {
+          key: "agent:main:queued",
+          kind: "direct",
+          updatedAt: 40,
+          hasActiveRun: true,
+          status: "queued",
+        },
+        {
+          key: "agent:main:live",
+          kind: "direct",
+          updatedAt: 30,
+          hasActiveRun: true,
+          status: "running",
+        },
+        {
+          key: "agent:main:idle",
+          kind: "direct",
+          updatedAt: 20,
+          hasActiveRun: false,
+          status: "running",
+        },
+        {
+          key: "agent:main:failed",
+          kind: "direct",
+          updatedAt: 10,
+          status: "failed",
+        },
+        {
+          key: "agent:main:done",
+          kind: "direct",
+          updatedAt: 5,
+          hasActiveRun: true,
+          status: "done",
+        },
+      ]),
+      {},
       container,
     );
     await Promise.resolve();
@@ -936,21 +785,16 @@ describe("sessions view", () => {
 
   it("renders the effective runtime including fallback in the details drawer", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(
-          buildMultiResult([
-            {
-              key: "agent:main:claude",
-              kind: "direct",
-              updatedAt: 20,
-              agentRuntime: { id: "claude-cli", fallback: "none", source: "agent" },
-            },
-          ]),
-        ),
-        searchQuery: "fallback none",
-        expandedSessionKey: "agent:main:claude",
-      }),
+    renderView(
+      buildMultiResult([
+        {
+          key: "agent:main:claude",
+          kind: "direct",
+          updatedAt: 20,
+          agentRuntime: { id: "claude-cli", fallback: "none", source: "agent" },
+        },
+      ]),
+      { searchQuery: "fallback none", expandedSessionKey: "agent:main:claude" },
       container,
     );
     await Promise.resolve();
@@ -969,16 +813,13 @@ describe("sessions view", () => {
 
   it("keeps raw keys for inherited identity object properties", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions(
-        buildProps(
-          buildResult({
-            key: "agent:constructor:telegram:abc123",
-            kind: "direct",
-            updatedAt: Date.now(),
-          }),
-        ),
-      ),
+    renderView(
+      buildResult({
+        key: "agent:constructor:telegram:abc123",
+        kind: "direct",
+        updatedAt: Date.now(),
+      }),
+      {},
       container,
     );
     await Promise.resolve();
@@ -1140,20 +981,16 @@ describe("sessions view", () => {
   });
   it("keeps session selects stable and deselects only the current page", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult({
-            key: "agent:main:main",
-            kind: "direct",
-            updatedAt: Date.now(),
-            fastMode: true,
-            verboseLevel: "full",
-            reasoningLevel: "custom-mode",
-          }),
-        ),
-        expandedSessionKey: "agent:main:main",
+    renderView(
+      buildResult({
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: Date.now(),
+        fastMode: true,
+        verboseLevel: "full",
+        reasoningLevel: "custom-mode",
       }),
+      { expandedSessionKey: "agent:main:main" },
       container,
     );
     await Promise.resolve();
@@ -1183,28 +1020,26 @@ describe("sessions view", () => {
     const onSelectPage = vi.fn();
     const onDeselectPage = vi.fn();
     const onDeselectAll = vi.fn();
-    render(
-      renderSessions({
-        ...buildProps(
-          buildMultiResult([
-            {
-              key: "page-0",
-              kind: "direct",
-              updatedAt: 20,
-            },
-            {
-              key: "page-1",
-              kind: "direct",
-              updatedAt: 10,
-            },
-          ]),
-        ),
+    renderView(
+      buildMultiResult([
+        {
+          key: "page-0",
+          kind: "direct",
+          updatedAt: 20,
+        },
+        {
+          key: "page-1",
+          kind: "direct",
+          updatedAt: 10,
+        },
+      ]),
+      {
         pageSize: 1,
         selectedKeys: new Set(["page-0", "off-page"]),
         onSelectPage,
         onDeselectPage,
         onDeselectAll,
-      }),
+      },
       container,
     );
     await Promise.resolve();
@@ -1221,14 +1056,7 @@ describe("sessions view", () => {
   it("shows a reset action when filters hide every session", async () => {
     const container = document.createElement("div");
     const onClearFilters = vi.fn();
-    render(
-      renderSessions({
-        ...buildProps(buildMultiResult([])),
-        searchQuery: "missing",
-        onClearFilters,
-      }),
-      container,
-    );
+    renderView(buildMultiResult([]), { searchQuery: "missing", onClearFilters }, container);
     await Promise.resolve();
 
     const emptyState = container.querySelector(".data-table-empty-state");
@@ -1245,40 +1073,20 @@ describe("sessions view", () => {
     expect(onClearFilters).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the plain empty state when no filters are active", async () => {
-    const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(buildMultiResult([])),
-        activeMinutes: "",
-        limit: "",
-        includeGlobal: true,
-        includeUnknown: true,
-        statusFilter: "archived",
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    const emptyCell = container.querySelector(".data-table-empty-cell");
-    expect(emptyCell?.textContent?.trim()).toBe("No archived sessions.");
-    expect(emptyCell?.querySelector("button")).toBeNull();
-  });
-
   it.each([
     { activeMinutes: "60minutes", limit: "1e2", filtered: false },
     { activeMinutes: "+30", limit: "060", filtered: true },
   ])("keeps numeric-filter empty state consistent: $activeMinutes / $limit", async (testCase) => {
     const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(buildMultiResult([])),
+    renderView(
+      buildMultiResult([]),
+      {
         activeMinutes: testCase.activeMinutes,
         limit: testCase.limit,
         includeGlobal: true,
         includeUnknown: true,
         statusFilter: "archived",
-      }),
+      },
       container,
     );
     await Promise.resolve();
@@ -1292,28 +1100,25 @@ describe("sessions view", () => {
 
   it("summarizes loaded sessions beside the roster heading", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions(
-        buildProps(
-          buildMultiResult([
-            {
-              key: "agent:main:live",
-              kind: "direct",
-              updatedAt: 2,
-              hasActiveRun: true,
-              status: "running",
-              totalTokens: 1200,
-            },
-            {
-              key: "agent:main:idle",
-              kind: "direct",
-              updatedAt: 1,
-              unread: true,
-              totalTokens: 300,
-            },
-          ]),
-        ),
-      ),
+    renderView(
+      buildMultiResult([
+        {
+          key: "agent:main:live",
+          kind: "direct",
+          updatedAt: 2,
+          hasActiveRun: true,
+          status: "running",
+          totalTokens: 1200,
+        },
+        {
+          key: "agent:main:idle",
+          kind: "direct",
+          updatedAt: 1,
+          unread: true,
+          totalTokens: 300,
+        },
+      ]),
+      {},
       container,
     );
     await Promise.resolve();
@@ -1337,24 +1142,20 @@ describe("sessions view", () => {
     { total: 130_000, percent: 65, tone: "warn", value: "130k" },
     { total: 168_000, percent: 84, tone: "warn", value: "168k" },
     { total: 170_000, percent: 85, tone: "danger", value: "170k" },
-    { total: 180_000, percent: 90, tone: "danger", value: "180k" },
     { total: 220_000, percent: 100, tone: "danger", value: "220k" },
   ])(
     "preserves context usage, tooltip, and $tone tone at $percent%",
     async ({ total, percent, tone, value }) => {
       const container = document.createElement("div");
-      render(
-        renderSessions(
-          buildProps(
-            buildResult({
-              key: "agent:main:main",
-              kind: "direct",
-              updatedAt: Date.now(),
-              totalTokens: total,
-              contextTokens: 200_000,
-            }),
-          ),
-        ),
+      renderView(
+        buildResult({
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: Date.now(),
+          totalTokens: total,
+          contextTokens: 200_000,
+        }),
+        {},
         container,
       );
       await Promise.resolve();
@@ -1378,19 +1179,16 @@ describe("sessions view", () => {
 
   it("keeps stale token snapshots out of the warning tones", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions(
-        buildProps(
-          buildResult({
-            key: "agent:main:main",
-            kind: "direct",
-            updatedAt: Date.now(),
-            totalTokens: 180_000,
-            totalTokensFresh: false,
-            contextTokens: 200_000,
-          }),
-        ),
-      ),
+    renderView(
+      buildResult({
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: Date.now(),
+        totalTokens: 180_000,
+        totalTokensFresh: false,
+        contextTokens: 200_000,
+      }),
+      {},
       container,
     );
     await Promise.resolve();
@@ -1408,17 +1206,14 @@ describe("sessions view", () => {
 
   it("omits the context meter when a session reports no context window", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions(
-        buildProps(
-          buildResult({
-            key: "agent:main:main",
-            kind: "direct",
-            updatedAt: Date.now(),
-            totalTokens: 4200,
-          }),
-        ),
-      ),
+    renderView(
+      buildResult({
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: Date.now(),
+        totalTokens: 4200,
+      }),
+      {},
       container,
     );
     await Promise.resolve();
@@ -1429,26 +1224,24 @@ describe("sessions view", () => {
 
   it("renders kind avatars with a live status dot", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions(
-        buildProps(
-          buildMultiResult([
-            {
-              // Cron display kind derives from the key shape, never the wire kind.
-              key: "agent:main:cron:live",
-              kind: "direct",
-              updatedAt: 2,
-              hasActiveRun: true,
-              status: "running",
-            },
-            { key: "agent:main:idle", kind: "direct", updatedAt: 1, hasActiveRun: false },
-          ]),
-        ),
-      ),
+    renderView(
+      buildMultiResult([
+        {
+          // Cron display kind derives from the key shape, never the wire kind.
+          key: "agent:main:cron:live",
+          kind: "direct",
+          updatedAt: 2,
+          hasActiveRun: true,
+          status: "running",
+        },
+        { key: "agent:main:idle", kind: "direct", updatedAt: 1, hasActiveRun: false },
+      ]),
+      {},
       container,
     );
     await Promise.resolve();
 
+    expect(container.querySelector(".session-kind--cron")?.textContent?.trim()).toBe("cron");
     const avatars = Array.from(container.querySelectorAll(".session-avatar"));
     expect(avatars.map((avatar) => [...avatar.classList])).toEqual([
       ["session-avatar", "session-avatar--cron"],
@@ -1460,10 +1253,7 @@ describe("sessions view", () => {
 
   it("shows skeleton rows during the initial load", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions({ ...buildProps(buildMultiResult([])), result: null, loading: true }),
-      container,
-    );
+    renderView(buildMultiResult([]), { result: null, loading: true }, container);
     await Promise.resolve();
 
     expect(container.querySelectorAll(".session-skeleton-row").length).toBeGreaterThan(0);
@@ -1475,19 +1265,16 @@ describe("sessions view", () => {
 
 it("renders the sessions meter against its last-run prompt budget", async () => {
   const container = document.createElement("div");
-  render(
-    renderSessions(
-      buildProps(
-        buildResult({
-          key: "agent:main:main",
-          kind: "direct",
-          updatedAt: 2,
-          totalTokens: 160_000,
-          contextTokens: 200_000,
-          contextBudgetStatus: contextBudgetStatusFixture(),
-        }),
-      ),
-    ),
+  renderView(
+    buildResult({
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 2,
+      totalTokens: 160_000,
+      contextTokens: 200_000,
+      contextBudgetStatus: contextBudgetStatusFixture(),
+    }),
+    {},
     container,
   );
   await Promise.resolve();

@@ -579,6 +579,9 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     await expect(duplicate).resolves.toBe(false);
 
     expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
+    expect(updateSessionEntry).toHaveBeenCalledOnce();
+    expect(loadSessionEntry).toHaveBeenCalledOnce();
+    expect(readSessionTitleFieldsFromTranscript).toHaveBeenCalledOnce();
   });
 });
 

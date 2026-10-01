@@ -1,4 +1,3 @@
-// Creates and propagates lightweight W3C diagnostic trace contexts.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -123,17 +122,14 @@ export function parseDiagnosticTraceparent(
   ) {
     return undefined;
   }
-  const normalizedTraceId = normalizeTraceField(traceId, isValidDiagnosticTraceId);
-  const normalizedSpanId = normalizeTraceField(spanId, isValidDiagnosticSpanId);
-  const normalizedTraceFlags = normalizeTraceField(traceFlags, isValidDiagnosticTraceFlags);
-  if (!normalizedTraceId || !normalizedSpanId || !normalizedTraceFlags) {
+  if (
+    !isValidDiagnosticTraceId(traceId) ||
+    !isValidDiagnosticSpanId(spanId) ||
+    !isValidDiagnosticTraceFlags(traceFlags)
+  ) {
     return undefined;
   }
-  return {
-    traceId: normalizedTraceId,
-    spanId: normalizedSpanId,
-    traceFlags: normalizedTraceFlags,
-  };
+  return { traceId, spanId, traceFlags };
 }
 
 /** Formats a diagnostic trace context as a W3C `traceparent` header. */

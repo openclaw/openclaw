@@ -18,6 +18,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { CallGatewayOptions } from "../call.js";
 import { createChannelManager } from "../server-channels.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
@@ -156,6 +157,7 @@ describe("channelsHandlers channels.status", () => {
     ]);
     mocks.listChannelPlugins.mockReturnValue([selected, unrelated]);
     const manager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: mocks.getRuntimeConfig,
       getPluginRegistry: () => registry,
       channelLogs: {},

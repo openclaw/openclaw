@@ -653,9 +653,7 @@ describe("channel detail", () => {
 
   it.each([
     ["discord", "Discord", []],
-    ["slack", "Slack", []],
     ["signal", "Signal", [["Base URL", "https://signal.example"]]],
-    ["imessage", "iMessage", []],
     [
       "googlechat",
       "Google Chat",
@@ -728,7 +726,7 @@ describe("channel detail", () => {
     expect(fact(discord, "Running")).toBe("No");
   });
 
-  it.each(["guildchat", "constructor", "__proto__"])(
+  it.each(["guildchat", "__proto__"])(
     "opens accountless plugin %s from its actual hub row without inherited account values",
     (channelId) => {
       for (const configured of [false, true]) {

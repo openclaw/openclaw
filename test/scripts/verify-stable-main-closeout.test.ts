@@ -7,6 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import {
   readRecoveryStepInputs,
   requireRecoveryJob,
@@ -274,6 +275,26 @@ if (args[1] === 'view') {
 }
 
 describe("stable closeout Linux publication", () => {
+  it.each(["stableSoakWaiver", "laneWaiver"])(
+    "refuses historical %s replay without rewriting the published receipt",
+    (field) => {
+      const fixture = linuxCloseoutFixture();
+      expect(fixture.run().status).toBe(0);
+      const receipt = JSON.parse(readFileSync(fixture.outputPath, "utf8"));
+      const original = JSON.stringify({ ...receipt, [field]: "historical published authority" });
+      writeFileSync(fixture.originalPath, original);
+      const result = fixture.run(true);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "Historical waiver-bearing closeout receipt replay is unsupported",
+      );
+      expect(result.stderr).toContain(
+        "a fresh validation run cannot replace their published binding",
+      );
+      expect(readFileSync(fixture.originalPath, "utf8")).toBe(original);
+    },
+  );
+
   it("accepts only the validated exact late immutable Linux manifest", () => {
     const fixture = linuxCloseoutFixture();
     expect(fixture.run().status).toBe(0);
@@ -613,7 +634,7 @@ describe("verify-stable-main-closeout", () => {
     expect(readFileSync(outputPath, "utf8")).toBe(readFileSync(originalPath, "utf8"));
   });
 
-  it("records operator waivers at closeout and preserves a waiver-less recorded manifest on replay", () => {
+  it("rejects removed waiver flags while preserving strict closeout replay", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "openclaw-waiver-closeout-"));
     tempDirs.push(dir);
     const version = "2026.9.6";
@@ -661,14 +682,6 @@ describe("verify-stable-main-closeout", () => {
       "--allow-failed-publish-recovery",
       "true",
     ];
-    const waiverArgs = [
-      "--stable-soak-waiver",
-      "2026.9.6 operator approved",
-      "--lane-waiver",
-      "2026.9.6 known flake",
-    ];
-
-    // A closeout recorded before waiver fields existed carries none of them.
     const initial = runCli(...args);
     expect(initial.status, initial.stderr).toBe(0);
     const recorded = JSON.parse(readFileSync(outputPath, "utf8"));
@@ -676,18 +689,15 @@ describe("verify-stable-main-closeout", () => {
     expect(recorded).not.toHaveProperty("laneWaiver");
     writeFileSync(originalPath, readFileSync(outputPath));
 
-    // Replay with waivers resolved from publish evidence keeps the recorded bytes.
-    const replay = runCli(...args, ...waiverArgs, "--existing-manifest", originalPath);
+    const replay = runCli(...args, "--existing-manifest", originalPath);
     expect(replay.status, replay.stderr).toBe(0);
     expect(readFileSync(outputPath, "utf8")).toBe(readFileSync(originalPath, "utf8"));
-
-    // A fresh closeout records the waivers that authorized the stable.
-    const waived = runCli(...args, ...waiverArgs);
-    expect(waived.status, waived.stderr).toBe(0);
-    expect(JSON.parse(readFileSync(outputPath, "utf8"))).toMatchObject({
-      stableSoakWaiver: "2026.9.6 operator approved",
-      laneWaiver: "2026.9.6 known flake",
-    });
+    for (const flag of ["--stable-soak-waiver", "--lane-waiver"]) {
+      const rejected = runCli(...args, flag, "2026.9.6 operator approved");
+      expect(rejected.status).not.toBe(0);
+      expect(rejected.stderr).toContain(`${flag} was removed`);
+      expect(readFileSync(outputPath, "utf8")).toBe(readFileSync(originalPath, "utf8"));
+    }
   });
 
   it("records a withdrawn 2026.9.6 macOS appcast from the main commit lookup", () => {
@@ -787,6 +797,48 @@ process.stdout.write(JSON.stringify([
     const replay = run("forbidden", "--existing-manifest", originalPath);
     expect(replay.status, replay.stderr).toBe(0);
     expect(readFileSync(outputPath, "utf8")).toBe(initialBytes);
+  });
+});
+
+describe("stable closeout workflow keyed runs and tag-only replay", () => {
+  const workflow = parse(
+    readFileSync(path.resolve(".github/workflows/openclaw-stable-main-closeout.yml"), "utf8"),
+  ) as {
+    concurrency: { group: string; "cancel-in-progress": boolean | string };
+    on: {
+      workflow_dispatch: {
+        inputs: Record<string, { required: boolean; type: string; default?: string | boolean }>;
+      };
+    };
+    jobs: Record<
+      "resolve" | "verify",
+      {
+        concurrency?: { group: string; "cancel-in-progress": boolean };
+        steps: Array<{ name: string; run?: string; env?: Record<string, string> }>;
+      }
+    >;
+  };
+  it("keeps push runs alive and serializes verification by resolved stable tag", () => {
+    expect(workflow.concurrency["cancel-in-progress"]).toBe(false);
+    expect(workflow.concurrency.group).toContain("inputs.tag");
+    expect(workflow.jobs.verify.concurrency).toEqual({
+      group: "openclaw-stable-main-closeout-verify-${{ needs.resolve.outputs.tag }}",
+      "cancel-in-progress": false,
+    });
+  });
+
+  it("keeps non-tag replay inputs optional", () => {
+    for (const [name, input] of Object.entries(workflow.on.workflow_dispatch.inputs)) {
+      if (name === "tag") {
+        continue;
+      }
+      expect(input.required, name).toBe(false);
+      // Optional string inputs have an implicit empty default in GitHub Actions.
+      expect(input.default ?? (input.type === "string" ? "" : undefined), name).toBeOneOf([
+        "",
+        false,
+      ]);
+    }
   });
 });
 

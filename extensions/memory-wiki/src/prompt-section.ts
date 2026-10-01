@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements prompt section behavior.
 import type { MemoryPromptSectionBuilder } from "openclaw/plugin-sdk/memory-host-core";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -40,7 +39,7 @@ function rankPromptClaimFreshness(level?: string): number {
 function sortPromptClaims(
   claims: MemoryWikiCompiledDigestClaim[],
 ): MemoryWikiCompiledDigestClaim[] {
-  return [...claims].toSorted((left, right) => {
+  return claims.toSorted((left, right) => {
     const leftConfidence = typeof left.confidence === "number" ? left.confidence : -1;
     const rightConfidence = typeof right.confidence === "number" ? right.confidence : -1;
     if (leftConfidence !== rightConfidence) {
@@ -74,7 +73,7 @@ function buildDigestPromptSection(
     return [];
   }
 
-  const selectedPages = [...digest.pages]
+  const selectedPages = digest.pages
     .filter(
       (page) =>
         (page.claimCount ?? 0) > 0 ||

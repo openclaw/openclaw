@@ -16,7 +16,7 @@ export function createSessionRowProjectionArchive(params: {
   enqueue: (id: string, change?: SessionRowChange) => void;
   put: (row: records.Row) => void;
   release: (id: string) => void;
-  prepare: (row: records.Row) => records.Row | undefined;
+  invalidateFacts: (row: records.Row) => void;
   config: () => records.Inputs["cfg"];
   context: () => Parameters<typeof records.readSessionRowLineage>[3];
   referenced: NonNullable<Parameters<typeof records.readSessionRowLineage>[4]>;
@@ -31,6 +31,10 @@ export function createSessionRowProjectionArchive(params: {
     params.release(id);
     const cold = records.dematerialize(row);
     params.put(cold);
+    // Eviction releases display custody, not unresolved database-fact preparation.
+    if (cold.unresolvedDatabaseFacts === "category") {
+      params.dirty.add(id);
+    }
     return cold;
   }
   function trim() {
@@ -96,6 +100,13 @@ export function createSessionRowProjectionArchive(params: {
   return {
     demote,
     markRelated,
+    deferAcquisition(row: records.Row) {
+      const id = records.identity(row);
+      params.put(row);
+      params.dirty.add(id);
+      params.enqueue(id);
+      return undefined;
+    },
     isCurrentMaterialization(row: records.Row) {
       const current = params.rows.get(records.identity(row));
       return (
@@ -109,6 +120,9 @@ export function createSessionRowProjectionArchive(params: {
     ) {
       const catalogOnly = change.scope === "catalog" && !change.factsInvalidated;
       for (const row of candidates) {
+        if (change.factsInvalidated) {
+          params.invalidateFacts(row);
+        }
         if (catalogOnly && row.entry?.archivedAt === undefined) {
           if (!params.dirty.has(records.identity(row))) {
             row.pendingDatabaseFacts = row.retainedDatabaseFacts;
@@ -182,7 +196,7 @@ export function createSessionRowProjectionArchive(params: {
       if (initial?.entry?.archivedAt === undefined) {
         return initial;
       }
-      const row = records.ready(initial) ? initial : params.prepare(initial);
+      const row = initial;
       if (records.ready(row) && row.entry.archivedAt !== undefined) {
         const id = records.identity(row);
         materialized.delete(id);

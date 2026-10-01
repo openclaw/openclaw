@@ -58,7 +58,7 @@ export function createNodeWorkspaceSkills(options: NodeWorkspaceWorkerOptions): 
     );
   }
   return {
-    loadSkills: (request) => call("discovery", { ...request, ...mapSources(request) }),
+    loadSkills: (request) => call("discovery", mapSources(request)),
     async watchSkills(request, onChange, signal) {
       await runNodeWorkspaceWorker(
         options,
@@ -71,7 +71,7 @@ export function createNodeWorkspaceSkills(options: NodeWorkspaceWorkerOptions): 
         AbortSignal.any([options.signal, signal]),
         (line) => {
           const event: unknown = JSON.parse(line);
-          if (event !== "change" && event !== "unavailable") {
+          if (event !== "change" && event !== "unavailable" && event !== "available") {
             throw new Error("Invalid Skill change notification");
           }
           onChange(event);

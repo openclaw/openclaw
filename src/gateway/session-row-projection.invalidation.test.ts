@@ -1,9 +1,24 @@
 import { renameSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  getRuntimeAuthProfileStoreCredentialsRevision,
+  getRuntimeAuthProfileStoreSnapshotsRevision,
+  prepareRuntimeAuthProfileStoreSnapshots,
+} from "../agents/auth-profiles/runtime-snapshots.js";
 import * as agentIdentity from "../agents/identity.js";
 import * as catalogLookup from "../agents/model-catalog-lookup.js";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  createConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
+import {
+  getRuntimeConfigSnapshotMetadata,
+  getRuntimeConfigSourceSnapshot,
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+  setRuntimeConfigSourceSnapshotIfCurrent,
+} from "../config/runtime-snapshot.js";
 import {
   assignSessionOwner,
   deleteSessionEntryLifecycle,
@@ -15,14 +30,24 @@ import {
   readSessionEntryCache,
 } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
+import { runSqliteSessionReclamation } from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
 import {
   createLifecycleArtifactReclamationPlan,
   createSessionMaintenanceFinalizationOperation,
-  runSqliteSessionReclamation,
 } from "../config/sessions/session-accessor.sqlite-reclamation.js";
+import { applySessionEntryExactReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import * as transcriptWorker from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
+import {
+  activateSecretsRuntimeSnapshotState,
+  clearSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeSnapshotRevisionState,
+  setSecretsRuntimeSourceSnapshotIfCurrent,
+} from "../secrets/runtime-state.js";
+import {
+  emitSessionIdentityMutation,
+  onSessionIdentityMutation,
+} from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as databaseIdentity from "../state/openclaw-agent-db-identity.js";
@@ -32,7 +57,8 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
-import { ensureProfileForEmail, linkEmail, setDisplayName } from "../state/user-profiles.js";
+import { linkEmail, setDisplayName } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   identifiedClient,
@@ -40,6 +66,7 @@ import {
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
 import * as projectionWork from "./session-projection-work.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as materialization from "./session-row-projection-materialize.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
@@ -213,10 +240,103 @@ it("reuses descendants after parent progress while keeping inherited models curr
   });
 });
 
+it.each(["native", "worker"] as const)(
+  "retains assigned owner and participants before observers after a %s metadata write",
+  async (writer) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const creator = ensureProfileForEmail("creator@example.com");
+      const owner = ensureProfileForEmail("owner@example.com");
+      const participant = ensureProfileForEmail("participant@example.com");
+      const scope = { agentId: "main", sessionKey: "agent:main:publication-side-metadata" };
+      const original: SessionEntry = {
+        sessionId: "publication-side-metadata",
+        updatedAt: 1,
+        label: "Original label",
+        createdActor: { type: "human", source: "profile", id: creator.id },
+      };
+      replaceSessionEntrySync(scope, original);
+      const assignment = {
+        actor: { type: "human" as const, id: owner.id },
+        assignedBy: { type: "human" as const, id: creator.id },
+        assignedAt: 1,
+      };
+      expect(
+        assignSessionOwner(scope, {
+          owner: assignment.actor,
+          assignedBy: assignment.assignedBy,
+          assignedAt: assignment.assignedAt,
+        }),
+      ).toEqual(assignment);
+      recordSessionParticipant(scope, {
+        identity: { type: "profile", id: participant.id },
+        promptedAt: 1,
+      });
+      const release = projectionWork.retainSessionListForegroundWork();
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      const query = { agentId: scope.agentId, key: scope.sessionKey };
+      let stop = () => {};
+      try {
+        await listProjectedSessions({ projection, opts: { includePeople: true } });
+        const sideMetadata = {
+          owner: assignment,
+          participants: [{ identity: { type: "profile", id: participant.id } }],
+          participantCount: 1,
+        };
+        const warm = projection.capture(query);
+        expect(warm?.entry).toMatchObject(sideMetadata);
+        expect(warm?.storedEntry).toMatchObject(sideMetadata);
+        const reads = vi.spyOn(materialization, "readSessionRowEntry");
+        const observed: Array<{
+          entry: SessionEntry | undefined;
+          storedEntry: SessionEntry | undefined;
+        }> = [];
+        stop = sessionChanges.subscribe((change) => {
+          if (!("sessionKey" in change) || change.sessionKey !== scope.sessionKey) {
+            return;
+          }
+          const row = projection.capture(query);
+          // Snapshot before any asynchronous refill can repair a partial publication.
+          observed.push(structuredClone({ entry: row?.entry, storedEntry: row?.storedEntry }));
+        });
+        const updated = { ...original, label: "Updated label", updatedAt: 2 };
+        if (writer === "native") {
+          replaceSessionEntrySync(scope, updated);
+        } else {
+          await applySessionEntryExactReplacements({
+            agentId: scope.agentId,
+            storePath: warm!.storeTarget.storePath,
+            sessionKeys: [scope.sessionKey],
+            update: ([row]) => ({
+              result: undefined,
+              replacements: [
+                { sessionKey: scope.sessionKey, entry: { ...row!.entry, ...updated } },
+              ],
+            }),
+          });
+        }
+        const expected = { ...updated, ...sideMetadata };
+        expect(observed).toEqual([
+          {
+            entry: expect.objectContaining(expected),
+            storedEntry: expect.objectContaining(expected),
+          },
+        ]);
+        expect(reads).not.toHaveBeenCalled();
+      } finally {
+        stop();
+        await projection.ensureMaterialized();
+        projection.dispose();
+        release();
+      }
+    });
+  },
+);
+
 it.each([false, true])(
   "retains repeated registration only for the captured birthtime (replaced=%s)",
   async (replaced) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       const identity = databaseIdentity.readOpenClawAgentDatabaseIdentity(database);
       const stores = new Map([
@@ -235,6 +355,7 @@ it.each([false, true])(
         ],
       ]);
       const registry = createSessionRowRegistryRead({
+        env: state.env,
         stores: () => stores,
         isActive: () => true,
         runAsOwner: (run) => run(),
@@ -250,6 +371,92 @@ it.each([false, true])(
     });
   },
 );
+
+it("keeps a captured row when another physical store resets the same key and session ID", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      session: { scope: "global" as const },
+    };
+    const query = {
+      agentId: "main",
+      key: "global",
+      storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+    };
+    const otherPath = state.statePath("secondary.sqlite");
+    const entry = { sessionId: "shared-id", lifecycleRevision: "original", updatedAt: 1 };
+    for (const storePath of [query.storePath, otherPath]) {
+      replaceSessionEntrySync({ agentId: query.agentId, sessionKey: query.key, storePath }, entry);
+      registerOpenClawAgentDatabase({ agentId: query.agentId, path: storePath });
+    }
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      await projection.ensureMaterialized();
+      const captured = projection.capture(query);
+      expect(captured).toBeDefined();
+      replaceSessionEntrySync(
+        { agentId: query.agentId, sessionKey: query.key, storePath: otherPath },
+        {
+          ...entry,
+          lifecycleRevision: "other-store-reset",
+          updatedAt: 2,
+        },
+      );
+      expect(projection.isCurrent(captured!)).toBe(true);
+      await projection.ensureMaterialized();
+      expect(projection.describe(query, captured)?.entry.lifecycleRevision).toBe("original");
+      expect(projection.describe({ ...query, storePath: otherPath })?.entry.lifecycleRevision).toBe(
+        "other-store-reset",
+      );
+    } finally {
+      projection.dispose();
+    }
+  });
+});
+
+it("invalidates a published row after an unprepared reset with the same session ID", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:unprepared-reset",
+      storePath: database.path,
+    };
+    const entry = { sessionId: "same-session", lifecycleRevision: "original", updatedAt: 1 };
+    replaceSessionEntrySync(scope, entry);
+    const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
+    const query = { agentId: scope.agentId, key: scope.sessionKey, storePath: scope.storePath };
+    try {
+      await projection.ensureMaterialized();
+      replaceSessionEntrySync(scope, { ...entry, label: "Published metadata", updatedAt: 2 });
+      const captured = projection.capture(query);
+      const identity = databaseIdentity.readOpenClawAgentDatabaseIdentity(database).identity;
+      expect(captured?.entry?.label).toBe("Published metadata");
+      expect(captured?.publishedSource?.identity).toBe(identity);
+      expect(projection.isCurrent(captured!)).toBe(true);
+
+      // A raw reset does not prove whether the previously published lifecycle still applies.
+      emitSessionIdentityMutation({
+        kind: "reset",
+        agentId: scope.agentId,
+        databaseIdentity: identity,
+        previous: { sessionId: entry.sessionId, sessionKeys: [scope.sessionKey] },
+        current: { sessionId: entry.sessionId, sessionKeys: [scope.sessionKey] },
+      });
+      expect(projection.isCurrent(captured!)).toBe(false);
+      const invalidated = projection.capture(query);
+      expect(invalidated).toBeDefined();
+      expect(invalidated?.generation).not.toBe(captured?.generation);
+      expect(invalidated?.entry).toBeUndefined();
+
+      await projection.ensureMaterialized();
+      expect(projection.capture(query)?.entry?.sessionId).toBe(entry.sessionId);
+      expect(projection.isCurrent(captured!)).toBe(false);
+    } finally {
+      projection.dispose();
+    }
+  });
+});
 
 it("hydrates a same-path replacement with a reused inode and retires its previous inventory", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -324,10 +531,16 @@ it("hydrates a same-path replacement with a reused inode and retires its previou
           ),
         );
       try {
-        expect(projection.snapshot({ agentId: "main", key: "agent:main:new" }).row?.sessionId).toBe(
-          "new",
+        await withReadySessionRows(
+          projection,
+          () => [{ agentId: "main", key: "agent:main:new" }],
+          (read) => {
+            expect(read.describe({ agentId: "main", key: "agent:main:new" })?.entry.sessionId).toBe(
+              "new",
+            );
+            expect(projection.selectEntries().map((row) => row.key)).toEqual(["agent:main:new"]);
+          },
         );
-        expect(projection.selectEntries().map((row) => row.key)).toEqual(["agent:main:new"]);
         await projection.ensureMaterialized();
         expect(projection.selectEntries().map((row) => row.key)).toEqual(["agent:main:new"]);
         expect([...projection.sessionGroupTargets()]).toEqual([
@@ -560,6 +773,7 @@ it.each([
       let lists: Array<ReturnType<typeof listProjectedSessions>> = [];
       let stopWorkerReadGuard = () => {};
       try {
+        await projection.ensureMaterialized();
         await listProjectedSessions({ projection, opts });
         const catalogReads = vi.spyOn(catalogLookup, "findModelCatalogEntry");
         await listProjectedSessions({ projection, opts });
@@ -760,6 +974,132 @@ it("reuses row identities across lists until their entry, profile, or config cha
       await projection.ensureMaterialized();
       projection.dispose();
       release();
+    }
+  });
+});
+
+it("keeps projected rows clean when config.apply rewrites a value-identical config", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    for (let index = 0; index < 4; index++) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: `agent:main:rewrite-${index}` },
+        { sessionId: `rewrite-${index}`, updatedAt: index + 1 },
+      );
+    }
+    const source = (version: string) => ({
+      ...structuredClone(cfg),
+      meta: { lastTouchedVersion: version },
+    });
+    const release = projectionWork.retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      activateSecretsRuntimeSnapshotState({
+        snapshot: {
+          sourceConfig: source("1"),
+          config: structuredClone(cfg),
+          authStores: prepareRuntimeAuthProfileStoreSnapshots([]),
+          authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+          authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
+          warnings: [],
+          webTools: {
+            search: { providerSource: "none", diagnostics: [] },
+            fetch: { providerSource: "none", diagnostics: [] },
+            diagnostics: [],
+          },
+        },
+        refreshContext: null,
+        refreshHandler: null,
+      });
+      await listProjectedSessions({ projection, opts: {} });
+      await projection.ensureMaterialized();
+      expect(projection.dirtyRowCount).toBe(0);
+
+      // A value-identical config.apply only restamps the file's meta, so the gateway takes its
+      // effective-config-unchanged branch: the runtime object stays and only its source advances.
+      const rewritten = source("2");
+      expect(
+        setSecretsRuntimeSourceSnapshotIfCurrent({
+          expectedSecretsRevision: getActiveSecretsRuntimeSnapshotRevisionState(),
+          expectedRuntimeConfigRevision: getRuntimeConfigSnapshotMetadata()?.revision ?? 0,
+          runtimeSourceConfig: rewritten,
+          secretsSourceConfig: rewritten,
+        }),
+      ).toBe(true);
+      expect(getRuntimeConfigSourceSnapshot()).toEqual(rewritten);
+      expect(projection.dirtyRowCount).toBe(0);
+    } finally {
+      await projection.ensureMaterialized();
+      projection.dispose();
+      release();
+      clearSecretsRuntimeSnapshotState();
+      resetConfigRuntimeState();
+    }
+  });
+});
+
+it("keeps projected rows clean when a config publication resolves to the published snapshot", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    for (let index = 0; index < 4; index++) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: `agent:main:republish-${index}` },
+        { sessionId: `republish-${index}`, updatedAt: index + 1 },
+      );
+    }
+    const release = projectionWork.retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      await listProjectedSessions({ projection, opts: {} });
+      expect(projection.dirtyRowCount).toBe(0);
+
+      // The first publication of a config is a real change: every row is invalidated.
+      setRuntimeConfigSnapshot(structuredClone(cfg));
+      expect(projection.dirtyRowCount).toBeGreaterThan(0);
+      await projection.ensureMaterialized();
+      expect(projection.dirtyRowCount).toBe(0);
+
+      // The same config published again is not a session-data change, so no row is
+      // invalidated and no drain starts.
+      setRuntimeConfigSnapshot(structuredClone(cfg));
+      expect(projection.dirtyRowCount).toBe(0);
+
+      // Equal values with different resolution provenance can resolve differently, so rows refresh.
+      const reresolved = structuredClone(cfg);
+      setConfigResolutionFacts(
+        reresolved,
+        createConfigResolutionFacts([
+          { varName: "UNIT_TEST_AGENT", configPath: "agents.list.0.id" },
+        ]),
+      );
+      setRuntimeConfigSnapshot(reresolved);
+      expect(projection.dirtyRowCount).toBeGreaterThan(0);
+      await projection.ensureMaterialized();
+      expect(projection.dirtyRowCount).toBe(0);
+
+      // A source-only republish that changes provenance copies it onto the published object in
+      // place, so it reaches rows through the same-object path.
+      expect(
+        setRuntimeConfigSourceSnapshotIfCurrent({
+          expectedRevision: getRuntimeConfigSnapshotMetadata()?.revision ?? 0,
+          sourceConfig: structuredClone(cfg),
+        }),
+      ).toBe(true);
+      expect(projection.dirtyRowCount).toBeGreaterThan(0);
+      await projection.ensureMaterialized();
+      expect(projection.dirtyRowCount).toBe(0);
+
+      // A real config change still dirties every row.
+      setRuntimeConfigSnapshot({
+        ...structuredClone(cfg),
+        agents: { ...cfg.agents, defaults: { model: "unit-test/model" } },
+      });
+      expect(projection.dirtyRowCount).toBeGreaterThan(0);
+    } finally {
+      await projection.ensureMaterialized();
+      projection.dispose();
+      release();
+      resetConfigRuntimeState();
     }
   });
 });

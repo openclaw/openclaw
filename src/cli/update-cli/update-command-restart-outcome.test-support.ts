@@ -4,6 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { expect, it, vi, type Mock } from "vitest";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import * as processSpawner from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -22,6 +23,7 @@ import {
 import type { InstallRootTransitionFixture } from "./update-command-service-transition.test-support.js";
 import {
   maybeRestartService,
+  maybeRestartServiceAfterFailedMutableUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
 } from "./update-command-service.js";
 
@@ -32,7 +34,7 @@ export function registerRestartOutcomeTests(
     servingOwner: Awaited<ReturnType<typeof createServiceActivationFixture>>["servingOwner"];
     mocks: Pick<
       InstallRootTransitionFixture["mocks"],
-      "child" | "health" | "configSnapshot" | "capability"
+      "child" | "health" | "configSnapshot" | "capability" | "command" | "running"
     > & {
       restart: Mock<() => Promise<{ outcome: "completed" }>>;
       terminateStale: Mock<
@@ -71,6 +73,7 @@ export function registerRestartOutcomeTests(
           preManagedServiceStop: before,
           shouldRestart: true,
           updateStepTimeoutMs: 1_000,
+          assertCurrent: () => run.executorFence?.assertCurrent(),
         },
         await readConfigFileSnapshot(),
       );
@@ -134,6 +137,148 @@ export function registerRestartOutcomeTests(
       expect(mocks.child.mock.calls.map(([argv]) => argv[3])).toEqual(
         revoked ? ["install"] : ["install", "restart"],
       );
+    },
+  );
+
+  it.each(["git-to-npm restart", "failed-update recovery", "revoked recovery"] as const)(
+    "revalidates a collected stopped systemd unit during %s",
+    async (scenario) => {
+      const { root, run, mocks } = getFixture();
+      const switchingInstall = scenario === "git-to-npm restart";
+      if (switchingInstall) {
+        await Promise.all(
+          [".git", "src", "extensions"].map((directory) => fs.mkdir(path.join(root, directory))),
+        );
+        mocks.capability.mockResolvedValue({ kind: "writable" });
+      }
+      const before = await maybeStopManagedServiceBeforeMutableUpdate({
+        updateInstallKind: switchingInstall ? "git" : "package",
+        root,
+        shouldRestart: true,
+        jsonMode: true,
+      });
+      let command = await mocks.command(process.env);
+      if (!command) {
+        throw new Error("Missing managed service fixture command");
+      }
+      expect(before.stopped).toBe(true);
+      let current = true;
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("Original update owner revoked");
+        }
+      };
+      run.executorFence = { assertCurrent };
+      mocks.command.mockImplementation(async (_env, options) => {
+        if (options?.requireLoaded && !mocks.running) {
+          if (!options.loadForInspection) {
+            throw new Error("Effective systemd service command could not be inspected.");
+          }
+          expect(options.loadForInspection.managerUid).toBe(before.serviceManagerUid);
+          current = scenario !== "revoked recovery";
+          options.loadForInspection.assertCurrent();
+        }
+        return command;
+      });
+      if (switchingInstall) {
+        expect(await summarizeGatewayServiceLayout(command)).toMatchObject({
+          packageRootReal: root,
+          entrypointSourceCheckout: true,
+        });
+        const packageRoot = path.join(root, "npm", "lib", "node_modules", "openclaw");
+        const packageEntry = path.join(packageRoot, "dist", "index.js");
+        await fs.mkdir(path.dirname(packageEntry), { recursive: true });
+        await fs.writeFile(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: VERSION }),
+        );
+        await fs.writeFile(packageEntry, "export {};\n");
+        // Model the persisted output of candidate Doctor before service revalidation.
+        const configPath = path.join(root, ".openclaw", "openclaw.json");
+        const config = JSON.parse(await fs.readFile(configPath, "utf8"));
+        config.update = { channel: "stable" };
+        await fs.writeFile(configPath, `${JSON.stringify(config)}\n`);
+        const beforeInstall = command;
+        mocks.child.mockImplementation(async (argv) => {
+          expect(argv).toContain(packageEntry);
+          expect(argv).toContain("install");
+          expect(argv).toContain("--force");
+          expect(command).toBe(beforeInstall);
+          command = {
+            ...beforeInstall,
+            programArguments: [process.execPath, packageEntry, "gateway", "--port", "19305"],
+          };
+          mocks.running = true;
+          return {
+            code: 0,
+            stdout: JSON.stringify({ action: "install", ok: true }),
+            stderr: "",
+            signal: null,
+            killed: false,
+            termination: "exit",
+          };
+        });
+        const result: UpdateRunResult = {
+          status: "ok",
+          mode: "npm",
+          root: packageRoot,
+          before: { version: VERSION },
+          after: { version: VERSION },
+          steps: [],
+          durationMs: 0,
+        };
+        const prepared = await prepareUpdateRestart(
+          {
+            root,
+            result,
+            preManagedServiceStop: before,
+            shouldRestart: true,
+            updateStepTimeoutMs: 1_000,
+            assertCurrent,
+          },
+          await readConfigFileSnapshot(),
+        );
+        expect(prepared.serviceUpdateVerdict).toMatchObject({
+          kind: "owned",
+          root,
+          requiresInstallRootRefresh: true,
+        });
+        expect(prepared.refreshGatewayServiceEnv).toBe(true);
+        await expect(
+          maybeRestartService({
+            ...prepared,
+            shouldRestart: true,
+            result,
+            opts: { json: true, run },
+            refreshServiceEnv: prepared.refreshGatewayServiceEnv,
+            serviceEnv: prepared.gatewayServiceEnv,
+            serviceInstallEnv: prepared.gatewayServiceInstallEnv,
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toBe("ok");
+        expect(mocks.child).toHaveBeenCalledOnce();
+        expect(await summarizeGatewayServiceLayout(command)).toMatchObject({
+          packageRootReal: packageRoot,
+          entrypointSourceCheckout: false,
+        });
+        expect(JSON.parse(await fs.readFile(configPath, "utf8")).update.channel).toBe("stable");
+      } else {
+        const recovery = maybeRestartServiceAfterFailedMutableUpdate({
+          preManagedServiceStop: before,
+          updateRun: run,
+          recovery: { serviceRestartSafe: true, version: VERSION },
+          jsonMode: true,
+        });
+        if (scenario === "revoked recovery") {
+          await expect(recovery).rejects.toThrow("Original update owner revoked");
+          expect(mocks.child).not.toHaveBeenCalled();
+          expect(mocks.running).toBe(false);
+          return;
+        }
+        await expect(recovery).resolves.toBe("healthy");
+      }
+      expect(mocks.running).toBe(true);
+      expect(mocks.health).toHaveBeenCalled();
     },
   );
 
@@ -357,7 +502,7 @@ export function registerRestartOutcomeTests(
         runUpdatedInstallGatewayCommand(
           {
             result: { root, mode: "npm" },
-            opts: { json: false },
+            opts: {},
             invocationEnv: process.env,
             nodeRunner: process.execPath,
           },

@@ -258,10 +258,8 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     }
   }
   const runtimeContextTokens =
-    typeof runResult.meta?.agentMeta?.contextTokens === "number" &&
-    Number.isFinite(runResult.meta.agentMeta.contextTokens) &&
-    runResult.meta.agentMeta.contextTokens > 0
-      ? Math.floor(runResult.meta.agentMeta.contextTokens)
+    typeof ctxTokens === "number" && Number.isFinite(ctxTokens) && ctxTokens > 0
+      ? Math.floor(ctxTokens)
       : undefined;
   const resolvedContextTokens =
     runtimeContextTokens === undefined
@@ -301,7 +299,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     cfg,
     agentDir: followupRun.run.agentDir,
     usage,
-    lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+    lastCallUsage,
     currentContextSnapshot,
     promptTokens,
     isHeartbeat,

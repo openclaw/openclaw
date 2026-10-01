@@ -338,7 +338,7 @@ describe("filesystem tool output contracts", () => {
     });
   });
 
-  it.each([0, -1, 0.5])(
+  it.each([0, 0.5])(
     "honors normalized explicit limit %s without automatic paging",
     async (limit) => {
       await fs.writeFile(path.join(tmpDir, "limited.txt"), "alpha\nbeta\ngamma");

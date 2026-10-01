@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { FailoverError } from "../agents/failover-error.js";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
@@ -67,6 +68,49 @@ function embeddedRoute(runtime: "codex" | "openclaw" = "codex"): SystemAgentConf
 }
 
 describe("setup inference plugin ownership", () => {
+  it.each([
+    ["ECONNREFUSED", "Nothing is listening at http://127.0.0.1:43210", "Start the server"],
+    ["ENOTFOUND", "The server name in http://127.0.0.1:43210 could not be found", "DNS"],
+    ["EHOSTUNREACH", "Cannot reach http://127.0.0.1:43210", "network"],
+  ])(
+    "explains a failed connection without calling it a timeout (%s)",
+    async (code, message, nextStep) => {
+      const route = embeddedRoute("openclaw");
+      route.runConfig.models = {
+        providers: {
+          openai: {
+            baseUrl: "http://127.0.0.1:43210/v1?key=synthetic-private-value",
+            models: [],
+          },
+        },
+      };
+      let retryConnectionErrors: boolean | undefined;
+      const result = await runSetupInferenceTurn({
+        route,
+        requireExecutionOwner: false,
+        deps: {
+          createTempDir: async () => "/tmp/openclaw-setup-inference-test",
+          removeTempDir: async () => {},
+          runEmbeddedAgent: async (params) => {
+            retryConnectionErrors = params.retryConnectionErrors;
+            throw new FailoverError("Connection error.", { reason: "timeout", code });
+          },
+        },
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        status: "unavailable",
+        error: expect.stringContaining(message),
+      });
+      expect(retryConnectionErrors).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain(nextStep);
+        expect(result.error).toContain("No default model was changed.");
+        expect(result.error).not.toContain("synthetic-private-value");
+      }
+    },
+  );
+
   it("waits for the isolated probe runtime to release its plugin work", async () => {
     const route = embeddedRoute();
     const cleanupStarted = createDeferred();

@@ -5,6 +5,7 @@ read_when:
   - Connecting Cloudflare sign-in to Gateway profiles and GitHub identities
   - Operating separate collaboration and release Gateways
 title: "Deploy a team server"
+doc-schema-version: 1
 ---
 
 This guide connects the pieces of a production team deployment: a persistent
@@ -17,6 +18,33 @@ For the shorter collaboration walkthrough, see [Team setup](/start/teams).
 This guide uses `team.example.com` for collaboration and
 `release.example.com` for an optional second Gateway. Replace them with your
 own hostnames; each Gateway needs its own configuration and state.
+
+## How we build OpenClaw with OpenClaw
+
+We use [team.openclaw.ai](https://team.openclaw.ai) as a shared development
+workspace for OpenClaw itself. Maintainers and agents work through repository
+changes in the same conversations:
+
+1. **Start a repository task.** Choose the OpenClaw project in **New conversation**
+   and select **Worktree** for a [managed branch and checkout](/concepts/managed-worktrees).
+   Give the agent a concrete change and the checks that demonstrate it works.
+2. **Work together.** Teammates with access can open the session, add context,
+   and steer the next turn. [Assign an owner](/concepts/multi-user#assigning-an-owner)
+   for follow-through; creator and participant attribution remain separate.
+3. **Review the work.** Inspect the agent's results and the checkout diff, run
+   the relevant tests, and resolve review findings before landing.
+4. **Publish and follow CI.** Use **Publish PR** after checking the selected
+   [GitHub publication account](/concepts/user-model#github-connections).
+   The linked pull request and its CI details stay available in the conversation.
+
+![An OpenClaw development task on the Team server, with analysis, test results, and a published pull request](https://github.com/user-attachments/assets/b64f4d3a-3988-4f59-ac73-27552b6bdd30)
+
+The screenshot shows a live repository task, cropped to its conversation.
+See [Chat and code review](/web/control-ui/chat) for the diff, file, and PR controls.
+
+Building the next version does not replace the running server. We keep
+deployment under its own approval and lifecycle owner, with coordinated
+activation and verification. See [Keep operations recoverable](/gateway/team-server#keep-operations-recoverable).
 
 ## Before you begin
 
@@ -375,19 +403,21 @@ an explicit group:
 }
 ```
 
-On the receiver, advertise the reachable node endpoint before creating a join
-code. For the Access service-token topology above, use the same HTTPS hostname;
-if you operate a separate authenticated machine endpoint, use that URL instead:
+On the receiver, the `gateway.publicOrigin` configured above supplies the join
+endpoint when the loopback Gateway has no other advertised route. For the Access
+service-token topology above, use that same HTTPS hostname. If you operate a
+separate authenticated machine endpoint, set
+`plugins.entries.device-pair.config.publicUrl` to its URL instead:
 
 ```bash
-openclaw config set plugins.entries.device-pair.config.publicUrl https://team.example.com
 openclaw plugins enable session-share
 openclaw devices join-code
 ```
 
-The join-code command needs this advertised pairing endpoint on a loopback-only
-Gateway; `publicOrigin` alone is not its endpoint-discovery setting. The
-`device-pair` plugin does not need to be enabled for core join-code creation.
+Join codes retain existing Tailscale, remote, and bind-derived routes before
+falling back to `publicOrigin`. The pairing-specific `publicUrl` override takes
+precedence over discovery. The `device-pair` plugin does not need to be enabled
+for core join-code creation.
 See [Node onboarding](/nodes/node-host).
 
 On the source, run the node under the source Gateway's account, state directory,

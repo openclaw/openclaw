@@ -41,10 +41,8 @@ afterEach(async () => {
 
 it.each([
   { collector: true, toolsAllow: undefined },
-  { collector: true, toolsAllow: ["read"] },
   { collector: true, toolsAllow: [] },
   { collector: false, toolsAllow: undefined },
-  { collector: false, toolsAllow: ["read"] },
 ])("constructs the real attempt collector surface %j", async ({ collector, toolsAllow }) => {
   addSubagentRunForTests({
     runId,

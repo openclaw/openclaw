@@ -4,18 +4,14 @@ import net from "node:net";
 import { fileURLToPath } from "node:url";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { SignalRpcOptions, SignalSseEvent } from "./client-types.js";
+import { isSignalQuoteMetadataRejection } from "./quote-rejection.js";
 import { assertSignalSocketEndpoint } from "./socket-path.js";
 
 const MAX_FRAME_BYTES = 1_048_576;
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 type RpcMessage = Record<string, unknown>;
-type UnixOptions = {
-  baseUrl: string;
-  timeoutMs?: number;
-  maxResponseBytes?: number;
-  assertDirectAdapterHandoff?: () => void;
-};
 
 function socketPath(baseUrl: string): string {
   const url = new URL(baseUrl.trim());
@@ -36,7 +32,7 @@ function abortError(): Error {
   return Object.assign(new Error("Signal UNIX stream aborted"), { name: "AbortError" });
 }
 
-async function openSocket(options: UnixOptions, abortSignal?: AbortSignal) {
+async function openSocket(options: SignalRpcOptions, abortSignal?: AbortSignal) {
   if (abortSignal?.aborted) {
     throw abortError();
   }
@@ -107,28 +103,6 @@ async function* messages(socket: net.Socket, maxBytes = MAX_FRAME_BYTES) {
   }
 }
 
-// Keep aligned with isSignalQuoteMetadataRejection in send.ts: only a definitive
-// quote-metadata rejection makes the ordinary-message fallback safe.
-const QUOTE_REJECTION_WORDS = [
-  "reject",
-  "invalid",
-  "unrecognized",
-  "unsupported",
-  "not found",
-  "no such",
-  "unknown",
-] as const;
-
-function isQuoteMetadataRejection(code: number | "unknown", rawMessage: string): boolean {
-  if (code !== -32602) {
-    return false;
-  }
-  const normalized = rawMessage.toLowerCase();
-  return (
-    normalized.includes("quote") && QUOTE_REJECTION_WORDS.some((word) => normalized.includes(word))
-  );
-}
-
 function result(message: RpcMessage): unknown {
   if (message.jsonrpc !== "2.0" || (!Object.hasOwn(message, "result") && !message.error)) {
     throw new Error("Signal UNIX RPC returned invalid response envelope");
@@ -138,7 +112,10 @@ function result(message: RpcMessage): unknown {
     const code = typeof error.code === "number" ? error.code : "unknown";
     // Classify a definitive quote-metadata rejection without echoing raw remote text,
     // which can carry PII. The safe message keeps the send-path fallback classifier working.
-    if (typeof error.message === "string" && isQuoteMetadataRejection(code, error.message)) {
+    if (
+      typeof error.message === "string" &&
+      isSignalQuoteMetadataRejection(`Signal RPC ${code}: ${error.message}`)
+    ) {
       throw new Error(`Signal RPC ${code}: quote metadata rejected (redacted)`);
     }
     throw new Error(`Signal RPC ${code}: remote error`);
@@ -149,7 +126,7 @@ function result(message: RpcMessage): unknown {
 export async function signalUnixRpcRequest<T>(
   method: string,
   params: Record<string, unknown> | undefined,
-  options: UnixOptions,
+  options: SignalRpcOptions,
 ): Promise<T> {
   const connection = await openSocket(options);
   const id = randomUUID();
@@ -180,7 +157,7 @@ export async function streamSignalUnixEvents(params: {
   account?: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
-  onEvent: (event: { event?: string; data?: string; id?: string }) => unknown;
+  onEvent: (event: SignalSseEvent) => unknown;
   onStreamOpen?: () => void;
 }): Promise<void> {
   // The monitor uses zero for unlimited stream idle time, not a 1 ms handshake.

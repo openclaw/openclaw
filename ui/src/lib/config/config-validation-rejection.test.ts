@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { GatewayProtocolClient } from "@openclaw/gateway-client/browser";
 import { expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { createConfigCapabilityHarness, createConfigServerMock } from "./config-test-harness.ts";
 
@@ -100,6 +101,69 @@ it.each(["save", "apply", "patch"] as const)(
   },
 );
 
+it.each(["unchanged", "edited", "saved"] as const)(
+  "preserves current %s draft feedback when opening the saved file succeeds",
+  async (outcome) => {
+    vi.useFakeTimers();
+    const server = createConfigServerMock();
+    const opened = deferred<{ ok: boolean }>();
+    let reject = true;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.openFile") {
+        return opened.promise;
+      }
+      if (method === "config.set" && reject) {
+        throw await validationError();
+      }
+      return server.request(method, params);
+    });
+    const { runtimeConfig } = createConfigCapabilityHarness(
+      request as GatewayBrowserClient["request"],
+    );
+    let opening: Promise<void> | undefined;
+    try {
+      await runtimeConfig.ensureLoaded();
+      runtimeConfig.setRaw('{"count":"invalid"}');
+      await expect(runtimeConfig.save()).resolves.toBe(false);
+      expect(runtimeConfig.state.lastError).toContain("Expected number");
+      opening = runtimeConfig.openFile();
+      expect(runtimeConfig.state.lastError).toContain("Expected number");
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("rejected");
+
+      if (outcome !== "unchanged") {
+        reject = false;
+        runtimeConfig.setRaw('{"count":2}');
+        if (outcome === "saved") {
+          await expect(runtimeConfig.save()).resolves.toBe(true);
+        }
+      }
+      opened.resolve({ ok: true });
+      await opening;
+
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe(
+        outcome === "unchanged" ? "rejected" : outcome === "saved" ? "saved" : "idle",
+      );
+      if (outcome === "unchanged") {
+        expect(runtimeConfig.state.lastError).toContain("Expected number");
+        expect(runtimeConfig.state.configRaw).toBe('{"count":"invalid"}');
+      } else {
+        expect(runtimeConfig.state.lastError).toBeNull();
+        expect(JSON.parse(runtimeConfig.state.configRaw)).toEqual({ count: 2 });
+      }
+      expect(runtimeConfig.state.configFormDirty).toBe(outcome !== "saved");
+      expect(server.submissions).toHaveLength(outcome === "saved" ? 1 : 0);
+      expect(runtimeConfig.state.configSnapshot?.hash).toBe(
+        outcome === "saved" ? "hash-2" : "hash-1",
+      );
+    } finally {
+      opened.resolve({ ok: true });
+      await opening;
+      runtimeConfig.setWritesSuspended(true);
+      runtimeConfig.dispose();
+    }
+  },
+);
+
 it.each([
   ["permission", "FORBIDDEN", "permission denied", { issues }, "error"],
   ["conflict", "INVALID_REQUEST", "config changed since last load", { issues }, "conflict"],
@@ -178,7 +242,7 @@ it("does not call an earlier uncertain save unchanged when a retry is rejected",
   runtimeConfig.dispose();
 });
 
-it.each(["read", "schema"])(
+it.each(["read", "schema", "open"])(
   "replaces a validation notice when a later %s fails",
   async (operation) => {
     vi.useFakeTimers();
@@ -206,7 +270,11 @@ it.each(["read", "schema"])(
     expect(runtimeConfig.state.lastError).toContain("Expected number");
     expect(runtimeConfig.state.configAutoSaveStatus).toBe("rejected");
     failedRead = true;
-    await (operation === "read" ? runtimeConfig.refresh() : runtimeConfig.ensureSchemaLoaded());
+    await (operation === "read"
+      ? runtimeConfig.refresh()
+      : operation === "schema"
+        ? runtimeConfig.ensureSchemaLoaded()
+        : runtimeConfig.openFile());
     expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
     expect(runtimeConfig.state.lastError).toBe("connection closed");
     runtimeConfig.setWritesSuspended(true);

@@ -185,7 +185,6 @@ describe("chat.abort native transcript settlement", () => {
               cleanupAbortController: registration.cleanup,
               io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
               context: dispatchContext,
-              taskTrackingMode: "none",
             });
         let deliverySettled = false;
         void completion?.then(() => {

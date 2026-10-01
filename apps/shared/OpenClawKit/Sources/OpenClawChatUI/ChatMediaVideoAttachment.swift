@@ -18,7 +18,6 @@ struct ChatMediaVideoAttachment: View {
     let label: String
     let width: Int?
     let height: Int?
-    let playback: OpenClawChatPlaybackMode?
     let resolverReady: Bool
     let playbackAllowed: @MainActor @Sendable () -> Bool
     let load: @MainActor @Sendable (String) async throws -> OpenClawChatLoadedMedia?
@@ -30,23 +29,9 @@ struct ChatMediaVideoAttachment: View {
         Group {
             switch self.state {
             case .loading:
-                HStack(spacing: 8) {
-                    ProgressView()
-                    Text(String(localized: "Loading video…"))
-                        .font(OpenClawChatTypography.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(minHeight: self.reservedHeight)
-                .frame(maxWidth: .infinity)
+                self.waitingCard(String(localized: "Loading video…"))
             case .preparing:
-                HStack(spacing: 8) {
-                    ProgressView()
-                    Text(String(localized: "Preparing playback…"))
-                        .font(OpenClawChatTypography.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(minHeight: self.reservedHeight)
-                .frame(maxWidth: .infinity)
+                self.waitingCard(String(localized: "Preparing playback…"))
             case let .loaded(player):
                 self.playerCard(player)
             case .unavailable:
@@ -61,6 +46,17 @@ struct ChatMediaVideoAttachment: View {
                 player.cleanup()
             }
         }
+    }
+
+    private func waitingCard(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            ProgressView()
+            Text(message)
+                .font(OpenClawChatTypography.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .frame(minHeight: self.reservedHeight)
+        .frame(maxWidth: .infinity)
     }
 
     @ViewBuilder

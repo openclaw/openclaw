@@ -1,7 +1,8 @@
 import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
-import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
@@ -42,6 +43,11 @@ export async function sendReplyRestartRecoveryNotice(params: {
   deliver: (text: string) => Promise<boolean>;
 }): Promise<void> {
   try {
+    const currentAcpSession = await readAcpSessionEntryAsync({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+    });
     // Admission may have waited while reset or deletion changed the session.
     const entry: InternalSessionEntry | undefined = loadSessionStoreEntry({
       agentId: params.agentId,
@@ -53,11 +59,6 @@ export async function sendReplyRestartRecoveryNotice(params: {
     if (!entry || !recovery?.tombstone) {
       return;
     }
-    const currentAcpSession = readAcpSessionEntry({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-    });
     if (
       isParentOwnedBackgroundAcpSession(
         currentAcpSession?.entry
@@ -91,12 +92,7 @@ export async function sendReplyRestartRecoveryNotice(params: {
       return;
     }
     notices.entries.delete(key);
-    if (notices.entries.size >= MAX_RECOVERY_NOTICES) {
-      const oldestKey = notices.entries.keys().next().value;
-      if (oldestKey !== undefined) {
-        notices.entries.delete(oldestKey);
-      }
-    }
+    pruneMapToMaxSize(notices.entries, MAX_RECOVERY_NOTICES - 1);
     // Claim before awaiting delivery; ambiguous failures must not produce a notice storm.
     notices.entries.set(key, {
       agentId: params.agentId,

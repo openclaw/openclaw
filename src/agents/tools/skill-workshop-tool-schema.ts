@@ -75,7 +75,8 @@ export function buildSkillWorkshopToolSchema(proposalRevision = false) {
         Type.Integer({
           minimum: 1,
           maximum: 50,
-          description: "Maximum proposals to return for action=list. Defaults to 20.",
+          description:
+            "Proposals to return for Workshop action=list: maximum 50, default 20. Not accepted with target=personal.",
         }),
       ),
       description: Type.Optional(

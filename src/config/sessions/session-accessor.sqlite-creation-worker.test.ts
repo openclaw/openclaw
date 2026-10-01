@@ -1,8 +1,14 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { deserialize } from "node:v8";
+import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { prepareInternalSessionEffectsSession } from "../../agents/internal-session-effects.js";
 import { ensureSessionGroupCatalog } from "../../gateway/session-group-catalog.js";
 import { ensureSessionGroupRegistered, listSessionGroups } from "../../gateway/session-groups.js";
+import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
+import { acquireStateDatabaseSchemaLease } from "../../infra/gateway-state-owner.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   markPluginRegistryActive,
@@ -12,13 +18,21 @@ import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-re
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createSessionEntryWithTranscript } from "./session-accessor.entry-mutation.js";
+import {
+  createSessionEntryWithTranscript,
+  prepareSessionEntryMutationDatabases,
+} from "./session-accessor.entry-mutation.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
+  assertSessionEntryCreationPublication,
   projectSessionSharingEntry,
   retainPreparedSessionSharingFacts,
 } from "./session-accessor.sqlite-entry-cache.js";
@@ -28,7 +42,6 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readTranscriptStorageRows } from "./session-accessor.sqlite-read.js";
-import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
@@ -39,12 +52,37 @@ it("creates with prepared label facts, header and atomic owner without host data
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const key = "agent:main:creation-worker";
-    writeSessionEntry(database, "agent:main:sibling", {
-      sessionId: "sibling",
-      label: "taken",
-      updatedAt: 1,
-      skillsSnapshot: { prompt: "unrelated".repeat(1024), skills: [] },
+    using post = vi.spyOn(Worker.prototype, "postMessage");
+    const alias = state.path("agent-alias");
+    await fs.symlink(path.dirname(database.path), alias, "junction");
+    const storePath = path.join(alias, path.basename(database.path));
+    const cfg = { agents: { entries: { main: {} } }, session: { store: database.path } };
+    await state.writeConfig(cfg);
+    await using storagePreparation = prepareSessionEntryMutationDatabases(
+      [{ scope: { agentId: "main", storePath, sessionKey: key }, assertCurrent: () => {} }],
+      Promise.resolve(),
+    );
+    await storagePreparation.preparations[0];
+    const prepared = await prepareSessionMutationFacts({
+      cfg,
+      agentId: "main",
+      sessionKey: key,
+      allowMissing: true,
     });
+    let assertCreation: () => void = () => {
+      throw new Error("Creation has not bound its owner");
+    };
+    runOpenClawAgentWriteTransaction(
+      (db) => {
+        writeSessionEntry(db, "agent:main:sibling", {
+          sessionId: "sibling",
+          label: "taken",
+          updatedAt: 1,
+          skillsSnapshot: { prompt: "unrelated".repeat(1024), skills: [] },
+        });
+      },
+      { agentId: database.agentId, path: database.path },
+    );
     const env = { ...process.env };
     const originalStateDir = env.OPENCLAW_STATE_DIR;
     const order: string[] = [];
@@ -67,36 +105,82 @@ it("creates with prepared label facts, header and atomic owner without host data
     };
     try {
       const result = await createSessionEntryWithTranscript(
-        { agentId: "main", storePath: database.path, sessionKey: key, env },
+        { agentId: "main", storePath, sessionKey: key, env },
         async (snapshot) => {
           expect(snapshot.existingEntry).toBeUndefined();
-          expect(snapshot.isLabelInUse("taken")).toBe(true);
+          expect(snapshot.labelInUse).toBe(false);
           env.OPENCLAW_STATE_DIR = state.statePath("changed-during-preparation");
+          assertCreation();
           await Promise.resolve();
-          expect(snapshot.isLabelInUse("taken")).toBe(true);
-          return { ok: true, entry: { sessionId: "created", updatedAt: 2, category: "Created" } };
+          assertCreation();
+          expect(snapshot.labelInUse).toBe(false);
+          return {
+            ok: true,
+            entry: { sessionId: "created", updatedAt: 2, category: "Created", label: "available" },
+          };
         },
         {
+          label: "available",
+          bindCreation: (operation) => {
+            prepared.bindCreation(operation);
+            assertCreation = () =>
+              assertSessionEntryCreationPublication(operation, {
+                agentId: "main",
+                sessionKey: key,
+                paths: new Set([database.path]),
+              });
+            assertCreation();
+          },
+          commitGuard: () => {
+            if (!order.includes("committed")) {
+              expect(prepared.readCurrent(cfg).target).toBeNull();
+            }
+          },
           cwd: "/workspace",
           resolveOwnerAssignment: () => owner,
           onLifecycleCommitted: () => {
             order.push("committed");
           },
           afterCommitted: async (entry, source) => {
-            expect(order).toEqual(["header", "committed", "published"]);
+            expect(order).toEqual(["committed", "published"]);
             expect(source.env.OPENCLAW_STATE_DIR).toBe(originalStateDir);
             source.assertCurrent();
+            assertCreation();
             await ensureSessionGroupRegistered(entry.category!, source.env, source.assertCurrent);
             source.assertCurrent();
             order.push("registered");
           },
         },
       );
-      expect(result).toMatchObject({ ok: true, entry: { sessionId: "created" } });
+      expect(result).toMatchObject({
+        ok: true,
+        entry: { sessionId: "created", label: "available" },
+      });
+      const writes = post.mock.calls.flatMap(([request]) => {
+        if (
+          !isRecord(request) ||
+          request.type !== "execute" ||
+          !(request.input instanceof Uint8Array)
+        ) {
+          return [];
+        }
+        const command: unknown = deserialize(request.input);
+        return isRecord(command) &&
+          typeof command.type === "string" &&
+          command.type.startsWith("session.")
+          ? [command.type]
+          : [];
+      });
+      expect(writes).toEqual(["session.entries.replace"]);
+      expect(assertCreation).toThrow("Session creation publication owner is no longer current");
       expect(publications).toEqual([
-        undefined,
         expect.objectContaining({
-          entry: expect.objectContaining({ sessionId: "created", category: "Created" }),
+          entry: expect.objectContaining({
+            sessionId: "created",
+            category: "Created",
+            label: "available",
+            owner,
+          }),
           source: expect.objectContaining({
             identity: expect.any(String),
             revision: expect.any(Number),
@@ -114,11 +198,12 @@ it("creates with prepared label facts, header and atomic owner without host data
       expect(firstUse.ok).toBe(true);
       expect(sql.queries).toEqual([]);
     } finally {
+      prepared.release();
       sql.restore();
       stopFacts();
       stop();
     }
-    expect(order).toEqual(["header", "committed", "published", "registered"]);
+    expect(order).toEqual(["committed", "published", "registered"]);
     expect(readExactSessionEntryRow(database, key)?.entry).toMatchObject({
       sessionId: "created",
       owner,
@@ -128,6 +213,63 @@ it("creates with prepared label facts, header and atomic owner without host data
     expect(listSessionGroups().map(({ name }) => name)).toContain("Created");
   });
 });
+
+it.each(["replaced", "closed"] as const)(
+  "rejects a %s creation owner after asynchronous preparation",
+  async (kind) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const sessionKey = "agent:main:stale-creation";
+      const alias = state.path("agent-alias");
+      await fs.symlink(path.dirname(database.path), alias, "junction");
+      const storePath = path.join(alias, path.basename(database.path));
+      let assertCreation: () => void = () => {
+        throw new Error("Creation has not bound its owner");
+      };
+      let closing: Promise<unknown> | undefined;
+      const message =
+        kind === "closed"
+          ? "Session history database read was revoked"
+          : "SQLite database file identity changed before existing-only open";
+      try {
+        await expect(
+          createSessionEntryWithTranscript(
+            { agentId: "main", storePath, sessionKey },
+            async () => {
+              await Promise.resolve();
+              assertCreation();
+              if (kind === "closed") {
+                closing = closeOpenClawAgentDatabaseByPathAsync(storePath);
+              } else {
+                const replacement = state.path("replacement");
+                await fs.mkdir(replacement);
+                await fs.writeFile(path.join(replacement, path.basename(database.path)), "");
+                await fs.rm(alias, { recursive: true });
+                await fs.symlink(replacement, alias, "junction");
+              }
+              expect(assertCreation).toThrow(message);
+              return { ok: true, entry: { sessionId: "must-not-publish", updatedAt: 1 } };
+            },
+            {
+              bindCreation: (operation) => {
+                assertCreation = () =>
+                  assertSessionEntryCreationPublication(operation, {
+                    agentId: "main",
+                    sessionKey,
+                    paths: new Set([storePath, database.path]),
+                  });
+                assertCreation();
+              },
+            },
+          ),
+        ).rejects.toThrow(message);
+        expect(assertCreation).toThrow("Session creation publication owner is no longer current");
+      } finally {
+        await closing;
+      }
+    });
+  },
+);
 
 it("does not initialize a transcript or invoke follow-up when creation rejects", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -163,10 +305,15 @@ it.each(["incognito", "maintenance"] as const)(
             : "agent:main:native-maintenance",
       };
       const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
-      const maintenance =
-        kind === "maintenance"
-          ? createOpenClawDatabaseMaintenanceScope(() => undefined)
-          : undefined;
+      const schemaLease =
+        kind === "maintenance" ? acquireStateDatabaseSchemaLease(database.path) : undefined;
+      const maintenance = schemaLease
+        ? createOpenClawDatabaseMaintenanceScope({
+            schemaMaintenance: true,
+            assertOwnerCurrent: () => schemaLease.assertCurrent(),
+            assertDatabaseAccess: schemaLease.assertDatabaseAccess,
+          })
+        : undefined;
       let followed = false;
       const create = () =>
         createSessionEntryWithTranscript(
@@ -188,37 +335,55 @@ it.each(["incognito", "maintenance"] as const)(
         expect((await (maintenance ? maintenance.run(create) : create())).ok).toBe(true);
         expect(followed).toBe(true);
       } finally {
-        await maintenance?.close();
+        try {
+          await maintenance?.close();
+        } finally {
+          schemaLease?.release();
+        }
       }
     });
   },
 );
 
-it("creates hidden internal-effects sessions without admitting their keys to canonical replacement", async () => {
+it("retires the old transcript when native alias creation selects a new session", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const target = await prepareInternalSessionEffectsSession({
-      agentId: "main",
-      storePath: database.path,
-      runId: "worker-create",
-    });
-    expect(readExactSessionEntryRow(database, target.sessionKey)?.entry.sessionId).toBe(
-      target.sessionId,
+    const sessionKey = "agent:main:signal:group:NativeReplacement";
+    const alias = sessionKey.toLowerCase();
+    const oldSessionId = "native-replaced-session";
+    writeSessionEntry(database, alias, { sessionId: oldSessionId, updatedAt: 1 });
+    ensureTranscriptHeader(
+      database,
+      { agentId: "main", sessionKey: alias, sessionId: oldSessionId },
+      "/old",
     );
-    expect(readTranscriptStorageRows(database, target.sessionId)).toHaveLength(1);
-    await expect(
-      applySessionEntryCanonicalReplacements({
-        agentId: "main",
-        storePath: database.path,
-        sessionKeys: [target.sessionKey],
-        update: ([row]) => ({
-          result: undefined,
-          replacements: [
-            { sessionKey: target.sessionKey, previousSessionKeys: [], entry: row!.entry },
-          ],
-        }),
-      }),
-    ).rejects.toThrow("cannot target internal effects rows");
+    const lease = acquireStateDatabaseSchemaLease(database.path);
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: () => lease.assertCurrent(),
+      assertDatabaseAccess: lease.assertDatabaseAccess,
+    });
+    try {
+      const created = await maintenance.run(() =>
+        createSessionEntryWithTranscript(
+          { agentId: "main", storePath: database.path, sessionKey },
+          () => ({ ok: true, entry: { sessionId: "native-new-session", updatedAt: 2 } }),
+        ),
+      );
+      expect(created).toMatchObject({ ok: true, sessionFile: sessionKey });
+      expect(readExactSessionEntryRow(database, alias)).toBeUndefined();
+      expect(readExactSessionEntryRow(database, sessionKey)?.entry.sessionId).toBe(
+        "native-new-session",
+      );
+      expect(readTranscriptStorageRows(database, oldSessionId)).toEqual([]);
+      expect(readTranscriptStorageRows(database, "native-new-session")).toHaveLength(1);
+    } finally {
+      try {
+        await maintenance.close();
+      } finally {
+        lease.release();
+      }
+    }
   });
 });
 
@@ -256,6 +421,7 @@ it("publishes the logical creator identity while retaining the shared database's
 it("adopts admitted Signal history and collaboration without host SQL, preserving a case-distinct Matrix sibling", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
+    using post = vi.spyOn(Worker.prototype, "postMessage");
     const sessionKey = "agent:main:signal:group:AbC";
     const alias = sessionKey.toLowerCase();
     const scope = { agentId: "main", storePath: database.path, sessionKey: alias };
@@ -377,6 +543,19 @@ it("adopts admitted Signal history and collaboration without host SQL, preservin
       ).ok,
     ).toBe(true);
     expect(readExactSessionEntryRow(database, sibling)?.entry.sessionId).toBe("matrix-sibling");
+    const commands = post.mock.calls.flatMap(([request]) => {
+      if (
+        !isRecord(request) ||
+        request.type !== "execute" ||
+        !(request.input instanceof Uint8Array)
+      ) {
+        return [];
+      }
+      const command: unknown = deserialize(request.input);
+      return isRecord(command) ? [command.type] : [];
+    });
+    expect(commands).toContain("session.entries.replace");
+    expect(commands).not.toContain("session.archives.preparePublication");
   });
 });
 
@@ -387,13 +566,13 @@ it("keeps native alias deletion rollback and creation notifications with the ori
     const alias = sessionKey.toLowerCase();
     const original = { sessionId: "native-alias", updatedAt: 1, agentHarnessId: "alias-owner" };
     const repositories = createSessionRepositoryWorkspaceStore();
-    const workspace = repositories.create({
+    const workspace = await repositories.create({
       agentId: "main",
       sessionKey: alias,
       url: "https://github.com/example/alias.git",
       assertCurrent: () => {},
     });
-    const siblingWorkspace = repositories.create({
+    const siblingWorkspace = await repositories.create({
       agentId: "other",
       sessionKey: alias,
       url: "https://github.com/example/sibling.git",
@@ -468,7 +647,7 @@ it("keeps native alias deletion rollback and creation notifications with the ori
     try {
       await expect(create()).rejects.toThrow("native alias failure");
       expect(order).toEqual(["prepare", "native", "rollback"]);
-      expect(repositories.get(workspace.workspaceId)).toEqual(workspace);
+      expect(await repositories.get(workspace.workspaceId)).toEqual(workspace);
       expect(readExactSessionEntryRow(database, alias)?.entry).toMatchObject(original);
       expect(readExactSessionEntryRow(database, sessionKey)).toBeUndefined();
       order.length = 0;
@@ -477,8 +656,8 @@ it("keeps native alias deletion rollback and creation notifications with the ori
       expect(order).toEqual(["prepare", "native", "committed", "published", "followup", "release"]);
       expect(readExactSessionEntryRow(database, alias)).toBeUndefined();
       expect(readExactSessionEntryRow(database, sessionKey)?.entry).toMatchObject(original);
-      expect(repositories.get(workspace.workspaceId)).toBeUndefined();
-      expect(repositories.get(siblingWorkspace.workspaceId)).toEqual(siblingWorkspace);
+      expect(await repositories.get(workspace.workspaceId)).toBeUndefined();
+      expect(await repositories.get(siblingWorkspace.workspaceId)).toEqual(siblingWorkspace);
     } finally {
       stop();
       markPluginRegistryRetired(registry);
@@ -537,6 +716,11 @@ it.each([false, true])(
   async (unknown) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const key = "agent:main:signal:group:Cleanup";
+      writeSessionEntry(database, key.toLowerCase(), {
+        sessionId: "alias-cleanup-header",
+        updatedAt: 1,
+      });
       const replacements = await import("./session-accessor.sqlite-replacement-worker.js");
       const { SqliteWorkerError } = await import("../../infra/sqlite-worker-contract.js");
       const failure = new AggregateError([
@@ -559,7 +743,7 @@ it.each([false, true])(
       const committed = vi.fn();
       try {
         const work = createSessionEntryWithTranscript(
-          { agentId: "main", storePath: database.path, sessionKey: "agent:main:cleanup-header" },
+          { agentId: "main", storePath: database.path, sessionKey: key },
           create,
           { onLifecycleCommitted: committed },
         );
@@ -572,10 +756,70 @@ it.each([false, true])(
         expect(interception).toHaveBeenCalledOnce();
         expect(committed).not.toHaveBeenCalled();
         expect(readTranscriptStorageRows(database, "cleanup-header")).toHaveLength(1);
-        expect(readExactSessionEntryRow(database, "agent:main:cleanup-header")).toBeUndefined();
+        expect(readExactSessionEntryRow(database, key)).toBeUndefined();
       } finally {
         interception.mockRestore();
       }
     });
   },
 );
+
+it("rolls back a failed fresh entry and recovers a previously committed standalone header", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const sessionKey = "agent:main:failed-create";
+    const committed = vi.fn();
+    const published = vi.fn();
+    const stop = sessionChanges.subscribe(published);
+    try {
+      await expect(
+        createSessionEntryWithTranscript(
+          { agentId: "main", storePath: database.path, sessionKey },
+          () => ({
+            ok: true,
+            entry: {
+              sessionId: "failed-create",
+              updatedAt: 1,
+              parentSessionKey: "AGENT:main:parent",
+            },
+          }),
+          {
+            onLifecycleCommitted: committed,
+            afterCommitted: async () => {
+              committed();
+            },
+          },
+        ),
+      ).rejects.toThrow("non-canonical session key");
+      expect(committed).not.toHaveBeenCalled();
+      expect(published).not.toHaveBeenCalled();
+      expect(readTranscriptStorageRows(database, "failed-create")).toEqual([]);
+      expect(
+        database.db
+          .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
+          .get(sessionKey),
+      ).toBeUndefined();
+    } finally {
+      stop();
+    }
+    ensureTranscriptHeader(
+      database,
+      { agentId: "main", sessionKey, sessionId: "failed-create" },
+      "/old-process",
+    );
+    const header = readTranscriptStorageRows(database, "failed-create");
+    expect(header).toHaveLength(1);
+    await closeOpenClawAgentDatabaseByPathAsync(database.path);
+    expect(
+      (
+        await createSessionEntryWithTranscript(
+          { agentId: "main", storePath: database.path, sessionKey },
+          () => ({ ok: true, entry: { sessionId: "failed-create", updatedAt: 2 } }),
+        )
+      ).ok,
+    ).toBe(true);
+    const reopened = openOpenClawAgentDatabase({ agentId: "main", path: database.path });
+    expect(readTranscriptStorageRows(reopened, "failed-create")).toEqual(header);
+    expect(readExactSessionEntryRow(reopened, sessionKey)?.entry.sessionId).toBe("failed-create");
+  });
+});

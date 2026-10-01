@@ -205,7 +205,7 @@ OpenClaw **pins the automatically chosen auth profile per session** to keep prov
 Context compaction does not change the selected auth profile. A healthy profile remains pinned
 across compaction; auth failures and unavailable profiles still use the normal fallback order.
 
-Manual selection via `/model …@<profileId> -s` sets a **user override**. A valid user pin survives `/new`, `/reset`, session rollover, compaction, and cooldown windows. It remains the first preference when eligible. While that exact profile is in cooldown or disabled, OpenClaw tries the next eligible same-provider profile without replacing the stored pin. OpenClaw clears the pin when the profile disappears, no longer matches the selected provider, or the user selects another explicit profile. `/model default -s` clears the model override while retaining a compatible auth pin and clearing an incompatible one.
+Manual selection via `/model …@<profileId> -s` sets a **user override**. A valid user pin survives `/new`, `/reset`, session rollover, compaction, and cooldown windows. It remains the first preference when eligible. While that exact profile is in cooldown or disabled, OpenClaw tries the next eligible same-provider profile without replacing the stored pin. Explicitly removing a saved credential clears its affected agent model and conversation account selections while retaining the selected models. Other accounts, including independent credentials owned by another agent, keep their selections. A temporarily missing or expired credential does not clear a user pin; refresh can restore access. If an older configuration still names a deleted account, choose an available account in Models. OpenClaw also clears an incompatible pin when the selected provider changes, or replaces it when the user selects another account. `/model default -s` clears the model override while retaining a compatible auth pin and clearing an incompatible one.
 
 <Note>
 Auto-pinned and user-pinned auth profiles are both retry preferences. OpenClaw tries the selected profile first while it is eligible. It may then rotate to another same-provider profile on auth failures, rate limits, billing limits, or timeouts. A user pin stays persisted during that temporary rotation. New runs prefer it again after its cooldown expires, without changing the selected model or runtime. This auth rotation does not loosen model selection: an explicit user provider/model selection remains strict and reports failure after its same-provider auth profiles are exhausted.
@@ -401,6 +401,10 @@ does not establish that the user violated a policy. OpenClaw preserves available
 provider findings and holds queued messages instead of retrying the conversation.
 Already-accepted results can still finish recording.
 
+Older saved errors that retain the policy code also display a safety precaution,
+even without the newer refusal diagnostics. Displaying that historical error does
+not create review findings or authorize continuation.
+
 In the Control UI, choose **Review findings**. When a supported Codex or ChatGPT
 Responses runtime supplies a continuation, the dialog shows its exact message
 before offering **Acknowledge findings and continue**. Confirmation applies only
@@ -408,6 +412,9 @@ to the displayed session and findings. It preserves the runtime, model, sandbox,
 and approval settings; a changed review requires another decision. The precaution
 clears only after the provider accepts the continuation. Previously queued
 messages remain held for individual review and retry.
+
+Continuation sends the acknowledged message exactly once as the next user turn.
+Runtime context stays separate, and existing transcript messages remain unchanged.
 
 Ordinary API-key Responses and incognito conversations do not offer continuation.
 Missing or incomplete findings also cannot authorize one. A stopped conversation

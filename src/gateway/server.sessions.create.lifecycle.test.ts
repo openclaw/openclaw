@@ -53,36 +53,6 @@ function describeSessionStoreForensics(storePath: string): string {
   return JSON.stringify({ storeDir, files, resolvedTargetPath: target.path, rows });
 }
 
-test("sessions.create assigns and registers its requested group", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const broadcastToConnIds = vi.fn();
-
-  const created = await directSessionReq<{ key: string }>(
-    "sessions.create",
-    {
-      agentId: "main",
-      category: "  Client work  ",
-    },
-    {
-      context: {
-        broadcastToConnIds,
-        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
-      },
-    },
-  );
-
-  expect(created.ok).toBe(true);
-  const key = requireNonEmptyString(created.payload?.key, "grouped session key");
-  expect(loadSessionEntry({ sessionKey: key, storePath })?.category).toBe("Client work");
-  expect(listSessionGroups().map((group) => group.name)).toContain("Client work");
-  expect(broadcastToConnIds).toHaveBeenCalledWith(
-    "sessions.changed",
-    expect.objectContaining({ reason: "groups" }),
-    new Set(["conn-1"]),
-    { dropIfSlow: true },
-  );
-});
-
 test("sessions.create registers a category only after the session commit succeeds", async () => {
   await createSessionStoreDir();
   const category = "Deferred category";
@@ -114,7 +84,11 @@ test("sessions.create registers a category only after the session commit succeed
   const broadcastToConnIds = vi.fn();
   const created = await directSessionReq(
     "sessions.create",
-    { agentId: "main", category, key: "agent:main:dashboard:successful-category-create" },
+    {
+      agentId: "main",
+      category: `  ${category}  `,
+      key: "agent:main:dashboard:successful-category-create",
+    },
     {
       context: {
         broadcastToConnIds,
@@ -520,7 +494,7 @@ test("sessions.create rejects a Fast Mode change completed by draining work befo
   const initialEntry = sessionStoreEntry("sess-fast-drain", { fastMode: false });
   await writeSessionStore({ entries: { main: initialEntry } });
   const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
-  const claim = placements.claimTurn({
+  const claim = await placements.claimTurn({
     agentId: "main",
     sessionKey: key,
     sessionId: initialEntry.sessionId,
@@ -566,7 +540,7 @@ test("sessions.create rejects a Fast Mode change completed by draining work befo
     releaseWriter.resolve();
     await heldWriter;
     expect(await persisted).toMatchObject({ status: "current", entry: { fastMode: true } });
-    placements.releaseTurn(claim);
+    await placements.releaseTurn(claim);
     admission.release();
     expect(await reset).toMatchObject({
       ok: false,
@@ -584,7 +558,7 @@ test("sessions.create rejects a Fast Mode change completed by draining work befo
     releaseWriter.resolve();
     await heldWriter;
     if (placements.validateTurnClaim(claim)) {
-      placements.releaseTurn(claim);
+      await placements.releaseTurn(claim);
     }
     admission.release();
     await reset;

@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { icons } from "../../../components/icons.ts";
+import { renderKbd } from "../../../components/kbd.ts";
 import {
   formatRawProviderLabel,
   providerDisplayLabel,
@@ -11,8 +12,17 @@ import { t } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { formatContextTokenCapacity } from "../../../lib/format.ts";
 import type { ModelRuntimeEntry } from "../../../lib/model-runtime-choice.ts";
+import { handleModelOptionMouseEnter } from "./chat-model-picker-search.ts";
 
 registerModelControlsEnglish();
+
+function renderModelShortcut() {
+  return renderKbd("", {
+    ariaHidden: true,
+    hidden: true,
+    ref: (element) => element?.setAttribute("data-chat-model-shortcut", "true"),
+  });
+}
 
 export type ChatModelPickerOption = {
   agentRuntimeId?: string;
@@ -115,7 +125,6 @@ export function renderChatModelPickerOption(params: {
   selectedModelValue: string;
   selectedAgentRuntime?: string;
   sessionModelPinned: boolean;
-  onHighlight: (row: HTMLButtonElement) => void;
   onSelect: (entry: ChatModelPickerOption, event: MouseEvent) => void;
   onModelSetup?: () => void;
 }) {
@@ -184,8 +193,7 @@ export function renderChatModelPickerOption(params: {
     type="button"
     ?disabled=${params.disabled || (params.entry.disabled && !onModelSetup && !resetsPin)}
     data-chat-model-setup=${onModelSetup ? "true" : nothing}
-    @mouseenter=${(event: MouseEvent) =>
-      params.onHighlight(event.currentTarget as HTMLButtonElement)}
+    @mouseenter=${handleModelOptionMouseEnter}
     @click=${(event: MouseEvent) => {
       // A sign-in-gated model must not dead-end: the row routes to Model
       // Setup instead of silently ignoring the click on a disabled button.
@@ -241,7 +249,7 @@ export function renderChatModelPickerOption(params: {
           ? html`<span class="chat-controls__inline-select-check" aria-hidden="true"
               >${icons.check}</span
             >`
-          : html`<kbd data-chat-model-shortcut="true" aria-hidden="true" hidden></kbd>`
+          : renderModelShortcut()
       }
     </span>
   </button>`;
@@ -256,7 +264,6 @@ export function renderChatModelPickerTargetOption(params: {
   groupId: string;
   groupLabel: string;
   index: number;
-  onHighlight: (row: HTMLButtonElement) => void;
   onSelect: (groupId: string, value: string, event: MouseEvent) => void;
 }) {
   return html`
@@ -271,8 +278,7 @@ export function renderChatModelPickerTargetOption(params: {
       aria-selected="false"
       type="button"
       ?disabled=${params.disabled}
-      @mouseenter=${(event: MouseEvent) =>
-        params.onHighlight(event.currentTarget as HTMLButtonElement)}
+      @mouseenter=${handleModelOptionMouseEnter}
       @click=${(event: MouseEvent) => params.onSelect(params.groupId, params.entry.value, event)}
     >
       <span
@@ -285,9 +291,7 @@ export function renderChatModelPickerTargetOption(params: {
           <span class="chat-controls__model-option-name">${params.entry.label}</span>
         </span>
       </span>
-      <span class="chat-controls__model-option-action">
-        <kbd data-chat-model-shortcut="true" aria-hidden="true" hidden></kbd>
-      </span>
+      <span class="chat-controls__model-option-action"> ${renderModelShortcut()} </span>
     </button>
   `;
 }

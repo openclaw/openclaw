@@ -1,5 +1,5 @@
-import "../../styles/config.css";
 import { consume } from "@lit/context";
+import "../../styles/config.css";
 import { initialState, Task, TaskStatus } from "@lit/task";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
@@ -72,9 +72,9 @@ import {
 } from "./config-sections.ts";
 import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
-import { renderMcp } from "./mcp.ts";
-import { renderMeetingCapture } from "./meeting-capture.ts";
-import { renderMemoryPage } from "./memory-page.ts";
+import { renderMcp, renderMcpIntro } from "./mcp.ts";
+import "./meeting-capture.ts";
+import "./memory-page.ts";
 import { narrowMemorySchema } from "./memory-schema.ts";
 import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
 import { renderSecurity, type SecurityOverview } from "./security.ts";
@@ -82,8 +82,8 @@ import {
   buildSessionObserverTogglePatch,
   buildSessionObserverUtilityModelPatch,
 } from "./session-observer-settings.ts";
-import { renderSessionStorage } from "./session-storage.ts";
-import { renderTalkPage } from "./talk-page.ts";
+import "./session-storage.ts";
+import "./talk-page.ts";
 import { renderUpdatesPage } from "./updates-page.ts";
 import {
   createConfigViewState,
@@ -96,7 +96,6 @@ registerSettingsEnglish();
 
 export type { ConfigPageId } from "./config-sections.ts";
 
-type ConfigFormMode = "form" | "raw";
 type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
 type SessionObserverModelsResult = {
   gateway: ApplicationContext["gateway"];
@@ -163,7 +162,7 @@ function renderConfigPageSubtitle(pageId: ConfigPageId) {
       return html`${t("configView.appearance.intro")}
       ${renderLearnMoreLink("https://docs.openclaw.ai/web/control-ui")}`;
     case "mcp":
-      return html`${t("mcpPage.intro")} ${renderLearnMoreLink("https://docs.openclaw.ai/tools/mcp")}`;
+      return renderMcpIntro();
     case "security":
       return html`${t("quickSettings.security.intro")}
       ${renderLearnMoreLink("https://docs.openclaw.ai/gateway/security")}`;
@@ -250,7 +249,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     camera: createMediaDeviceState(),
   };
   private cameraSelectionRequest = 0;
-  @state() private formModes: Partial<Record<ConfigPageId, ConfigFormMode>> = {};
+  @state() private formModes: Partial<Record<ConfigPageId, ConfigProps["formMode"]>> = {};
   @state() private selections: Partial<Record<ConfigPageId, ConfigSelection>> = {};
   @state() private customThemeImport = themeImport.INITIAL_CUSTOM_THEME_IMPORT_STATE;
   private readonly customThemeImportOwner = new themeImport.CustomThemeImportOwner((next) => {
@@ -401,38 +400,18 @@ export class ConfigPage extends OpenClawLightDomElement {
     onPageActivation: () => this.syncSystemInfoPolling(),
   });
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
+    .watchStore(
       () => this.context?.runtimeConfig,
-      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
       (runtimeConfig) => this.synchronizeRuntimeConfig(runtimeConfig),
     )
-    .watch(
-      () => this.context?.overlays,
-      (overlays, notify) => overlays.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.config,
-      (config, notify) => config.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.settingsAgentSelection,
-      (selection, notify) => selection.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.nativeDeviceSettings ?? undefined,
-      (nativeDeviceSettings, notify) => nativeDeviceSettings.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.nativeNotifications ?? undefined,
-      (nativeNotifications, notify) => nativeNotifications.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.webPush,
-      (webPush, notify) => webPush.subscribe(notify),
-    )
-    .watch(
+    .watchStore(() => this.context?.overlays)
+    .watchStore(() => this.context?.config)
+    .watchStore(() => this.context?.settingsAgentSelection)
+    .watchStore(() => this.context?.nativeDeviceSettings ?? undefined)
+    .watchStore(() => this.context?.nativeNotifications ?? undefined)
+    .watchStore(() => this.context?.webPush)
+    .watchStore(
       () => this.context?.theme,
-      (theme, notify) => theme.subscribe(notify),
       () => {
         this.settings = this.customThemeImportOwner.adoptSettings(
           this.settings,
@@ -564,12 +543,6 @@ export class ConfigPage extends OpenClawLightDomElement {
     this.routeTargetScroll.setTarget(targetBlockId);
   }
 
-  private isSystemInfoVisible(): boolean {
-    // Appearance still uses system.info to show the Session Observer's server-resolved utility
-    // model. Gateway host polling itself belongs exclusively to the Connection page.
-    return this.pageId === "appearance";
-  }
-
   private syncUpdateCountdownPolling() {
     const campaign = this.context?.overlays.snapshot.updateSchedule?.campaign;
     if (
@@ -689,7 +662,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       !gateway ||
       !this.isConnected ||
       document.visibilityState === "hidden" ||
-      !this.isSystemInfoVisible() ||
+      this.pageId !== "appearance" ||
       this.context.gateway !== gatewaySource ||
       gateway.phase !== "connected" ||
       !supportsSystemInfo(gateway.hello) ||
@@ -703,10 +676,6 @@ export class ConfigPage extends OpenClawLightDomElement {
   private resetSessionObserverModels(unavailable = false) {
     this.sessionObserverModels = [];
     this.sessionObserverModelsUnavailable = unavailable;
-  }
-
-  private setFormMode(mode: ConfigFormMode) {
-    this.formModes = { ...this.formModes, [this.pageId]: mode };
   }
 
   private setActiveSection(section: string | null) {
@@ -807,38 +776,25 @@ export class ConfigPage extends OpenClawLightDomElement {
     this.context.theme.refresh();
   }
 
-  private setTheme(
-    theme: ThemeName,
-    context?: Parameters<typeof startThemeTransition>[0]["context"],
-  ) {
+  private setTheme(theme: ThemeName) {
     const preference = this.currentSyncedPref("theme");
     const reset = preference.overridden && theme === preference.resetValue;
     this.customThemeImportOwner.recordActivation(reset ? null : theme);
     startThemeTransition({
       currentTheme: resolveTheme(this.settings.theme, this.settings.themeMode),
       nextTheme: resolveTheme(theme, this.settings.themeMode),
-      context,
       applyTheme: () =>
         reset ? this.resetSyncedAppearancePref("theme") : this.applySettings({}, theme),
     });
   }
 
-  private setThemeMode(
-    mode: ThemeMode,
-    context?: Parameters<typeof startThemeTransition>[0]["context"],
-  ) {
+  private setThemeMode(mode: ThemeMode) {
     const preference = this.currentSyncedPref("themeMode");
     if (preference.overridden && mode === preference.resetValue) {
       this.resetSyncedAppearancePref("themeMode");
     } else {
-      this.context.theme.setMode(mode, context?.element);
+      this.context.theme.setMode(mode);
     }
-  }
-
-  private selectMicrophone(deviceId: string) {
-    this.applySettings({
-      realtimeTalkInputDeviceId: deviceId.trim() || undefined,
-    });
   }
 
   private async selectCamera(deviceId: string) {
@@ -971,14 +927,15 @@ export class ConfigPage extends OpenClawLightDomElement {
       ),
       showModeToggle: this.pageId === "advanced",
       formValue: configState.configForm,
-      originalValue: configState.configFormOriginal,
       activeSection,
       activeSubsection,
       onRawChange: (next) => {
         this.customThemeImportOwner.retireForConfigMutation(t("common.unsavedChanges"));
         runtimeConfig.setRaw(next);
       },
-      onFormModeChange: (mode) => this.setFormMode(mode),
+      onFormModeChange: (mode) => {
+        this.formModes = { ...this.formModes, [this.pageId]: mode };
+      },
       onViewStateChange: () => this.requestUpdate(),
       onFormPatch: (path, value) => {
         this.customThemeImportOwner.retireForConfigMutation(t("common.unsavedChanges"));
@@ -1020,8 +977,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       onLocaleChange: (locale) => this.setLocale(locale),
       themeCatalog: this.pageId === "appearance" ? this.context.theme.catalog : undefined,
       onRetryThemeCatalog: () => this.context.theme.retryCatalog?.(),
-      setTheme: (theme, transitionContext) => this.setTheme(theme, transitionContext),
-      setThemeMode: (mode, transitionContext) => this.setThemeMode(mode, transitionContext),
+      setTheme: (theme) => this.setTheme(theme),
+      setThemeMode: (mode) => this.setThemeMode(mode),
       setAccent: (accent) =>
         accent === undefined
           ? this.resetSyncedAppearancePref("accent")
@@ -1059,6 +1016,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       chatShowTaskProgress:
         this.settings.chatShowTaskProgress ?? UI_APPEARANCE_DEFAULTS.chatShowTaskProgress,
       setChatShowTaskProgress: (enabled) => this.applySettings({ chatShowTaskProgress: enabled }),
+      openLinksExternally: this.settings.openLinksExternally === true,
+      setOpenLinksExternally: (enabled) => this.applySettings({ openLinksExternally: enabled }),
       chatCollapseTaskProgress: this.settings.chatCollapseTaskProgress === true,
       setChatCollapseTaskProgress: (enabled) =>
         this.applySettings({ chatCollapseTaskProgress: enabled }),
@@ -1131,7 +1090,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       composerHoldToRecord: this.settings.composerHoldToRecord !== false,
       setComposerHoldToRecord: (enabled) => this.applySettings({ composerHoldToRecord: enabled }),
       onMicrophoneRefresh: () => void this.refreshMediaDevices("microphone", true),
-      onMicrophoneSelect: (deviceId) => this.selectMicrophone(deviceId),
+      onMicrophoneSelect: (deviceId) =>
+        this.applySettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined }),
       camera: {
         ...this.mediaDevices.camera,
         selectedDeviceId: this.settings.realtimeTalkVideoDeviceId ?? "",
@@ -1145,23 +1105,23 @@ export class ConfigPage extends OpenClawLightDomElement {
       showSectionDocs: this.pageId !== "communications",
       renderSection:
         this.pageId === "communications" && activeSection === "transcripts"
-          ? (editor) =>
-              renderMeetingCapture({
-                mutationDisabled: this.isCuratedConfigMutationDisabled(),
-                advancedExpanded:
-                  this.routeData?.advanced === true ||
-                  this.routeData?.targetBlockId === "config-section-transcripts",
-                editor,
-              })
+          ? (editor) => html`<openclaw-meeting-capture-settings
+              .mutationDisabled=${this.isCuratedConfigMutationDisabled()}
+              .advancedExpanded=${
+                this.routeData?.advanced === true ||
+                this.routeData?.targetBlockId === "config-section-transcripts"
+              }
+              .editor=${editor}
+            ></openclaw-meeting-capture-settings>`
           : this.pageId === "ai-agents" && activeSection === "session"
-            ? (editor) =>
-                renderSessionStorage({
-                  mutationDisabled: this.isCuratedConfigMutationDisabled(),
-                  advancedExpanded:
-                    this.routeData?.advanced === true ||
-                    this.routeData?.targetBlockId === "config-section-session",
-                  editor,
-                })
+            ? (editor) => html`<openclaw-session-storage-settings
+                .mutationDisabled=${this.isCuratedConfigMutationDisabled()}
+                .advancedExpanded=${
+                  this.routeData?.advanced === true ||
+                  this.routeData?.targetBlockId === "config-section-session"
+                }
+                .editor=${editor}
+              ></openclaw-session-storage-settings>`
             : undefined,
       sectionPrelude:
         activeSection === "browser" && browserPanelAvailable && !hasNativeBrowserBridge()
@@ -1188,53 +1148,40 @@ export class ConfigPage extends OpenClawLightDomElement {
       onWebPushSetDevicePreferences: (preferences) =>
         void this.context.webPush.run({ kind: "set", scope: "device", preferences }),
     };
+    const renderSectionEditor = (section: string, label: string, schema = props.schema) =>
+      renderConfig({
+        ...props,
+        schema,
+        activeSection: section,
+        activeSubsection: null,
+        showModeToggle: false,
+        embeddedEditor: true,
+        navRootLabel: label,
+      });
     if (this.pageId === "mcp") {
       return renderMcp({
         configObject,
         pluginsHref: pathForRoute("plugins", this.context.basePath),
-        editor: renderConfig({
-          ...props,
-          activeSection: "mcp",
-          activeSubsection: null,
-          showModeToggle: false,
-          embeddedEditor: true,
-          navRootLabel: "MCP",
-        }),
+        editor: renderSectionEditor("mcp", "MCP"),
       });
     }
     if (this.pageId === "memory") {
-      return renderMemoryPage({
-        configObject,
-        mutationDisabled: this.isCuratedConfigMutationDisabled(),
-        pluginsHref: pathForRoute("plugins", this.context.basePath),
-        memoryImportHref: pathForRoute("memory-import", this.context.basePath),
-        routeData: this.routeData,
-        buildEditor: (keys) =>
-          renderConfig({
-            ...props,
-            schema: narrowMemorySchema(props.schema, keys),
-            activeSection: "memory",
-            activeSubsection: null,
-            showModeToggle: false,
-            embeddedEditor: true,
-            navRootLabel: t("tabs.memory"),
-          }),
-      });
+      return html`<openclaw-memory-settings
+        .configObject=${configObject}
+        .mutationDisabled=${this.isCuratedConfigMutationDisabled()}
+        .pluginsHref=${pathForRoute("plugins", this.context.basePath)}
+        .memoryImportHref=${pathForRoute("memory-import", this.context.basePath)}
+        .routeData=${this.routeData}
+        .buildEditor=${(keys: readonly string[]) =>
+          renderSectionEditor("memory", t("tabs.memory"), narrowMemorySchema(props.schema, keys))}
+      ></openclaw-memory-settings>`;
     }
     if (this.pageId === "talk") {
-      return renderTalkPage({
-        configObject,
-        mutationDisabled: this.isCuratedConfigMutationDisabled(),
-        buildEditor: () =>
-          renderConfig({
-            ...props,
-            activeSection: "talk",
-            activeSubsection: null,
-            showModeToggle: false,
-            embeddedEditor: true,
-            navRootLabel: t("tabs.talk"),
-          }),
-      });
+      return html`<openclaw-talk-settings
+        .configObject=${configObject}
+        .mutationDisabled=${this.isCuratedConfigMutationDisabled()}
+        .buildEditor=${() => renderSectionEditor("talk", t("tabs.talk"))}
+      ></openclaw-talk-settings>`;
     }
     if (this.pageId === "security") {
       const runtimeState = runtimeConfig.state;

@@ -3,11 +3,16 @@ import os from "node:os";
 import path from "node:path";
 import type { WorktreeGitPolicy } from "../agents/worktrees/checkout-git-config.js";
 import { splitNullBuffer } from "../agents/worktrees/git-path-inventory.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import { retryableGitNetworkOperation, withGitNetworkRetry } from "../infra/git-network-retry.js";
 import { runCommandBuffered } from "../process/exec.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { githubPublicationUnsafeConfigArgs } from "./github-publication-base.js";
-import { isGitHubPublicationWorkflowPath } from "./github-publication-workflows.js";
+import {
+  hasUnapprovedGitHubPublicationWorkflowChanges,
+  isGitHubPublicationWorkflowPath,
+} from "./github-publication-workflows.js";
 
 type GitCommandOptions = {
   cwd?: string;
@@ -17,6 +22,19 @@ type GitCommandOptions = {
   beforeRun?: () => void;
 };
 type GitCommandResult = { code: number | null; stdout: Buffer };
+
+export function githubPublicationApiArgs(endpoint: string, method = "GET"): string[] {
+  return [
+    "gh",
+    "api",
+    "--hostname",
+    "github.com",
+    "--method",
+    method,
+    endpoint,
+    ...(method === "GET" ? [] : ["--input", "-"]),
+  ];
+}
 
 export async function runPublicationCommand(argv: string[], options: GitCommandOptions = {}) {
   return await withGitNetworkRetry(
@@ -88,29 +106,61 @@ const TREE_LISTING_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 export async function hasGitHubPublicationWorkflowChanges(params: {
   cwd: string;
   comparisonCommit: string;
+  ancestryCommit: string;
+  targetCommit: string;
   workspaceTree: string;
   run: typeof runPublicationCommand;
 }): Promise<boolean> {
-  const changed = await params.run(
-    [
-      "git",
-      "diff-tree",
-      "--no-commit-id",
-      "--name-only",
-      "-r",
-      "-z",
-      "--no-renames",
-      params.comparisonCommit,
-      params.workspaceTree,
-      "--",
-      ".github/workflows",
-    ],
-    { cwd: params.cwd, maxOutputBytes: TREE_LISTING_MAX_OUTPUT_BYTES },
-  );
-  if (changed.code !== 0) {
-    throw new Error("GitHub publication workspace workflow changes could not be verified.");
-  }
-  return changed.stdout.toString("latin1").split("\0").some(isGitHubPublicationWorkflowPath);
+  const trees = new Map<string, Promise<Map<string, string>>>();
+  const workflows = (tree: string) =>
+    getOrCreatePromise(trees, tree, async () => {
+      const listing = await params.run(
+        ["git", "ls-tree", "-r", "-z", "--full-tree", tree, "--", ".github/workflows"],
+        { cwd: params.cwd, maxOutputBytes: TREE_LISTING_MAX_OUTPUT_BYTES },
+      );
+      if (listing.code !== 0) {
+        throw new Error("GitHub publication workspace workflows could not be verified.");
+      }
+      const entries = new Map<string, string>();
+      for (const record of listing.stdout.toString("latin1").split("\0").filter(Boolean)) {
+        const tab = record.indexOf("\t");
+        const [mode, , sha] = record.slice(0, tab).split(" ");
+        if (tab < 0 || !mode || !sha) {
+          throw new Error("GitHub publication workspace workflows could not be verified.");
+        }
+        const file = record.slice(tab + 1);
+        if (isGitHubPublicationWorkflowPath(file)) {
+          entries.set(file, mode + ":" + sha);
+        }
+      }
+      return entries;
+    });
+  const [before, accepted] = await Promise.all([
+    workflows(params.comparisonCommit),
+    workflows(params.workspaceTree),
+  ]);
+  return await hasUnapprovedGitHubPublicationWorkflowChanges({
+    before,
+    accepted,
+    readUpstream: async () => {
+      const result = await params.run(
+        ["git", "merge-base", "--all", params.ancestryCommit, params.targetCommit],
+        { cwd: params.cwd },
+      );
+      if (result.code !== 0) {
+        throw new Error("GitHub publication workflow ancestry could not be verified.");
+      }
+      const bases = result.stdout.toString("utf8").trim().split(/\s+/u);
+      if (bases.length !== 1 || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(bases[0]!)) {
+        return undefined;
+      }
+      const [ancestor, target] = await Promise.all([
+        workflows(bases[0]!),
+        workflows(params.targetCommit),
+      ]);
+      return { ancestor, target };
+    },
+  });
 }
 
 export async function assertSafeGitPublicationWorkspace(
@@ -177,9 +227,7 @@ async function readOptionalAttributeFile(file: string): Promise<Buffer | undefin
   try {
     return await fs.readFile(file);
   } catch (error) {
-    const code =
-      typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
-    if (code === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return undefined;
     }
     throw error;

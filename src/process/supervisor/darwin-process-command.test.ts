@@ -1,28 +1,36 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const { sysctl, pidPath, csops, errno, dead } = vi.hoisted(() => ({
+const { sysctl, errno, dead } = vi.hoisted(() => ({
   sysctl: vi.fn(),
-  pidPath: vi.fn(),
-  csops: vi.fn(),
   errno: vi.fn(),
   dead: vi.fn(),
 }));
 vi.mock("node:module", () => ({
   createRequire: () => () => ({
     load: () => ({
-      func: (signature: string) =>
-        signature.includes("sysctl(") ? sysctl : signature.includes("csops(") ? csops : pidPath,
+      func: () => sysctl,
     }),
     errno,
   }),
+}));
+vi.mock("../../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({ debug: vi.fn() }),
 }));
 vi.mock("../../shared/pid-alive.js", () => ({ isPidDefinitelyDead: dead }));
 import { readDarwinProcessCommand } from "./darwin-process-command.js";
 
 let reply: Buffer | undefined;
-let executable: string | undefined;
 const uid = process.getuid?.() ?? 501;
 const foreignUid = uid + 1;
+const getuidDescriptor = Object.getOwnPropertyDescriptor(process, "getuid");
+
+afterEach(() => {
+  if (getuidDescriptor) {
+    Object.defineProperty(process, "getuid", getuidDescriptor);
+  } else {
+    Reflect.deleteProperty(process, "getuid");
+  }
+});
 
 function argumentsReply(argv: string[], argc = argv.length, environment = "SYNTHETIC_ENV=private") {
   const header = Buffer.alloc(4);
@@ -34,8 +42,8 @@ function argumentsReply(argv: string[], argc = argv.length, environment = "SYNTH
 }
 
 beforeEach(() => {
+  Object.defineProperty(process, "getuid", { configurable: true, value: () => uid });
   reply = undefined;
-  executable = undefined;
   errno.mockReset().mockReturnValue(1);
   dead.mockReset().mockReturnValue(false);
   sysctl
@@ -53,16 +61,6 @@ beforeEach(() => {
       size.writeBigUInt64LE(BigInt(reply.length));
       return 0;
     });
-  pidPath.mockReset().mockImplementation((_pid: number, output: Buffer) => {
-    if (!executable) {
-      return 0;
-    }
-    return output.write(`${executable}\0`);
-  });
-  csops.mockReset().mockImplementation((_pid: number, _operation: number, output: Buffer) => {
-    output.writeUInt32LE(0x0400_0001);
-    return 0;
-  });
 });
 
 it.each([uid, undefined])(
@@ -95,62 +93,37 @@ it.each(["invalid count", "truncated argument"])("rejects %s native argument byt
   expect(() => readDarwinProcessCommand(12, uid)).toThrow(/Darwin process arguments/);
 });
 
-it.each([
-  "/usr/libexec/native-service",
-  "/System/Volumes/Update/MobileAsset/fixture.asset/Service.xpc/Contents/MacOS/Service",
-])("records live kernel platform-signing evidence for foreign service %s", (file) => {
-  executable = file;
+it.each([1, 13, 22])("excludes unreadable foreign-UID argv with errno %s", (error) => {
+  errno.mockReturnValue(error);
   expect(readDarwinProcessCommand(12, foreignUid)).toEqual({
-    executable,
     uid: foreignUid,
     argvUnavailable: true,
   });
 });
 
-it.each([
-  "/usr/bin/python3",
-  "/System/Library/Frameworks/Python.framework/Versions/2.7/bin/python",
-  "/usr/libexec/node",
-  "/usr/local/bin/bun",
-  "/Applications/Fixture.app/Contents/MacOS/Fixture",
-  "/System/Library/CoreServices/Fixture.app/Contents/MacOS/Fixture",
-  "/tmp/openclaw-plugin-build-abc123/vendor/codex",
-])("rejects unreadable argv for an ambiguous executable %s", (file) => {
-  executable = file;
-  expect(() => readDarwinProcessCommand(12, foreignUid)).toThrow(
-    "Could not classify PID 12: cannot inspect Darwin arguments",
-  );
-});
-
-it.each([
-  { kind: "non-platform executable", flags: 0x0000_0001, result: 0 },
-  { kind: "invalid platform signature", flags: 0x0400_0000, result: 0 },
-  { kind: "unavailable signing status", flags: 0x0400_0001, result: -1 },
-])("rejects executable-only evidence from $kind", ({ flags, result }) => {
-  executable = "/usr/libexec/fixture-native-service";
-  csops.mockImplementation((_pid: number, _operation: number, output: Buffer) => {
-    output.writeUInt32LE(flags);
-    return result;
-  });
-  expect(() => readDarwinProcessCommand(12, foreignUid)).toThrow(
-    "Could not classify PID 12: cannot inspect Darwin arguments",
-  );
-});
-
-it.each([uid, undefined])(
-  "rejects foreign-service evidence with current or unavailable uid %s",
-  (observedUid) => {
-    executable = "/usr/libexec/native-service";
+it.each(
+  [1, 13, 22].flatMap((error) => [uid, undefined].map((observedUid) => ({ error, observedUid }))),
+)(
+  "holds unreadable argv with current or unavailable UID $observedUid and errno $error",
+  ({ error, observedUid }) => {
+    errno.mockReturnValue(error);
     expect(() => readDarwinProcessCommand(12, observedUid)).toThrow(
       "Could not classify PID 12: cannot inspect Darwin arguments",
     );
   },
 );
 
-it("distinguishes an exited process from an unavailable executable inspection", () => {
-  expect(() => readDarwinProcessCommand(12, foreignUid)).toThrow(
+it("distinguishes an exited process from unreadable arguments", () => {
+  expect(() => readDarwinProcessCommand(12, uid)).toThrow(
     "Could not classify PID 12: cannot inspect Darwin arguments",
   );
   dead.mockReturnValue(true);
   expect(readDarwinProcessCommand(12, foreignUid)).toBeUndefined();
+});
+
+it("holds unreadable argv when the inspecting UID is unavailable", () => {
+  Object.defineProperty(process, "getuid", { configurable: true, value: undefined });
+  expect(() => readDarwinProcessCommand(12, foreignUid)).toThrow(
+    "Could not classify PID 12: cannot inspect Darwin arguments",
+  );
 });

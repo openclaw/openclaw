@@ -15,6 +15,7 @@ import {
   listSessionMembersInDatabase,
   type SessionMember,
 } from "./session-sharing-store.kernel.js";
+import { projectionLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 function resolveDatabaseOptions(scope: SessionAccessScope): OpenClawAgentDatabaseOptions {
@@ -49,8 +50,10 @@ export async function listSessionMembersInWorker(
     // Incognito SQLite exists only in this process and keeps its native owner.
     return listSessionMembers({ ...input, env });
   }
-  return await withSessionHistoryWorkerDatabase(options, (owner) =>
-    owner.readMembers({ sessionKey: resolved.sessionKey, env }),
+  return await withSessionHistoryWorkerDatabase(
+    options,
+    (owner) => owner.readMembers({ sessionKey: resolved.sessionKey, env }),
+    projectionLane,
   );
 }
 

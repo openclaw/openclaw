@@ -37,6 +37,7 @@ import {
   resolveOpenClawExecPolicyForCodexAppServer,
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
+import { isCodexAppServerProxyLaunch } from "./launch-args.js";
 import { resolveCodexNativeHookRelayEvents } from "./native-hook-relay.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { isCodexResponsesOAuthRun } from "./responses-oauth.js";
@@ -145,7 +146,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         ...preparedEnvironment.localProcessEnv,
       }
     : undefined;
-  const shellEnvironment =
+  const baseShellEnvironment =
     preparedShellEnvironment && Object.keys(preparedShellEnvironment).length > 0
       ? preparedShellEnvironment
       : undefined;
@@ -157,11 +158,30 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     preparedEnvironment?.managedLocalIdentity === true ||
     (preparedEnvironment !== undefined &&
       Object.keys(preparedEnvironment.credentialScrubEnv).length > 0);
+  let shellEnvironment = baseShellEnvironment;
+  let shellPathPrepend: readonly string[] | undefined;
   const withPreparedProcessEnv = <T extends CodexAppServerRuntimeOptions>(appServer: T) => {
     // Peer locality is not process ownership: disconnected socket turns can outlive recovery.
     assertLocalTargetSupported(
       appServer.start.transport !== "stdio" || Boolean(appServer.remoteWorkspaceRoot),
     );
+    // Resolve placement before projecting host PATH; socket peers and remote workspaces
+    // own their tool lookup even when their control connection runs on this machine.
+    const localToolEnv =
+      !sandbox?.enabled &&
+      !remoteExec &&
+      appServer.start.transport === "stdio" &&
+      !isCodexAppServerProxyLaunch(appServer.start.args) &&
+      !appServer.remoteWorkspaceRoot
+        ? preparedEnvironment?.localToolEnv
+        : undefined;
+    const hasLocalToolEnv = localToolEnv && Object.keys(localToolEnv).length > 0;
+    shellPathPrepend = hasLocalToolEnv ? preparedEnvironment?.localToolPathPrepend : undefined;
+    shellEnvironment = hasLocalToolEnv
+      ? { ...baseShellEnvironment, ...localToolEnv }
+      : baseShellEnvironment;
+    // Tool lookup must not reject native login requests. Codex owns profile and
+    // snapshot startup; only the identity restrictions above disable login.
     return shellEnvironment
       ? {
           ...appServer,
@@ -398,10 +418,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       env: { ...process.env, ...session.start.env, ...shellEnvironment },
       agentDir,
     });
-    return { session, appServer: withPreparedProcessEnv(trusted) };
+    return withPreparedProcessEnv(trusted);
   };
-  let resolvedAppServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
-  let appServer = resolvedAppServer.appServer;
+  let appServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
   preDynamicStartupStages.mark("app-server-policy");
   preDynamicStartupStages.mark("native-hook-relay");
   const terminalState = {
@@ -471,8 +490,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         modelProvider: reviewerPolicyContext.modelProvider,
         model: reviewerPolicyContext.model,
       });
-      resolvedAppServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
-      appServer = resolvedAppServer.appServer;
+      appServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
     }
     const sessionPermissionPolicy = resolveCodexEffectiveSessionPermissionPolicy({
       appServer,
@@ -504,7 +522,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       resolveFinalAppServer(
         await resolveRuntimeOptionsForBinding(mutable.startupBinding, selection),
         selection,
-      ).appServer;
+      );
     assertCurrent();
     // Host capabilities are identity-keyed; carry generation proof separately.
     return {
@@ -582,6 +600,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       sandbox,
       agentDir,
       shellEnvironment,
+      shellPathPrepend,
       disableLoginShell,
       bindingIdentity,
       bindingStore,

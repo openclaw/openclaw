@@ -24,6 +24,10 @@ import type {
   TelegramCallbackButton,
   TelegramCallbackMessageActions,
 } from "./bot-handlers.callback-actions.js";
+import {
+  buildSyntheticContext,
+  buildSyntheticTextMessage,
+} from "./bot-handlers.message-context.js";
 import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import {
@@ -47,11 +51,7 @@ import { buildInlineKeyboard } from "./send.js";
 
 export type TelegramCallbackMessageRuntime = Pick<
   TelegramMessagePipeline,
-  | "buildSyntheticTextMessage"
-  | "buildSyntheticContext"
-  | "buildFailedProcessingResult"
-  | "processMessageWithReplyChain"
-  | "resolveTelegramSessionState"
+  "buildFailedProcessingResult" | "processMessageWithReplyChain" | "resolveTelegramSessionState"
 >;
 
 export class TelegramRetryableCallbackError extends Error {
@@ -421,10 +421,6 @@ const updateMultiSelectKeyboard = (
     }),
   );
 
-const resolvePluginCallbackSubmitText = (submitText: unknown): string | undefined => {
-  return normalizeOptionalString(submitText);
-};
-
 const isReplySessionInitConflictError = (err: unknown): boolean =>
   REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(String(err instanceof Error ? err.message : err));
 
@@ -467,12 +463,7 @@ export async function handleTelegramInteractiveCallback(params: {
     messageRuntime,
     authorizeCallback,
   } = params;
-  const {
-    buildSyntheticTextMessage,
-    buildSyntheticContext,
-    buildFailedProcessingResult,
-    processMessageWithReplyChain,
-  } = messageRuntime;
+  const { buildFailedProcessingResult, processMessageWithReplyChain } = messageRuntime;
   const {
     clearCallbackButtons,
     editCallbackButtons,
@@ -604,7 +595,7 @@ export async function handleTelegramInteractiveCallback(params: {
       if (result?.handled === false) {
         return;
       }
-      const submitText = resolvePluginCallbackSubmitText(result?.submitText);
+      const submitText = normalizeOptionalString(result?.submitText);
       if (!submitText || (await processSubmitText(submitText)) === "skipped") {
         return;
       }

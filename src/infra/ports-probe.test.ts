@@ -2,6 +2,8 @@
 import net from "node:net";
 import { describe, expect, it, vi, type TestContext } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { isErrno } from "./errors.js";
 import { probePortUsage, tryListenOnPort } from "./ports-probe.js";
 
 async function withListeningServer(
@@ -180,4 +182,64 @@ describe("probePortUsage", () => {
       "127.0.0.2",
     );
   });
+
+  // Linux with IPv6 disabled accepts a dual-stack `::` bind, but its missing `::1` target
+  // times out on some kernels and fails with EADDRNOTAVAIL on others.
+  it.for([
+    { host: "::", answer: "timeout", ipv6Loopback: "missing", expected: "free" },
+    { host: "::", answer: "EADDRNOTAVAIL", ipv6Loopback: "missing", expected: "free" },
+    { host: "::", answer: "timeout", ipv6Loopback: "present", expected: "unknown" },
+    { host: "0.0.0.0", answer: "timeout", ipv6Loopback: "missing", expected: "unknown" },
+  ] as const)(
+    "reports $expected when $host binds, its confirm gets $answer, and ::1 is $ipv6Loopback",
+    async ({ host, answer, ipv6Loopback, expected }, { skip }) => {
+      const claim = await acquireTestPortBlock({ offsets: [0] });
+      const connect = vi.spyOn(net, "connect");
+      const createServer = vi.spyOn(net, "createServer");
+      try {
+        try {
+          await tryListenOnPort({ port: claim.port, host });
+          if (ipv6Loopback === "present") {
+            await tryListenOnPort({ port: 0, host: "::1" });
+          }
+        } catch (err) {
+          if (isErrno(err) && (err.code === "EADDRNOTAVAIL" || err.code === "EAFNOSUPPORT")) {
+            skip(`host lacks the ${host} or ::1 address this case needs`);
+          }
+          throw err;
+        }
+        if (ipv6Loopback === "missing") {
+          createServer.mockImplementation(() => {
+            const server = new net.Server();
+            const listen = server.listen.bind(server);
+            server.listen = ((options: net.ListenOptions) => {
+              if (options.host !== "::1") {
+                return listen(options);
+              }
+              const error = Object.assign(new Error("listen EADDRNOTAVAIL"), {
+                code: "EADDRNOTAVAIL",
+              });
+              process.nextTick(() => server.emit("error", error));
+              return server;
+            }) as net.Server["listen"];
+            return server;
+          });
+        }
+        connect.mockImplementation(() => {
+          const socket = new net.Socket();
+          const error = Object.assign(new Error(`connect ${answer}`), { code: answer });
+          setImmediate(() =>
+            answer === "timeout" ? socket.emit("timeout") : socket.destroy(error),
+          );
+          return socket;
+        });
+        await expect(probePortUsage(claim.port, [host])).resolves.toBe(expected);
+        expect(connect).toHaveBeenCalledOnce();
+      } finally {
+        connect.mockRestore();
+        createServer.mockRestore();
+        await claim.release();
+      }
+    },
+  );
 });

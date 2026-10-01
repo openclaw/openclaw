@@ -2,17 +2,12 @@ import type { DatabaseSync } from "node:sqlite";
 import type {
   OpenClawStateLeaseAcquisition,
   OpenClawStateLeaseIdentity,
-} from "./openclaw-state-lease-store.js";
+} from "./openclaw-state-lease.types.js";
 
 export type OpenClawStateLeaseContext = {
   signal: AbortSignal;
-  /** Drain the heartbeat and capture while the original durable lease remains live. */
-  withDatabaseFileExclusion?<T>(
-    this: void,
-    operation: (assertCurrent: () => void) => Promise<T>,
-    bindCaptured?: (captured: T, assertCurrent: () => void) => undefined,
-  ): Promise<T>;
-  /** Renew or verify independent renewal before another blocking phase. */
+  /** Renew before a blocking phase, carrying this caller's authority into timer renewal.
+   * Renew again after a temporary authority scope ends to restore the caller's context. */
   renew?(): void;
   /** Verify that this exact owner holds a non-expired lease at this instant. */
   assertOwned(): void;
@@ -39,6 +34,7 @@ export type OpenClawStateLeaseLifecycleOperations = {
       operationLabel: string;
       observeExpiry?: true;
       schemaPolicy?: "existing";
+      processBound?: boolean;
     };
     output: OpenClawStateLeaseAcquisition;
   };

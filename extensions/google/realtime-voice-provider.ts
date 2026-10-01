@@ -16,6 +16,7 @@ import {
   StartSensitivity,
   TurnCoverage,
 } from "@google/genai";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
@@ -55,6 +56,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { canonicalizeGoogleProviderBase64 } from "./base64.js";
+import { resolveGoogleEnvApiKey } from "./gemini-auth.js";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
 import {
   GOOGLE_REALTIME_DEFAULT_MODEL,
@@ -63,6 +65,8 @@ import {
 import {
   buildGoogleLiveInterruptTurn,
   buildThinkingConfig,
+  emitsCompleteInputTranscripts,
+  endsTurnOnAudioStreamEnd,
   isGemini31LiveModel,
   isResponseDone,
   modelSupportsToolResultContinuation,
@@ -91,9 +95,10 @@ const GOOGLE_REALTIME_TRANSCRIPT_OVERFLOW_MESSAGE =
 // Google Live requires a leading letter/underscore and caps function names at 128 characters.
 const GOOGLE_REALTIME_TOOL_NAME_RE = /^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$/;
 const MULAW_LINEAR_SAMPLES = new Int16Array(256);
+const mulawTablePcm = mulawToPcm(Buffer.from(Array.from({ length: 256 }, (_, index) => index)));
 
 for (let i = 0; i < MULAW_LINEAR_SAMPLES.length; i += 1) {
-  MULAW_LINEAR_SAMPLES[i] = decodeMulawSample(i);
+  MULAW_LINEAR_SAMPLES[i] = mulawTablePcm.readInt16LE(i * 2);
 }
 
 type GoogleRealtimeSensitivity = "low" | "high";
@@ -239,13 +244,6 @@ function normalizeProviderConfig(
     thinkingLevel: asThinkingLevel(raw?.thinkingLevel),
     thinkingBudget: asSafeIntegerInRange(raw?.thinkingBudget, { min: -1, max: 24_576 }),
   };
-}
-
-function resolveEnvApiKey(): string | undefined {
-  return (
-    normalizeOptionalString(process.env.GEMINI_API_KEY) ??
-    normalizeOptionalString(process.env.GOOGLE_API_KEY)
-  );
 }
 
 function buildRealtimeInputConfig(
@@ -472,18 +470,15 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (this.connectAttempt) {
       return this.connectAttempt.promise;
     }
-    let cancel = () => {};
-    const cancelled = new Promise<void>((resolve) => {
-      cancel = resolve;
-    });
+    const cancelled = createDeferred();
     const attempt: GoogleLiveConnectionAttempt = {
-      promise: cancelled,
-      cancel,
+      promise: cancelled.promise,
+      cancel: cancelled.resolve,
     };
     this.connectionOwner = attempt;
     this.connectAttempt = attempt;
     const connection = this.connectOwned(attempt);
-    attempt.promise = Promise.race([connection, cancelled]).finally(() => {
+    attempt.promise = Promise.race([connection, cancelled.promise]).finally(() => {
       if (this.connectAttempt === attempt) {
         this.connectAttempt = undefined;
       }
@@ -615,13 +610,10 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.pendingAudio.enqueue(audio);
       return;
     }
-    const silent = this.isSilence(audio);
+    // Only silence that may end the audio stream counts; 3.8 needs every silent frame.
+    const silent = endsTurnOnAudioStreamEnd(this.model) && this.isSilence(audio);
     if (silent && this.audioStreamEnded) {
       return;
-    }
-    if (!silent) {
-      this.consecutiveSilenceMs = 0;
-      this.audioStreamEnded = false;
     }
 
     const pcm16k = this.toGoogleInputPcm16k(audio);
@@ -633,6 +625,8 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     });
 
     if (!silent) {
+      this.consecutiveSilenceMs = 0;
+      this.audioStreamEnded = false;
       return;
     }
 
@@ -756,10 +750,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
     try {
       const session = this.session;
-      const canSendImmediately = Boolean(
-        session && (!this.resumingSession || this.sessionConfigured),
-      );
-      if (session && canSendImmediately) {
+      if (session && (!this.resumingSession || this.sessionConfigured)) {
         session.sendToolResponse({
           functionResponses: [normalizedResponse],
         });
@@ -819,20 +810,12 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     return this.audioFormat.encoding === "pcm16" ? isPcm16Silence(audio) : isMulawSilence(audio);
   }
 
-  private toInputPcm(audio: Buffer): Buffer {
-    return this.audioFormat.encoding === "pcm16" ? audio : mulawToPcm(audio);
-  }
-
   private toGoogleInputPcm16k(audio: Buffer): Buffer {
-    if (
-      this.audioFormat.encoding === "g711_ulaw" &&
-      this.audioFormat.sampleRateHz === 8_000 &&
-      GOOGLE_REALTIME_INPUT_SAMPLE_RATE === 16_000
-    ) {
+    if (this.audioFormat.encoding === "g711_ulaw" && this.audioFormat.sampleRateHz === 8_000) {
       return convertMulaw8kToPcm16k(audio);
     }
     return resamplePcm(
-      this.toInputPcm(audio),
+      this.audioFormat.encoding === "pcm16" ? audio : mulawToPcm(audio),
       this.audioFormat.sampleRateHz,
       GOOGLE_REALTIME_INPUT_SAMPLE_RATE,
     );
@@ -973,21 +956,20 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private appendTranscript(role: RealtimeVoiceRole, transcript: GoogleLiveTranscription): boolean {
     const owner = this.connectionOwner;
-    // Live 3.1 emits complete input utterances without the optional finished flag.
-    const completeInput = role === "user" && isGemini31LiveModel(this.model);
-    const text = transcript.text;
-    if (text) {
+    // Live 3.1 and 3.8 emit complete input utterances without the optional finished flag.
+    const completeInput = role === "user" && emitsCompleteInputTranscripts(this.model);
+    if (transcript.text) {
       const pending = this.pendingTranscripts[role],
-        bytes = Buffer.byteLength(text, "utf8");
+        bytes = Buffer.byteLength(transcript.text, "utf8");
       if (pending.byteCount + bytes > GOOGLE_REALTIME_MAX_PENDING_TRANSCRIPT_BYTES) {
         this.resetPendingTranscripts();
         this.failConnection(new Error(GOOGLE_REALTIME_TRANSCRIPT_OVERFLOW_MESSAGE));
         return false;
       }
-      pending.text += text;
+      pending.text += transcript.text;
       pending.byteCount += bytes;
       if (!completeInput) {
-        this.emitTranscript(role, text, false);
+        this.emitTranscript(role, transcript.text, false);
         if (this.connectionOwner !== owner) {
           return false;
         }
@@ -1254,16 +1236,6 @@ function convertMulaw8kToPcm16k(muLaw: Buffer): Buffer {
   return pcm;
 }
 
-function decodeMulawSample(value: number): number {
-  const muLaw = ~value & 0xff;
-  const sign = muLaw & 0x80;
-  const exponent = (muLaw >> 4) & 0x07;
-  const mantissa = muLaw & 0x0f;
-  let sample = ((mantissa << 3) + 132) << exponent;
-  sample -= 132;
-  return sign ? -sample : sample;
-}
-
 async function createGoogleRealtimeBrowserSession(
   req: RealtimeVoiceBrowserSessionCreateRequest,
 ): Promise<RealtimeVoiceBrowserSession> {
@@ -1275,7 +1247,7 @@ async function createGoogleRealtimeBrowserSession(
     ...(prefixPaddingMs !== undefined ? { prefixPaddingMs } : {}),
     ...(silenceDurationMs !== undefined ? { silenceDurationMs } : {}),
   };
-  const apiKey = config.apiKey || resolveEnvApiKey();
+  const apiKey = config.apiKey || resolveGoogleEnvApiKey();
   if (!apiKey) {
     throw new Error("Google Gemini API key missing");
   }
@@ -1368,10 +1340,10 @@ export function buildGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
     },
     resolveConfig: ({ cfg, rawConfig }) => normalizeProviderConfig(rawConfig, cfg),
     isConfigured: ({ providerConfig }) =>
-      Boolean(normalizeProviderConfig(providerConfig).apiKey || resolveEnvApiKey()),
+      Boolean(normalizeProviderConfig(providerConfig).apiKey || resolveGoogleEnvApiKey()),
     createBridge: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
-      const apiKey = config.apiKey || resolveEnvApiKey();
+      const apiKey = config.apiKey || resolveGoogleEnvApiKey();
       if (!apiKey) {
         throw new Error("Google Gemini API key missing");
       }

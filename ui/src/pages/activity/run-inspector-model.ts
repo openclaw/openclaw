@@ -128,16 +128,7 @@ export function mergeDecisionPage(
   };
 }
 
-type RunInspectorDiagnosticKind =
-  | "present"
-  | "not-found"
-  | "expired"
-  | "corrupt"
-  | "ambiguous"
-  | "unknown"
-  | "unsupported";
-
-export function classifyRunInspection(result: RunInspectorResult): RunInspectorDiagnosticKind {
+export function classifyRunInspection(result: RunInspectorResult) {
   const identity = result.identity;
   if (identity.state === "present") {
     return "present";

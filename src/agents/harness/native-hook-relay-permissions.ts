@@ -41,7 +41,7 @@ import type {
 } from "./native-hook-relay-types.js";
 import { readOptionalNonEmptyString, truncateRelayText } from "./native-hook-relay-utils.js";
 
-export type NativeHookRelayDeferredToolApprovalRequester = typeof requestDeferredPluginToolApproval;
+type NativeHookRelayDeferredToolApprovalRequester = typeof requestDeferredPluginToolApproval;
 
 const DEFAULT_PERMISSION_TIMEOUT_MS = 120_000;
 const PERMISSION_ALLOW_ALWAYS_TTL_MS = 30 * 60 * 1000;
@@ -430,11 +430,7 @@ function permissionRequestFallbackKey(request: NativeHookRelayPermissionApproval
   return `${request.toolName}:keys:${permissionRequestToolInputKeyFingerprint(request.toolInput)}`;
 }
 
-export function permissionRequestToolInputKeyFingerprintForTests(
-  toolInput: Record<string, unknown>,
-): string {
-  return permissionRequestToolInputKeyFingerprint(toolInput);
-}
+export { permissionRequestToolInputKeyFingerprint as permissionRequestToolInputKeyFingerprintForTests };
 
 function permissionRequestToolInputKeyFingerprint(toolInput: Record<string, unknown>): string {
   let fingerprint = "";
@@ -454,11 +450,7 @@ function permissionRequestToolInputKeyFingerprint(toolInput: Record<string, unkn
   return fingerprint || "none";
 }
 
-export function permissionRequestContentFingerprintForTests(
-  request: NativeHookRelayPermissionApprovalRequest,
-): string {
-  return permissionRequestContentFingerprint(request);
-}
+export { permissionRequestContentFingerprint as permissionRequestContentFingerprintForTests };
 
 function permissionRequestContentFingerprint(
   request: NativeHookRelayPermissionApprovalRequest,

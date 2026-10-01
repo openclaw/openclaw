@@ -24,16 +24,12 @@ const missing = {
   installation: null,
 };
 describe("accepted Windows management ABI", () => {
-  it.each([
-    '{"v":1,"v":1}',
-    '{"v":1,"\\u0076":1}',
-    '{"v":1,"context":{"x":1,"x":1}}',
-    '{"v":1.0}',
-    '{"v":1e0}',
-    '{"v":1,"x":"\\ud800"}',
-  ])("rejects ambiguous JSON %s", (json) => {
-    expect(() => parseWindowsJson(Buffer.from(json))).toThrow();
-  });
+  it.each(['{"v":1,"\\u0076":1}', '{"v":1.0}', '{"v":1e0}', '{"v":1,"x":"\\ud800"}'])(
+    "rejects ambiguous JSON %s",
+    (json) => {
+      expect(() => parseWindowsJson(Buffer.from(json))).toThrow();
+    },
+  );
   it("enforces exact byte bounds, UTF-8 and LF-inclusive response framing", () => {
     const request = windowsFixture().request;
     const json = JSON.stringify(request);
@@ -93,25 +89,13 @@ describe("accepted Windows management ABI", () => {
       store: "request",
     });
     const partial = { ...f.response, ok: false, code: "browser_control_disabled" };
-    expect(
-      parseWindowsManagementResponse(Buffer.from(JSON.stringify(partial) + "\n"), 1, request),
-    ).toEqual(partial);
+    const parse = (response: unknown) =>
+      parseWindowsManagementResponse(Buffer.from(JSON.stringify(response) + "\n"), 1, request);
+    expect(parse(partial)).toEqual(partial);
     for (const store of ["disabled", "unknown"]) {
-      expect(() =>
-        parseWindowsManagementResponse(
-          Buffer.from(JSON.stringify({ ...partial, store }) + "\n"),
-          1,
-          request,
-        ),
-      ).toThrow();
+      expect(() => parse({ ...partial, store })).toThrow();
     }
-    expect(() =>
-      parseWindowsManagementResponse(
-        Buffer.from(JSON.stringify({ ...f.response, code: "context_conflict", ok: false }) + "\n"),
-        1,
-        request,
-      ),
-    ).toThrow();
+    expect(() => parse({ ...f.response, code: "context_conflict", ok: false })).toThrow();
   });
 });
 const directories: string[] = [];

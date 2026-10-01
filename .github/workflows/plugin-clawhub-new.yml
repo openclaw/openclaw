@@ -55,12 +55,12 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
   CLAWHUB_REGISTRY: "https://clawhub.ai"
 
 jobs:
   resolve_bootstrap_plan:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -85,6 +85,10 @@ jobs:
           WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          if [[ "${WORKFLOW_REF}" == *tideclaw/alpha/* ]]; then
+            echo "Alpha releases are retired; use a beta prerelease." >&2
+            exit 1
+          fi
           [[ "$(git rev-parse HEAD)" == "${WORKFLOW_SHA}" ]] || {
             echo "Trusted workflow checkout does not match github.sha." >&2
             exit 1
@@ -92,10 +96,6 @@ jobs:
           if [[ "${PRETAG_VALIDATION}" != "true" ]]; then
             # Repository release-tag rules make this exact-SHA ref immutable.
             # Parent attestation is checked again before environment approval.
-            [[ "${GITHUB_ACTOR}" == "github-actions[bot]" ]] || {
-              echo "Plugin ClawHub bootstrap release must be dispatched by the approved parent workflow." >&2
-              exit 1
-            }
             [[ "${APPROVED_WORKFLOW_SHA}" =~ ^[a-f0-9]{40}$ ]] || {
               echo "Plugin ClawHub bootstrap requires an exact approved workflow SHA." >&2
               exit 1
@@ -108,10 +108,17 @@ jobs:
               echo "Plugin ClawHub bootstrap requires trusted main or the protected SHA-pinned release-publish tag." >&2
               exit 1
             fi
-            [[ "${WORKFLOW_SHA}" == "${APPROVED_WORKFLOW_SHA}" ]] || {
+            if [[ "${GITHUB_ACTOR}" != "github-actions[bot]" && "${WORKFLOW_REF}" == "refs/heads/main" ]]; then
+              # Direct human recovery may run newer trusted main; the attested
+              # approval stays bound to the parent-approved SHA.
+              git merge-base --is-ancestor "${APPROVED_WORKFLOW_SHA}" "${WORKFLOW_SHA}" || {
+                echo "Direct Plugin ClawHub New recovery requires trusted main to contain the parent-approved SHA." >&2
+                exit 1
+              }
+            elif [[ "${WORKFLOW_SHA}" != "${APPROVED_WORKFLOW_SHA}" ]]; then
               echo "Plugin ClawHub New workflow SHA does not match the parent-approved trusted-main SHA." >&2
               exit 1
-            }
+            fi
           else
             [[ "${WORKFLOW_REF}" == "refs/heads/main" ]] || {
               echo "Plugin ClawHub pre-tag validation must be dispatched from trusted main." >&2
@@ -136,6 +143,10 @@ jobs:
           TARGET_REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
+          if [[ "${RELEASE_TAG}" == *-alpha.* || "${TARGET_REF}" == *tideclaw/alpha/* || "${RELEASE_PUBLISH_BRANCH}" == *tideclaw/alpha/* ]]; then
+            echo "Alpha releases are retired; use a beta prerelease." >&2
+            exit 1
+          fi
           [[ "${TARGET_REF}" =~ ^[a-f0-9]{40}$ ]] || {
             echo "Plugin ClawHub bootstrap ref must be a full lowercase commit SHA." >&2
             exit 1
@@ -172,7 +183,7 @@ jobs:
               exit 1
             }
           else
-            [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]] || {
+            [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]] || {
               echo "Plugin ClawHub bootstrap release_tag is invalid." >&2
               exit 1
             }
@@ -245,8 +256,17 @@ jobs:
             --selection-mode selected \
             --plugins "${RELEASE_PLUGINS}" > .local/plugin-clawhub-release-plan.json
 
+          if jq -e '(.all[]?, .candidates[]?, .bootstrapCandidates[]?, .missingTrustedPublisher[]?) | select(.publishTag == "alpha" or .channel == "alpha" or ((.version // "") | contains("-alpha.")))' .local/plugin-clawhub-release-plan.json >/dev/null; then
+            echo "Alpha releases are retired; use a beta prerelease." >&2
+            exit 1
+          fi
+
           cat .local/plugin-clawhub-release-plan.json
           jq -r '.warnings[]? | "- Warning: \(.)"' .local/plugin-clawhub-release-plan.json >> "$GITHUB_STEP_SUMMARY"
+          if jq -e '.missingTrustedPublisher[]? | select(.publication.state == "pending" or .publication.state == "failed")' .local/plugin-clawhub-release-plan.json >/dev/null; then
+            echo "::error::Pending or failed ClawHub publications cannot be bootstrapped again. Wait for pending publication or use the release plan's operator recovery instructions."
+            exit 1
+          fi
 
           bootstrap_candidate_count="$(jq -r '(.bootstrapCandidates | length) + (.missingTrustedPublisher | length)' .local/plugin-clawhub-release-plan.json)"
           selected_count="$(jq -r '.all | length' .local/plugin-clawhub-release-plan.json)"
@@ -316,32 +336,11 @@ jobs:
             .missingTrustedPublisher[]? | "- \(.packageName)@\(.version) [\(.publishTag)] from \(.packageDir), alreadyPublished=\(.alreadyPublished)"
           ' .local/plugin-clawhub-release-plan.json
 
-      - name: Validate Tideclaw alpha plugin channels
-        env:
-          TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch }}
-        run: |
-          set -euo pipefail
-          if [[ ! "${TRUSTED_PUBLISH_BRANCH}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
-            exit 0
-          fi
-          invalid="$(
-            jq -r '
-              (.bootstrapCandidates[]?, .missingTrustedPublisher[]?)
-              | select(.publishTag != "alpha" or .channel != "alpha")
-              | "- \(.packageName)@\(.version) [\(.publishTag)]"
-            ' .local/plugin-clawhub-release-plan.json
-          )"
-          if [[ -n "${invalid}" ]]; then
-            echo "Tideclaw alpha ClawHub bootstraps may only publish alpha plugin versions." >&2
-            printf '%s\n' "${invalid}" >&2
-            exit 1
-          fi
-
   validate_release_publish_approval:
     name: Validate release publish approval
     needs: resolve_bootstrap_plan
     if: github.event_name == 'workflow_dispatch' && inputs.pretag_validation != true && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     timeout-minutes: 20
     permissions:
       actions: read
@@ -373,7 +372,7 @@ jobs:
         env:
           ALLOW_COMPLETED_SUCCESSFUL_PARENT: "true"
           APPROVAL_PATH: ${{ runner.temp }}/clawhub-bootstrap-approval/approval.json
-          CHILD_WORKFLOW_SHA: ${{ github.sha }}
+          CHILD_WORKFLOW_SHA: ${{ inputs.bootstrap_workflow_sha }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_APPROVAL_KIND: clawhub-bootstrap
           RELEASE_PACKAGES: ${{ inputs.plugins }}
@@ -422,7 +421,7 @@ jobs:
   validate_bootstrap_trusted_publisher_cli:
     needs: [resolve_bootstrap_plan, validate_release_publish_approval]
     if: always() && github.event_name == 'workflow_dispatch' && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true' && (inputs.pretag_validation == true || needs.validate_release_publish_approval.result == 'success')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -471,7 +470,7 @@ jobs:
     name: Pack immutable ClawHub bootstrap artifacts
     needs: [resolve_bootstrap_plan, validate_release_publish_approval]
     if: always() && github.event_name == 'workflow_dispatch' && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true' && (inputs.pretag_validation == true || needs.validate_release_publish_approval.result == 'success')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     timeout-minutes: 60
     permissions:
       actions: read

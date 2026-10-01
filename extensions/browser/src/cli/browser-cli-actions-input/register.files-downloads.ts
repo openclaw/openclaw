@@ -1,32 +1,22 @@
-/**
- * Browser CLI file upload, dialog, and download commands.
- */
 import type { Command } from "commander";
+import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveExistingUploadPaths } from "../../browser/paths.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   parseBrowserPositiveIntegerOption,
+  runBrowserCliCommand,
   runBrowserCliRequest,
   withBrowserActionTimeoutSlack,
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
-import { danger, defaultRuntime, shortenHomePath } from "../core-api.js";
 
 const DEFAULT_BROWSER_HOOK_TIMEOUT_MS = 120000;
 
-async function normalizeUploadPaths(paths: string[]): Promise<string[]> {
-  const result = await resolveExistingUploadPaths({ requestedPaths: paths });
-  if (!result.ok) {
-    throw new Error(result.error);
-  }
-  return result.paths;
-}
-
-/** Registers Browser file chooser, dialog, and download commands. */
 export function registerBrowserFilesAndDownloadsCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -75,15 +65,18 @@ export function registerBrowserFilesAndDownloadsCommands(
       (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
     .action(async (paths: string[], opts, cmd) => {
-      try {
+      await runBrowserCliCommand(async () => {
         const parent = parentOpts(cmd);
-        const normalizedPaths = await normalizeUploadPaths(paths);
+        const resolved = await resolveExistingUploadPaths({ requestedPaths: paths });
+        if (!resolved.ok) {
+          throw new Error(resolved.error);
+        }
         const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
         await runBrowserCliRequest({
           parent,
           path: "/hooks/file-chooser",
           body: {
-            paths: normalizedPaths,
+            paths: resolved.paths,
             ref: normalizeOptionalString(opts.ref),
             inputRef: normalizeOptionalString(opts.inputRef),
             element: normalizeOptionalString(opts.element),
@@ -94,10 +87,7 @@ export function registerBrowserFilesAndDownloadsCommands(
           errorPolicy: "inline",
           successMessage: `upload armed for ${paths.length} file(s)`,
         });
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      }, "inline");
     });
 
   browser

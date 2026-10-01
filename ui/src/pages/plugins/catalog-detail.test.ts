@@ -2,7 +2,7 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
 import { renderPluginCatalogDetail } from "./catalog-detail.ts";
-import { createDiscoveryDetail } from "./plugins-page.test-support.ts";
+import { createDiscoveryDetail, createPlugin } from "./plugins-page.test-support.ts";
 
 afterEach(() => document.body.replaceChildren());
 
@@ -63,6 +63,33 @@ describe("catalog README", () => {
 });
 
 describe("renderPluginCatalogDetail", () => {
+  it("uses a white tile for an official package icon", () => {
+    const imageUrl = "https://example.com/icon.png";
+    const result = createDiscoveryDetail(createPlugin({ origin: "official" }));
+    result.plugin.catalog.imageUrl = imageUrl;
+    const container = document.createElement("div");
+
+    render(
+      renderPluginCatalogDetail({
+        connected: true,
+        result,
+        error: null,
+        backHref: "/plugins",
+        onBack: vi.fn(),
+        onRetry: vi.fn(),
+        canInstall: true,
+        installBlockedReason: null,
+        onInstall: vi.fn(),
+        iconUrls: { [imageUrl]: "blob:package-icon" },
+      }),
+      container,
+    );
+
+    expect(
+      container.querySelector(".plugin-catalog-detail__icon .plugins-tile--white"),
+    ).not.toBeNull();
+  });
+
   it("does not invent a ClawHub link for an unproven local package", () => {
     const result = {
       plugin: {
@@ -164,40 +191,53 @@ it.each([
   },
 );
 
-it.each([false, true])("shows only authored skills, tools, and MCP servers (mixed=%s)", (mixed) => {
-  const result = createDiscoveryDetail();
-  result.detail.contracts = {
-    videoGenerationProviders: ["heygen"],
-    ...(mixed ? { tools: ["render_status"] } : {}),
-  };
-  result.detail.providers = ["model-provider"];
-  result.detail.channels = ["messaging-channel"];
-  result.detail.skills = mixed ? [{ name: "video-guide" }] : [];
-  result.detail.mcpServers = mixed ? ["media-server"] : [];
-  const container = document.createElement("div");
-  render(
-    renderPluginCatalogDetail({
-      connected: true,
-      result,
-      error: null,
-      backHref: "/plugins",
-      onBack: vi.fn(),
-      onRetry: vi.fn(),
-      canInstall: true,
-      installBlockedReason: null,
-      onInstall: vi.fn(),
-      iconUrls: {},
-    }),
-    container,
-  );
-  const sections = [...container.querySelectorAll(".plugin-capabilities")];
-  expect(container.querySelector(".plugin-capabilities button")).toBeNull();
-  expect(sections.map((section) => section.querySelector("h2")?.textContent)).toEqual(
-    mixed ? ["Skills1", "Tools1", "MCP servers1"] : [],
-  );
-  expect(
-    sections.flatMap((section) =>
-      [...section.querySelectorAll("strong")].map((item) => item.textContent),
-    ),
-  ).toEqual(mixed ? ["video-guide", "render_status", "media-server"] : []);
-});
+it.each([false, true])(
+  "renders user capabilities before tools without redundant provider or channel lists (mixed=%s)",
+  (mixed) => {
+    const result = createDiscoveryDetail();
+    result.detail.contracts = {
+      videoGenerationProviders: ["heygen", "heygen-alias"],
+      gatewayMethodDispatch: ["internal-dispatch"],
+      ...(mixed ? { tools: ["render_status"] } : {}),
+    };
+    result.detail.uiCapabilities = ["link-reader", "widget"];
+    result.detail.providers = ["model-provider"];
+    result.detail.channels = ["messaging-channel"];
+    result.detail.skills = mixed ? [{ name: "video-guide" }] : [];
+    result.detail.mcpServers = mixed ? ["media-server"] : [];
+    const container = document.createElement("div");
+    render(
+      renderPluginCatalogDetail({
+        connected: true,
+        result,
+        error: null,
+        backHref: "/plugins",
+        onBack: vi.fn(),
+        onRetry: vi.fn(),
+        canInstall: true,
+        installBlockedReason: null,
+        onInstall: vi.fn(),
+        iconUrls: {},
+      }),
+      container,
+    );
+    const sections = [...container.querySelectorAll(".plugin-capabilities")];
+    expect(container.querySelector(".plugin-capabilities button")).toBeNull();
+    expect(sections.map((section) => section.querySelector("h2")?.textContent)).toEqual([
+      "Capabilities3",
+      ...(mixed ? ["Skills1", "Tools1", "MCP servers1"] : []),
+    ]);
+    expect(
+      sections.flatMap((section) =>
+        [...section.querySelectorAll("strong")].map((item) => item.textContent),
+      ),
+    ).toEqual([
+      "Video generation",
+      "Dashboard widgets",
+      "Link previews",
+      ...(mixed ? ["video-guide", "render_status", "media-server"] : []),
+    ]);
+    expect(container.textContent).not.toContain("internal-dispatch");
+    expect(container.textContent).not.toContain("heygen-alias");
+  },
+);

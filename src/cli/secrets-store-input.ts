@@ -69,14 +69,10 @@ export async function readSecretStoreInput(params: { valueFile?: string }): Prom
   return value;
 }
 
-export function parseSecretStoreDotEnv(raw: string | Buffer): Record<string, string> {
-  return parseSecretStoreDotEnvText(raw.toString());
-}
-
 export async function readSecretStoreImport(from?: string): Promise<Record<string, string>> {
   const raw =
     from && from !== "-"
       ? await readBoundedFile(from, SECRET_STORE_IMPORT_MAX_BYTES)
       : await readBoundedStdin(SECRET_STORE_IMPORT_MAX_BYTES);
-  return parseSecretStoreDotEnv(raw);
+  return parseSecretStoreDotEnvText(raw);
 }

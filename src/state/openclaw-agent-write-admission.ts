@@ -1,3 +1,7 @@
+import {
+  readDatabasePathIdentitySync,
+  type DatabasePathIdentity,
+} from "../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   runQueuedStoreWrite,
@@ -21,12 +25,24 @@ export const SQLITE_SESSION_WRITER_QUEUES = admission.queues;
 
 export function runOpenClawAgentWriteAdmission<T>(
   options: OpenClawAgentDatabaseOptions,
-  run: () => Promise<T> | T,
+  run: (identity: DatabasePathIdentity, assertCurrent: () => void) => Promise<T> | T,
   reentrant = false,
   timing?: StoreWriterTiming,
   signal?: AbortSignal,
 ): Promise<T> {
-  const storePath = resolveOpenClawAgentSqlitePath(options);
+  const pathname = resolveOpenClawAgentSqlitePath(options);
+  const identity = readDatabasePathIdentitySync(pathname);
+  const storePath = identity.canonicalPath;
+  const assertCurrent = () => {
+    const current = readDatabasePathIdentitySync(pathname);
+    if (
+      current.canonicalPath !== storePath ||
+      (identity.key.startsWith("file:") &&
+        (current.key !== identity.key || current.birthtime !== identity.birthtime))
+    ) {
+      throw new Error("Agent database target changed before write admission");
+    }
+  };
   return runQueuedStoreWrite({
     queues: admission.queues,
     storePath,
@@ -34,7 +50,10 @@ export function runOpenClawAgentWriteAdmission<T>(
     // Worker callbacks inherit their parent's async context, but not its native
     // writer lock. Their foreground writes must queue, never reenter that owner.
     reentrant: reentrant && !admission.workers.has(storePath),
-    fn: async () => await run(),
+    fn: async () => {
+      assertCurrent();
+      return await run(identity, assertCurrent);
+    },
     timing,
     signal,
   });
@@ -47,10 +66,9 @@ export function runOpenClawAgentWorkerWrite<T>(
   timing?: StoreWriterTiming,
   signal?: AbortSignal,
 ): Promise<T> {
-  const storePath = resolveOpenClawAgentSqlitePath(options);
   return runOpenClawAgentWriteAdmission(
     options,
-    async () => {
+    async ({ canonicalPath: storePath }) => {
       const owner = {};
       admission.workers.set(storePath, owner);
       try {

@@ -314,10 +314,7 @@ openclaw-chat-session-rail {
   margin-inline-start: auto;
 }
 
-.chat-session-rail__timestamp {
-  font-size: var(--control-ui-text-sm);
-}
-
+.chat-session-rail__timestamp,
 .chat-session-rail__hint {
   font-size: var(--control-ui-text-sm);
 }
@@ -355,9 +352,9 @@ openclaw-chat-session-rail {
   .chat-session-rail--pill {
     position: fixed;
     top: auto;
-    left: max(8px, var(--safe-area-left));
-    right: max(8px, var(--safe-area-right));
-    bottom: calc(108px + var(--safe-area-bottom));
+    left: calc(var(--chat-mobile-edge-inset) + var(--safe-area-left));
+    right: calc(var(--chat-mobile-edge-inset) + var(--safe-area-right));
+    bottom: calc(100% - var(--shell-canvas-height) + 108px + var(--shell-safe-area-bottom));
     z-index: 35;
     width: auto;
   }
@@ -367,9 +364,9 @@ openclaw-chat-session-rail {
   .chat-session-rail--expanded:not(.chat-session-rail--embedded) {
     position: fixed;
     z-index: 35;
-    inset: 0;
-    width: 100%;
-    padding-bottom: var(--safe-area-bottom);
+    inset: var(--safe-area-top) var(--safe-area-right) auto var(--safe-area-left);
+    height: var(--shell-content-height);
+    width: auto;
     border-width: 0;
   }
 }

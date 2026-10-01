@@ -461,9 +461,16 @@ def checkout_selected_ref():
 def checkout_harness(sha):
     action = ".github/actions/setup-node-env/action.yml"
     node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
-    evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs")
-    platform_scripts = ("scripts/lib/swift-toolchain.sh",)
+    evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh")
+    platform_scripts = ("scripts/lib/swift-toolchain.sh", "scripts/lib/ci-ios-smoke-plan.mjs")
     upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs")
+    # The manifest builder runs from the harness and imports these siblings by file-relative paths.
+    preflight_scripts = (
+        "scripts/ci-build-manifest.mjs",
+        "scripts/lib/ci-ios-smoke-plan.mjs",
+        "scripts/lib/release-context.mjs",
+        "scripts/lib/release-version.mjs",
+    )
     npm_lock_scripts = (
         "scripts/ci-npm-lock-admission.mjs",
         "scripts/generate-npm-package-lock.mjs",
@@ -490,7 +497,7 @@ def checkout_harness(sha):
         if kind in ("platform", "linux-node"):
             pathspecs += evidence_scripts
         elif kind == "preflight":
-            pathspecs += ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"]
+            pathspecs += preflight_scripts
         if kind == "platform":
             pathspecs += platform_scripts
         if kind == "linux-node":

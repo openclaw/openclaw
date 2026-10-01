@@ -71,7 +71,9 @@ function readPersistedTarget(value: unknown): IMessageApprovalPollTarget | null 
   if (
     !target ||
     typeof target.approvalId !== "string" ||
-    (target.approvalKind !== "exec" && target.approvalKind !== "plugin") ||
+    (target.approvalKind !== "exec" &&
+      target.approvalKind !== "plugin" &&
+      target.approvalKind !== "system-agent") ||
     !Array.isArray(target.optionDecisions)
   ) {
     return null;

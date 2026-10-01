@@ -74,12 +74,12 @@ actor RemoteTunnelManager {
         await self.waitForRetirement()
         guard self.lifecycleGeneration == lifecycleGeneration else { return .none }
         guard let currentConfiguration = try? RemotePortTunnel.configuration(),
-              Self.isCurrentConfiguration(requested: configuration, current: currentConfiguration)
+              configuration == currentConfiguration
         else {
             return .staleConfiguration
         }
         if let active = controlTunnel {
-            guard Self.canReuse(active.configuration, for: configuration) else {
+            guard active.configuration == configuration else {
                 self.logger.info("configured SSH route changed; replacing control tunnel")
                 let replacementGeneration = self.beginRetirement()
                 await self.waitForRetirement()
@@ -117,20 +117,6 @@ actor RemoteTunnelManager {
         return .none
     }
 
-    private static func canReuse(
-        _ active: RemotePortTunnel.Configuration,
-        for desired: RemotePortTunnel.Configuration) -> Bool
-    {
-        active == desired
-    }
-
-    private static func isCurrentConfiguration(
-        requested: RemotePortTunnel.Configuration,
-        current: RemotePortTunnel.Configuration) -> Bool
-    {
-        requested == current
-    }
-
     private func resolveLookup(
         _ result: RouteLookupResult,
         lifecycleGeneration: UInt64) async throws -> Route?
@@ -158,12 +144,6 @@ actor RemoteTunnelManager {
             }
             return nil
         }
-    }
-
-    /// Ensure an SSH tunnel is running for the gateway control port.
-    /// Returns the local forwarded port configured by gateway.remote.url.
-    func ensureControlTunnel() async throws -> UInt16 {
-        try await self.ensureControlTunnelRoute().localPort
     }
 
     func ensureControlTunnelRoute() async throws -> Route {
@@ -250,10 +230,7 @@ actor RemoteTunnelManager {
         guard let create = createInFlight else { return .none }
         guard create.configuration == configuration else {
             let currentConfiguration = try RemotePortTunnel.configuration()
-            guard Self.isCurrentConfiguration(
-                requested: configuration,
-                current: currentConfiguration)
-            else {
+            guard configuration == currentConfiguration else {
                 return .staleConfiguration
             }
 
@@ -377,20 +354,6 @@ actor RemoteTunnelManager {
     }
 
     #if DEBUG
-    static func _testCanReuse(
-        _ active: RemotePortTunnel.Configuration,
-        for desired: RemotePortTunnel.Configuration) -> Bool
-    {
-        self.canReuse(active, for: desired)
-    }
-
-    static func _testIsCurrentConfiguration(
-        requested: RemotePortTunnel.Configuration,
-        current: RemotePortTunnel.Configuration) -> Bool
-    {
-        self.isCurrentConfiguration(requested: requested, current: current)
-    }
-
     static func _testWaitForRestartBackoff(
         seconds: TimeInterval,
         sleep: @escaping @Sendable (UInt64) async throws -> Void) async throws
@@ -418,6 +381,4 @@ actor RemoteTunnelManager {
         try await sleep(UInt64(seconds * 1_000_000_000))
         try Task.checkCancellation()
     }
-
-    // Reuse is cheap only while both the listener and its captured SSH route remain current.
 }

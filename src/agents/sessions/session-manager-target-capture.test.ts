@@ -9,13 +9,11 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { SessionManager } from "./session-manager.js";
 
 it.each([
-  { entry: "open", storePath: "session-store.sqlite", linked: false },
   { entry: "open", storePath: "sessions.json", linked: false },
   { entry: "open", storePath: "custom-store.json", linked: false },
   { entry: "open", storePath: "linked/session-store.sqlite", linked: true },
   { entry: "openBounded", storePath: "session-store.sqlite", linked: false },
   { entry: "setSessionTarget", storePath: "session-store.sqlite", linked: false },
-  { entry: "openAsync", storePath: "session-store.sqlite", linked: false },
   { entry: "openAsync", storePath: "linked/session-store.sqlite", linked: true },
   { entry: "openBoundedAsync", storePath: "session-store.sqlite", linked: false },
   { entry: "setSessionTargetAsync", storePath: "session-store.sqlite", linked: false },

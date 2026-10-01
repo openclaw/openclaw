@@ -111,48 +111,24 @@ describe("setPluginEnabledInConfig", () => {
     });
   });
 
+  const legacyEntry = {
+    config: { region: "us", nested: { legacy: true, shared: "legacy" } },
+    custom: "legacy",
+    enabled: true,
+  };
+  const canonicalEntry = {
+    config: { model: "gemini", nested: { canonical: true, shared: "canonical" } },
+    custom: "canonical",
+    enabled: false,
+  };
   it.each([
     {
       name: "canonical entry last",
-      entries: {
-        "GOOGLE-GEMINI-CLI": {
-          config: {
-            region: "us",
-            nested: { legacy: true, shared: "legacy" },
-          },
-          custom: "legacy",
-          enabled: true,
-        },
-        google: {
-          config: {
-            model: "gemini",
-            nested: { canonical: true, shared: "canonical" },
-          },
-          custom: "canonical",
-          enabled: false,
-        },
-      },
+      entries: { "GOOGLE-GEMINI-CLI": legacyEntry, google: canonicalEntry },
     },
     {
       name: "canonical entry first",
-      entries: {
-        google: {
-          config: {
-            model: "gemini",
-            nested: { canonical: true, shared: "canonical" },
-          },
-          custom: "canonical",
-          enabled: false,
-        },
-        "GOOGLE-GEMINI-CLI": {
-          config: {
-            region: "us",
-            nested: { legacy: true, shared: "legacy" },
-          },
-          custom: "legacy",
-          enabled: true,
-        },
-      },
+      entries: { google: canonicalEntry, "GOOGLE-GEMINI-CLI": legacyEntry },
     },
   ])("deep-merges compatibility settings with $name", ({ entries }) => {
     const config = {

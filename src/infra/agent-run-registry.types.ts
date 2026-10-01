@@ -41,6 +41,18 @@ export type AgentRunContext = {
   cronRunsByJobId?: Map<string, { pacingEnabled: boolean; nextCheckMs?: number }>;
   /** Timestamp when this context was first registered (for TTL-based cleanup). */
   registeredAt?: number;
+  /** Bounded presentation facts from this registration's accepted events; never authority. */
+  executionActivity?: {
+    tools: Array<{ id: string; name: string }>;
+    pendingApprovalIds: string[];
+    approvalOverflow?: true;
+    execution?: {
+      state: "running" | "waiting" | "unknown";
+      sourceId?: string;
+      id?: string;
+      wait?: "approval" | "user_input" | "agent_messages" | "children" | "external";
+    };
+  };
   /** Timestamp of last activity (updated on every emitAgentEvent). */
   lastActiveAt?: number;
   /** Exact approval authority owned by this operational execution. */

@@ -1,5 +1,5 @@
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { redactSensitiveText } from "../api.js";
 
 export const MAX_OTEL_CONTENT_ATTRIBUTE_CHARS = 128 * 1024;
 export const MAX_OTEL_CONTENT_ARRAY_ITEMS = 200;
@@ -26,12 +26,11 @@ const NO_CONTENT_CAPTURE: OtelContentCapturePolicy = {
   logBodies: false,
 };
 
-function clampOtelLogText(value: string, maxChars: number): string {
-  return value.length > maxChars ? `${truncateUtf16Safe(value, maxChars)}...(truncated)` : value;
-}
-
 export function normalizeOtelLogString(value: string, maxChars: number): string {
-  return clampOtelLogText(redactSensitiveText(value), maxChars);
+  const redacted = redactSensitiveText(value);
+  return redacted.length > maxChars
+    ? `${truncateUtf16Safe(redacted, maxChars)}...(truncated)`
+    : redacted;
 }
 
 export function normalizeOtelErrorMessage(value: string | undefined): string | undefined {
@@ -65,12 +64,9 @@ export function normalizeOtelContentValue(value: unknown): string | undefined {
     return normalizeOtelLogString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
   }
   if (Array.isArray(value)) {
-    const items: string[] = [];
-    for (const item of value.slice(0, MAX_OTEL_CONTENT_ARRAY_ITEMS)) {
-      if (typeof item === "string") {
-        items.push(item);
-      }
-    }
+    const items = value
+      .slice(0, MAX_OTEL_CONTENT_ARRAY_ITEMS)
+      .filter((item): item is string => typeof item === "string");
     if (items.length > 0) {
       return normalizeOtelLogString(items.join("\n"), MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
     }

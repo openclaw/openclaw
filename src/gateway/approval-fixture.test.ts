@@ -119,21 +119,14 @@ describe("approval fixture request ownership", () => {
             await release.promise;
             return register(...args);
           });
-          let settled = false;
+          const settled = vi.fn();
           const ready = expectSinglePendingApproval(manager, context, () =>
             fixture.track(invokeDemoPolicy(context, createOperatorClient())),
           );
-          void ready.then(
-            () => {
-              settled = true;
-            },
-            () => {
-              settled = true;
-            },
-          );
+          void ready.then(settled, settled);
           try {
             await Promise.race([entered.promise, ready]);
-            expect(settled).toBe(false);
+            expect(settled).not.toHaveBeenCalled();
             expect(
               published.mock.calls.filter(([event]) => event === "plugin.approval.requested"),
             ).toHaveLength(index);
@@ -266,7 +259,7 @@ describe("approval fixture request ownership", () => {
         twoPhase: true,
         timeoutMs: 60_000,
       };
-      let settled = false;
+      const settled = vi.fn();
       const ready = waitForApprovalAccepted(respond, (observedRespond) =>
         fixture.track(
           Promise.resolve(
@@ -281,18 +274,11 @@ describe("approval fixture request ownership", () => {
           ),
         ),
       );
-      void ready.then(
-        () => {
-          settled = true;
-        },
-        () => {
-          settled = true;
-        },
-      );
+      void ready.then(settled, settled);
       try {
         await Promise.race([entered.promise, ready]);
         expect(respond).not.toHaveBeenCalled();
-        expect(settled).toBe(false);
+        expect(settled).not.toHaveBeenCalled();
         release.resolve();
         const { pending, response } = await ready;
         const [record] = await manager.listPendingRecords();
@@ -352,7 +338,7 @@ describe("approval fixture request ownership", () => {
     const unwinding = createDeferredCore();
     const release = createDeferredCore();
     const failure = new Error("inspection failed");
-    let settled = false;
+    const settled = vi.fn();
     let pending: Promise<void> | undefined;
     const body = fixture.run(async () => {
       const record = fixture.manager.create({ command: "echo fixture" }, 60_000);
@@ -373,17 +359,10 @@ describe("approval fixture request ownership", () => {
       );
       throw failure;
     });
-    void body.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
+    void body.then(settled, settled);
     try {
       await Promise.race([unwinding.promise, body]);
-      expect(settled).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
       expect(database.db.isOpen).toBe(true);
       release.resolve();
       await expect(body).rejects.toBe(failure);

@@ -1,14 +1,18 @@
 // Preserve module setup before modules that consume it.
-// oxfmt-ignore
+import "./agent.test-harness.js";
+import { afterAll, beforeAll } from "vitest";
+import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
-  resetAgentTaskRegistryForTests,
-  restoreAgentTaskRegistryRuntimeAfterTests,
-} from "./agent.test-harness.js";
-import { afterAll } from "vitest";
+  retainGatewayPluginMetadata,
+  type GatewayPluginMetadataOwner,
+} from "../../plugins/plugin-metadata-lifecycle.js";
+import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import "./agent.base.test-utils.js";
 import "./agent.media-and-routing.test-utils.js";
 import "./agent.events-and-subagents.test-utils.js";
 import "./agent.sessions-and-models.test-utils.js";
+import "./agent.yielded-orchestrator.test-utils.js";
 import "./agent.expected-session.test-utils.js";
 import "./agent.cancellation.test-utils.js";
 import "./agent.session-followup.test-utils.js";
@@ -17,5 +21,17 @@ import "./agent.abort-integration.test-utils.js";
 import "./agent.caller-authority.test-utils.js";
 import "./agent.dispatch-clock.test-utils.js";
 
-resetAgentTaskRegistryForTests();
-afterAll(restoreAgentTaskRegistryRuntimeAfterTests);
+let metadataOwner: GatewayPluginMetadataOwner | undefined;
+beforeAll(() => {
+  // Handler cases share the real startup inventory; no case changes plugin
+  // installation, so admission can consume prepared metadata like a live Gateway.
+  metadataOwner = retainGatewayPluginMetadata(createTestGatewayScheduler());
+  const snapshot = metadataOwner.runBootstrap(() =>
+    loadPluginMetadataSnapshot({ config: {}, allowCurrent: false }),
+  );
+  metadataOwner.publish(snapshot);
+  setGatewayPluginMetadataSnapshot(snapshot, { config: {} });
+});
+afterAll(async () => {
+  await metadataOwner?.close();
+});

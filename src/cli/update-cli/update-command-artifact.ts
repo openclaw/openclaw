@@ -1,14 +1,18 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { assertDirectoryIdentitySync, readDirectoryIdentity } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { valid as validSemver } from "semver";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "../../config/gateway-env-selection.js";
 import { GATEWAY_SERVICE_SELECTOR_ENV_KEYS } from "../../daemon/constants.js";
-import { tempWorkspace } from "../../infra/private-temp-workspace.js";
+import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
+import { createPrivateSqliteTempDirectory } from "../../infra/sqlite-private-directory.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { parseOpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { createUpdateProgress } from "./progress.js";
 import type { InitializedUpdate } from "./update-command-initialization.js";
@@ -18,7 +22,7 @@ import { stagePackageInstallUpdate } from "./update-command-package.js";
 type StageParams = Parameters<typeof stagePackageInstallUpdate>[0];
 type ArtifactInitialization = Pick<InitializedUpdate, "stagedPackage"> & {
   target: Pick<
-    InitializedUpdate["target"],
+    NonNullable<InitializedUpdate["target"]>,
     | "currentVersion"
     | "targetVersion"
     | "packageTargetSchemaVersions"
@@ -37,65 +41,96 @@ export async function withPrivateStagedPackageInstall<T>(
     manifest: unknown;
   }) => Promise<T>,
 ): Promise<T> {
-  const workspace = await tempWorkspace({
-    rootDir: resolvePreferredOpenClawTmpDir(),
-    prefix: "openclaw-update-artifact-",
-  });
+  const rootIdentity = await readDirectoryIdentity(resolvePreferredOpenClawTmpDir());
+  const root = rootIdentity.realPath;
+  const assertRoot = () => assertDirectoryIdentitySync(root, rootIdentity);
+  assertRoot();
+  const home = await createPrivateSqliteTempDirectory(root, "openclaw-update-artifact-");
+  assertRoot();
+  const homeIdentity = await readDirectoryIdentity(home);
+  const assertWorkspace = () => {
+    assertRoot();
+    assertDirectoryIdentitySync(home, homeIdentity);
+  };
+  assertWorkspace();
+  let retainWorkspace = false;
   return await withUpdateInitializationCleanup(
     async () => {
-      const home = workspace.dir;
-      const state = path.join(home, "state");
-      const tmp = path.join(home, "tmp");
-      await fs.mkdir(tmp);
-      const env = { ...params.installEnv };
-      // Child env overlays process.env. Tombstones must survive until spawn.
-      for (const key of [
-        ...[...GATEWAY_CONFIG_SELECTION_ENV_KEYS].filter(
-          (selector) => selector.startsWith("OPENCLAW_") || selector === "PI_CODING_AGENT_DIR",
-        ),
-        ...GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
-        ...SUPERVISOR_HINT_ENV_VARS,
-        "STATE_DIRECTORY",
-        "NODE_COMPILE_CACHE",
-        "OPENCLAW_GATEWAY_SERVICE_PID",
-        "OPENCLAW_SERVICE_MARKER",
-        "OPENCLAW_SERVICE_KIND",
-        "OPENCLAW_UPDATE_RUN_ID",
-        "OPENCLAW_UPDATE_RUN_HANDOFF",
-        "OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META",
-        "OPENCLAW_UPDATE_POST_CORE",
-        "OPENCLAW_UPDATE_POST_CORE_CHANNEL",
-        "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH",
-        "OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH",
-        "OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS",
-        "OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL",
-        "OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH",
-        "OPENCLAW_DIAGNOSTICS_TIMELINE_PATH",
-      ]) {
-        env[key] = undefined;
+      try {
+        const state = path.join(home, "state");
+        const tmp = path.join(home, "tmp");
+        await fs.mkdir(tmp);
+        assertWorkspace();
+        const env = { ...params.installEnv };
+        // Child env overlays process.env. Tombstones must survive until spawn.
+        for (const key of [
+          ...[...GATEWAY_CONFIG_SELECTION_ENV_KEYS].filter(
+            (selector) => selector.startsWith("OPENCLAW_") || selector === "PI_CODING_AGENT_DIR",
+          ),
+          ...GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
+          ...SUPERVISOR_HINT_ENV_VARS,
+          "STATE_DIRECTORY",
+          "NODE_COMPILE_CACHE",
+          "OPENCLAW_GATEWAY_SERVICE_PID",
+          "OPENCLAW_SERVICE_MARKER",
+          "OPENCLAW_SERVICE_KIND",
+          "OPENCLAW_UPDATE_RUN_ID",
+          "OPENCLAW_UPDATE_RUN_HANDOFF",
+          "OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META",
+          "OPENCLAW_UPDATE_POST_CORE",
+          "OPENCLAW_UPDATE_POST_CORE_CHANNEL",
+          "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH",
+          "OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH",
+          "OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS",
+          "OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL",
+          "OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH",
+          "OPENCLAW_DIAGNOSTICS_TIMELINE_PATH",
+        ]) {
+          env[key] = undefined;
+        }
+        Object.assign(env, {
+          OPENCLAW_HOME: home,
+          OPENCLAW_STATE_DIR: state,
+          OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
+          TMPDIR: tmp,
+          TMP: tmp,
+          TEMP: tmp,
+          NODE_DISABLE_COMPILE_CACHE: "1",
+        });
+        const stage = await stagePackageInstallUpdate({ ...params, installEnv: env });
+        return await withUpdateInitializationCleanup(
+          async () => {
+            assertWorkspace();
+            const manifest: unknown = JSON.parse(
+              await fs.readFile(path.join(stage.root, "package.json"), "utf8"),
+            );
+            assertWorkspace();
+            return await use({ stage, manifest });
+          },
+          () => stage.close(),
+        );
+      } catch (error) {
+        retainWorkspace = hasCommandProcessCleanupError(error);
+        throw error;
       }
-      Object.assign(env, {
-        OPENCLAW_HOME: home,
-        OPENCLAW_STATE_DIR: state,
-        OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
-        TMPDIR: tmp,
-        TMP: tmp,
-        TEMP: tmp,
-        NODE_DISABLE_COMPILE_CACHE: "1",
-      });
-      const stage = await stagePackageInstallUpdate({ ...params, installEnv: env });
-      return await withUpdateInitializationCleanup(
-        async () => {
-          const manifest: unknown = JSON.parse(
-            await fs.readFile(path.join(stage.root, "package.json"), "utf8"),
-          );
-          return await use({ stage, manifest });
-        },
-        () => stage.close(),
-      );
     },
     async () => {
-      await workspace.cleanup();
+      // Accepted children may still use HOME/state/tmp after the updater exits.
+      if (retainWorkspace) {
+        return;
+      }
+      await removePathWithinRoot({
+        rootDir: root,
+        relativePath: path.basename(home),
+        recursive: true,
+        symlinks: "unlink",
+        assertBeforeMutation: () => {
+          assertRoot();
+          if (fsSync.lstatSync(home, { bigint: true, throwIfNoEntry: false })) {
+            assertDirectoryIdentitySync(home, homeIdentity);
+          }
+        },
+      });
     },
   );
 }

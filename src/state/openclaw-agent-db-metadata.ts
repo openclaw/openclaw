@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { classifySqliteTableReadError, tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 export type ExistingAgentSchemaMeta = {
   agentId: string | null;
@@ -14,9 +14,19 @@ export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSche
     return null;
   }
   // Schema admission runs in native readers before query-builder runtimes load.
-  const row = db
-    .prepare("SELECT role, schema_version, agent_id FROM schema_meta WHERE meta_key = 'primary'")
-    .get();
+  let row;
+  try {
+    row = db
+      .prepare("SELECT role, schema_version, agent_id FROM schema_meta WHERE meta_key = 'primary'")
+      .get();
+  } catch (error) {
+    throw classifySqliteTableReadError(
+      db,
+      "schema_meta",
+      ["meta_key", "role", "schema_version", "agent_id"],
+      error,
+    );
+  }
   if (!row) {
     return null;
   }

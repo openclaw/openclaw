@@ -39,11 +39,6 @@ export {
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-export {
-  BrowserToolOutputSchema,
-  createBrowserToolSchema,
-  resolveBrowserToolCapabilities,
-} from "./browser-tool.schema.js";
 export type { BrowserToolCapabilities } from "./browser-tool.schema.js";
 export {
   browserAct,

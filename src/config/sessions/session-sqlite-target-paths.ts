@@ -34,7 +34,7 @@ export function resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath: str
   shared?: boolean;
 } {
   const resolved = path.resolve(storePath);
-  if (path.basename(resolved) === "openclaw-agent.sqlite" || resolved.endsWith(".sqlite")) {
+  if (resolved.endsWith(".sqlite")) {
     const agentId = resolveAgentIdFromSqliteDatabasePath(resolved);
     return { path: resolved, ...(agentId ? { agentId } : { shared: true }) };
   }

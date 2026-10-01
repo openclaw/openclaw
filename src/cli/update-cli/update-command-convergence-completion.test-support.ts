@@ -12,7 +12,6 @@ import {
 } from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
-  postCoreUpdateParentOwnsCompletion,
   writePostCorePluginUpdateResultFile,
 } from "./update-command-post-core.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
@@ -56,8 +55,9 @@ export function registerConvergenceCompletionTests({
         return { pluginUpdate, configSnapshot: validConfigSnapshot };
       });
       if (resumesTarget) {
-        vi.mocked(postCoreUpdateParentOwnsCompletion).mockResolvedValue(true);
-        vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", "/fixture/post-core-result.json");
+        const handoffDir = process.env.OPENCLAW_STATE_DIR!;
+        await fs.writeFile(path.join(handoffDir, "handoff.json"), '{"completionOwner":"parent"}');
+        vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", path.join(handoffDir, "plugins.json"));
         vi.mocked(continuePostCoreUpdateInFreshProcess).mockImplementationOnce(async () => {
           // Run the actual resume producer, not a canned child result. The existing
           // transport mock observes when a modern child publishes to its parent.
@@ -129,3 +129,5 @@ export function registerConvergenceCompletionTests({
     },
   );
 }
+import fs from "node:fs/promises";
+import path from "node:path";

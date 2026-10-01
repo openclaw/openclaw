@@ -1,5 +1,6 @@
 import { Value } from "typebox/value";
 import { expect, it, type Mock } from "vitest";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { readInProcessSubagentResume } from "../gateway/in-process-subagent-resume.js";
 import { createOperationalRunInstanceRef } from "./admitted-run-context.js";
 import { subagentRuns } from "./subagents/registry/subagent-registry-memory.js";
@@ -10,13 +11,11 @@ import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js
 type SessionsSendResumeFixtures = {
   getSessionTool: (name: "sessions_send", options: { agentSessionKey: string }) => AnyAgentTool;
   callGatewayMock: Mock;
-  loadSessionEntryByKeyMock: Mock;
 };
 
 export function registerSessionsSendResumeTests({
   getSessionTool,
   callGatewayMock,
-  loadSessionEntryByKeyMock,
 }: SessionsSendResumeFixtures) {
   it("sessions_send resume rejects a caller without admitted authority instead of sending a message", async () => {
     const tool = getSessionTool("sessions_send", { agentSessionKey: "agent:main:main" });
@@ -32,24 +31,25 @@ export function registerSessionsSendResumeTests({
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it.each(
-    ["agent:main:subagent:resume-child", "agent:main:dashboard:resume-child"].flatMap((targetKey) =>
-      [
-        { scenario: "explicit resume", options: { mode: "resume" as const } },
-        { scenario: "automatic resume", options: {} },
-        { scenario: "newer completed sibling", options: {} },
-        {
-          scenario: "automatic resume with reply options",
-          options: { timeoutSeconds: 30, watch: true },
-        },
-        { scenario: "explicit separate followup", options: { mode: "followup" as const } },
-        { scenario: "unrelated caller", options: {} },
-        { scenario: "completed child", options: {} },
-        { scenario: "completion disabled", options: {} },
-        { scenario: "completion unspecified", options: {} },
-      ].map((testCase) => Object.assign({ targetKey }, testCase)),
+  it.each([
+    {
+      targetKey: "agent:main:subagent:resume-child",
+      scenario: "explicit resume",
+      options: { mode: "resume" as const },
+    },
+    ...[
+      { scenario: "newer completed sibling", options: {} },
+      {
+        scenario: "automatic resume with reply options",
+        options: { timeoutSeconds: 30, watch: true },
+      },
+      { scenario: "explicit separate followup", options: { mode: "followup" as const } },
+      { scenario: "unrelated caller", options: {} },
+      { scenario: "completion unspecified", options: {} },
+    ].map((testCase) =>
+      Object.assign({ targetKey: "agent:main:dashboard:resume-child" }, testCase),
     ),
-  )(
+  ])(
     "sessions_send preserves completion ownership for $targetKey: $scenario",
     async ({ targetKey, scenario, options }) => {
       const parent = "agent:main:main";
@@ -57,13 +57,15 @@ export function registerSessionsSendResumeTests({
       const siblingRunId = "tool-resume-independent-sibling";
       const controller =
         scenario === "unrelated caller" ? "agent:main:dashboard:other-parent" : parent;
-      const pauseReason = scenario === "completed child" ? undefined : "sessions_yield";
+      const pauseReason = "sessions_yield";
       const resumes =
         scenario !== "explicit separate followup" &&
         scenario !== "unrelated caller" &&
-        scenario !== "completed child" &&
-        scenario !== "completion disabled" &&
         scenario !== "completion unspecified";
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: targetKey },
+        { sessionId: "tool-resume-session", updatedAt: Date.now() },
+      );
       addSubagentRunForTests({
         runId: previousRunId,
         childSessionKey: targetKey,
@@ -75,8 +77,7 @@ export function registerSessionsSendResumeTests({
         startedAt: Date.now() - 100,
         endedAt: Date.now(),
         pauseReason,
-        expectsCompletionMessage:
-          scenario === "completion unspecified" ? undefined : scenario !== "completion disabled",
+        expectsCompletionMessage: scenario === "completion unspecified" ? undefined : true,
       });
       if (scenario === "newer completed sibling") {
         addSubagentRunForTests({
@@ -92,10 +93,6 @@ export function registerSessionsSendResumeTests({
           execution: { status: "terminal", endedAt: Date.now() + 1, outcome: { status: "ok" } },
         });
       }
-      loadSessionEntryByKeyMock.mockReturnValue({
-        sessionId: "tool-resume-session",
-        updatedAt: Date.now(),
-      });
       callGatewayMock.mockImplementation(async ({ method }) => {
         if (method === "agent") {
           return {

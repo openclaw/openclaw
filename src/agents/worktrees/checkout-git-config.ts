@@ -31,7 +31,6 @@ const native: WorktreeGitPolicy = {
   worker: { text: runGitBytes, buffered: runGitBuffered },
   withContentEnvironment: async (run) => await run(gitEnvironment()),
 };
-type GitPolicy = WorktreeGitPolicy;
 type GitConfigOptions = Pick<
   NonNullable<Parameters<typeof runGit>[2]>,
   "baseEnv" | "env" | "signal" | "beforeRun"
@@ -69,7 +68,7 @@ export async function withWorktreeGitConfig<T>(
   cwd: string,
   sourceOnly: boolean,
   guard: Guard,
-  run: (git: GitPolicy) => Promise<T>,
+  run: (git: WorktreeGitPolicy) => Promise<T>,
 ): Promise<T> {
   if (!sourceOnly) {
     return await run(native);

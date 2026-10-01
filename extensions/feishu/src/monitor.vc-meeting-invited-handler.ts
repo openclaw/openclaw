@@ -1,6 +1,6 @@
 import * as crypto from "node:crypto";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString as pickString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
 import { claimUnprocessedFeishuMessage, type FeishuMessageProcessingClaim } from "./dedup.js";
@@ -35,21 +35,15 @@ type ResolvedVcInviter = {
   openId?: string;
   userId?: string;
   unionId?: string;
-  name?: string;
 };
 
 type VcMeetingInvitedTurn = {
   turnId: string;
   meetingNo: string;
-  topic?: string;
   inviteTime?: string;
   inviter: ResolvedVcInviter;
   prompt: string;
 };
-
-function pickString(value: unknown): string | undefined {
-  return typeof value === "string" ? normalizeOptionalString(value) : undefined;
-}
 
 function resolveVcInviter(event: FeishuVcMeetingInvitedEvent): ResolvedVcInviter | null {
   const id = event.inviter?.id;
@@ -60,13 +54,11 @@ function resolveVcInviter(event: FeishuVcMeetingInvitedEvent): ResolvedVcInviter
   if (!senderId) {
     return null;
   }
-  const name = pickString(event.inviter?.user_name);
   return {
     senderId,
     ...(openId ? { openId } : {}),
     ...(userId ? { userId } : {}),
     ...(unionId ? { unionId } : {}),
-    ...(name ? { name } : {}),
   };
 }
 
@@ -90,7 +82,6 @@ function resolveVcMeetingInvitedTurn(
   const eventId = pickString(event.event_id);
   const inviteTime = pickString(event.invite_time);
   const callId = pickString(event.call_id);
-  const topic = pickString(event.meeting?.topic);
   const turnId = eventId
     ? `vc-invited:event:${eventId}`
     : `vc-invited:${meetingNo}:${inviteTime ?? uuid()}`;
@@ -101,7 +92,6 @@ function resolveVcMeetingInvitedTurn(
     meetingNo,
     inviter,
     prompt,
-    ...(topic ? { topic } : {}),
     ...(inviteTime ? { inviteTime } : {}),
   };
 }

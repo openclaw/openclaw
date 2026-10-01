@@ -35,7 +35,8 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     await import("../../config/sessions/session-accessor.transcript-target.js");
   const { waitForSessionTranscriptIndexReconcile } =
     await import("../../config/sessions/session-transcript-reconcile.js");
-  const { closeOpenClawAgentDatabaseByPath } = await import("../../state/openclaw-agent-db.js");
+  const { closeOpenClawAgentDatabaseByPathAsync } =
+    await import("../../state/openclaw-agent-db.js");
   const { SessionManager } = await import("../sessions/session-manager.js");
   const { makeAgentAssistantMessage, makeAgentUserMessage } =
     await import("../test-helpers/agent-message-fixtures.js");
@@ -168,7 +169,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       unsubscribe();
       forgetActiveSessionForShutdown(target.sessionId);
       forgetCommittedSuccessor();
-      closeOpenClawAgentDatabaseByPath(target.storePath);
+      await closeOpenClawAgentDatabaseByPathAsync(target.storePath, target.agentId);
     }
   };
   try {
@@ -359,7 +360,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     const snapshot = async () => {
       await drain();
       // Reopen independently: a cached manager can hide a durable append or leaf change.
-      closeOpenClawAgentDatabaseByPath(target.storePath);
+      await closeOpenClawAgentDatabaseByPathAsync(target.storePath, target.agentId);
       const manager = memoryManager ?? SessionManager.open(target, state.workspaceDir);
       const events = memoryManager
         ? memoryManager.getEntries()

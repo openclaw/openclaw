@@ -47,6 +47,28 @@ describe("plugin npm runtime build args", () => {
   });
 
   it.each([
+    ["--qa-gateway-fixture", "extensions/qa-lab"],
+    ["extensions/qa-lab", "--qa-gateway-fixture"],
+    ["--", "--qa-gateway-fixture", "extensions/qa-lab"],
+  ])("selects the private Gateway graph for %j", (...args) => {
+    expect(parseSingleBuildArgs(args)).toEqual({
+      packageDir: "extensions/qa-lab",
+      profile: "qa-gateway-fixture",
+    });
+  });
+
+  it("refuses source-host preparation for portable Gateway fixtures", () => {
+    expect(() =>
+      parseSingleBuildArgs([
+        "extensions/qa-lab",
+        "--qa-gateway-fixture",
+        "--prepare-native-import",
+      ]),
+    ).toThrow("QA Gateway fixtures cannot prepare source-native host imports");
+    expect(() => parseSingleBuildArgs(["--qa-gateway-fixture"])).toThrow(/usage:/u);
+  });
+
+  it.each([
     { argv: ["extensions/slack", ""] },
     { argv: ["extensions/slack", " \t "] },
     { argv: ["extensions/slack", "", "extra"] },
@@ -57,6 +79,8 @@ describe("plugin npm runtime build args", () => {
     { argv: ["extensions/slack", "--prepare-native-import", "", "--unexpected"] },
     { argv: ["--", "--prepare-native-import", "extensions/slack", ""] },
     { argv: ["--prepare-native-import", "extensions/slack", "", "--prepare-native-import"] },
+    { argv: ["extensions/qa-lab", "--qa-gateway-fixture", ""] },
+    { argv: ["extensions/qa-lab", "--qa-gateway-fixture", "--qa-gateway-fixture"] },
   ])("rejects excess runtime build argv $argv after extracting its mode", ({ argv }) => {
     expect(() => parseSingleBuildArgs(argv)).toThrow(
       "unexpected plugin npm runtime build argument",

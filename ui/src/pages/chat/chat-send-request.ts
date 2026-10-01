@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type {
   ChatSendIntent,
@@ -11,6 +12,7 @@ import {
   normalizeAgentId,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { assertUploadsEnabled } from "../../lib/uploads.ts";
 import { buildChatApiAttachments } from "./attachment-api.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
@@ -34,19 +36,33 @@ export async function requestChatSend(
     expectedLeafEntryId?: string | null;
   },
 ): Promise<ChatSendAck> {
-  const routing = resolveChatSendRouting(state, params);
-  if (chatProviderReviewRow(state, routing.sessionKey, routing.selectedAgentId)?.providerReview) {
+  if (params.attachments?.length) {
+    assertUploadsEnabled(state.uploadConfig);
+  }
+  const sessionKey = params.sessionKey ?? state.sessionKey;
+  const selectedAgentId = params.agentId
+    ? normalizeAgentId(params.agentId)
+    : resolveUiSelectedSessionAgentId(state);
+  const currentSessionId = state.currentSessionId;
+  const canReuseCurrentSessionId =
+    sessionKey === state.sessionKey &&
+    (!isUiGlobalSessionKey(sessionKey) ||
+      (selectedAgentId !== undefined &&
+        selectedAgentId === resolveUiSelectedSessionAgentId(state)));
+  const routingSessionId =
+    canReuseCurrentSessionId && typeof currentSessionId === "string" && currentSessionId.trim()
+      ? currentSessionId.trim()
+      : undefined;
+  if (chatProviderReviewRow(state, sessionKey, selectedAgentId)?.providerReview) {
     throw new Error(t("chat.providerReview.pausedBody"));
   }
-  const sessionId = params.sessionId ?? (params.intent ? undefined : routing.sessionId);
+  const sessionId = params.sessionId ?? (params.intent ? undefined : routingSessionId);
   const controlUiReconnectResume = Boolean(
     !params.intent && sessionId && state.reconnectResumeSessionId === sessionId,
   );
   const payload = await state.client!.request("chat.send", {
-    sessionKey: routing.sessionKey,
-    ...(isUiGlobalSessionKey(routing.sessionKey) && routing.selectedAgentId
-      ? { agentId: routing.selectedAgentId }
-      : {}),
+    sessionKey,
+    ...(isUiGlobalSessionKey(sessionKey) && selectedAgentId ? { agentId: selectedAgentId } : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
     message: params.message,
@@ -82,42 +98,8 @@ export function resolveDisplayedLeafEntryId(state: ChatState): string | null | u
 const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
 
 export function isActiveLeafChangedError(err: unknown): err is GatewayRequestError {
-  if (!(err instanceof GatewayRequestError)) {
-    return false;
-  }
-  const details = err.details;
   return (
-    typeof details === "object" &&
-    details !== null &&
-    !Array.isArray(details) &&
-    (details as { reason?: unknown }).reason === ACTIVE_LEAF_CHANGED_ERROR_REASON
+    err instanceof GatewayRequestError &&
+    asOptionalRecord(err.details)?.reason === ACTIVE_LEAF_CHANGED_ERROR_REASON
   );
-}
-
-function resolveChatSendRouting(
-  state: ChatState,
-  params: {
-    sessionKey?: string;
-    agentId?: string;
-  },
-): { selectedAgentId?: string; sessionId?: string; sessionKey: string } {
-  const sessionKey = params.sessionKey ?? state.sessionKey;
-  const selectedAgentId = params.agentId
-    ? normalizeAgentId(params.agentId)
-    : resolveUiSelectedSessionAgentId(state);
-  const currentSessionId = state.currentSessionId;
-  const canReuseCurrentSessionId =
-    sessionKey === state.sessionKey &&
-    (!isUiGlobalSessionKey(sessionKey) ||
-      (selectedAgentId !== undefined &&
-        selectedAgentId === resolveUiSelectedSessionAgentId(state)));
-  const sessionId =
-    canReuseCurrentSessionId && typeof currentSessionId === "string" && currentSessionId.trim()
-      ? currentSessionId.trim()
-      : undefined;
-  return {
-    sessionKey,
-    ...(selectedAgentId ? { selectedAgentId } : {}),
-    ...(sessionId ? { sessionId } : {}),
-  };
 }

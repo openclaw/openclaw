@@ -1,8 +1,3 @@
-/**
- * Sandbox runtime status and tool-policy diagnostics.
- *
- * Resolves whether a session is sandboxed and explains policy blocks before tool execution.
- */
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -86,18 +81,6 @@ function resolveMainSessionKeyForSandbox(params: {
   });
 }
 
-function resolveComparableSessionKeyForSandbox(params: {
-  cfg?: OpenClawConfig;
-  agentId: string;
-  sessionKey: string;
-}): string {
-  return canonicalizeMainSessionAlias({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
-}
-
 type SandboxRuntimeStatusParams = {
   cfg?: OpenClawConfig;
   sessionKey?: string;
@@ -109,7 +92,6 @@ type SandboxRuntimeStatusParams = {
   preparedSessionEntry?: Pick<SessionEntry, "sandbox" | "sandboxMode" | "createdActor"> | null;
 };
 
-/** Resolves sandbox mode, effective session scope, and tool policy for a session. */
 export function resolveSandboxRuntimeStatus(params: SandboxRuntimeStatusParams) {
   return resolveSandboxRuntimeStatusWithRead(params, resolveSessionEntry);
 }
@@ -180,7 +162,7 @@ export function resolveSandboxRuntimeStatusesForPersistedSessions(
       }),
       projection: "list" as const,
       sessionKeys: params.sessionKeys.map((sessionKey) =>
-        resolveComparableSessionKeyForSandbox({ ...params, sessionKey }),
+        canonicalizeMainSessionAlias({ ...params, sessionKey }),
       ),
     })),
   );
@@ -220,7 +202,7 @@ function resolveSandboxClassification(params: SandboxRuntimeStatusParams) {
   const cfg = params.cfg;
   const sandboxCfg = resolveSandboxConfigForAgent(cfg, classificationAgentId);
   const mainSessionKey = resolveMainSessionKeyForSandbox({ cfg, agentId: classificationAgentId });
-  const comparableSessionKey = resolveComparableSessionKeyForSandbox({
+  const comparableSessionKey = canonicalizeMainSessionAlias({
     cfg,
     agentId: classificationAgentId,
     sessionKey: classificationSessionKey,
@@ -312,10 +294,6 @@ function resolveSandboxRuntimeStatusWithRead(
   };
 }
 
-function sanitizeForSingleLineDisplay(value: string): string {
-  return escapeControlCharsVisible(value);
-}
-
 function hasUnsafeControlChars(value: string): boolean {
   return Array.from(value).some((char) => {
     const codePoint = char.codePointAt(0) ?? 0;
@@ -331,14 +309,13 @@ function redactSessionKey(value: string): string {
   if (trimmed.length <= 12) {
     return "(redacted)";
   }
-  return `${sanitizeForSingleLineDisplay(truncateUtf16Safe(trimmed, 6))}…${sanitizeForSingleLineDisplay(sliceUtf16Safe(trimmed, -6))}`;
+  return `${escapeControlCharsVisible(truncateUtf16Safe(trimmed, 6))}…${escapeControlCharsVisible(sliceUtf16Safe(trimmed, -6))}`;
 }
 
 function shellEscapeSingleArg(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-/** Formats the user-facing denial message when sandbox tool policy blocks a tool. */
 export function formatSandboxToolPolicyBlockedMessage(params: {
   cfg?: OpenClawConfig;
   sessionKey?: string;

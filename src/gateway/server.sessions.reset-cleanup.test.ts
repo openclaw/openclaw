@@ -52,17 +52,24 @@ afterEach(async () => {
 });
 
 function expectResetAcpState(acp: SessionAcpMeta | undefined) {
-  expect(acp?.backend).toBe("acpx");
-  expect(acp?.agent).toBe("codex");
-  expect(acp?.runtimeSessionName).toBe("runtime:reset");
-  expect(acp?.identity?.state).toBe("pending");
-  expect(acp?.identity?.acpxRecordId).toBe("agent:main:main");
+  expect(acp).toMatchObject({
+    backend: "acpx",
+    agent: "codex",
+    runtimeSessionName: "runtime:reset",
+    identity: { state: "pending", acpxRecordId: "agent:main:main" },
+    mode: "persistent",
+    runtimeOptions: { runtimeMode: "auto", timeoutSeconds: 30 },
+    cwd: "/tmp/acp-session",
+    state: "idle",
+  });
   expect(acp?.identity?.acpxSessionId).toBeUndefined();
-  expect(acp?.mode).toBe("persistent");
-  expect(acp?.runtimeOptions?.runtimeMode).toBe("auto");
-  expect(acp?.runtimeOptions?.timeoutSeconds).toBe(30);
-  expect(acp?.cwd).toBe("/tmp/acp-session");
-  expect(acp?.state).toBe("idle");
+}
+
+async function seedMainSession() {
+  const seeded = await createSessionStoreDir();
+  await writeSingleLineSession(seeded.dir, "sess-main", "hello");
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+  return seeded;
 }
 
 async function seedWaitingActiveMainSession() {
@@ -515,27 +522,16 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
   expect(reset.payload?.entry).not.toHaveProperty("acp");
   expectResetAcpState(readAcpSessionMeta({ sessionKey: "agent:main:main" }));
   expect(acpManagerMocks.closeSession).toHaveBeenCalledTimes(1);
-  const closeSessionCall = acpManagerMocks.closeSession.mock.calls.at(0) as unknown as
-    | [
-        {
-          allowBackendUnavailable?: boolean;
-          cfg?: unknown;
-          discardPersistentState?: boolean;
-          requireAcpSession?: boolean;
-          reason?: string;
-          sessionKey?: string;
-        },
-      ]
-    | undefined;
-  const closeSessionParams = closeSessionCall?.[0];
-  expect(closeSessionParams?.allowBackendUnavailable).toBe(true);
-  if (!closeSessionParams?.cfg) {
-    throw new Error("expected closeSession config");
-  }
-  expect(closeSessionParams?.discardPersistentState).toBe(true);
-  expect(closeSessionParams?.requireAcpSession).toBe(false);
-  expect(closeSessionParams?.reason).toBe("session-reset");
-  expect(closeSessionParams?.sessionKey).toBe("agent:main:main");
+  expect(acpManagerMocks.closeSession).toHaveBeenCalledWith(
+    expect.objectContaining({
+      allowBackendUnavailable: true,
+      cfg: expect.any(Object),
+      discardPersistentState: true,
+      requireAcpSession: false,
+      reason: "session-reset",
+      sessionKey: "agent:main:main",
+    }),
+  );
   expect(prepareFreshSession).toHaveBeenCalledWith({
     sessionKey: "agent:main:main",
     agentId: "main",
@@ -974,13 +970,7 @@ test("sessions.reset closes child ACP runtimes concurrently so stuck children do
 });
 
 test("sessions.reset does not emit lifecycle events when key does not exist", async () => {
-  const { dir } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-main", "hello");
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-main"),
-    },
-  });
+  await seedMainSession();
 
   const reset = await directSessionReq<{
     ok: true;
@@ -1030,13 +1020,7 @@ test("sessions.reset emits subagent targetKind for subagent sessions", async () 
 });
 
 test("sessions.reset directly unbinds thread bindings when hooks are unavailable", async () => {
-  const { dir } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-main", "hello");
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-main"),
-    },
-  });
+  await seedMainSession();
   subagentLifecycleHookState.hasSubagentEndedHook = false;
 
   const reset = await directSessionReq<{ ok: true; key: string }>("sessions.reset", {

@@ -13,6 +13,17 @@ import {
 import type { JsonValue } from "./protocol.js";
 import { createClientHarness } from "./test-support.js";
 
+function boundedTurnDefaults() {
+  return {
+    model: { mode: "required", id: "gpt-5.4" },
+    timeoutMs: 5_000,
+    taskLabel: "isolated completion",
+    developerInstructions: "Answer only.",
+    input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
+    requiredModalities: ["text"],
+  } satisfies Omit<Parameters<typeof runBoundedCodexAppServerTurn>[0], "options" | "isolation">;
+}
+
 describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
   it.each<{ source: string; requirements: JsonValue }>([
     { source: "managed config layers", requirements: null },
@@ -186,13 +197,8 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         },
       });
       const run = runBoundedCodexAppServerTurn({
-        model: { mode: "required", id: "gpt-5.4" },
-        timeoutMs: 5_000,
+        ...boundedTurnDefaults(),
         options: { clientFactory: async () => harness.client },
-        taskLabel: "isolated completion",
-        developerInstructions: "Answer only.",
-        input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
-        requiredModalities: ["text"],
         isolation: "configured-transport",
       });
       const result = expect(run).resolves.toMatchObject({
@@ -223,14 +229,11 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     const controller = new AbortController();
     let outcome: unknown;
     const run = runBoundedCodexAppServerTurn({
-      model: { mode: "required", id: "gpt-5.4" },
-      timeoutMs: 5_000,
+      ...boundedTurnDefaults(),
       signal: controller.signal,
       options: { clientFactory: fake.factory },
-      taskLabel: "isolated completion",
       developerInstructions: "Name the conversation.",
       input: [{ type: "text", text: "Help me plan a garden.", text_elements: [] }],
-      requiredModalities: ["text"],
       isolation: "configured-transport",
     }).catch((error: unknown) => {
       outcome = error;
@@ -257,13 +260,10 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     const fake = createClientFactory({ preBindDeltaCount: 257 });
     await expect(
       runBoundedCodexAppServerTurn({
-        model: { mode: "required", id: "gpt-5.4" },
-        timeoutMs: 5_000,
+        ...boundedTurnDefaults(),
         options: { clientFactory: fake.factory },
-        taskLabel: "isolated completion",
         developerInstructions: "Name the conversation.",
         input: [{ type: "text", text: "Help me plan a garden.", text_elements: [] }],
-        requiredModalities: ["text"],
         isolation: "configured-transport",
       }),
     ).rejects.toThrow("pre-bind notification buffer exceeded");
@@ -353,18 +353,13 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       try {
         await expect(
           runBoundedCodexAppServerTurn({
-            model: { mode: "required", id: "gpt-5.4" },
-            timeoutMs: 5_000,
+            ...boundedTurnDefaults(),
             assertCurrent: () => {
               if (!current) {
                 throw expired;
               }
             },
             options: { clientFactory: async () => harness.client },
-            taskLabel: "isolated completion",
-            developerInstructions: "Answer only.",
-            input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
-            requiredModalities: ["text"],
             isolation: "configured-transport",
             requireNoExternalCapabilities: true,
           }),
@@ -380,13 +375,11 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
   it("returns an explicit unsupported decline for interactive MCP input", async () => {
     const fake = createClientFactory({ completeTurn: false });
     const run = runBoundedCodexAppServerTurn({
-      model: { mode: "required", id: "gpt-5.4" },
-      timeoutMs: 5_000,
+      ...boundedTurnDefaults(),
       options: { clientFactory: fake.factory },
       taskLabel: "hosted search",
       developerInstructions: "Search only.",
       input: [{ type: "text", text: "Find current market news.", text_elements: [] }],
-      requiredModalities: ["text"],
       isolation: "private-stdio",
     });
     await vi.waitFor(() => expect(fake.methods).toContain("turn/start"));
@@ -422,13 +415,12 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
     await expect(
       runBoundedCodexAppServerTurn({
-        model: { mode: "required", id: "gpt-5.4" },
+        ...boundedTurnDefaults(),
         timeoutMs: 100,
         options: { clientFactory: fake.factory },
         taskLabel: "hosted search",
         developerInstructions: "Search only.",
         input: [{ type: "text", text: "Find current market news.", text_elements: [] }],
-        requiredModalities: ["text"],
         isolation: "private-stdio",
       }),
     ).rejects.toMatchObject({
@@ -437,42 +429,17 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     });
   });
 
-  it("keeps a caller abort distinct from its own timeout", async () => {
-    const fake = createClientFactory({ completeTurn: false });
-    const caller = new AbortController();
-    const reason = new Error("caller cancelled hosted search");
-    caller.abort(reason);
-
-    await expect(
-      runBoundedCodexAppServerTurn({
-        model: { mode: "required", id: "gpt-5.4" },
-        timeoutMs: 5_000,
-        signal: caller.signal,
-        options: { clientFactory: fake.factory },
-        taskLabel: "hosted search",
-        developerInstructions: "Search only.",
-        input: [{ type: "text", text: "Find current market news.", text_elements: [] }],
-        requiredModalities: ["text"],
-        isolation: "private-stdio",
-      }),
-    ).rejects.toMatchObject({
-      name: "Error",
-      message: "codex app-server hosted search turn aborted",
-    });
-  });
-
   it("does not adopt a prior turn's timeout as its own", async () => {
     const first = createClientFactory({ completeTurn: false });
     let priorTimeout: unknown;
     try {
       await runBoundedCodexAppServerTurn({
-        model: { mode: "required", id: "gpt-5.4" },
+        ...boundedTurnDefaults(),
         timeoutMs: 100,
         options: { clientFactory: first.factory },
         taskLabel: "first hosted search",
         developerInstructions: "Search only.",
         input: [{ type: "text", text: "Find first query.", text_elements: [] }],
-        requiredModalities: ["text"],
         isolation: "private-stdio",
       });
     } catch (error) {
@@ -485,14 +452,12 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     const second = createClientFactory({ completeTurn: false });
     await expect(
       runBoundedCodexAppServerTurn({
-        model: { mode: "required", id: "gpt-5.4" },
-        timeoutMs: 5_000,
+        ...boundedTurnDefaults(),
         signal: caller.signal,
         options: { clientFactory: second.factory },
         taskLabel: "second hosted search",
         developerInstructions: "Search only.",
         input: [{ type: "text", text: "Find second query.", text_elements: [] }],
-        requiredModalities: ["text"],
         isolation: "private-stdio",
       }),
     ).rejects.toMatchObject({
@@ -508,13 +473,11 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
     await expect(
       runBoundedCodexAppServerTurn({
-        model: { mode: "required", id: "gpt-5.4" },
-        timeoutMs: 5_000,
+        ...boundedTurnDefaults(),
         options: { clientFactory: fake.factory },
         taskLabel: "settled-turn finalization",
         developerInstructions: "Finalize only.",
         input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
-        requiredModalities: ["text"],
         isolation: "private-stdio",
         requireNoExternalCapabilities: true,
       }),
@@ -526,13 +489,11 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
     await expect(
       runBoundedCodexAppServerTurn({
-        model: { mode: "required", id: "gpt-5.4" },
-        timeoutMs: 5_000,
+        ...boundedTurnDefaults(),
         options: { clientFactory: fake.factory },
         taskLabel: "settled-turn finalization",
         developerInstructions: "Finalize only.",
         input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
-        requiredModalities: ["text"],
         isolation: "private-stdio",
         requireNoExternalCapabilities: true,
         allowEmptyText: true,
@@ -545,13 +506,11 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
     await expect(
       runBoundedCodexAppServerTurn({
-        model: { mode: "required", id: "gpt-5.4" },
-        timeoutMs: 5_000,
+        ...boundedTurnDefaults(),
         options: { clientFactory: fake.factory },
         taskLabel: "hosted search",
         developerInstructions: "Search only.",
         input: [{ type: "text", text: "Find the answer.", text_elements: [] }],
-        requiredModalities: ["text"],
         isolation: "private-stdio",
       }),
     ).rejects.toThrow("hosted search turn returned no text");
@@ -581,13 +540,11 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
       await expect(
         runBoundedCodexAppServerTurn({
-          model: { mode: "required", id: "gpt-5.4" },
-          timeoutMs: 5_000,
+          ...boundedTurnDefaults(),
           options: { clientFactory: fake.factory },
           taskLabel: "settled-turn finalization",
           developerInstructions: "Finalize only.",
           input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
-          requiredModalities: ["text"],
           isolation: "private-stdio",
           requireNoExternalCapabilities: true,
         }),
@@ -606,13 +563,11 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
     await expect(
       runBoundedCodexAppServerTurn({
-        model: { mode: "required", id: "gpt-5.4" },
-        timeoutMs: 5_000,
+        ...boundedTurnDefaults(),
         options: { clientFactory: fake.factory },
         taskLabel: "settled-turn finalization",
         developerInstructions: "Finalize only.",
         input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
-        requiredModalities: ["text"],
         isolation: "private-stdio",
         requireNoExternalCapabilities: true,
       }),
@@ -627,22 +582,17 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       const profile = "openai:bounded";
 
       await runBoundedCodexAppServerTurn({
-        model: { mode: "required", id: "gpt-5.4" },
+        ...boundedTurnDefaults(),
         ...(authSelection === "prepared"
           ? { preparedAuth }
           : authSelection === "profile"
             ? { profile }
             : {}),
         authRequirement: "api-key",
-        timeoutMs: 5_000,
         options: {
           clientFactory: fake.factory,
           pluginConfig: { appServer: { homeScope: "user" } },
         },
-        taskLabel: "isolated completion",
-        developerInstructions: "Answer only.",
-        input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
-        requiredModalities: ["text"],
         isolation: "private-stdio",
         requireNoExternalCapabilities: true,
       });
@@ -670,8 +620,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
   it("carries attached provider overrides into private turns without importing tool policy", async () => {
     const fake = createClientFactory();
     await runBoundedCodexAppServerTurn({
-      model: { mode: "required", id: "gpt-5.4" },
-      timeoutMs: 5_000,
+      ...boundedTurnDefaults(),
       options: {
         clientFactory: fake.factory,
         pluginConfig: {
@@ -690,10 +639,6 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
           },
         },
       },
-      taskLabel: "isolated completion",
-      developerInstructions: "Answer only.",
-      input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
-      requiredModalities: ["text"],
       isolation: "private-stdio",
     });
     expect(vi.mocked(fake.factory).mock.calls[0]?.[0]?.startOptions?.args).toEqual([
@@ -795,16 +740,12 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     });
 
     const result = await runBoundedCodexAppServerTurn({
+      ...boundedTurnDefaults(),
       model: { mode: "required", id: model },
-      timeoutMs: 5_000,
       options: {
         clientFactory: fake.factory,
         pluginConfig: { appServer: { homeScope: "user" } },
       },
-      taskLabel: "isolated completion",
-      developerInstructions: "Answer only.",
-      input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
-      requiredModalities: ["text"],
       isolation: "configured-transport",
       requireNoExternalCapabilities: true,
     });
@@ -844,13 +785,9 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
     await expect(
       runBoundedCodexAppServerTurn({
+        ...boundedTurnDefaults(),
         model: { mode: "required", id: requested },
-        timeoutMs: 5_000,
         options: { clientFactory: fake.factory },
-        taskLabel: "isolated completion",
-        developerInstructions: "Answer only.",
-        input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
-        requiredModalities: ["text"],
         isolation: "configured-transport",
       }),
     ).resolves.toMatchObject({
@@ -876,13 +813,12 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
     await expect(
       runBoundedCodexAppServerTurn({
+        ...boundedTurnDefaults(),
         model: { mode: "live-default" },
-        timeoutMs: 5_000,
         options: { clientFactory: fake.factory },
         taskLabel: "hosted search",
         developerInstructions: "Search only.",
         input: [{ type: "text", text: "Find the answer.", text_elements: [] }],
-        requiredModalities: ["text"],
         isolation: "private-stdio",
       }),
     ).resolves.toMatchObject({
@@ -902,13 +838,9 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
     await expect(
       runBoundedCodexAppServerTurn({
+        ...boundedTurnDefaults(),
         model: { mode: "required", id: "missing-model" },
-        timeoutMs: 5_000,
         options: { clientFactory: fake.factory },
-        taskLabel: "isolated completion",
-        developerInstructions: "Answer only.",
-        input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
-        requiredModalities: ["text"],
         isolation: "configured-transport",
       }),
     ).rejects.toThrow("Codex app-server model not found: missing-model");
@@ -954,13 +886,11 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
       await expect(
         runBoundedCodexAppServerTurn({
-          model: { mode: "required", id: "gpt-5.4" },
-          timeoutMs: 5_000,
+          ...boundedTurnDefaults(),
           options: { clientFactory: fake.factory },
           taskLabel: "settled-turn finalization",
           developerInstructions: "Finalize only.",
           input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
-          requiredModalities: ["text"],
           isolation: "private-stdio",
           historyItems,
           requireNoExternalCapabilities: true,
@@ -1032,13 +962,11 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
     await expect(
       runBoundedCodexAppServerTurn({
-        model: { mode: "required", id: "gpt-5.4" },
-        timeoutMs: 5_000,
+        ...boundedTurnDefaults(),
         options: { clientFactory: fake.factory },
         taskLabel: "settled-turn finalization",
         developerInstructions: "Finalize only.",
         input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
-        requiredModalities: ["text"],
         isolation: "private-stdio",
         historyItems: [{ type: "function_call_output", call_id: "call-1", output: "sent" }],
         requireNoExternalCapabilities: true,

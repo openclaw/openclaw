@@ -1,6 +1,6 @@
-// Qa Lab plugin module owns bounded Mantis worktree cleanup.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { assertNoSymlinkParents } from "openclaw/plugin-sdk/security-runtime";
 import {
   MantisCommandCleanupError,
@@ -12,7 +12,6 @@ import {
 } from "./run-command.runtime.js";
 import {
   captureMantisDirectoryOwnership,
-  hasSameFileIdentity,
   type MantisDirectoryOwnership,
 } from "./run-directory.runtime.js";
 
@@ -60,22 +59,9 @@ async function runBeforeMantisCleanupDeadline<T>(
   run: () => Promise<T>,
 ): Promise<T> {
   const remainingMs = resolveMantisCleanupRemainingMs(deadline, operation);
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      Promise.resolve().then(run),
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () => reject(new MantisCleanupDeadlineError(deadline, operation)),
-          remainingMs,
-        );
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  return await withTimeout(Promise.resolve().then(run), remainingMs, {
+    createError: () => new MantisCleanupDeadlineError(deadline, operation),
+  });
 }
 
 function rethrowMantisCleanupBoundaryError(error: unknown): void {
@@ -127,42 +113,35 @@ async function verifyMantisDirectoryOwnershipBeforeDeadline(params: {
         targetPath: path.resolve(params.worktreeDir),
       }),
   );
-  let parentStat: Awaited<ReturnType<typeof fs.lstat>>;
-  try {
-    parentStat = await runBeforeMantisCleanupDeadline(
-      params.deadline,
+  let matches = true;
+  for (const [directory, operation, dev, ino] of [
+    [
+      path.dirname(params.worktreeDir),
       "reading the worktree parent identity",
-      async () => await fs.lstat(path.dirname(params.worktreeDir), { bigint: true }),
-    );
-  } catch (error) {
-    if (isNotFoundError(error)) {
-      return false;
-    }
-    throw error;
-  }
-  let targetStat: Awaited<ReturnType<typeof fs.lstat>>;
-  try {
-    targetStat = await runBeforeMantisCleanupDeadline(
-      params.deadline,
+      params.ownership.parentDevice,
+      params.ownership.parentInode,
+    ],
+    [
+      params.worktreeDir,
       "reading the worktree identity",
-      async () => await fs.lstat(params.worktreeDir, { bigint: true }),
-    );
-  } catch (error) {
-    if (isNotFoundError(error)) {
-      return false;
+      params.ownership.targetDevice,
+      params.ownership.targetInode,
+    ],
+  ] as const) {
+    let stat;
+    try {
+      stat = await runBeforeMantisCleanupDeadline(params.deadline, operation, () =>
+        fs.lstat(directory, { bigint: true }),
+      );
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        return false;
+      }
+      throw error;
     }
-    throw error;
+    matches &&= stat.dev === dev && stat.ino === ino;
   }
-  if (
-    !hasSameFileIdentity(parentStat, {
-      dev: params.ownership.parentDevice,
-      ino: params.ownership.parentInode,
-    }) ||
-    !hasSameFileIdentity(targetStat, {
-      dev: params.ownership.targetDevice,
-      ino: params.ownership.targetInode,
-    })
-  ) {
+  if (!matches) {
     throw new Error(`Mantis worktree path was replaced before cleanup: ${params.worktreeDir}`);
   }
   return true;
@@ -268,18 +247,6 @@ async function listRegisteredWorktreePaths(params: {
   );
 }
 
-async function isDirectoryEmptyBeforeDeadline(
-  directoryPath: string,
-  deadline: MantisCleanupDeadline,
-): Promise<boolean> {
-  const entries = await runBeforeMantisCleanupDeadline(
-    deadline,
-    "checking an unregistered worktree directory",
-    async () => await fs.readdir(directoryPath),
-  );
-  return entries.length === 0;
-}
-
 function createCleanupVerificationAggregate(params: {
   errors: [unknown, unknown];
   lane: "baseline" | "candidate";
@@ -328,16 +295,11 @@ async function removeMantisWorktreeBeforeDeadline(
     deadline,
   );
   const ownership = params.ownership;
+  const listRegisteredPaths = () =>
+    listRegisteredWorktreePaths({ ...params, createExecution: createCleanupExecution, deadline });
 
   if (!ownership) {
-    const registeredWorktreePaths = await listRegisteredWorktreePaths({
-      createExecution: createCleanupExecution,
-      deadline,
-      lane: params.lane,
-      repoRoot: params.repoRoot,
-      runner: params.runner,
-      worktreeDir: params.worktreeDir,
-    });
+    const registeredWorktreePaths = await listRegisteredPaths();
     if (!registeredWorktreePaths.includes(normalizedWorktreeDir)) {
       if (await pathExistsBeforeDeadline(params.worktreeDir, deadline)) {
         throw createRetainedDirectoryError({
@@ -359,14 +321,7 @@ async function removeMantisWorktreeBeforeDeadline(
       worktreeDir: params.worktreeDir,
     }))
   ) {
-    const registeredWorktreePaths = await listRegisteredWorktreePaths({
-      createExecution: createCleanupExecution,
-      deadline,
-      lane: params.lane,
-      repoRoot: params.repoRoot,
-      runner: params.runner,
-      worktreeDir: params.worktreeDir,
-    });
+    const registeredWorktreePaths = await listRegisteredPaths();
     if (!registeredWorktreePaths.includes(normalizedWorktreeDir)) {
       return;
     }
@@ -418,14 +373,7 @@ async function removeMantisWorktreeBeforeDeadline(
 
   let registeredWorktreePaths: string[];
   try {
-    registeredWorktreePaths = await listRegisteredWorktreePaths({
-      createExecution: createCleanupExecution,
-      deadline,
-      lane: params.lane,
-      repoRoot: params.repoRoot,
-      runner: params.runner,
-      worktreeDir: params.worktreeDir,
-    });
+    registeredWorktreePaths = await listRegisteredPaths();
   } catch (listError) {
     rethrowMantisCleanupBoundaryError(listError);
     throw createCleanupVerificationAggregate({
@@ -448,7 +396,14 @@ async function removeMantisWorktreeBeforeDeadline(
         repoRoot: params.repoRoot,
         worktreeDir: params.worktreeDir,
       });
-      if (stillOwned && (await isDirectoryEmptyBeforeDeadline(params.worktreeDir, deadline))) {
+      const entries = stillOwned
+        ? await runBeforeMantisCleanupDeadline(
+            deadline,
+            "checking an unregistered worktree directory",
+            () => fs.readdir(params.worktreeDir),
+          )
+        : undefined;
+      if (entries?.length === 0) {
         // Git no longer owns this unique prepared directory. Keep the empty
         // inode rather than deleting through a pathname race.
         return;

@@ -176,12 +176,15 @@ it.each([
         const prepare = opened.prepare.bind(opened);
         opened.prepare = (sql) => {
           const statement = prepare(sql);
-          if (sql === "PRAGMA integrity_check;") {
+          if (
+            sql === "PRAGMA integrity_check;" ||
+            sql === "PRAGMA integrity_check('sqlite_schema');"
+          ) {
             const all = statement.all.bind(statement);
             statement.all = () => {
               if (observingAdmission) {
                 parentChecks += 1;
-                events.push("parent-full-integrity-check");
+                events.push("parent-integrity-check");
               }
               return all();
             };

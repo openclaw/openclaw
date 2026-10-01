@@ -54,6 +54,9 @@ export type {
   PluginStateKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
 export type {
+  PluginDoctorCronChange,
+  PluginDoctorCronInventory,
+  PluginDoctorCronJob,
   PluginDoctorChannelIngressQueueAccess,
   PluginDoctorMigrationBackupResource,
   PluginDoctorMigrationBackupWarning,
@@ -64,8 +67,12 @@ export {
   archiveLegacyStateSource,
   legacyStateFileExists,
 } from "../plugins/doctor-state-migration-fs.js";
+export { backupLegacyStateSource } from "../infra/state-migrations.source-backup.js";
+export { resolveLegacyMigrationSourcePath } from "../infra/state-migrations.source-path.js";
+export type { ChannelIngressLegacyEntry } from "../channels/message/ingress-queue.migration.js";
 export { buildLegacyMigrationPreview } from "../channels/plugins/legacy-state-migration-preview.js";
 export { definePluginDoctorMigrationFromPlans } from "./doctor-migration-plan-adapter.js";
+export { createLegacyWebhookListenerDoctorContract } from "./legacy-webhook-listener-migration.js";
 export type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";
 
 type KeyMoveValue = { value: unknown };

@@ -70,22 +70,24 @@ export function resolveFsSafeNativeContract({
   const packageJson = JSON.parse(packageSource);
   const fsSafeVersion = packageJson.dependencies?.["@openclaw/fs-safe"];
   const contractKey = `${packageJson.version ?? ""}:${fsSafeVersion ?? ""}`;
+  const legacyPythonOnly =
+    LEGACY_PYTHON_ONLY_CONTRACTS.has(`*:${fsSafeVersion ?? ""}`) ||
+    LEGACY_PYTHON_ONLY_CONTRACTS.has(contractKey);
+  const bundledNative = hasBundledNativeBinding(fsSafeVersion);
+  if (!legacyPythonOnly && !bundledNative) {
+    return "required";
+  }
   const defaults = readSource("src/infra/fs-safe-defaults.ts");
   if (defaults === null) {
     throw new Error("missing fs-safe defaults source");
   }
-  if (hasBundledNativeBinding(fsSafeVersion) && NATIVE_MARKER.test(defaults)) {
+  if (bundledNative && NATIVE_MARKER.test(defaults)) {
     return "bundled";
-  }
-  if (
-    !LEGACY_PYTHON_ONLY_CONTRACTS.has(`*:${fsSafeVersion ?? ""}`) &&
-    !LEGACY_PYTHON_ONLY_CONTRACTS.has(contractKey)
-  ) {
-    return "required";
   }
   // fs-safe 0.3.0's public config module exports Python/lock controls only;
   // a built package on this exact dependency cannot consume native controls.
-  return defaults.includes('import { configureFsSafePython } from "@openclaw/fs-safe/config";') &&
+  return legacyPythonOnly &&
+    defaults.includes('import { configureFsSafePython } from "@openclaw/fs-safe/config";') &&
     !NATIVE_MARKER.test(defaults)
     ? "not-applicable"
     : "required";

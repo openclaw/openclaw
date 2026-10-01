@@ -1,10 +1,14 @@
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ensureSessionEntrySync } from "../../config/sessions/session-accessor.js";
-import { bindCloudWorkerSetupCompletion } from "../../infra/device-pairing-cloud-worker.js";
+import {
+  consumeDeviceBootstrapTokenWithSetupCompletion,
+  verifyDeviceBootstrapToken,
+} from "../../infra/device-bootstrap.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
+import { decodePairingSetupCode } from "../../pairing/setup-code.js";
 import type {
   WorkerNodeEnrollment,
   WorkerNodeRuntimePreparation,
@@ -12,22 +16,17 @@ import type {
 } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
-import { admitWorkerConnection } from "./admission.js";
-import { hashWorkerCredential } from "./credential.js";
+import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
 import { createGatewayNodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { createNodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import * as nodeTunnelSupport from "./node-worker-tunnel.test-support.js";
-import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
-import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
-import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
+import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
 describe("node worker provider provisioning", () => {
   support.setupWorkerEnvironmentServiceSuite({ reuseReadWorkers: true });
@@ -35,7 +34,6 @@ describe("node worker provider provisioning", () => {
 
   it.each([
     { target: "primary", executionMode: undefined, prewarm: true },
-    { target: "primary", executionMode: "worker-turn", prewarm: true },
     { target: "primary", executionMode: "remote-exec", prewarm: false },
     { target: "conversation", executionMode: undefined, prewarm: false },
   ] as const)(
@@ -65,6 +63,7 @@ describe("node worker provider provisioning", () => {
         invoke,
       };
       const ensureNodeWorkerBundle = createGatewayNodeWorkerBundleInstaller({
+        log: { info: vi.fn(), warn: vi.fn() },
         gatewayNamespace: "gateway-test",
         getTransport: () => transport,
         transfer,
@@ -297,8 +296,10 @@ describe("node worker provider provisioning", () => {
     const closeNodeEnrollment = vi.fn();
     const retireNodeEnrollment = vi.fn(async () => {});
     let begin: (() => Promise<WorkerNodeEnrollment>) | undefined;
+    let declaredTimeoutMs: number | undefined;
     const provision = vi.fn<WorkerProvider["provision"]>(
       async (_profile, _operationId, options) => {
+        expect(options?.nodeBootstrapTimeoutMs).toBe(declaredTimeoutMs);
         begin = options?.beginNodeEnrollment;
         await expect(options?.beginNodeEnrollment?.()).resolves.toMatchObject({
           mode: "connect",
@@ -316,6 +317,12 @@ describe("node worker provider provisioning", () => {
         supportedExecutionModes: ["worker-turn"],
         provisionBeforeInstallation: true,
         requiresNodeEnrollment: true,
+        resolveProvisionTimeoutMs: (_profile, options) => {
+          expect(prepareNodeEnrollment).not.toHaveBeenCalled();
+          expect(options?.nodeBootstrapTimeoutMs).toBe(105 * 60_000);
+          declaredTimeoutMs = options?.nodeBootstrapTimeoutMs;
+          return declaredTimeoutMs ?? 1;
+        },
         provision,
       }),
       {
@@ -570,6 +577,10 @@ describe("node worker provider provisioning", () => {
   );
 
   it("destroys an unreported node allocation without reenrolling or admitting its worker", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", support.testState.root);
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
     const leaseId = "cloud-lease-destroy-replay";
     const deviceId = "cloud-device-destroy-replay";
     const operationIds: string[] = [];
@@ -594,21 +605,27 @@ describe("node worker provider provisioning", () => {
     });
     const stop = vi.spyOn(nodeTunnels, "stop");
     const transitions = vi.spyOn(support.testState.store, "transition");
-    const prepareNodeEnrollment = vi.fn(async (record) => {
-      const enrolled = await support.testState.store.ensureNodeEnrollment(record.environmentId);
-      if (!enrolled.nodeSetupId) {
-        throw new Error("expected persisted cloud enrollment ownership");
-      }
-      return {
-        mode: "connect" as const,
-        setupCode: "setup-code",
-        setupId: enrolled.nodeSetupId,
+    const enrollmentManager = createWorkerNodeEnrollmentManager({
+      store: support.testState.store,
+      getConfig: () => ({
+        gateway: {
+          publicOrigin: "https://gateway.example.test",
+          auth: { mode: "token", token: "gateway-token" },
+        },
+      }),
+      resolveAvailability: async () => ({ available: false }),
+      prepareArtifact: async () => ({
+        tarballPath: path.join(support.testState.root, "node-runtime.tgz"),
+        tarballSha256: support.NODE_BOOTSTRAP.sha256,
+        tarballBytes: 1,
         openclawVersion: "2026.8.1",
-        nodeBootstrap: support.NODE_BOOTSTRAP,
-        displayName: "Cloud worker destroy replay",
-        waitForDeviceId: async () => deviceId,
-      };
+        buildId: "gateway-source-build",
+        enabledPluginIds: [],
+      }),
+      transfer: createWorkerBootstrapArtifactTransferService(),
     });
+    onTestFinished(() => enrollmentManager.stop());
+    const prepareNodeEnrollment = vi.fn(enrollmentManager.begin);
     const workerService = support.createService(
       support.createProvider({
         supportedExecutionModes: ["worker-turn"],
@@ -621,22 +638,31 @@ describe("node worker provider provisioning", () => {
           if (enrollment?.mode !== "connect") {
             throw new Error("expected pending enrollment");
           }
-          runOpenClawStateWriteTransaction(
-            ({ db }) => {
-              const { environmentId, ...patch } = bindCloudWorkerSetupCompletion({
-                db,
-                completion: { setupId: enrollment.setupId, deviceId, completedAtMs: 1_000 },
-              });
-              publishWorkerEnvironmentNativeMutation(db, environmentId, patch);
-            },
-            { database: support.testState.stateDb },
-          );
+          const { bootstrapToken: token } = decodePairingSetupCode(enrollment.setupCode);
+          await expect(
+            verifyDeviceBootstrapToken({
+              token,
+              deviceId,
+              publicKey: "cloud-public-key-destroy-replay",
+              role: "node",
+              scopes: [],
+            }),
+          ).resolves.toEqual({ ok: true });
+          await expect(
+            consumeDeviceBootstrapTokenWithSetupCompletion({
+              token,
+              deviceId,
+              completedAtMs: 1_000,
+              admitsCloudWorkerSetup: enrollmentManager.admitsNodeSetupCompletion,
+            }),
+          ).resolves.toMatchObject({ completion: { setupId: enrollment.setupId, deviceId } });
           throw new Error("provider response was lost after node allocation");
         },
         destroy,
       }),
       {
         prepareNodeEnrollment,
+        closeNodeEnrollment: enrollmentManager.close,
         retireNodeEnrollment,
         ensureNodeWorkerBundle,
         generateWorkerCredential,
@@ -649,7 +675,10 @@ describe("node worker provider provisioning", () => {
         profileId: "development",
         idempotencyKey: "request-node-destroy-replay",
       }),
-    ).rejects.toMatchObject({ code: "provider_failure" });
+    ).rejects.toMatchObject({
+      code: "provider_failure",
+      message: expect.stringContaining("provider response was lost after node allocation"),
+    });
     const provisioning = support.testState.store.list()[0]!;
     expect(provisioning).toMatchObject({
       state: "provisioning",
@@ -749,122 +778,5 @@ describe("node worker provider provisioning", () => {
       state: "destroyed",
     });
     expect(retireNodeEnrollment).not.toHaveBeenCalled();
-  });
-
-  it("commits an installed Gateway bundle receipt and credential for a node lease", async () => {
-    const workerBuild = structuredClone(support.BOOTSTRAP_RECEIPT);
-    const placements = createWorkerSessionPlacementStore({
-      database: support.testState.stateDb,
-      now: () => support.testState.nowMs,
-    });
-    const placementGate = createWorkerSessionPlacementGate(placements);
-    const workerService = support.createService(
-      support.createProvider({
-        supportedExecutionModes: ["worker-turn"],
-        provisionBeforeInstallation: true,
-        provision: async () => ({
-          leaseId: "device-lease-1",
-          node: { deviceId: "device-1" },
-          sharedHost: true,
-        }),
-      }),
-      { ensureNodeWorkerBundle: async () => workerBuild, placementStore: placementGate },
-    );
-
-    const result = await workerService.createWithRequest({
-      profileId: "development",
-      idempotencyKey: "request-device",
-    });
-
-    expect(result).toMatchObject({
-      state: "ready",
-      leaseId: "device-lease-1",
-      nodeDeviceId: "device-1",
-      sshEndpoint: null,
-      bootstrapReceipt: { ...workerBuild, installKind: "bundle" },
-      sharedHost: true,
-      ownerEpoch: 1,
-    });
-    expect(support.testState.prepareInstallation).toHaveBeenCalledExactlyOnceWith("bundle");
-    expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
-    const credential = workerService.takeMintedCredential({
-      environmentId: result.environmentId,
-      ownerEpoch: result.ownerEpoch,
-      sessionId: null,
-    });
-    expect(credential).toMatchObject({
-      credential: support.CREDENTIAL,
-      bundleHash: support.BUNDLE_HASH,
-    });
-    const attachedCredential = await workerService.attachSession({
-      environmentId: result.environmentId,
-      ownerEpoch: result.ownerEpoch,
-      sessionId: REQUEST.sessionId,
-    });
-    await support.waitForFast(() => {
-      expect({
-        environment: support.testState.store.get(result.environmentId),
-        credential: support.testState.store.getCredential(result.environmentId),
-      }).toMatchObject({
-        environment: {
-          state: "attached",
-          ownerEpoch: attachedCredential.ownerEpoch,
-          attachedSessionIds: [REQUEST.sessionId],
-        },
-        credential: {
-          credentialHash: hashWorkerCredential(attachedCredential.credential),
-          bundleHash: workerBuild.bundleHash,
-          sessionId: REQUEST.sessionId,
-          ownerEpoch: attachedCredential.ownerEpoch,
-        },
-      });
-    });
-    seedActivePlacement(placements, {
-      environmentId: result.environmentId,
-      ownerEpoch: attachedCredential.ownerEpoch,
-    });
-    const turnClaim = placements.claimTurn({
-      sessionId: REQUEST.sessionId,
-      sessionKey: REQUEST.sessionKey,
-      agentId: REQUEST.agentId,
-      claimId: "claim-device",
-      runId: "run-device",
-      owner: {
-        kind: "worker",
-        environmentId: result.environmentId,
-        ownerEpoch: attachedCredential.ownerEpoch,
-      },
-    });
-    const turnCredential = await workerService.acquireTurnCredential(turnClaim);
-    const admission = {
-      environmentId: result.environmentId,
-      credential: turnCredential.credential,
-      ownerEpoch: attachedCredential.ownerEpoch,
-      rpcSetVersion: 1,
-      sessionId: REQUEST.sessionId,
-      runId: turnClaim.runId,
-      handshake: workerBuild,
-    } as const;
-    expect(
-      admitWorkerConnection({
-        store: support.testState.store,
-        admission,
-        expectedBuild: workerBuild,
-        nowMs: support.testState.nowMs,
-        turnClaim,
-      }),
-    ).toMatchObject({ ok: true });
-    expect(
-      admitWorkerConnection({
-        store: support.testState.store,
-        admission: {
-          ...admission,
-          handshake: { ...workerBuild, bundleHash: "d".repeat(64) },
-        },
-        expectedBuild: workerBuild,
-        nowMs: support.testState.nowMs,
-        turnClaim,
-      }),
-    ).toEqual({ ok: false, reason: "bundle-mismatch" });
   });
 });

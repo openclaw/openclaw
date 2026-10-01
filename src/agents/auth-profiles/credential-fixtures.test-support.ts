@@ -58,3 +58,85 @@ export function oidcIdentity(claims: Record<string, unknown> = {}) {
     .digest("hex");
   return { issuer, clientId, accountId, idToken: `e30.${payload}.verified-by-provider` };
 }
+
+export function createOAuthRefreshCredential(
+  overrides: Partial<OAuthCredential> = {},
+): OAuthCredential {
+  return {
+    type: "oauth",
+    provider: "openai",
+    access: "access-token",
+    refresh: "refresh-token",
+    expires: Date.now() + 60_000,
+    ...overrides,
+  };
+}
+
+export function oauthRefreshReplacementCases() {
+  return [
+    {
+      kind: "account mismatch",
+      identity: { accountId: "acct-a" },
+      replacementIdentity: { accountId: "acct-b" },
+      sameIdentity: false,
+      coldObserver: false,
+    },
+    {
+      kind: "OIDC match",
+      identity: oidcIdentity(),
+      replacementIdentity: oidcIdentity(),
+      sameIdentity: true,
+      coldObserver: false,
+    },
+    {
+      kind: "OIDC cold mismatch",
+      identity: oidcIdentity(),
+      replacementIdentity: oidcIdentity({ sub: "subject-b" }),
+      sameIdentity: false,
+      coldObserver: true,
+    },
+    {
+      kind: "OIDC cold observer",
+      identity: oidcIdentity(),
+      replacementIdentity: oidcIdentity(),
+      sameIdentity: true,
+      coldObserver: true,
+    },
+  ];
+}
+
+export function oauthRefreshFailureFallbackCases() {
+  return [
+    {
+      name: "rejects refresh-only changes",
+      candidate: {
+        access: "failed-access",
+        refresh: "new-refresh",
+        expires: Date.now() + 600_000,
+        accountId: "acct-123",
+      },
+      expectedApiKey: undefined,
+    },
+    {
+      name: "adopts access-token changes",
+      candidate: {
+        access: "new-access",
+        refresh: "failed-refresh",
+        expires: Date.now() + 600_000,
+        accountId: "acct-123",
+      },
+      expectedApiKey: "new-access",
+    },
+    {
+      name: "preserves the refresh error when adopted-key construction fails",
+      candidate: {
+        access: "new-access",
+        refresh: "failed-refresh",
+        expires: Date.now() + 600_000,
+        accountId: "acct-123",
+      },
+      expectedApiKey: undefined,
+      buildError: "fallback key construction failed",
+    },
+  ];
+}

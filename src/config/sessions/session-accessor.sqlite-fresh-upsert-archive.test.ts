@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -13,6 +13,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "./session-accessor.js";
+import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import { readTranscriptStorageRows } from "./session-accessor.sqlite-read.js";
 import {
   getSessionKysely,
@@ -32,6 +33,33 @@ describe("fresh session creation with pending transcript archives", () => {
     sessionKey: "agent:main:fresh-session",
     storePath: fixture.storePath(),
   });
+
+  it.each([true, false])(
+    "skips empty archive recovery with skipMaintenance=%s",
+    async (skipMaintenance) => {
+      await replaceSessionEntry(freshScope(), freshEntry);
+      const probe = vi.spyOn(archiveWorker, "readPendingSqliteTranscriptArchivesInWorker");
+      try {
+        for (let turn = 0; turn < 3; turn += 1) {
+          await applySessionEntryLifecycleMutation({
+            storePath: fixture.storePath(),
+            skipMaintenance,
+            maintenanceOverride: skipMaintenance ? undefined : { mode: "warn" },
+            upserts: [
+              {
+                sessionKey: freshScope().sessionKey,
+                entry: { ...freshEntry, label: `turn-${turn}` },
+              },
+            ],
+          });
+        }
+        expect(loadSessionEntry(freshScope())?.label).toBe("turn-2");
+        expect(probe).not.toHaveBeenCalled();
+      } finally {
+        probe.mockRestore();
+      }
+    },
+  );
 
   function readArchive() {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(freshScope())));

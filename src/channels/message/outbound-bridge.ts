@@ -3,6 +3,7 @@
  *
  * Wraps old channel send functions in the newer channel message adapter contract.
  */
+import { defaultManualReceiveAdapter } from "./adapter.js";
 import { createMessageReceiptFromOutboundResults, resolveReceiptSourceId } from "./receipt.js";
 import type {
   ChannelMessageAdapterShape,
@@ -18,11 +19,6 @@ import type {
   MessageReceiptPartKind,
   MessageReceiptSourceResult,
 } from "./types.js";
-
-const defaultManualReceiveAdapter = {
-  defaultAckPolicy: "manual",
-  supportedAckPolicies: ["manual"],
-} as const satisfies ChannelMessageReceiveAdapterShape;
 
 /** Send result accepted from legacy outbound bridge methods before receipt normalization. */
 type ChannelMessageOutboundBridgeResult = MessageReceiptSourceResult & {
@@ -105,27 +101,6 @@ function toMessageSendResult(
   };
 }
 
-function adaptOutboundBridgeContext<
-  TContext extends {
-    onDeliveryResult?: (result: ChannelMessageSendResult) => Promise<void> | void;
-  },
->(
-  ctx: TContext,
-  resultParams: MessageSendResultParams,
-): ChannelMessageOutboundBridgeContext<TContext> {
-  const { onDeliveryResult, ...outboundCtx } = ctx;
-  return {
-    ...outboundCtx,
-    ...(onDeliveryResult
-      ? {
-          onDeliveryResult: async (result: ChannelMessageOutboundBridgeResult) => {
-            await onDeliveryResult(toMessageSendResult(result, resultParams));
-          },
-        }
-      : {}),
-  };
-}
-
 async function sendThroughOutboundBridge<
   TContext extends Pick<
     ChannelMessageSendTextContext,
@@ -144,8 +119,18 @@ async function sendThroughOutboundBridge<
     threadId: ctx.threadId,
     replyToId: ctx.replyToId,
   };
+  const { onDeliveryResult, ...outboundCtx } = ctx;
   return toMessageSendResult(
-    await send(adaptOutboundBridgeContext(ctx, resultParams)),
+    await send({
+      ...outboundCtx,
+      ...(onDeliveryResult
+        ? {
+            onDeliveryResult: async (result: ChannelMessageOutboundBridgeResult) => {
+              await onDeliveryResult(toMessageSendResult(result, resultParams));
+            },
+          }
+        : {}),
+    }),
     resultParams,
   );
 }
@@ -163,25 +148,18 @@ function hasRenderedPresentationBlocks(channelData: Record<string, unknown> | un
 function resolvePayloadReceiptKind(
   ctx: ChannelMessageSendPayloadContext<unknown>,
 ): MessageReceiptPartKind {
-  if (
-    ctx.payload.audioAsVoice &&
-    (ctx.mediaUrl || ctx.payload.mediaUrl || ctx.payload.mediaUrls?.length)
-  ) {
-    return "voice";
-  }
   if (ctx.mediaUrl || ctx.payload.mediaUrl || ctx.payload.mediaUrls?.length) {
-    return "media";
+    return ctx.payload.audioAsVoice ? "voice" : "media";
   }
   const hasPortablePresentation = Boolean(
     ctx.payload.presentation?.title || ctx.payload.presentation?.blocks?.length,
   );
-  if (hasPortablePresentation || hasRenderedPresentationBlocks(ctx.payload.channelData)) {
-    return "card";
-  }
-  if (ctx.payload.interactive) {
-    return "card";
-  }
-  if (ctx.payload.location) {
+  if (
+    hasPortablePresentation ||
+    hasRenderedPresentationBlocks(ctx.payload.channelData) ||
+    ctx.payload.interactive ||
+    ctx.payload.location
+  ) {
     return "card";
   }
   if (ctx.payload.text?.trim() || ctx.text.trim()) {

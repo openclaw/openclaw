@@ -77,9 +77,6 @@
       "openclaw/plugin-sdk/secure-random-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/secure-random-runtime.d.ts"
       ],
-      "openclaw/plugin-sdk/system-event-runtime": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/system-event-runtime.d.ts"
-      ],
       "openclaw/plugin-sdk/transport-ready-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/transport-ready-runtime.d.ts"
       ],
@@ -145,9 +142,6 @@
       ],
       "openclaw/plugin-sdk/codex-session-transcript-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/codex-session-transcript-runtime.d.ts"
-      ],
-      "openclaw/plugin-sdk/agent-harness-task-runtime": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-task-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/agent-harness-exec-review-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-exec-review-runtime.d.ts"
@@ -957,6 +951,9 @@
       ],
       "openclaw/plugin-sdk/secret-egress-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/secret-egress-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/agent-harness-completion": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-completion.d.ts"
       ]
     }
   }

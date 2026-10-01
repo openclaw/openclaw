@@ -20,6 +20,112 @@ const manifest = {
   childRuns: { productPerformance: { conclusion: "success" } },
   validationInputs: { coveragePolicy: "full" },
 };
+const windowsAdvisory = {
+  class: "windows-node-ci",
+  child: "normalCi",
+  job: "checks-windows-node-test-2",
+  conclusion: "failure",
+  runId: "42",
+  url: "https://github.com/openclaw/openclaw/actions/runs/42/job/43",
+};
+const windowsEvidence = {
+  ...manifest,
+  childRuns: { normalCi: "42" },
+  childEvidence: {
+    normalCi: {
+      runId: "42",
+      jobs: [
+        {
+          name: "checks-windows-node-test-2",
+          status: "completed",
+          conclusion: "failure",
+          url: windowsAdvisory.url,
+        },
+      ],
+    },
+  },
+  advisoryJobs: [windowsAdvisory],
+};
+const flakeReceipt = {
+  schema: "openclaw.frv-flake-classification.v1",
+  parentRunId: "123",
+  parentRunAttempt: 2,
+  child: "normalCi",
+  childRunId: "456",
+  childRunAttempt: 1,
+  targetSha,
+  jobId: "457",
+  jobName: "checks-node-test-2",
+  jobUrl: "https://github.com/openclaw/openclaw/actions/runs/456/job/457",
+  conclusion: "failure",
+  trackingUrl: "https://github.com/openclaw/openclaw/issues/789",
+  reason: "Shared test fixture races during cleanup; repair tracked on main.",
+  classifiedBy: "release-operator",
+  receiptRunId: "890",
+  receiptRunAttempt: 1,
+};
+const flakeEvidence = {
+  ...manifest,
+  runId: "123",
+  runAttempt: "2",
+  sourceParentRunAttempt: 2,
+  childRuns: { normalCi: "456" },
+  childEvidence: {
+    normalCi: {
+      runId: "456",
+      status: "completed",
+      conclusion: "failure",
+      jobs: [
+        {
+          name: flakeReceipt.jobName,
+          status: "completed",
+          conclusion: "failure",
+          acceptedRunAttempt: 1,
+          url: flakeReceipt.jobUrl,
+        },
+        {
+          name: "openclaw/ci-gate",
+          status: "completed",
+          conclusion: "failure",
+          url: "https://github.com/openclaw/openclaw/actions/runs/456/job/458",
+        },
+      ],
+      flakeClassifications: [flakeReceipt],
+      gateEntries: [
+        { name: "preflight", result: "success", selected: true },
+        { name: "checks-node", result: "failure", selected: true },
+        { name: "pr-fail-fast", result: "skipped", selected: false },
+      ],
+    },
+  },
+  advisoryJobs: [
+    {
+      class: "recorded-flake",
+      child: "normalCi",
+      job: flakeReceipt.jobName,
+      conclusion: "failure",
+      runId: "456",
+      url: flakeReceipt.jobUrl,
+      jobId: "457",
+      trackingUrl: flakeReceipt.trackingUrl,
+      reason: flakeReceipt.reason,
+      receiptRunId: "890",
+    },
+  ],
+};
+
+it.each([
+  { releaseTag: "v2026.9.5-alpha.1", npmDistTag: "beta" },
+  { releaseTag: "v2026.9.5", npmDistTag: "alpha" },
+])("rejects retired alpha gate input %j", (input) => {
+  const result = evaluateReleasePublishGates({ ...input, manifest: {}, consumer: "publisher" });
+  expect(result).toContainEqual(
+    expect.objectContaining({
+      status: "FAIL",
+      message: "Alpha releases are retired; use a beta prerelease instead.",
+    }),
+  );
+});
 
 describe("release publication control admission", () => {
   it("rejects stable bootstrap approval that cannot cover the candidate package version", () => {
@@ -46,13 +152,13 @@ describe("release publication control admission", () => {
       name: "waived advisory and soak",
       overrides: { controls: { performanceBlocking: false }, runReleaseSoak: "false" },
       waiver: "2026.9.5 Approved after infrastructure failure",
-      failures: [],
+      failures: ["performance", "soak"],
     },
     {
       name: "waiver naming another release train",
       overrides: { runReleaseSoak: "false" },
       waiver: "2026.9.7 Approved",
-      failures: ["waiver-target"],
+      failures: ["soak"],
     },
     {
       name: "blank waiver",
@@ -90,7 +196,7 @@ describe("release publication control admission", () => {
         consumer,
         releaseTag: "v2026.9.5",
         npmDistTag: "latest",
-        stableSoakWaiver: waiver,
+        ...(waiver ? { stableSoakWaiver: waiver } : {}),
         expectedSha: targetSha,
       });
       expect(gates.filter((gate) => gate.status === "FAIL").map((gate) => gate.id)).toEqual(
@@ -99,13 +205,13 @@ describe("release publication control admission", () => {
     }
   });
 
-  it("keeps performance advisory for beta tags published to beta", () => {
+  it("does not require deferred performance for beta tags published to beta", () => {
     const input = {
       manifest: {
         ...manifest,
         releaseProfile: "beta",
         controls: { performanceBlocking: false },
-        childRuns: { productPerformance: { conclusion: "failure" } },
+        childRuns: {},
       },
       releaseTag: "v2026.9.5-beta.1",
       npmDistTag: "beta",
@@ -161,96 +267,152 @@ describe("release publication control admission", () => {
     ]);
   });
 
-  it("keeps a revoked sealed soak waiver revoked at the publisher gate", () => {
-    const root = tempRoots.make("release-publish-gates-revoked-");
-    const manifestPath = join(root, "manifest.json");
-    const output = join(root, "output");
-    writeFileSync(
-      manifestPath,
-      JSON.stringify({
-        ...manifest,
-        runReleaseSoak: "false",
-        controls: { performanceBlocking: true },
-        childRuns: { productPerformance: { conclusion: "success" } },
-        sourceAdmission: {
-          validationPurpose: "publish",
-          publicationSelection: { npmDistTag: "latest" },
-          projection: { packages: [] },
+  it.each(["publisher", "core-npm", "stable-closeout"] as const)(
+    "rejects beta evidence for stable publication at %s even with historical waiver inputs",
+    (consumer) => {
+      const historicalInput = {
+        consumer,
+        releaseTag: "v2026.9.5",
+        npmDistTag: "latest",
+        manifest: {
+          ...manifest,
+          releaseProfile: "beta",
+          runReleaseSoak: "false",
+          controls: { performanceBlocking: false },
         },
-        publishInputs: {
-          version: 1,
-          targetSha,
-          npmDistTag: "latest",
-          pluginSdkApiEvidenceDigest: "a".repeat(64),
-          pluginSdkApiAcknowledgement: "",
-          stableSoakWaiver: "2026.9.5 approved earlier",
-          npmDecisions: [],
+        stableSoakWaiver: "2026.9.5 approved",
+        laneWaiver: "2026.9.5 approved",
+        publishAcceptedWaivers: {
+          stableSoakWaiver: "2026.9.5 approved",
+          laneWaiver: "2026.9.5 approved",
         },
-      }),
-    );
-    const run = (currentVariable: string) =>
-      spawnSync(
-        process.execPath,
-        [
-          resolve("scripts/lib/release-publish-gates.mts"),
-          "--consumer",
-          "publisher",
-          "--manifest",
-          manifestPath,
-        ],
-        {
-          cwd: root,
-          encoding: "utf8",
-          env: {
-            PATH: process.env.PATH,
-            RELEASE_TAG: "v2026.9.5",
-            RELEASE_NPM_DIST_TAG: "latest",
-            EXPECTED_SHA: targetSha,
-            EXPECTED_RELEASE_PROFILE: "from-validation",
-            OPENCLAW_RELEASE_STABLE_SOAK_WAIVER: currentVariable,
-            GITHUB_OUTPUT: output,
-          },
-        },
+      };
+      const gates = evaluateReleasePublishGates(historicalInput);
+      expect(gates.filter((gate) => gate.status === "FAIL").map((gate) => gate.id)).toEqual([
+        `${consumer}.performance`,
+        `${consumer}.stable-profile`,
+        `${consumer}.soak`,
+      ]);
+    },
+  );
+
+  it.each([
+    { validationInputs: { laneWaiver: "2026.9.5 approved" } },
+    { publishInputs: { stableSoakWaiver: "2026.9.5 approved" } },
+    { validationInputs: { knownFlakyJobsJson: '["checks-windows-node-test-2"]' } },
+    { advisoryJobs: [{ child: "normalCi", job: "tests", conclusion: "failure" }] },
+  ])("rejects recorded waiver or unclassified advisory evidence: %j", (recorded) => {
+    for (const releaseTag of ["v2026.9.5", "v2026.9.5-beta.1"]) {
+      const gates = evaluateReleasePublishGates({
+        consumer: "publisher",
+        releaseTag,
+        npmDistTag: releaseTag.includes("beta") ? "beta" : "latest",
+        manifest: { ...manifest, ...recorded },
+      });
+      expect(gates).toContainEqual(
+        expect.objectContaining({ id: "publisher.selected-lanes", status: "FAIL" }),
       );
-    expect(run("2026.9.5 approved earlier").status).toBe(0);
-    const revoked = run("");
-    expect(revoked.status).not.toBe(0);
-    expect(revoked.stderr).toContain("Stable releases require Full Release Validation");
+    }
   });
 
-  it.each(["legacy", "sealed", "whitespace"] as const)(
-    "resolves escaped workflow outputs without installed dependencies (sealed=%s)",
-    (mode) => {
-      const sealed = mode !== "legacy";
+  it.each(["publisher", "core-npm", "stable-closeout"] as const)(
+    "accepts bound Windows Node CI advisories without relaxing other gates at %s",
+    (consumer) => {
+      const evaluate = (overrides = {}) =>
+        evaluateReleasePublishGates({
+          consumer,
+          releaseTag: "v2026.9.5",
+          npmDistTag: "latest",
+          manifest: { ...windowsEvidence, ...overrides },
+        })
+          .filter((gate) => gate.status === "FAIL")
+          .map((gate) => gate.id);
+      expect(evaluate()).toEqual([]);
+      expect(
+        evaluate({
+          controls: { performanceBlocking: false },
+          runReleaseSoak: "false",
+          rerunGroup: "performance",
+        }),
+      ).toEqual([`${consumer}.rerun-group`, `${consumer}.performance`, `${consumer}.soak`]);
+    },
+  );
+
+  it.each([
+    { name: "unknown class", advisoryJobs: [{ ...windowsAdvisory, class: "operator-approved" }] },
+    { name: "macOS job", advisoryJobs: [{ ...windowsAdvisory, job: "macos-node-2" }] },
+    {
+      name: "other child",
+      advisoryJobs: [{ ...windowsAdvisory, child: "releaseChecksCandidate" }],
+    },
+    { name: "other run", advisoryJobs: [{ ...windowsAdvisory, runId: "44" }] },
+    { name: "other conclusion", advisoryJobs: [{ ...windowsAdvisory, conclusion: "timed_out" }] },
+    { name: "missing advisory", advisoryJobs: [] },
+    { name: "missing evidence", childEvidence: {} },
+    { name: "unbound child run", childRuns: { normalCi: "44" } },
+  ])("rejects forged Windows advisory evidence: $name", ({ name: _name, ...overrides }) => {
+    const gates = evaluateReleasePublishGates({
+      consumer: "publisher",
+      releaseTag: "v2026.9.5",
+      npmDistTag: "latest",
+      manifest: { ...windowsEvidence, ...overrides },
+    });
+    expect(gates).toContainEqual(
+      expect.objectContaining({ id: "publisher.selected-lanes", status: "FAIL" }),
+    );
+  });
+
+  it.each(["publisher", "core-npm", "stable-closeout"] as const)(
+    "admits recorded flakes only with their exact manifest proof at %s",
+    (consumer) => {
+      const selectedLaneGate = (evidence: unknown = flakeEvidence) =>
+        evaluateReleasePublishGates({
+          consumer,
+          releaseTag: "v2026.9.5",
+          npmDistTag: "latest",
+          manifest: evidence,
+        }).find((gate) => gate.id === `${consumer}.selected-lanes`);
+      expect(selectedLaneGate()).toMatchObject({ status: "PASS" });
+      for (const overrides of [
+        { runId: "124" },
+        { targetSha: "b".repeat(40) },
+        { advisoryJobs: [] },
+        { childEvidence: {} },
+        { validationInputs: { knownFlakyJobsJson: '["checks-node-test-2"]' } },
+        { validationInputs: { laneWaiver: "approved" } },
+        { publishInputs: { stableSoakWaiver: "approved" } },
+      ]) {
+        expect(selectedLaneGate({ ...flakeEvidence, ...overrides })).toMatchObject({
+          status: "FAIL",
+        });
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "runs without installed dependencies and never emits waiver authority (waived=%s)",
+    (waived) => {
       const root = tempRoots.make("release-publish-gates-");
       const manifestPath = join(root, "manifest.json");
       const output = join(root, "output");
-      const summary = join(root, "summary");
-      const waiver = '2026.9.5 Infrastructure 100% unavailable\nOperator "approved"';
       writeFileSync(
         manifestPath,
         JSON.stringify({
           ...manifest,
-          runReleaseSoak: "false",
-          controls: { performanceBlocking: false },
-          ...(sealed
-            ? {
-                sourceAdmission: {
-                  validationPurpose: "publish",
-                  publicationSelection: { npmDistTag: "latest" },
-                  projection: { packages: [] },
-                },
-                publishInputs: {
-                  version: 1,
-                  targetSha,
-                  npmDistTag: "latest",
-                  pluginSdkApiEvidenceDigest: "a".repeat(64),
-                  pluginSdkApiAcknowledgement: "aaaaaaaa",
-                  stableSoakWaiver: waiver,
-                  npmDecisions: [],
-                },
-              }
-            : {}),
+          sourceAdmission: {
+            validationPurpose: "publish",
+            publicationSelection: { npmDistTag: "latest" },
+            projection: { packages: [] },
+          },
+          publishInputs: {
+            version: 1,
+            targetSha,
+            npmDistTag: "latest",
+            pluginSdkApiEvidenceDigest: "a".repeat(64),
+            pluginSdkApiAcknowledgement: "aaaaaaaa",
+            npmDecisions: [],
+            ...(waived ? { stableSoakWaiver: "2026.9.5 approved" } : {}),
+          },
         }),
       );
       const result = spawnSync(
@@ -271,192 +433,23 @@ describe("release publication control admission", () => {
             RELEASE_NPM_DIST_TAG: "latest",
             EXPECTED_SHA: targetSha,
             EXPECTED_RELEASE_PROFILE: "from-validation",
-            ...(mode === "whitespace"
-              ? { STABLE_SOAK_WAIVER: " \n\t", PLUGIN_SDK_API_ACKNOWLEDGEMENT: " \n\t" }
-              : sealed
-                ? {}
-                : { STABLE_SOAK_WAIVER: waiver }),
-            ...(sealed ? { OPENCLAW_RELEASE_STABLE_SOAK_WAIVER: waiver } : {}),
             GITHUB_OUTPUT: output,
-            GITHUB_STEP_SUMMARY: summary,
           },
         },
       );
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain(
-        '2026.9.5 Infrastructure 100%25 unavailable%0AOperator "approved"',
-      );
-      expect(readFileSync(output, "utf8").split("\n")).toEqual([
-        `stable_soak_waiver=${JSON.stringify(waiver)}`,
-        `plugin_sdk_api_acknowledgement=${sealed ? "aaaaaaaa" : ""}`,
-        "npm_decisions=[]",
-        "release_profile=stable",
-        "coverage_policy=full",
-        "",
-      ]);
-      expect(readFileSync(summary, "utf8")).toBe(`- Stable soak waived by operator: ${waiver}\n`);
+      if (waived) {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("waivers are no longer supported");
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+        expect(readFileSync(output, "utf8").split("\n")).toEqual([
+          "plugin_sdk_api_acknowledgement=aaaaaaaa",
+          "npm_decisions=[]",
+          "release_profile=stable",
+          "coverage_policy=full",
+          "",
+        ]);
+      }
     },
   );
-});
-
-describe("strict default and operator fast path", () => {
-  const stableGates = (input: {
-    manifest: unknown;
-    stableSoakWaiver?: string;
-    laneWaiver?: string;
-    releaseTag?: string;
-  }) =>
-    evaluateReleasePublishGates({
-      consumer: "publisher",
-      releaseTag: "v2026.9.6",
-      npmDistTag: "latest",
-      expectedSha: targetSha,
-      ...input,
-    });
-  const byId = (gates: ReturnType<typeof evaluateReleasePublishGates>, id: string) =>
-    gates.find((entry) => entry.id === `publisher.${id}`);
-  const betaEvidence = {
-    ...manifest,
-    releaseProfile: "beta",
-    runReleaseSoak: "false",
-    controls: { performanceBlocking: false },
-  };
-
-  it("fails closed for a stable tag published from beta evidence without waivers", () => {
-    const gates = stableGates({ manifest: betaEvidence });
-    expect(byId(gates, "stable-profile")).toMatchObject({ status: "FAIL" });
-    expect(byId(gates, "soak")).toMatchObject({ status: "FAIL" });
-    expect(byId(gates, "performance")).toMatchObject({ status: "FAIL" });
-  });
-
-  it("warns instead of failing when the operator supplies a version-bound soak waiver", () => {
-    const gates = stableGates({
-      manifest: { ...betaEvidence, childRuns: { productPerformance: { conclusion: "success" } } },
-      stableSoakWaiver: "2026.9.6 ship the hotfix",
-    });
-    expect(byId(gates, "waiver-target")).toBeUndefined();
-    expect(byId(gates, "stable-profile")).toMatchObject({ status: "WARN" });
-    expect(byId(gates, "soak")).toMatchObject({ status: "WARN" });
-  });
-
-  it("rejects waiver reasons that do not name the target version", () => {
-    const gates = stableGates({ manifest: betaEvidence, stableSoakWaiver: "ship it" });
-    expect(byId(gates, "waiver-target")).toMatchObject({ status: "FAIL" });
-    expect(
-      byId(stableGates({ manifest: betaEvidence, laneWaiver: "2026.9.7 other" }), "waiver-target"),
-    ).toMatchObject({ status: "FAIL" });
-  });
-
-  it("requires lane_waiver to publish a stable with a failed non-proof lane", () => {
-    const withFailure = {
-      ...manifest,
-      advisoryJobs: [
-        {
-          child: "normalCi",
-          job: "checks-windows-node-test-1",
-          status: "completed",
-          conclusion: "failure",
-          policy: "advisory",
-        },
-      ],
-    };
-    expect(byId(stableGates({ manifest: withFailure }), "lane-waiver")).toMatchObject({
-      status: "FAIL",
-    });
-    expect(
-      byId(
-        stableGates({ manifest: withFailure, laneWaiver: "2026.9.6 known flake" }),
-        "lane-waiver",
-      ),
-    ).toMatchObject({
-      status: "WARN",
-      message:
-        "Operator lane waiver: 2026.9.6 known flake; waived lanes (1): normalCi checks-windows-node-test-1",
-    });
-    expect(
-      byId(stableGates({ manifest: withFailure, releaseTag: "v2026.9.6-beta.1" }), "lane-waiver"),
-    ).toBeUndefined();
-  });
-});
-
-describe("stable closeout of a soak-waived stable", () => {
-  const waivedStable = {
-    ...manifest,
-    releaseProfile: "beta",
-    runReleaseSoak: false,
-    controls: { performanceBlocking: false },
-    childRuns: { productPerformance: { conclusion: "success" } },
-  };
-  const closeout = (stableSoakWaiver?: string) =>
-    evaluateReleasePublishGates({
-      consumer: "stable-closeout",
-      releaseTag: "v2026.9.6",
-      npmDistTag: "latest",
-      expectedSha: targetSha,
-      manifest: waivedStable,
-      stableSoakWaiver,
-    });
-
-  it("passes with the acknowledged waiver and fails without it", () => {
-    const waived = closeout("2026.9.6 operator approved");
-    expect(waived.filter((gate) => gate.status === "FAIL")).toEqual([]);
-    expect(waived.filter((gate) => gate.status === "WARN").map((gate) => gate.id)).toEqual([
-      "stable-closeout.performance",
-      "stable-closeout.stable-profile",
-      "stable-closeout.soak",
-    ]);
-    expect(
-      closeout()
-        .filter((gate) => gate.status === "FAIL")
-        .map((gate) => gate.id),
-    ).toEqual([
-      "stable-closeout.performance",
-      "stable-closeout.stable-profile",
-      "stable-closeout.soak",
-    ]);
-  });
-});
-
-describe("operator lane waiver acknowledgement", () => {
-  const waived = {
-    ...manifest,
-    validationInputs: { coveragePolicy: "full", laneWaiver: "ship 2026.9.6" },
-    advisoryJobs: [
-      {
-        child: "normalCi",
-        job: "checks-node-bundle-infra-small-runtime-2",
-        conclusion: "failure",
-        policy: "advisory",
-        reason: "lane_waiver",
-      },
-      {
-        child: "releaseChecksCandidate",
-        job: "cross_os_release_checks / Windows / packaged upgrade",
-        conclusion: "failure",
-        policy: "advisory",
-      },
-    ],
-  };
-  const gate = (input: { manifest: unknown; laneWaiver?: string }) =>
-    evaluateReleasePublishGates({
-      consumer: "publisher",
-      releaseTag: "v2026.9.6",
-      npmDistTag: "latest",
-      expectedSha: targetSha,
-      ...input,
-    }).find((entry) => entry.id === "publisher.lane-waiver");
-
-  it("blocks waived evidence until the operator acknowledges it", () => {
-    expect(gate({ manifest: waived })).toMatchObject({ status: "FAIL" });
-    expect(gate({ manifest: waived, laneWaiver: " " })).toMatchObject({ status: "FAIL" });
-    expect(gate({ manifest: waived, laneWaiver: "2026.9.6 ack" })).toMatchObject({
-      status: "WARN",
-      message:
-        "Operator lane waiver: 2026.9.6 ack; waived lanes (2): normalCi checks-node-bundle-infra-small-runtime-2, releaseChecksCandidate cross_os_release_checks / Windows / packaged upgrade",
-    });
-  });
-
-  it("ignores the acknowledgement when evidence carries no waiver", () => {
-    expect(gate({ manifest, laneWaiver: "2026.9.6 ack" })).toBeUndefined();
-  });
 });

@@ -24,7 +24,16 @@ import {
 import { isRecord, trimString } from "./record-shared.mjs";
 import type { ReleasePublishGate } from "./release-publish-gates.mts";
 
-export type PublishPreflightGh = (args: string[]) => string;
+export type PublishPreflightGh = (args: string[], options?: { timeoutMs?: number }) => string;
+
+export function publishPreflightGhError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const stderr =
+    isRecord(error) && (typeof error.stderr === "string" || Buffer.isBuffer(error.stderr))
+      ? error.stderr.toString().trim()
+      : "";
+  return [stderr, message].filter(Boolean).join("; ").replace(/\s+/gu, " ").slice(0, 1000);
+}
 export type PublishPreflightRecord = Record<string, unknown>;
 type CoreTarball = {
   packageName: string;
@@ -183,13 +192,14 @@ export function requirePreflightRecord(value: unknown, label: string): PublishPr
 
 export function createPublishPreflightGh(): PublishPreflightGh {
   const responses = new Map<string, string>();
-  return (args) => {
+  return (args, options) => {
     const key = JSON.stringify(args);
     let response = responses.get(key);
     if (response === undefined) {
       response = execFileSync("gh", args, {
         encoding: "utf8",
-        timeout: 60_000,
+        timeout: Math.min(60_000, options?.timeoutMs ?? 60_000),
+        killSignal: "SIGKILL",
         maxBuffer: 32 * 1024 * 1024,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -205,11 +215,66 @@ export function preflightApi(runGh: PublishPreflightGh, repo: string, endpoint: 
   );
 }
 
-export function readPublishPreflightRelease(runGh: PublishPreflightGh, repo: string, tag: string) {
-  // The tag endpoint omits drafts, and gh release view can mask a failed draft
-  // lookup as absence. One bounded list owner preserves errors and shared caching.
+export function readPublishPreflightRelease(
+  runGh: PublishPreflightGh,
+  repo: string,
+  tag: string,
+  onProgress: (message: string) => void = () => {},
+) {
+  const found = (release: unknown) => {
+    if (
+      !isRecord(release) ||
+      release.tag_name !== tag ||
+      typeof release.id !== "number" ||
+      typeof release.draft !== "boolean" ||
+      typeof release.prerelease !== "boolean" ||
+      typeof release.html_url !== "string" ||
+      typeof release.target_commitish !== "string"
+    ) {
+      throw new Error("Invalid GitHub release response.");
+    }
+    return {
+      state: "found" as const,
+      release: {
+        id: release.id,
+        draft: release.draft,
+        prerelease: release.prerelease,
+        tag_name: tag,
+        html_url: release.html_url,
+        target_commitish: release.target_commitish,
+        body: release.body,
+        assets: release.assets,
+      },
+    };
+  };
+  onProgress(`release lookup exact tag ${tag}`);
+  let exact: unknown;
+  try {
+    exact = preflightApi(runGh, repo, `releases/tags/${encodeURIComponent(tag)}`);
+  } catch (error) {
+    // A missing public tag does not establish draft absence; preserve the
+    // authenticated inventory fallback, but never mask other read failures.
+    if (!/\b404\b/u.test(publishPreflightGhError(error))) {
+      throw error;
+    }
+  }
+  if (exact !== undefined) {
+    return found(exact);
+  }
   for (let page = 1; page <= 20; page++) {
-    const releases = preflightApi(runGh, repo, `releases?per_page=100&page=${page}`);
+    onProgress(`release lookup page ${page}/20`);
+    // Retain full evidence only for this tag; other bodies/assets can dominate
+    // the response by megabytes while contributing only pagination and tag names.
+    const releases: unknown = JSON.parse(
+      runGh([
+        "api",
+        `repos/${repo}/releases?per_page=100&page=${page}`,
+        "--method",
+        "GET",
+        "--jq",
+        `map(if .tag_name == ${JSON.stringify(tag)} then . else {tag_name} end)`,
+      ]),
+    );
     if (
       !Array.isArray(releases) ||
       releases.length > 100 ||
@@ -222,32 +287,11 @@ export function readPublishPreflightRelease(runGh: PublishPreflightGh, repo: str
     }
     const release = releases.find((entry) => entry.tag_name === tag);
     if (release) {
-      if (
-        typeof release.id !== "number" ||
-        typeof release.draft !== "boolean" ||
-        typeof release.prerelease !== "boolean" ||
-        typeof release.html_url !== "string" ||
-        typeof release.target_commitish !== "string"
-      ) {
-        throw new Error("Invalid GitHub release response.");
-      }
-      return {
-        state: "found" as const,
-        release: {
-          id: release.id,
-          draft: release.draft,
-          prerelease: release.prerelease,
-          tag_name: tag,
-          html_url: release.html_url,
-          target_commitish: release.target_commitish,
-          body: release.body,
-          assets: release.assets,
-        },
-      };
+      return found(release);
     }
     if (releases.length < 100) {
-      // GitHub includes drafts only for readers with push access. A complete
-      // public-only list cannot establish that publication has no existing draft.
+      // GitHub includes drafts only for readers with push access.
+      onProgress("release lookup verifying draft visibility");
       const repository = requirePreflightRecord(preflightApi(runGh, repo, ""), "repository");
       if (!isRecord(repository.permissions) || repository.permissions.push !== true) {
         return {
@@ -355,6 +399,72 @@ export function resolvePreflightTag(runGh: PublishPreflightGh, repo: string, tag
     throw new Error(`Tag ${tag} does not resolve to one exact commit.`);
   }
   return object.sha;
+}
+
+export function ensureReleasePublishToolingTag({
+  runGh,
+  repo,
+  toolingSha,
+  now = Date.now,
+}: {
+  runGh: PublishPreflightGh;
+  repo: string;
+  toolingSha: string;
+  now?: () => number;
+}): { tag: string; created: boolean } {
+  if (!/^[a-f0-9]{40}$/u.test(toolingSha)) {
+    throw new Error("Tooling SHA must be a lowercase 40-character commit SHA.");
+  }
+  const ancestry = runGh([
+    "api",
+    `repos/${repo}/compare/${toolingSha}...main`,
+    "--method",
+    "GET",
+    "--jq",
+    ".status",
+  ]).trim();
+  if (ancestry !== "ahead" && ancestry !== "identical") {
+    throw new Error(`Tooling SHA ${toolingSha} is not reachable from trusted main.`);
+  }
+  const sha12 = toolingSha.slice(0, 12);
+  const refs = preflightApi(runGh, repo, `git/matching-refs/tags/release-publish/${sha12}-`);
+  if (!Array.isArray(refs)) {
+    throw new Error("Invalid protected tooling tag inventory.");
+  }
+  let newest: RegExpExecArray | undefined;
+  for (const entry of refs) {
+    if (
+      !isRecord(entry) ||
+      !isRecord(entry.object) ||
+      entry.object.type !== "commit" ||
+      entry.object.sha !== toolingSha ||
+      typeof entry.ref !== "string"
+    ) {
+      continue;
+    }
+    const match = /^refs\/tags\/(release-publish\/[a-f0-9]{12}-([1-9][0-9]*))$/u.exec(entry.ref);
+    if (match && (!newest || BigInt(match[2]!) > BigInt(newest[2]!))) {
+      newest = match;
+    }
+  }
+  if (newest) {
+    return { tag: newest[1]!, created: false };
+  }
+  const tag = `release-publish/${sha12}-${Math.floor(now() / 1000)}`;
+  runGh([
+    "api",
+    `repos/${repo}/git/refs`,
+    "--method",
+    "POST",
+    "-f",
+    `ref=refs/tags/${tag}`,
+    "-f",
+    `sha=${toolingSha}`,
+  ]);
+  if (resolvePreflightTag(runGh, repo, tag) !== toolingSha) {
+    throw new Error(`Protected tooling tag ${tag} does not resolve to ${toolingSha}.`);
+  }
+  return { tag, created: true };
 }
 
 function listPreflightArtifacts(runGh: PublishPreflightGh, repo: string, runId: string) {
@@ -609,6 +719,9 @@ export function verifyPublishSourceLineage(input: {
   releaseTag: string;
   runGh: PublishPreflightGh;
 }) {
+  if (input.releaseTag.includes("-alpha.") || input.workflowRef.includes("tideclaw/alpha/")) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   const branches = ["main"];
   for (const prefix of ["release/", "extended-stable/"]) {
     const refs = preflightApi(input.runGh, input.repo, `git/matching-refs/heads/${prefix}`);
@@ -620,9 +733,6 @@ export function verifyPublishSourceLineage(input: {
         String(requirePreflightRecord(ref, "branch ref").ref).replace(/^refs\/heads\//u, ""),
       ),
     );
-  }
-  if (input.releaseTag.includes("-alpha.") && input.workflowRef.startsWith("tideclaw/alpha/")) {
-    branches.push(input.workflowRef);
   }
   for (const branch of branches) {
     const comparison = requirePreflightRecord(
@@ -637,7 +747,5 @@ export function verifyPublishSourceLineage(input: {
       return branch;
     }
   }
-  throw new Error(
-    "Release source is not reachable from main, release/*, extended-stable/* or the matching Tideclaw branch.",
-  );
+  throw new Error("Release source is not reachable from main, release/*, or extended-stable/*.");
 }

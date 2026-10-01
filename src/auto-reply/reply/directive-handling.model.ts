@@ -1,4 +1,3 @@
-// Handles model directives and persists provider/model selections.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -283,20 +282,17 @@ export async function maybeHandleModelDirectiveInfo(params: {
     lines.push(`(previous selection reset to default)`);
   }
 
-  const byProvider = new Map<string, ModelPickerCatalogEntry[]>();
   const statusCatalog = filterMissingAuthNestedProviderDuplicates({
     cfg: params.cfg,
     entries: pickerCatalog,
     authByProvider,
   });
+  const byProvider = new Map<string, ModelPickerCatalogEntry[]>();
   for (const entry of statusCatalog) {
     const provider = normalizeProviderId(entry.provider);
-    const models = byProvider.get(provider);
-    if (models) {
-      models.push(entry);
-      continue;
-    }
-    byProvider.set(provider, [entry]);
+    const models = byProvider.get(provider) ?? [];
+    models.push(entry);
+    byProvider.set(provider, models);
   }
 
   for (const [provider, models] of byProvider) {

@@ -373,12 +373,11 @@ export class NewSessionDraftPersistence {
         reportDurableComposerStorageError(scope, this.onStorageError);
         return;
       }
-      const currentRevision =
-        (current.status === "found" ? current.draft.revision : current.revision) ?? 0;
-      const currentWriteId = current.status === "found" ? current.draft.writeId : current.writeId;
       if (current.status !== "found" || !submitted.writeIds.has(current.draft.writeId)) {
         return;
       }
+      const currentRevision = current.draft.revision;
+      const currentWriteId = current.draft.writeId;
       const revision = nextDraftRevision(currentRevision);
       const writeId = `clear:${revision}`;
       const { result } = await writeDurableComposerSnapshot({
@@ -534,6 +533,29 @@ export class NewSessionDraftPersistence {
     };
   }
 
+  private isRestoreCurrent(
+    scope: DurableComposerDraftScope,
+    generation: number,
+    mutationGeneration: number,
+    signature: string,
+  ): boolean {
+    const current = this.read();
+    const currentScope = this.scope();
+    return (
+      generation === this.restoreGeneration &&
+      mutationGeneration === this.mutationGeneration &&
+      currentScope !== null &&
+      durableComposerScopeIdentity(scope) === durableComposerScopeIdentity(currentScope) &&
+      signature ===
+        chatAttachmentDraftSignature(
+          current.message,
+          current.attachments,
+          undefined,
+          current.mentions,
+        )
+    );
+  }
+
   private async restoreScope(
     scope: DurableComposerDraftScope,
     generation: number,
@@ -552,21 +574,7 @@ export class NewSessionDraftPersistence {
     // An absent authoritative row clears committed facts, never in-flight IDs.
     lineage.revision = storedRevision ?? 0;
     lineage.writeId = storedWriteId;
-    const current = this.read();
-    const currentScope = this.scope();
-    if (
-      generation !== this.restoreGeneration ||
-      mutationGeneration !== this.mutationGeneration ||
-      !currentScope ||
-      durableComposerScopeIdentity(scope) !== durableComposerScopeIdentity(currentScope) ||
-      signature !==
-        chatAttachmentDraftSignature(
-          current.message,
-          current.attachments,
-          undefined,
-          current.mentions,
-        )
-    ) {
+    if (!this.isRestoreCurrent(scope, generation, mutationGeneration, signature)) {
       return false;
     }
     this.reconcileHandoffCommit();
@@ -602,21 +610,7 @@ export class NewSessionDraftPersistence {
         return false;
       }
     }
-    const hydratedCurrent = this.read();
-    const hydratedScope = this.scope();
-    if (
-      generation !== this.restoreGeneration ||
-      mutationGeneration !== this.mutationGeneration ||
-      !hydratedScope ||
-      durableComposerScopeIdentity(scope) !== durableComposerScopeIdentity(hydratedScope) ||
-      signature !==
-        chatAttachmentDraftSignature(
-          hydratedCurrent.message,
-          hydratedCurrent.attachments,
-          undefined,
-          hydratedCurrent.mentions,
-        )
-    ) {
+    if (!this.isRestoreCurrent(scope, generation, mutationGeneration, signature)) {
       return false;
     }
     this.revision = storedRevision;

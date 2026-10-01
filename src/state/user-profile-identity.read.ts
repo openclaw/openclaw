@@ -2,7 +2,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
@@ -10,14 +10,21 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import { selectUserProfileGitHubIdentities } from "./user-profile-github-identity.js";
+import {
+  selectStoredGitHubIdentities,
+  selectUserProfileGitHubIdentities,
+} from "./user-profile-github-identity.js";
 import {
   matchUserProfileReference,
+  resolveCatalogProfile,
+  selectProfileDisplayEntries,
+  projectUserProfileDisplay,
   selectResolvedUserProfile,
+  selectUserProfileEmailAlias,
   selectResolvedUserProfileMetadataById,
   userProfilesDb,
   userProfileDisplaySelection,
-  normalizeUserProfileAvatarMime,
+  toUserProfile,
 } from "./user-profiles-internal.js";
 import {
   ensureUserProfilesSchema,
@@ -67,17 +74,18 @@ export function readUserProfileIdForEmail(db: DatabaseSync, email: string): stri
   if (!tableExists(db, "user_profile_emails") || !tableExists(db, "user_profiles")) {
     return undefined;
   }
-  const alias = executeSqliteQueryTakeFirstSync(
-    db,
-    userProfilesDb(db)
-      .selectFrom("user_profile_emails")
-      .select("profile_id")
-      .where("email", "=", email),
-  );
+  const alias = selectUserProfileEmailAlias(db, email);
   return alias ? selectResolvedUserProfileMetadataById(db, alias.profile_id)?.id : undefined;
 }
 
 export function listUserProfilesSync(options: OpenClawStateDatabaseOptions = {}) {
+  return readUserProfileSnapshotSync(options).profiles;
+}
+
+export function readUserProfileSnapshotSync(
+  options: OpenClawStateDatabaseOptions = {},
+  githubAccountIds?: readonly number[],
+) {
   ensureUserProfilesSchema(options);
   const database = openOpenClawStateDatabase(options);
   return runSqliteDeferredTransactionSync(
@@ -112,25 +120,57 @@ export function listUserProfilesSync(options: OpenClawStateDatabaseOptions = {})
       for (const { profile_id, email } of emails) {
         emailsByProfile.get(profile_id)?.push(email);
       }
-      return profiles.map((profile) =>
-        Object.assign(
-          {
-            id: profile.id,
-            displayName: profile.display_name,
-            avatarMime: normalizeUserProfileAvatarMime(profile.avatar_mime),
-            mergedInto: profile.merged_into,
-            createdAt: profile.created_at,
-            updatedAt: profile.updated_at,
+      return {
+        profiles: profiles.map((profile) =>
+          Object.assign(toUserProfile(profile), {
             emails: emailsByProfile.get(profile.id) ?? [],
             githubIdentity: githubIdentities.get(profile.id) ?? null,
             hasAvatar: profile.has_avatar === 1,
-          },
-          profile.role ? { role: profile.role } : {},
+          }),
         ),
-      );
+        ...(githubAccountIds
+          ? {
+              githubProfiles: [
+                ...selectStoredGitHubIdentities(database.db, undefined, githubAccountIds),
+              ].flatMap(([profileId, { accounts }]) =>
+                accounts.map(({ accountId }) => ({ accountId, profileId })),
+              ),
+            }
+          : {}),
+      };
     },
     { databaseLabel: database.path, operationLabel: "user-profiles.list" },
   );
+}
+
+/** Resolve current authority and display together on the caller's admitted connection. */
+export function readUserProfileAuthorityInDatabase(db: DatabaseSync, profileId: string) {
+  return runSqliteDeferredTransactionSync(db, () => {
+    const current = tableExists(db, "user_profiles")
+      ? selectResolvedUserProfileMetadataById(db, profileId)
+      : undefined;
+    if (!current) {
+      return undefined;
+    }
+    const display = selectProfileDisplayEntries(db, [current.id])[0]?.[1];
+    if (!display) {
+      return undefined;
+    }
+    const aliases = executeSqliteQuerySync(
+      db,
+      userProfilesDb(db)
+        .selectFrom("user_profiles")
+        .select("id")
+        .where("merged_into", "=", current.id)
+        .orderBy("id", "asc"),
+    ).rows;
+    return {
+      profileId: current.id,
+      role: current.role ?? null,
+      aliases: [current.id, ...aliases.map((alias) => alias.id)],
+      display: projectUserProfileDisplay(display),
+    };
+  });
 }
 
 /** Disclosure scopes need current aliases, never the resident display catalog. */
@@ -245,6 +285,38 @@ export function selectUserProfileDisplaysInDatabase(
       const raw = byId.get(toUSVString(id));
       return [id, raw?.merged_into ? (byId.get(raw.merged_into) ?? raw) : raw];
     }),
+  );
+}
+
+/** Project a bounded display cohort from the resident Gateway catalog. */
+export function projectUserProfileDisplays(
+  ids: readonly string[],
+  resolve: (id: string) => Omit<ProfileDisplayRow, "role"> | undefined,
+) {
+  return new Map(
+    ids.flatMap((id) => {
+      const profile = resolve(id);
+      return profile ? [[id, projectUserProfileDisplay(profile)] as const] : [];
+    }),
+  );
+}
+
+/** Resolve display navigation against the resident Gateway catalog. */
+export function resolveUserProfileReferenceInCatalog(
+  rows: Map<string, ProfileDisplayRow>,
+  reference: string,
+  allowedProfileIds?: ReadonlySet<string>,
+) {
+  const allowed = (row: ProfileDisplayRow) =>
+    !allowedProfileIds || allowedProfileIds.has(row.merged_into ?? row.id);
+  const raw = rows.get(reference);
+  return matchUserProfileReference(
+    reference,
+    raw && allowed(raw) ? resolveCatalogProfile(rows, reference)?.id : undefined,
+    (prefix) =>
+      [...rows.values()]
+        .filter((row) => allowed(row) && row.id.toLowerCase().startsWith(prefix))
+        .map((row) => row.merged_into ?? row.id),
   );
 }
 

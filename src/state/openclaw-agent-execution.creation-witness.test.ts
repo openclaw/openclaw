@@ -8,12 +8,21 @@ import {
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import {
+  prepareOpenClawAgentDatabaseRegistrySnapshotRead,
+  readOpenClawAgentDatabaseRegistryToken,
+} from "./openclaw-agent-db-registry-listing.js";
+import { unregisterOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
+  listOpenClawRegisteredAgentDatabases,
+  openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
-import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
+import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
+import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -27,6 +36,18 @@ function fixture() {
   const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-creation-witness-")) };
   const options = { agentId: "main", env };
   return { ...options, path: resolveOpenClawAgentSqlitePath(options) };
+}
+
+function aliasedFixture() {
+  const options = fixture();
+  const alias = path.join(options.env.OPENCLAW_STATE_DIR, "alias");
+  const directory = path.dirname(options.path);
+  fs.mkdirSync(directory, { recursive: true });
+  fs.symlinkSync(directory, alias, process.platform === "win32" ? "junction" : "dir");
+  return {
+    options,
+    aliased: { ...options, path: path.join(alias, path.basename(options.path)) },
+  };
 }
 
 function source(
@@ -43,11 +64,130 @@ function source(
           if (!grant()) {
             throw new Error("Creation witness fixture lost admission");
           }
-        }),
+        }, binding.attachment),
       });
     },
   };
 }
+
+it("shares an execution owner across directory aliases, later turns, and cleanup", async () => {
+  const { options, aliased } = aliasedFixture();
+  const creator = captureOpenClawAgentDatabaseExecution(aliased, {
+    expectedCreationIdentity: readDatabasePathIdentitySync(aliased.path),
+  });
+  const sibling = captureOpenClawAgentDatabaseExecution(options);
+  const sessionKey = "agent:main:alias-proof";
+  const command = {
+    type: "session.transcript.initialize" as const,
+    input: { sessionKey, sessionId: "alias-session" },
+  };
+  const existingTranscript = { kind: "session-transcript-initialized", sessionKey };
+  try {
+    await creator.prepare(source());
+    const registry = await prepareOpenClawAgentDatabaseRegistrySnapshotRead({
+      env: options.env,
+    }).read();
+    await expect(creator.runExisting(source(), (scope) => scope.execute(command))).resolves.toEqual(
+      {
+        ...existingTranscript,
+        placeholder: { sessionId: "alias-session" },
+      },
+    );
+    await expect(sibling.runExisting(source(), (scope) => scope.execute(command))).resolves.toEqual(
+      existingTranscript,
+    );
+    expect(registry.assertCurrent).not.toThrow();
+    expect(sibling.path).toBe(options.path);
+    expect(sibling.fileIdentity).toEqual(creator.fileIdentity);
+    await Promise.all([creator.release(), sibling.release()]);
+    const later = captureOpenClawAgentDatabaseExecution(options);
+    try {
+      await expect(later.runExisting(source(), (scope) => scope.execute(command))).resolves.toEqual(
+        existingTranscript,
+      );
+      await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
+      expect(() => later.assertCurrent()).toThrow(/closed/);
+    } finally {
+      await later.release();
+    }
+    const reopened = captureOpenClawAgentDatabaseExecution(aliased);
+    try {
+      await expect(
+        reopened.runExisting(source(), (scope) => scope.execute(command)),
+      ).resolves.toEqual(existingTranscript);
+      expect(registry.assertCurrent).not.toThrow();
+      await closeOpenClawAgentDatabaseByPathAsync(aliased.path, options.agentId);
+      expect(() => reopened.assertCurrent()).toThrow(/closed/);
+    } finally {
+      await reopened.release();
+    }
+    fs.unlinkSync(options.path);
+    const replacement = captureOpenClawAgentDatabaseExecution(options, {
+      expectedCreationIdentity: readDatabasePathIdentitySync(options.path),
+    });
+    try {
+      await replacement.prepare(source());
+      expect(registry.assertCurrent).toThrow("registry changed");
+      await expect(
+        replacement.runExisting(source(), (scope) => scope.execute(command)),
+      ).resolves.toEqual({
+        ...existingTranscript,
+        placeholder: { sessionId: "alias-session" },
+      });
+    } finally {
+      await replacement.release();
+    }
+  } finally {
+    await Promise.allSettled([creator.release(), sibling.release()]);
+  }
+});
+
+it.each(["child-first", "parent-first"] as const)(
+  "retains executor aliases across %s maintenance borrowing",
+  async (order) => {
+    const { options, aliased } = aliasedFixture();
+    const parent = createOpenClawDatabaseMaintenanceScope();
+    const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
+    const creator =
+      order === "child-first"
+        ? child.run(() => captureOpenClawAgentDatabaseExecution(aliased))
+        : parent.run(() => captureOpenClawAgentDatabaseExecution(options));
+    const borrower =
+      order === "child-first"
+        ? parent.run(() => captureOpenClawAgentDatabaseExecution(options))
+        : child.run(() => captureOpenClawAgentDatabaseExecution(aliased));
+    const parentBorrower = order === "child-first" ? borrower : creator;
+    const childBorrower = order === "child-first" ? creator : borrower;
+    try {
+      await parent.run(() => creator.prepare(source()));
+      const identity = parentBorrower.fileIdentity;
+      expect(identity).toBeDefined();
+      await childBorrower.release();
+      await child.close();
+      await expect(
+        parent.run(() =>
+          parentBorrower.runExisting(source(), (scope) =>
+            scope.execute({
+              type: "session.transcript.initialize",
+              input: { sessionKey: "agent:main:maintenance-borrow", sessionId: "retained-session" },
+            }),
+          ),
+        ),
+      ).resolves.toEqual({
+        kind: "session-transcript-initialized",
+        sessionKey: "agent:main:maintenance-borrow",
+        placeholder: { sessionId: "retained-session" },
+      });
+      expect(parentBorrower.fileIdentity).toEqual(identity);
+      await parent.close();
+      expect(() => parentBorrower.assertCurrent()).toThrow(/closed/);
+    } finally {
+      await Promise.allSettled([creator.release(), borrower.release()]);
+      await child.close();
+      await parent.close();
+    }
+  },
+);
 
 it.each(["missing", "schema-missing"] as const)(
   "prepares its originally observed %s store and records native birth without changing identity",
@@ -77,9 +217,113 @@ it.each(["missing", "schema-missing"] as const)(
       await expect(execution.runExisting(source(), async () => "retained")).resolves.toBe(
         "retained",
       );
+      const unrelatedInitialization = vi.fn(() => {
+        throw new Error("A warm borrower must not recapture initialization configuration");
+      });
+      const env = { ...options.env };
+      if (process.platform !== "win32") {
+        Object.defineProperty(env, "UNRELATED_INITIALIZATION", {
+          enumerable: true,
+          get: unrelatedInitialization,
+        });
+      }
+      const warm = captureOpenClawAgentDatabaseExecution({
+        ...options,
+        env,
+      });
+      try {
+        await expect(warm.runExisting(source(), async () => "warm")).resolves.toBe("warm");
+        expect(unrelatedInitialization).not.toHaveBeenCalled();
+      } finally {
+        await warm.release();
+      }
+      const windows = (() => {
+        const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        try {
+          return captureOpenClawAgentDatabaseExecution({
+            ...options,
+            env: {
+              HOME: options.env.OPENCLAW_STATE_DIR,
+              OpenClaw_State_Dir: options.env.OPENCLAW_STATE_DIR,
+            },
+          });
+        } finally {
+          platform.mockRestore();
+        }
+      })();
+      try {
+        await expect(windows.runExisting(source(), async () => "same owner")).resolves.toBe(
+          "same owner",
+        );
+      } finally {
+        await windows.release();
+      }
+      expect(() =>
+        captureOpenClawAgentDatabaseExecution(options, {
+          expectedIdentity: {
+            kind: "file",
+            physicalIdentity: physical.key.slice("file:".length),
+            nativeLocation: physical.canonicalPath,
+            birthtime: (fs.statSync(options.path, { bigint: true }).birthtimeNs + 1n).toString(),
+          },
+        }),
+      ).toThrow(/identity|physical file/);
     } finally {
       await execution.release();
     }
+  },
+);
+
+it.each(["fresh root", "existing root", "existing agent"] as const)(
+  "preserves a relative registration through native opening, relocation, and removal (%s alias)",
+  async (layout) => {
+    const options = fixture();
+    const alias = path.join(tempDirs.make("agent-registry-alias-"), "state");
+    fs.symlinkSync(
+      options.env.OPENCLAW_STATE_DIR,
+      alias,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const relative = path.join("agents", "main", "agent", "openclaw-agent.sqlite");
+    const aliased =
+      layout === "existing agent"
+        ? options
+        : {
+            ...options,
+            env: { OPENCLAW_STATE_DIR: alias },
+            path: path.join(alias, relative),
+          };
+    if (layout === "existing agent") {
+      fs.mkdirSync(path.dirname(path.dirname(options.path)), { recursive: true });
+      fs.symlinkSync(
+        tempDirs.make("agent-registry-external-"),
+        path.dirname(options.path),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
+    if (layout !== "fresh root") {
+      openOpenClawAgentDatabase(aliased);
+      await closeOpenClawAgentDatabasesAsync();
+    }
+    const state = openOpenClawStateDatabase({ env: aliased.env });
+    const registrations = () => state.db.prepare("SELECT path FROM agent_databases").all();
+    expect(registrations()).toEqual(layout === "fresh root" ? [] : [{ path: relative }]);
+    const execution = captureOpenClawAgentDatabaseExecution(aliased);
+    try {
+      await execution.prepare(source());
+      expect(registrations()).toEqual([{ path: relative }]);
+    } finally {
+      await execution.release();
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
+    }
+    const relocated = fs.realpathSync(tempDirs.make("agent-registry-relocated-"));
+    fs.cpSync(options.env.OPENCLAW_STATE_DIR, relocated, { recursive: true });
+    expect(
+      listOpenClawRegisteredAgentDatabases({ env: { OPENCLAW_STATE_DIR: relocated } }),
+    ).toEqual([expect.objectContaining({ agentId: "main", path: path.join(relocated, relative) })]);
+    unregisterOpenClawAgentDatabase({ ...aliased, path: fs.realpathSync(aliased.path) });
+    expect(listOpenClawRegisteredAgentDatabases({ env: aliased.env })).toEqual([]);
   },
 );
 
@@ -228,6 +472,85 @@ it("joins native creating admission before releasing its original reservation", 
   }
 });
 
+it("rechecks source authority after registration notification before authorizing native open", async () => {
+  const options = fixture();
+  readOpenClawAgentDatabaseRegistryToken({ env: options.env });
+  const execution = captureOpenClawAgentDatabaseExecution(options);
+  const revoked = new Error("Creation source revoked by its registry notification");
+  let current = true;
+  const authorizedOpen = vi.fn();
+  const requestSource: AgentDatabaseRequestExecutionSource = {
+    assertCurrent() {
+      if (!current) {
+        throw revoked;
+      }
+    },
+    onRegistryChange() {
+      current = false;
+    },
+    createAdmission(binding) {
+      return () => ({
+        nativeLocations: binding.nativeLocations,
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          binding.authorize(request);
+          if (request.stage === "open") {
+            authorizedOpen();
+          }
+          if (!grant()) {
+            throw new Error("Creation source lost admission");
+          }
+        }, binding.attachment),
+      });
+    },
+  };
+  try {
+    await expect(execution.prepare(requestSource)).rejects.toThrow(revoked);
+    expect(authorizedOpen).not.toHaveBeenCalled();
+    expect(fs.existsSync(options.path)).toBe(false);
+  } finally {
+    await execution.release();
+  }
+});
+
+it.skipIf(process.platform === "win32")(
+  "rejects a warm database path replaced by its source callback before granting admission",
+  async () => {
+    const options = fixture();
+    const retainedPath = `${options.path}.retained`;
+    const execution = captureOpenClawAgentDatabaseExecution(options);
+    let replaceOnAssertion = false;
+    let replaced = false;
+    const requestSource = source((request) => {
+      replaceOnAssertion = request.stage === "prepare";
+    });
+    requestSource.assertCurrent = () => {
+      if (replaceOnAssertion && !replaced) {
+        fs.renameSync(options.path, retainedPath);
+        fs.writeFileSync(options.path, "replacement path; not a database");
+        replaced = true;
+      }
+    };
+    try {
+      await execution.prepare(source());
+      await expect(
+        execution.runExisting(requestSource, (scope) =>
+          scope.execute({
+            type: "session.entry.read",
+            input: { sessionKey: "agent:main:missing" },
+          }),
+        ),
+      ).rejects.toThrow(/identity changed/);
+      expect(replaced).toBe(true);
+    } finally {
+      if (replaced) {
+        fs.unlinkSync(options.path);
+        fs.renameSync(retainedPath, options.path);
+      }
+      await execution.release();
+    }
+  },
+);
+
 it("reserves absent first birth and refuses a competitor introduced at the native open boundary", async () => {
   const options = fixture();
   const creator = captureOpenClawAgentDatabaseExecution(options, {
@@ -283,7 +606,7 @@ it.each(["missing", "stale"] as const)(
   },
 );
 
-it("retains the prepared native receipt across an alias swap before caller continuation", async () => {
+it("retains canonical borrowers and rejects the changed alias before caller continuation", async () => {
   const options = fixture();
   const originalDirectory = path.join(options.env.OPENCLAW_STATE_DIR, "original");
   const successorDirectory = path.join(options.env.OPENCLAW_STATE_DIR, "successor");
@@ -300,6 +623,10 @@ it("retains the prepared native receipt across an alias swap before caller conti
   const creator = captureOpenClawAgentDatabaseExecution(aliased, {
     expectedCreationIdentity: readDatabasePathIdentitySync(aliased.path),
   });
+  const canonical = captureOpenClawAgentDatabaseExecution({
+    ...options,
+    path: path.join(originalDirectory, "agent.sqlite"),
+  });
   const operation = vi.fn(async () => "must not enter successor");
   try {
     await successor.prepare(source());
@@ -315,11 +642,25 @@ it("retains the prepared native receipt across an alias swap before caller conti
       /identity|observed target/,
     );
     expect(operation).not.toHaveBeenCalled();
+    await expect(
+      canonical.runExisting(source(), (scope) =>
+        scope.execute({
+          type: "session.transcript.initialize",
+          input: { sessionKey: "agent:main:retarget-proof", sessionId: "original-session" },
+        }),
+      ),
+    ).resolves.toEqual({
+      kind: "session-transcript-initialized",
+      sessionKey: "agent:main:retarget-proof",
+      placeholder: { sessionId: "original-session" },
+    });
+    expect(canonical.fileIdentity).toEqual(receipt);
+    await closeOpenClawAgentDatabaseByPathAsync(aliased.path, options.agentId);
     expect(() => successor.assertCurrent()).not.toThrow();
+    await expect(successor.runExisting(source(), async () => "successor retained")).resolves.toBe(
+      "successor retained",
+    );
   } finally {
-    // Restore the test's directory alias so native cleanup addresses its original file.
-    fs.unlinkSync(alias);
-    fs.symlinkSync(originalDirectory, alias, linkType);
-    await Promise.allSettled([creator.release(), successor.release()]);
+    await Promise.allSettled([creator.release(), canonical.release(), successor.release()]);
   }
 });

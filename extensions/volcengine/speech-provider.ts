@@ -1,9 +1,8 @@
-// Volcengine provider module implements model/runtime integration.
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
+  SpeechDirectiveTokenParseResult,
   SpeechProviderConfig,
-  SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
 import {
@@ -44,12 +43,6 @@ type VolcengineTtsProviderConfig = {
   resourceId: string;
   appKey: string;
   baseUrl?: string;
-  speedRatio?: number;
-  emotion?: string;
-};
-
-type VolcengineTtsProviderOverrides = {
-  voice?: string;
   speedRatio?: number;
   emotion?: string;
 };
@@ -119,24 +112,9 @@ function readProviderConfig(config: SpeechProviderConfig): VolcengineTtsProvider
   });
 }
 
-function readVolcengineOverrides(
-  overrides: SpeechProviderOverrides | undefined,
-): VolcengineTtsProviderOverrides {
-  if (!overrides) {
-    return {};
-  }
-  return {
-    voice: trimToUndefined(overrides.voice),
-    speedRatio: normalizeSpeedRatio(overrides.speedRatio),
-    emotion: trimToUndefined(overrides.emotion),
-  };
-}
-
-function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
-  handled: boolean;
-  overrides?: SpeechProviderOverrides;
-  warnings?: string[];
-} {
+function parseDirectiveToken(
+  ctx: SpeechDirectiveTokenParseContext,
+): SpeechDirectiveTokenParseResult {
   switch (ctx.key) {
     case "voice":
     case "volcengine_voice":
@@ -192,7 +170,7 @@ export function buildVolcengineSpeechProvider(): SpeechProviderPlugin {
 
     synthesize: async (req) => {
       const cfg = readProviderConfig(req.providerConfig);
-      const overrides = readVolcengineOverrides(req.providerOverrides);
+      const overrides = req.providerOverrides;
       const apiKey = resolveSeedSpeechApiKey(cfg.apiKey);
       const { appId, token } = resolveLegacyVolcengineCredentials(cfg);
 
@@ -211,13 +189,13 @@ export function buildVolcengineSpeechProvider(): SpeechProviderPlugin {
         apiKey,
         appId,
         token,
-        voice: overrides.voice ?? cfg.voice,
+        voice: trimToUndefined(overrides?.voice) ?? cfg.voice,
         cluster: cfg.cluster,
         resourceId: cfg.resourceId,
         appKey: cfg.appKey,
         baseUrl: cfg.baseUrl,
-        speedRatio: overrides.speedRatio ?? cfg.speedRatio,
-        emotion: overrides.emotion ?? cfg.emotion,
+        speedRatio: normalizeSpeedRatio(overrides?.speedRatio) ?? cfg.speedRatio,
+        emotion: trimToUndefined(overrides?.emotion) ?? cfg.emotion,
         encoding,
         timeoutMs: req.timeoutMs,
       });

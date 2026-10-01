@@ -32,9 +32,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -68,7 +70,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -240,7 +241,31 @@ private fun ChatLinkPreview(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp).then(metadataAnchor?.modifier ?: Modifier),
         verticalArrangement = Arrangement.spacedBy(3.dp),
       ) {
-        Text(domain, style = ClawTheme.type.captionSmall, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Text(
+            text = domain,
+            style = ClawTheme.type.captionSmall,
+            color = ClawTheme.colors.textMuted,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+          Surface(
+            onClick = { expanded = false },
+            shape = CircleShape,
+            color = Color.Transparent,
+          ) {
+            Icon(
+              imageVector = Icons.Default.ExpandLess,
+              contentDescription = nativeString("Collapse link preview"),
+              tint = ClawTheme.colors.textMuted,
+            )
+          }
+        }
         when (val preview = result) {
           null -> {
             Text(nativeString("Loading preview…"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
@@ -505,8 +530,9 @@ internal fun ChatManagedImage(
   var image by remember(artifactId) { mutableStateOf<ImageBitmap?>(null) }
   var failed by remember(artifactId) { mutableStateOf(false) }
   var retryGeneration by rememberSaveable(artifactId) { mutableStateOf(0) }
+  val decodeDispatcher = LocalChatImageDecodeDispatcher.current
 
-  LaunchedEffect(artifactId, resolverReady, retryGeneration) {
+  LaunchedEffect(artifactId, resolverReady, retryGeneration, decodeDispatcher) {
     if (!resolverReady) {
       failed = true
       image = null
@@ -517,7 +543,7 @@ internal fun ChatManagedImage(
     val loaded = runCatching { loadImage(artifactId) }.getOrNull()
     image =
       loaded?.let { value ->
-        withContext(Dispatchers.Default) { decodeImageBytes(value.bytes)?.asImageBitmap() }
+        withContext(decodeDispatcher) { decodeImageBytes(value.bytes)?.asImageBitmap() }
       }
     failed = image == null
   }

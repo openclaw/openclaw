@@ -21,7 +21,6 @@ export function captureSessionEntryRead(
             entry: selected.entry,
             agentId: database.agentId,
             sessionKey: selected.row.session_key,
-            rowid: selected.row.rowid,
             sessionId: selected.row.current_session_id,
             updatedAt: selected.row.updated_at,
             lifecycleRevision: selected.entry.lifecycleRevision,

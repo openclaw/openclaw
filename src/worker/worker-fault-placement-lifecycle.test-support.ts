@@ -88,7 +88,7 @@ export class WorkerFaultPlacementLifecycle {
 
   async prepareRun(runId: string, credential: string): Promise<WorkerSessionTurnClaim> {
     const current = this.options.placementStore.get(this.options.sessionId);
-    const placement = current?.state === "active" ? current : this.activatePlacement();
+    const placement = current?.state === "active" ? current : await this.activatePlacement();
     const activeClaim = projectWorkerSessionTurnClaim(placement);
     if (activeClaim) {
       if (activeClaim.runId !== runId) {
@@ -97,7 +97,7 @@ export class WorkerFaultPlacementLifecycle {
       await this.bindCredentialToClaim(credential, activeClaim);
       return activeClaim;
     }
-    const claim = this.options.placementStore.claimTurn({
+    const claim = await this.options.placementStore.claimTurn({
       sessionId: this.options.sessionId,
       agentId: this.options.agentId,
       sessionKey: this.options.sessionKey,
@@ -113,7 +113,7 @@ export class WorkerFaultPlacementLifecycle {
     return claim;
   }
 
-  settleRun(runId: string): void {
+  async settleRun(runId: string): Promise<void> {
     const placement = this.options.placementStore.get(this.options.sessionId);
     const claim = placement ? projectWorkerSessionTurnClaim(placement) : undefined;
     if (!claim || claim.runId !== runId) {
@@ -132,7 +132,7 @@ export class WorkerFaultPlacementLifecycle {
       this.options.placementStore.completeWorkspaceResultAndReleaseTurn(claim);
       return;
     }
-    this.options.placementStore.releaseTurn(claim);
+    await this.options.placementStore.releaseTurn(claim);
   }
 
   reclaimPlacement(
@@ -168,8 +168,10 @@ export class WorkerFaultPlacementLifecycle {
     }
   }
 
-  private activatePlacement(): Extract<WorkerSessionPlacementRecord, { state: "active" }> {
-    let placement = this.options.placementStore.startDispatch({
+  private async activatePlacement(): Promise<
+    Extract<WorkerSessionPlacementRecord, { state: "active" }>
+  > {
+    let placement = await this.options.placementStore.startDispatch({
       sessionId: this.options.sessionId,
       agentId: this.options.agentId,
       sessionKey: this.options.sessionKey,

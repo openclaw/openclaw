@@ -141,14 +141,6 @@ export class DraftPreferenceState {
   }
 
   readPreference(agentId: string): NewSessionPreference | null {
-    const snapshot = this.read();
-    if (
-      catalog.isTarget(snapshot.data) ||
-      snapshot.data?.group ||
-      snapshot.pendingPlacementSessionKey
-    ) {
-      return null;
-    }
     return this.preferenceModeValue === "remote"
       ? (this.identityPreferences[normalizeAgentId(agentId)] ?? null)
       : loadNewSessionPreference(this.read().gatewayUrl, agentId);

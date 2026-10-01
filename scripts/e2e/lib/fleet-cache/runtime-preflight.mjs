@@ -123,22 +123,23 @@ for (const line of packageQuery.stdout.trim().split("\n")) {
 }
 
 const engine = installedPackages["docker-ce"];
-const rootlessInstall = engine.installed
-  ? command(
-      "apt-get",
-      [
-        "-s",
-        "--no-upgrade",
-        "--no-install-recommends",
-        "install",
-        `docker-ce-rootless-extras=${engine.version}`,
-        "uidmap",
-        "slirp4netns",
-      ],
-      process.env,
-      10000,
-    )
-  : undefined;
+function simulateRootlessInstall() {
+  return command(
+    "apt-get",
+    [
+      "-s",
+      "--no-upgrade",
+      "--no-install-recommends",
+      "install",
+      `docker-ce-rootless-extras=${engine.version}`,
+      "uidmap",
+      "slirp4netns",
+    ],
+    process.env,
+    10000,
+  );
+}
+const rootlessInstall = engine.installed ? simulateRootlessInstall() : undefined;
 
 let packageIndexRefresh;
 let refreshedRootlessInstall;
@@ -154,20 +155,7 @@ if (
     135000,
   );
   if (packageIndexRefresh.exitCode === 0) {
-    refreshedRootlessInstall = command(
-      "apt-get",
-      [
-        "-s",
-        "--no-upgrade",
-        "--no-install-recommends",
-        "install",
-        `docker-ce-rootless-extras=${engine.version}`,
-        "uidmap",
-        "slirp4netns",
-      ],
-      process.env,
-      10000,
-    );
+    refreshedRootlessInstall = simulateRootlessInstall();
   }
 }
 

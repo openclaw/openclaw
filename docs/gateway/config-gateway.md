@@ -70,6 +70,9 @@ For the full key index and the other top-level config domains, see [Configuratio
       // allowedOrigins: ["https://control.example.com"], // optional override of publicOrigin
       // dangerouslyAllowHostHeaderOriginFallback: false, // dangerous Host-header origin fallback mode
     },
+    uploads: {
+      enabled: true, // set false to reject client file/image uploads
+    },
     cliAgents: {
       enabled: true, // show create-capable CLI session targets in the model picker
     },
@@ -148,7 +151,7 @@ For the full key index and the other top-level config domains, see [Configuratio
 - `gateway.roles`: optional named operator roles for authenticated user profiles on team Gateways. Every definition specifies `sessions.others` (`none`, `view`, `suggest`, or `write`), allowed session-creation and agent-run `agents` (`"*"` or an array of agent IDs), and a closed `scopes` ceiling that also applies to identity-authenticated HTTP requests and signed Control UI plugin grants. Optional `sandbox` is `"inherit"` by default or `"required"` to sandbox sessions created under that role even when the agent's sandbox mode is `"off"`. This requirement is recorded once from the authenticated creator, cannot be changed through role updates or session mutation, and does not affect existing sessions. A sandbox-required person cannot start a host-execution session, including through an invitation; unavailable sandbox backends fail closed, and elevated or host-target overrides cannot escape. The administrator-scoped `users.setRole` Gateway method assigns or clears a profile's role and immediately disconnects its active clients so they reconnect with current authority. Identity-authenticated operator sessions do not receive reusable, person-unbound device/bootstrap tokens while roles are configured, and identity-less device-token or bootstrap-token operator authentication is rejected; reconnect through trusted-proxy or other supported verified identity instead. `default` is required, must name a configured definition, and applies to unassigned profiles. `sessions.others: "none"` also denies Gateway-wide `usage.cost`; audit diagnostics and other `operator.write` control-plane capabilities remain shared-domain surfaces, not hostile-tenant isolation. Omitting `roles` leaves existing solo and shared-secret deployments unchanged. See [Operator scopes](/gateway/operator-scopes#named-operator-roles).
 - `gateway.roles.definitions.<role>.accessPolicyPlugin`: optional exact plugin ID whose registered Gateway access policy must authorize people governed by this role. For example, a default visitor role can require `"visitor-access"`, while an independently assigned staff role omits the field. The Gateway denies this role's access when the plugin is missing or disabled, its manifest is missing or malformed, loading fails, or the policy supplies no current authority. The reference remains valid configuration while the plugin is unavailable, so independent staff and the Gateway owner can repair it. Omitting the field adds no plugin dependency.
 - `gateway.roles.definitions.<name>.modelPolicy`: optional model ceiling for a role's requests, queued work, and children. With `{}`, permitted models follow the designated source agent's primary and fallbacks. `sourceAgent` chooses that agent; `allow` replaces membership and `deny` excludes resolved model references, aliases, or trailing family patterns such as `provider/restricted-*`. An empty `allow` denies all models. With config reload enabled, edits confined to existing roles' model policies apply when committed without restarting the Gateway: requests using removed models are canceled while permitted models and unrelated work continue. Other role changes hot-apply and reconnect clients with current authority, including when combined with a model-policy edit. Existing manual model rules still apply; omitted role model policy and System access are unchanged. See [Named operator roles](/gateway/operator-scopes#named-operator-roles).
-- Role definitions, proxy trust, identity scopes, Tailscale authentication, and trusted-proxy policy hot-apply. Changes beyond model policy reconnect existing clients with current authority; pending handshakes and writes cannot keep revoked access. Auth mode changes still require a Gateway restart.
+- Role definitions, proxy trust, identity scopes, Tailscale authentication, and trusted-proxy policy hot-apply. Changes beyond model policy reconnect existing clients with current authority, except that verified WebSocket logins retain their connections and accepted runs when only another login’s identity grants change or their own scope set is merely reordered. Changes to their own resolved grants revoke retained and delegated work; restoring a grant does not revive that authority. Pending handshakes and writes cannot keep revoked access. Auth mode changes still require a Gateway restart.
 - `gateway.auth.rateLimit`: optional failed-auth limiter. Applies per client IP and per auth scope (shared-secret and device-token are tracked independently). Blocked attempts return `429` + `Retry-After`. Changes hot-apply to the existing limiters: recorded failures, earned lockout deadlines, and pending loopback delays survive. New limits and exemptions apply to subsequent attempts; deleting the section restores defaults.
   - On the async Tailscale Serve Control UI path, failed attempts for the same `{scope, clientIp}` are serialized before the failure write. Concurrent bad attempts from the same client can therefore trip the limiter on the second request instead of both racing through as plain mismatches.
   - `gateway.auth.rateLimit.exemptLoopback` defaults to `true`; set `false` when you intentionally want localhost traffic rate-limited too (for test setups or strict proxy deployments).
@@ -222,6 +225,46 @@ For the full key index and the other top-level config domains, see [Configuratio
   unavailable to non-owner callers even when allowlisted.
 
 </Accordion>
+
+### Disable file and image uploads
+
+Set `gateway.uploads.enabled` to `false` to disable client file and image uploads:
+
+```json5
+{
+  gateway: {
+    uploads: { enabled: false },
+  },
+}
+```
+
+The default is `true`. Changes hot-apply without restarting the Gateway. The
+Gateway rejects uploads even from a stale browser or a direct API client; hiding
+the Control UI controls is not the enforcement boundary. Rejections return
+`FORBIDDEN` with detail code `UPLOADS_DISABLED` (OpenAI-compatible HTTP APIs return
+status `403` and error code `UPLOADS_DISABLED`). Tool-invocation endpoints retain
+their existing blocked-tool envelope with the same disabled-upload message.
+
+The switch covers chat and new-session attachments, companion attachments,
+terminal uploads, inline user/agent avatars, skill archive and folder uploads,
+and Workboard attachments. Direct node and tool invocations
+that carry new upload bytes are also rejected; existing-media transfers remain
+available. OpenAI-compatible requests containing image or file
+content parts are rejected, including URL-backed parts, before fetching or
+decoding them. Text-only requests still work. A disabled upload is rejected as
+a whole; its attachments are not silently removed. Already accepted writes finish
+settling: for example, an avatar persisted before the switch changes still gets
+its matching agent configuration update. Disabling uploads does not undo existing
+bytes or turn that completed upload into a denial. Authorized retries of accepted
+chat, session-creation, and outbound-message requests replay their existing receipts
+without uploading again; a fresh idempotency key still requires uploads to be enabled.
+
+Downloads, existing media, agent-generated images/files, ordinary text editing,
+server-local memory migration, channel-inbound media, and internal worker file
+transfers remain available. This switch is not a sandbox or data-loss-prevention
+policy: it does not remove authorized shell access, agent filesystem tools,
+configuration administration, or arbitrary third-party plugin capabilities.
+Use the corresponding tool, terminal, channel, and plugin policies for those.
 
 ### OpenAI-compatible endpoints
 

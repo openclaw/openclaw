@@ -16,13 +16,12 @@ import {
   MAX_WORKSPACE_MANIFEST_BYTES,
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
 } from "../gateway/worker-environments/workspace-inventory-limits.js";
-import { parseWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
+import { decodeWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import { absoluteEntryMatches } from "../gateway/worker-environments/workspace-reconcile-fs.js";
 import { workerWorkspaceTransferPaths } from "../gateway/worker-environments/workspace-result-staging.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
 import { root as fsRoot, FsSafeError, type Root } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { tempWorkspace } from "../infra/private-temp-workspace.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   ensureStagedInputDirectory,
@@ -59,6 +58,7 @@ import {
   type NodeWorkerTransferHttpRequest,
 } from "./node-worker-transfer-http.js";
 import { withNodeWorkerUploadSnapshot } from "./node-worker-upload-snapshot.js";
+import { createNodeWorkerTempWorkspace } from "./node-worker-workspace-admission.js";
 import {
   captureManifest,
   readWorkspaceManifest,
@@ -239,7 +239,7 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
     },
     MAX_WORKSPACE_MANIFEST_BYTES,
   );
-  const manifest = await parseWorkspaceManifest(
+  const { manifest } = await decodeWorkspaceManifest(
     raw.toString("utf8"),
     params.transfer.manifestRef,
     params.signal,
@@ -285,7 +285,7 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
     throw new Error("Invalid worker attachment manifest");
   }
   params.setStage("materialize");
-  const stagingWorkspace = await tempWorkspace({
+  const stagingWorkspace = await createNodeWorkerTempWorkspace({
     rootDir: path.dirname(params.workspaceDir),
     prefix: `.${path.basename(params.workspaceDir)}.workspace-transfer-`,
   });

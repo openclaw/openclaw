@@ -20,9 +20,9 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { publishUserProfileAliasChange } from "../../state/user-profile-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import {
@@ -46,39 +46,40 @@ const cases = [
   { write: "compound sibling participant", allowed: true },
   { write: "compound new sibling owner", allowed: true },
   { write: "compound new sibling participant", allowed: true },
-  { write: "selected owner", allowed: false },
-  { write: "selected participant", allowed: false },
+  { write: "selected owner", allowed: true, entryChanged: true },
+  { write: "selected participant", allowed: true, entryChanged: true },
   { write: "selected participant repeat", allowed: true },
   { write: "nested selected participant repeats", allowed: true },
-  { write: "earlier selected participant first prompt", allowed: false },
-  { write: "selected participant insert then repeat", allowed: false },
-  { write: "selected participant repeat then insert", allowed: false },
-  { write: "selected entry write then participant repeat", allowed: false },
-  { write: "selected participant repeat then entry write", allowed: false },
+  { write: "earlier selected participant first prompt", allowed: true, entryChanged: true },
+  { write: "selected participant insert then repeat", allowed: true, entryChanged: true },
+  { write: "selected participant repeat then insert", allowed: true, entryChanged: true },
+  { write: "selected entry write then participant repeat", allowed: true, entryChanged: true },
+  { write: "selected participant repeat then entry write", allowed: true, entryChanged: true },
   { write: "rolled-back selected owner", allowed: true },
   { write: "rolled-back selected participant", allowed: true },
-  { write: "raw before sibling owner", allowed: false },
-  { write: "raw after sibling owner", allowed: false },
-  { write: "raw before sibling participant", allowed: false },
-  { write: "raw after sibling participant", allowed: false },
-  { write: "tracked selected update", allowed: false },
+  { write: "raw before sibling owner", allowed: true, entryChanged: true },
+  { write: "raw after sibling owner", allowed: true, entryChanged: true },
+  { write: "raw before sibling participant", allowed: true, entryChanged: true },
+  { write: "raw after sibling participant", allowed: true, entryChanged: true },
+  { write: "tracked selected update", allowed: true, entryChanged: true },
   { write: "selected lifecycle change", allowed: false },
   { write: "external sibling update", allowed: true },
   // Identical target facts remain publishable even if the row was recreated.
   { write: "external selected identical recreation", allowed: true },
   { write: "external selected fully restored recreation", allowed: true },
   { write: "external selected recreated sessionId", allowed: false },
-  { write: "external selected recreated payload", allowed: false },
+  { write: "external selected recreated payload", allowed: true, entryChanged: true },
   { write: "external selected recreated lifecycle", allowed: false },
   { write: "runtime config replacement", allowed: false },
-  { write: "access revision change", allowed: false },
+  { write: "profile alias change", allowed: false },
 ] as const;
 
 it.each(
-  cases.flatMap(({ write, allowed }) =>
-    ["exact", "full"].map((cache) => ({ write, allowed, cache })),
+  cases.flatMap((scenario) =>
+    ["exact", "full"].map((cache) => Object.assign({ entryChanged: false, cache }, scenario)),
   ),
-)("metadata read across $write with $cache cache", async ({ write, allowed, cache }) => {
+)("metadata read across $write with $cache cache", async (scenario) => {
+  const { write, allowed, entryChanged, cache } = scenario;
   await withOpenClawTestState({ label: "metadata-cache-boundary" }, async (state) => {
     const config = {};
     let runtimeConfig = config;
@@ -193,8 +194,8 @@ it.each(
         ).toEqual({ ok: true, value: true });
       } else if (write === "runtime config replacement") {
         runtimeConfig = {};
-      } else if (write === "access revision change") {
-        bumpGatewayAccessRevision();
+      } else if (write === "profile alias change") {
+        publishUserProfileAliasChange();
       } else if (write.startsWith("compound")) {
         runOpenClawAgentWriteTransaction((current) => {
           writeSessionEntry(current, writeTarget.sessionKey, {
@@ -361,10 +362,28 @@ it.each(
     const after = loadSessionEntry(selected);
     expect(readChatMetadata).toHaveBeenCalledTimes(1);
     if (allowed) {
-      expect(after).toEqual(before);
+      if (entryChanged) {
+        expect(after).not.toEqual(before);
+      } else {
+        expect(after).toEqual(before);
+      }
       expect(outcome.error).toBeUndefined();
       expect(respond).toHaveBeenCalledWith(true, metadata);
-      if (write === "canonical sibling owner") {
+      if (write === "selected owner") {
+        expect(after?.owner?.actor.id).toBe("other");
+      } else if (write === "selected participant") {
+        expect(after?.participants).toEqual([
+          { identity: { type: "agent", id: "second-participant" } },
+        ]);
+      } else if (
+        write.startsWith("raw before") ||
+        write.startsWith("raw after") ||
+        write === "external selected recreated payload"
+      ) {
+        expect(after?.label).toBe("raw");
+      } else if (write === "tracked selected update") {
+        expect(after?.label).toBe("changed selected");
+      } else if (write === "canonical sibling owner") {
         expect(loadSessionEntry(sibling)?.owner?.actor.id).toBe("other");
       } else if (write === "canonical sibling participant") {
         expect(loadSessionEntry(sibling)?.participantCount).toBe(2);
@@ -405,7 +424,7 @@ it.each(
       expect(outcome.error).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
       expect(outcome.error).toMatchObject({
         message:
-          write === "runtime config replacement" || write === "access revision change"
+          write === "runtime config replacement" || write === "profile alias change"
             ? "Chat metadata access changed while preparing its metadata. Retry the request."
             : "Session changed while preparing its metadata. Retry the request.",
       });

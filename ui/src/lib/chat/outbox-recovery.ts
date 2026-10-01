@@ -7,6 +7,7 @@ import {
 } from "./outbox-payload-store.runtime.ts";
 import { normalizeStoredSession } from "./outbox-store-codec.ts";
 import { nextDraftRevision, readDraftRevisionState } from "./outbox-store-draft-state.ts";
+import type { StoredChatOutboxScope } from "./outbox-store-scope.ts";
 import {
   notifyStoredChatOutboxChanges,
   readStoredOutboxStore,
@@ -15,7 +16,6 @@ import {
   storageTargetForGateway,
   writeStoredOutboxStore,
   type ChatComposerScope,
-  type StoredChatOutboxScope,
   type StoredComposerRecovery,
 } from "./outbox-store.ts";
 
@@ -106,7 +106,7 @@ export function restoreChatOutboxRecovery(
     }
     const key = storedChatOutboxScopeKey(scope);
     const existing = store.sessions[key];
-    if (existing?.draft || existing?.goalMode || existing?.queue?.length) {
+    if (existing?.draft || existing?.goalMode || existing?.replyTarget || existing?.queue?.length) {
       return "conflict";
     }
     const session = entry.session;

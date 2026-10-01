@@ -22,10 +22,9 @@ maintenance risk.
 
 Use this path only for a `.33+` Gateway distribution from either of the two
 trailing completed months: the `openclaw` npm package, official npm plugins,
-and matching Docker Gateway images. Treat
-`docs/reference/RELEASING.md`,
-`scripts/openclaw-npm-extended-stable-release.mjs`, and the release workflows
-on pinned current `main` as the exact command and validation contract.
+and matching Docker Gateway images. Use
+`scripts/openclaw-npm-extended-stable-release.mjs` and the release workflows
+on pinned current `main` for command and validation requirements.
 
 1. On `extended-stable/YYYY.M.33`, verify the root and every publishable official
    plugin have the intended version. Generate and commit the complete
@@ -53,7 +52,9 @@ on pinned current `main` as the exact command and validation contract.
    direct canonical-branch/main producers and narrow reruns.
 6. With publication/tag-push authority, create and push a protected lightweight
    `release-publish/<tooling-sha12>-<epoch>` tag at the frozen trusted-main
-   Tooling SHA, using the commands in `docs/reference/RELEASING.md`. Dispatch
+   Tooling SHA: `git tag "$PUBLISH_REF" "$TOOLING_SHA"`, then
+   `git push origin "refs/tags/$PUBLISH_REF"`. Set `PUBLISH_REF` to the chosen
+   protected tag name before running these commands. Dispatch
    `OpenClaw Release Publish` with `--ref` set to that tooling tag, the product
    release tag as `tag`, `npm_dist_tag=extended-stable`,
    `publish_openclaw_npm=true`, the saved
@@ -70,10 +71,10 @@ on pinned current `main` as the exact command and validation contract.
    not attach evidence or finalize the release.
 8. From a clean current-`main` checkout, run
    `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.P`.
-   Verify signatures, provenance, inventories, exact versions, and selectors.
+   Verify package signatures, source commits, inventories, exact versions, and selectors.
    To promote an already-published core version to `extended-stable`, use
    `promote_extended_stable` in the `openclaw/releases` dist-tag workflow
-   from that repository's `main`, after openclaw/releases#27 is merged. Follow
+   from that repository's `main`. Follow
    [registry selector recovery](publication-recovery.md#registry-selectors),
    not the publication/resume path. The target must be a final extended-stable
    version with patch `33` or higher and no suffix; fixes increment the patch.
@@ -103,10 +104,12 @@ own repair and fresh qualification; workflow recovery does not waive those gates
 Use this lower-level route only for an approved workflow recovery, not normal
 shared publication. It does not itself attach evidence or finalize the GitHub
 Release. Retain both child identities and their evidence for approved closeout;
-a direct-main recovery run is not automatically interchangeable with the
+an independently dispatched recovery run is not automatically interchangeable with the
 protected parent's core-resume receipt.
 
-In `gh workflow run`, `--ref main` selects trusted publishing **tooling**.
+Mint or reuse a protected `release-publish/<tooling-sha12>-<epoch>` tag at the
+frozen trusted-main Tooling SHA as above. In `gh workflow run`, `--ref` selects
+that publishing **tooling** tag.
 The plugin input `-f ref=<release-sha>` selects the exact **package source**;
 never replace it with `main`, a branch name, or the tooling SHA.
 
@@ -114,10 +117,11 @@ After the publication prerequisites above pass, dispatch:
 
 ```bash
 gh workflow run plugin-npm-release.yml --repo openclaw/openclaw \
-  --ref main \
+  --ref release-publish/<tooling-sha12>-<epoch> \
   -f publish_scope=all-publishable \
   -f ref=<exact-40-character-release-sha> \
-  -f npm_dist_tag=extended-stable
+  -f npm_dist_tag=extended-stable \
+  -f release_candidate_branch=extended-stable/YYYY.M.33
 ```
 
 Leave `plugins` empty and `preflight_only=false` (the default). A successful
@@ -129,7 +133,7 @@ and replacing its qualification, not substituting a new SHA into old evidence.
 Keep final tags immutable and use a new patch for source changes after tagging.
 
 Save the successful plugin publication run ID after exact-version and selector
-readback. Dispatch `openclaw-npm-release.yml` with `--ref main` and the existing
+readback. Dispatch `openclaw-npm-release.yml` with the same `--ref release-publish/...` and the existing
 core recovery inputs:
 
 - `tag=vYYYY.M.P`, `preflight_only=false`, and `npm_dist_tag=extended-stable`.
@@ -142,7 +146,8 @@ core recovery inputs:
 
 Core verifies the plugin workflow's identity, trusted-main ancestry, and exact
 candidate binding. Record both workflows' actual tooling SHAs and run IDs in
-the release handoff. Required environment approvals, immutable artifact checks,
+the release handoff. Each direct human dispatch requires its `npm-release`
+approval job before publishing in `npm-publish`. Immutable artifact checks,
 and registry readback still apply; extended-stable token bootstrap is prohibited.
 Reuse already-published versions and verified bytes. If only core failed, retain
 the successful plugin run instead of dispatching plugin publication again.

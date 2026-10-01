@@ -13,12 +13,6 @@ import { buildTelegramGroupPeerId, type TelegramThreadSpec } from "./bot/helpers
 
 type TelegramErrorPolicy = "always" | "once" | "silent";
 
-type TelegramErrorConfig =
-  | TelegramAccountConfig
-  | TelegramDirectConfig
-  | TelegramGroupConfig
-  | TelegramTopicConfig;
-
 const errorCooldownStore = new Map<string, Map<string, number>>();
 const DEFAULT_ERROR_COOLDOWN_MS = 14400000;
 
@@ -38,20 +32,14 @@ export function resolveTelegramErrorPolicy(params: {
   policy: TelegramErrorPolicy;
   cooldownMs: number;
 } {
-  const configs: Array<TelegramErrorConfig | undefined> = [
-    params.accountConfig,
-    params.groupConfig,
-    params.topicConfig,
-  ];
-  let policy: TelegramErrorPolicy = "always";
-
-  for (const config of configs) {
-    if (config?.errorPolicy) {
-      policy = config.errorPolicy;
-    }
-  }
-
-  return { policy, cooldownMs: DEFAULT_ERROR_COOLDOWN_MS };
+  return {
+    policy:
+      params.topicConfig?.errorPolicy ||
+      params.groupConfig?.errorPolicy ||
+      params.accountConfig?.errorPolicy ||
+      "always",
+    cooldownMs: DEFAULT_ERROR_COOLDOWN_MS,
+  };
 }
 
 export function buildTelegramErrorScopeKey(params: {
@@ -109,8 +97,4 @@ export function shouldSuppressTelegramError(params: {
   nextScopeStore.set(messageKey, nextExpiresAt);
   errorCooldownStore.set(scopeKey, nextScopeStore);
   return false;
-}
-
-export function isSilentErrorPolicy(policy: TelegramErrorPolicy): boolean {
-  return policy === "silent";
 }

@@ -147,29 +147,18 @@ function hasVertexAdcCredentials(): boolean {
 }
 
 function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
-  if (provider === "github-copilot") {
-    return ["COPILOT_GITHUB_TOKEN"];
-  }
-
-  // ANTHROPIC_OAUTH_TOKEN takes precedence over ANTHROPIC_API_KEY
-  if (provider === "anthropic") {
-    return ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
-  }
-
-  if (provider === "moonshot") {
-    return ["MOONSHOT_API_KEY", "KIMI_API_KEY"];
-  }
-
-  if (provider === "kimi" || provider === "kimi-coding") {
-    return ["KIMI_API_KEY", "KIMICODE_API_KEY"];
-  }
-
-  const envMap: Record<string, string> = {
+  const envMap: Record<string, string | string[]> = {
+    "github-copilot": "COPILOT_GITHUB_TOKEN",
+    anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+    moonshot: ["MOONSHOT_API_KEY", "KIMI_API_KEY"],
+    kimi: ["KIMI_API_KEY", "KIMICODE_API_KEY"],
+    "kimi-coding": ["KIMI_API_KEY", "KIMICODE_API_KEY"],
     openai: "OPENAI_API_KEY",
     meta: "MODEL_API_KEY",
     "azure-openai-responses": "AZURE_OPENAI_API_KEY",
     deepseek: "DEEPSEEK_API_KEY",
     google: "GEMINI_API_KEY",
+    "google-interactions": "GEMINI_API_KEY",
     "google-vertex": "GOOGLE_CLOUD_API_KEY",
     groq: "GROQ_API_KEY",
     cerebras: "CEREBRAS_API_KEY",
@@ -196,7 +185,7 @@ function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
   };
 
   const envVar = envMap[provider];
-  return envVar ? [envVar] : undefined;
+  return Array.isArray(envVar) ? envVar : envVar ? [envVar] : undefined;
 }
 
 /**

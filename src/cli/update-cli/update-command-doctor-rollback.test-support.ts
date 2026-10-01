@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import { createConfigIO } from "../../config/io.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
@@ -24,6 +24,7 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { VERSION } from "../../version.js";
 import { finishUpdate } from "./update-command-post-update.js";
+import { createReadinessRollbackFixture } from "./update-command-readiness-rollback.test-support.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
 
@@ -125,6 +126,9 @@ export function registerDoctorRestorationRollbackTests(
     stopCandidate: { mockResolvedValueOnce: (result: PreManagedServiceStop) => unknown };
     restartCandidate: { mockImplementationOnce: (implementation: Restart) => unknown };
     verifyGateway: { mockImplementation: (implementation: VerifyGateway) => unknown };
+    gatewayCommand: Mock<
+      typeof import("./update-command-service-command.js").runUpdatedInstallGatewayCommand
+    >;
   },
   makeTempDir: (prefix: string) => string,
 ) {
@@ -133,6 +137,7 @@ export function registerDoctorRestorationRollbackTests(
     { transport: "child-result", differentService: false },
     { transport: "exception", differentService: true },
     { transport: "stale-git-graph", differentService: false },
+    { transport: "readiness-deadline", differentService: false },
   ] as const)(
     "restores and verifies the previous package after post-update verification failure ($transport, differentService=$differentService)",
     async ({ transport, differentService }) => {
@@ -183,15 +188,36 @@ export function registerDoctorRestorationRollbackTests(
       vi.spyOn(stateSchemas, "readUpdateStateSchemaVersions").mockImplementation((params) =>
         readSchemas(params.root === packageRoot ? { ...params, root: undefined } : params),
       );
-      const stateDir = path.join(base, "state");
+      const stateDir = path.join(base, transport === "readiness-deadline" ? ".openclaw" : "state");
       await fs.mkdir(stateDir);
       const configPath = path.join(stateDir, "openclaw.json");
-      await fs.writeFile(configPath, "{}\n");
       const env = {
         ...process.env,
+        ...(transport === "readiness-deadline"
+          ? {
+              HOME: base,
+              USERPROFILE: base,
+              OPENCLAW_HOME: undefined,
+              OPENCLAW_PROFILE: undefined,
+              OPENCLAW_SUPERVISOR_MODE: undefined,
+            }
+          : {}),
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_CONFIG_PATH: configPath,
       };
+      const readiness =
+        transport === "readiness-deadline" && launcher
+          ? await createReadinessRollbackFixture({
+              packageRoot,
+              launcher,
+              env: { ...env, HOME: base, USERPROFILE: base },
+              harness,
+            })
+          : undefined;
+      const configRaw = readiness
+        ? `${JSON.stringify({ gateway: { port: readiness.port } })}\n`
+        : "{}\n";
+      await fs.writeFile(configPath, configRaw);
       const configSnapshot = await createConfigIO({
         env,
         observe: false,
@@ -204,7 +230,7 @@ export function registerDoctorRestorationRollbackTests(
         env,
       });
       const facts =
-        transport === "stale-git-graph"
+        transport === "stale-git-graph" || transport === "readiness-deadline"
           ? []
           : [
               {
@@ -228,6 +254,9 @@ export function registerDoctorRestorationRollbackTests(
               facts,
             );
       harness.freshProcess.mockImplementationOnce(async () => {
+        if (transport === "readiness-deadline") {
+          return { resumed: true };
+        }
         if (transport !== "child-result") {
           throw error;
         }
@@ -252,6 +281,9 @@ export function registerDoctorRestorationRollbackTests(
         },
       };
       harness.stopCandidate.mockResolvedValueOnce(before);
+      const finishWithDeadline = readiness
+        ? (finishing: Promise<UpdateRunResult>) => readiness.finish(finishing, run)
+        : undefined;
       let observedGateway: { version: string | null; buildId: string | null } | undefined;
       if (transport === "stale-git-graph") {
         harness.verifyGateway.mockImplementation(
@@ -280,45 +312,47 @@ export function registerDoctorRestorationRollbackTests(
           },
         );
       }
-      harness.restartCandidate.mockImplementationOnce(async (params) => {
-        expect(params.requireRunningServiceAfterRestart).toBe(true);
-        expect(params.result.after?.version).toBe(installedVersion);
-        expect(params.expectedGatewayIdentity).toEqual(before.serviceIdentity);
-        expect(
-          JSON.parse(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).version,
-        ).toBe(installedVersion);
-        if (launcher) {
-          expect(await fs.readFile(launcher, "utf8")).toBe("old launcher\n");
-        } else {
-          expect(await fs.readFile(path.join(packageRoot, "dist", "entry.js"), "utf8")).toBe(
-            'export const build = "previous-build";\n',
+      if (!finishWithDeadline) {
+        harness.restartCandidate.mockImplementationOnce(async (params) => {
+          expect(params.requireRunningServiceAfterRestart).toBe(true);
+          expect(params.result.after?.version).toBe(installedVersion);
+          expect(params.expectedGatewayIdentity).toEqual(before.serviceIdentity);
+          expect(
+            JSON.parse(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).version,
+          ).toBe(installedVersion);
+          if (launcher) {
+            expect(await fs.readFile(launcher, "utf8")).toBe("old launcher\n");
+          } else {
+            expect(await fs.readFile(path.join(packageRoot, "dist", "entry.js"), "utf8")).toBe(
+              'export const build = "previous-build";\n',
+            );
+            expect(await runFixtureGit(packageRoot, "rev-parse", "HEAD")).toBe(
+              updateResult.before?.sha,
+            );
+            observedGateway = {
+              version: await readPackageVersion(packageRoot),
+              buildId: await readBuiltGatewayBuildId(packageRoot),
+            };
+          }
+          recordUpdateRunVerification(
+            run.runId,
+            {
+              serviceRunning: true,
+              runningVersion: serviceVersion,
+              ...(transport === "stale-git-graph" ? { runningBuildId: "previous-build" } : {}),
+              versionMatch: true,
+              settled: true,
+              readyz: true,
+            },
+            { env },
           );
-          expect(await runFixtureGit(packageRoot, "rev-parse", "HEAD")).toBe(
-            updateResult.before?.sha,
-          );
-          observedGateway = {
-            version: await readPackageVersion(packageRoot),
-            buildId: await readBuiltGatewayBuildId(packageRoot),
-          };
-        }
-        recordUpdateRunVerification(
-          run.runId,
-          {
-            serviceRunning: true,
-            runningVersion: serviceVersion,
-            ...(transport === "stale-git-graph" ? { runningBuildId: "previous-build" } : {}),
-            versionMatch: true,
-            settled: true,
-            readyz: true,
-          },
-          { env },
-        );
-        params.onVerified?.(Date.now());
-        return "ok";
-      });
+          params.onVerified?.(Date.now());
+          return "ok";
+        });
+      }
       let failure: UpdateCommandFailure | undefined;
       try {
-        await finishUpdate({
+        const finishing = finishUpdate({
           mutationStarted: true,
           result: updateResult,
           root: packageRoot,
@@ -339,6 +373,7 @@ export function registerDoctorRestorationRollbackTests(
           startedAt: Date.now(),
           controlPlaneUpdateSentinelMeta: null,
         });
+        await (finishWithDeadline ? finishWithDeadline(finishing) : finishing);
       } catch (caught) {
         if (!(caught instanceof UpdateCommandFailure)) {
           throw caught;
@@ -348,7 +383,7 @@ export function registerDoctorRestorationRollbackTests(
       expect(failure?.exitCode).toBe(1);
       expect(rollback).toHaveBeenCalledOnce();
       expect(harness.stopCandidate).toHaveBeenCalledOnce();
-      expect(harness.restartCandidate).toHaveBeenCalledOnce();
+      expect(harness.restartCandidate).toHaveBeenCalledTimes(finishWithDeadline ? 2 : 1);
       expect(failure?.result.root).toBe(packageRoot);
       expect(failure?.result.after?.version).toBe(installedVersion);
       expect(failure?.result.recovery).toMatchObject({
@@ -357,7 +392,17 @@ export function registerDoctorRestorationRollbackTests(
         service: "healthy",
         version: serviceVersion,
       });
-      expect(failure?.result.steps.flatMap((step) => step.failureFacts ?? [])).toEqual(facts);
+      if (finishWithDeadline) {
+        expect(failure?.result.steps).toContainEqual(
+          expect.objectContaining({
+            name: "gateway verification",
+            exitCode: 1,
+            failureFacts: expect.arrayContaining([expect.objectContaining({ code: "timeout" })]),
+          }),
+        );
+      } else {
+        expect(failure?.result.steps.flatMap((step) => step.failureFacts ?? [])).toEqual(facts);
+      }
       const recorded = getUpdateRun(run.runId, { env });
       expect(recorded?.status).toBe("rolled-back");
       expect(recorded?.verification).toMatchObject({
@@ -376,11 +421,14 @@ export function registerDoctorRestorationRollbackTests(
         expect(recorded.verification.runningBuildId).toBe("previous-build");
         expect(failure?.detail).toContain("io.write-previous.mjs");
         await expect(fs.stat(transaction.backupRoot)).rejects.toMatchObject({ code: "ENOENT" });
+      } else if (finishWithDeadline) {
+        expect(recorded.verification).toMatchObject({ readyz: true, settled: true });
+        expect(report.markdown).toContain("timeout");
       } else {
         expect(report.markdown).toContain("rpc-verification");
         expect(report.markdown).toContain("openclaw gateway status --deep");
       }
-      expect(await fs.readFile(configPath, "utf8")).toBe("{}\n");
+      expect(await fs.readFile(configPath, "utf8")).toBe(configRaw);
     },
   );
 }

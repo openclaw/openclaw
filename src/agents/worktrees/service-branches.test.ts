@@ -6,6 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as execRunner from "../../process/exec-runner.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -189,6 +190,35 @@ describe("ManagedWorktreeService branch discovery", () => {
       }
     },
   );
+
+  it("reuses unchanged branch inventories and observes loose, packed, tag, and HEAD changes", async () => {
+    const linked = path.join(root, "linked");
+    await git(repo, "worktree", "add", "-b", "tasks/selected", linked, "HEAD");
+    const run = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
+    const first = await service.listRepositoryBranches(linked);
+    expect(first.headBranch).toBe("tasks/selected");
+    run.mockClear();
+    expect(await service.listRepositoryBranches(linked)).toEqual(first);
+    // Checkout validation stays live; unchanged refs need no inventory process.
+    expect(run).toHaveBeenCalledTimes(1);
+
+    await git(repo, "branch", "tasks/added");
+    expect((await service.listRepositoryBranches(linked)).branches).toContainEqual({
+      name: "tasks/added",
+      kind: "local",
+    });
+    await git(repo, "pack-refs", "--all", "--prune");
+    await git(repo, "branch", "-d", "tasks/added");
+    expect((await service.listRepositoryBranches(linked)).branches).not.toContainEqual({
+      name: "tasks/added",
+      kind: "local",
+    });
+    await git(repo, "tag", "tasks/selected");
+    expect((await service.listRepositoryBranches(linked)).headBranch).toBe("heads/tasks/selected");
+    await git(linked, "switch", "--detach");
+    expect((await service.listRepositoryBranches(linked)).headBranch).toBeUndefined();
+    expect((await service.listRepositoryBranches(repo)).headBranch).toBe("main");
+  });
 
   it("keeps large repositories usable with bounded suggestions and an explicit unlisted base", async () => {
     const { stdout } = await execFileAsync("git", ["-C", repo, "rev-parse", "HEAD"]);

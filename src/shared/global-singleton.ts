@@ -54,14 +54,12 @@ export function resolveGlobalMap<TKey, TValue>(
   reset?: GlobalSingletonLifecycle | GlobalSingletonReset<Map<TKey, TValue>>,
   lifecycle?: GlobalSingletonLifecycle,
 ): Map<TKey, TValue> {
-  return typeof reset === "string"
-    ? resolveGlobalSingleton(
-        key,
-        () => new Map<TKey, TValue>(),
-        (value) => value.clear(),
-        reset,
-      )
-    : resolveGlobalSingleton(key, () => new Map<TKey, TValue>(), reset, lifecycle);
+  return resolveGlobalSingleton(
+    key,
+    () => new Map<TKey, TValue>(),
+    typeof reset === "string" ? (value) => value.clear() : reset,
+    typeof reset === "string" ? reset : lifecycle,
+  );
 }
 
 /** Resolves a lifecycle-owned process-local Set singleton. */

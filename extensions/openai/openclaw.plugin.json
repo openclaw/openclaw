@@ -54,6 +54,38 @@
         "defaultUtilityModel": "gpt-5.6-luna",
         "models": [
           {
+            "id": "gpt-daybreak-blue-latest",
+            "name": "Daybreak Blue",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1050000,
+            "contextTokens": 272000,
+            "maxTokens": 128000,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "thinkingLevelMap": { "off": null, "minimal": "low", "xhigh": "xhigh", "max": "max" },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+              "supportsTemperature": false
+            }
+          },
+          {
+            "id": "gpt-daybreak-red-latest",
+            "name": "Daybreak Red",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 400000,
+            "contextTokens": 272000,
+            "maxTokens": 128000,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "thinkingLevelMap": { "off": "none", "minimal": "low", "xhigh": "xhigh", "max": "max" },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+              "supportsTemperature": false
+            }
+          },
+          {
             "id": "gpt-6-astra",
             "name": "GPT-6 Astra",
             "reasoning": true,
@@ -69,6 +101,32 @@
               "tieredPricing": [
                 { "range": [0, 272001], "input": 10, "output": 50, "cacheRead": 1, "cacheWrite": 12.5 },
                 { "range": [272001], "input": 20, "output": 75, "cacheRead": 2, "cacheWrite": 25 }
+              ]
+            },
+            "thinkingLevelMap": { "off": null, "minimal": "low", "xhigh": "xhigh", "max": "max" },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+              "supportsTemperature": false,
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "gpt-6.1-sol",
+            "name": "GPT-6.1 Sol",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1050000,
+            "contextTokens": 272000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 2,
+              "output": 10,
+              "cacheRead": 0.1,
+              "cacheWrite": 2.5,
+              "tieredPricing": [
+                { "range": [0, 272001], "input": 2, "output": 10, "cacheRead": 0.1, "cacheWrite": 2.5 },
+                { "range": [272001], "input": 4, "output": 15, "cacheRead": 0.2, "cacheWrite": 5 }
               ]
             },
             "thinkingLevelMap": { "off": null, "minimal": "low", "xhigh": "xhigh", "max": "max" },
@@ -309,12 +367,12 @@
       "appGuidedAuth": "oauth",
       "credentialOnly": true,
       "choiceLabel": "Codex login (browser)",
-      "choiceHint": "Sign in to Codex with your ChatGPT account",
+      "choiceHint": "Sign in to Codex locally with your ChatGPT account",
       "docsUrl": "https://docs.openclaw.ai/providers/openai/authentication",
       "assistantPriority": -10,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "Codex login, Sign in with ChatGPT, or API key"
+      "groupHint": "Codex login, Sign in with ChatGPT (Beta), or API key"
     },
     {
       "provider": "openai",
@@ -327,12 +385,12 @@
         "aliases": ["codex"]
       },
       "choiceLabel": "Codex login (device code)",
-      "choiceHint": "Approve Codex access using a code in your browser",
+      "choiceHint": "Use a browser code when OpenClaw runs on a remote VM",
       "docsUrl": "https://docs.openclaw.ai/providers/openai/authentication",
       "assistantPriority": -40,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "Codex login, Sign in with ChatGPT, or API key",
+      "groupHint": "Codex login, Sign in with ChatGPT (Beta), or API key",
       "onboardingFeatured": true
     },
     {
@@ -342,13 +400,13 @@
       "choiceId": "openai-token-sharing",
       "appGuidedAuth": "oauth",
       "credentialOnly": true,
-      "choiceLabel": "Sign in with ChatGPT",
-      "choiceHint": "Use your ChatGPT allowance through the Responses API",
+      "choiceLabel": "Sign in with ChatGPT (Beta)",
+      "choiceHint": "Authorize OpenClaw for eligible Responses models using your Codex allowance",
       "docsUrl": "https://docs.openclaw.ai/providers/openai/authentication",
       "assistantPriority": 0,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "Codex login, Sign in with ChatGPT, or API key"
+      "groupHint": "Codex login, Sign in with ChatGPT (Beta), or API key"
     },
     {
       "provider": "openai",
@@ -362,7 +420,7 @@
       "assistantPriority": 5,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "Codex login, Sign in with ChatGPT, or API key",
+      "groupHint": "Codex login, Sign in with ChatGPT (Beta), or API key",
       "onboardingFeatured": true,
       "optionKey": "openaiApiKey",
       "cliFlag": "--openai-api-key",
@@ -377,19 +435,9 @@
     "embeddingProviders": ["openai"],
     "mediaUnderstandingProviders": ["openai"],
     "imageGenerationProviders": ["openai"],
-    "videoGenerationProviders": ["openai"],
     "usageProviders": ["openai"]
   },
   "imageGenerationProviderMetadata": {
-    "openai": {
-      "authSignals": [
-        {
-          "provider": "openai"
-        }
-      ]
-    }
-  },
-  "videoGenerationProviderMetadata": {
     "openai": {
       "authSignals": [
         {

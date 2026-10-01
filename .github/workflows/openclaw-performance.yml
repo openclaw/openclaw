@@ -86,12 +86,12 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  OCM_VERSION: v0.2.33
-  OCM_LINUX_X64_SHA256: 06b0e46791e750eb044e4a898b6643ad5e7b20224fe0c64f160e35a42f08d00a
+  OCM_VERSION: v0.2.47
+  OCM_LINUX_X64_SHA256: 05e0bb598fe391c75fe7668e159d7eb09168b4298b5d8d0999786e79e97d0642
   KOVA_REPOSITORY: openclaw/Kova
-  KOVA_CANONICAL_CONFIG_REF: 14d7413dfc0f2b79c771dad83aca6d99413182bd
-  KOVA_LEGACY_LIST_CONFIG_REF: 14d7413dfc0f2b79c771dad83aca6d99413182bd
-  KOVA_TRUSTED_LIVE_REF: 14d7413dfc0f2b79c771dad83aca6d99413182bd
+  KOVA_CANONICAL_CONFIG_REF: 4b8b1681446b868a44193ed6e97253a6c8bcbbbf
+  KOVA_LEGACY_LIST_CONFIG_REF: d69b2209905195bea06980721a92ad8b70808c5d
+  KOVA_TRUSTED_LIVE_REF: 4b8b1681446b868a44193ed6e97253a6c8bcbbbf
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
   # Release matrices cold-build the candidate runtime before measurement.
   KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
@@ -131,7 +131,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
           package-manager-cache: false
 
       - name: Resolve OpenClaw target ref
@@ -192,7 +192,7 @@ jobs:
             schema_path="${TARGET_CHECKOUT_DIR}/src/config/zod-schema.agent-defaults.ts"
             # Follow the shipped composition only when the wrapper has no inline contract.
             if [[ -f "$schema_path" ]] &&
-              ! grep -Fqx '    mediaModels: z' "$schema_path" &&
+              ! grep -Eq '^[[:space:]]*mediaModels: z$' "$schema_path" &&
               ! grep -Fqx '    imageGenerationModel: AgentToolModelSchema.optional(),' "$schema_path" &&
               grep -Fqx 'import { AgentDefaultsBaseSchema } from "./zod-schema.agent-defaults-base.js";' "$schema_path" &&
               grep -Fqx 'export const AgentDefaultsSchema = AgentDefaultsBaseSchema.safeExtend({' "$schema_path"; then
@@ -206,7 +206,7 @@ jobs:
             else
               schema_content=""
             fi
-            if [[ -n "$schema_content" ]] && grep -Fqx '    mediaModels: z' <<<"$schema_content"; then
+            if [[ -n "$schema_content" ]] && grep -Eq '^[[:space:]]*mediaModels: z$' <<<"$schema_content"; then
               detected_kova_config_contract="canonical"
               default_kova_ref="$KOVA_CANONICAL_CONFIG_REF"
             elif [[ -n "$schema_content" ]] && grep -Fqx '    imageGenerationModel: AgentToolModelSchema.optional(),' <<<"$schema_content"; then
@@ -422,37 +422,9 @@ jobs:
         if: steps.lane.outputs.run == 'true'
         uses: ./.artifacts/performance-workflow/.github/actions/setup-node-env
         with:
+          semantic-checks: ${{ matrix.managed_service }}
           cache-mode: ${{ needs.resolve_target.outputs.cache_write_allowed == 'true' && 'restore' || 'off' }}
           install-bun: "false"
-
-      - name: Prepare systemd user session
-        if: ${{ steps.lane.outputs.run == 'true' && matrix.managed_service == 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          user="$(id -un)"
-          uid="$(id -u)"
-
-          test "$(ps -p 1 -o comm= | xargs)" = systemd
-          sudo systemctl is-active --quiet systemd-logind.service
-          sudo loginctl enable-linger "$user"
-          sudo systemctl start "user@${uid}.service"
-
-          runtime_dir="$(loginctl show-user "$user" --property=RuntimePath --value)"
-          test -n "$runtime_dir"
-          test -d "$runtime_dir"
-          test -O "$runtime_dir"
-
-          export XDG_RUNTIME_DIR="$runtime_dir"
-          test -S "$XDG_RUNTIME_DIR/systemd/private"
-          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
-
-          if [[ -S "$runtime_dir/bus" ]]; then
-            export DBUS_SESSION_BUS_ADDRESS="unix:path=${runtime_dir}/bus"
-            echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
-          fi
-
-          systemctl --user show-environment >/dev/null
 
       - name: Install OCM and Kova
         if: steps.lane.outputs.run == 'true'
@@ -472,7 +444,7 @@ jobs:
             --max-time 180 \
             --retry 8 --retry-max-time 180 --retry-all-errors --retry-connrefused \
             -o "$ocm_archive" \
-            "https://github.com/shakkernerd/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"
+            "https://github.com/openclaw/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"
           echo "${OCM_LINUX_X64_SHA256}  ${ocm_archive}" | sha256sum -c -
           tar -xzf "$ocm_archive" -C "${RUNNER_TEMP}/ocm-install"
           install -m 0755 "${RUNNER_TEMP}/ocm-install/ocm" "$HOME/.local/bin/ocm"
@@ -1277,7 +1249,7 @@ jobs:
         if: steps.download.outcome == 'success'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
           package-manager-cache: false
 
       - name: Prepare clawgrit report commit
@@ -1835,7 +1807,7 @@ jobs:
       - name: Set up benchmark Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24.19.0
+          node-version: 24.21.0
           check-latest: false
 
       - name: Install benchmark pnpm
@@ -1844,9 +1816,9 @@ jobs:
           set -euo pipefail
           pnpm_prefix="$RUNNER_TEMP/vitest-pair-pnpm"
           npm_config_cache="$RUNNER_TEMP/vitest-pair-npm-cache" \
-            npm install --global --prefix "$pnpm_prefix" pnpm@12.4.2
+            npm install --global --prefix "$pnpm_prefix" pnpm@12.5.1
           pnpm_bin="$pnpm_prefix/bin/pnpm"
-          [[ "$("$pnpm_bin" --version)" == "12.4.2" ]]
+          [[ "$("$pnpm_bin" --version)" == "12.5.1" ]]
           echo "VITEST_PAIR_PNPM_BIN=$pnpm_bin" >> "$GITHUB_ENV"
 
       - name: Run Vitest pair benchmark

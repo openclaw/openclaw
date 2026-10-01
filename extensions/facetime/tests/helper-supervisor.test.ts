@@ -1,110 +1,87 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FaceTimeHelperSupervisor } from "../src/helper-supervisor.js";
 
+type SupervisorParams = ConstructorParameters<typeof FaceTimeHelperSupervisor>[0];
+type CommandResult = Awaited<ReturnType<SupervisorParams["runCommandWithTimeout"]>>;
+const completed: CommandResult = {
+  code: 0,
+  stdout: "",
+  stderr: "",
+  signal: null,
+  killed: false,
+  termination: "exit",
+};
+
 describe("FaceTime helper supervisor", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("injects missing FaceTime and Phone helpers after the startup grace period", async () => {
-    vi.useFakeTimers();
-    const connectedBundles: string[] = [];
-    const runCommandWithTimeout = vi.fn().mockResolvedValue({
-      code: 0,
-      stdout: "",
-      stderr: "",
-    });
-    const supervisor = new FaceTimeHelperSupervisor({
-      pluginRoot: "/tmp/facetime",
-      logger: console,
-      runCommandWithTimeout: runCommandWithTimeout as never,
-      connectedBundles: () => connectedBundles,
-      targetAvailable: () => true,
-      initialGraceMs: 100,
-      retryDelaysMs: [1_000],
-      connectionGraceMs: 0,
-    });
-
-    supervisor.start();
-    expect(runCommandWithTimeout).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(100);
-
-    expect(runCommandWithTimeout).toHaveBeenCalledTimes(2);
-    expect(runCommandWithTimeout).toHaveBeenCalledWith(
-      ["/bin/bash", "/tmp/facetime/scripts/inject-helper.sh", "--app", "FaceTime"],
-      expect.objectContaining({
-        timeoutMs: 120_000,
-        killProcessTree: true,
-        signal: expect.any(AbortSignal),
-      }),
-    );
-    expect(runCommandWithTimeout).toHaveBeenCalledWith(
-      ["/bin/bash", "/tmp/facetime/scripts/inject-helper.sh", "--app", "Phone"],
-      expect.objectContaining({
-        timeoutMs: 120_000,
-        killProcessTree: true,
-        signal: expect.any(AbortSignal),
-      }),
-    );
-    await supervisor.stop();
-  });
-
-  it("reports the second serialized injection as queued", async () => {
-    vi.useFakeTimers();
-    let finishFirst:
-      | ((result: { code: number; stdout: string; stderr: string }) => void)
-      | undefined;
-    const firstInjection = new Promise<{ code: number; stdout: string; stderr: string }>(
-      (resolve) => {
-        finishFirst = resolve;
-      },
-    );
-    const runCommandWithTimeout = vi
-      .fn()
-      .mockReturnValueOnce(firstInjection)
-      .mockResolvedValue({ code: 0, stdout: "", stderr: "" });
-    const supervisor = new FaceTimeHelperSupervisor({
+  let activeSupervisor: FaceTimeHelperSupervisor;
+  function createSupervisor(overrides: Partial<SupervisorParams> = {}) {
+    activeSupervisor = new FaceTimeHelperSupervisor({
       pluginRoot: "/tmp/facetime",
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-      runCommandWithTimeout: runCommandWithTimeout as never,
+      runCommandWithTimeout: vi
+        .fn<SupervisorParams["runCommandWithTimeout"]>()
+        .mockResolvedValue(completed),
       connectedBundles: () => [],
       targetAvailable: () => true,
       initialGraceMs: 0,
       retryDelaysMs: [1_000],
       connectionGraceMs: 0,
+      ...overrides,
     });
+    return activeSupervisor;
+  }
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(async () => {
+    await activeSupervisor.stop();
+    vi.useRealTimers();
+  });
+
+  it("reports the second serialized injection as queued", async () => {
+    const { promise: firstInjection, resolve: finishFirst } =
+      Promise.withResolvers<CommandResult>();
+    const runCommandWithTimeout = vi
+      .fn<SupervisorParams["runCommandWithTimeout"]>()
+      .mockReturnValueOnce(firstInjection)
+      .mockResolvedValue(completed);
+    const supervisor = createSupervisor({ runCommandWithTimeout, initialGraceMs: 100 });
 
     supervisor.start();
-    await vi.advanceTimersByTimeAsync(0);
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(100);
 
     expect(supervisor.status()).toEqual([
       expect.objectContaining({ target: "FaceTime", injecting: true, queued: false }),
       expect.objectContaining({ target: "Phone", injecting: false, queued: true }),
     ]);
 
-    finishFirst?.({ code: 0, stdout: "", stderr: "" });
+    finishFirst(completed);
     await firstInjection;
     await vi.advanceTimersByTimeAsync(0);
-    await supervisor.stop();
+    expect(runCommandWithTimeout).toHaveBeenCalledTimes(2);
+    for (const [index, target] of ["FaceTime", "Phone"].entries()) {
+      expect(runCommandWithTimeout).toHaveBeenNthCalledWith(
+        index + 1,
+        ["/bin/bash", "/tmp/facetime/scripts/inject-helper.sh", "--app", target],
+        expect.objectContaining({
+          timeoutMs: 120_000,
+          killProcessTree: true,
+          signal: expect.any(AbortSignal),
+        }),
+      );
+    }
   });
 
   it("cancels reinjection after an authenticated helper reconnects", async () => {
-    vi.useFakeTimers();
     const connectedBundles: string[] = [];
-    const runCommandWithTimeout = vi.fn().mockResolvedValue({
-      code: 0,
-      stdout: "",
-      stderr: "",
-    });
-    const supervisor = new FaceTimeHelperSupervisor({
-      pluginRoot: "/tmp/facetime",
-      logger: console,
-      runCommandWithTimeout: runCommandWithTimeout as never,
+    const runCommandWithTimeout = vi
+      .fn<SupervisorParams["runCommandWithTimeout"]>()
+      .mockResolvedValue(completed);
+    const supervisor = createSupervisor({
+      runCommandWithTimeout,
       connectedBundles: () => connectedBundles,
-      targetAvailable: () => true,
       initialGraceMs: 100,
-      retryDelaysMs: [1_000],
-      connectionGraceMs: 0,
     });
 
     supervisor.start();
@@ -118,25 +95,21 @@ describe("FaceTime helper supervisor", () => {
       expect.objectContaining({ target: "FaceTime", connected: true, attempts: 0 }),
       expect.objectContaining({ target: "Phone", connected: true, attempts: 0 }),
     ]);
-    await supervisor.stop();
   });
 
   it("backs off and reports the last injection failure", async () => {
-    vi.useFakeTimers();
-    const runCommandWithTimeout = vi.fn().mockResolvedValue({
-      code: 1,
-      stdout: "",
-      stderr: "Developer Tools mode is disabled",
-    });
-    const supervisor = new FaceTimeHelperSupervisor({
-      pluginRoot: "/tmp/facetime",
-      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-      runCommandWithTimeout: runCommandWithTimeout as never,
+    const runCommandWithTimeout = vi
+      .fn<SupervisorParams["runCommandWithTimeout"]>()
+      .mockResolvedValue({
+        ...completed,
+        code: 1,
+        stdout: "",
+        stderr: "Developer Tools mode is disabled",
+      });
+    const supervisor = createSupervisor({
+      runCommandWithTimeout,
       connectedBundles: () => ["com.apple.mobilephone"],
-      targetAvailable: () => true,
-      initialGraceMs: 0,
       retryDelaysMs: [1_000, 5_000],
-      connectionGraceMs: 0,
     });
 
     supervisor.start();
@@ -156,25 +129,15 @@ describe("FaceTime helper supervisor", () => {
     expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(runCommandWithTimeout).toHaveBeenCalledTimes(2);
-    await supervisor.stop();
   });
 
   it("reports an injection that never authenticates instead of waiting forever", async () => {
-    vi.useFakeTimers();
-    const runCommandWithTimeout = vi.fn().mockResolvedValue({
-      code: 0,
-      stdout: "",
-      stderr: "",
-    });
-    const supervisor = new FaceTimeHelperSupervisor({
-      pluginRoot: "/tmp/facetime",
-      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-      runCommandWithTimeout: runCommandWithTimeout as never,
-      connectedBundles: () => [],
+    const runCommandWithTimeout = vi
+      .fn<SupervisorParams["runCommandWithTimeout"]>()
+      .mockResolvedValue(completed);
+    const supervisor = createSupervisor({
+      runCommandWithTimeout,
       targetAvailable: (target) => target === "FaceTime",
-      initialGraceMs: 0,
-      retryDelaysMs: [1_000],
-      connectionGraceMs: 0,
     });
 
     supervisor.start();
@@ -189,25 +152,15 @@ describe("FaceTime helper supervisor", () => {
         lastError: "FaceTime helper injection completed but no authenticated connection arrived",
       }),
     );
-    await supervisor.stop();
   });
 
   it("does not supervise Phone when the app is unavailable", async () => {
-    vi.useFakeTimers();
-    const runCommandWithTimeout = vi.fn().mockResolvedValue({
-      code: 0,
-      stdout: "",
-      stderr: "",
-    });
-    const supervisor = new FaceTimeHelperSupervisor({
-      pluginRoot: "/tmp/facetime",
-      logger: console,
-      runCommandWithTimeout: runCommandWithTimeout as never,
-      connectedBundles: () => [],
+    const runCommandWithTimeout = vi
+      .fn<SupervisorParams["runCommandWithTimeout"]>()
+      .mockResolvedValue(completed);
+    const supervisor = createSupervisor({
+      runCommandWithTimeout,
       targetAvailable: (target) => target === "FaceTime",
-      initialGraceMs: 0,
-      retryDelaysMs: [1_000],
-      connectionGraceMs: 0,
     });
 
     supervisor.start();
@@ -223,27 +176,17 @@ describe("FaceTime helper supervisor", () => {
       }),
     );
     expect(supervisor.status().map((entry) => entry.target)).toEqual(["FaceTime"]);
-    await supervisor.stop();
   });
 
   it("waits for a stale helper process to exit before reinjecting", async () => {
-    vi.useFakeTimers();
     let processAlive = true;
-    const runCommandWithTimeout = vi.fn().mockResolvedValue({
-      code: 0,
-      stdout: "",
-      stderr: "",
-    });
-    const supervisor = new FaceTimeHelperSupervisor({
-      pluginRoot: "/tmp/facetime",
-      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-      runCommandWithTimeout: runCommandWithTimeout as never,
-      connectedBundles: () => [],
-      targetAvailable: () => true,
+    const runCommandWithTimeout = vi
+      .fn<SupervisorParams["runCommandWithTimeout"]>()
+      .mockResolvedValue(completed);
+    const supervisor = createSupervisor({
+      runCommandWithTimeout,
       processAlive: () => processAlive,
       initialGraceMs: 10_000,
-      retryDelaysMs: [1_000],
-      connectionGraceMs: 0,
     });
 
     supervisor.start();
@@ -265,22 +208,15 @@ describe("FaceTime helper supervisor", () => {
       ["/bin/bash", "/tmp/facetime/scripts/inject-helper.sh", "--app", "FaceTime"],
       expect.objectContaining({ timeoutMs: 120_000, killProcessTree: true }),
     );
-    await supervisor.stop();
   });
 
   it("warns once while stale helper processes keep reconnecting", async () => {
-    vi.useFakeTimers();
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-    const supervisor = new FaceTimeHelperSupervisor({
-      pluginRoot: "/tmp/facetime",
+    const supervisor = createSupervisor({
       logger,
-      runCommandWithTimeout: vi.fn() as never,
-      connectedBundles: () => [],
       targetAvailable: (target) => target === "FaceTime",
       processAlive: () => true,
       initialGraceMs: 10_000,
-      retryDelaysMs: [1_000],
-      connectionGraceMs: 0,
     });
 
     supervisor.start();
@@ -313,33 +249,19 @@ describe("FaceTime helper supervisor", () => {
     supervisor.connected("com.apple.FaceTime");
     supervisor.stale("com.apple.FaceTime", 9012);
     expect(logger.warn).toHaveBeenCalledTimes(2);
-    await supervisor.stop();
   });
 
   it("preserves the stale-process monitor when injection finishes concurrently", async () => {
-    vi.useFakeTimers();
-    let finishInjection:
-      | ((result: { code: number; stdout: string; stderr: string }) => void)
-      | undefined;
-    const firstInjection = new Promise<{ code: number; stdout: string; stderr: string }>(
-      (resolve) => {
-        finishInjection = resolve;
-      },
-    );
+    const { promise: firstInjection, resolve: finishInjection } =
+      Promise.withResolvers<CommandResult>();
     const runCommandWithTimeout = vi
-      .fn()
+      .fn<SupervisorParams["runCommandWithTimeout"]>()
       .mockReturnValueOnce(firstInjection)
-      .mockResolvedValue({ code: 0, stdout: "", stderr: "" });
-    const supervisor = new FaceTimeHelperSupervisor({
-      pluginRoot: "/tmp/facetime",
-      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-      runCommandWithTimeout: runCommandWithTimeout as never,
-      connectedBundles: () => [],
+      .mockResolvedValue(completed);
+    const supervisor = createSupervisor({
+      runCommandWithTimeout,
       targetAvailable: (target) => target === "FaceTime",
       processAlive: () => false,
-      initialGraceMs: 0,
-      retryDelaysMs: [1_000],
-      connectionGraceMs: 0,
     });
 
     supervisor.start();
@@ -347,45 +269,39 @@ describe("FaceTime helper supervisor", () => {
     expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
 
     supervisor.stale("com.apple.FaceTime", 1234);
-    finishInjection?.({ code: 0, stdout: "", stderr: "" });
+    finishInjection(completed);
     await firstInjection;
     await vi.advanceTimersByTimeAsync(2_001);
 
     expect(runCommandWithTimeout).toHaveBeenCalledTimes(2);
-    await supervisor.stop();
   });
 
   it("aborts and joins in-flight LLDB injection before stop completes", async () => {
-    vi.useFakeTimers();
     let injectionSignal: AbortSignal | undefined;
-    const runCommandWithTimeout = vi.fn(
-      async (_argv: string[], options: { signal: AbortSignal; killProcessTree: boolean }) => {
-        injectionSignal = options.signal;
-        return await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
-          options.signal.addEventListener(
+    const runCommandWithTimeout = vi.fn<SupervisorParams["runCommandWithTimeout"]>(
+      async (_argv, options) => {
+        if (typeof options === "number" || !options.signal) {
+          throw new Error("injection must be cancellable");
+        }
+        const signal = options.signal;
+        injectionSignal = signal;
+        return await new Promise<CommandResult>((resolve) => {
+          signal.addEventListener(
             "abort",
-            () => resolve({ code: 1, stdout: "", stderr: "aborted" }),
+            () => resolve({ ...completed, code: 1, stderr: "aborted" }),
             { once: true },
           );
         });
       },
     );
-    const supervisor = new FaceTimeHelperSupervisor({
-      pluginRoot: "/tmp/facetime",
-      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-      runCommandWithTimeout: runCommandWithTimeout as never,
-      connectedBundles: () => [],
-      targetAvailable: () => true,
-      initialGraceMs: 0,
-      retryDelaysMs: [1_000],
-      connectionGraceMs: 0,
+    const supervisor = createSupervisor({
+      runCommandWithTimeout,
     });
     supervisor.start();
     await vi.advanceTimersByTimeAsync(0);
     expect(runCommandWithTimeout).toHaveBeenCalledOnce();
 
     await supervisor.stop();
-
     expect(injectionSignal?.aborted).toBe(true);
     expect(runCommandWithTimeout).toHaveBeenCalledOnce();
     expect(runCommandWithTimeout.mock.calls[0]?.[1]).toMatchObject({

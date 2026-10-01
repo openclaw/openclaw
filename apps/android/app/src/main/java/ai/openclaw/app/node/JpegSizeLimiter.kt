@@ -8,9 +8,6 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-/**
- * Result of a JPEG compression attempt after quality and scale reductions.
- */
 internal data class JpegSizeLimiterResult(
   val bytes: ByteArray,
   val width: Int,
@@ -18,9 +15,6 @@ internal data class JpegSizeLimiterResult(
   val quality: Int,
 )
 
-/**
- * Utility that searches quality/scale combinations until a JPEG fits a byte budget.
- */
 internal object JpegSizeLimiter {
   fun readOrientation(open: () -> InputStream?): Int =
     try {
@@ -120,10 +114,6 @@ internal object JpegSizeLimiter {
     }
 
     val failed = checkNotNull(best)
-    if (failed.bytes.size > maxBytes) {
-      throw IllegalStateException("CAMERA_TOO_LARGE: ${failed.bytes.size} bytes > $maxBytes bytes")
-    }
-
-    return failed
+    throw IllegalStateException("CAMERA_TOO_LARGE: ${failed.bytes.size} bytes > $maxBytes bytes")
   }
 }

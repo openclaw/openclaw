@@ -26,6 +26,7 @@ import {
   createWorkerSessionTurnPlacementProvider,
   credential,
   measureLaunchTurn,
+  readLaunchToolNames,
   placements,
   seedActivePlacement,
   sessionTarget,
@@ -42,7 +43,7 @@ describe("worker turn trajectory authority", () => {
     "retains the cold transcript handle through guarded worker persistence (%s)",
     async (authority) => {
       expect(isMainThread).toBe(true);
-      seedActivePlacement();
+      await seedActivePlacement();
       const input = turn(`trajectory-${authority}`);
       const abort = new AbortController();
       const revoked = new Error("turn revoked before trajectory commit");
@@ -113,6 +114,7 @@ describe("worker turn trajectory authority", () => {
         ownerEpoch: OWNER_EPOCH,
         launchTurn,
         measureLaunchTurn,
+        readLaunchToolNames,
         runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),

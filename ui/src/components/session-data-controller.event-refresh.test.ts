@@ -15,6 +15,7 @@ afterEach(() => {
   for (const cleanup of cleanups.splice(0)) {
     cleanup();
   }
+  vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
@@ -502,6 +503,7 @@ describe("filtered sidebar session event refresh", () => {
     "refreshes the %s list once for duplicate remote session events",
     async (statusFilter) => {
       vi.useFakeTimers();
+      vi.spyOn(Math, "random").mockReturnValue(0);
       const { controller, list, publishSessionChanged } =
         createFilteredSessionController(statusFilter);
       controller.hostConnected();
@@ -647,6 +649,7 @@ describe("filtered sidebar session event refresh", () => {
 
   it("bounds refresh latency while same-agent events continue arriving", async () => {
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
     const { controller, list, publishSessionChanged } = createFilteredSessionController("all");
     controller.hostConnected();
     await controller.refreshSidebarSessions();

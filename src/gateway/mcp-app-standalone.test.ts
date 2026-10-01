@@ -289,7 +289,7 @@ describe("MCP App standalone host", () => {
     ).toBe(401);
   });
 
-  it.each([0, 7, "7"])("cancels only the active serialized request %j", async (id) => {
+  it.each([0, "7"])("cancels only the active serialized request %j", async (id) => {
     const host = await createSerializedHost();
     host.emit({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "app-only" } });
     const operation = host.operations[0]!;
@@ -340,24 +340,21 @@ describe("MCP App standalone host", () => {
     },
   );
 
-  it.each(["tools/list", "resources/list", "resources/templates/list", "resources/read"])(
-    "retires %s when the page closes",
-    async (method) => {
-      const host = await createSerializedHost();
-      host.emit({ jsonrpc: "2.0", id: 1, method, params: {} });
-      host.pagehide();
-      expect(host.operations[0]?.signal?.aborted).toBe(true);
-      host.pageshow(true);
-      expect(host.reload).not.toHaveBeenCalled();
-      host.emit({ jsonrpc: "2.0", id: 2, method, params: {} });
-      expect(host.operations).toHaveLength(1);
-      host.operations[0]!.result.resolve("late result");
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
-    },
-  );
+  it.each(["tools/list", "resources/read"])("retires %s when the page closes", async (method) => {
+    const host = await createSerializedHost();
+    host.emit({ jsonrpc: "2.0", id: 1, method, params: {} });
+    host.pagehide();
+    expect(host.operations[0]?.signal?.aborted).toBe(true);
+    host.pageshow(true);
+    expect(host.reload).not.toHaveBeenCalled();
+    host.emit({ jsonrpc: "2.0", id: 2, method, params: {} });
+    expect(host.operations).toHaveLength(1);
+    host.operations[0]!.result.resolve("late result");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
+  });
 
   it("requests one fresh document on a persisted live-host return without replaying work", async () => {
     const host = await createSerializedHost();

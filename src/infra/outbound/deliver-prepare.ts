@@ -15,8 +15,8 @@ import type { ChannelHandler, DeliverOutboundPayloadsParams } from "./deliver-co
 import { applyMessageSendingHook, applyReplyPayloadSendingHook } from "./deliver-hooks.js";
 import {
   buildPayloadSummary,
-  normalizeEmptyPayloadForDelivery,
   normalizePayloadsForChannelDelivery,
+  normalizeTransformedPayloadForDelivery,
   resolveOutboundMediaAccessForSend,
   stripInternalRuntimeScaffoldingFromPayload,
 } from "./deliver-payload.js";
@@ -327,23 +327,11 @@ async function prepareOutboundPlan(
     }
     // Adapter normalization may project visible text into transport fields. Re-run it
     // after policy so durable custody cannot retain a stale pre-rewrite projection.
-    const normalizedPostHookPayload = handler.normalizePayload
-      ? handler.normalizePayload(postHookPayload)
-      : postHookPayload;
-    const normalizedPayload = normalizedPostHookPayload
-      ? copyMetadata(postHookPayload, normalizedPostHookPayload)
-      : null;
-    const strippedPayload = normalizedPayload
-      ? copyMetadata(
-          normalizedPayload,
-          stripInternalRuntimeScaffoldingFromPayload(normalizedPayload),
-        )
-      : null;
-    const nonEmptyPayload = strippedPayload
-      ? normalizeEmptyPayloadForDelivery(strippedPayload)
-      : null;
-    const preparedPayload =
-      nonEmptyPayload && strippedPayload ? copyMetadata(strippedPayload, nonEmptyPayload) : null;
+    const preparedPayload = normalizeTransformedPayloadForDelivery(
+      postHookPayload,
+      handler,
+      copyMetadata,
+    );
     if (!preparedPayload) {
       entries.push({
         sourceIndex,

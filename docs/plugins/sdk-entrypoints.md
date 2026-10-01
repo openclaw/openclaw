@@ -200,8 +200,13 @@ Hosts can provide `watchSkills(request, onChange, signal)` to notify the existin
 snapshot cache when admitted Skill sources change. Keep the subscription alive
 until aborted, and send `change` after the initial scan and later edits. Send
 `unavailable` if file watching stops: preparation then refreshes on each call,
-without reopening the subscription. Hosts without `watchSkills` use that same
-fallback. `skills.load.watch: false` disables the subscription and this fallback.
+without reopening the subscription. After recovery, send `available` only when
+all subscribed sources have verified watch coverage and edits made during the
+outage have been reconciled. This restores snapshot reuse without adding a content
+revision. A `change` alone never clears unavailable state. Hosts that only send
+`change` and `unavailable` retain preparation fallback after an outage. Hosts
+without `watchSkills` always use that fallback. `skills.load.watch: false`
+disables the subscription and this fallback.
 Gateway watches Workshop locally under the same snapshot invalidation lifecycle.
 
 The paired-node file-transfer adapter also connects Skill discovery, resource reads,
@@ -213,6 +218,37 @@ OpenClaw version on Gateway and node.
 This adapter does not implement remote Skill source install/update/remove or
 ClawHub lifecycle operations; those remain tracked in
 [Enterprise #242](https://github.com/openclaw/openclaw-enterprise/issues/242).
+
+## Agent workspace context
+
+Native harnesses use `prepareAgentWorkspaceContext` from
+`openclaw/plugin-sdk/agent-harness-runtime` to prepare bounded workspace context.
+The shared owner runs the existing bootstrap hooks, privacy filters, and character
+budgets. `scope: "full"` separates the agent instruction snapshot, persona,
+remaining project context, and tool-routed memory references. It prepares recall
+guidance through the active memory plugin without inventing fallback policy.
+`scope: "instructions-only"` selects the configured workspace's root `AGENTS.md`
+before budgeting and does not prepare persona or memory guidance.
+
+Provider adapters own native project-document discovery, available memory tools,
+path projection, context order, instruction carriers, and session/turn lifetimes.
+Optional `projectPath` projects file paths after budgeting without changing their
+contents or personal-user provenance. It describes existing execution placement;
+it does not transfer or mount files.
+Full-context preparation preserves Codex's existing selection timing: projecting
+the root instruction path away from `workspaceDir` produces an empty root snapshot.
+Callers preparing source-workspace instructions should omit `projectPath`.
+
+`buildAgentWorkspaceInstructionSnapshot(contextFiles, workspaceDir)` selects and
+renders that root instruction document from already-bounded context, including
+hook-free child preparation. An empty instruction string is a successful capture;
+preparation failures must remain distinguishable and retryable.
+
+Agents API can consume the instruction-only snapshot at session creation. Its
+current client does not implement per-turn developer instructions, persona and
+personal-overlay refresh, turn-scoped project or memory guidance, native forks,
+or Gateway-to-hosted-workspace path projection. Those remain MVP integration gaps;
+shared preparation does not enable those operations.
 
 ## Tool failure diagnostics
 

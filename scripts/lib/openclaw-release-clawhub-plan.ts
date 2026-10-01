@@ -1,4 +1,3 @@
-// OpenClaw release ClawHub plan script supports release workflow routing.
 import { resolve } from "node:path";
 import { resolvePreparedClawHubMatrix } from "../clawhub-prepared-artifact.mjs";
 import {
@@ -88,10 +87,6 @@ function packageNames(packages: readonly ClawHubPlanPackage[]): string[] {
   return packages.map((plugin) => plugin.packageName);
 }
 
-function joinPackageNames(packages: readonly string[]): string {
-  return packages.join(",");
-}
-
 function optionalArg(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
@@ -162,7 +157,6 @@ function createDispatchTarget(params: {
     };
   }
 
-  const plugins = joinPackageNames(params.packages);
   return {
     workflow: params.workflow,
     ref: params.ref,
@@ -184,7 +178,7 @@ function createDispatchTarget(params: {
       ...(params.releasePublishWorkflowSha
         ? { release_publish_workflow_sha: params.releasePublishWorkflowSha }
         : {}),
-      plugins,
+      plugins: params.packages.join(","),
       release_publish_run_id: params.releasePublishRunId,
       release_publish_branch: params.releasePublishBranch,
     },
@@ -386,13 +380,12 @@ export async function buildOpenClawReleaseClawHubPlan(
           fetchImpl: options.fetchImpl,
         })
       : undefined;
-  const plan = args.skipClawHub
-    ? { candidates: [], bootstrapCandidates: [], missingTrustedPublisher: [], warnings: [] }
-    : prepared
+  // Prepared publication requires established normal trusted publishers;
+  // the resolver rejects bootstrap/repair needs before this routing.
+  const plan =
+    args.skipClawHub || prepared
       ? {
-          // Prepared publication requires established normal trusted publishers;
-          // the resolver rejects bootstrap/repair needs before this routing.
-          candidates: prepared,
+          candidates: prepared ?? [],
           bootstrapCandidates: [],
           missingTrustedPublisher: [],
           warnings: [],
@@ -447,9 +440,9 @@ export async function buildOpenClawReleaseClawHubPlan(
       normalCount: normalPackages.length,
       bootstrapCount: bootstrapPackages.length,
       missingTrustedPublisherCount: missingTrustedPlugins.length,
-      normalPlugins: joinPackageNames(normalPackages),
-      bootstrapPlugins: joinPackageNames(bootstrapPackages),
-      missingTrustedPlugins: joinPackageNames(missingTrustedPlugins),
+      normalPlugins: normalPackages.join(","),
+      bootstrapPlugins: bootstrapPackages.join(","),
+      missingTrustedPlugins: missingTrustedPlugins.join(","),
     },
     verifier: {
       clawHubWorkflowRef: bootstrapWorkflowRef,

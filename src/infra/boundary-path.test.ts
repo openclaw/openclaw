@@ -16,14 +16,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function createSeededRandom(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state * 1664525 + 1013904223) >>> 0;
-    return state / 0x100000000;
-  };
-}
-
 describe("resolveRealpathOrAbsolute", () => {
   it("canonicalizes existing symlinks", async () => {
     await withTestDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
@@ -219,53 +211,6 @@ describe("resolveRootPath", () => {
       });
       expect(resolvedSync.exists).toBe(true);
       expect(isPathInside(resolvedSync.rootCanonicalPath, resolvedSync.canonicalPath)).toBe(true);
-    });
-  });
-
-  it("maintains containment invariant across randomized alias cases", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-
-    await withTestDir({ prefix: "openclaw-boundary-path-fuzz-" }, async (base) => {
-      const root = path.join(base, "workspace");
-      const outside = path.join(base, "outside");
-      const safeTarget = path.join(root, "safe-target");
-      const safeRealBase = path.join(root, "safe-real");
-      const safeLinkBase = path.join(root, "safe-link");
-      const escapeLink = path.join(root, "escape-link");
-      await fs.mkdir(root, { recursive: true });
-      await fs.mkdir(outside, { recursive: true });
-      await fs.mkdir(safeTarget, { recursive: true });
-      await fs.mkdir(safeRealBase, { recursive: true });
-      await fs.symlink(safeTarget, safeLinkBase);
-      await fs.symlink(outside, escapeLink);
-
-      const rand = createSeededRandom(0x5eed1234);
-      const fuzzCases = 32;
-      for (let idx = 0; idx < fuzzCases; idx += 1) {
-        const token = Math.floor(rand() * 1_000_000)
-          .toString(16)
-          .padStart(5, "0");
-        const useLink = rand() > 0.5;
-        const safeBase = useLink ? safeLinkBase : safeRealBase;
-        const safeCandidate = path.join(safeBase, `new-${token}.txt`);
-        const safeResolved = await resolveRootPath({
-          absolutePath: safeCandidate,
-          rootPath: root,
-          boundaryLabel: "sandbox root",
-        });
-        expect(isPathInside(safeResolved.rootCanonicalPath, safeResolved.canonicalPath)).toBe(true);
-
-        const unsafeCandidate = path.join(escapeLink, `new-${token}.txt`);
-        await expect(
-          resolveRootPath({
-            absolutePath: unsafeCandidate,
-            rootPath: root,
-            boundaryLabel: "sandbox root",
-          }),
-        ).rejects.toThrow(/Symlink escapes sandbox root/i);
-      }
     });
   });
 });

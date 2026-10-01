@@ -11,7 +11,6 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { sessionSuggestionHandlers } from "./sessions-suggestions.js";
 import { getSessionSuggestionTestMocks } from "./sessions-suggestions.test-mocks.js";
 import {
   call,
@@ -24,6 +23,8 @@ import {
 
 const mocks = getSessionSuggestionTestMocks();
 registerSessionSuggestionTestLifecycle(mocks);
+// Register shared mocks before the handlers capture their presence dependency.
+const { sessionSuggestionHandlers } = await import("./sessions-suggestions.js");
 
 describe("session suggestion visibility and role ceilings", () => {
   it("retains committed suggestion visibility through a tentative role relaxation", async () => {
@@ -305,6 +306,7 @@ describe("session suggestion visibility and role ceilings", () => {
 
   it("keeps incognito suggestion and typing surfaces admin-only", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      vi.useFakeTimers();
       const incognitoKey = "agent:main:dashboard:incognito-suggestions";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: incognitoKey },
@@ -368,6 +370,37 @@ describe("session suggestion visibility and role ceilings", () => {
       expect(adminList.responses[0]?.[1]).toMatchObject({
         role: "admin",
         suggestions: [{ id: "incognito-suggestion", text: "private suggestion" }],
+      });
+
+      mocks.presence = ["admin", "other-admin"].map((id) => ({
+        user: { id, identity: { type: "profile", id } },
+        watchedSessions: [incognitoKey],
+      }));
+      const broadcast = vi.fn();
+      const typingContext = context(broadcast);
+      const admin = client("admin", "Admin", true);
+      const typeDraft = (preview: string) =>
+        call(
+          "session.typing",
+          { sessionKey: incognitoKey, sessionId: "session-incognito", typing: true, preview },
+          admin,
+          typingContext,
+        );
+      expect((await typeDraft("first private draft")).responses[0]?.[1]).toEqual({
+        ok: true,
+        broadcast: true,
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      expect((await typeDraft("latest private draft")).responses[0]?.[1]).toEqual({
+        ok: true,
+        broadcast: false,
+      });
+      await vi.advanceTimersByTimeAsync(150);
+      expect(broadcast).toHaveBeenCalledTimes(2);
+      expect(broadcast.mock.lastCall?.[1]).toMatchObject({
+        sessionKey: incognitoKey,
+        sessionId: "session-incognito",
+        preview: "latest private draft",
       });
     });
   });

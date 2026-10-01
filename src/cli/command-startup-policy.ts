@@ -23,6 +23,8 @@ function shouldLoadPlugins(params: {
 
 export function resolveCliStartupPolicy(params: {
   argv?: string[];
+  /** Commander-owned option values, available after parsing. */
+  options?: Readonly<Record<string, unknown>>;
   commandPath: string[];
   jsonOutputMode: boolean;
   machineOutputMode?: boolean;
@@ -38,7 +40,11 @@ export function resolveCliStartupPolicy(params: {
   const suppressDoctorStdout = machineOutputMode || commandPolicy.ownsProtocolStdout;
   const configGuard =
     typeof commandPolicy.configGuard === "function"
-      ? commandPolicy.configGuard({ argv: params.argv ?? [], commandPath: params.commandPath })
+      ? commandPolicy.configGuard({
+          argv: params.argv ?? [],
+          commandPath: params.commandPath,
+          options: params.options,
+        })
       : commandPolicy.configGuard;
   const env = params.env ?? process.env;
   const hideBanner = machineOutputMode || commandPolicy.hideBanner;

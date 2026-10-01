@@ -1,8 +1,3 @@
-/**
- * Bundled channel persisted-auth state probes.
- *
- * Lists and checks channel package metadata that can report persisted auth state.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginDiscoveryResult } from "../../plugins/discovery.js";
 import {

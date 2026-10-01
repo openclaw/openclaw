@@ -605,16 +605,9 @@ export class DraftGatewayState {
     if (!preferences) {
       return;
     }
-    const notify = (event: "loaded" | "changed") => {
+    const notify = () => {
       if (this.identityPreferences !== preferences) {
         return;
-      }
-      if (
-        event === "loaded" &&
-        this.read().agentsHydrated &&
-        this.callbacks.preferenceScope !== "palette"
-      ) {
-        this.callbacks.onAdoptAgentDefaults();
       }
       this.callbacks.requestUpdate();
     };
@@ -628,7 +621,7 @@ export class DraftGatewayState {
         this.read().context?.gateway.connection.gatewayUrl === this.gatewayUrlValue,
     );
     if (preferences.mode !== "loading") {
-      notify("loaded");
+      notify();
     }
   }
 }

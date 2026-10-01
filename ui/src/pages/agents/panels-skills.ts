@@ -20,6 +20,14 @@ import {
 
 registerSettingsEnglish();
 
+type AgentSkillControls = {
+  agentId: string;
+  allowSet: Set<string>;
+  usingAllowlist: boolean;
+  editable: boolean;
+  onToggle: (agentId: string, skillName: string, enabled: boolean) => void;
+};
+
 export function renderAgentSkills(params: {
   agentId: string;
   report: SkillStatusReport | null;
@@ -184,14 +192,7 @@ export function renderAgentSkills(params: {
 
 function renderAgentSkillGroup(
   group: SkillGroup,
-  params: {
-    agentId: string;
-    allowSet: Set<string>;
-    usingAllowlist: boolean;
-    editable: boolean;
-    filterActive: boolean;
-    onToggle: (agentId: string, skillName: string, enabled: boolean) => void;
-  },
+  params: AgentSkillControls & { filterActive: boolean },
 ) {
   const collapsedByDefault =
     !params.filterActive && (group.id === "workspace" || group.id === "built-in");
@@ -202,30 +203,13 @@ function renderAgentSkillGroup(
         <span class="muted">${group.skills.length}</span>
       </summary>
       <div class="list skills-grid">
-        ${group.skills.map((skill) =>
-          renderAgentSkillRow(skill, {
-            agentId: params.agentId,
-            allowSet: params.allowSet,
-            usingAllowlist: params.usingAllowlist,
-            editable: params.editable,
-            onToggle: params.onToggle,
-          }),
-        )}
+        ${group.skills.map((skill) => renderAgentSkillRow(skill, params))}
       </div>
     </details>
   `;
 }
 
-function renderAgentSkillRow(
-  skill: SkillStatusEntry,
-  params: {
-    agentId: string;
-    allowSet: Set<string>;
-    usingAllowlist: boolean;
-    editable: boolean;
-    onToggle: (agentId: string, skillName: string, enabled: boolean) => void;
-  },
-) {
+function renderAgentSkillRow(skill: SkillStatusEntry, params: AgentSkillControls) {
   const enabled = params.usingAllowlist ? params.allowSet.has(skill.name) : true;
   const missing = computeSkillMissing(skill);
   const reasons = computeSkillReasons(skill);

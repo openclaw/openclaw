@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { parseBunCliLauncher, renderBunCliLauncher } from "../../scripts/lib/bun-cli-launcher.mjs";
 import { hasErrnoCode } from "./errno.js";
 import { isPathInside } from "./path-guards.js";
 import { createRuntimePathLookup } from "./update-runtime-path-index.js";
@@ -62,6 +63,7 @@ export async function relocateRuntimeSymlink(
   sourceFile: string,
   destinationFile: string,
   relocations: RuntimeRelocations,
+  assertBeforeMutation?: () => void,
 ): Promise<void> {
   const link = await fs.readlink(file);
   const target = relocateRuntimePath(path.resolve(path.dirname(sourceFile), link), relocations);
@@ -75,7 +77,9 @@ export async function relocateRuntimeSymlink(
   // source before rebinding; Windows junctions require the final absolute target.
   const type =
     process.platform === "win32" && (await fs.stat(sourceFile)).isDirectory() ? "junction" : "file";
+  assertBeforeMutation?.();
   await fs.unlink(file);
+  assertBeforeMutation?.();
   await fs.symlink(type === "junction" ? target : replacement, file, type);
 }
 
@@ -84,9 +88,22 @@ export async function relocateRuntimeLauncher(
   sourceFile: string,
   destinationFile: string,
   relocations: RuntimeRelocations,
+  assertBeforeMutation?: () => void,
 ): Promise<void> {
   const prepared = prepareRuntimeRelocations(relocations);
   const original = await fs.readFile(file, "utf8");
+  const bunLauncher = parseBunCliLauncher(original);
+  if (bunLauncher) {
+    const content = renderBunCliLauncher({
+      bunPath: relocateRuntimePath(bunLauncher.bunPath, prepared),
+      entryPath: relocateRuntimePath(bunLauncher.entryPath, prepared),
+    });
+    if (content !== original) {
+      assertBeforeMutation?.();
+      await fs.writeFile(file, content);
+    }
+    return;
+  }
   // pnpm cmd-shim uses these directory-relative references on sh, cmd and PowerShell.
   // Resolve them before changing the directory; absolute store/runtime paths stay external.
   let content = original.replace(
@@ -125,6 +142,7 @@ export async function relocateRuntimeLauncher(
     }
   }
   if (content !== original) {
+    assertBeforeMutation?.();
     await fs.writeFile(file, content);
   }
 }
@@ -148,6 +166,7 @@ async function relocateModulesManifest(
   sourceFile: string,
   destinationFile: string,
   relocations: RuntimeRelocations,
+  assertBeforeMutation?: () => void,
 ): Promise<void> {
   const contents = await readRuntimeModulesManifest(file);
   if (!contents) {
@@ -177,6 +196,7 @@ async function relocateModulesManifest(
     const content = original.trimStart().startsWith("{")
       ? `${JSON.stringify(manifest, null, 2)}\n`
       : stringifyYaml(manifest);
+    assertBeforeMutation?.();
     await fs.writeFile(file, content);
   }
 }
@@ -188,13 +208,18 @@ export async function relocateRuntimeEntry(
   destinationFile: string,
   kind: "file" | "symlink",
   relocations: RuntimeRelocations,
+  assertBeforeMutation?: () => void,
 ): Promise<void> {
+  let relocate: typeof relocateRuntimeSymlink | undefined;
   if (kind === "symlink") {
-    await relocateRuntimeSymlink(file, sourceFile, destinationFile, relocations);
+    relocate = relocateRuntimeSymlink;
   } else if (path.basename(file) === ".modules.yaml") {
-    await relocateModulesManifest(file, sourceFile, destinationFile, relocations);
+    relocate = relocateModulesManifest;
   } else if (path.basename(path.dirname(file)) === ".bin" && !file.endsWith(".exe")) {
-    await relocateRuntimeLauncher(file, sourceFile, destinationFile, relocations);
+    relocate = relocateRuntimeLauncher;
+  }
+  if (relocate) {
+    await relocate(file, sourceFile, destinationFile, relocations, assertBeforeMutation);
   }
 }
 

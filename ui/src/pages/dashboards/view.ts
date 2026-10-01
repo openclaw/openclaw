@@ -4,6 +4,7 @@ import { html as staticHtml, literal } from "lit/static-html.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { icons } from "../../components/icons.ts";
 import { renderPanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
@@ -317,7 +318,7 @@ export function renderDashboards(
         `
       : renderDashboardGallerySkeleton();
   return html`
-    <section class="content-header dashboards-header">
+    <section class="content-header dashboards-header" ${shellLayoutTraits({ toolbarHeader: true })}>
       <div>
         <h1 class="page-title">${titleForRoute("dashboards")}</h1>
         <div class="page-subtitle">${t("subtitles.dashboards")}</div>

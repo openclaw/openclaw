@@ -6,13 +6,15 @@ import { DatabaseSync } from "node:sqlite";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import zlib from "node:zlib";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { isVisibleSubagentResultEventForRun } from "../../agents/subagents/announce/subagent-announce-result.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { assertOpenClawAgentCurrentRuntimeSchema } from "../../state/openclaw-agent-db-schema-helpers.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
@@ -24,10 +26,8 @@ import {
 } from "./archive-compression.js";
 import { deleteSessionEntryLifecycle, findTranscriptEvent } from "./session-accessor.js";
 import { withSqliteTranscriptArchiveSession } from "./session-accessor.sqlite-archive-session.js";
-import {
-  MAX_TASK_ARCHIVE_RECORD_BYTES,
-  TASK_ARCHIVE_RECORD_CAPACITY_ERROR,
-} from "./session-accessor.sqlite-archive-stream.js";
+import { MAX_TASK_ARCHIVE_RECORD_BYTES } from "./session-accessor.sqlite-archive-stream.js";
+import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
@@ -36,10 +36,22 @@ import {
   readSessionTaskArchivePageReadOnly,
   verifySessionTranscriptArchivePageBindingReadOnly,
 } from "./session-history.js";
+import * as historyReaders from "./session-transcript-worker-readers.js";
 
 const autoTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+async function withoutHostSql<T>(read: () => Promise<T>): Promise<T> {
+  const hostSql = observeHostDataSql();
+  const result = await read().finally(() => hostSql.restore());
+  expect(hostSql.queries).toEqual([]);
+  for (const call of hostSql.calls) {
+    expect(call).not.toHaveBeenCalled();
+  }
+  return result;
+}
+
 afterEach(() => {
+  vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 });
@@ -158,11 +170,13 @@ describe("SQLite transcript archive reads", () => {
       replaceSuccessor(oversizedSuccessor);
       // The capped candidate cannot establish whether the readable match is unique.
       await expect(readSessionTaskArchivePageReadOnly(scope, { runId })).rejects.toThrow(
-        TASK_ARCHIVE_RECORD_CAPACITY_ERROR,
+        "Archived transcript is unavailable because a record exceeds the task-history read capacity.",
       );
       await expect(
         verifySessionTranscriptArchivePageBindingReadOnly(scope, runId, page.binding),
-      ).rejects.toThrow(TASK_ARCHIVE_RECORD_CAPACITY_ERROR);
+      ).rejects.toThrow(
+        "Archived transcript is unavailable because a record exceeds the task-history read capacity.",
+      );
       replaceSuccessor(successor);
       await expect(
         readSessionTaskArchivePageReadOnly(scope, { ...continuation, runId: "next-run" }),
@@ -455,6 +469,18 @@ describe("SQLite transcript archive reads", () => {
   it("reads a pre-archive store without creating its optional archive table", async () => {
     await withOpenClawTestState({ label: "optional-archive-read" }, async (state) => {
       const options = { agentId: "main", env: state.env };
+      const archiveRead = vi.spyOn(archiveWorker, "runSqliteTranscriptArchiveReadWorker");
+      const missingPath = state.statePath("missing.sqlite");
+      await expect(
+        withoutHostSql(() =>
+          findSessionTranscriptArchiveEventReadOnly(
+            { ...options, storePath: missingPath, sessionKey: "agent:main:missing" },
+            "absent-run",
+          ),
+        ),
+      ).resolves.toBeUndefined();
+      expect(fs.existsSync(missingPath)).toBe(false);
+      expect(archiveRead).not.toHaveBeenCalled();
       const database = openOpenClawAgentDatabase(options);
       database.db.exec("DROP TABLE session_transcript_archives");
       assertOpenClawAgentCurrentRuntimeSchema(database.db, {
@@ -474,9 +500,14 @@ describe("SQLite transcript archive reads", () => {
       expect(
         listSessionTranscriptArchivesReadOnly({ ...scope, sessionIds: [scope.sessionId] }),
       ).toEqual([]);
-      await expect(
-        findSessionTranscriptArchiveEventReadOnly(scope, "absent-run"),
-      ).resolves.toBeUndefined();
+      try {
+        await expect(
+          withoutHostSql(() => findSessionTranscriptArchiveEventReadOnly(scope, "absent-run")),
+        ).resolves.toBeUndefined();
+        expect(archiveRead).not.toHaveBeenCalled();
+      } finally {
+        archiveRead.mockRestore();
+      }
       const persisted = new DatabaseSync(storePath, { readOnly: true });
       try {
         expect(
@@ -573,9 +604,11 @@ describe("SQLite transcript archive reads", () => {
         .readdirSync(env.OPENCLAW_STATE_DIR, { recursive: true, encoding: "utf8" })
         .toSorted((left, right) => left.localeCompare(right));
 
-      expect(await findSessionTranscriptArchiveEventReadOnly(scope, "completed-run")).toEqual({
-        event: answer,
-      });
+      expect(
+        await withoutHostSql(() =>
+          findSessionTranscriptArchiveEventReadOnly(scope, "completed-run"),
+        ),
+      ).toEqual({ event: answer });
       expect(
         await findSessionTranscriptArchiveEventReadOnly(
           { ...scope, sessionId: "old" },
@@ -638,6 +671,113 @@ describe("SQLite transcript archive reads", () => {
       await expect(
         findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId: "new" }, "completed-run"),
       ).rejects.toThrow("Archived transcript bytes do not match their registered hash");
+
+      if (!compressed) {
+        const entered = createDeferred();
+        const release = createDeferred();
+        const createReaders = historyReaders.createSessionHistoryWorkerReaders;
+        const factory = vi
+          .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+          .mockImplementation((runRequest) => {
+            const readers = createReaders(runRequest);
+            const readPresence = readers.readArchivePresence;
+            return {
+              ...readers,
+              readArchivePresence: async (input) => {
+                const registered = await readPresence(input);
+                entered.resolve();
+                await release.promise;
+                return registered;
+              },
+            };
+          });
+        const archiveRead = vi.spyOn(archiveWorker, "runSqliteTranscriptArchiveReadWorker");
+        const outcome = findSessionTranscriptArchiveEventReadOnly(
+          { ...scope, sessionId: "old" },
+          "completed-run",
+        ).then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        let closing: Promise<void> | undefined;
+        try {
+          await Promise.race([
+            entered.promise,
+            outcome.then(() => {
+              throw new Error("Archive lookup settled before its metadata hold");
+            }),
+          ]);
+          closing = closeOpenClawAgentDatabasesAsync(env.OPENCLAW_STATE_DIR);
+          release.resolve();
+          expect(await outcome).toMatchObject({
+            error: { message: expect.stringMatching(/revoked/) },
+          });
+          await closing;
+          expect(archiveRead).not.toHaveBeenCalled();
+        } finally {
+          release.resolve();
+          await Promise.allSettled([outcome, closing]);
+          archiveRead.mockRestore();
+          factory.mockRestore();
+        }
+      } else {
+        await closeOpenClawAgentDatabasesAsync(env.OPENCLAW_STATE_DIR);
+        const replacementPath = `${storePath}.replacement`;
+        const originalPath = `${storePath}.original`;
+        fs.copyFileSync(storePath, replacementPath);
+        expect(fs.readFileSync(replacementPath)).toEqual(fs.readFileSync(storePath));
+        const scopeOwner = await import("./session-accessor.sqlite-scope.js");
+        const prepare = scopeOwner.prepareSqliteScope;
+        const entered = createDeferred();
+        const release = createDeferred();
+        const preparation = vi
+          .spyOn(scopeOwner, "prepareSqliteScope")
+          .mockImplementation(async (input) => {
+            const resolved = await prepare(input);
+            entered.resolve();
+            await release.promise;
+            return resolved;
+          });
+        const archiveRead = vi.spyOn(archiveWorker, "runSqliteTranscriptArchiveReadWorker");
+        const outcome = findSessionTranscriptArchiveEventReadOnly(
+          { ...scope, sessionId: "old" },
+          "completed-run",
+        ).then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        let originalMoved = false;
+        let replacementMoved = false;
+        try {
+          await Promise.race([
+            entered.promise,
+            outcome.then(() => {
+              throw new Error("Archive lookup settled before its scope preparation hold");
+            }),
+          ]);
+          fs.renameSync(storePath, originalPath);
+          originalMoved = true;
+          fs.renameSync(replacementPath, storePath);
+          replacementMoved = true;
+          release.resolve();
+          expect(await outcome).toMatchObject({
+            error: { message: expect.stringMatching(/identity changed/) },
+          });
+          expect(archiveRead).not.toHaveBeenCalled();
+        } finally {
+          release.resolve();
+          await outcome;
+          await closeOpenClawAgentDatabasesAsync(env.OPENCLAW_STATE_DIR);
+          if (replacementMoved) {
+            fs.renameSync(storePath, replacementPath);
+          }
+          if (originalMoved) {
+            fs.renameSync(originalPath, storePath);
+          }
+          archiveRead.mockRestore();
+          preparation.mockRestore();
+        }
+      }
     },
   );
 
@@ -683,9 +823,9 @@ describe("SQLite transcript archive reads", () => {
         entry: { sessionId, updatedAt: 3 },
         events: rows,
       });
-      await expect(
-        findTranscriptEvent(scope, (event) => isVisibleSubagentResultEventForRun(event, runId)),
-      ).resolves.toEqual({ event: answer });
+      await expect(findTranscriptEvent(scope, { kind: "visible-final", runId })).resolves.toEqual({
+        event: answer,
+      });
 
       const deletion = await deleteSessionEntryLifecycle({
         ...scope,

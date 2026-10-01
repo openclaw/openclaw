@@ -8,6 +8,7 @@ import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash
 import type { PluginManifestRecord } from "./manifest-registry.types.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { OpenClawPackageBuild, PluginPackageChannel } from "./package-manifest.types.js";
+import type { PluginSourceAdmissionReceipt } from "./plugin-source-admission.types.js";
 
 /** Schema version for installed plugin index files. */
 export const INSTALLED_PLUGIN_INDEX_VERSION = 1;
@@ -49,52 +50,7 @@ export type InstalledPluginContributionInfo = {
   contracts: Readonly<Record<string, readonly string[]>>;
 };
 
-export type InstalledPluginInstallRecordInfo = Pick<
-  PluginInstallRecord,
-  | "source"
-  | "spec"
-  | "sourcePath"
-  | "installPath"
-  | "version"
-  | "resolvedName"
-  | "resolvedVersion"
-  | "resolvedSpec"
-  | "integrity"
-  | "shasum"
-  | "resolvedAt"
-  | "installedAt"
-  | "clawhubUrl"
-  | "clawhubPackage"
-  | "clawhubFamily"
-  | "clawhubChannel"
-  | "clawhubTrustDisposition"
-  | "clawhubTrustScanStatus"
-  | "clawhubTrustModerationState"
-  | "clawhubTrustReasons"
-  | "clawhubTrustPending"
-  | "clawhubTrustStale"
-  | "clawhubTrustCheckedAt"
-  | "clawhubTrustAcknowledgedAt"
-  | "artifactKind"
-  | "artifactFormat"
-  | "npmIntegrity"
-  | "npmShasum"
-  | "npmTarballName"
-  | "clawpackSha256"
-  | "clawpackSpecVersion"
-  | "clawpackManifestSha256"
-  | "clawpackSize"
-  | "gitUrl"
-  | "gitRef"
-  | "gitCommit"
-  | "marketplaceName"
-  | "marketplaceSource"
-  | "marketplacePlugin"
-  | "acceptedSurface"
-  | "acceptedSurfaceHash"
-  | "acceptedSurfaceAt"
-  | "acceptedSurfaceIntegrity"
->;
+export type InstalledPluginInstallRecordInfo = PluginInstallRecord;
 
 export type InstalledPluginPackageChannelInfo = PluginPackageChannel;
 
@@ -110,6 +66,8 @@ export type InstalledPluginIndexRecord = {
   installRecord?: InstalledPluginInstallRecordInfo;
   /** Hash of the top-level installRecords entry; used to detect source-changed invalidation. */
   installRecordHash?: string;
+  /** Native source admissions survive process restarts while the install owner is unchanged. */
+  sourceAdmissions?: Record<string, PluginSourceAdmissionReceipt>;
   /**
    * Package-authored openclaw.install metadata. This describes catalog/package
    * install intent and must not be treated as the durable install record.

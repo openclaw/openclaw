@@ -1,4 +1,5 @@
 import path from "node:path";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
@@ -11,10 +12,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { listSubagentRunsForRequester } from "../subagents/registry/subagent-registry-read.js";
-import {
-  mainSessionRecoveryLog,
-  normalizeFiniteTimestamp,
-} from "./main-session-restart-recovery-shared.js";
+import { mainSessionRecoveryLog } from "./main-session-restart-recovery-shared.js";
 
 export function resolveRestartRecoveryDispatchTarget(params: {
   agentId?: string;
@@ -70,7 +68,7 @@ export function captureYieldedMainSessionContinuation(
   if (
     params.entry.status !== "running" ||
     params.entry.pendingFinalDelivery !== undefined ||
-    normalizeFiniteTimestamp(params.entry.endedAt) === undefined
+    asFiniteNumber(params.entry.endedAt) === undefined
   ) {
     return undefined;
   }

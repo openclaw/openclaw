@@ -982,15 +982,15 @@ export function activateSecretsRuntimeSnapshotStateIfCurrent(
   return true;
 }
 
-/** Restores an owned predecessor while retaining changes after candidate preparation. */
-export function restoreSecretsRuntimeSnapshotStateIfCurrent(
+/** Computes the owned predecessor while retaining changes after candidate preparation. */
+export function prepareSecretsRuntimeSnapshotRestoreState(
   params: Parameters<typeof activateSecretsRuntimeSnapshotState>[0] & {
     expectedRevision: number;
     ownedSnapshot: PreparedSecretsRuntimeSnapshot;
   },
-): boolean {
+) {
   if (!activeSnapshot || activeSnapshotLineageStartRevision !== params.expectedRevision) {
-    return false;
+    return null;
   }
   const currentEntries = listOwnedRuntimeAuthProfileStoreSnapshots();
   // A later owner is outside this activation's rollback authority, even when its bytes match.
@@ -1055,7 +1055,7 @@ export function restoreSecretsRuntimeSnapshotStateIfCurrent(
     restoredSourceConfig,
     activeSnapshot.sourceConfig,
   ) as OpenClawConfig;
-  return activateSecretsRuntimeSnapshotStateIfCurrent({
+  return {
     ...params,
     snapshot: {
       ...params.snapshot,
@@ -1077,7 +1077,7 @@ export function restoreSecretsRuntimeSnapshotStateIfCurrent(
     mergeLiveAuthBookkeeping: false,
     preserveActivationLineage: false,
     expectedRevision: activeSnapshotRevision,
-  });
+  };
 }
 
 /**

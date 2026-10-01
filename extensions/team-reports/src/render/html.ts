@@ -1,3 +1,4 @@
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DAY_MS } from "../periods.js";
 import type { TeamReportsHealth } from "../scheduler.js";
 import type { PeriodListEntry } from "../store.js";
@@ -16,7 +17,6 @@ import {
   sourceBanners,
   type PageContext,
 } from "./page.js";
-import { escapeHtml } from "./shared.js";
 import { renderWorkSessionsPreview } from "./work-sessions.js";
 
 export { renderPeoplePage, renderPersonPage } from "./people.js";

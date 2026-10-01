@@ -5,7 +5,7 @@ export const CHAT_SNAPSHOT_STORE_NAME = "snapshots";
 export const CHAT_SNAPSHOT_METADATA_STORE_NAME = "snapshotMetadata";
 const CHAT_SNAPSHOT_DB_VERSION = 3;
 
-function debugSnapshotDatabase(message: string, error?: unknown): void {
+export function debugSnapshotStore(message: string, error?: unknown): void {
   if (error === undefined) {
     console.debug(`[chat-snapshot-cache] ${message}`);
   } else {
@@ -17,7 +17,7 @@ function indexedDbFactory(): IDBFactory | null {
   try {
     return globalThis.indexedDB ?? null;
   } catch (error) {
-    debugSnapshotDatabase("IndexedDB is unavailable", error);
+    debugSnapshotStore("IndexedDB is unavailable", error);
     return null;
   }
 }
@@ -82,14 +82,14 @@ export async function openSessionSnapshotDatabase(): Promise<IDBDatabase | null>
   try {
     database = await openIndexedDb(factory);
   } catch (error) {
-    debugSnapshotDatabase("resetting cache after IndexedDB open failure", error);
+    debugSnapshotStore("resetting cache after IndexedDB open failure", error);
     if (!(await deleteIndexedDb(factory))) {
       return null;
     }
     try {
       database = await openIndexedDb(factory);
     } catch (retryError) {
-      debugSnapshotDatabase("IndexedDB cache remains unavailable", retryError);
+      debugSnapshotStore("IndexedDB cache remains unavailable", retryError);
       return null;
     }
   }
@@ -102,7 +102,7 @@ export async function openSessionSnapshotDatabase(): Promise<IDBDatabase | null>
     return database;
   }
   database.close();
-  debugSnapshotDatabase("resetting cache after IndexedDB schema mismatch");
+  debugSnapshotStore("resetting cache after IndexedDB schema mismatch");
   if (!(await deleteIndexedDb(factory))) {
     return null;
   }
@@ -111,7 +111,7 @@ export async function openSessionSnapshotDatabase(): Promise<IDBDatabase | null>
     fresh.addEventListener("versionchange", () => fresh.close());
     return fresh;
   } catch (error) {
-    debugSnapshotDatabase("IndexedDB cache reset failed", error);
+    debugSnapshotStore("IndexedDB cache reset failed", error);
     return null;
   }
 }
@@ -137,7 +137,7 @@ export async function readStoredChatSnapshotRecord(sessionKey: string): Promise<
       );
     });
   } catch (error) {
-    debugSnapshotDatabase("resetting cache after IndexedDB read failure", error);
+    debugSnapshotStore("resetting cache after IndexedDB read failure", error);
     await resetSessionSnapshotDatabase(database);
     return undefined;
   } finally {
@@ -149,7 +149,7 @@ export async function resetSessionSnapshotDatabase(database?: IDBDatabase | null
   database?.close();
   const factory = indexedDbFactory();
   if (factory && !(await deleteIndexedDb(factory))) {
-    debugSnapshotDatabase("IndexedDB cache reset was blocked");
+    debugSnapshotStore("IndexedDB cache reset was blocked");
   }
 }
 

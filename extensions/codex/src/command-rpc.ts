@@ -378,50 +378,28 @@ export async function safeCodexControlRequest(
   );
 }
 
-async function safeCodexModelList(
-  pluginConfig: unknown,
-  limit: number,
-  config?: AuthProfileOrderConfig,
-  agentDir?: string,
-) {
-  return await safeValue(
-    async () =>
-      await listCodexAppServerModels(requestOptions(pluginConfig, limit, config, agentDir)),
-  );
-}
-
 export async function readCodexStatusProbes(
   pluginConfig: unknown,
   config?: AuthProfileOrderConfig,
   agentDir?: string,
 ) {
+  const options = { config, agentDir };
   const [models, account, limits, mcps, skills] = await Promise.all([
-    safeCodexModelList(pluginConfig, 20, config, agentDir),
+    safeValue(() => listCodexAppServerModels(requestOptions(pluginConfig, 20, config, agentDir))),
     safeCodexControlRequest(
       pluginConfig,
       CODEX_CONTROL_METHODS.account,
       { refreshToken: false },
-      { config, agentDir },
+      options,
     ),
-    safeCodexControlRequest(pluginConfig, CODEX_CONTROL_METHODS.rateLimits, undefined, {
-      config,
-      agentDir,
-    }),
+    safeCodexControlRequest(pluginConfig, CODEX_CONTROL_METHODS.rateLimits, undefined, options),
     safeCodexControlRequest(
       pluginConfig,
       CODEX_CONTROL_METHODS.listMcpServers,
       { limit: 100 },
-      { config, agentDir },
+      options,
     ),
-    safeCodexControlRequest(
-      pluginConfig,
-      CODEX_CONTROL_METHODS.listSkills,
-      {},
-      {
-        config,
-        agentDir,
-      },
-    ),
+    safeCodexControlRequest(pluginConfig, CODEX_CONTROL_METHODS.listSkills, {}, options),
   ]);
 
   return { models, account, limits, mcps, skills };

@@ -1,4 +1,3 @@
-// Qa Lab plugin entrypoint registers its OpenClaw integration.
 import { createMockQaProviderDefinition } from "../shared/mock-provider-definition.js";
 
 export const aimockProviderDefinition = createMockQaProviderDefinition({

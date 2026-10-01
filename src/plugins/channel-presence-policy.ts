@@ -1,4 +1,3 @@
-// Resolves channel presence policy advertised by plugin metadata.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
@@ -216,6 +215,16 @@ function normalizeActivationBlockedReason(reason?: string): ConfiguredChannelBlo
   }
 }
 
+function hasChannelPluginOwnerTrust(params: {
+  plugin: PluginManifestRecord;
+  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
+  rootConfig?: OpenClawConfig;
+}): boolean {
+  return params.plugin.origin === "global" || params.plugin.origin === "config"
+    ? hasExplicitManifestOwnerTrust(params)
+    : isActivatedManifestOwner(params);
+}
+
 function isChannelPluginEligibleForScopedOwnership(params: {
   plugin: PluginManifestRecord;
   normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
@@ -242,17 +251,7 @@ function isChannelPluginEligibleForScopedOwnership(params: {
   if (isBundledManifestOwner(params.plugin)) {
     return true;
   }
-  if (params.plugin.origin === "global" || params.plugin.origin === "config") {
-    return hasExplicitManifestOwnerTrust({
-      plugin: params.plugin,
-      normalizedConfig: params.normalizedConfig,
-    });
-  }
-  return isActivatedManifestOwner({
-    plugin: params.plugin,
-    normalizedConfig: params.normalizedConfig,
-    rootConfig: params.rootConfig,
-  });
+  return hasChannelPluginOwnerTrust(params);
 }
 
 function evaluateEffectiveChannelPlugin(params: {
@@ -283,25 +282,12 @@ function evaluateEffectiveChannelPlugin(params: {
   }
 
   if (!isBundledManifestOwner(params.plugin)) {
-    if (params.plugin.origin === "global" || params.plugin.origin === "config") {
-      const trusted = hasExplicitManifestOwnerTrust({
-        plugin: params.plugin,
-        normalizedConfig: params.normalizedConfig,
-      });
-      return trusted
-        ? { effective: true, pluginId: params.plugin.id }
-        : {
-            effective: false,
-            pluginId: params.plugin.id,
-            blockedReason: "untrusted-plugin",
-          };
-    }
-    const activated = isActivatedManifestOwner({
+    const trusted = hasChannelPluginOwnerTrust({
       plugin: params.plugin,
       normalizedConfig: params.normalizedConfig,
       rootConfig: params.activationSource.rootConfig,
     });
-    return activated
+    return trusted
       ? { effective: true, pluginId: params.plugin.id }
       : {
           effective: false,
@@ -417,7 +403,11 @@ export function resolveConfiguredChannelPresencePolicy(params: {
   const configuredManifestEnvChannelIds = new Set(
     manifestEnv?.signals.map((signal) => normalizeOptionalLowercaseString(signal.channelId)),
   );
-  for (const channelId of listExplicitConfiguredChannelIdsForConfig(params.config)) {
+  // Runtime auto-enable can synthesize channel blocks; only the authored source
+  // establishes explicit consent when startup or reload supplies both snapshots.
+  for (const channelId of listExplicitConfiguredChannelIdsForConfig(
+    params.activationSourceConfig ?? params.config,
+  )) {
     addPolicySignal(entrySources, channelId, "explicit-config");
   }
   for (const signal of potentialSignals) {

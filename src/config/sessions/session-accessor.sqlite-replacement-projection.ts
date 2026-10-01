@@ -25,11 +25,11 @@ import {
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
-import {
-  commitSessionEntryReplacementsInDatabase,
-  type SqliteSessionEntryReplacement,
-  type SessionEntryReplacementCommit,
-} from "./session-accessor.sqlite-replacement-state.js";
+import { commitSessionEntryReplacementsInDatabase } from "./session-accessor.sqlite-replacement-state.js";
+import type {
+  SqliteSessionEntryReplacement,
+  SessionEntryReplacementCommit,
+} from "./session-accessor.sqlite-replacement-types.js";
 import {
   commitSessionEntryReplacementsInWorker,
   prepareSessionEntryReplacementDatabase,
@@ -41,6 +41,7 @@ import {
   resolveSqliteTranscriptArchiveDirectory,
   toDatabaseOptions,
   withSqliteSessionDatabase,
+  type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
 import type {
   SessionEntryCommitContext,
@@ -60,7 +61,10 @@ type ReplacementProjectionOptions = {
   assertCommitAllowed?: () => void;
   withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"];
   ownerAssignment?: SessionEntryReplacementCommit["ownerAssignment"];
-  onLifecycleCommitted?: () => void;
+  labelClaim?: SessionEntryReplacementCommit["labelClaim"];
+  preparedTranscript?: SessionEntryReplacementCommit["preparedTranscript"];
+  checkPendingArchiveRecovery?: boolean;
+  onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
   env?: NodeJS.ProcessEnv;
   activeSessionKey?: string;
   agentId?: string;
@@ -82,9 +86,17 @@ type ReplacementProjectionParams<T, TReplacement> = ReplacementProjectionOptions
     | { result: T; replacements?: Iterable<TReplacement> };
 };
 
+type CreationProjection = {
+  scope: ResolvedSqliteScope & { path: string; env: NodeJS.ProcessEnv };
+  sessionKey: string;
+  initializeTranscript?: { sessionKey: string; sessionId: string; cwd?: string };
+  onWriterAdmitted?: () => void;
+};
+
 async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
   params: ReplacementProjectionParams<T, TReplacement>,
   normalize: (replacements: Iterable<TReplacement> | undefined) => SqliteSessionEntryReplacement[],
+  creation?: CreationProjection,
 ): Promise<T> {
   const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
@@ -94,19 +106,28 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     storePath: params.storePath,
     env,
   };
-  const admission = isMainThread ? resolveSqliteWriteAdmissionScope(target) : undefined;
+  const admission =
+    !creation && isMainThread ? resolveSqliteWriteAdmissionScope(target) : undefined;
   const scope =
-    admission ?? (isMainThread ? await prepareSqliteScope(target) : resolveSqliteScope(target));
+    creation?.scope ??
+    admission ??
+    (isMainThread ? await prepareSqliteScope(target) : resolveSqliteScope(target));
   scope.path ??= resolveOpenClawAgentSqlitePath(toDatabaseOptions(scope));
   const preparedWrite = await runPreparedSqliteSessionWrite(
     scope,
     async (preparedScope) => {
+      creation?.onWriterAdmitted?.();
+      if (creation) {
+        params.assertCommitAllowed?.();
+      }
       const resolved = { ...preparedScope, env };
       const databaseOptions = {
         ...toDatabaseOptions(resolved),
         path: resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved)),
       };
-      const useWorker = isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions);
+      const useWorker =
+        creation !== undefined ||
+        (isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions));
       const readNative = () =>
         withSqliteSessionDatabase(databaseOptions, (database) => ({
           ...readSessionEntryReplacementState(database, params),
@@ -193,7 +214,9 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
 
       const applicable = replacements.filter(
         (replacement) =>
-          replacement.previousSessionKeys || expectedRows.has(replacement.sessionKey),
+          replacement.previousSessionKeys ||
+          expectedRows.has(replacement.sessionKey) ||
+          creation?.sessionKey === replacement.sessionKey,
       );
       if (params.requireWriteSuccess && replacements.length > 0 && applicable.length === 0) {
         throw new Error("session entry replacements did not persist any rows");
@@ -252,8 +275,11 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
             includeLabelOwners: params.includeLabelOwners,
             validationKeys: [...validationKeys],
             replacements: applicable,
+            checkPendingArchiveRecovery: params.checkPendingArchiveRecovery,
             consumePendingReset: params.consumePendingReset,
             ownerAssignment: params.ownerAssignment,
+            labelClaim: params.labelClaim,
+            preparedTranscript: params.preparedTranscript,
             maintenance,
           };
           // Native harness rollback closures and process-held databases cannot cross isolates.
@@ -268,9 +294,8 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                     const committed = runOpenClawAgentWriteTransaction(
                       (database) => {
                         if (params.onLifecycleCommitted) {
-                          deferOpenClawAgentPostCommitPublication(
-                            database,
-                            params.onLifecycleCommitted,
+                          deferOpenClawAgentPostCommitPublication(database, () =>
+                            params.onLifecycleCommitted?.(result.pendingArchiveRecovery),
                           );
                         }
                         const result = commitSessionEntryReplacementsInDatabase(
@@ -313,7 +338,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
           const committed = await commitSessionEntryReplacementsInWorker(
             databaseOptions,
             snapshot.databaseIdentity,
-            input,
+            { ...input, initializeTranscript: creation?.initializeTranscript },
             assertCurrent,
             {
               identityAgentId: resolved.agentId,
@@ -339,6 +364,40 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     { deletedEntriesBeforeMaintenance: preparedWrite.deletedEntries },
   );
   return committed.result;
+}
+
+/** Worker creation admits an absent exact target; public replacement selection stays unchanged. */
+export async function applySessionEntryCreationReplacement(
+  params: ReplacementProjectionOptions &
+    CreationProjection & {
+      entry: SessionEntryReplacement["entry"];
+      previousSessionKeys: readonly string[];
+      afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
+    },
+): Promise<void> {
+  await applySqliteSessionEntryReplacementProjection(
+    {
+      ...params,
+      sessionKeys: [params.sessionKey, ...params.previousSessionKeys],
+      afterCommitted: params.afterCommitted
+        ? (_result, context) => params.afterCommitted!(context)
+        : undefined,
+      update: () => ({
+        result: undefined,
+        replacements: [
+          {
+            sessionKey: params.sessionKey,
+            entry: params.entry,
+            ...(params.previousSessionKeys.length
+              ? { previousSessionKeys: params.previousSessionKeys }
+              : {}),
+          },
+        ],
+      }),
+    },
+    (replacements) => [...(replacements ?? [])],
+    params,
+  );
 }
 
 export async function applySessionEntryExactReplacements<T>(params: {

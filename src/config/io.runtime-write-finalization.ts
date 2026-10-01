@@ -22,7 +22,7 @@ import type {
   ReadConfigFileSnapshotForWriteResult,
 } from "./io.types.js";
 import { ConfigRuntimeRefreshError, configWritePostCommitRollback } from "./io.types.js";
-import { ConfigWritePostCommitError, type ConfigWriteRollbackStatus } from "./io.write-errors.js";
+import { recoverConfigWriteFailure } from "./io.write-errors.js";
 import { assertBaseSnapshotStillCurrent } from "./io.write-safety.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
 import {
@@ -182,14 +182,12 @@ export async function finalizeCommittedConfigWrite(params: {
         new ConfigRuntimeRefreshError(`runtime snapshot refresh failed: ${detail}`, { cause }),
     });
   } catch (error) {
-    let rollbackStatus: ConfigWriteRollbackStatus = "unknown";
-    try {
-      const rollback = writeResult[configWritePostCommitRollback];
-      const rolledBackConfig = await rollback?.restoreFile(() =>
-        params.assertPostCommitCurrent?.(),
-      );
-      rollbackStatus = rolledBackConfig ? "restored" : "not-restored";
-      if (rolledBackConfig) {
+    const rollback = writeResult[configWritePostCommitRollback];
+    return await recoverConfigWriteFailure({
+      configPath: io.configPath,
+      cause: error,
+      restoreFile: async () => rollback?.restoreFile(() => params.assertPostCommitCurrent?.()),
+      restoreEffects: () => {
         params.assertPostCommitCurrent?.();
         recordUpdateDoctorConfigWrite(
           io.configPath,
@@ -204,22 +202,7 @@ export async function finalizeCommittedConfigWrite(params: {
           after: envAfterCanonicalRead,
         });
         rollback?.restoreEffects(() => params.assertPostCommitCurrent?.());
-      }
-    } catch (rollbackError) {
-      throw new ConfigWritePostCommitError({
-        configPath: io.configPath,
-        rollbackStatus,
-        cause: new AggregateError(
-          [error, rollbackError],
-          `${formatErrorMessage(error)} Recovery failed: ${formatErrorMessage(rollbackError)}`,
-          { cause: rollbackError },
-        ),
-      });
-    }
-    throw new ConfigWritePostCommitError({
-      configPath: io.configPath,
-      rollbackStatus,
-      cause: error,
+      },
     });
   }
   return writeResult;

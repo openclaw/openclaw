@@ -8,6 +8,7 @@ export const SESSION_ROSTER_STORE_NAME = "rosters";
 export const SESSION_ROSTER_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 export const SESSION_ROSTER_MAX_BYTES = 1.5 * 1024 * 1024;
 export let sessionRosterCacheGeneration = 0;
+let sessionRosterPublication = 0;
 
 export type SessionRosterRecord = {
   version: 1;
@@ -47,10 +48,14 @@ export const sessionRosterCache: SessionRosterCache = {
   },
   write(record) {
     const generation = sessionRosterCacheGeneration;
+    // Separate lazy imports can settle out of order, so number publications here
+    // and let the runtime keep the newest one.
+    sessionRosterPublication += 1;
+    const publication = sessionRosterPublication;
     void import("./session-roster-cache.runtime.ts")
       .then((runtime) => {
         if (generation === sessionRosterCacheGeneration) {
-          runtime.persistSessionRoster(record);
+          runtime.persistSessionRoster(record, publication);
         }
       })
       .catch(() => undefined);

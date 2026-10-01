@@ -195,12 +195,11 @@ it("fences WAL schema migration without copying a large registered agent payload
     PRAGMA user_version=3; PRAGMA wal_checkpoint(TRUNCATE);
   `);
   expect(fs.statSync(agentPath).size).toBeGreaterThan(64 * 1024 * 1024);
-  // Constrain the actual child's filesystem copy path, which differs from
-  // SQLite backup. Metadata reads remain real, including native WAL handling.
+  // Shared discovery gets one native snapshot; agent metadata must not copy its payload.
   fs.writeFileSync(
     preload,
     `
-    const fs = require('node:fs');
+    const fs = require('node:fs'), sqlite = require('node:sqlite');
     const source = ${JSON.stringify(agentPath)}, shared = ${JSON.stringify(sharedPath)};
     const marker = ${JSON.stringify(copiedShared)};
     const open = fs.openSync, read = fs.readSync, close = fs.closeSync;
@@ -212,11 +211,16 @@ it("fences WAL schema migration without copying a large registered agent payload
     };
     fs.readSync = function(fd, buffer, offset, length, position) {
       if (sources.get(fd) === source && length > 4096) throw new Error('agent payload copy forbidden');
-      if (sources.get(fd) === shared && length > 4096) fs.writeFileSync(marker, 'copied');
       return read.call(this, fd, buffer, offset, length, position);
     };
     fs.closeSync = function(fd) { sources.delete(fd); return close.call(this, fd); };
-    require('node:sqlite').backup = async () => { throw new Error('agent backup forbidden'); };
+    const backup = sqlite.backup;
+    sqlite.backup = async function(database, ...args) {
+      if (database.location() !== shared) throw new Error('agent backup forbidden');
+      const pages = await backup(database, ...args);
+      fs.writeFileSync(marker, 'copied');
+      return pages;
+    };
   `,
   );
   const env = { ...process.env, ...sqliteWorkerPreloadEnv(preload), XDG_CACHE_HOME: cache };

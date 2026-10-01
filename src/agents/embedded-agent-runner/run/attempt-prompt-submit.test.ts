@@ -25,7 +25,6 @@ import {
   createCompactionHandlers,
   createResourceLoader,
 } from "../../sessions/agent-session-loop-resource-loader.test-support.js";
-import { agentSessionQueuePromptContext } from "../../sessions/agent-session-prompting.js";
 import {
   createCompactionRequestBudget,
   estimateCompactedRequestTokens,
@@ -42,13 +41,11 @@ import {
   getActiveEmbeddedRunSnapshot,
   setActiveEmbeddedRun,
 } from "../runs.js";
-import {
-  clearEmbeddedSessionPromptStates,
-  getEmbeddedSessionPromptState,
-} from "../session-prompt-state.js";
+import { clearEmbeddedSessionPromptStates } from "../session-prompt-state.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js";
 import { forgetPromptBuildDrainCacheForRun } from "./attempt-prompt-helpers.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
+import { createBaseInput, createSession, sessionId } from "./attempt-prompt-submit.test-support.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
 import {
   buildRuntimeContextCustomMessage,
@@ -57,59 +54,8 @@ import {
 
 registerAgentSessionLoopTestLifecycle();
 
-const sessionId = "attempt-prompt-submit-test";
 type PromptActiveSession = Parameters<typeof submitEmbeddedAttemptPrompt>[0]["promptActiveSession"];
 type PromptOptions = Parameters<PromptActiveSession>[1];
-
-function createSession() {
-  const state = {
-    messages: [{ role: "user", content: "transcript prompt", timestamp: 1 }] as AgentMessage[],
-  };
-  const baseStreamFn: StreamFn = () => {
-    throw new Error("stream function should not be called directly");
-  };
-  const originalTransformContext = async (messages: AgentMessage[]) => messages;
-  const agent = {
-    state,
-    streamFn: baseStreamFn,
-    transformContext: originalTransformContext,
-    reset: () => {
-      state.messages = [];
-    },
-  };
-  const activeSession = {
-    [agentSessionQueuePromptContext]: vi.fn(() => () => undefined),
-    get messages() {
-      return state.messages;
-    },
-    agent,
-  };
-  return { activeSession, baseStreamFn, originalTransformContext };
-}
-
-function createBaseInput() {
-  const sessionPromptState = getEmbeddedSessionPromptState(sessionId);
-  return {
-    attempt: { sessionId },
-    appendContext: "append context",
-    contextTokenBudget: 8_000,
-    images: [] as ImageContent[],
-    modelPrompt: "model prompt",
-    onFinalPromptText: vi.fn(),
-    onSteeringAcknowledged: vi.fn(),
-    persistToolResultProjections: vi.fn(async () => {}),
-    prependContext: "prepend context",
-    runtimeOnly: false,
-    sessionPromptState,
-    systemPrompt: "system prompt",
-    toolResultAggregateMaxChars: 8_000,
-    toolResultMaxChars: 4_000,
-    toolResultPromptProjectionState: sessionPromptState.toolResults,
-    trajectoryRecorder: null,
-    transcriptLeafId: null,
-    transcriptPrompt: "transcript prompt",
-  };
-}
 
 afterEach(() => {
   clearEmbeddedSessionPromptStates([sessionId]);

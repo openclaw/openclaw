@@ -8,7 +8,7 @@ import {
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveComparableIdentity, type WhatsAppReplyContext } from "../identity.js";
-import { jidToE164 } from "../text-runtime.js";
+import { jidToE164 } from "../targets-runtime.js";
 import { parseVcard } from "../vcard.js";
 import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import type { WhatsAppStructuredContactContext } from "./types.js";

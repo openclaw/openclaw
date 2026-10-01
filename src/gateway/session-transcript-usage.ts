@@ -5,7 +5,6 @@ import type { SessionTranscriptReadScope } from "../config/sessions/session-acce
 import {
   readRecentSessionTranscriptMessageEvents,
   visitSessionTranscriptMessageEvents,
-  type SessionTranscriptMessageEvent,
 } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { resolveSessionTranscriptReadTarget } from "../config/sessions/session-accessor.transcript-target.js";
 import { readRestoredSessionTranscript } from "../config/sessions/session-cold-storage-read.js";
@@ -17,10 +16,6 @@ import {
 } from "./session-transcript-derived-readers.js";
 import { toTranscriptReadScope } from "./session-transcript-read-target.js";
 import { readLatestSessionUsageFromTranscriptFileAsync } from "./session-utils.fs.js";
-
-function extractMessagePayloads(entries: readonly SessionTranscriptMessageEvent[]): unknown[] {
-  return entries.map((entry) => asOptionalRecord(entry.event)?.message);
-}
 
 /** Reads aggregate usage from a full transcript asynchronously through the reader seam. */
 export async function readLatestSessionUsageFromTranscriptAsync(
@@ -65,5 +60,7 @@ export function readRecentSessionUsageFromTranscript(
     maxLines: 1000,
     maxMessages: 1000,
   });
-  return aggregateSessionTranscriptUsage(extractMessagePayloads(page.events));
+  return aggregateSessionTranscriptUsage(
+    page.events.map((entry) => asOptionalRecord(entry.event)?.message),
+  );
 }

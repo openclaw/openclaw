@@ -57,7 +57,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawn: mocks.spawn,
 }));
 
-vi.mock("./doctor-lint.js", () => ({
+vi.mock("./doctor-lint-runner.js", () => ({
   collectDoctorFindings: mocks.collectDoctorFindings,
 }));
 
@@ -464,8 +464,6 @@ describe("triageCommand", () => {
 
   it.each([
     { agent: "claude", exitCode: 0 },
-    { agent: "claude", exitCode: 17 },
-    { agent: "codex", exitCode: 0 },
     { agent: "codex", exitCode: 17 },
   ])(
     "preserves external $agent exit $exitCode without certifying descendant cleanup",
@@ -900,7 +898,7 @@ describe("triageCommand", () => {
       const entrypoint = path.join(binDir, "agent.cjs");
       const shimPath = path.join(binDir, "claude.cmd");
       const pathNode = path.join(binDir, "node.exe");
-      const currentNode = process.execPath;
+      const currentNode = path.join(binDir, "current", "node.exe");
       await fs.mkdir(binDir, { recursive: true });
       await fs.writeFile(entrypoint, "", "utf8");
       await fs.writeFile(pathNode, "", "utf8");

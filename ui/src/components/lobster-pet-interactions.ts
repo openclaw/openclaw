@@ -15,7 +15,6 @@ type LobsterInteractionHooks = {
 export class LobsterPetInteractions implements ReactiveController {
   private grumpyTimer: number | null = null;
   private holdTimer: number | null = null;
-  private holdPetted = false;
   private audioCtx: AudioContext | null = null;
   private pokeTimes: number[] = [];
   private lastGazeAt = 0;
@@ -53,13 +52,11 @@ export class LobsterPetInteractions implements ReactiveController {
     if (event.button !== 0 || prefersReducedMotion()) {
       return;
     }
-    this.holdPetted = false;
     if (this.holdTimer !== null) {
       window.clearTimeout(this.holdTimer);
     }
     this.holdTimer = window.setTimeout(() => {
       this.holdTimer = null;
-      this.holdPetted = true;
       this.hooks.onGrumpyChange(false);
       this.playChirp("pet");
       this.hooks.onAct("pet");
@@ -73,11 +70,8 @@ export class LobsterPetInteractions implements ReactiveController {
     if (this.holdTimer !== null) {
       window.clearTimeout(this.holdTimer);
       this.holdTimer = null;
-      if (!this.holdPetted) {
-        this.pokeNow();
-      }
+      this.pokeNow();
     }
-    this.holdPetted = false;
   };
 
   readonly handleHoldCancel = () => {
@@ -85,7 +79,6 @@ export class LobsterPetInteractions implements ReactiveController {
       window.clearTimeout(this.holdTimer);
       this.holdTimer = null;
     }
-    this.holdPetted = false;
   };
 
   private playChirp(kind: LobsterPetChirpKind) {

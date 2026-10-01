@@ -79,6 +79,7 @@ if (args[0] === 'run' && args[1] === 'list') {
   console.log(JSON.stringify(matches ? [{ databaseId: child.id, headBranch: child.head_branch, displayTitle: child.display_title, url: child.html_url }] : []));
 } else if (args[0] === 'api' && endpoint.endsWith('/pending_deployments')) {
   if (args.includes('POST')) {
+    if (${cancellationFails}) { console.error('HTTP 403'); process.exit(1); }
     child.status = 'completed'; child.conclusion = 'failure';
     writeFileSync(root + '/child.json', JSON.stringify(child));
     console.log('[]');
@@ -124,6 +125,7 @@ if (args[0] === 'run' && args[1] === 'list') {
           WORKFLOW: workflow,
           PARENT_WORKFLOW_SHA: workflowSha,
           RELEASE_TAG: releaseTag,
+          RELEASE_CHILD_SWEEP_TIMEOUT_SECONDS: "0",
         },
       });
       return {
@@ -145,7 +147,7 @@ describe("ClawHub child lifecycle", () => {
     (workflow) => {
       const f = fixture({ workflow });
       const result = f.run(
-        'dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" "$WORKFLOW" -f release_tag="$RELEASE_TAG"',
+        'require_clawhub_dispatch_available "$WORKFLOW_REF" "$WORKFLOW"\ndispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" "$WORKFLOW" -f release_tag="$RELEASE_TAG"',
       );
       expect(result.status, result.stderr).toBe(0);
       const cancellation = result.calls.findIndex((args) => args[1] === "cancel");
@@ -166,7 +168,7 @@ describe("ClawHub child lifecycle", () => {
     { cancellationFails: true, label: "failed cancellation" },
   ])("does not dispatch past $label", (options) => {
     const result = fixture(options).run(
-      'dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" "$WORKFLOW" -f release_tag="$RELEASE_TAG"',
+      'require_clawhub_dispatch_available "$WORKFLOW_REF" "$WORKFLOW"\ndispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" "$WORKFLOW" -f release_tag="$RELEASE_TAG"',
     );
     expect(result.status).not.toBe(0);
     expect(result.calls.some((args) => args.some((arg) => arg.endsWith("/dispatches")))).toBe(
@@ -186,7 +188,7 @@ describe("ClawHub child lifecycle", () => {
     "leaves another tag's waiting %s alone (same tooling: %s)",
     (workflow, sameToolingRef) => {
       const result = fixture({ workflow, titleTag: "v2026.9.4", sameToolingRef }).run(
-        'dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" "$WORKFLOW" -f release_tag="$RELEASE_TAG"',
+        'require_clawhub_dispatch_available "$WORKFLOW_REF" "$WORKFLOW"\ndispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" "$WORKFLOW" -f release_tag="$RELEASE_TAG"',
       );
       expect(result.status, result.stderr).toBe(0);
       expect(result.calls.some((args) => args[1] === "cancel")).toBe(false);
@@ -202,7 +204,7 @@ describe("ClawHub child lifecycle", () => {
         validation: true,
         childStatus: "in_progress",
       }).run(
-        'dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" "$WORKFLOW" -f release_tag="$RELEASE_TAG"',
+        'require_clawhub_dispatch_available "$WORKFLOW_REF" "$WORKFLOW"\ndispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" "$WORKFLOW" -f release_tag="$RELEASE_TAG"',
       );
       expect(result.status, result.stderr).toBe(0);
       expect(result.calls.some((args) => args[1] === "cancel")).toBe(false);
@@ -215,7 +217,7 @@ describe("ClawHub child lifecycle", () => {
       sameToolingRef: true,
       legacyTitle: true,
     }).run(
-      'dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" "$WORKFLOW" -f release_tag="$RELEASE_TAG"',
+      'require_clawhub_dispatch_available "$WORKFLOW_REF" "$WORKFLOW"\ndispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" "$WORKFLOW" -f release_tag="$RELEASE_TAG"',
     );
     expect(result.status, result.stderr).toBe(0);
     expect(result.calls.some((args) => args[1] === "cancel")).toBe(false);
@@ -224,7 +226,7 @@ describe("ClawHub child lifecycle", () => {
   it("cleans up immediately recorded children after a later dispatch step fails", () => {
     const f = fixture({ titleTag: "v2026.9.4" });
     const dispatched = f.run(
-      'dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" "$WORKFLOW" -f release_tag="$RELEASE_TAG"\nexit 1',
+      'require_clawhub_dispatch_available "$WORKFLOW_REF" "$WORKFLOW"\ndispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" "$WORKFLOW" -f release_tag="$RELEASE_TAG"\nexit 1',
     );
     expect(dispatched.status).toBe(1);
     expect(dispatched.savedEnv).toContain("=92");

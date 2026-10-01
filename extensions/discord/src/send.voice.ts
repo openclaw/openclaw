@@ -13,7 +13,6 @@ import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import type { RequestClient } from "./internal/discord.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
-import type { DiscordReplyReference } from "./reply-reference.js";
 import type { sendMessageDiscord } from "./send.outbound.js";
 import { createDiscordSendResult } from "./send.receipt.js";
 import { buildDiscordSendError, createDiscordClient, resolveChannelId } from "./send.shared.js";
@@ -40,19 +39,6 @@ type VoiceMessageOpts = Pick<
   | "onPlatformSendDispatch"
   | "assertPlatformSendAuthorized"
 >;
-
-function toDiscordSendResult(
-  result: { id?: string | null; channel_id?: string | null },
-  fallbackChannelId: string,
-  reply?: DiscordReplyReference,
-): DiscordSendResult {
-  return createDiscordSendResult({
-    result,
-    fallbackChannelId,
-    kind: "voice",
-    reply,
-  });
-}
 
 async function withMaterializedVoiceMessageInput<T>(
   mediaUrl: string,
@@ -82,16 +68,7 @@ async function withMaterializedVoiceMessageInput<T>(
   );
 }
 
-/**
- * Send a voice message to Discord.
- *
- * Voice messages are a special Discord feature that displays audio with a waveform
- * visualization. They require OGG/Opus format and cannot include text content.
- *
- * @param to - Recipient (user ID for DM or channel ID)
- * @param audioPath - Path to local audio file (will be converted to OGG/Opus if needed)
- * @param opts - Send options
- */
+/** Discord voice messages require OGG/Opus audio with a waveform and cannot include text. */
 export async function sendVoiceMessageDiscord(
   to: string,
   audioPath: string,
@@ -149,7 +126,12 @@ async function sendVoiceMessageDiscordInternal(
         direction: "outbound",
       });
 
-      return toDiscordSendResult(result, channelId, opts.reply);
+      return createDiscordSendResult({
+        result,
+        fallbackChannelId: channelId,
+        kind: "voice",
+        reply: opts.reply,
+      });
     } catch (err) {
       if (channelId && rest && token) {
         throw await buildDiscordSendError(err, {

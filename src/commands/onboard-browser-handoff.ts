@@ -45,7 +45,7 @@ type BrowserHatchTarget = {
 
 type DashboardPresenceProbeResult =
   | { reachable: true; clientKeys: string[] }
-  | { reachable: false; reason?: string };
+  | { reachable: false };
 
 type DashboardWaitResult =
   | { connected: true }
@@ -156,8 +156,6 @@ async function probeDashboardPresence(
       config: target.config,
       method: "system-presence",
       timeoutMs,
-      // Connect as a CLI-mode loopback client (what every `openclaw` command
-      // does) so the gateway grants operator.read via trusted local auth.
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       mode: GATEWAY_CLIENT_MODES.CLI,
       // Present the shared secret when one is configured (token-auth gateways
@@ -172,11 +170,8 @@ async function probeDashboardPresence(
       reachable: true,
       clientKeys: resolveConnectedControlUiPresenceKeys(presence ?? []),
     };
-  } catch (error) {
-    return {
-      reachable: false,
-      reason: error instanceof Error ? error.message : String(error),
-    };
+  } catch {
+    return { reachable: false };
   }
 }
 

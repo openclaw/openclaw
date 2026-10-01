@@ -6,6 +6,11 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { connectRfbAttachment } from "./attachment.js";
 import { createDesktopSessionRegistry } from "./session-registry.js";
 
+const { cleanupWarning } = vi.hoisted(() => ({ cleanupWarning: vi.fn() }));
+vi.mock("../../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({ warn: cleanupWarning }),
+}));
+
 const servers: net.Server[] = [];
 const sockets: net.Socket[] = [];
 
@@ -205,30 +210,44 @@ describe("RFB attachments", () => {
     await registry.stopAll();
   });
 
-  it("retains failed teardown and prevents replacement until cleanup succeeds", async () => {
-    const registry = createDesktopSessionRegistry();
-    const failure = new Error("transport still running");
-    const teardown = vi.fn().mockRejectedValue(failure);
-    await registry.activate({ sourceKey: "node:one", ownerEpoch: 1, teardown });
-    const start = vi.fn(async () => ({
-      attachment: { kind: "tcp", host: "127.0.0.1", port: 5900 } as const,
-    }));
-    try {
-      await expect(registry.stop("node:one", 1)).rejects.toBe(failure);
-      await expect(registry.acquire({ sourceKey: "node:one", ownerEpoch: 2, start })).rejects.toBe(
-        failure,
-      );
-      await expect(registry.stopAll()).rejects.toBe(failure);
-      expect(start).not.toHaveBeenCalled();
-      expect(createPendingStream(registry).reserve()).toBe(false);
-    } finally {
-      teardown.mockResolvedValue(undefined);
+  it.each([1, 2])(
+    "bounds failed cleanup across repeated acquisition at epoch %s",
+    async (ownerEpoch) => {
+      const registry = createDesktopSessionRegistry();
+      const failure = new Error("transport still running");
+      const teardown = vi.fn().mockRejectedValue(failure);
+      const dispose = vi.fn(async () => undefined);
+      const start = vi.fn(async () => ({
+        attachment: { kind: "tcp", host: "127.0.0.1", port: 5900 } as const,
+      }));
+      const request = { sourceKey: "node:one", ownerEpoch: 1, start, teardown, dispose };
+      cleanupWarning.mockClear();
+      await registry.acquire(request);
+      try {
+        if (ownerEpoch === 1) {
+          await expect(registry.stop("node:one", 1)).rejects.toBe(failure);
+        }
+        for (let attempt = 1; attempt < 300; attempt++) {
+          await expect(registry.acquire({ ...request, ownerEpoch })).rejects.toBe(failure);
+        }
+        expect(teardown).toHaveBeenCalledOnce();
+        expect(cleanupWarning).toHaveBeenCalledOnce();
+        expect(start).toHaveBeenCalledOnce();
+        expect(dispose).not.toHaveBeenCalled();
+        expect(createPendingStream(registry).reserve()).toBe(false);
+      } finally {
+        teardown.mockClear();
+        teardown.mockResolvedValue(undefined);
+        await registry.stopAll();
+      }
+      // Only the original owner remains to recover, with teardown bracketing initialization.
+      expect(teardown).toHaveBeenCalledTimes(2);
+      expect(dispose).toHaveBeenCalledOnce();
+      await registry.acquire({ ...request, ownerEpoch: 2 });
+      expect(start).toHaveBeenCalledTimes(2);
       await registry.stopAll();
-    }
-    await registry.acquire({ sourceKey: "node:one", ownerEpoch: 2, start });
-    expect(start).toHaveBeenCalledOnce();
-    await registry.stopAll();
-  });
+    },
+  );
 
   it.each(["epoch", "source", "all"] as const)(
     "keeps a replacement visible to %s stop while its predecessor drains",

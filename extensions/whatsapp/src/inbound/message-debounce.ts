@@ -41,15 +41,13 @@ export function createWhatsAppInboundMessageDebouncer(options: {
   const resolveSenderKey = (msg: WhatsAppQueuedInboundMessage): string => {
     const admission = requireWhatsAppInboundAdmission(msg);
     const sender = msg.platform.sender;
-    const senderKey =
-      admission.conversation.kind === "group"
-        ? (getPrimaryIdentityId(sender ?? null) ??
+    return admission.conversation.kind === "group"
+      ? (getPrimaryIdentityId(sender ?? null) ??
           msg.platform.senderJid ??
           msg.platform.senderE164 ??
           msg.platform.senderName ??
           admission.sender.id)
-        : admission.conversation.id;
-    return senderKey;
+      : admission.conversation.id;
   };
   const shouldDebounce = (msg: AdmittedWebInboundCallbackMessage): boolean =>
     options.shouldDebounce?.(msg) ?? true;
@@ -162,21 +160,19 @@ export function createWhatsAppInboundMessageDebouncer(options: {
     // Use one timing fact for both queue admission and shutdown tracking.
     const message = { ...input, debounceMs: options.resolveDebounceMs() };
     const key = buildKey(message);
-    if (key) {
-      message.debounceKey = key;
-      const senderKey = resolveSenderKey(message);
-      const pending = pendingKeys.get(key);
-      // One conversation lane orders dispatch; sender changes end the current
-      // batch so payloads and attribution never combine across participants.
-      if (pending && pending.senderKey !== senderKey) {
-        await debouncer.flushKey(key);
-      }
-      if (message.debounceMs > 0 && shouldDebounce(message)) {
-        message.debounceKeyTracked = true;
-        trackKey(key, senderKey);
-        options.onPendingWorkChanged();
-        notifyWork();
-      }
+    message.debounceKey = key;
+    const senderKey = resolveSenderKey(message);
+    const pending = pendingKeys.get(key);
+    // One conversation lane orders dispatch; sender changes end the current
+    // batch so payloads and attribution never combine across participants.
+    if (pending && pending.senderKey !== senderKey) {
+      await debouncer.flushKey(key);
+    }
+    if (message.debounceMs > 0 && shouldDebounce(message)) {
+      message.debounceKeyTracked = true;
+      trackKey(key, senderKey);
+      options.onPendingWorkChanged();
+      notifyWork();
     }
     await debouncer.enqueue(message);
   };

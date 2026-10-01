@@ -1,8 +1,3 @@
-/**
- * Channel config schema helpers.
- *
- * Builds common zod/JSON schema shapes and parses runtime config issues for channel plugins.
- */
 import { z, type ZodRawShape, type ZodTypeAny } from "zod";
 import { ToolPolicySchema } from "../../config/zod-schema.agent-runtime.js";
 import {

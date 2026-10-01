@@ -1,6 +1,11 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchemaCore } from "./schema.js";
+import type { ConfigJsonSchemaObject } from "./schema.shared.js";
 import { applyResolvedConfigTierHints } from "./schema.tiers.js";
+
+function customSchema(properties: Record<string, ConfigJsonSchemaObject>): ConfigJsonSchemaObject {
+  return { type: "object", properties: { custom: { type: "object", properties } } };
+}
 
 describe("config schema tiers", () => {
   let baseSchema: ReturnType<typeof buildConfigSchemaCore>;
@@ -40,29 +45,6 @@ describe("config schema tiers", () => {
       expect(baseSchema.uiHints[path]?.advanced, path).toBe(false);
     }
     expect(baseSchema.uiHints["agents.defaults.experimental.localModelLean"]?.advanced).toBe(true);
-  });
-
-  it("preserves explicit common hints on numeric leaves while defaulting tuning advanced", () => {
-    const hints = applyResolvedConfigTierHints(
-      {
-        type: "object",
-        properties: {
-          custom: {
-            type: "object",
-            properties: {
-              visibleCount: { type: "integer" },
-              tuningMs: { type: "integer" },
-            },
-          },
-        },
-      },
-      {
-        custom: { advanced: false },
-        "custom.visibleCount": { advanced: false },
-      },
-    );
-    expect(hints["custom.visibleCount"]?.advanced).toBe(false);
-    expect(hints["custom.tuningMs"]?.advanced).toBe(true);
   });
 
   it.each([
@@ -131,18 +113,10 @@ describe("config schema tiers", () => {
     ],
   ] as const)("preserves tier precedence for %s", (_name, entries, target, expected) => {
     const hints = applyResolvedConfigTierHints(
-      {
-        type: "object",
-        properties: {
-          custom: {
-            type: "object",
-            properties: {
-              item: { type: "object", properties: { value: { type: "string" } } },
-              items: { type: "array", items: { type: "string" } },
-            },
-          },
-        },
-      },
+      customSchema({
+        item: { type: "object", properties: { value: { type: "string" } } },
+        items: { type: "array", items: { type: "string" } },
+      }),
       Object.fromEntries(entries.map(([key, advanced]) => [key, { advanced }])),
     );
     expect(hints[target]?.advanced).toBe(expected);
@@ -157,15 +131,7 @@ describe("config schema tiers", () => {
       ];
       for (const variants of [branches, branches.toReversed()]) {
         const hints = applyResolvedConfigTierHints(
-          {
-            type: "object",
-            properties: {
-              custom: {
-                type: "object",
-                properties: { choice: { [composition]: variants } },
-              },
-            },
-          },
+          customSchema({ choice: { [composition]: variants } }),
           { custom: { advanced: false } },
         );
         expect(hints["custom.choice"]?.advanced).toBe(true);
@@ -178,26 +144,18 @@ describe("config schema tiers", () => {
     "ranks generated numeric wildcards with authored tiers (explicit common=%s)",
     (explicitCommon) => {
       const hints = applyResolvedConfigTierHints(
-        {
-          type: "object",
-          properties: {
-            custom: {
-              type: "object",
-              properties: {
-                group: {
-                  type: "object",
-                  properties: {
-                    item: {
-                      type: "object",
-                      properties: { value: { type: "string" } },
-                      additionalProperties: { type: "integer" },
-                    },
-                  },
-                },
+        customSchema({
+          group: {
+            type: "object",
+            properties: {
+              item: {
+                type: "object",
+                properties: { value: { type: "string" } },
+                additionalProperties: { type: "integer" },
               },
             },
           },
-        },
+        }),
         {
           custom: { advanced: false },
           "custom.*.*.value": { advanced: false },

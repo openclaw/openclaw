@@ -8,6 +8,10 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { sha256Hex } from "./crypto-digest.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
+import {
+  existsDir as dirExists,
+  migrationFileExists as fileExists,
+} from "./state-migrations.fs.js";
 
 const DEBUG_PROXY_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal", "-journal"] as const;
 
@@ -70,22 +74,6 @@ class LegacyDebugProxyBlobConflictError extends Error {
 class LegacyDebugProxySessionConflictError extends Error {
   constructor(readonly sessionId: string) {
     super(`legacy debug proxy session conflicts with shared state: ${sessionId}`);
-  }
-}
-
-function fileExists(filePath: string): boolean {
-  try {
-    return fs.statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
-}
-
-function dirExists(dirPath: string): boolean {
-  try {
-    return fs.statSync(dirPath).isDirectory();
-  } catch {
-    return false;
   }
 }
 
@@ -304,10 +292,6 @@ function eventValues(event: LegacyCaptureEventRow): SQLInputValue[] {
   ];
 }
 
-function eventKey(values: SQLInputValue[]): string {
-  return JSON.stringify(values);
-}
-
 function archiveLegacyDebugProxySqlite(params: {
   sourcePath: string;
   changes: string[];
@@ -321,7 +305,7 @@ function archiveLegacyDebugProxySqlite(params: {
   }
   const resolutions: Array<{ sourcePath: string; targetPath: string; removed: boolean }> = [];
   for (const sourcePath of existingSources) {
-    const archivedPath = `${sourcePath}.migrated`;
+    let archivedPath = `${sourcePath}.migrated`;
     try {
       if (fileExists(archivedPath)) {
         if (fs.readFileSync(sourcePath).equals(fs.readFileSync(archivedPath))) {
@@ -333,10 +317,7 @@ function archiveLegacyDebugProxySqlite(params: {
         while (fs.existsSync(`${sourcePath}.migrated.${index}`)) {
           index++;
         }
-        const nextArchivePath = `${sourcePath}.migrated.${index}`;
-        fs.renameSync(sourcePath, nextArchivePath);
-        resolutions.push({ sourcePath, targetPath: nextArchivePath, removed: false });
-        continue;
+        archivedPath = `${sourcePath}.migrated.${index}`;
       }
       fs.renameSync(sourcePath, archivedPath);
       resolutions.push({ sourcePath, targetPath: archivedPath, removed: false });
@@ -529,7 +510,7 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
         const seenCounts = new Map<string, number>();
         for (const event of legacy.events) {
           const values = eventValues(event);
-          const key = eventKey(values);
+          const key = JSON.stringify(values);
           const seenCount = (seenCounts.get(key) ?? 0) + 1;
           seenCounts.set(key, seenCount);
           let existingCount = existingCounts.get(key);

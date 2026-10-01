@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { registerAgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
@@ -26,6 +27,13 @@ describe("Gateway index over Harness workspace files", () => {
     getMemorySearchManager,
     closeAllMemorySearchManagers,
   });
+  const createConfig = (overrides: Parameters<typeof fixture.createConfig>[0] = {}) =>
+    fixture.createConfig({
+      provider: "none",
+      sources: ["memory"],
+      vectorEnabled: false,
+      ...overrides,
+    });
   let release: (() => void) | undefined;
   afterEach(() => {
     release?.();
@@ -96,41 +104,30 @@ describe("Gateway index over Harness workspace files", () => {
     };
   }
 
-  it.each(["active", "stopped"])(
-    "keeps local Memory with a %s document-only bridge",
-    async (state) => {
-      await fs.writeFile(path.join(fixture.paths.workspace, "MEMORY.md"), "alpha local Memory.");
-      release = registerAgentWorkspaceAccess(fixture.paths.workspace, {
-        bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
-      });
-      if (state === "stopped") {
-        release();
-      }
-      const cfg = fixture.createConfig({
-        provider: "none",
-        sources: ["memory"],
-        vectorEnabled: false,
-      });
-      const manager = await fixture.getFreshManager(cfg, "cli");
-      await manager.sync({ reason: "document-only", force: true });
-      expect((await manager.search("alpha", { minScore: 0 }))[0]?.snippet).toContain(
-        "local Memory",
-      );
-      expect((await manager.readFile({ relPath: "MEMORY.md" })).text).toContain("local Memory");
-      expect(
-        (await readAgentMemoryFile({ cfg, agentId: "main", relPath: "MEMORY.md" })).text,
-      ).toContain("local Memory");
-      expect(await listWorkspaceMemoryFiles(fixture.paths.workspace)).toContain(
+  it("keeps local Memory with a stopped document-only bridge", async () => {
+    await fs.writeFile(path.join(fixture.paths.workspace, "MEMORY.md"), "alpha local Memory.");
+    release = registerAgentWorkspaceAccess(fixture.paths.workspace, {
+      bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
+    });
+    release();
+    const cfg = createConfig();
+    const manager = await fixture.getFreshManager(cfg, "cli");
+    await manager.sync({ reason: "document-only", force: true });
+    expect((await manager.search("alpha", { minScore: 0 }))[0]?.snippet).toContain("local Memory");
+    expect((await manager.readFile({ relPath: "MEMORY.md" })).text).toContain("local Memory");
+    expect(
+      (await readAgentMemoryFile({ cfg, agentId: "main", relPath: "MEMORY.md" })).text,
+    ).toContain("local Memory");
+    expect(await listWorkspaceMemoryFiles(fixture.paths.workspace)).toContain(
+      path.join(fixture.paths.workspace, "MEMORY.md"),
+    );
+    expect(
+      await readWorkspaceText(
+        fixture.paths.workspace,
         path.join(fixture.paths.workspace, "MEMORY.md"),
-      );
-      expect(
-        await readWorkspaceText(
-          fixture.paths.workspace,
-          path.join(fixture.paths.workspace, "MEMORY.md"),
-        ),
-      ).toContain("local Memory");
-    },
-  );
+      ),
+    ).toContain("local Memory");
+  });
 
   it("still rejects maintenance absent from an opted-in Memory host", async () => {
     await registerHarness();
@@ -147,12 +144,7 @@ describe("Gateway index over Harness workspace files", () => {
     await fs.writeFile(path.join(harness, "imports/new.md"), "alpha imported knowledge.");
     const oldTime = new Date(Date.now() - 90 * 86_400_000);
     await fs.utimes(old, oldTime, oldTime);
-    const cfg = fixture.createConfig({
-      provider: "none",
-      sources: ["memory"],
-      vectorEnabled: false,
-      extraPaths: ["imports"],
-    });
+    const cfg = createConfig({ extraPaths: ["imports"] });
     // Native search applies a 30-day half-life; the Gateway has no copy of these files.
     const manager = await fixture.getFreshManager(cfg, "cli");
     await manager.sync({ reason: "remote-mtime", force: true });
@@ -184,11 +176,9 @@ describe("Gateway index over Harness workspace files", () => {
         },
       ],
     });
-    const cfg = fixture.createConfig({
-      provider: "none",
+    const cfg = createConfig({
       sources: ["memory", "sessions"],
       sessionMemory: true,
-      vectorEnabled: false,
     });
     const manager = await fixture.getFreshManager(cfg, "cli");
     await manager.sync({ reason: "split-storage", force: true });
@@ -238,11 +228,9 @@ describe("Gateway index over Harness workspace files", () => {
           },
         ],
       });
-      const cfg = fixture.createConfig({
-        provider: "none",
+      const cfg = createConfig({
         sources: ["sessions"],
         sessionMemory: true,
-        vectorEnabled: false,
       });
       const manager = await fixture.getFreshManager(cfg, "cli");
       await manager.sync({ reason: "session-only", force: true });
@@ -278,11 +266,7 @@ describe("Gateway index over Harness workspace files", () => {
       }
       return result;
     };
-    const cfg = fixture.createConfig({
-      provider: "none",
-      sources: ["memory"],
-      vectorEnabled: false,
-    });
+    const cfg = createConfig();
     const manager = await fixture.getFreshManager(cfg, "cli");
     await manager.sync({ reason: "changed-source", force: true });
     await manager.sync({ reason: "retry-current-source" });
@@ -296,13 +280,7 @@ describe("Gateway index over Harness workspace files", () => {
     const { harness, files, changed } = await registerHarness();
     await fs.writeFile(path.join(harness, "memory/first.md"), "alpha first.");
     await fs.writeFile(path.join(harness, "memory/second.md"), "alpha second.");
-    const manager = await fixture.getPersistentManager(
-      fixture.createConfig({
-        provider: "none",
-        sources: ["memory"],
-        vectorEnabled: false,
-      }),
-    );
+    const manager = await fixture.getPersistentManager(createConfig());
     await manager.sync({ reason: "initial", force: true });
     const entered = Promise.withResolvers<void>();
     const resume = Promise.withResolvers<void>();
@@ -350,13 +328,7 @@ describe("Gateway index over Harness workspace files", () => {
     async (outcome) => {
       const { harness, files, changed } = await registerHarness();
       await fs.writeFile(path.join(harness, "memory/first.md"), "alpha first.");
-      const manager = await fixture.getPersistentManager(
-        fixture.createConfig({
-          provider: "none",
-          sources: ["memory"],
-          vectorEnabled: false,
-        }),
-      );
+      const manager = await fixture.getPersistentManager(createConfig());
       await manager.sync({ reason: "initial", force: true });
       if (outcome === "newer-index") {
         const db = new DatabaseSync(manager.status().dbPath!);
@@ -413,39 +385,55 @@ describe("Gateway index over Harness workspace files", () => {
     let changed: (() => void) | undefined;
     let watchSignal: AbortSignal | undefined;
     let watchRequest: Parameters<MemoryWorkspaceFiles["watch"]>[0] | undefined;
+    const cancellation = createDeferred<void>();
+    const retired = createDeferred<void>();
     files.watch = async (request, onChange, signal) => {
       watchRequest = request;
       changed = () => onChange("change");
       watchSignal = signal;
-      await new Promise<void>((resolve) => {
-        signal.addEventListener("abort", () => resolve(), { once: true });
-      });
+      signal.addEventListener("abort", () => cancellation.resolve(), { once: true });
+      await cancellation.promise;
+      await retired.promise;
+      // The node transport finishes cancellation with this exact signal reason.
+      signal.throwIfAborted();
     };
-    const cfg = fixture.createConfig({
-      provider: "none",
-      sources: ["memory"],
-      vectorEnabled: false,
-    });
+    const cfg = createConfig();
     const manager = await fixture.getPersistentManager(cfg);
-    await manager.sync({ reason: "initial", force: true });
-    expect(changed).toBeTypeOf("function");
-    expect(Object.keys(watchRequest!.settings).toSorted()).toEqual([
-      "extraPaths",
-      "multimodal",
-      "sync",
-    ]);
-    expect(Object.keys(watchRequest!.settings.sync)).toEqual(["watchDebounceMs"]);
-    await fs.writeFile(note, "beta changed host note.");
-    changed?.();
-    await vi.waitFor(
-      async () => {
-        expect((await manager.search("beta", { minScore: 0 }))[0]?.snippet).toContain(
-          "changed host note",
-        );
-      },
-      { timeout: 15_000 },
-    );
-    await manager.close();
-    expect(watchSignal?.aborted).toBe(true);
+    try {
+      await manager.sync({ reason: "initial", force: true });
+      expect(changed).toBeTypeOf("function");
+      expect(Object.keys(watchRequest!.settings).toSorted()).toEqual([
+        "extraPaths",
+        "multimodal",
+        "sync",
+      ]);
+      expect(Object.keys(watchRequest!.settings.sync)).toEqual(["watchDebounceMs"]);
+      const sync = vi.spyOn(manager, "sync");
+      await fs.writeFile(note, "beta changed host note.");
+      changed?.();
+      expect(sync).toHaveBeenCalledWith({ reason: "watch" });
+      await sync.mock.results.at(-1)!.value;
+      expect((await manager.search("beta", { minScore: 0 }))[0]?.snippet).toContain(
+        "changed host note",
+      );
+      let closed = false;
+      const closing = manager.close().then(() => {
+        closed = true;
+      });
+      try {
+        await cancellation.promise;
+        expect(watchSignal?.aborted).toBe(true);
+        await Promise.resolve();
+        expect(closed).toBe(false);
+        changed?.();
+      } finally {
+        retired.resolve();
+        await closing;
+      }
+      expect(closed).toBe(true);
+    } finally {
+      retired.resolve();
+      await manager.close();
+    }
   });
 });

@@ -338,6 +338,65 @@ describe("registerNodeCli", () => {
     );
   });
 
+  it("defers an expired fallback code to the node host credential owner", async () => {
+    const setupCode = encodePairingSetupCode({
+      url: "wss://paired.example/node",
+      bootstrapToken: "expired-test-bootstrap",
+      expiresAtMs: 1,
+    });
+
+    await createProgram().parseAsync(["node", "run", "--pair-if-needed", setupCode], {
+      from: "user",
+    });
+
+    expect(daemonMocks.defaultRuntime.error).not.toHaveBeenCalled();
+    expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gatewayHost: "paired.example",
+        gatewayBootstrapToken: "expired-test-bootstrap",
+        gatewayBootstrapExpiresAtMs: 1,
+        preferGatewayBootstrapToken: false,
+      }),
+    );
+  });
+
+  it.each([
+    { urls: ["wss://paired.example/node", 42] },
+    { tlsFingerprint: "invalid-pin" },
+    { expiresAtMs: -1 },
+  ])("rejects malformed fallback payload fields: %j", async (invalidFields) => {
+    const setupCode = Buffer.from(
+      JSON.stringify({
+        url: "wss://paired.example/node",
+        bootstrapToken: "expired-test-bootstrap",
+        expiresAtMs: 1,
+        ...invalidFields,
+      }),
+    ).toString("base64url");
+
+    await createProgram().parseAsync(["node", "run", "--pair-if-needed", setupCode], {
+      from: "user",
+    });
+
+    expect(daemonMocks.defaultRuntime.error).toHaveBeenCalledWith("Invalid pairing setup payload.");
+    expect(daemonMocks.runNodeHost).not.toHaveBeenCalled();
+  });
+
+  it("rejects an expired explicit pairing code before starting the node host", async () => {
+    const setupCode = encodePairingSetupCode({
+      url: "wss://paired.example/node",
+      bootstrapToken: "expired-test-bootstrap",
+      expiresAtMs: 1,
+    });
+
+    await createProgram().parseAsync(["node", "run", "--pair", setupCode], { from: "user" });
+
+    expect(daemonMocks.defaultRuntime.error).toHaveBeenCalledWith(
+      "Pairing setup code has expired.",
+    );
+    expect(daemonMocks.runNodeHost).not.toHaveBeenCalled();
+  });
+
   it("rejects simultaneous forced and resumable pairing", async () => {
     await expect(
       createProgram().parseAsync(["node", "run", "--pair", "first", "--pair-if-needed", "second"], {

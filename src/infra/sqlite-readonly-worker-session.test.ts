@@ -89,6 +89,37 @@ afterEach(async () => {
 });
 
 describe("SQLite read-only session operation custody", () => {
+  it.each([false, true])(
+    "attributes errors to startup only before the spawn event (spawned=%s)",
+    async (spawned) => {
+      const { session, child } = createSession();
+      const failure = Object.assign(new Error("fixture process refusal"), { code: "EACCES" });
+      const result = session.run("/fixture/snapshot", { mode: "staging-create" });
+      const observed = result.catch((error: unknown) => error);
+      const settled = observeSettlement(result);
+      if (spawned) {
+        child.emit("spawn");
+      }
+      child.emit("error", failure);
+      await nextTurn();
+      expect(settled()).toBe(false);
+      expect(session.notStarted).toBe(false);
+      child.emit("close", -1, null);
+      const error = await observed;
+      expect(session.notStarted).toBe(!spawned);
+      if (spawned) {
+        expect(error).toBe(failure);
+      } else {
+        expect(error).toMatchObject({ code: "EACCES", cause: failure });
+        expect((error as Error).message).toContain(process.execPath);
+        expect((error as Error).message).toContain("/fixture/launch");
+        expect((error as Error).message).not.toContain("OPENCLAW_STATE_DIR");
+        expect((error as Error).message).not.toContain("--fixture-readonly-session");
+      }
+      await session.close();
+    },
+  );
+
   it.each([
     "staging-create",
     "staging-create-legacy",
@@ -146,19 +177,17 @@ describe("SQLite read-only session operation custody", () => {
 
   it("joins a framed auth operation failure even when staging refusals may retain the child", async () => {
     const { session, child, env } = createSession();
-    const coordinatorRuntime = { directory: "/fixture/coordinator", keepAlive: false };
     const result = session.run("/fixture/auth.sqlite", {
       mode: "auth-profile-rows",
       source: "canonical",
       expectedIdentity: "file:fixture-auth",
       env,
-      coordinatorRuntime,
     });
     const settled = observeSettlement(result);
     const id = requestId(child);
     expect(child.send.mock.calls[0]?.[0]).toMatchObject({
       id,
-      auth: { expectedIdentity: "file:fixture-auth", coordinatorRuntime },
+      auth: { expectedIdentity: "file:fixture-auth" },
     });
     const transfer = createSqliteWorkerTransferOwner();
     const handle = transfer.start(

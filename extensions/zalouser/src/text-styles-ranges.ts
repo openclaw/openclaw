@@ -189,17 +189,9 @@ function splitLines(
   range: { start: number; end: number },
   text: string,
 ): Array<{ start: number; end: number }> {
-  const lines: Array<{ start: number; end: number }> = [];
-  let start = range.start;
-  while (start < range.end) {
-    const newline = text.indexOf("\n", start);
-    const end = newline === -1 ? range.end : Math.min(newline, range.end);
-    if (end > start && text.slice(start, end).replace(/[ \t\r\n]/gu, "")) {
-      lines.push({ start, end });
-    }
-    start = end + 1;
-  }
-  return lines;
+  return splitStyledLines(range, text).filter(({ start, end }) =>
+    text.slice(start, end).replace(/[ \t\r\n]/gu, ""),
+  );
 }
 
 export function applyTextEdits(
@@ -236,13 +228,7 @@ export function applyTextEdits(
     .flatMap((style) =>
       style.style === TextStyle.Indent ? splitStyledLines(style, output) : [style],
     )
-    .filter((style) => style.end > style.start)
-    .toSorted(
-      (left, right) =>
-        left.start - right.start ||
-        left.priority - right.priority ||
-        left.sequence - right.sequence,
-    );
+    .filter((style) => style.end > style.start);
   for (const [editIndex, edit] of edits.entries()) {
     if ((!edit.indentSize && !edit.listStyle) || !edit.text) {
       continue;
@@ -367,9 +353,6 @@ function mapEditedOffset(
     if (offset < edit.end) {
       return edit.start + delta + (preferEnd ? edit.text.length : 0);
     }
-    if (offset === edit.end) {
-      return edit.start + delta + edit.text.length;
-    }
   }
   return offset + delta;
 }
@@ -397,4 +380,41 @@ export function restoreTrailingNewlines(
   const trailingNewlines = sourceLines.length - 1 - Math.max(0, lastContentLine);
   const renderedTrailingNewlines = text.match(/\n*$/u)?.[0].length ?? 0;
   return `${text}${"\n".repeat(Math.max(0, trailingNewlines - renderedTrailingNewlines))}`;
+}
+
+export function sliceTextStyles(
+  styles: Style[] | undefined,
+  start: number,
+  end: number,
+): Style[] | undefined {
+  if (!styles || styles.length === 0) {
+    return undefined;
+  }
+
+  const chunkStyles = styles
+    .map((style) => {
+      const overlapStart = Math.max(style.start, start);
+      const overlapEnd = Math.min(style.start + style.len, end);
+      if (overlapEnd <= overlapStart) {
+        return null;
+      }
+
+      if (style.st === TextStyle.Indent) {
+        return {
+          start: overlapStart - start,
+          len: overlapEnd - overlapStart,
+          st: style.st,
+          indentSize: style.indentSize,
+        };
+      }
+
+      return {
+        start: overlapStart - start,
+        len: overlapEnd - overlapStart,
+        st: style.st,
+      };
+    })
+    .filter((style): style is NonNullable<typeof style> => style !== null);
+
+  return chunkStyles.length > 0 ? chunkStyles : undefined;
 }

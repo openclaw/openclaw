@@ -35,10 +35,9 @@ type DesktopSessionMetadata = {
   pullRequest?: SessionCatalogPullRequestSummary;
 };
 
-type DesktopPullRequestMetadata = {
-  prNumber?: unknown;
-  state?: unknown;
-  dismissed?: unknown;
+export type DesktopOverlay = {
+  active: Map<string, DesktopSessionMetadata>;
+  archived: Set<string>;
 };
 
 function pullRequestState(value: unknown): SessionCatalogPullRequestSummary["state"] | undefined {
@@ -59,11 +58,10 @@ function desktopPullRequestSummary(
   const visibleByNumber = new Map<number, SessionCatalogPullRequestSummary["state"] | undefined>();
   const dismissed = new Set<number>();
   if (Array.isArray(metadata.prs)) {
-    for (const value of metadata.prs) {
-      if (!isRecord(value)) {
+    for (const entry of metadata.prs) {
+      if (!isRecord(entry)) {
         continue;
       }
-      const entry: DesktopPullRequestMetadata = value;
       const number = pullRequestNumber(entry.prNumber);
       if (!number) {
         continue;
@@ -162,23 +160,13 @@ export function parsePullRequestSummary(
 async function readDesktopMetadata(
   homeDir: string,
   forceRefresh?: boolean,
-): Promise<{
-  available: boolean;
-  customGroups: Map<string, string>;
-  active: Map<string, DesktopSessionMetadata>;
-  archived: Set<string>;
-}> {
+): Promise<DesktopOverlay> {
   const active = new Map<string, DesktopSessionMetadata>();
   const archived = new Set<string>();
   const customGroups = await readClaudeDesktopCustomGroups(homeDir, forceRefresh);
   for (const accountDir of await childDirectories(desktopSessionsDir(homeDir))) {
     for (const workspaceDir of await childDirectories(accountDir)) {
-      let entries: string[];
-      try {
-        entries = await fs.readdir(workspaceDir);
-      } catch {
-        continue;
-      }
+      const entries = await fs.readdir(workspaceDir).catch(() => []);
       for (const name of entries) {
         if (!name.startsWith("local_") || !name.endsWith(".json")) {
           continue;
@@ -206,10 +194,9 @@ async function readDesktopMetadata(
       }
     }
   }
-  return { available: true, active, archived, customGroups };
+  return { active, archived };
 }
 
-export type DesktopOverlay = Awaited<ReturnType<typeof readDesktopMetadata>>;
 type DesktopOverlayCacheEntry = {
   watch?: DirtyDirectoryWatch;
   refreshedAt: number;
@@ -218,10 +205,8 @@ type DesktopOverlayCacheEntry = {
 };
 const desktopOverlays = new Map<string, DesktopOverlayCacheEntry>();
 export const emptyDesktopOverlay: DesktopOverlay = {
-  available: false,
   active: new Map(),
   archived: new Set(),
-  customGroups: new Map(),
 };
 
 export async function readDesktopOverlay(

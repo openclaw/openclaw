@@ -17,12 +17,14 @@ const cases: Array<{
   name: string;
   contexts: Record<string, unknown>[];
   contextFiles: string[];
+  outputPath?: string;
 }> = [
-  { name: "no context", contexts: [], contextFiles: [] },
+  { name: "no context", contexts: [], contextFiles: [], outputPath: "nested/inventory" },
   {
     name: "complete context",
     contexts: [complete],
     contextFiles: ["system-prompt.txt", "tools.json"],
+    outputPath: "prefix/../~/inventory",
   },
   { name: "oversized prompt", contexts: [oversized], contextFiles: ["tools.json"] },
   {
@@ -54,7 +56,7 @@ const cases: Array<{
 describe("trajectory command export inventory", () => {
   it.each(cases)(
     "reports only written files in existing order for $name",
-    async ({ contexts, contextFiles }) => {
+    async ({ contexts, contextFiles, outputPath = "inventory" }) => {
       await withTempDir("openclaw-trajectory-inventory-", async (root) => {
         const sessionId = "inventory-session";
         const sessionKey = "agent:main:qa-inventory";
@@ -118,8 +120,11 @@ describe("trajectory command export inventory", () => {
           sessionId,
           sessionKey,
           workspaceDir: root,
-          outputPath: "inventory",
+          outputPath,
         });
+        expect(result.outputDir).toBe(
+          path.resolve(root, ".openclaw", "trajectory-exports", outputPath),
+        );
         const manifest = JSON.parse(
           await fs.readFile(path.join(result.outputDir, "manifest.json"), "utf8"),
         ) as TrajectoryBundleManifest;
@@ -147,6 +152,35 @@ describe("trajectory command export inventory", () => {
         expect(formatTrajectoryCommandExportSummary(result)).toContain(
           `📁 Files: ${expected.join(", ")}`,
         );
+      });
+    },
+  );
+
+  it.each([".openclaw", ".openclaw/trajectory-exports", ".openclaw/trajectory-exports/alias"])(
+    "rejects an escaping %s directory without writing outside the workspace",
+    async (relativeLink) => {
+      await withTempDir("openclaw-trajectory-boundary-", async (root) => {
+        const workspaceDir = path.join(root, "workspace");
+        const outside = path.join(root, "outside");
+        const link = path.join(workspaceDir, relativeLink);
+        await fs.mkdir(path.dirname(link), { recursive: true });
+        await fs.mkdir(outside);
+        await fs.symlink(outside, link, "junction");
+        const sessionFile = path.join(root, "session.jsonl");
+        await fs.writeFile(
+          sessionFile,
+          `${JSON.stringify({ type: "session", version: 3, id: "boundary-session", timestamp: "2026-09-01T00:00:00.000Z", cwd: workspaceDir })}\n`,
+        );
+        await expect(
+          exportTrajectoryForCommand({
+            sessionFile,
+            sessionId: "boundary-session",
+            sessionKey: "agent:main:boundary",
+            workspaceDir,
+            outputPath: "alias/missing/export",
+          }),
+        ).rejects.toThrow(/workspace|trajectory exports|root/i);
+        expect(await fs.readdir(outside)).toEqual([]);
       });
     },
   );

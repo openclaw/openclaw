@@ -10,10 +10,10 @@ import {
 } from "./local-user-ingress.js";
 import {
   directSessionReq,
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 test("sessions.create stamps trusted operator provenance and records created", async () => {
   const { storePath } = await createSessionStoreDir();

@@ -1,8 +1,6 @@
-// Proxy capture SQLite store persists capture metadata and replayable exchanges.
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { StringDecoder } from "node:string_decoder";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
@@ -25,6 +23,8 @@ import {
   DebugProxyCaptureKernel,
 } from "./store.kernel.js";
 import type { CaptureBlobRecord, SharedCaptureBlobRecord } from "./types.js";
+
+export { persistEventPayload } from "./store.kernel.js";
 
 // Capture rows and compressed payload BLOBs live in the shared global state DB.
 type DebugProxyCaptureStoreOptions = {
@@ -167,10 +167,6 @@ function openPathBasedDebugProxyCaptureStore(
   }
 }
 
-function serializeJson(value: unknown): string | null {
-  return value == null ? null : JSON.stringify(value);
-}
-
 type SharedDebugProxyCaptureState = {
   database: OpenClawStateDatabase;
   env?: NodeJS.ProcessEnv;
@@ -267,6 +263,7 @@ class DebugProxyCaptureStoreImpl extends DebugProxyCaptureKernel {
   }
 }
 
+/** @deprecated Use AsyncDebugProxyCaptureStore for worker-backed shared-state access. */
 export type DebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
   persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord | SharedCaptureBlobRecord;
 };
@@ -286,6 +283,7 @@ type DebugProxyCaptureStoreConstructor = {
 
 // The runtime implementation branches on constructor arguments; expose the
 // corresponding result type so both shipped constructor contracts stay exact.
+/** @deprecated Acquire shared-state storage with acquireDebugProxyCaptureStoreAsync. */
 export const DebugProxyCaptureStore =
   DebugProxyCaptureStoreImpl as unknown as DebugProxyCaptureStoreConstructor;
 
@@ -323,10 +321,12 @@ function getDebugProxyCaptureStoreImpl(
   return store;
 }
 
+/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. */
 export function getDebugProxyCaptureStore(
   dbPath: string,
   blobDir: string,
 ): LegacyDebugProxyCaptureStore;
+/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. */
 export function getDebugProxyCaptureStore(
   options?: DebugProxyCaptureStoreOptions,
 ): SharedDebugProxyCaptureStore;
@@ -337,6 +337,7 @@ export function getDebugProxyCaptureStore(
   return getDebugProxyCaptureStoreImpl(optionsOrDbPath, legacyBlobDir);
 }
 
+/** @deprecated Await each async capture lease's release instead. */
 export function closeDebugProxyCaptureStore(): void {
   unregisterExitClose?.();
   unregisterExitClose = null;
@@ -357,6 +358,7 @@ export function closeDebugProxyCaptureStore(): void {
 
 // Lease API keeps one cached capture-store wrapper alive across related
 // operations, then releases it without closing the shared state database.
+/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. */
 export function acquireDebugProxyCaptureStore(
   dbPath: string,
   blobDir: string,
@@ -364,6 +366,7 @@ export function acquireDebugProxyCaptureStore(
   store: LegacyDebugProxyCaptureStore;
   release: () => void;
 };
+/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. */
 export function acquireDebugProxyCaptureStore(options?: DebugProxyCaptureStoreOptions): {
   store: SharedDebugProxyCaptureStore;
   release: () => void;
@@ -403,29 +406,6 @@ export function acquireDebugProxyCaptureStore(
   };
 }
 
-export function persistEventPayload(
-  store: {
-    persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord | SharedCaptureBlobRecord;
-  },
-  params: { data?: Buffer | string | null; contentType?: string; previewLimit?: number },
-): { dataText?: string; dataBlobId?: string; dataSha256?: string } {
-  if (params.data == null) {
-    return {};
-  }
-  const buffer = Buffer.isBuffer(params.data) ? params.data : Buffer.from(params.data);
-  const previewLimit = params.previewLimit ?? 8192;
-  // Store the whole payload as a blob but keep a small UTF-8 preview inline for
-  // fast CLI listings and query output. write(), unlike end(), omits an incomplete
-  // trailing code point introduced by the byte cap instead of injecting U+FFFD.
-  const blob = store.persistPayload(buffer, params.contentType);
-  return {
-    dataText: new StringDecoder("utf8").write(buffer.subarray(0, previewLimit)),
-    dataBlobId: blob.blobId,
-    dataSha256: blob.sha256,
-  };
-}
-
 export function safeJsonString(value: unknown): string | undefined {
-  const raw = serializeJson(value);
-  return raw ?? undefined;
+  return value == null ? undefined : JSON.stringify(value);
 }

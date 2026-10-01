@@ -35,6 +35,30 @@ const tempDirs = createTempDirTracker();
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 afterEach(() => tempDirs.cleanup());
 
+it.each(["ECONNREFUSED", "ENOTFOUND", "EHOSTUNREACH", "ENETUNREACH"])(
+  "fails fast on %s for setup while normal runs retain connection retries",
+  async (errorCode) => {
+    const scenario = {
+      errorMessage: "Connection error.",
+      errorCode,
+      noTools: true,
+      replaySafe: true,
+      content: [],
+    } satisfies TransportDropScenario;
+    vi.mocked(sleepWithAbort).mockClear();
+    const setup = await recoverAfterTransportDrop({ ...scenario, retryConnectionErrors: false });
+    expect(setup.recovery.action).toBe("proceed");
+    expect(sleepWithAbort).not.toHaveBeenCalled();
+    await expect(handleAssistantFailureAfterRecovery(setup)).rejects.toMatchObject({
+      reason: "timeout",
+      code: errorCode,
+    });
+    const ordinary = await recoverAfterTransportDrop(scenario);
+    expect(ordinary.recovery.action).toBe("retry");
+    expect(sleepWithAbort).toHaveBeenCalledOnce();
+  },
+);
+
 function handleAssistantFailureAfterRecovery(
   fixture: Awaited<ReturnType<typeof recoverAfterTransportDrop>>,
   previousRetryFailoverReason: Parameters<
@@ -185,7 +209,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     });
 
     expect(recovery).toMatchObject({ action: "retry", lastRetryFailoverReason: null });
-    expect(markOwnedTranscriptRetry).toHaveBeenCalledOnce();
+    expect(markOwnedTranscriptRetry).toHaveBeenCalledTimes(2);
     expect(continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
       includeToolFailureInstruction: false,
     });
@@ -200,11 +224,14 @@ describe("recoverEmbeddedRunAttempt", () => {
     );
   });
 
-  it("keeps repeated output-limit recovery inside the existing retry budget", async () => {
+  it("allows only one output-limit continuation even after successful model progress", async () => {
     const { recovery, recover, failoverRetryController, continueFromCurrentTranscript } =
       await recoverAfterTransportDrop(outputLimitScenario);
     expect(recovery.action).toBe("retry");
-    failoverRetryController.observeAttempt({ providerRetryMaxRetries: 1 });
+    failoverRetryController.observeAttempt({
+      providerRetryMaxRetries: 8,
+      hasSuccessfulModelResponse: true,
+    });
 
     expect(await recover()).toEqual({ action: "proceed" });
     expect(failoverRetryController.transientRetryCount).toBe(1);
@@ -239,9 +266,9 @@ describe("recoverEmbeddedRunAttempt", () => {
       expect(recovery.action).toBe("retry");
       now.mockReturnValue(startedAt + 16 * 60_000);
 
-      expect(await recover()).toMatchObject({ action: "retry" });
-      expect(failoverRetryController.transientRetryCount).toBe(2);
-      expect(continueFromCurrentTranscript).toHaveBeenCalledTimes(2);
+      expect(await recover()).toMatchObject({ action: "proceed" });
+      expect(failoverRetryController.transientRetryCount).toBe(1);
+      expect(continueFromCurrentTranscript).toHaveBeenCalledTimes(1);
       now.mockReturnValue(startedAt + 32 * 60_000);
       await expect(
         failoverRetryController.maybeRetryTransient({ reason: "server_error" }),

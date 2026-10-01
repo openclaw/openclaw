@@ -51,28 +51,34 @@ export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
       "deepinfra",
       "fal",
       "google",
+      "kie",
       "minimax",
-      "openai",
+      "novita",
       "openrouter",
+      "pixverse",
       "qwen",
       "runway",
       "together",
       "vydra",
       "xai",
+      "zai",
     ],
     defaultProviders: [
       "alibaba",
       "byteplus",
       "deepinfra",
       "google",
+      "kie",
       "minimax",
-      "openai",
+      "novita",
       "openrouter",
+      "pixverse",
       "qwen",
       "runway",
       "together",
       "vydra",
       "xai",
+      "zai",
     ],
   },
 };
@@ -470,14 +476,14 @@ export async function buildRunPlan(
   );
 }
 
-export function formatHelp(): string {
+function formatHelp(): string {
   return `Media live harness
 
 Usage:
   pnpm test:live:media
   pnpm test:live:media image
-  pnpm test:live:media image video --providers openai,google,minimax
-  pnpm test:live:media video --video-providers openai,runway --all-providers
+  pnpm test:live:media image video --providers google,minimax,xai
+  pnpm test:live:media video --video-providers runway,xai --all-providers
 
 QA evidence mode:
   node --import tsx ${SOURCE_PATH} --qa-evidence --suite image --artifact-base <dir>

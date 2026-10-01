@@ -1,4 +1,4 @@
-import fsSync from "node:fs";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -194,10 +194,9 @@ function inspectRememberAcrossConversationsHealth(params: {
   cfg: OpenClawConfig;
   agentId: string;
   report: MemorySearchHealthReporter;
-}): { enabled: boolean } {
-  const enabled = resolveRememberAcrossConversations(params.cfg, params.agentId);
-  if (!enabled) {
-    return { enabled: false };
+}): boolean {
+  if (!resolveRememberAcrossConversations(params.cfg, params.agentId)) {
+    return false;
   }
   const activeMemoryAvailable = isActiveMemoryPluginAvailable(params.cfg);
   const conversationRecallSupport = resolveActiveMemoryConversationRecallSupport(params.cfg);
@@ -215,13 +214,9 @@ function inspectRememberAcrossConversationsHealth(params: {
       `Remember across conversations is effectively enabled for agent "${params.agentId}", but Active Memory does not allow memory_search. Add memory_search to the plugin toolsAllow list or set memory.search.rememberAcrossConversations to false.`,
     );
   }
-  return { enabled: true };
+  return true;
 }
 
-/**
- * Check whether memory search has a usable embedding provider.
- * Runs as part of `openclaw doctor` using config-only checks where possible.
- */
 type MemorySearchHealthOptions = {
   gatewayMemoryProbe?: {
     checked: boolean;
@@ -330,17 +325,17 @@ async function inspectMemorySearchHealthForAgent(
   const resolved = resolveMemorySearchConfig(cfg, agentId);
 
   if (!resolved) {
-    const recallHealth = inspectRememberAcrossConversationsHealth({
+    const recallEnabled = inspectRememberAcrossConversationsHealth({
       cfg,
       agentId,
       report,
     });
     report(
-      recallHealth.enabled
+      recallEnabled
         ? `Remember across conversations is effectively enabled for agent "${agentId}", but memory search is disabled. Enable memory search or set memory.search.rememberAcrossConversations to false.`
         : "Memory search is explicitly disabled (enabled: false).",
       "memory.search.provider",
-      !recallHealth.enabled,
+      !recallEnabled,
     );
     return;
   }
@@ -526,13 +521,7 @@ async function inspectMemorySearchHealthForAgent(
     if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
       return;
     }
-    // When the probe was intentionally skipped (skipped: true / checked: false
-    // due to probe:false path), we have no embedding status information — do
-    // not warn. A skipped probe means the user ran `openclaw doctor` without
-    // --deep; it does not mean embeddings are unavailable.
-    // NOTE: a transport timeout also sets checked: false, but skipped stays
-    // false/absent — a timeout is a real diagnostic signal and should fall
-    // through to the warning below.
+    // Shallow probes are intentionally skipped; transport timeouts still warrant a warning.
     if (opts?.gatewayMemoryProbe?.skipped) {
       return;
     }
@@ -551,7 +540,6 @@ async function inspectMemorySearchHealthForAgent(
     return;
   }
 
-  // Remote provider — check for API key.
   if (
     hasRemoteApiKey ||
     (await hasApiKeyForProvider(provider, cfg, agentDir, {
@@ -590,10 +578,6 @@ async function inspectMemorySearchHealthForAgent(
   );
 }
 
-/**
- * Check whether local embeddings are available.
- *
- */
 function hasLocalEmbeddings(local: { modelPath?: string }): boolean {
   const modelPath = normalizeOptionalString(local.modelPath);
   if (!modelPath) {
@@ -606,11 +590,7 @@ function hasLocalEmbeddings(local: { modelPath?: string }): boolean {
     return true;
   }
   const resolved = resolveUserPath(modelPath);
-  try {
-    return fsSync.statSync(resolved).isFile();
-  } catch {
-    return false;
-  }
+  return safeStatSync(resolved)?.isFile() ?? false;
 }
 
 async function hasApiKeyForProvider(
@@ -663,14 +643,7 @@ function resolvePrimaryMemoryProviderEnvVar(provider: string): string {
 }
 
 function buildGatewayProbeWarning(
-  probe:
-    | {
-        checked: boolean;
-        ready: boolean;
-        error?: string;
-        skipped?: boolean;
-      }
-    | undefined,
+  probe: MemorySearchHealthOptions["gatewayMemoryProbe"],
 ): string | null {
   if (!probe?.checked || probe.ready) {
     return null;

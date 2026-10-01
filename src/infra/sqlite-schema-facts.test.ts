@@ -41,6 +41,48 @@ describe("admitted SQLite schema facts", () => {
     }
   });
 
+  it.each(["exec", "run", "get", "all", "iterate"] as const)(
+    "retains transactional facts across CASE queries executed through %s",
+    (method) => {
+      const database = openDatabase(undefined, false);
+      database.exec("BEGIN");
+      admitSqliteSchema(database);
+      // The backup schema query orders tables before indexes with CASE ... END.
+      const queries = [
+        `SELECT type, name, tbl_name AS tableName, sql
+        FROM sqlite_master
+        WHERE type IN ('table', 'index', 'trigger')
+          AND name NOT LIKE 'sqlite_%' AND sql IS NOT NULL
+        ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 ELSE 2 END, name`,
+        "UPDATE original SET id = CASE WHEN id IS NULL THEN 0 ELSE id END",
+        "/* BEGIN; END */ SELECT '; ROLLBACK; END' AS [END], 1 AS `COMMIT`, 2 AS \"RELEASE\" -- COMMIT",
+        `${"/* ** END; /* nested opener */ ".repeat(100)} SELECT 1`,
+      ];
+      const observation = observeSqliteReadSql(StatementSync.prototype);
+      try {
+        for (const query of queries) {
+          const statement = database.prepare(query);
+          for (let index = 0; index < 10; index += 1) {
+            if (method === "exec") {
+              database.exec(query);
+            } else if (method === "iterate") {
+              Array.from(statement.iterate());
+            } else {
+              statement[method]();
+            }
+            expect(tableExists(database, "original")).toBe(true);
+          }
+        }
+        expect(
+          observation.queries.filter((sql) => /FROM main\.sqlite_schema/iu.test(sql)),
+        ).toHaveLength(0);
+      } finally {
+        observation.restore();
+        database.exec("ROLLBACK");
+      }
+    },
+  );
+
   it("retains table and column facts across 100 foreign data commits", () => {
     const filename = path.join(tempDirs.make("openclaw-schema-data-"), "state.sqlite");
     const reader = openDatabase(
@@ -185,46 +227,81 @@ describe("admitted SQLite schema facts", () => {
     expect(tableExists(reader, "implicit_snapshot")).toBe(true);
   });
 
-  it("tracks transactional DDL through savepoint cookie reuse, rollback, and commit", () => {
+  it.each(["exec", "prepare"] as const)(
+    "tracks commented transaction controls through %s",
+    (method) => {
+      const database = openDatabase();
+      const execute = (sql: string) =>
+        method === "exec" ? database.exec(sql) : database.prepare(sql).run();
+      execute(" ; -- start\n /* transaction */ bEgIn IMMEDIATE TRANSACTION");
+      execute("/* nested */ SaVePoInT schema_change");
+      database.exec("CREATE TABLE first (id); PRAGMA user_version = 2;");
+      const firstCookie = database.prepare("PRAGMA schema_version").get()?.schema_version;
+      expect(tableExists(database, "first")).toBe(true);
+      expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(2);
+
+      execute("-- undo\n /* nested */ RoLlBaCk TRANSACTION TO SAVEPOINT schema_change");
+      database.exec("CREATE TABLE second (id); PRAGMA user_version = 3;");
+      execute("/* done */ ReLeAsE SAVEPOINT schema_change");
+      expect(database.prepare("PRAGMA schema_version").get()?.schema_version).toBe(firstCookie);
+      expect(tableExists(database, "first")).toBe(false);
+      expect(tableExists(database, "second")).toBe(true);
+      expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(3);
+
+      execute("/* undo */ RoLlBaCk TRANSACTION;");
+      expect(tableExists(database, "second")).toBe(false);
+      expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(1);
+
+      execute("-- next\n BEGIN EXCLUSIVE TRANSACTION");
+      database.exec("CREATE TABLE committed (id); PRAGMA user_version = 4;");
+      expect(tableExists(database, "committed")).toBe(true);
+      execute("/* publish */ CoMmIt TRANSACTION;");
+      expect(tableExists(database, "committed")).toBe(true);
+      expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(4);
+      execute("BEGIN DEFERRED");
+      database.exec("CREATE TABLE ended (id)");
+      expect(tableExists(database, "ended")).toBe(true);
+      execute("-- publish\n EnD TRANSACTION");
+      expect(tableExists(database, "ended")).toBe(true);
+    },
+  );
+
+  it("observes controls after ordinary statements in exec batches", () => {
     const database = openDatabase();
-    database.exec(
-      "BEGIN; SAVEPOINT schema_change; CREATE TABLE first (id); PRAGMA user_version = 2;",
-    );
-    const firstCookie = database.prepare("PRAGMA schema_version").get()?.schema_version;
-    expect(tableExists(database, "first")).toBe(true);
-    expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(2);
-
-    database.exec(
-      "ROLLBACK TO schema_change; CREATE TABLE second (id); PRAGMA user_version = 3; RELEASE schema_change;",
-    );
-    expect(database.prepare("PRAGMA schema_version").get()?.schema_version).toBe(firstCookie);
-    expect(tableExists(database, "first")).toBe(false);
-    expect(tableExists(database, "second")).toBe(true);
-    expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(3);
-
-    database.exec("ROLLBACK;");
-    expect(tableExists(database, "second")).toBe(false);
-    expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(1);
-
-    database.exec("BEGIN; CREATE TABLE committed (id); PRAGMA user_version = 4;");
+    database.exec("BEGIN; SAVEPOINT nested; CREATE TABLE undone (id)");
+    expect(tableExists(database, "undone")).toBe(true);
+    database.exec("SELECT '; END'; -- undo\n /* change */ ROLLBACK TO nested");
+    expect(database.isTransaction).toBe(true);
+    expect(tableExists(database, "undone")).toBe(false);
+    database.exec("CREATE TABLE committed (id)");
     expect(tableExists(database, "committed")).toBe(true);
-    database.exec("COMMIT;");
+    database.exec("SELECT CASE WHEN 1 THEN 'END' END; /* publish */ END; BEGIN");
+    expect(database.isTransaction).toBe(true);
     expect(tableExists(database, "committed")).toBe(true);
-    expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(4);
+    database.exec("ROLLBACK");
+    expect(tableExists(database, "committed")).toBe(true);
   });
 
-  it("discards DDL from an implicit rollback before a new transaction starts", () => {
-    const database = openDatabase(
-      "CREATE TABLE original (id INTEGER UNIQUE ON CONFLICT ROLLBACK); INSERT INTO original VALUES (1);",
-    );
-    database.exec("BEGIN; CREATE TABLE rolled_back (id);");
-    expect(tableExists(database, "rolled_back")).toBe(true);
-    expect(() => database.prepare("INSERT INTO original VALUES (1)").run()).toThrow();
-    expect(database.isTransaction).toBe(false);
-    database.exec("BEGIN;");
-    expect(tableExists(database, "rolled_back")).toBe(false);
-    database.exec("ROLLBACK;");
-  });
+  it.each(["exec", "prepare"] as const)(
+    "discards implicitly rolled-back DDL before %s begins again",
+    (method) => {
+      const database = openDatabase(
+        "CREATE TABLE original (id INTEGER UNIQUE ON CONFLICT ROLLBACK); INSERT INTO original VALUES (1);",
+      );
+      database.exec("BEGIN; CREATE TABLE rolled_back (id);");
+      expect(tableExists(database, "rolled_back")).toBe(true);
+      expect(() => database.prepare("INSERT INTO original VALUES (1)").run()).toThrow();
+      expect(database.isTransaction).toBe(false);
+      const begin = "; /* next */ -- transaction\n BEGIN DEFERRED TRANSACTION;";
+      if (method === "exec") {
+        database.exec(begin);
+      } else {
+        database.prepare(begin).run();
+      }
+      expect(tableExists(database, "rolled_back")).toBe(false);
+      database.exec("ROLLBACK;");
+    },
+  );
 
   it.each(["run", "get", "all", "iterate"] as const)(
     "observes prepared DDL when executed through %s",

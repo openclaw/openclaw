@@ -2,6 +2,7 @@
 // Membership stays on each session entry's category field; this module owns
 // which groups exist, their display order, and bulk member category updates.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { updateSessionGroupCategoriesInWorker } from "../config/sessions/session-group-categories.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -38,27 +39,12 @@ export class SessionGroupNotEmptyError extends Error {
   }
 }
 
-export function normalizeGroupNames(names: readonly string[]): string[] {
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-  for (const raw of names) {
-    const name = normalizeOptionalString(raw);
-    if (!name || seen.has(name)) {
-      continue;
-    }
-    seen.add(name);
-    normalized.push(name);
-  }
-  return normalized;
-}
-
 function normalizeSidebarSectionOrder(
   sectionOrder: readonly string[],
   groupNames: readonly string[],
 ): string[] {
   const groups = new Set(groupNames);
-  const seen = new Set<string>();
-  const normalized: string[] = [];
+  const normalized = new Set<string>();
   for (const raw of sectionOrder) {
     const sectionId = raw.trim();
     let canonical: string | null = null;
@@ -75,13 +61,11 @@ function normalizeSidebarSectionOrder(
         canonical = `catalog:${catalogId}`;
       }
     }
-    if (!canonical || seen.has(canonical)) {
-      continue;
+    if (canonical) {
+      normalized.add(canonical);
     }
-    seen.add(canonical);
-    normalized.push(canonical);
   }
-  return normalized;
+  return [...normalized];
 }
 
 export function listSessionGroups(env: NodeJS.ProcessEnv = process.env): SessionGroupRecord[] {
@@ -113,7 +97,7 @@ export async function putSessionGroups(params: {
 }): Promise<SessionGroupRecord[]> {
   const { cfg, names, sectionOrder, env = process.env } = params;
   await ensureSessionGroupCatalog(env);
-  const normalized = normalizeGroupNames(names);
+  const normalized = normalizeUniqueTrimmedStringList(names);
   const normalizedSectionOrder =
     sectionOrder === undefined ? undefined : normalizeSidebarSectionOrder(sectionOrder, normalized);
   const result = await mutateSessionGroupCatalog(

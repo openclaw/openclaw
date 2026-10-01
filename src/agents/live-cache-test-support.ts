@@ -4,12 +4,12 @@ import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion
  */
 import { getRuntimeConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { completeSimple } from "../llm/stream.js";
+import type { completeSimple } from "../llm/stream.js";
 import type { Api, AssistantMessage, Model } from "../llm/types.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { collectProviderApiKeys } from "./live-auth-keys.js";
-import { isLiveTestEnabled } from "./live-test-helpers.js";
+import { completeSimpleWithTimeout, isLiveTestEnabled } from "./live-test-helpers.js";
 import {
   getApiKeyForModelCore,
   isMissingProviderAuthError,
@@ -118,33 +118,16 @@ export async function completeSimpleWithLiveTimeout<TApi extends Api>(
     toInt(process.env.OPENCLAW_LIVE_MODEL_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
   ),
 ): Promise<AssistantMessage> {
-  const controller = new AbortController();
-  const abortTimer = setTimeout(() => controller.abort(), timeoutMs);
-  abortTimer.unref?.();
-  let hardTimer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    hardTimer = setTimeout(() => {
-      reject(new Error(`${progressContext} timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    hardTimer.unref?.();
-  });
-  try {
-    return await withLiveCacheHeartbeat(
-      Promise.race([
-        completeSimple(model, context, {
-          ...options,
-          signal: controller.signal,
-        }),
-        timeout,
-      ]),
-      progressContext,
-    );
-  } finally {
-    clearTimeout(abortTimer);
-    if (hardTimer) {
-      clearTimeout(hardTimer);
-    }
-  }
+  return withLiveCacheHeartbeat(
+    completeSimpleWithTimeout(
+      model,
+      context,
+      options,
+      timeoutMs,
+      `${progressContext} timed out after ${timeoutMs}ms`,
+    ),
+    progressContext,
+  );
 }
 
 /** Build deterministic prompt text large enough to exercise provider prompt caches. */

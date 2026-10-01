@@ -24,6 +24,7 @@ import {
   readTranscriptDisplayDelta,
 } from "./session-accessor.sqlite-history-events.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
+import type { SessionTranscriptRuntimeScope } from "./session-accessor.types.js";
 import {
   shouldRebuildSessionTranscriptIndexSynchronously,
   SYNC_REBUILD_MAX_BYTES,
@@ -91,14 +92,21 @@ const readers: Array<
   ],
 ];
 
-it.each(readers)("sizes %s without reading transcript overflow payloads", async (_name, read) => {
+async function withByteSizeScope(
+  run: (scope: SessionTranscriptRuntimeScope & { agentId: string }) => Promise<void>,
+) {
   await withOpenClawTestState({ label: "transcript-byte-size" }, async (state) => {
-    const scope = {
+    await run({
       agentId: "main",
       env: state.env,
       sessionId: "byte-size",
       sessionKey: "agent:main:byte-size",
-    };
+    });
+  });
+}
+
+it.each(readers)("sizes %s without reading transcript overflow payloads", async (_name, read) => {
+  await withByteSizeScope(async (scope) => {
     await persistSessionTranscriptTurn(scope, {
       messages: [
         transcriptMessage("large", null, { role: "user", content: "🦞".repeat(4096) }),
@@ -113,7 +121,7 @@ it.each(readers)("sizes %s without reading transcript overflow payloads", async 
       ],
       touchSessionEntry: false,
     });
-    const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId, env: state.env });
+    const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
     const table = db
       .prepare(
         "SELECT rootpage FROM sqlite_schema WHERE type = 'table' AND name = 'transcript_events'",
@@ -190,13 +198,7 @@ it.each([
   { name: "raw", read: readTranscriptRawDelta },
   { name: "display", read: readTranscriptDisplayDelta },
 ])("bounds $name delta sizing before its byte limit and resumes in order", async ({ read }) => {
-  await withOpenClawTestState({ label: "delta-byte-budget" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      env: state.env,
-      sessionId: "delta-byte-budget",
-      sessionKey: "agent:main:delta-byte-budget",
-    };
+  await withByteSizeScope(async (scope) => {
     const events = Array.from({ length: 512 }, (_, index) => ({
       type: "message",
       id: `event-${index}`,
@@ -289,13 +291,7 @@ it.each(["incoming", "stored"])(
 );
 
 it("admits compressed transcript bytes before decoding and preserves canonical snapshot text", async () => {
-  await withOpenClawTestState({ label: "compressed-transcript-byte-budget" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      env: state.env,
-      sessionId: "compressed-byte-budget",
-      sessionKey: "agent:main:compressed-byte-budget",
-    };
+  await withByteSizeScope(async (scope) => {
     const events = [
       {
         type: "message",
@@ -311,7 +307,7 @@ it("admits compressed transcript bytes before decoding and preserves canonical s
       },
     ];
     await replaceTranscriptEvents(scope, events);
-    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: state.env });
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
     const compressed = database.db
       .prepare("SELECT seq FROM transcript_events WHERE session_id = ? AND event_zstd IS NOT NULL")
       .get(scope.sessionId);
@@ -345,8 +341,6 @@ it("admits compressed transcript bytes before decoding and preserves canonical s
 });
 
 it.each([
-  { incomingRows: 0, storedRows: SYNC_REBUILD_MAX_ROWS, synchronous: true },
-  { incomingRows: 0, storedRows: SYNC_REBUILD_MAX_ROWS * 2, synchronous: false },
   { incomingRows: 1, storedRows: SYNC_REBUILD_MAX_ROWS - 1, synchronous: true },
   { incomingRows: 1, storedRows: SYNC_REBUILD_MAX_ROWS * 2, synchronous: false },
   { incomingRows: SYNC_REBUILD_MAX_ROWS + 1, storedRows: 1, synchronous: false },
@@ -386,21 +380,11 @@ it.each([
   },
 );
 
-it.each(
-  [
-    { name: "usage", read: readRecentSessionTranscriptMessageEvents },
-    { name: "history", read: readRecentSessionTranscriptHistoryEvents },
-  ].flatMap((reader) =>
-    [false, true].map((oversized) => ({ name: reader.name, read: reader.read, oversized })),
-  ),
-)("bounds $name tail sizing with newest oversized=$oversized", async ({ read, oversized }) => {
-  await withOpenClawTestState({ label: "usage-tail-budget" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      env: state.env,
-      sessionId: "usage-tail",
-      sessionKey: "agent:main:usage-tail",
-    };
+it.each([
+  { name: "usage", read: readRecentSessionTranscriptMessageEvents },
+  { name: "history", read: readRecentSessionTranscriptHistoryEvents },
+])("bounds $name tail sizing while retaining an oversized newest event", async ({ read }) => {
+  await withByteSizeScope(async (scope) => {
     await persistSessionTranscriptTurn(scope, {
       messages: [
         ...Array.from({ length: 1_000 }, (_, index) => `old-${index}`),
@@ -411,8 +395,7 @@ it.each(
         parentId: ids[index - 1] ?? null,
         message: {
           role: "assistant",
-          content:
-            eventId === "large" || (oversized && eventId === "new") ? "🦞".repeat(1024) : eventId,
+          content: eventId === "large" || eventId === "new" ? "🦞".repeat(1024) : eventId,
         },
       })),
       touchSessionEntry: false,

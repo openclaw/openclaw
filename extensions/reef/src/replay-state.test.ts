@@ -94,7 +94,7 @@ describe("Reef replay worker ownership", () => {
   it("claims, refreshes, completes and reopens encrypted replay without host SQLite calls", async () => {
     const f = fixture();
     const replay = f.open();
-    const observation = observeHostDataSql(f.env);
+    const observation = observeHostDataSql();
     const sql = observation.calls;
     await expect(replay.claim("alice", id, hash)).resolves.toBe("new");
     await replay.refresh?.("alice", id);

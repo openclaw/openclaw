@@ -43,6 +43,22 @@ describe("provider login choices", () => {
     ]);
   });
 
+  it("orders login methods by the provider's declared priority", () => {
+    const choices = [
+      choice({
+        choiceId: "codex-device",
+        choiceLabel: "Codex device code",
+        onboardingFeatured: true,
+        assistantPriority: -40,
+      }),
+      choice({ choiceId: "chatgpt", choiceLabel: "Sign in with ChatGPT", assistantPriority: -50 }),
+    ];
+    expect(listProviderLoginOptions(choices).map((option) => option.id)).toEqual([
+      "demo/chatgpt",
+      "demo/codex-device",
+    ]);
+  });
+
   it("keeps a single provider behind an explicit menu selection", () => {
     declarations.read.mockReturnValue([choice()]);
     expect(resolveProviderChannelLoginChoice(undefined)).toEqual({

@@ -152,7 +152,7 @@ async function withDispatchLifecycle(
                   headers: { Authorization: "Bearer " + auth.discoveryApiKey },
                 });
                 if (!response.ok) return {
-                  providers: {}, outcomes: [{ provider: "opencode", status: "unavailable" }],
+                  providers: {}, outcomes: [{ provider: "opencode", profileId: auth.profileId, status: "unavailable" }],
                 };
                 const { data } = await response.json();
                 return { provider: {
@@ -163,7 +163,7 @@ async function withDispatchLifecycle(
                     contextWindow: 32768, maxTokens: 1536,
                     compat: { maxTokensField: "max_tokens" },
                   })),
-                } };
+                }, outcomes: [{ provider: "opencode", profileId: auth.profileId, status: "ready" }] };
               },
             },
           });
@@ -413,7 +413,11 @@ it.for([
           outcome.result?.models
             .filter((model) => model.provider === "opencode")
             .map(({ id, available }) => ({ id, available })),
-        ).toEqual(expectedIds.toSorted().map((id) => ({ id, available: true })));
+        ).toEqual(
+          ["account-a-only", ...expectedIds.filter((id) => id !== "account-a-only").toSorted()].map(
+            (id) => ({ id, available: true }),
+          ),
+        );
         expect(fixture.discoveryAccounts).toEqual(["account-a-key"]);
         expect(observedReads.factory).toBeGreaterThan(0);
         expect(observedReads.isCurrent).toBeGreaterThan(0);

@@ -255,14 +255,7 @@ export function backfillSessionConversations(db: DatabaseSync): void {
         ORDER BY se.updated_at ASC, se.session_key ASC;
       `,
     )
-    .all() as Array<{
-    entry_json?: unknown;
-    persisted_chat_type?: unknown;
-    session_key?: unknown;
-    session_id?: unknown;
-    session_scope?: unknown;
-    updated_at?: unknown;
-  }>;
+    .all();
   const upsertConversation = db.prepare(`
     INSERT INTO conversations (
       conversation_id, channel, account_id, kind, peer_id, delivery_target,
@@ -357,15 +350,10 @@ export function readSqliteTableColumns(db: DatabaseSync, tableName: string): Set
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tableName)) {
     throw new Error(`invalid SQLite table identifier: ${tableName}`);
   }
-  const table = db
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(tableName);
-  if (!table) {
+  if (!tableExists(db, tableName)) {
     return null;
   }
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
-    name?: unknown;
-  }>;
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all();
   return new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
 }
 
@@ -495,10 +483,7 @@ export function migrateSessionEntryStatusProjection(
       "ALTER TABLE session_entries ADD COLUMN status TEXT CHECK (status IS NULL OR status IN ('running', 'done', 'failed', 'killed', 'timeout'));",
     );
   }
-  const rows = db.prepare("SELECT session_key, entry_json FROM session_entries").all() as Array<{
-    entry_json?: unknown;
-    session_key?: unknown;
-  }>;
+  const rows = db.prepare("SELECT session_key, entry_json FROM session_entries").all();
   const update = db.prepare("UPDATE session_entries SET status = ? WHERE session_key = ?");
   update.setReadBigInts(true);
   for (const row of rows) {

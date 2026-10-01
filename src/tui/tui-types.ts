@@ -1,9 +1,17 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
-// Defines shared TUI state, backend, and event types.
 import type { SessionProjectionState } from "../../packages/gateway-client/src/session-projection.js";
 import type { SessionGoal } from "../config/sessions/types.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
 import type { TuiPendingSubmit } from "./tui-submit-state.js";
+
+/** Exact pre-probed Gateway target and its selection provenance for an in-process handoff. */
+export type TuiBoundGateway = {
+  url: string;
+  configuredRemote?: boolean;
+  token?: string;
+  password?: string;
+  tlsFingerprint?: string;
+};
 
 export type TuiOptions = {
   local?: boolean;
@@ -24,6 +32,14 @@ export type TuiOptions = {
    * process out if imported runtime handles keep the event loop alive.
    */
   forceProcessExitOnReturn?: boolean;
+};
+
+export type TuiGatewayConnectionOptions = Pick<
+  TuiOptions,
+  "url" | "token" | "password" | "tlsFingerprint"
+> & {
+  allowConfiguredAuthForExactTarget?: boolean;
+  suppressEnvAuthFallback?: boolean;
 };
 
 type TuiExitReason = "exit" | "return-to-system-agent";
@@ -49,6 +65,8 @@ export type ChatEvent = {
   seq?: number;
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
+  deltaText?: string;
+  replace?: boolean;
   errorMessage?: string;
 };
 
@@ -98,7 +116,7 @@ export type AgentEvent = {
   agentId?: string;
 };
 
-export type ResponseUsageMode = "on" | "off" | "tokens" | "full";
+type ResponseUsageMode = "on" | "off" | "tokens" | "full";
 
 export type SessionInfo = {
   thinkingLevel?: string;

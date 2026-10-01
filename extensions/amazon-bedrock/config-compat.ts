@@ -3,16 +3,12 @@
  * old `models.bedrockDiscovery` config into plugin-local config shape.
  */
 import { mergeMissing } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNullableRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type JsonRecord = Record<string, unknown>;
 
 const LEGACY_PATH = "models.bedrockDiscovery";
 const TARGET_PATH = "plugins.entries.amazon-bedrock.config.discovery";
-
-function getRecord(value: unknown): JsonRecord | null {
-  return isRecord(value) ? value : null;
-}
 
 function ensureRecord(root: JsonRecord, key: string): JsonRecord {
   const existing = root[key];
@@ -24,20 +20,16 @@ function ensureRecord(root: JsonRecord, key: string): JsonRecord {
   return next;
 }
 
-function cloneRecord<T extends JsonRecord>(value: T | undefined): T {
-  return { ...value } as T;
-}
-
 function resolveLegacyBedrockDiscoveryConfig(raw: unknown): JsonRecord | undefined {
   if (!isRecord(raw)) {
     return undefined;
   }
-  const models = getRecord(raw.models);
-  return getRecord(models?.bedrockDiscovery) ?? undefined;
+  const models = asNullableRecord(raw.models);
+  return asNullableRecord(models?.bedrockDiscovery) ?? undefined;
 }
 
 function pruneEmptyModelsRoot(root: JsonRecord): void {
-  const models = getRecord(root.models);
+  const models = asNullableRecord(root.models);
   if (models && Object.keys(models).length === 0) {
     delete root.models;
   }
@@ -69,15 +61,15 @@ export function migrateAmazonBedrockLegacyConfig<T>(raw: T): { config: T; change
   const entries = ensureRecord(plugins, "entries");
   const entry = ensureRecord(entries, "amazon-bedrock");
   const config = ensureRecord(entry, "config");
-  const existing = getRecord(config.discovery) ?? undefined;
+  const existing = asNullableRecord(config.discovery) ?? undefined;
 
   if (!existing) {
-    config.discovery = cloneRecord(legacy);
+    config.discovery = { ...legacy };
     changes.push(`Moved ${LEGACY_PATH} → ${TARGET_PATH}.`);
     return { config: nextRoot as T, changes };
   }
 
-  const merged = cloneRecord(existing);
+  const merged = { ...existing };
   mergeMissing(merged, legacy);
   config.discovery = merged;
   if (JSON.stringify(merged) !== JSON.stringify(existing)) {

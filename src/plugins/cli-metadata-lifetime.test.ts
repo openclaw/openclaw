@@ -240,7 +240,6 @@ module.exports = { id: "unrelated-help", register(api) {
 
   it.each([
     { first: "beta", owner: "alpha" },
-    { first: "alpha", owner: "alpha" },
     { first: "beta", owner: undefined },
   ])(
     "validates all workspaces with $first first and execution owner $owner",

@@ -2,6 +2,7 @@
 // whose producer-owned source may disappear before retry.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileStore } from "@openclaw/fs-safe/store";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
 import { hasNonEmptyString as isNonEmptyMediaSource } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -15,7 +16,6 @@ import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
-import { fileStore } from "../file-store.js";
 import { generateSecureUuid } from "../secure-random.js";
 import {
   ARTIFACT_NAME_RE,
@@ -75,7 +75,7 @@ export async function stageQueuePayloadMedia(
     mediaAccess?: OutboundMediaAccess;
     maxBytes: number;
     stateDir?: string;
-    artifactFormat?: "session-generation-v1";
+    artifactFormat?: "session-generation-v1" | "command-owner-v1";
   },
   context?: DeliveryQueueStateContext,
 ): Promise<StageQueueMediaResult> {
@@ -86,8 +86,13 @@ export async function stageQueuePayloadMedia(
 
   const spoolRoot = path.resolve(resolveDeliveryQueueMediaDir(stateDir));
   // Older queue readers skip these artifacts instead of collecting media whose
-  // generation-bound queue namespace they cannot inventory.
-  const artifactPrefix = params.artifactFormat === "session-generation-v1" ? "g1-" : "";
+  // authority-bound queue namespace they cannot inventory.
+  const artifactPrefix =
+    params.artifactFormat === "command-owner-v1"
+      ? "c1-"
+      : params.artifactFormat === "session-generation-v1"
+        ? "g1-"
+        : "";
   const artifactsBySource = new Map<string, string>();
   for (const source of params.payloads.flatMap(payloadMediaSources)) {
     if (isSpoolableSource(source) && !artifactsBySource.has(source)) {
@@ -105,11 +110,10 @@ export async function stageQueuePayloadMedia(
   // or expires it; enqueue then consumes it atomically or fails closed.
   const mediaStageId =
     artifacts.length > 0
-      ? createDeliveryQueueMediaRetention(
+      ? await createDeliveryQueueMediaRetention(
           artifacts,
           "outbound-media-stage",
           stateDir,
-          undefined,
           context,
         )
       : undefined;
@@ -175,7 +179,7 @@ export async function stageQueuePayloadMedia(
       stagedPayloads.push(staged);
     }
   } catch (err) {
-    cancelDeliveryQueueMediaRetention(mediaStageId, stateDir, context);
+    await cancelDeliveryQueueMediaRetention(mediaStageId, stateDir, context);
     await releaseSpoolArtifacts(artifacts, stateDir);
     throw err;
   }

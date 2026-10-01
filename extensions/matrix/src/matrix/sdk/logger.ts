@@ -5,13 +5,7 @@ import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 
-type Logger = {
-  trace: (module: string, ...messageOrObject: unknown[]) => void;
-  debug: (module: string, ...messageOrObject: unknown[]) => void;
-  info: (module: string, ...messageOrObject: unknown[]) => void;
-  warn: (module: string, ...messageOrObject: unknown[]) => void;
-  error: (module: string, ...messageOrObject: unknown[]) => void;
-};
+type Logger = Pick<ConsoleLogger, "trace" | "debug" | "info" | "warn" | "error">;
 
 export function noop(): void {
   // no-op
@@ -81,8 +75,7 @@ export class ConsoleLogger {
   }
 }
 
-const defaultLogger = new ConsoleLogger();
-let activeLogger: Logger = defaultLogger;
+let activeLogger: Logger = new ConsoleLogger();
 
 export const LogService = {
   setLogger(logger: Logger): void {

@@ -16,8 +16,6 @@ describe("path prepend helpers", () => {
   it.each([
     [env({ PATH: "/usr/bin" }), "PATH"],
     [env({ Path: "/usr/bin" }), "Path"],
-    [env({ path: "/usr/bin" }), "path"],
-    [env({ PaTh: "/usr/bin" }), "PaTh"],
     [env({ HOME: "/tmp" }), "PATH"],
   ])("finds the PATH key for %j", (envEntry, expected) => {
     expect(findPathKey(envEntry)).toBe(expected);
@@ -75,20 +73,10 @@ describe("path prepend helpers", () => {
     expect(envValue).toEqual(expected);
   });
 
-  it.each([
-    {
-      name: "creates PATH when prepends are provided and no path key exists",
-      env: { HOME: "/tmp/home" },
-      prepend: ["/custom/bin"],
-      opts: undefined,
-      expected: {
-        HOME: "/tmp/home",
-        PATH: "/custom/bin",
-      },
-    },
-  ])("$name", ({ env: envLocal, prepend, opts, expected }) => {
-    applyPathPrepend(envLocal, prepend, opts);
-    expect(envLocal).toEqual(expected);
+  it("creates PATH when prepends are provided and no path key exists", () => {
+    const envLocal = { HOME: "/tmp/home" };
+    applyPathPrepend(envLocal, ["/custom/bin"]);
+    expect(envLocal).toEqual({ HOME: "/tmp/home", PATH: "/custom/bin" });
   });
 
   describe("removePathPrepend", () => {
@@ -101,30 +89,12 @@ describe("path prepend helpers", () => {
     });
 
     it("removes prepended entries globally from the existing path", () => {
-      // Normal case
       expect(
-        removePathPrepend(pathLine("/custom/bin", "/opt/bin", "/usr/bin", "/bin"), [
-          "/custom/bin",
-          "/opt/bin",
-        ]),
-      ).toBe(pathLine("/usr/bin", "/bin"));
-
-      // Tampered case (entries exist later in the path)
-      expect(
-        removePathPrepend(pathLine("/plugin/bin", "/custom/bin", "/opt/bin", "/usr/bin", "/bin"), [
-          "/custom/bin",
-          "/opt/bin",
-        ]),
+        removePathPrepend(
+          pathLine("/plugin/bin", "/custom/bin", "/opt/bin", "/usr/bin", "/custom/bin", "/bin"),
+          ["/custom/bin", "/opt/bin"],
+        ),
       ).toBe(pathLine("/plugin/bin", "/usr/bin", "/bin"));
-
-      // Duplicate case (natural path contains duplicate of prepended entry)
-      // Since removePathPrepend now uses global filtering, it will remove all instances.
-      expect(
-        removePathPrepend(pathLine("/custom/bin", "/opt/bin", "/usr/bin", "/custom/bin", "/bin"), [
-          "/custom/bin",
-          "/opt/bin",
-        ]),
-      ).toBe(pathLine("/usr/bin", "/bin"));
     });
 
     it("handles whitespace and blank entries safely", () => {

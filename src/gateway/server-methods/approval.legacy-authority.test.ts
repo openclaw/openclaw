@@ -6,6 +6,7 @@ import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db
 import { invalidateGatewayDeviceRevocation } from "../device-revocation.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createPreparedTestApprovalManager } from "../exec-approval-manager.test-support.js";
+import * as approvalStore from "../operator-approval-store.js";
 import * as recordLookup from "./approval-record-lookup.js";
 import {
   createApprovalInvocation,
@@ -20,6 +21,70 @@ import { createPluginApprovalHandlers } from "./plugin-approval.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it.for(["list", "revoke"] as const)(
+  "rechecks grant %s RPC authority after storage settles",
+  async (operation, test) => {
+    const fixture = await createExecApprovalFixture(test);
+    await fixture.run(async () => {
+      const client = createClient({ deviceId: "grant-reviewer", scopes: ["operator.admin"] });
+      const invocation = createApprovalInvocation({
+        handlers: fixture.handlers,
+        method: operation === "list" ? "exec.approval.grants.list" : "exec.approval.grants.revoke",
+        body: operation === "list" ? {} : { grantId: "missing" },
+        client,
+      });
+      const list = approvalStore.listCronStandingGrants;
+      const revoke = approvalStore.revokeCronStandingGrant;
+      if (operation === "list") {
+        vi.spyOn(approvalStore, "listCronStandingGrants").mockImplementationOnce(async (params) => {
+          const result = await list({ ...params, databaseOptions: fixture.databaseOptions });
+          client.invalidated = true;
+          return result;
+        });
+      } else {
+        vi.spyOn(approvalStore, "revokeCronStandingGrant").mockImplementationOnce(
+          async (params) => {
+            const result = await revoke({ ...params, databaseOptions: fixture.databaseOptions });
+            client.invalidated = true;
+            return result;
+          },
+        );
+      }
+      await expect(invocation.invoke()).rejects.toThrow(/authority/i);
+      expect(invocation.respond).not.toHaveBeenCalled();
+    });
+  },
+);
+
+it("refuses grant revocation when the RPC authority changes at worker commit", async (test) => {
+  const fixture = await createExecApprovalFixture(test);
+  await fixture.run(async () => {
+    const client = createClient({ deviceId: "grant-commit-reviewer", scopes: ["operator.admin"] });
+    const invocation = createApprovalInvocation({
+      handlers: fixture.handlers,
+      method: "exec.approval.grants.revoke",
+      body: { grantId: "missing" },
+      client,
+    });
+    const revoke = approvalStore.revokeCronStandingGrant;
+    vi.spyOn(approvalStore, "revokeCronStandingGrant").mockImplementationOnce((params) =>
+      revoke({ ...params, databaseOptions: fixture.databaseOptions }),
+    );
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+      (admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (request.stage === "commit") {
+            client.invalidated = true;
+          }
+          return admit(request, grant);
+        }, attachment),
+    );
+    await expect(invocation.invoke()).rejects.toThrow(/authority/i);
+    expect(invocation.respond).not.toHaveBeenCalled();
+  });
+});
 
 type LegacyReadMethod = "exec.approval.get" | "exec.approval.list" | "plugin.approval.list";
 
@@ -162,19 +227,20 @@ async function proveLegacyAuthority<
     });
   } else {
     const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation((admit) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "transaction") {
-          connection.abort();
-          stages.push("transport-retired");
-        } else if (request.stage === "commit") {
-          stages.push("verdict-commit");
-          if (revoke) {
-            invalidateGatewayDeviceRevocation(invocation.context, "legacy-reviewer", "operator");
+    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+      (admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (request.stage === "transaction") {
+            connection.abort();
+            stages.push("transport-retired");
+          } else if (request.stage === "commit") {
+            stages.push("verdict-commit");
+            if (revoke) {
+              invalidateGatewayDeviceRevocation(invocation.context, "legacy-reviewer", "operator");
+            }
           }
-        }
-        return admit(request, grant);
-      }),
+          return admit(request, grant);
+        }, attachment),
     );
   }
   const response = await invocation.invoke();
@@ -297,7 +363,7 @@ it.for([false, true])(
       const stages: string[] = [];
       const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (admit) =>
+        (admit, attachment) =>
           createAdmission((request, grant) => {
             if (request.stage === "transaction") {
               connection.abort();
@@ -313,7 +379,7 @@ it.for([false, true])(
               }
             }
             return admit(request, grant);
-          }),
+          }, attachment),
       );
       if (revoke) {
         await expect(invocation.invoke()).rejects.toThrow(/authority/u);

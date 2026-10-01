@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { createLazyRuntimeMethodBinder } from "openclaw/plugin-sdk/lazy-runtime";
 import { verifyInstalledCuaDriverArtifacts } from "./driver-artifacts.js";
 
 type DriverClickButton = import("@trycua/cua-driver").ClickButton;
-type DriverEscalationReason = import("@trycua/cua-driver").EscalationReason;
 type CuaDriverLike = import("@trycua/cua-driver").CuaDriverLike;
 type CuaDriverSessionLike = import("@trycua/cua-driver").CuaDriverSessionLike;
 type DriverScrollDirection = import("@trycua/cua-driver").ScrollDirection;
@@ -13,7 +13,6 @@ type CuaDriverSdk = Pick<
   | "ClickPosition"
   | "CuaDriver"
   | "DriverError"
-  | "EscalationReason"
   | "InputDeliveryMode"
   | "ScrollBy"
   | "SessionPermissionMode"
@@ -21,15 +20,6 @@ type CuaDriverSdk = Pick<
 >;
 
 export type CuaToolResult = import("@trycua/cua-driver").ToolResult;
-
-export const EscalationReason = {
-  AxTreePixelMismatch: 0 as DriverEscalationReason,
-  BackgroundDeliveryFailed: 1 as DriverEscalationReason,
-  ForegroundIneffective: 2 as DriverEscalationReason,
-  NoWindowTarget: 3 as DriverEscalationReason,
-  Other: 4 as DriverEscalationReason,
-} as const;
-export type EscalationReason = (typeof EscalationReason)[keyof typeof EscalationReason];
 
 // These numeric values are part of the pinned SDK contract. Keeping
 // them local avoids loading the native library while OpenClaw is only
@@ -60,7 +50,7 @@ export interface CuaDriverSession {
     signal?: AbortSignal,
   ): Promise<CuaToolResult>;
   getCursorPosition(signal?: AbortSignal): Promise<CuaToolResult>;
-  escalateScope(reason: EscalationReason, signal?: AbortSignal): Promise<CuaSessionState>;
+  getSessionState(signal?: AbortSignal): Promise<CuaSessionState>;
   getDesktopState(signal?: AbortSignal): Promise<CuaToolResult>;
   getScreenSize(signal?: AbortSignal): Promise<CuaToolResult>;
   click(
@@ -175,7 +165,7 @@ class DirectCuaDriverSession {
       this.session.getCursorPosition({ session: this.publicSession }, asyncOptions(signal)),
     );
   }
-  async escalateScope(_reason: EscalationReason, signal?: AbortSignal) {
+  async getSessionState(signal?: AbortSignal) {
     await this.ensureSessionStarted(signal);
     return await this.session.getSessionState(
       { session: this.publicSession },
@@ -414,48 +404,18 @@ class LazyCuaDriverSession implements CuaDriverSession {
     }
   }
 
-  async getDesktopState(signal?: AbortSignal) {
-    return await (await this.requireRuntime()).getDesktopState(signal);
-  }
-  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
-    return await (await this.requireRuntime()).callTool(name, args, signal);
-  }
-  async getCursorPosition(signal?: AbortSignal) {
-    return await (await this.requireRuntime()).getCursorPosition(signal);
-  }
-  async escalateScope(reason: EscalationReason, signal?: AbortSignal) {
-    return await (await this.requireRuntime()).escalateScope(reason, signal);
-  }
-  async getScreenSize(signal?: AbortSignal) {
-    return await (await this.requireRuntime()).getScreenSize(signal);
-  }
-  async click(
-    input: { x: number; y: number; button: ClickButton; count: number },
-    signal?: AbortSignal,
-  ) {
-    return await (await this.requireRuntime()).click(input, signal);
-  }
-  async drag(
-    input: { fromX: number; fromY: number; toX: number; toY: number; durationMs?: bigint },
-    signal?: AbortSignal,
-  ) {
-    return await (await this.requireRuntime()).drag(input, signal);
-  }
-  async moveCursor(input: { x: number; y: number }, signal?: AbortSignal) {
-    return await (await this.requireRuntime()).moveCursor(input, signal);
-  }
-  async scroll(
-    input: { x: number; y: number; direction: ScrollDirection; amount: bigint },
-    signal?: AbortSignal,
-  ) {
-    return await (await this.requireRuntime()).scroll(input, signal);
-  }
-  async typeText(text: string, signal?: AbortSignal) {
-    return await (await this.requireRuntime()).typeText(text, signal);
-  }
-  async pressKey(input: { key: string; modifiers: string[] }, signal?: AbortSignal) {
-    return await (await this.requireRuntime()).pressKey(input, signal);
-  }
+  private readonly bindRuntime = createLazyRuntimeMethodBinder(() => this.requireRuntime());
+  getDesktopState = this.bindRuntime((runtime) => runtime.getDesktopState.bind(runtime));
+  callTool = this.bindRuntime((runtime) => runtime.callTool.bind(runtime));
+  getCursorPosition = this.bindRuntime((runtime) => runtime.getCursorPosition.bind(runtime));
+  getSessionState = this.bindRuntime((runtime) => runtime.getSessionState.bind(runtime));
+  getScreenSize = this.bindRuntime((runtime) => runtime.getScreenSize.bind(runtime));
+  click = this.bindRuntime((runtime) => runtime.click.bind(runtime));
+  drag = this.bindRuntime((runtime) => runtime.drag.bind(runtime));
+  moveCursor = this.bindRuntime((runtime) => runtime.moveCursor.bind(runtime));
+  scroll = this.bindRuntime((runtime) => runtime.scroll.bind(runtime));
+  typeText = this.bindRuntime((runtime) => runtime.typeText.bind(runtime));
+  pressKey = this.bindRuntime((runtime) => runtime.pressKey.bind(runtime));
 
   async dispose(): Promise<void> {
     if (this.disposed) {

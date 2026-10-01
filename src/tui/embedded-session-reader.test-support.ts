@@ -3,6 +3,22 @@ import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { createEmbeddedCallGateway } from "../agents/tools/embedded-gateway-stub.js";
 import type { EmbeddedTuiBackend } from "./embedded-backend.js";
 
+export function createPreparedProjectionMethods(read: () => unknown) {
+  const methods = {
+    present: vi.fn((record: { entry: { sessionId?: unknown }; target: { key: string } }) => ({
+      key: record.target.key,
+      sessionId: record.entry.sessionId,
+    })),
+    withPreparedExactRows: vi.fn(
+      async (_queries: unknown, consume: (read: unknown) => unknown) => ({
+        kind: "complete" as const,
+        value: consume(read()),
+      }),
+    ),
+  };
+  return methods;
+}
+
 export function registerEmbeddedSessionReaderTests<
   Projection extends { dispose: () => void },
 >(params: {

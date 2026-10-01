@@ -21,13 +21,13 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { retryableGatewayDelayMs } from "./chat-outbox-retry.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import {
   clearPendingQueueItemsForRun,
   confirmQueuedMessageCustody,
   removeDeliveredQueuedChatSendForRun,
-  syncVisibleChatQueueProjection,
   updateQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
@@ -78,12 +78,11 @@ function reconcilePendingChatOutboxInput(
     return "blocked";
   }
   const inputReceipt = readChatInputReceipt(history, item);
-  if (inputReceipt === "pending") {
+  if (inputReceipt === "pending" || inputReceipt === "cancelled") {
     const pending = history.pendingInputs?.items.find((input) => input.runId === item.sendRunId);
+    const cancelled = inputReceipt === "cancelled" || pending?.state === "cancelled";
     const confirmsLocal = Boolean(
-      pending?.state !== "cancelled" &&
-      historySessionId &&
-      (!item.sessionId || item.sendState === "unconfirmed"),
+      !cancelled && historySessionId && (!item.sessionId || item.sendState === "unconfirmed"),
     );
     if (confirmsLocal && !confirmQueuedMessageCustody(host, item, historySessionId)) {
       return "blocked";
@@ -93,9 +92,9 @@ function reconcilePendingChatOutboxInput(
       historySessionId === host.currentSessionId &&
       pendingBefore === undefined
     ) {
-      applyChatPendingInputs(host, history.pendingInputs);
+      applyChatPendingInputs(host, history.pendingInputs, { receipts: history.inputReceipts });
     }
-    if (pending?.state === "cancelled") {
+    if (cancelled) {
       return removeDeliveredQueuedChatSendForRun(host, item.sendRunId, outbox) !== null ||
         !readStoredChatOutbox(host, outbox)?.queue.some((entry) => entry.id === item.id)
         ? "continue"
@@ -263,7 +262,7 @@ export async function readCurrentStoredChatHistory(
     if (!currentOutbox || !currentItem || !sameQueuedDeliveryVersion(currentItem, item)) {
       return "continue";
     }
-    syncVisibleChatQueueProjection(host);
+    chatOutboxOwner(host).syncHost(host);
     const pendingInput = reconcilePendingChatOutboxInput(
       host,
       outbox,

@@ -133,6 +133,11 @@
       "types": "./dist/utf16-slice.d.mts",
       "import": "./dist/utf16-slice.mjs",
       "default": "./dist/utf16-slice.mjs"
+    },
+    "./uuid": {
+      "types": "./dist/uuid.d.mts",
+      "import": "./dist/uuid.mjs",
+      "default": "./dist/uuid.mjs"
     }
   },
   "scripts": {
@@ -140,6 +145,6 @@
   },
   "dependencies": {
     "libphonenumber-js": "1.13.13",
-    "typebox": "1.3.32"
+    "typebox": "1.3.34"
   }
 }

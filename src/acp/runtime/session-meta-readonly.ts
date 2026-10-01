@@ -8,50 +8,71 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   executeExistingOpenClawStateRead,
   withExistingOpenClawStateDatabaseReadOnly,
+  withExistingOpenClawStateDatabaseCurrentReadOnly,
 } from "../../state/openclaw-state-db-readonly.js";
 import {
-  type AcpSessionEntryBinding,
-  type AcpSessionRow,
   buildAcpDatabaseSessionKey,
   legacyAcpDatabaseSessionKeys,
   resolveLegacyFreeAcpSessionKey,
   resolveReadableAcpSessionRow,
   selectAcpSessionRowForStoreEntry,
 } from "./session-meta-keys.js";
+import type { AcpSessionEntryBinding, AcpSessionRow } from "./session-meta-read.types.js";
 
 /** Each result stays bound to the entry lifecycle captured by the row reader. */
-export async function readAcpSessionMetaForEntries(params: {
-  entries: readonly { sessionKey: string; agentId: string; entry: AcpSessionEntryBinding }[];
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  databasePath?: string;
-}): Promise<Array<SessionAcpMeta | null>> {
+export async function readAcpSessionMetaForEntries(
+  params: {
+    entries: readonly {
+      sessionKey: string;
+      agentId: string;
+      entry: AcpSessionEntryBinding | undefined;
+    }[];
+    cfg: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+    databasePath?: string;
+  },
+  options: { current?: true } = {},
+): Promise<Array<SessionAcpMeta | null>> {
   if (params.entries.length === 0) {
     return [];
   }
+  const entries = params.entries.map((item) => ({
+    sessionKey: item.sessionKey,
+    agentId: item.agentId,
+    entry: item.entry
+      ? {
+          lifecycleRevision: item.entry.lifecycleRevision,
+          sessionId: item.entry.sessionId,
+          sessionStartedAt: item.entry.sessionStartedAt,
+        }
+      : undefined,
+  }));
   const result = await executeExistingOpenClawStateRead(
     { env: params.env, path: params.databasePath },
     {
       type: "acpSessions.metadata",
-      entries: params.entries.map(({ sessionKey, agentId, entry }) => ({
+      entries: entries.map(({ sessionKey, agentId, entry }) => ({
         keys: [
           buildAcpDatabaseSessionKey(sessionKey, agentId),
           ...legacyAcpDatabaseSessionKeys(sessionKey, agentId, params.cfg),
         ],
         legacyKey: resolveLegacyFreeAcpSessionKey(sessionKey),
-        entry: {
-          lifecycleRevision: entry.lifecycleRevision,
-          sessionId: entry.sessionId,
-          sessionStartedAt: entry.sessionStartedAt,
-        },
+        entry,
       })),
     },
+    options,
   );
   if (result === undefined) {
-    return params.entries.map(() => null);
+    return entries.map(() => null);
   }
   if (result.ok && result.type === "acpSessions.metadata") {
-    return result.rows.map((row) => (row ? rowToAcpSessionMeta(row) : null));
+    return result.rows.map((row, index) => {
+      const readable = resolveReadableAcpSessionRow({
+        row: row ?? undefined,
+        entry: entries[index]?.entry,
+      });
+      return readable ? rowToAcpSessionMeta(readable) : null;
+    });
   }
   throw new Error("Unexpected ACP session metadata read result");
 }
@@ -77,19 +98,25 @@ export function rowToAcpSessionMeta(row: AcpSessionRow): SessionAcpMeta {
   };
 }
 
-export function readAcpSessionMetaForEntry(params: {
-  sessionKey: string;
-  agentId?: string;
-  cfg?: OpenClawConfig;
-  entry: AcpSessionEntryBinding | undefined;
-  env?: NodeJS.ProcessEnv;
-  databasePath?: string;
-}): SessionAcpMeta | undefined {
+export function readAcpSessionMetaForEntry(
+  params: {
+    sessionKey: string;
+    agentId?: string;
+    cfg?: OpenClawConfig;
+    entry: AcpSessionEntryBinding | undefined;
+    env?: NodeJS.ProcessEnv;
+    databasePath?: string;
+  },
+  options: { current?: true } = {},
+): SessionAcpMeta | undefined {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return undefined;
   }
-  const row = withExistingOpenClawStateDatabaseReadOnly(
+  const read = options.current
+    ? withExistingOpenClawStateDatabaseCurrentReadOnly
+    : withExistingOpenClawStateDatabaseReadOnly;
+  const row = read(
     ({ db }) =>
       resolveReadableAcpSessionRow({
         row: selectAcpSessionRowForStoreEntry(

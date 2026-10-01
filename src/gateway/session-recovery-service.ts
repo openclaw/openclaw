@@ -33,9 +33,10 @@ import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
-import { buildDashboardSessionKey } from "./session-create-service.js";
+import { buildDashboardSessionKey } from "./session-create-key.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { buildRestartRecoverySuccessorEntry } from "./session-recovery-entry.js";
+import { invalidSessionRequest } from "./session-request-error.js";
 import {
   loadGatewaySessionEntryReadOnly,
   resolveGatewaySessionStoreTarget,
@@ -173,10 +174,7 @@ export async function recoverGatewaySession(params: {
     }).entry as InternalSessionEntry | undefined;
   const initialSource = readSource();
   if (!initialSource?.sessionId) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, "Session recovery source was not found."),
-    };
+    return invalidSessionRequest("Session recovery source was not found.");
   }
   if (isMainSessionRecoveryReconciliationCandidate(initialSource)) {
     const repaired = await reconcileOrphanedGatewaySessionRecovery({
@@ -185,13 +183,9 @@ export async function recoverGatewaySession(params: {
       entry: initialSource,
     });
     if (!repaired) {
-      return {
-        ok: false,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Session recovery is unavailable while the source still has active work.",
-        ),
-      };
+      return invalidSessionRequest(
+        "Session recovery is unavailable while the source still has active work.",
+      );
     }
     const continuation = await params.launchContinuation({
       agentId: sourceTarget.agentId,
@@ -212,20 +206,11 @@ export async function recoverGatewaySession(params: {
   }
   const initialEligibility = inspectMainRestartRecoveryRolloverEligibility(initialSource);
   if (!initialEligibility.eligible && initialEligibility.reason !== "already_recovered") {
-    return {
-      ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "Session recovery requires a restart-tombstoned session.",
-      ),
-    };
+    return invalidSessionRequest("Session recovery requires a restart-tombstoned session.");
   }
   const recovery = initialSource.mainRestartRecovery;
   if (!recovery?.tombstone) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, "Session is not recoverable."),
-    };
+    return invalidSessionRequest("Session is not recoverable.");
   }
   const generatedSuccessorKey = buildDashboardSessionKey(sourceTarget.agentId);
   const successorTarget = resolveGatewaySessionStoreTarget({
@@ -276,13 +261,9 @@ export async function recoverGatewaySession(params: {
         currentSource.sessionId,
       ])
     ) {
-      return {
-        ok: false as const,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Session recovery is unavailable while the source still has active work.",
-        ),
-      };
+      return invalidSessionRequest(
+        "Session recovery is unavailable while the source still has active work.",
+      );
     }
     return { ok: true as const, source: currentSource };
   };

@@ -6,6 +6,17 @@ import {
   CODEX_SESSION_OVERRIDABLE_LAYER_TYPES,
   readCodexEffectiveConfig,
 } from "./config-layer-policy.js";
+import { supportsInferenceEnvironment } from "./inference-environment.js";
+import {
+  configuredProviders,
+  hasProviderAws,
+  projectProviderRoutes,
+  providerKind,
+  readProviderBaseUrl,
+  readProviderField,
+  withProviderBaseUrl,
+  type ProviderKind,
+} from "./inference-provider-config.js";
 import type { CodexInferenceProxy } from "./inference-proxy.js";
 import type { CodexInferenceThreadQualification } from "./inference-qualification.js";
 import { isJsonObject, type CodexConfigReadResponse, type JsonObject } from "./protocol.js";
@@ -14,13 +25,11 @@ import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 export type CodexInferenceProviderRoutes = ReadonlyMap<string, CodexInferenceProxy>;
-export type { CodexInferenceThreadQualification } from "./inference-qualification.js";
 type ThreadRoutes = {
   route: CodexInferenceProxy;
   providers: CodexInferenceProviderRoutes;
   qualification?: CodexInferenceThreadQualification;
 };
-type ProviderKind = "openai" | "azure" | "other";
 
 type Owner = {
   closed: boolean;
@@ -106,61 +115,6 @@ export function ownCodexInferenceClient(
       close();
     }
   });
-}
-
-function supportsInferenceEnvironment(native: NodeJS.ProcessEnv): boolean {
-  if (native.CODEX_CA_CERTIFICATE?.trim() || native.SSL_CERT_FILE?.trim()) {
-    return false;
-  }
-  const names = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
-  for (const upper of names) {
-    const lower = upper.toLowerCase();
-    if (
-      native[upper] !== process.env[upper] ||
-      native[lower] !== process.env[lower] ||
-      (native[upper] !== undefined &&
-        native[lower] !== undefined &&
-        native[upper] !== native[lower])
-    ) {
-      return false;
-    }
-  }
-  const value = (name: string) => (native[name] ?? native[name.toLowerCase()])?.trim() || undefined;
-  const http = value("HTTP_PROXY");
-  const https = value("HTTPS_PROXY");
-  const all = value("ALL_PROXY");
-  if (!http && !https && !all) {
-    return true;
-  }
-  const noProxy = native.NO_PROXY ?? native.no_proxy ?? "";
-  if (noProxy === "*") {
-    return true;
-  }
-  if (
-    native.REQUEST_METHOD !== undefined ||
-    names.slice(0, 3).some((name) => {
-      const raw = native[name] ?? native[name.toLowerCase()];
-      return raw !== undefined && raw !== raw.trim();
-    })
-  ) {
-    return false;
-  }
-  // Reqwest prefers uppercase and has no HTTP_PROXY fallback for HTTPS. Only
-  // equivalent proxy selection and literal loopback bypasses are qualified here.
-  if ((https ?? all) !== (https ?? http ?? all)) {
-    return false;
-  }
-  const bypasses = noProxy
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  if (bypasses.some((entry) => !["127.0.0.1", "localhost", "::1", "[::1]"].includes(entry))) {
-    return false;
-  }
-  if ((http || all) && !bypasses.includes("127.0.0.1")) {
-    return false;
-  }
-  return /^https?:\/\//.test(https ?? all ?? "");
 }
 
 async function prepareCodexInferenceRoute(params: {
@@ -600,100 +554,6 @@ export function assertCodexInferenceRouteConfig(
     }
     sibling.assertCurrent();
   }
-}
-
-function providerKind(name: unknown): ProviderKind | undefined {
-  if (name === "Amazon Bedrock" || name === "Amazon Bedrock Runtime") {
-    return undefined;
-  }
-  return name === "OpenAI"
-    ? "openai"
-    : typeof name === "string" && name.toLowerCase() === "azure"
-      ? "azure"
-      : "other";
-}
-
-function hasProviderAws(config: JsonObject | undefined, provider: string): boolean {
-  return (
-    readProviderField(config, provider, "aws") != null ||
-    Object.keys(config ?? {}).some((key) => key.startsWith(`model_providers.${provider}.aws.`))
-  );
-}
-
-function configuredProviders(...configs: (JsonObject | undefined)[]): Set<string> {
-  const providers = new Set(["openai"]);
-  for (const config of configs) {
-    for (const provider of Object.keys(
-      isJsonObject(config?.model_providers) ? config.model_providers : {},
-    )) {
-      providers.add(provider);
-    }
-    for (const key of Object.keys(config ?? {})) {
-      const provider = /^model_providers\.([^.]+)(?:\.|$)/.exec(key)?.[1];
-      if (provider) {
-        providers.add(provider);
-      }
-    }
-  }
-  return providers;
-}
-
-function projectProviderRoutes(
-  config: JsonObject | undefined,
-  providers: CodexInferenceProviderRoutes,
-): JsonObject {
-  let projected = config ?? {};
-  for (const [provider, route] of providers) {
-    projected = withProviderBaseUrl(projected, provider, route.baseUrl);
-  }
-  return projected;
-}
-
-function readProviderBaseUrl(config: JsonObject | undefined, provider: string): unknown {
-  if (provider === "openai") {
-    return config?.openai_base_url;
-  }
-  return readProviderField(config, provider, "base_url");
-}
-
-function readProviderField(
-  config: JsonObject | undefined,
-  provider: string,
-  field: string,
-): unknown {
-  const providers = isJsonObject(config?.model_providers) ? config.model_providers : undefined;
-  const selected = providers?.[provider];
-  const flat = config?.[`model_providers.${provider}`];
-  return (
-    config?.[`model_providers.${provider}.${field}`] ??
-    (isJsonObject(flat) ? flat[field] : undefined) ??
-    (isJsonObject(selected) ? selected[field] : undefined)
-  );
-}
-
-function withProviderBaseUrl(
-  config: JsonObject | undefined,
-  provider: string,
-  baseUrl: string,
-): JsonObject {
-  if (provider === "openai") {
-    return { ...config, openai_base_url: baseUrl };
-  }
-  const providers = isJsonObject(config?.model_providers) ? config.model_providers : {};
-  const selected = providers[provider];
-  const providerKey = `model_providers.${provider}`;
-  const baseUrlKey = `${providerKey}.base_url`;
-  const flat = config?.[providerKey];
-  // A sparse native table overlay changes only this URL; native still owns auth and headers.
-  return {
-    ...config,
-    model_providers: {
-      ...providers,
-      [provider]: { ...(isJsonObject(selected) ? selected : {}), base_url: baseUrl },
-    },
-    ...(isJsonObject(flat) ? { [providerKey]: { ...flat, base_url: baseUrl } } : {}),
-    ...(config?.[baseUrlKey] !== undefined ? { [baseUrlKey]: baseUrl } : {}),
-  };
 }
 
 export function bindCodexInferenceThread(

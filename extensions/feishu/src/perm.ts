@@ -10,8 +10,6 @@ type ListTokenType = NonNullable<
   NonNullable<Parameters<Lark.Client["drive"]["permissionMember"]["list"]>[0]>["params"]
 >["type"];
 
-// ============ Actions ============
-
 async function listMembers(client: Lark.Client, token: string, type: string) {
   const res = await client.drive.permissionMember.list({
     path: { token },
@@ -65,8 +63,6 @@ async function removeMember(
     success: true,
   };
 }
-
-// ============ Tool Registration ============
 
 export function registerFeishuPermTools(api: OpenClawPluginApi) {
   registerFeishuTool(api, {

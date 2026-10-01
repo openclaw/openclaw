@@ -1,11 +1,6 @@
-/**
- * mobile_ui built-in tool.
- *
- * Drives a paired Android node through the dangerous mobile.ui.observe and
- * mobile.ui.act commands. Semantic targets are bound to the latest observed
- * snapshot, and sensitive controls require an explicit model confirmation.
- */
 import crypto from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { Type, type Static } from "typebox";
@@ -18,8 +13,8 @@ import { isStringOption } from "../../utils/string-readers.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam, ToolInputError } from "./common.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
-import { callGatewayTool, type GatewayCallOptions, readGatewayCallOptions } from "./gateway.js";
-import { listNodes, type NodeListNode } from "./nodes-utils.js";
+import { readGatewayCallOptions } from "./gateway.js";
+import { invokeAgentNodeCommand, listNodes, type NodeListNode } from "./nodes-utils.js";
 
 const MOBILE_UI_OBSERVE_COMMAND = "mobile.ui.observe";
 const MOBILE_UI_ACT_COMMAND = "mobile.ui.act";
@@ -89,45 +84,16 @@ const MobileUiToolSchema = Type.Object({
 
 type MobileUiAction = Static<typeof MobileUiActionSchema>;
 
-type MobileUiNode = {
-  ref: string;
-  parentRef: string | null;
-  role: string;
-  text: string | null;
-  contentDescription: string | null;
-  viewId: string | null;
-  bounds: [number, number, number, number];
-  flags: {
-    clickable: boolean;
-    editable: boolean;
-    scrollable: boolean;
-    enabled: boolean;
-    focused: boolean;
-  };
-  actions: string[];
-};
-
-type MobileUiSnapshot = {
-  snapshotId: string;
-  package: string | null;
-  windowTitle: string | null;
-  nodes: MobileUiNode[];
-};
-
-type MobileUiOutcome = { code: string; message: string | null };
+type MobileUiNode = ReturnType<typeof parseMobileUiNode>;
+type MobileUiSnapshot = ReturnType<typeof parseMobileUiSnapshot>;
 
 function readInteger(
   record: Record<string, unknown>,
   key: string,
   options: { minimum?: number; maximum?: number } = {},
 ): number {
-  const value = record[key];
-  if (
-    typeof value !== "number" ||
-    !Number.isSafeInteger(value) ||
-    (options.minimum !== undefined && value < options.minimum) ||
-    (options.maximum !== undefined && value > options.maximum)
-  ) {
+  const value = asSafeIntegerInRange(record[key], { min: options.minimum, max: options.maximum });
+  if (value === undefined) {
     const range =
       options.minimum !== undefined && options.maximum !== undefined
         ? ` between ${options.minimum} and ${options.maximum}`
@@ -229,58 +195,13 @@ const MOBILE_UI_NODE_MESSAGES: EligibleNodeMessages<NodeListNode> = {
       .join(", ")}`,
 };
 
-async function resolveMobileUiNode(
-  gatewayOpts: GatewayCallOptions,
-  query?: string,
-  signal?: AbortSignal,
-): Promise<NodeListNode> {
-  const nodes = await listNodes(gatewayOpts, signal);
-  return resolveEligibleNodeFromList(nodes, query, isEligibleMobileUiNode, MOBILE_UI_NODE_MESSAGES);
-}
-
-async function invokeNodeCommand(params: {
-  gatewayOpts: GatewayCallOptions;
-  nodeId: string;
-  command: string;
-  commandParams: Record<string, unknown>;
-  timeoutMs?: number;
-  idempotencyKey?: string;
-  signal?: AbortSignal;
-}): Promise<unknown> {
-  const gatewayOpts =
-    params.timeoutMs === undefined
-      ? params.gatewayOpts
-      : {
-          ...params.gatewayOpts,
-          timeoutMs: Math.max(params.gatewayOpts.timeoutMs ?? 0, params.timeoutMs),
-        };
-  const raw = await callGatewayTool<{ payload: unknown }>(
-    "node.invoke",
-    gatewayOpts,
-    {
-      nodeId: params.nodeId,
-      command: params.command,
-      params: params.commandParams,
-      timeoutMs: params.timeoutMs,
-      idempotencyKey: params.idempotencyKey ?? crypto.randomUUID(),
-    },
-    { signal: params.signal },
-  );
-  return raw && typeof raw === "object" && Object.hasOwn(raw, "payload")
-    ? (raw as { payload: unknown }).payload
-    : raw;
-}
-
 function mobileUiActIdempotencyKey(params: { scope?: string; toolCallId: string }): string {
   const stableScope = params.scope?.trim();
   const stableCallId = params.toolCallId.trim();
   if (!stableScope || !stableCallId) {
     return crypto.randomUUID();
   }
-  const digest = crypto
-    .createHash("sha256")
-    .update(JSON.stringify([stableScope, stableCallId, MOBILE_UI_ACT_COMMAND]))
-    .digest("hex");
+  const digest = sha256Hex(JSON.stringify([stableScope, stableCallId, MOBILE_UI_ACT_COMMAND]));
   return `mobile.ui.act:v1:${digest}`;
 }
 
@@ -309,7 +230,7 @@ function nullableString(value: unknown, label: string): string | null {
   return value;
 }
 
-function parseMobileUiNode(value: unknown): MobileUiNode {
+function parseMobileUiNode(value: unknown) {
   if (!isRecord(value)) {
     throw new Error("mobile.ui.observe returned an invalid node");
   }
@@ -326,7 +247,6 @@ function parseMobileUiNode(value: unknown): MobileUiNode {
     throw new Error(`mobile.ui.observe returned invalid metadata for node ${ref}`);
   }
   const flags = value.flags;
-  const flag = (key: keyof MobileUiNode["flags"]) => flags[key] === true;
   return {
     ref,
     parentRef: nullableString(value.parentRef, "parentRef"),
@@ -336,17 +256,17 @@ function parseMobileUiNode(value: unknown): MobileUiNode {
     viewId: nullableString(value.viewId, "viewId"),
     bounds: value.bounds as [number, number, number, number],
     flags: {
-      clickable: flag("clickable"),
-      editable: flag("editable"),
-      scrollable: flag("scrollable"),
-      enabled: flag("enabled"),
-      focused: flag("focused"),
+      clickable: flags.clickable === true,
+      editable: flags.editable === true,
+      scrollable: flags.scrollable === true,
+      enabled: flags.enabled === true,
+      focused: flags.focused === true,
     },
     actions: value.actions.filter((entry): entry is string => typeof entry === "string"),
   };
 }
 
-function parseMobileUiSnapshot(payload: unknown): MobileUiSnapshot {
+function parseMobileUiSnapshot(payload: unknown) {
   const record = payloadRecord(payload, MOBILE_UI_OBSERVE_COMMAND);
   const snapshotId = readToolStringParam(record, "snapshotId", { required: true });
   if (!Array.isArray(record.nodes)) {
@@ -360,7 +280,7 @@ function parseMobileUiSnapshot(payload: unknown): MobileUiSnapshot {
   };
 }
 
-function parseMobileUiOutcome(payload: unknown): MobileUiOutcome {
+function parseMobileUiOutcome(payload: unknown) {
   const record = payloadRecord(payload, MOBILE_UI_ACT_COMMAND);
   return {
     code: readToolStringParam(record, "code", { required: true }),
@@ -409,38 +329,16 @@ function targetLabel(node: MobileUiNode): string {
   );
 }
 
-function stateChangingTarget(
-  snapshot: MobileUiSnapshot,
-  action: MobileUiAction,
-): { node: MobileUiNode | null; label: string } | null {
-  switch (action.type) {
-    case "tap":
-      return { node: null, label: `coordinates (${action.x}, ${action.y})` };
-    case "swipe":
-      return {
-        node: null,
-        label: `coordinates (${action.x1}, ${action.y1}) to (${action.x2}, ${action.y2})`,
-      };
-    case "activate":
-    case "set_text": {
-      const node = snapshot.nodes.find((candidate) => candidate.ref === action.ref) ?? null;
-      return { node, label: node ? targetLabel(node) : `node ${action.ref}` };
-    }
-    default:
-      return null;
-  }
-}
-
 function enrichStateChangingEffect(
   snapshot: MobileUiSnapshot,
-  target: { node: MobileUiNode | null; label: string },
+  selectedNode: MobileUiNode | undefined,
 ): string | null {
-  if (!target.node) {
+  if (!selectedNode) {
     return null;
   }
   const byRef = new Map(snapshot.nodes.map((node) => [node.ref, node]));
   const context: MobileUiNode[] = [];
-  let current: MobileUiNode | undefined = target.node;
+  let current: MobileUiNode | undefined = selectedNode;
   while (current && context.length < 6) {
     context.push(current);
     current = current.parentRef ? byRef.get(current.parentRef) : undefined;
@@ -458,34 +356,47 @@ function stateChangingConfirmation(
   snapshot: MobileUiSnapshot,
   action: MobileUiAction,
 ): { target: string; effect: string } | null {
-  const target = stateChangingTarget(snapshot, action);
-  if (!target) {
-    return null;
+  let node: MobileUiNode | undefined;
+  let label: string;
+  switch (action.type) {
+    case "tap":
+      label = `coordinates (${action.x}, ${action.y})`;
+      break;
+    case "swipe":
+      label = `coordinates (${action.x1}, ${action.y1}) to (${action.x2}, ${action.y2})`;
+      break;
+    case "activate":
+    case "set_text":
+      node = snapshot.nodes.find((candidate) => candidate.ref === action.ref);
+      label = node ? targetLabel(node) : `node ${action.ref}`;
+      break;
+    default:
+      return null;
   }
   const packageName = snapshot.package ?? "unknown package";
   return {
-    target: target.label,
+    target: label,
     effect:
-      enrichStateChangingEffect(snapshot, target) ??
-      `perform a state-changing action (${action.type}) on ${packageName} targeting ${target.label}`,
+      enrichStateChangingEffect(snapshot, node) ??
+      `perform a state-changing action (${action.type}) on ${packageName} targeting ${label}`,
   };
 }
 
 const DANGEROUS_DENY_HINT = "blocked by gateway.nodes.commands.deny";
 const PLATFORM_ALLOWLIST_HINT = "is not in the allowlist for platform";
 
-function withMobileUiEnablementHint(error: unknown): Error {
+function throwWithMobileUiEnablementHint(error: unknown): never {
   const message = formatErrorMessage(error);
   if (message.includes(DANGEROUS_DENY_HINT)) {
-    return new Error(
+    throw new Error(
       `${message} — remove the mobile UI commands from gateway.nodes.commands.deny, then retry.`,
       { cause: error },
     );
   }
   if (message.includes(PLATFORM_ALLOWLIST_HINT)) {
-    return new Error(`${message} — ${MOBILE_UI_NODE_HINT}, then retry.`, { cause: error });
+    throw new Error(`${message} — ${MOBILE_UI_NODE_HINT}, then retry.`, { cause: error });
   }
-  return error instanceof Error ? error : new Error(message);
+  throw error instanceof Error ? error : new Error(message);
 }
 
 const REOBSERVE_OUTCOMES = new Set([
@@ -527,21 +438,21 @@ export function createMobileUiTool(options?: {
         }
         const gatewayOpts = readGatewayCallOptions(input);
         const explicitNode = typeof input.node === "string" ? input.node : undefined;
-        const node = await resolveMobileUiNode(gatewayOpts, explicitNode, signal);
+        const node = resolveEligibleNodeFromList(
+          await listNodes(gatewayOpts, signal),
+          explicitNode,
+          isEligibleMobileUiNode,
+          MOBILE_UI_NODE_MESSAGES,
+        );
 
         const observe = async (): Promise<MobileUiSnapshot> => {
-          let payload: unknown;
-          try {
-            payload = await invokeNodeCommand({
-              gatewayOpts,
-              nodeId: node.nodeId,
-              command: MOBILE_UI_OBSERVE_COMMAND,
-              commandParams: {},
-              signal,
-            });
-          } catch (error) {
-            throw withMobileUiEnablementHint(error);
-          }
+          const payload = await invokeAgentNodeCommand({
+            gatewayOpts,
+            nodeId: node.nodeId,
+            command: MOBILE_UI_OBSERVE_COMMAND,
+            commandParams: {},
+            signal,
+          }).catch(throwWithMobileUiEnablementHint);
           const snapshot = parseMobileUiSnapshot(payload);
           observations.set(node.nodeId, snapshot);
           return snapshot;
@@ -572,7 +483,6 @@ export function createMobileUiTool(options?: {
           });
         }
 
-        let outcome: MobileUiOutcome;
         const invokeTimeoutMs =
           mobileAction.type === "wait"
             ? mobileAction.ms + 10_000
@@ -582,24 +492,26 @@ export function createMobileUiTool(options?: {
         // Once dispatch begins, the pre-action snapshot can no longer authorize
         // another action, even if the result or follow-up observation is lost.
         observations.delete(node.nodeId);
-        try {
-          outcome = parseMobileUiOutcome(
-            await invokeNodeCommand({
-              gatewayOpts,
-              nodeId: node.nodeId,
-              command: MOBILE_UI_ACT_COMMAND,
-              commandParams: { snapshotId, action: mobileAction },
-              timeoutMs: invokeTimeoutMs,
-              idempotencyKey: mobileUiActIdempotencyKey({
-                scope: options?.idempotencyScope,
-                toolCallId,
-              }),
-              signal,
-            }),
-          );
-        } catch (error) {
-          throw withMobileUiEnablementHint(error);
-        }
+        const outcome = await invokeAgentNodeCommand({
+          gatewayOpts:
+            invokeTimeoutMs === undefined
+              ? gatewayOpts
+              : {
+                  ...gatewayOpts,
+                  timeoutMs: Math.max(gatewayOpts.timeoutMs ?? 0, invokeTimeoutMs),
+                },
+          nodeId: node.nodeId,
+          command: MOBILE_UI_ACT_COMMAND,
+          commandParams: { snapshotId, action: mobileAction },
+          timeoutMs: invokeTimeoutMs,
+          idempotencyKey: mobileUiActIdempotencyKey({
+            scope: options?.idempotencyScope,
+            toolCallId,
+          }),
+          signal,
+        })
+          .then(parseMobileUiOutcome)
+          .catch(throwWithMobileUiEnablementHint);
         const requiresReobserve = REOBSERVE_OUTCOMES.has(outcome.code);
         let snapshot: MobileUiSnapshot;
         try {

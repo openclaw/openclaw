@@ -1,4 +1,5 @@
 import type { AcpAgentRegistry } from "acpx/runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_ACP_PACKAGE } from "./codex-adapter.js";
 
 export type AcpxAgentCommand = string | string[];
@@ -85,11 +86,6 @@ export function splitCommandParts(value: AcpxAgentCommand): string[] {
 
 const OPENCLAW_BRIDGE_EXECUTABLE = "openclaw";
 const OPENCLAW_BRIDGE_SUBCOMMAND = "acp";
-export function normalizeAgentName(value: string | undefined): string | undefined {
-  const normalized = value?.trim().toLowerCase();
-  return normalized ? normalized : undefined;
-}
-
 function basename(value: string): string {
   return value.split(/[\\/]/).pop() ?? value;
 }
@@ -186,7 +182,7 @@ export function resolveAgentCommand(params: {
   agentName: string | undefined;
   agentRegistry: AcpAgentRegistry;
 }): AcpxAgentCommand | undefined {
-  const normalizedAgentName = normalizeAgentName(params.agentName);
+  const normalizedAgentName = normalizeOptionalLowercaseString(params.agentName);
   if (!normalizedAgentName) {
     return undefined;
   }

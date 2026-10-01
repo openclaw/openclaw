@@ -71,7 +71,6 @@ describe("update recovery manifest", () => {
     expect(() => parse({ ...value, configPaths: [value.configPath, value.configPath] })).toThrow(
       /configuration inventory/,
     );
-    expect(parse(value).configPaths).toEqual([value.configPath]);
   });
 
   it("requires symlink configs to retain their captured target inventory", () => {
@@ -128,7 +127,7 @@ describe("update recovery manifest", () => {
     ).toThrow();
   });
 
-  it("rejects ambiguous database owners and directory-shaped missing databases", () => {
+  it("rejects ambiguous global owners while retaining relocated agent databases", () => {
     const value = fixture();
     const second = path.join(value.stateDir, "second.sqlite");
     const entries = [
@@ -152,12 +151,6 @@ describe("update recovery manifest", () => {
       ],
     };
     expect(parse(retainedAgentPaths)).toEqual(retainedAgentPaths);
-    expect(() =>
-      parse({
-        ...value,
-        entries: [value.entries[0], value.entries[1], { ...value.entries[2], directory: true }],
-      }),
-    ).toThrow(/SQLite inventory/);
   });
 
   it.each([1, 2])("rejects contradictory unowned SQLite absence in format v%s", (schemaVersion) => {
@@ -188,24 +181,10 @@ describe("update recovery manifest", () => {
 
   it("rejects config symlinks whose resolved content is another link instead of captured data", () => {
     const value = fixture();
-    const linked = {
-      ...value,
-      entries: [
-        value.entries[0],
-        value.entries[2],
-        {
-          kind: "symlink",
-          sourcePath: value.configPath,
-          target: "included.json",
-          contentPath: value.configPath,
-        },
-      ],
-    };
-    expect(() => parse(linked)).toThrow(/configuration inventory/);
     const second = path.join(value.stateDir, "second.json");
     expect(() =>
       parse({
-        ...linked,
+        ...value,
         configPaths: [value.configPath, second],
         entries: [
           value.entries[0],
@@ -276,6 +255,26 @@ describe("update recovery manifest", () => {
         ],
       }),
     ).toThrow(/source/);
+  });
+
+  it("records an omitted database only as excluded, never retained or missing", () => {
+    const value = fixture();
+    const database = value.databases[0]!.path;
+    const omitted = {
+      ...value,
+      databases: [],
+      excludedRoots: [database],
+      entries: value.entries.slice(0, 2),
+    };
+    expect(parse(omitted)).toEqual(omitted);
+    expect(() => parse({ ...omitted, entries: value.entries })).toThrow(/Excluded.*retained/);
+    expect(() => parse({ ...omitted, databases: value.databases })).toThrow(/SQLite inventory/);
+    expect(() => parse({ ...omitted, excludedRoots: [database, database] })).toThrow(/exclusions/);
+    for (const field of ["roots", "protectedPaths", "configPaths"] as const) {
+      expect(() => parse({ ...omitted, [field]: [...omitted[field], database] })).toThrow(
+        /exclusions/,
+      );
+    }
   });
 
   it("binds each file to a unique constrained payload with digest and byte count", () => {

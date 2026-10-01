@@ -26,7 +26,7 @@ export function modelCatalogEventInvalidation(
   event: Pick<GatewayEventFrame, "event" | "payload">,
 ): ModelCatalogInvalidation | undefined {
   if (event.event === "config.changed") {
-    return "clear";
+    return "refresh";
   }
   if (event.event === "chat.metadata.changed") {
     const payload = asNullableRecord(event.payload);

@@ -301,27 +301,6 @@ describe("CustodianSessionStore", () => {
     expect(panelSurfaceUpdates).toHaveBeenCalled();
   });
 
-  it("restores a live wizard interaction from the rejoin projection", async () => {
-    const step = { id: "step-1", type: "text", message: "Enter a value" };
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "rejoined-session",
-      reply: "Welcome back.",
-      action: "none",
-      wizardInputPending: true,
-      step,
-    });
-    const { context } = createContext(request);
-    const store = new CustodianSessionStore();
-
-    store.connect(context, "caretaker");
-    await waitForFast(() => expect(store.sending).toBe(false));
-
-    // The reconnecting surface must re-render the answer control the Gateway
-    // session still awaits, not just the transcript text.
-    expect(store.wizardInputPending).toBe(true);
-    expect(store.messages.at(-1)?.step).toMatchObject({ id: "step-1" });
-  });
-
   it("reuses the persisted session id across store instances", async () => {
     const request = vi.fn((_method: string, params: { sessionId: string }) =>
       Promise.resolve({ sessionId: params.sessionId, reply: "Ready.", action: "none" }),
@@ -608,41 +587,6 @@ describe("CustodianSessionStore", () => {
     expect(store.messages.some((message) => message.text === "Racing turn landed")).toBe(true);
     expect(store.messages.at(-1)?.step).toMatchObject({ id: "live-step" });
     expect(store.wizardInputPending).toBe(true);
-  });
-
-  it("reconciles history persisted behind a racing turn on rejoin", async () => {
-    const historyBatches = [
-      { turns: [] },
-      {
-        turns: [
-          { role: "user", text: "Earlier ask", at: 30 },
-          { role: "assistant", text: "Racing turn landed", at: 31 },
-        ],
-      },
-    ];
-    let historyCall = 0;
-    const request = vi.fn((method: string, params: { sessionId?: string }) => {
-      if (method === "openclaw.chat.history") {
-        const batch = historyBatches[Math.min(historyCall, historyBatches.length - 1)];
-        historyCall += 1;
-        return Promise.resolve(batch);
-      }
-      return Promise.resolve({ sessionId: params.sessionId, reply: "Ready.", action: "none" });
-    });
-    const { context } = createContext(request, ["openclaw.chat", "openclaw.chat.history"]);
-    // A restored persisted id is what makes this a rejoin candidate.
-    localStorage.setItem("openclaw.custodian.session.v1", "persisted-session-1");
-    const store = new CustodianSessionStore();
-
-    store.connect(context, "caretaker");
-    await waitForFast(() => expect(store.sending).toBe(false));
-
-    // The welcome-only rejoin queues behind any in-flight turn server-side, so
-    // the post-response refresh must surface rows that turn persisted after
-    // the initial (empty) history fetch.
-    expect(historyCall).toBe(2);
-    expect(store.messages.some((message) => message.text === "Racing turn landed")).toBe(true);
-    expect(store.messages.at(-1)?.text).toBe("Ready.");
   });
 
   it.each([

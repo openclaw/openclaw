@@ -1,8 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
+import { canReloadControlUiDocument } from "../../app/document-reload-guard.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { reviewPrivateComposerDraft } from "../chat/components/private-composer-recovery-dialog.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { restoreDraft, retainDraft } from "./draft-navigation-handoff.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
@@ -108,6 +111,52 @@ afterEach(() => {
 });
 
 describe("NewSessionDraftPersistence restore race", () => {
+  it("preserves a newer edit when stored attachment hydration succeeds late", async () => {
+    const flow = createFlow();
+    const hydrationEntered = createDeferred();
+    const hydration = createDeferred<[]>();
+    const restoreSelection = vi.fn();
+    flow.draftPersistence.modelSelection = {
+      read: () => undefined,
+      restore: restoreSelection,
+      retire: vi.fn(),
+    };
+    store.readDurableComposerDraft.mockResolvedValueOnce({
+      status: "found",
+      draft: {
+        revision: 7,
+        text: "@Alex stored draft",
+        mentions: [{ profileId: "old-alex", start: 0, end: 5 }],
+        modelSelection: { agentId: "main", model: "openai/stored", thinkingLevel: "low" },
+        attachments: [],
+        writeId: "stored",
+      },
+    });
+    store.hydrateDurableComposerAttachments.mockImplementationOnce(() => {
+      hydrationEntered.resolve();
+      return hydration.promise;
+    });
+    try {
+      flow.draftPersistence.setOwner("ws://gateway.test", "recovery-a");
+      flow.draftPersistence.activateRoute("agent:main");
+      await hydrationEntered.promise;
+      const mentions = [{ profileId: "new-alex", start: 0, end: 5 }];
+      flow.setMessage("@Alex newer edit", mentions);
+      hydration.resolve([]);
+      // The restore registered its continuation before this await.
+      await hydration.promise;
+      expect(flow.message).toBe("@Alex newer edit");
+      expect(flow.mentions).toEqual(mentions);
+      expect(restoreSelection).not.toHaveBeenCalled();
+    } finally {
+      hydration.resolve([]);
+      await hydration.promise;
+      const submitted = flow.draftPersistence.captureSubmission();
+      flow.disconnect();
+      await Promise.all(submitted.mutation.writes);
+    }
+  });
+
   it.each(["read", "attachments"] as const)(
     "never flushes model-only edits after failed %s restoration",
     async (failure) => {
@@ -336,7 +385,7 @@ describe("NewSessionDraftPersistence restore race", () => {
 
   it("keeps an incognito draft private when navigation hands it to a fresh page", async () => {
     const { context, flow: source } = createDraftFixture();
-    const handoff = createChatAttachmentHandoff();
+    const handoff = createChatAttachmentHandoff(context.gateway);
     Object.assign(context, { chatAttachmentHandoff: handoff });
     source.draftPersistence.setOwner("ws://gateway.example", "principal-a");
     source.draftPersistence.selectRoute("private-route");
@@ -344,8 +393,10 @@ describe("NewSessionDraftPersistence restore race", () => {
     source.setMessage("private incognito draft");
     retainDraft(context, source, "private-route", "private-route");
     source.disconnect();
+    expect(canReloadControlUiDocument()).toBe(false);
     const target = createFlow();
     restoreDraft(context, target, "private-route", "");
+    expect(canReloadControlUiDocument()).toBe(true);
     await settle();
     if (store.pendingReads.length) {
       await resolvePendingRead({ status: "not-found", revision: Date.now() });
@@ -356,6 +407,7 @@ describe("NewSessionDraftPersistence restore race", () => {
     expect(store.writeDurableComposerSnapshot).not.toHaveBeenCalled();
     target.disconnect();
     handoff.dispose();
+    expect(canReloadControlUiDocument()).toBe(true);
   });
 
   it.each(["conflict", "late commit"])("reconciles a handed-off edit after %s", async (outcome) => {
@@ -417,9 +469,10 @@ describe("NewSessionDraftPersistence restore race", () => {
 
   it("lets durable restoration supersede a stale handoff during initial owner setup", async () => {
     const { context, flow } = createDraftFixture();
-    const handoff = createChatAttachmentHandoff();
+    const handoff = createChatAttachmentHandoff(context.gateway);
     Object.assign(context, { chatAttachmentHandoff: handoff });
     handoff.prepare({
+      reviewPrivateDraft: reviewPrivateComposerDraft,
       owner: context.gateway.snapshot.client,
       paneId: "new-session-draft",
       scopeKey: "first-owner",

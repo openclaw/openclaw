@@ -1,5 +1,5 @@
 import os from "node:os";
-import { parseStrictJsonObject } from "./extension-relay/strict-json.js";
+import { parseStrictJsonObject } from "../../chrome-extension/modules/strict-json.js";
 
 const BROWSER_NATIVE_REQUEST_MAX_BYTES = 4 * 1024;
 const BROWSER_NATIVE_RESPONSE_MAX_BYTES = 1024 * 1024;

@@ -1,4 +1,3 @@
-// Mattermost plugin module implements reactions behavior.
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   asDateTimestampMs,

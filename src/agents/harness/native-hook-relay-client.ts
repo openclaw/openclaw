@@ -1,5 +1,6 @@
 import { request as httpRequest } from "node:http";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { readNativeHookRelayClientBridgeRecord } from "./native-hook-relay-client-store.js";
 import { DEFAULT_RELAY_TIMEOUT_MS } from "./native-hook-relay-constants.js";
@@ -169,6 +170,7 @@ function isRetryableNativeHookRelayBridgeError(error: unknown): boolean {
     code === "ENOENT" ||
     code === "ECONNREFUSED" ||
     code === "EAGAIN" ||
+    isSqliteLockError(error) ||
     (error instanceof Error && error.message === "native hook relay bridge not found")
   );
 }

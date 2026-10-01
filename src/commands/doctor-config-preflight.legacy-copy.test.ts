@@ -2,37 +2,19 @@
 // looking like a clean fresh install while the operator's config exists.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 
 const envKeys = ["HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"] as const;
-const savedEnv = new Map<string, string | undefined>();
 
 function setEnv(values: Partial<Record<(typeof envKeys)[number], string>>) {
   for (const key of envKeys) {
-    if (!savedEnv.has(key)) {
-      savedEnv.set(key, process.env[key]);
-    }
-    const value = values[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
+    vi.stubEnv(key, values[key]);
   }
 }
 
-afterEach(() => {
-  for (const [key, value] of savedEnv) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-  savedEnv.clear();
-});
+afterEach(() => vi.unstubAllEnvs());
 
 describe("doctor legacy config migration failures", () => {
   it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(

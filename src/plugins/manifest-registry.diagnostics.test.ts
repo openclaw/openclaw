@@ -48,9 +48,10 @@ describe("loadPluginManifestRegistry compatibility diagnostics", () => {
         channels: ["external-chat"],
         configSchema: { type: "object" },
       };
-      writeManifest(globalDir, manifest);
+      writeManifest(globalDir, { ...manifest, uiCapabilities: "page" });
       writeManifest(configDir, {
         ...manifest,
+        uiCapabilities: [],
         ...(hasChannelConfigs
           ? { channelConfigs: { "external-chat": { schema: { type: "object" } } } }
           : {}),
@@ -78,6 +79,7 @@ describe("loadPluginManifestRegistry compatibility diagnostics", () => {
       });
 
       expect(registry.plugins.map((plugin) => plugin.rootDir)).toEqual([configDir]);
+      expectNoRegistryDiagnosticContains(registry, "invalid plugin manifest uiCapabilities");
       expect(registry.diagnostics).toContainEqual(
         expect.objectContaining({ level: "info", code: "explicit-config-plugin-selection" }),
       );

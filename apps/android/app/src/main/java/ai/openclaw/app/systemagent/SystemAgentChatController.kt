@@ -349,10 +349,8 @@ internal class SystemAgentChatController(
 
   private fun isCurrent(requestGeneration: Long): Boolean = generation.get() == requestGeneration
 
-  private fun markRouteChanged(requestGeneration: Long? = null) {
-    if (requestGeneration == null) {
-      invalidateRequest()
-    } else if (!generation.compareAndSet(requestGeneration, requestGeneration + 1)) {
+  private fun markRouteChanged(requestGeneration: Long) {
+    if (!generation.compareAndSet(requestGeneration, requestGeneration + 1)) {
       return
     }
     _state.update {
@@ -400,7 +398,7 @@ internal class SystemAgentChatController(
     val options = root["options"] as? JsonArray ?: return null
     if (header.isEmpty() || question.isEmpty() || options.size !in 2..4) return null
     val parsed =
-      options.mapNotNull { element ->
+      options.map { element ->
         val option = element as? JsonObject ?: return null
         val label =
           option["label"]
@@ -426,7 +424,7 @@ internal class SystemAgentChatController(
           recommended = option["recommended"]?.jsonPrimitive?.booleanOrNull == true,
         )
       }
-    if (parsed.size != options.size || parsed.map { it.label.lowercase() }.toSet().size != parsed.size) return null
+    if (parsed.map { it.label.lowercase() }.toSet().size != parsed.size) return null
     if (parsed.count { it.recommended } > 1) return null
     return SystemAgentChatQuestion(header = header, question = question, options = parsed)
   }

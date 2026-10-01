@@ -51,23 +51,18 @@ export function recordAgentHarnessToolResultTelemetry(params: {
   }
   // Only a live invocation may accept new media; committed effects remain evidence.
   if (!params.isError && params.result && !params.signal.aborted) {
-    const media = extractToolResultMediaArtifact(params.result);
+    const media = recordAgentHarnessToolResultMedia({
+      facts: params.telemetry,
+      toolName: params.toolName,
+      result: params.result,
+      mediaTrustResult: params.coreTtsToolResult ?? params.mediaTrustResult,
+      trustedLocalMediaToolNames: params.trustedLocalMediaToolNames,
+    });
     if (media) {
-      const mediaUrls = filterToolResultMediaUrls(
-        params.toolName,
-        media.mediaUrls,
-        params.coreTtsToolResult ?? params.mediaTrustResult ?? params.result,
-        params.trustedLocalMediaToolNames,
-      );
-      const seen = new Set(params.telemetry.toolMediaUrls);
       const autoDeliveryMediaUrls = new Set(params.telemetry.toolAutoDeliveryMediaUrls);
       const rawAutoDeliveryMediaUrls = new Set(params.autoDeliveryTtsMediaUrls);
       let retainsCoreTtsMedia = false;
-      for (const mediaUrl of mediaUrls) {
-        if (!seen.has(mediaUrl)) {
-          seen.add(mediaUrl);
-          params.telemetry.toolMediaUrls.push(mediaUrl);
-        }
+      for (const mediaUrl of media.mediaUrls) {
         if (rawAutoDeliveryMediaUrls.has(mediaUrl)) {
           autoDeliveryMediaUrls.add(mediaUrl);
           retainsCoreTtsMedia = true;
@@ -83,31 +78,22 @@ export function recordAgentHarnessToolResultTelemetry(params: {
       ) {
         params.telemetry.coreTtsToolResults.push(params.coreTtsToolResult);
       }
-      if (media.audioAsVoice) {
-        params.telemetry.toolAudioAsVoice = true;
-      }
     }
   }
   if (!params.messagingDelivered) {
     return undefined;
   }
-  params.telemetry.didSendViaMessagingTool = true;
   if (
     asOptionalRecord(asOptionalRecord(params.mediaTrustResult)?.details)?.sourceReplySink ===
     "internal-ui"
   ) {
     const sourceReplyPayload = params.extractSourceReplyPayload(params.result);
-    if (!sourceReplyPayload) {
-      return undefined;
-    }
-    const record = {
-      ...sourceReplyPayload,
-      ...(params.sourceReplyFinal !== undefined
-        ? { sourceReplyFinal: params.sourceReplyFinal }
-        : {}),
-    };
-    params.telemetry.messagingToolSourceReplyPayloads.push(record);
-    if (params.mediaDeliveryConfirmed) {
+    const record = recordAgentHarnessMessagingDelivery({
+      facts: params.telemetry,
+      sourceReplyPayload,
+      sourceReplyFinal: params.sourceReplyFinal,
+    });
+    if (record && params.mediaDeliveryConfirmed) {
       params.telemetry.confirmedMediaDeliveries.push({
         kind: "sourceReply",
         sourceUrls: params.resolveMessagingMediaSourceUrls(
@@ -117,27 +103,22 @@ export function recordAgentHarnessToolResultTelemetry(params: {
     }
     return record;
   }
-  const text = readFirstString(params.args, ["text", "message", "body", "content"]);
-  if (text) {
-    params.telemetry.messagingToolSentTexts.push(text);
-  }
   const mediaUrls = params.mediaDeliveryConfirmed
     ? params.collectMessagingMediaUrls(params.args)
     : [];
-  params.telemetry.messagingToolSentMediaUrls.push(...mediaUrls);
-  const record = {
-    ...(params.messagingTarget ?? {
+  const record = recordAgentHarnessMessagingDelivery({
+    facts: params.telemetry,
+    text: readFirstString(params.args, ["text", "message", "body", "content"]),
+    mediaUrls,
+    target: params.messagingTarget ?? {
       tool: params.toolName,
       provider: readFirstString(params.args, ["provider", "channel"]) ?? params.toolName,
       accountId: readFirstString(params.args, ["accountId", "account_id"]),
       to: readFirstString(params.args, ["to", "target", "recipient"]),
       threadId: readFirstString(params.args, ["threadId", "thread_id", "messageThreadId"]),
-    }),
-    ...(text ? { text } : {}),
-    ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
-    ...(params.sourceReplyFinal !== undefined ? { sourceReplyFinal: params.sourceReplyFinal } : {}),
-  };
-  params.telemetry.messagingToolSentTargets.push(record);
+    },
+    sourceReplyFinal: params.sourceReplyFinal,
+  });
   if (mediaUrls.length > 0) {
     params.telemetry.confirmedMediaDeliveries.push({
       kind: "outbound",
@@ -174,14 +155,18 @@ export function resolveAgentHarnessToolResultPresentation(params: {
 }
 
 /** Records a delivery already established by the caller's messaging receipt. */
-export function recordAgentHarnessMessagingDelivery(params: {
-  facts: AgentHarnessMessagingDeliveryFacts;
-  sourceReplyPayload?: MessagingToolSourceReplyPayload;
-  target?: MessagingToolSend;
-  text?: string;
-  mediaUrls?: string[];
-  sourceReplyFinal?: boolean;
-}): MessagingToolSend | MessagingToolSourceReplyPayload | undefined {
+export function recordAgentHarnessMessagingDelivery(
+  params: AgentHarnessMessagingDeliveryParams & {
+    target: MessagingToolSend;
+    sourceReplyPayload?: undefined;
+  },
+): MessagingToolSend;
+export function recordAgentHarnessMessagingDelivery(
+  params: AgentHarnessMessagingDeliveryParams,
+): MessagingToolSend | MessagingToolSourceReplyPayload | undefined;
+export function recordAgentHarnessMessagingDelivery(
+  params: AgentHarnessMessagingDeliveryParams,
+): MessagingToolSend | MessagingToolSourceReplyPayload | undefined {
   const { facts, sourceReplyPayload, target, text, mediaUrls = [], sourceReplyFinal } = params;
   facts.didSendViaMessagingTool = true;
   const finality = sourceReplyFinal !== undefined ? { sourceReplyFinal } : {};
@@ -237,6 +222,15 @@ export function recordAgentHarnessToolResultMedia(params: {
   }
   return { ...media, mediaUrls };
 }
+
+type AgentHarnessMessagingDeliveryParams = {
+  facts: AgentHarnessMessagingDeliveryFacts;
+  sourceReplyPayload?: MessagingToolSourceReplyPayload;
+  target?: MessagingToolSend;
+  text?: string;
+  mediaUrls?: string[];
+  sourceReplyFinal?: boolean;
+};
 
 export type AgentHarnessMessagingDeliveryFacts = {
   didSendViaMessagingTool: boolean;

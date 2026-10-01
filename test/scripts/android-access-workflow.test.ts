@@ -66,7 +66,10 @@ describe("Android Access native workflow", () => {
     expect(step.run).toContain('zipalign" -c -P 16 -v 4');
     expect(step.run).toContain('zipalign" -c -P 16 -v 4 "$apk"');
     expect(workflow.jobs["ci-gate"].needs).toContain("android-access-native");
-    expect(workflow.jobs["ci-gate"].steps[0].env.JOB_RESULTS).toContain(
+    const aggregate = workflow.jobs["ci-gate"].steps.find(
+      (entry: { name?: string }) => entry.name === "Verify selected CI lanes",
+    );
+    expect(aggregate.env.JOB_RESULTS).toContain(
       "android-access-native=${{ needs.android-access-native.result }}|${{ needs.preflight.outputs.run_android_access_native }}",
     );
   });

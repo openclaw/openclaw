@@ -4,7 +4,6 @@ import { isDeepStrictEqual } from "node:util";
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/env-vars.js";
 import { createConfigIO } from "../../config/io.js";
-import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../../config/sessions/targets.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -17,8 +16,10 @@ import {
   type OpenClawDatabaseSchemaPreflight,
 } from "../../state/openclaw-database-preflight.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { isArtifactPreservingStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { UpdatePreMutationError } from "./shared.js";
+import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 
 type TargetDatabaseSchemaContext = {
   config: OpenClawConfig;
@@ -57,7 +58,7 @@ export function formatSchemaRefusalLines(
     }),
     ...schemas.indeterminate.map(
       (database) =>
-        `${prefix}: could not inspect ${database.kind} database ${database.path}: ${database.reason}; retry once the gateway releases it.`,
+        `${prefix}: could not inspect ${database.kind} database ${database.path}: ${database.reason}; check database access and free disk space, then retry the update.`,
     ),
     OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
     "Installing manually via npm bypasses this guard; back up first and verify compatibility.",
@@ -83,6 +84,7 @@ async function checkTargetDatabaseSchemas(
   return preflightOpenClawDatabaseSchemas({
     env: context.env,
     supportedVersions,
+    preserveSourceArtifacts: isArtifactPreservingStateRead(),
     // Include default on-disk stores that update-time Doctor can later touch,
     // without resolving configured candidates into writable migration owners.
     configuredAgentDatabaseTargets: [],
@@ -112,7 +114,7 @@ export async function captureTargetDatabaseSchemaContext(
   // a caller's plan must not authorize a different managed service's config.
   const planned = options?.legacyConfigPlan;
   const before = planned?.snapshot;
-  const legacyConfigPlan =
+  let legacyConfigPlan =
     before &&
     before.path === snapshot.path &&
     before.exists === snapshot.exists &&
@@ -132,32 +134,19 @@ export async function captureTargetDatabaseSchemaContext(
       ? planned
       : undefined;
   if (before?.path === snapshot.path && !legacyConfigPlan) {
-    throw new UpdatePreMutationError(
-      "database-schema-preflight",
-      `Update refused: planned configuration changed at ${snapshot.path}. Retry against the current source.`,
-    );
+    // This is read-only admission. A concurrent save needs a fresh projection,
+    // never reuse of the old source's plan or refusal merely because it changed.
+    if (!snapshot.valid) {
+      const { planLegacyConfigForUpdateChannel } =
+        await import("../../commands/doctor/legacy-config-repair.js");
+      legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
+    }
   }
   if (
     (!snapshot.valid && !legacyConfigPlan && configValidation !== "candidate") ||
     snapshot.readError
   ) {
-    throw new UpdatePreMutationError(
-      "invalid-config",
-      [
-        `Update refused: configuration is invalid or unreadable at ${snapshot.path}.`,
-        ...formatConfigIssueLines(
-          // Validator messages can contain config values, including misplaced secrets.
-          snapshot.issues.map(({ path: issuePath, pathSegments }) => ({
-            path: issuePath,
-            pathSegments,
-            message: "Invalid configuration field",
-          })),
-          "-",
-          { normalizeRoot: true },
-        ),
-        "Run `openclaw doctor --fix` to repair retired or unrecognized configuration fields, then correct any remaining errors before retrying.",
-      ].join("\n"),
-    );
+    throw createUpdateConfigFailure(snapshot);
   }
   return {
     env: inspectionEnv,

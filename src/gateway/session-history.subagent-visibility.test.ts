@@ -235,14 +235,12 @@ describe("subagent coordination history", () => {
     });
   });
 
-  it.each(
-    [false, true].flatMap((deferSources) =>
-      ["uncached-source", "cached-source", "cached-run", "projected-fast-path"].map((readKind) => ({
-        readKind,
-        deferSources,
-      })),
-    ),
-  )(
+  it.each([
+    { readKind: "uncached-source", deferSources: true },
+    { readKind: "cached-source", deferSources: false },
+    { readKind: "cached-run", deferSources: true },
+    { readKind: "projected-fast-path", deferSources: false },
+  ])(
     "rejects local history after shared-state retirement ($readKind, deferred=$deferSources)",
     async ({ readKind, deferSources }) => {
       await withHistory(
@@ -375,7 +373,6 @@ describe("subagent coordination history", () => {
           stateDatabase: {
             path: stateContext.admission.databasePath,
             environment: stateContext.environment,
-            coordinatorRuntime: stateContext.coordinatorRuntime,
           },
         });
         const snapshot = await readSessionHistorySnapshotKernel(

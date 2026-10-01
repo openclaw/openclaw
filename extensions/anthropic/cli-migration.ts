@@ -1,7 +1,3 @@
-/**
- * Claude CLI setup migration helpers. They rewrite legacy Claude CLI model refs
- * to Anthropic refs while preserving runtime allowlist entries for CLI execution.
- */
 import { buildModelAliasIndex, resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig, ProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -10,24 +6,14 @@ import {
   resolveClaudeCliAnthropicModelRefs,
   splitTrailingModelAuthProfile,
 } from "./claude-model-refs.js";
-import { CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF } from "./cli-constants.js";
-import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-shared.js";
+import {
+  CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
+  CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
+} from "./cli-constants.js";
 
 type AgentDefaultsModel = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["model"];
 type AgentDefaultsModels = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"];
-
-function toAnthropicModelRef(raw: string): string | null {
-  return resolveClaudeCliAnthropicModelRefs(raw)?.rewriteRef ?? null;
-}
-
-function toAnthropicRuntimeRefs(raw: string): string[] {
-  return resolveClaudeCliAnthropicModelRefs(raw)?.runtimeRefs ?? [];
-}
-
-function toAnthropicSelectedModelRef(raw: string): string | undefined {
-  const resolved = resolveClaudeCliAnthropicModelRefs(raw);
-  return resolved?.rewriteRef ?? resolved?.selectedRef;
-}
 
 function rewriteModelSelection(config: OpenClawConfig): {
   value: AgentDefaultsModel;
@@ -50,8 +36,9 @@ function rewriteModelSelection(config: OpenClawConfig): {
       // Resolve before migrating the entry map: a legacy alias row can disappear
       // when its canonical target already exists with different metadata.
       const target = configured.ref.provider + "/" + configured.ref.model;
-      runtimeRefs.push(...toAnthropicRuntimeRefs(target));
-      const selected = toAnthropicSelectedModelRef(target);
+      const resolved = resolveClaudeCliAnthropicModelRefs(target);
+      runtimeRefs.push(...(resolved?.runtimeRefs ?? []));
+      const selected = resolved?.rewriteRef ?? resolved?.selectedRef;
       if (!selected) {
         return { value: raw, primary: raw };
       }
@@ -59,11 +46,12 @@ function rewriteModelSelection(config: OpenClawConfig): {
       const value = profile ? selected + "@" + profile : selected;
       return { value, primary: value, changed: value !== raw };
     }
-    runtimeRefs.push(...toAnthropicRuntimeRefs(raw));
-    const converted = toAnthropicModelRef(raw);
+    const resolved = resolveClaudeCliAnthropicModelRefs(raw);
+    runtimeRefs.push(...(resolved?.runtimeRefs ?? []));
+    const converted = resolved?.rewriteRef;
     return {
       value: converted ?? raw,
-      primary: converted ?? toAnthropicSelectedModelRef(raw),
+      primary: converted ?? resolved?.selectedRef,
       changed: Boolean(converted),
     };
   }
@@ -107,12 +95,10 @@ function rewriteModelEntryMap(models: Record<string, unknown> | undefined): {
   const runtimeRefs: string[] = [];
 
   for (const [rawKey, value] of Object.entries(models)) {
-    runtimeRefs.push(...toAnthropicRuntimeRefs(rawKey));
-    const converted = toAnthropicModelRef(rawKey);
-    if (!converted) {
-      continue;
-    }
-    if (converted === rawKey) {
+    const resolved = resolveClaudeCliAnthropicModelRefs(rawKey);
+    runtimeRefs.push(...(resolved?.runtimeRefs ?? []));
+    const converted = resolved?.rewriteRef;
+    if (!converted || converted === rawKey) {
       continue;
     }
     if (!Object.hasOwn(next, converted)) {
@@ -141,14 +127,12 @@ function seedClaudeCliAllowlist(
   selectedRefs: readonly string[] = [],
 ): NonNullable<AgentDefaultsModels> {
   const next = { ...models };
-  const runtimeRefs = new Set<string>();
-  for (const ref of CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS) {
-    const canonicalRef = toAnthropicModelRef(ref) ?? ref;
-    runtimeRefs.add(canonicalRef);
-  }
-  for (const ref of selectedRefs) {
-    runtimeRefs.add(ref);
-  }
+  const runtimeRefs = new Set([
+    ...CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.map(
+      (ref) => resolveClaudeCliAnthropicModelRefs(ref)?.rewriteRef ?? ref,
+    ),
+    ...selectedRefs,
+  ]);
   for (const ref of runtimeRefs) {
     const current = Object.hasOwn(next, ref) ? next[ref] : undefined;
     Object.defineProperty(next, ref, {
@@ -161,7 +145,6 @@ function seedClaudeCliAllowlist(
   return next;
 }
 
-/** Build the config migration result for adopting Claude CLI-backed Anthropic defaults. */
 export function buildAnthropicCliMigrationResult(config: OpenClawConfig): ProviderAuthResult {
   const defaults = config.agents?.defaults;
   const rewrittenModel = rewriteModelSelection(config);

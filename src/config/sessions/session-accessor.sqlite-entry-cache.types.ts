@@ -1,15 +1,14 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { SessionEntryCacheDatabase } from "./session-accessor.sqlite-entry-cache-projection.js";
-import type { SessionEntry } from "./types.js";
+import { isDeepStrictEqual } from "node:util";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import type { InternalSessionEntry, SessionEntry } from "./types.js";
+
+export type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 
 export type SessionEntryCacheReadOptions = {
   cache: boolean;
   latest?: boolean;
   projection?: "full" | "list";
-  /** Uncached mixed snapshot: retain complete selected rows beside sibling metadata. */
-  fullEntryKeys?: readonly string[];
-  /** Stream full JSON once, retaining prompt snapshots only for selected rows. Never cached. */
-  retainFullEntry?: (sessionKey: string, entry: SessionEntry) => boolean;
   /** Topology admits metadata first; its worker owns participant hydration. Never cache this view. */
   deferParticipants?: true;
 };
@@ -20,15 +19,62 @@ export type SessionEntryCacheSnapshot = {
 };
 
 export type SessionSharingEntry = Pick<
-  SessionEntry,
+  InternalSessionEntry,
   | "sessionId"
   | "updatedAt"
   | "lifecycleRevision"
+  | "lifecycleRunId"
+  | "activeWriterRunId"
+  | "subagentRecovery"
+  | "archivedAt"
+  | "repositoryWorkspaceId"
   | "visibility"
   | "incognito"
   | "createdActor"
+  | "owner"
   | "sandbox"
+  | "spawnedBy"
+  | "spawnDepth"
+  | "parentSessionKey"
+  | "sessionStartedAt"
 >;
+
+export function projectSessionSharingEntry(entry: InternalSessionEntry): SessionSharingEntry {
+  return {
+    sessionId: entry.sessionId,
+    updatedAt: entry.updatedAt,
+    lifecycleRevision: entry.lifecycleRevision,
+    lifecycleRunId: entry.lifecycleRunId,
+    activeWriterRunId: entry.activeWriterRunId,
+    ...(entry.subagentRecovery
+      ? {
+          subagentRecovery: {
+            lastRunId: entry.subagentRecovery.lastRunId,
+            sessionLifecycleRunId: entry.subagentRecovery.sessionLifecycleRunId,
+          },
+        }
+      : {}),
+    archivedAt: entry.archivedAt,
+    ...(entry.repositoryWorkspaceId === undefined
+      ? {}
+      : { repositoryWorkspaceId: entry.repositoryWorkspaceId }),
+    visibility: entry.visibility,
+    incognito: entry.incognito,
+    createdActor: entry.createdActor ? { ...entry.createdActor } : undefined,
+    owner: entry.owner
+      ? {
+          ...entry.owner,
+          actor: { ...entry.owner.actor },
+          assignedBy: entry.owner.assignedBy ? { ...entry.owner.assignedBy } : undefined,
+        }
+      : undefined,
+    sandbox: entry.sandbox,
+    spawnedBy: entry.spawnedBy,
+    spawnDepth: entry.spawnDepth,
+    parentSessionKey: entry.parentSessionKey,
+    sessionStartedAt: entry.sessionStartedAt,
+  };
+}
 
 export type SessionEntryPlaceholder = Readonly<{ sessionId: string }>;
 
@@ -46,11 +92,19 @@ export function createSessionEntryCreationOperation(): SessionEntryCreationOpera
   return Object.freeze({ [creationBrand]: true });
 }
 
-export type CommittedSessionSharingFacts = {
-  entry: SessionSharingEntry | undefined;
-  placeholder?: SessionEntryPlaceholder;
-  membership: ReadonlySet<string>;
-};
+/** Timestamp-only progress does not change retained sharing authority. */
+export function sessionSharingEntriesEqual(
+  previous: InternalSessionEntry | undefined,
+  current: InternalSessionEntry | undefined,
+): boolean {
+  if (!previous || !current) {
+    return false;
+  }
+  const { updatedAt: _previousUpdatedAt, ...before } = projectSessionSharingEntry(previous);
+  const { updatedAt: _currentUpdatedAt, ...after } = projectSessionSharingEntry(current);
+  return isDeepStrictEqual(before, after);
+}
+
 export type SessionEntryPublicationSource = {
   identity: string | symbol;
   birthtime: string | undefined;
@@ -67,6 +121,7 @@ export type PreparedSessionEntryChanges = {
 
 export type SessionEntryReplacementPublication = {
   kind: "session-entry-replacements";
+  pendingArchiveRecovery: boolean;
   previous: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>;
   current: Map<string, SessionEntry>;
   source?: SessionEntryPublicationSource;
@@ -90,7 +145,6 @@ export type CreationDatabase =
     };
 export type CreationRecord = {
   agentId: string;
-  operation: SessionEntryCreationOperation;
   source: CreationDatabase;
   sessionKey: string;
   active: boolean;
@@ -112,13 +166,6 @@ export type SessionEntryPublicationRecord =
     }
   | { kind: "placeholder"; sharingChange: "changed"; receipt: PlaceholderReceipt };
 
-export type PreparedSessionSharingRead = {
-  pending: Set<object>;
-  facts: CommittedSessionSharingFacts | undefined;
-  generation?: {
-    current: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | null | undefined;
-  };
-};
 export type PendingSessionEntryPublication = {
   superseded: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined>;
   metadataSuperseded: Set<string>;

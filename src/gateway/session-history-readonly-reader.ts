@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveConversationInDatabase } from "../config/sessions/session-accessor.sqlite-conversation-read.js";
 import { readSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { readSessionTranscriptRunInputVisibilityFromProjection } from "../config/sessions/session-accessor.sqlite-history-input-visibility.js";
 import { readTranscriptDisplayDeltaFromProjection } from "../config/sessions/session-accessor.sqlite-history-query.js";
@@ -6,19 +7,23 @@ import {
   readCurrentProjectionSnapshot,
   type CurrentTranscriptProjection,
 } from "../config/sessions/session-accessor.sqlite-projection-read.js";
-import { readSessionTranscriptBindingFromProjection } from "../config/sessions/session-accessor.sqlite-task-history.js";
+import { readSessionTranscriptBindingFromProjection } from "../config/sessions/session-accessor.sqlite-transcript-binding.js";
 import type { SessionTranscriptRawDeltaLimits } from "../config/sessions/session-accessor.types.js";
 import { readWithCanonicalSessionAdmission } from "../config/sessions/session-canonical-key.js";
+import type { SessionConversationBinding } from "../config/sessions/session-history-types.js";
+import { listSessionReactionsInDatabase } from "../config/sessions/session-reaction-store.read.js";
 import {
   SessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
 } from "../config/sessions/session-transcript-projection-error.js";
 import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.metadata.js";
 import { withScopedOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-scope.js";
+import type { OpenClawAgentReadOnlyDatabase } from "../state/openclaw-agent-db-readonly.js";
 import {
   isSubagentCoordinationHistoryInput,
   type SubagentCoordinationDisplayResolver,
 } from "./chat-display-projection.history.js";
+import type { SessionArtifactReadQuery } from "./session-artifact-read.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createBoundSessionHistorySubagentSource } from "./session-history-subagent-sources.js";
 import { createSessionTranscriptReader } from "./session-transcript-read-kernel.js";
@@ -40,9 +45,7 @@ export function createBoundSessionHistorySubagentProjection(
     readSourceDatabases,
   );
   return {
-    isSubagentSession(sessionKey) {
-      return readSource(sessionKey);
-    },
+    isSubagentSession: readSource,
     isSubagentRunMessage(runId, messageSeq) {
       if (messageSeq === undefined) {
         return false;
@@ -77,9 +80,12 @@ export function createBoundSessionHistorySubagentProjection(
   };
 }
 
-export function createReadonlySessionHistoryReader(target: PreparedSessionHistoryReadTarget) {
-  const sourceDatabases = target.sourceDatabases;
-  const readSnapshot = <T>(read: (projection: CurrentTranscriptProjection) => T): T => {
+export function createReadonlySessionHistoryReader(
+  target: Omit<PreparedSessionHistoryReadTarget, "sourceDiscovery">,
+  resolveSourceDatabases?: () => GatewaySessionStoreReadSources | undefined,
+) {
+  let sourceDatabases = target.sourceDatabases;
+  const readDatabase = <T>(read: (database: OpenClawAgentReadOnlyDatabase) => T): T => {
     const result = withScopedOpenClawAgentDatabaseReadOnly(
       (database) =>
         readWithCanonicalSessionAdmission(database, () => {
@@ -89,31 +95,59 @@ export function createReadonlySessionHistoryReader(target: PreparedSessionHistor
           if (entryValidationKey !== undefined) {
             readSessionEntryRow(database, entryValidationKey);
           }
-          return readCurrentProjectionSnapshot(
-            database,
-            {
-              agentId: target.transcript.agentId,
-              sessionId: target.transcript.sessionId,
-              sessionKey: target.transcript.sessionKey,
-              databaseAgentId: target.database.agentId,
-              path: target.database.path,
-            },
-            read,
-          );
+          return read(database);
         }),
       target.database,
     );
     if (!result.found) {
       throw new SessionTranscriptStorageUnavailableError(result.reason);
     }
-    if (result.value.kind === "unavailable") {
+    return result.value;
+  };
+  const readSnapshot = <T>(read: (projection: CurrentTranscriptProjection) => T): T => {
+    const result = readDatabase((database) =>
+      readCurrentProjectionSnapshot(
+        database,
+        {
+          agentId: target.transcript.agentId,
+          sessionId: target.transcript.sessionId,
+          sessionKey: target.transcript.sessionKey,
+          databaseAgentId: target.database.agentId,
+          path: target.database.path,
+        },
+        read,
+      ),
+    );
+    if (result.kind === "unavailable") {
       throw new SessionTranscriptProjectionUnavailableError(target.transcript.sessionId);
     }
-    return result.value.value;
+    return result.value;
   };
   return {
-    readTranscriptBinding: (run?: { id: string; maxBytes: number }) =>
-      readSnapshot((projection) => readSessionTranscriptBindingFromProjection(projection, run)),
+    readArtifactSummaries: async (query: Extract<SessionArtifactReadQuery, { kind: "list" }>) => {
+      const { readArtifactSummariesFromProjection } = await import("./session-artifact-read.js");
+      return readSnapshot((projection) => readArtifactSummariesFromProjection(projection, query));
+    },
+    readReactions: () =>
+      readDatabase((database) => {
+        if (!target.transcript.sessionKey) {
+          throw new Error("Reaction reads require a session key");
+        }
+        return listSessionReactionsInDatabase(database, target.transcript.sessionKey, {
+          sessionId: target.transcript.sessionId,
+        });
+      }),
+    readConversationBinding: (conversationRef: string): SessionConversationBinding | null =>
+      readDatabase((database) => {
+        const conversation = resolveConversationInDatabase(database, conversationRef);
+        if (!conversation) {
+          return null;
+        }
+        const { channel, accountId, target: address, threadId, nativeChannelId } = conversation;
+        return { channel, accountId, target: address, threadId, nativeChannelId };
+      }),
+    readTranscriptBinding: () =>
+      readSnapshot((projection) => readSessionTranscriptBindingFromProjection(projection)),
     readTranscriptDisplayDelta: (limits: SessionTranscriptRawDeltaLimits) =>
       readSnapshot((projection) => readTranscriptDisplayDeltaFromProjection(projection, limits)),
     ...createSessionTranscriptReader({
@@ -123,7 +157,7 @@ export function createReadonlySessionHistoryReader(target: PreparedSessionHistor
     subagentCoordination: createBoundSessionHistorySubagentProjection(
       readSnapshot,
       target.stateDatabase,
-      () => sourceDatabases,
+      () => (sourceDatabases ??= resolveSourceDatabases?.()),
     ),
   };
 }

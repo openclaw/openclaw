@@ -40,21 +40,14 @@ export function createMemorySearchDeadlineControl(): MemorySearchDeadlineControl
     report(action) {
       if (action === "pause") {
         depth += 1;
-        if (depth === 1) {
-          for (const listener of listeners) {
-            listener("pause");
-          }
+        if (depth !== 1) {
+          return;
         }
+      } else if (depth === 0 || --depth !== 0) {
         return;
       }
-      if (depth === 0) {
-        return;
-      }
-      depth -= 1;
-      if (depth === 0) {
-        for (const listener of listeners) {
-          listener("resume");
-        }
+      for (const listener of listeners) {
+        listener(action === "pause" ? "pause" : "resume");
       }
     },
     subscribe(listener) {

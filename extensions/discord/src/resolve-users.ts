@@ -1,14 +1,11 @@
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS, fetchDiscord } from "./api.js";
 import { listGuilds, type DiscordGuildSummary } from "./guilds.js";
-import {
-  buildDiscordUnresolvedResults,
-  filterDiscordGuilds,
-  resolveDiscordAllowlistToken,
-} from "./resolve-allowlist-common.js";
+import { filterDiscordGuilds, resolveDiscordAllowlistToken } from "./resolve-allowlist-common.js";
 
 type DiscordUser = {
   id: string;
@@ -66,17 +63,14 @@ function parseDiscordUserInput(raw: string): {
 function scoreDiscordMember(member: DiscordMember, query: string): number {
   const q = normalizeLowercaseStringOrEmpty(query);
   const user = member.user;
-  const candidates = [user.username, user.global_name, member.nick ?? undefined]
-    .map((value) => {
-      const normalized = normalizeOptionalString(value);
-      return normalized ? normalizeLowercaseStringOrEmpty(normalized) : undefined;
-    })
-    .filter(Boolean) as string[];
+  const candidates = [user.username, user.global_name, member.nick]
+    .map(normalizeOptionalLowercaseString)
+    .filter((value) => value !== undefined);
   let score = 0;
   if (candidates.some((value) => value === q)) {
     score += 3;
   }
-  if (candidates.some((value) => value?.includes(q))) {
+  if (candidates.some((value) => value.includes(q))) {
     score += 1;
   }
   if (!user.bot) {
@@ -92,7 +86,7 @@ export async function resolveDiscordUserAllowlist(params: {
 }): Promise<DiscordUserResolution[]> {
   const token = resolveDiscordAllowlistToken(params.token);
   if (!token) {
-    return buildDiscordUnresolvedResults(params.entries, (input) => ({
+    return params.entries.map((input) => ({
       input,
       resolved: false,
     }));

@@ -1,9 +1,6 @@
-// Sidebar agent menu and the menu focus/typeahead helpers shared with the
-// footer identity menu, split out of app-sidebar.ts to keep that hot
-// component inside the TS LOC ratchet.
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
-import type { AgentIdentityResult } from "../api/types.ts";
+import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForAgentPanel } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
@@ -14,7 +11,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { renderAgentSelectAvatar, renderAgentSelectCopy } from "./agent-select.ts";
-import { renderSidebarMenuTrigger } from "./app-sidebar-nav-menus.ts";
+import { renderSidebarMenuAction, renderSidebarMenuTrigger } from "./app-sidebar-nav-menus.ts";
 import { icons, type IconName } from "./icons.ts";
 import {
   consumeDropdownKeyboardDismissal,
@@ -78,6 +75,24 @@ export function closeMenuAfterOwnDropdownHide(
     return;
   }
   onClose(consumeDropdownKeyboardDismissal(event));
+}
+
+export function consumeSidebarMenuSelection(
+  event: CustomEvent<{ item: HTMLElement & { value?: string } }>,
+  onClose: (restoreFocus?: boolean) => void,
+): string | undefined {
+  event.preventDefault();
+  const item = event.detail.item;
+  if (item.dataset.nativeNavigation) {
+    delete item.dataset.nativeNavigation;
+    onClose(false);
+    return undefined;
+  }
+  const value = item.value;
+  if (value) {
+    onClose(false);
+  }
+  return value;
 }
 
 export function moveSidebarMenuFocus(event: KeyboardEvent): boolean {
@@ -149,18 +164,12 @@ function typeaheadSidebarMenuFocus(event: KeyboardEvent): boolean {
   return true;
 }
 
-type AgentMenuAgent = {
-  id: string;
-  name?: string;
-  identity?: { name?: string; emoji?: string; avatar?: string; avatarUrl?: string };
-};
-
 type SidebarAgentMenuParams = {
   position: { x: number; top: number };
   basePath: string;
   activeId: string;
   activeName: string;
-  agents: readonly AgentMenuAgent[];
+  agents: readonly GatewayAgentRow[];
   identities: ReadonlyMap<string, AgentIdentityResult>;
   pinnedAgentIds: readonly string[];
   connected: boolean;
@@ -181,7 +190,7 @@ type SidebarAgentMenuParams = {
 };
 
 function sidebarAgentMenuRows(params: {
-  agents: readonly AgentMenuAgent[];
+  agents: readonly GatewayAgentRow[];
   pinnedAgentIds: readonly string[];
 }) {
   const { agents } = params;
@@ -193,7 +202,11 @@ function sidebarAgentMenuRows(params: {
   });
 }
 
-function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams, autofocus: boolean) {
+function renderAgentRow(
+  agent: GatewayAgentRow,
+  params: SidebarAgentMenuParams,
+  autofocus: boolean,
+) {
   const agentId = normalizeAgentId(agent.id);
   const identity = params.identities.get(agentId) ?? null;
   const label = normalizeAgentLabel(agent, identity);
@@ -303,18 +316,10 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
       @pointerenter=${params.onPointerEnter}
       @pointerleave=${params.onPointerLeave}
       @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
-        event.preventDefault();
-        const item = event.detail.item;
-        if (item.dataset.nativeNavigation) {
-          delete item.dataset.nativeNavigation;
-          params.onClose(false);
-          return;
-        }
-        const value = item.value;
+        const value = consumeSidebarMenuSelection(event, params.onClose);
         if (!value) {
           return;
         }
-        params.onClose(false);
         if (value.startsWith(LINK_VALUE_PREFIX)) {
           openExternalUrlSafe(decodeURIComponent(value.slice(LINK_VALUE_PREFIX.length)));
           return;
@@ -389,31 +394,22 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
       ${
         !params.rosterMode
           ? html`
-              <wa-dropdown-item class="sidebar-customize-menu__item" value="command:all-agents">
-                <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.bot}</span>
-                <span class="sidebar-customize-menu__text">${t("agentChip.allAgents")}</span>
-              </wa-dropdown-item>
-              <wa-dropdown-item class="sidebar-customize-menu__item" value="command:new-agent">
-                <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.users}</span>
-                <span class="sidebar-customize-menu__text">${t("custodian.newAgent")}</span>
-              </wa-dropdown-item>
-              <wa-dropdown-item
-                class="sidebar-customize-menu__item"
-                value="command:capabilities"
-                ?disabled=${!params.connected}
-              >
-                <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.bot}</span>
-                <span class="sidebar-customize-menu__text">
-                  ${t("agentChip.whatCanAgentDo", { name: activeName })}
-                </span>
-              </wa-dropdown-item>
+              ${renderSidebarMenuAction("command:all-agents", t("agentChip.allAgents"), "bot")}
+              ${renderSidebarMenuAction("command:new-agent", t("custodian.newAgent"), "users")}
+              ${
+                activeId
+                  ? renderSidebarMenuAction(
+                      "command:capabilities",
+                      t("agentChip.whatCanAgentDo", { name: activeName }),
+                      "bot",
+                      { disabled: !params.connected },
+                    )
+                  : nothing
+              }
             `
           : nothing
       }
-      <wa-dropdown-item class="sidebar-customize-menu__item" value="command:agent-settings">
-        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.settings}</span>
-        <span class="sidebar-customize-menu__text">${t("agentChip.agentSettings")}</span>
-      </wa-dropdown-item>
+      ${renderSidebarMenuAction("command:agent-settings", t("agentChip.agentSettings"), "settings", { disabled: !activeId })}
       ${params.rosterMode ? renderSidebarHelpMenu() : nothing}
     </wa-dropdown>
   `;

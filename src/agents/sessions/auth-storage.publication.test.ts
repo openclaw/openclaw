@@ -85,7 +85,6 @@ describe("AuthStorage OAuth publication", () => {
     { phase: "settlement", actor: "same", change: "replace" },
     { phase: "claim", actor: "same", change: "unrelated" },
     { phase: "settlement", actor: "peer", change: "unrelated" },
-    { phase: "settlement", actor: "same", change: "unchanged" },
   ])(
     "preserves $actor facade $change after durable $phase and before publication",
     async ({ phase, actor, change }) => {

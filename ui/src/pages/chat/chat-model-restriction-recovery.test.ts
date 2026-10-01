@@ -8,16 +8,13 @@ import type { SessionsPatchResult } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { waitForConfirmDialogActions } from "../../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import {
-  getPendingChatPickerPatch,
-  retireChatModelSelectionOwnership,
-  switchChatModel,
-} from "./chat-session.ts";
-import { patchChatSessionSettings } from "./chat-settings-patches.ts";
+import { retireChatModelSelectionOwnership, switchChatModel } from "./chat-session.ts";
+import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 
 afterEach(() => {
@@ -123,16 +120,22 @@ function fixture(
         host.sessionsResult = state.result;
       })
     : undefined;
-  onTestFinished(() => {
+  onTestFinished(async () => {
     stopSessionUpdates?.();
+    // Cancellation must also join a selection still loading its recovery dialog.
+    const pendingSelections = Object.values(host.chatModelSwitchPromises ?? {});
     retireChatModelSelectionOwnership(host);
-    host.sessions.dispose();
+    try {
+      await Promise.all(pendingSelections);
+    } finally {
+      host.sessions.dispose();
+    }
   });
   return { host, receipt };
 }
 
 async function dialog() {
-  await waitForFast(() => expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull());
+  await waitForConfirmDialogActions();
   const modal = document.querySelector("openclaw-modal-dialog");
   if (!modal) {
     throw new Error("Expected native runtime confirmation");
@@ -274,6 +277,7 @@ it("rechecks a confirmed recovery after the shared settings tail, before dispatc
   const selection = switchChatModel(host, "fixture/selected", "global", "opencode");
   const modal = await dialog();
   const held = createDeferred<SessionsPatchResult>();
+  onTestFinished(() => held.resolve(receipt));
   host.request.mockImplementationOnce(async () => held.promise);
   const pending = patchChatSessionSettings(
     host,

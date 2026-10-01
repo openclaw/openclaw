@@ -218,7 +218,7 @@ extension OpenClawChatComposer {
                 .disabled(branch.active)
             }
             .task {
-                await self.viewModel.refreshSessionBranchesForMenuPresentation()
+                await self.viewModel.refreshSessionBranches()
             }
         } label: {
             Image(systemName: "arrow.triangle.branch")

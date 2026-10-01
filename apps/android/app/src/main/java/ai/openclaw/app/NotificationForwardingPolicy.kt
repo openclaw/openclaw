@@ -91,11 +91,7 @@ internal fun NotificationForwardingPolicy.isWithinQuietHours(
 private val localHourMinuteRegex = Regex("""^([01]\d|2[0-3]):([0-5]\d)$""")
 
 /** Normalizes persisted or user-entered local times to strict HH:mm form. */
-internal fun normalizeLocalHourMinute(raw: String): String? {
-  val trimmed = raw.trim()
-  val match = localHourMinuteRegex.matchEntire(trimmed) ?: return null
-  return "${match.groupValues[1]}:${match.groupValues[2]}"
-}
+internal fun normalizeLocalHourMinute(raw: String): String? = raw.trim().takeIf(localHourMinuteRegex::matches)
 
 /** Converts strict local HH:mm text to minutes since midnight for window checks. */
 internal fun parseLocalHourMinute(raw: String): Int? {

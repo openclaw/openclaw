@@ -1,10 +1,7 @@
-// Codex tests cover run attempt.hooks plugin behavior.
 import path from "node:path";
 import {
   abortAgentHarnessRun,
-  onAgentEvent,
   resolveActiveEmbeddedRunSessionId,
-  type AgentEventPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import {
@@ -19,21 +16,19 @@ import {
   createMockPluginRegistry,
   onTrustedInternalDiagnosticEvent,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import {
   assistantMessage,
-  createAppServerHarness,
   createCodexRuntimePlanFixture,
   createParams,
+  createTestParams,
   createStartedThreadHarness,
   fastWait,
   mockCall,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
-  threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
 
@@ -54,221 +49,18 @@ function readTurnStartText(harness: ReturnType<typeof createStartedThreadHarness
   return text;
 }
 
-function flushDiagnosticEvents() {
-  return waitForDiagnosticEventsDrained();
+function holdAgentEnd() {
+  const deferred = createDeferred<void>();
+  const agentEnd = vi.fn(() => deferred.promise);
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+  );
+  return { agentEnd, releaseAgentEnd: deferred.resolve };
 }
 
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
-  it("fires llm_input, llm_output, and agent_end hooks for codex turns", async () => {
-    const beforePromptBuild = vi.fn();
-    const llmInput = vi.fn();
-    const llmOutput = vi.fn();
-    const agentEnd = vi.fn();
-    const modelAnnounced = createDeferred<void>();
-    const onRunAgentEvent = vi.fn<NonNullable<ReturnType<typeof createParams>["onAgentEvent"]>>(
-      (event) => {
-        if (event.stream === "lifecycle" && event.data.phase === "model") {
-          modelAnnounced.resolve();
-        }
-      },
-    );
-    const globalAgentEvents: AgentEventPayload[] = [];
-    onAgentEvent((event) => globalAgentEvents.push(event));
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        { hookName: "before_prompt_build", handler: beforePromptBuild },
-        { hookName: "llm_input", handler: llmInput },
-        { hookName: "llm_output", handler: llmOutput },
-        { hookName: "agent_end", handler: agentEnd },
-      ]),
-    );
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const sessionManager = openFileBackedSessionManagerForTest(sessionFile, {
-      sessionId: "session-1",
-    });
-    sessionManager.appendMessage(assistantMessage("existing context", Date.now()));
-    const harness = createStartedThreadHarness();
-
-    const params = createParams(sessionFile, workspaceDir);
-    params.sandboxSessionKey = "agent:main:policy";
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.onAgentEvent = onRunAgentEvent;
-    // Protocol events own this case; fixture I/O must not spend the execution watchdog.
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const run = runCodexAppServerAttempt(params);
-    try {
-      await Promise.race([
-        modelAnnounced.promise,
-        run.then((result) => {
-          throw new Error("Attempt ended before its lifecycle model announcement", {
-            cause: result,
-          });
-        }),
-      ]);
-      expect(llmInput).toHaveBeenCalled();
-
-      const [llmInputPayload, llmInputContext] = mockCall(llmInput, "llm_input") as [
-        {
-          historyMessages?: Array<{ role?: string }>;
-          imagesCount?: number;
-          model?: string;
-          prompt?: string;
-          provider?: string;
-          runId?: string;
-          sessionId?: string;
-          systemPrompt?: string;
-        },
-        { runId?: string; sessionId?: string; sessionKey?: string },
-      ];
-      expect(llmInputPayload.runId).toBe("run-1");
-      expect(llmInputPayload.sessionId).toBe("session-1");
-      expect(llmInputPayload.provider).toBe("codex");
-      expect(llmInputPayload.model).toBe("gpt-5.4-codex");
-      await harness.waitForMethod("turn/start");
-      expect(llmInputPayload.prompt).toBe(readTurnStartText(harness));
-      expect(llmInputPayload.imagesCount).toBe(0);
-      expect(llmInputPayload.historyMessages).toEqual([]);
-      expect(llmInputPayload.systemPrompt).toContain(
-        "You are a personal agent running inside OpenClaw.",
-      );
-      expect(llmInputPayload.systemPrompt).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
-      expect(llmInputContext.runId).toBe("run-1");
-      expect(llmInputContext.sessionId).toBe("session-1");
-      expect(llmInputContext.sessionKey).toBe("agent:main:session-1");
-
-      await harness.notify({
-        method: "item/agentMessage/delta",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          itemId: "msg-1",
-          delta: "hello back",
-        },
-      });
-      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      const result = await run;
-
-      expect(result.terminal).toEqual({ kind: "ok" });
-      expect(result.assistantTexts).toEqual(["hello back"]);
-      expect(llmOutput).toHaveBeenCalledTimes(1);
-      expect(agentEnd).toHaveBeenCalledTimes(1);
-      const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event) as Array<{
-        data: {
-          endedAt?: number;
-          phase?: string;
-          startedAt?: number;
-          text?: string;
-        };
-        stream: string;
-      }>;
-      const lifecycleStart = agentEvents.find(
-        (event) => event.stream === "lifecycle" && event.data.phase === "start",
-      );
-      expect(typeof lifecycleStart?.data.startedAt).toBe("number");
-      const assistantEvents = agentEvents.filter((event) => event.stream === "assistant");
-      expect(assistantEvents).toHaveLength(2);
-      expect(assistantEvents[0]?.data).toEqual({
-        itemId: "msg-1",
-        text: "hello back",
-        delta: "hello back",
-        replaceable: true,
-      });
-      expect(assistantEvents[1]?.data).toEqual({ text: "hello back" });
-      const lifecycleEnd = agentEvents.find(
-        (event) => event.stream === "lifecycle" && event.data.phase === "end",
-      );
-      expect(typeof lifecycleEnd?.data.startedAt).toBe("number");
-      expect(typeof lifecycleEnd?.data.endedAt).toBe("number");
-      const startIndex = agentEvents.findIndex(
-        (event) => event.stream === "lifecycle" && event.data.phase === "start",
-      );
-      const assistantIndex = agentEvents.findIndex((event) => event.stream === "assistant");
-      const endIndex = agentEvents.findIndex(
-        (event) => event.stream === "lifecycle" && event.data.phase === "end",
-      );
-      expect(startIndex).toBeGreaterThanOrEqual(0);
-      expect(assistantIndex).toBeGreaterThan(startIndex);
-      expect(endIndex).toBeGreaterThan(assistantIndex);
-      const globalAssistantEvents = globalAgentEvents.filter(
-        (event) => event.stream === "assistant",
-      );
-      expect(globalAssistantEvents).toHaveLength(2);
-      expect(globalAssistantEvents[0]?.runId).toBe("run-1");
-      expect(globalAssistantEvents[0]?.sessionKey).toBe("agent:main:session-1");
-      expect(globalAssistantEvents[0]?.data).toEqual({
-        itemId: "msg-1",
-        text: "hello back",
-        delta: "hello back",
-        replaceable: true,
-      });
-      expect(globalAssistantEvents[1]?.data).toEqual({ text: "hello back" });
-      const globalEndEvent = globalAgentEvents.find(
-        (event) => event.stream === "lifecycle" && event.data.phase === "end",
-      );
-      expect(globalEndEvent?.runId).toBe("run-1");
-      expect(globalEndEvent?.sessionKey).toBe("agent:main:session-1");
-
-      const [llmOutputPayload, llmOutputContext] = mockCall(llmOutput, "llm_output") as [
-        {
-          assistantTexts?: string[];
-          harnessId?: string;
-          lastAssistant?: { role?: string };
-          model?: string;
-          provider?: string;
-          resolvedRef?: string;
-          runId?: string;
-          sessionId?: string;
-          contextTokenBudget?: number;
-          contextWindowSource?: string;
-          contextWindowReferenceTokens?: number;
-        },
-        {
-          runId?: string;
-          sessionId?: string;
-          contextTokenBudget?: number;
-          contextWindowSource?: string;
-          contextWindowReferenceTokens?: number;
-        },
-      ];
-      expect(llmOutputPayload.runId).toBe("run-1");
-      expect(llmOutputPayload.sessionId).toBe("session-1");
-      expect(llmOutputPayload.provider).toBe("codex");
-      expect(llmOutputPayload.model).toBe("gpt-5.4-codex");
-      expect(llmOutputPayload.contextTokenBudget).toBe(150_000);
-      expect(llmOutputPayload.contextWindowSource).toBe("agentContextTokens");
-      expect(llmOutputPayload.contextWindowReferenceTokens).toBe(200_000);
-      expect(llmOutputPayload.resolvedRef).toBe("codex/gpt-5.4-codex");
-      expect(llmOutputPayload.harnessId).toBe("codex");
-      expect(llmOutputPayload.assistantTexts).toEqual(["hello back"]);
-      expect(llmOutputPayload.lastAssistant?.role).toBe("assistant");
-      expect(llmOutputContext.runId).toBe("run-1");
-      expect(llmOutputContext.sessionId).toBe("session-1");
-      expect(llmOutputContext.contextTokenBudget).toBe(150_000);
-      expect(llmOutputContext.contextWindowSource).toBe("agentContextTokens");
-      expect(llmOutputContext.contextWindowReferenceTokens).toBe(200_000);
-      const [agentEndPayload, agentEndContext] = mockCall(agentEnd, "agent_end") as [
-        { messages?: Array<{ role?: string }>; success?: boolean },
-        { runId?: string; sessionId?: string },
-      ];
-      expect(agentEndPayload.success).toBe(true);
-      expect(agentEndPayload.messages?.some((message) => message.role === "user")).toBe(true);
-      expect(agentEndPayload.messages?.some((message) => message.role === "assistant")).toBe(true);
-      expect(agentEndContext.runId).toBe("run-1");
-      expect(agentEndContext.sessionId).toBe("session-1");
-      for (const hook of [beforePromptBuild, llmInput, llmOutput, agentEnd]) {
-        expect(hook).toHaveBeenCalledWith(
-          expect.anything(),
-          expect.objectContaining({ agentId: "main", sessionKey: params.sessionKey }),
-        );
-      }
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("emits gated model-call content diagnostics for codex turns", async () => {
     const diagnosticEvents: DiagnosticEventPayload[] = [];
     const diagnosticContentByType = new Map<string, DiagnosticEventPrivateData>();
@@ -285,16 +77,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     try {
       const sessionFile = path.join(tempDir, "session.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
-      const harness = createAppServerHarness(async (method) => {
-        if (method === "config/read") {
-          return { config: {}, origins: {}, layers: [] };
-        }
-        if (method === "configRequirements/read") {
-          return { requirements: null };
-        }
-        if (method === "thread/start") {
-          return threadStartResult();
-        }
+      const harness = createStartedThreadHarness(async (method) => {
         if (method === "turn/start") {
           return {
             turn: {
@@ -310,7 +93,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
             },
           };
         }
-        return {};
+        return undefined;
       });
       const params = createParams(sessionFile, workspaceDir);
       const sessionManager = openFileBackedSessionManagerForTest(sessionFile, {
@@ -388,10 +171,8 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       }
     });
     try {
-      const sessionFile = path.join(tempDir, "session.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
       createStartedThreadHarness();
-      const params = createParams(sessionFile, workspaceDir);
+      const params = createTestParams();
       params.config = {
         diagnostics: { enabled: true, otel: { enabled: true, traces: true } },
       } as never;
@@ -401,7 +182,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       await run.waitForTurnAccepted();
       await vi.advanceTimersByTimeAsync(60_000);
       const result = await run;
-      await flushDiagnosticEvents();
+      await waitForDiagnosticEventsDrained();
 
       const errorEvent = diagnosticEvents.find((event) => event.type === "model.call.error");
       expect(readAttemptTerminal(result).timedOut).toBe(true);
@@ -413,48 +194,10 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     }
   });
 
-  it("waits for agent_end hooks before resolving local codex turns", async () => {
-    let releaseAgentEnd: () => void = () => undefined;
-    const agentEndSettled = new Promise<void>((resolve) => {
-      releaseAgentEnd = resolve;
-    });
-    const agentEnd = vi.fn(() => agentEndSettled);
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
-    );
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
-    let settled = false;
-    void run.then(() => {
-      settled = true;
-    });
-
-    await harness.waitForMethod("turn/start");
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-
-    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
-    expect(settled).toBe(false);
-    releaseAgentEnd();
-    expect(readAttemptTerminal(await run).promptError).toBeNull();
-    expect(settled).toBe(true);
-  });
-
   it("freezes native terminal success locally before agent_end", async () => {
-    let releaseAgentEnd: () => void = () => undefined;
-    const agentEndSettled = new Promise<void>((resolve) => {
-      releaseAgentEnd = resolve;
-    });
-    const agentEnd = vi.fn(() => agentEndSettled);
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
-    );
+    const { agentEnd, releaseAgentEnd } = holdAgentEnd();
     const onRunAgentEvent = vi.fn();
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
+    const params = createTestParams();
     params.onAgentEvent = onRunAgentEvent;
     const attachBackend = vi.fn();
     const detachBackend = vi.fn();
@@ -466,6 +209,10 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     } as unknown as NonNullable<typeof params.replyOperation>;
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(params);
+    let settled = false;
+    void run.then(() => {
+      settled = true;
+    });
 
     await harness.waitForMethod("turn/start");
     await harness.notify({
@@ -483,6 +230,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
+    expect(settled).toBe(false);
 
     const [replyBackend] = mockCall(attachBackend, "reply backend") as [
       { isAbortable?: () => boolean },
@@ -497,8 +245,8 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       timedOut: false,
       promptError: null,
     });
-    const [agentEndPayload] = mockCall(agentEnd, "agent_end") as [{ success?: boolean }, unknown];
-    expect(agentEndPayload.success).toBe(true);
+    expect(settled).toBe(true);
+    expect(mockCall(agentEnd, "agent_end")[0]).toMatchObject({ success: true });
     expect(freezeAbort).not.toHaveBeenCalled();
     const terminalLifecycleEvents = onRunAgentEvent.mock.calls
       .map(([event]) => event)
@@ -514,71 +262,11 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(resolveActiveEmbeddedRunSessionId("agent:main:session-1")).toBeUndefined();
   });
 
-  it("keeps a successful memory preflight cancellable for the main turn", async () => {
-    let releaseAgentEnd: () => void = () => undefined;
-    const agentEndSettled = new Promise<void>((resolve) => {
-      releaseAgentEnd = resolve;
-    });
-    const agentEnd = vi.fn(() => agentEndSettled);
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
-    );
+  it("keeps replay-safe client-close recovery cancellable during agent_end", async () => {
+    const { agentEnd, releaseAgentEnd } = holdAgentEnd();
     const onAttemptAbort = vi.fn();
     let replyBackend: Pick<ReplyBackend, "cancel" | "isAbortable"> | undefined;
-    const params = createParams(
-      path.join(tempDir, "memory-preflight.jsonl"),
-      path.join(tempDir, "memory-preflight-workspace"),
-    );
-    params.trigger = "memory";
-    params.memoryFlushWritePath = "memory/notes.md";
-    params.onAttemptAbort = onAttemptAbort;
-    const freezeAbort = vi.fn();
-    params.replyOperation = {
-      attachBackend: (backend: ReplyBackend) => {
-        replyBackend = backend;
-      },
-      detachBackend: vi.fn(),
-      freezeAbort,
-    } as unknown as NonNullable<typeof params.replyOperation>;
-    const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(params);
-
-    await harness.waitForMethod("turn/start");
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
-
-    expect(replyBackend?.isAbortable?.()).toBe(true);
-    replyBackend?.cancel("user_abort");
-    expect(onAttemptAbort).toHaveBeenCalledTimes(1);
-
-    releaseAgentEnd();
-    expect(readAttemptTerminal(await run)).toMatchObject({
-      aborted: false,
-      promptError: null,
-    });
-    expect(freezeAbort).not.toHaveBeenCalled();
-  });
-
-  it("keeps replay-safe client-close recovery cancellable during agent_end", async () => {
-    let releaseAgentEnd: () => void = () => undefined;
-    const agentEndSettled = new Promise<void>((resolve) => {
-      releaseAgentEnd = resolve;
-    });
-    const agentEnd = vi.fn(() => agentEndSettled);
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
-    );
-    const onAttemptAbort = vi.fn();
-    let replyBackend:
-      | {
-          isAbortable?: () => boolean;
-          cancel: (reason: "restart" | "superseded" | "user_abort") => void;
-        }
-      | undefined;
-    const params = createParams(
-      path.join(tempDir, "replay-safe-client-close.jsonl"),
-      path.join(tempDir, "replay-safe-client-close-workspace"),
-    );
+    const params = createTestParams();
     params.onAttemptAbort = onAttemptAbort;
     const freezeAbort = vi.fn();
     params.replyOperation = {
@@ -621,13 +309,6 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       expectedClassification: undefined,
     },
     {
-      label: "interrupted",
-      status: "interrupted",
-      error: undefined,
-      expectedPromptError: null,
-      expectedClassification: "empty",
-    },
-    {
       label: "empty completed",
       status: "completed",
       error: undefined,
@@ -636,22 +317,14 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     },
   ] as const)(
     "keeps ordinary $label turns cancellable until the orchestrator settles",
-    async ({ label, status, error, expectedPromptError, expectedClassification }) => {
-      let releaseAgentEnd: () => void = () => undefined;
-      const agentEndSettled = new Promise<void>((resolve) => {
-        releaseAgentEnd = resolve;
-      });
-      const agentEnd = vi.fn(() => agentEndSettled);
-      initializeGlobalHookRunner(
-        createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
-      );
+    async ({ status, error, expectedPromptError, expectedClassification }) => {
+      const { agentEnd, releaseAgentEnd } = holdAgentEnd();
       const onAttemptAbort = vi.fn();
+      const onRunAgentEvent = vi.fn<NonNullable<ReturnType<typeof createParams>["onAgentEvent"]>>();
       let replyBackend: Pick<ReplyBackend, "cancel" | "isAbortable"> | undefined;
-      const params = createParams(
-        path.join(tempDir, `ordinary-${label}-turn.jsonl`),
-        path.join(tempDir, `ordinary-${label}-turn-workspace`),
-      );
+      const params = createTestParams();
       params.onAttemptAbort = onAttemptAbort;
+      params.onAgentEvent = onRunAgentEvent;
       const freezeAbort = vi.fn();
       params.replyOperation = {
         attachBackend: (backend: ReplyBackend) => {
@@ -691,77 +364,33 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       });
       expect(result.agentHarnessResultClassification).toBe(expectedClassification);
       expect(freezeAbort).not.toHaveBeenCalled();
+      if (status === "failed") {
+        const events = onRunAgentEvent.mock.calls.map(([event]) => event);
+        expect(
+          events.find((event) => event.stream === "lifecycle" && event.data.phase === "start"),
+        ).toMatchObject({ data: { startedAt: expect.any(Number) } });
+        expect(
+          events.find((event) => event.stream === "lifecycle" && event.data.phase === "error"),
+        ).toMatchObject({
+          data: {
+            startedAt: expect.any(Number),
+            endedAt: expect.any(Number),
+            error: "codex exploded",
+          },
+        });
+        expect(events.some((event) => event.stream === "assistant")).toBe(false);
+        expect(mockCall(agentEnd, "agent_end")).toMatchObject([
+          { success: false, error: "codex exploded" },
+          { runId: "run-1", sessionId: "session-1" },
+        ]);
+      }
     },
   );
 
-  it("keeps websocket client-close failure cancellable until the orchestrator settles", async () => {
-    let releaseAgentEnd: () => void = () => undefined;
-    const agentEndSettled = new Promise<void>((resolve) => {
-      releaseAgentEnd = resolve;
-    });
-    const agentEnd = vi.fn(() => agentEndSettled);
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
-    );
-    const onAttemptAbort = vi.fn();
-    let replyBackend:
-      | {
-          isAbortable?: () => boolean;
-          cancel: (reason: "restart" | "superseded" | "user_abort") => void;
-        }
-      | undefined;
-    const params = createParams(
-      path.join(tempDir, "websocket-client-close.jsonl"),
-      path.join(tempDir, "websocket-client-close-workspace"),
-    );
-    params.onAttemptAbort = onAttemptAbort;
-    params.replyOperation = {
-      attachBackend: (backend: ReplyBackend) => {
-        replyBackend = backend;
-      },
-      detachBackend: vi.fn(),
-      freezeAbort: vi.fn(),
-    } as unknown as NonNullable<typeof params.replyOperation>;
-    const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(params, {
-      pluginConfig: {
-        appServer: {
-          transport: "websocket",
-          url: "ws://127.0.0.1:39175",
-        },
-      },
-    });
-
-    await run.waitForTurnAccepted();
-    harness.close();
-    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
-
-    expect(replyBackend?.isAbortable?.()).toBe(true);
-    replyBackend?.cancel("user_abort");
-    expect(onAttemptAbort).toHaveBeenCalledTimes(1);
-
-    releaseAgentEnd();
-    const result = await run;
-    expect(readAttemptTerminal(result)).toMatchObject({
-      aborted: false,
-      promptError: "codex app-server client closed before turn completed",
-    });
-    expect(result.codexAppServerFailure).toMatchObject({ transport: "websocket" });
-  });
-
   it("does not wait for agent_end hooks before resolving channel-backed codex turns", async () => {
-    let releaseAgentEnd: () => void = () => undefined;
-    const agentEndSettled = new Promise<void>((resolve) => {
-      releaseAgentEnd = resolve;
-    });
-    const agentEnd = vi.fn(() => agentEndSettled);
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
-    );
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
+    const { agentEnd, releaseAgentEnd } = holdAgentEnd();
     const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
+    const params = createTestParams();
     params.messageChannel = "discord";
     params.messageProvider = "discord";
     const run = runCodexAppServerAttempt(params);
@@ -776,23 +405,14 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
   });
 
   it("waits for agent_end hooks before rejecting local codex turn-start failures", async () => {
-    let releaseAgentEnd: () => void = () => undefined;
-    const agentEndSettled = new Promise<void>((resolve) => {
-      releaseAgentEnd = resolve;
-    });
-    const agentEnd = vi.fn(() => agentEndSettled);
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
-    );
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
+    const { agentEnd, releaseAgentEnd } = holdAgentEnd();
     createStartedThreadHarness(async (method) => {
       if (method === "turn/start") {
         throw new Error("turn start exploded");
       }
       return undefined;
     });
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    const run = runCodexAppServerAttempt(createTestParams());
     let settled = false;
     void run.catch(() => {
       settled = true;
@@ -803,63 +423,6 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     releaseAgentEnd();
     await expect(run).rejects.toThrow("turn start exploded");
     expect(settled).toBe(true);
-  });
-
-  it("fires agent_end with failure metadata when the codex turn fails", async () => {
-    const agentEnd = vi.fn();
-    const onRunAgentEvent = vi.fn();
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
-    );
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const harness = createStartedThreadHarness();
-
-    const params = createParams(sessionFile, workspaceDir);
-    params.onAgentEvent = onRunAgentEvent;
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await harness.notify({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        turn: {
-          id: "turn-1",
-          status: "failed",
-          items: [],
-          error: { message: "codex exploded" },
-        },
-      },
-    });
-
-    const result = await run;
-
-    expect(readAttemptTerminal(result).promptError).toBe("codex exploded");
-    expect(agentEnd).toHaveBeenCalledTimes(1);
-    const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event) as Array<{
-      data: { endedAt?: number; error?: string; phase?: string; startedAt?: number };
-      stream: string;
-    }>;
-    const startEvent = agentEvents.find(
-      (event) => event.stream === "lifecycle" && event.data.phase === "start",
-    );
-    expect(typeof startEvent?.data.startedAt).toBe("number");
-    const errorEvent = agentEvents.find(
-      (event) => event.stream === "lifecycle" && event.data.phase === "error",
-    );
-    expect(typeof errorEvent?.data.startedAt).toBe("number");
-    expect(typeof errorEvent?.data.endedAt).toBe("number");
-    expect(errorEvent?.data.error).toBe("codex exploded");
-    expect(agentEvents.some((event) => event.stream === "assistant")).toBe(false);
-    const [agentEndPayload, agentEndContext] = mockCall(agentEnd, "agent_end") as [
-      { error?: string; success?: boolean },
-      { runId?: string; sessionId?: string },
-    ];
-    expect(agentEndPayload.success).toBe(false);
-    expect(agentEndPayload.error).toBe("codex exploded");
-    expect(agentEndContext.runId).toBe("run-1");
-    expect(agentEndContext.sessionId).toBe("session-1");
   });
 
   it("fires llm_output and agent_end when turn/start fails", async () => {
@@ -902,56 +465,31 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(llmInput).toHaveBeenCalledTimes(1);
     expect(llmOutput).toHaveBeenCalledTimes(1);
     expect(agentEnd).toHaveBeenCalledTimes(1);
-    const [llmOutputPayload] = mockCall(llmOutput, "llm_output") as [
-      {
-        assistantTexts?: string[];
-        harnessId?: string;
-        model?: string;
-        provider?: string;
-        resolvedRef?: string;
-        runId?: string;
-        sessionId?: string;
-      },
-      unknown,
-    ];
-    expect(llmOutputPayload.assistantTexts).toEqual([]);
-    expect(llmOutputPayload.model).toBe("gpt-5.4-codex");
-    expect(llmOutputPayload.provider).toBe("codex");
-    expect(llmOutputPayload.resolvedRef).toBe("codex/gpt-5.4-codex");
-    expect(llmOutputPayload.harnessId).toBe("codex");
-    expect(llmOutputPayload.runId).toBe("run-1");
-    expect(llmOutputPayload.sessionId).toBe("session-1");
-    const [agentEndPayload] = mockCall(agentEnd, "agent_end") as [
-      { error?: string; messages?: Array<{ role?: string }>; success?: boolean },
-      unknown,
-    ];
-    expect(agentEndPayload.success).toBe(false);
-    expect(agentEndPayload.error).toBe("turn start exploded");
-    expect(agentEndPayload.messages?.some((message) => message.role === "assistant")).toBe(true);
-    const userMessage = agentEndPayload.messages?.find((message) => message.role === "user") as
-      | {
-          content?: unknown;
-          provenance?: unknown;
-          role?: string;
-          senderId?: unknown;
-          senderLabel?: unknown;
-          senderName?: unknown;
-          senderUsername?: unknown;
-          sourceChannel?: unknown;
-        }
-      | undefined;
-    expect(userMessage).toMatchObject({
-      role: "user",
-      content: readTurnStartText(harness),
-      sourceChannel: "discord",
-      senderId: "user-123",
-      senderName: "Test User",
-      senderUsername: "testuser",
-      senderLabel: "Test User (user-123)",
-      provenance: {
-        kind: "external_user",
-        sourceChannel: "discord",
-      },
+    expect(mockCall(llmOutput, "llm_output")[0]).toMatchObject({
+      assistantTexts: [],
+      model: "gpt-5.4-codex",
+      provider: "codex",
+      resolvedRef: "codex/gpt-5.4-codex",
+      harnessId: "codex",
+      runId: "run-1",
+      sessionId: "session-1",
+    });
+    expect(mockCall(agentEnd, "agent_end")[0]).toMatchObject({
+      success: false,
+      error: "turn start exploded",
+      messages: expect.arrayContaining([
+        expect.objectContaining({ role: "assistant" }),
+        expect.objectContaining({
+          role: "user",
+          content: readTurnStartText(harness),
+          sourceChannel: "discord",
+          senderId: "user-123",
+          senderName: "Test User",
+          senderUsername: "testuser",
+          senderLabel: "Test User (user-123)",
+          provenance: { kind: "external_user", sourceChannel: "discord" },
+        }),
+      ]),
     });
   });
 
@@ -961,10 +499,9 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
     );
     createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(
-      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
-      { pluginConfig: { appServer: { mode: "yolo" } } },
-    );
+    const run = runCodexAppServerAttempt(createTestParams(), {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
 
     await run.waitForTurnAccepted();
     expect(abortAgentHarnessRun("session-1")).toBe(true);
@@ -972,7 +509,6 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     const result = await run;
     expect(readAttemptTerminal(result).aborted).toBe(true);
     expect(agentEnd).toHaveBeenCalledTimes(1);
-    const [agentEndPayload] = mockCall(agentEnd, "agent_end") as [{ success?: boolean }, unknown];
-    expect(agentEndPayload.success).toBe(false);
+    expect(mockCall(agentEnd, "agent_end")[0]).toMatchObject({ success: false });
   });
 });

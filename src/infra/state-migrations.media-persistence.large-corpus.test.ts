@@ -15,7 +15,52 @@ const SPARSE_EVENT_SESSION_COUNT = 4_096;
 const ACTIVE_SESSIONS = 40;
 const EVENTS_PER_SESSION = 128;
 const PAYLOAD = "x".repeat(48 * 1024);
-const tempDir = useAutoCleanupTempDirTracker(afterEach);
+const tempDir = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(() => {
+    closeOpenClawAgentDatabases();
+    closeOpenClawStateDatabase();
+    cleanup();
+  });
+});
+
+function runMigration(stateDir: string, script: string, memoryMb?: number): unknown {
+  const result = spawnSync(
+    memoryMb ? resolveTestNodeExecPath() : process.execPath,
+    [
+      ...(memoryMb ? [`--max-old-space-size=${memoryMb}`] : []),
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "-e",
+      script,
+    ],
+    { cwd: process.cwd(), encoding: "utf8", env: migrationChildEnv(stateDir), timeout: 120_000 },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout);
+}
+
+function createWindows(stateDir: string, prefix: string, count: number) {
+  const database = openOpenClawAgentDatabase({
+    agentId: "main",
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  });
+  database.db.exec("BEGIN");
+  database.db
+    .prepare(`WITH RECURSIVE n(i) AS (
+    VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1 < ?
+  ) INSERT INTO session_nodes(session_key,current_session_id,entry_json,entry_valid,updated_at)
+    SELECT 'agent:main:'||?||i, ?||i,
+      json_object('sessionId',?||i,'updatedAt',i+1), 1, i+1 FROM n`)
+    .run(count, prefix, prefix, prefix);
+  database.db
+    .prepare(`WITH RECURSIVE n(i) AS (
+    VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1 < ?
+  ) INSERT INTO session_windows(session_id,session_key,created_at,updated_at)
+    SELECT ?||i, 'agent:main:'||?||i, i+1, i+1 FROM n`)
+    .run(count, prefix, prefix);
+  return database;
+}
 
 function migrationChildEnv(stateDir: string): NodeJS.ProcessEnv {
   // Measure migration memory, not tsx's index of unrelated projects' cached modules.
@@ -148,24 +193,7 @@ const SPARSE_EVENT_CHILD_SCRIPT = String.raw`
 `;
 
 function createCorpus(stateDir: string): void {
-  const database = openOpenClawAgentDatabase({
-    agentId: "main",
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
-  database.db.exec("BEGIN");
-  database.db
-    .prepare(`WITH RECURSIVE n(i) AS (
-    VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1 < ?
-  ) INSERT INTO session_nodes(session_key,current_session_id,entry_json,entry_valid,updated_at)
-    SELECT 'agent:main:large-corpus-'||i, 'large-corpus-'||i,
-      json_object('sessionId','large-corpus-'||i,'updatedAt',i+1), 1, i+1 FROM n`)
-    .run(SESSION_COUNT);
-  database.db
-    .prepare(`WITH RECURSIVE n(i) AS (
-    VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1 < ?
-  ) INSERT INTO session_windows(session_id,session_key,created_at,updated_at)
-    SELECT 'large-corpus-'||i, 'agent:main:large-corpus-'||i, i+1, i+1 FROM n`)
-    .run(SESSION_COUNT);
+  const database = createWindows(stateDir, "large-corpus-", SESSION_COUNT);
   database.db
     .prepare(`WITH RECURSIVE s(i) AS (
     VALUES(0) UNION ALL SELECT i+1 FROM s WHERE i+1 < ?
@@ -194,47 +222,13 @@ function createCorpus(stateDir: string): void {
 }
 
 function createSessionWindowCorpus(stateDir: string): void {
-  const database = openOpenClawAgentDatabase({
-    agentId: "main",
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
-  database.db.exec("BEGIN");
-  database.db
-    .prepare(`WITH RECURSIVE n(i) AS (
-    VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1 < ?
-  ) INSERT INTO session_nodes(session_key,current_session_id,entry_json,entry_valid,updated_at)
-    SELECT 'agent:main:window-'||i, 'window-'||i,
-      json_object('sessionId','window-'||i,'updatedAt',i+1), 1, i+1 FROM n`)
-    .run(SESSION_WINDOW_COUNT);
-  database.db
-    .prepare(`WITH RECURSIVE n(i) AS (
-    VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1 < ?
-  ) INSERT INTO session_windows(session_id,session_key,created_at,updated_at)
-    SELECT 'window-'||i, 'agent:main:window-'||i, i+1, i+1 FROM n`)
-    .run(SESSION_WINDOW_COUNT);
+  const database = createWindows(stateDir, "window-", SESSION_WINDOW_COUNT);
   database.db.exec("COMMIT; UPDATE session_nodes SET entry_valid=1");
   closeOpenClawAgentDatabases();
 }
 
 function createSparseEventCorpus(stateDir: string): void {
-  const database = openOpenClawAgentDatabase({
-    agentId: "main",
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
-  database.db.exec("BEGIN");
-  database.db
-    .prepare(`WITH RECURSIVE n(i) AS (
-    VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1 < ?
-  ) INSERT INTO session_nodes(session_key,current_session_id,entry_json,entry_valid,updated_at)
-    SELECT 'agent:main:sparse-'||i, 'sparse-'||i,
-      json_object('sessionId','sparse-'||i,'updatedAt',i+1), 1, i+1 FROM n`)
-    .run(SPARSE_EVENT_SESSION_COUNT);
-  database.db
-    .prepare(`WITH RECURSIVE n(i) AS (
-    VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1 < ?
-  ) INSERT INTO session_windows(session_id,session_key,created_at,updated_at)
-    SELECT 'sparse-'||i, 'agent:main:sparse-'||i, i+1, i+1 FROM n`)
-    .run(SPARSE_EVENT_SESSION_COUNT);
+  const database = createWindows(stateDir, "sparse-", SPARSE_EVENT_SESSION_COUNT);
   database.db
     .prepare(`WITH RECURSIVE n(i) AS (
     VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1 < ?
@@ -262,116 +256,62 @@ function createSparseEventCorpus(stateDir: string): void {
 describe("legacy media persistence large corpus", () => {
   it("does not materialize every session window under a 128 MiB old-space cap", () => {
     const stateDir = tempDir.make("openclaw-media-session-windows-");
-    try {
-      createSessionWindowCorpus(stateDir);
-      const result = spawnSync(
-        // Old-space limits are a V8/Node contract; keep this resource proof on that owner.
-        resolveTestNodeExecPath(),
-        [
-          "--max-old-space-size=128",
-          "--import",
-          "tsx",
-          "--input-type=module",
-          "-e",
-          SESSION_WINDOW_CHILD_SCRIPT,
-        ],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: migrationChildEnv(stateDir),
-          timeout: 120_000,
-        },
-      );
-      expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(result.stdout)).toEqual({ changes: [], warnings: [] });
-    } finally {
-      closeOpenClawAgentDatabases();
-      closeOpenClawStateDatabase();
-    }
+    createSessionWindowCorpus(stateDir);
+    const output = runMigration(stateDir, SESSION_WINDOW_CHILD_SCRIPT, 128);
+    expect(output).toEqual({ changes: [], warnings: [] });
   }, 130_000);
 
   it("rewrites bounded batches under a 256 MiB old-space cap", () => {
     const stateDir = tempDir.make("openclaw-media-corpus-");
-    try {
-      createCorpus(stateDir);
-      const result = spawnSync(
-        resolveTestNodeExecPath(),
-        ["--max-old-space-size=256", "--import", "tsx", "--input-type=module", "-e", CHILD_SCRIPT],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: migrationChildEnv(stateDir),
-          timeout: 120_000,
-        },
-      );
-      expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        warnings: [],
-        changeCount: 1,
-        sessions: SESSION_COUNT,
-        windows: SESSION_COUNT,
-        events: ACTIVE_SESSIONS * EVENTS_PER_SESSION,
-        trajectoryEvents: EVENTS_PER_SESSION,
-        firstIdentity: ["message", "event-0-0", null],
-        firstMediaPath: "/media/legacy.png",
-        firstHasLegacyCarrier: false,
-        boundaryMediaPath: "/media/boundary.png",
-        boundaryHasLegacyCarrier: false,
-        trajectoryBoundaryMediaPath: "/media/trajectory-boundary.png",
-        trajectoryBoundaryHasLegacyCarrier: false,
-        middlePreserved: true,
-        lastPreserved: true,
-      });
-    } finally {
-      closeOpenClawAgentDatabases();
-      closeOpenClawStateDatabase();
-    }
+    createCorpus(stateDir);
+    const output = runMigration(stateDir, CHILD_SCRIPT, 256);
+    expect(output).toMatchObject({
+      warnings: [],
+      changeCount: 1,
+      sessions: SESSION_COUNT,
+      windows: SESSION_COUNT,
+      events: ACTIVE_SESSIONS * EVENTS_PER_SESSION,
+      trajectoryEvents: EVENTS_PER_SESSION,
+      firstIdentity: ["message", "event-0-0", null],
+      firstMediaPath: "/media/legacy.png",
+      firstHasLegacyCarrier: false,
+      boundaryMediaPath: "/media/boundary.png",
+      boundaryHasLegacyCarrier: false,
+      trajectoryBoundaryMediaPath: "/media/trajectory-boundary.png",
+      trajectoryBoundaryHasLegacyCarrier: false,
+      middlePreserved: true,
+      lastPreserved: true,
+    });
   }, 130_000);
 
   it("bounds SQLite crossings across many event-bearing sessions", () => {
     const stateDir = tempDir.make("openclaw-media-sparse-events-");
-    try {
-      createSparseEventCorpus(stateDir);
-      const result = spawnSync(
-        process.execPath,
-        ["--import", "tsx", "--input-type=module", "-e", SPARSE_EVENT_CHILD_SCRIPT],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: migrationChildEnv(stateDir),
-          timeout: 120_000,
-        },
-      );
-      expect(result.status, result.stderr).toBe(0);
-      const output = JSON.parse(result.stdout) as {
-        changeCount: number;
-        cursorPlanDetails: string[];
-        migrationSelects: number;
-        transcriptHasLegacyCarrier: boolean;
-        transcriptMediaPath: string;
-        trajectoryHasLegacyCarrier: boolean;
-        trajectoryMediaPath: string;
-        warnings: string[];
-      };
-      expect(output).toMatchObject({
-        warnings: [],
-        changeCount: 1,
-        transcriptMediaPath: "/media/transcript.png",
-        transcriptHasLegacyCarrier: false,
-        trajectoryMediaPath: "/media/trajectory.png",
-        trajectoryHasLegacyCarrier: false,
-      });
-      expect(output.cursorPlanDetails.length).toBeGreaterThan(0);
-      expect(
-        output.cursorPlanDetails.every(
-          (detail) =>
-            detail.startsWith("SEARCH ") && detail.includes("session_id") && detail.includes("seq"),
-        ),
-      ).toBe(true);
-      expect(output.migrationSelects).toBeLessThan(1_000);
-    } finally {
-      closeOpenClawAgentDatabases();
-      closeOpenClawStateDatabase();
-    }
+    createSparseEventCorpus(stateDir);
+    const output = runMigration(stateDir, SPARSE_EVENT_CHILD_SCRIPT) as {
+      changeCount: number;
+      cursorPlanDetails: string[];
+      migrationSelects: number;
+      transcriptHasLegacyCarrier: boolean;
+      transcriptMediaPath: string;
+      trajectoryHasLegacyCarrier: boolean;
+      trajectoryMediaPath: string;
+      warnings: string[];
+    };
+    expect(output).toMatchObject({
+      warnings: [],
+      changeCount: 1,
+      transcriptMediaPath: "/media/transcript.png",
+      transcriptHasLegacyCarrier: false,
+      trajectoryMediaPath: "/media/trajectory.png",
+      trajectoryHasLegacyCarrier: false,
+    });
+    expect(output.cursorPlanDetails.length).toBeGreaterThan(0);
+    expect(
+      output.cursorPlanDetails.every(
+        (detail) =>
+          detail.startsWith("SEARCH ") && detail.includes("session_id") && detail.includes("seq"),
+      ),
+    ).toBe(true);
+    expect(output.migrationSelects).toBeLessThan(1_000);
   }, 130_000);
 });

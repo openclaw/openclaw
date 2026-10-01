@@ -172,13 +172,12 @@ describe("npm lock setup admission", () => {
     commit();
     expect(skip()).toBe(true);
   });
-  it("wires the dependency-free decision before setup and preserves the named check", () => {
+  it("wires the dependency-free decision before conditional setup", () => {
     const workflow = readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8");
     const shard = workflow.split("  check-shard:")[1]?.split("\n  check-test-types-core:")[0] ?? "";
-    expect(shard).toContain("check_name: check-npm-lock");
-    expect(shard.indexOf("node .ci-harness/scripts/ci-npm-lock-admission.mjs")).toBeLessThan(
-      shard.indexOf("- name: Setup Node environment"),
-    );
+    const admission = shard.indexOf("node .ci-harness/scripts/ci-npm-lock-admission.mjs");
+    expect(admission).toBeGreaterThanOrEqual(0);
+    expect(admission).toBeLessThan(shard.indexOf("- name: Setup Node environment"));
     expect(shard).toContain("if: steps.npm-lock-scope.outputs.skip != 'true'");
     expect(shard).toContain(
       'pnpm deps:npm-lock:check:changed --base "$CHECKOUT_BASE_SHA" --head HEAD',

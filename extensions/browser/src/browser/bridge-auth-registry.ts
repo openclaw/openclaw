@@ -18,26 +18,18 @@ export function setBridgeAuthForPort(port: number, auth: BridgeAuth): void {
   if (!Number.isFinite(port) || port <= 0) {
     return;
   }
-  const token = normalizeOptionalString(auth.token) ?? "";
-  const password = normalizeOptionalString(auth.password) ?? "";
   authByPort.set(port, {
-    token: token || undefined,
-    password: password || undefined,
+    token: normalizeOptionalString(auth.token),
+    password: normalizeOptionalString(auth.password),
   });
 }
 
 /** Read auth material for a loopback bridge port. */
 export function getBridgeAuthForPort(port: number): BridgeAuth | undefined {
-  if (!Number.isFinite(port) || port <= 0) {
-    return undefined;
-  }
   return authByPort.get(port);
 }
 
 /** Drop auth material when a bridge server closes or changes port. */
 export function deleteBridgeAuthForPort(port: number): void {
-  if (!Number.isFinite(port) || port <= 0) {
-    return;
-  }
   authByPort.delete(port);
 }

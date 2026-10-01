@@ -2,36 +2,21 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { assertNoSymlinkParentsSync } from "@openclaw/fs-safe/advanced";
+import * as replaceFile from "@openclaw/fs-safe/atomic";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import { VERSION } from "../version.js";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
-import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
-import * as replaceFile from "./replace-file.js";
-import {
-  MigrationArtifactSchema,
-  type MigrationArtifact,
-} from "./session-sqlite-migration-artifact.js";
+import { MigrationArtifactSchema } from "./session-sqlite-migration-artifact.js";
 import {
   isSessionSqliteMigrationWarning,
   type DoctorSessionSqliteIssue,
-  type DoctorSessionSqliteRestoreConflict,
 } from "./session-sqlite-migration-issues.js";
 
-export type SessionSqliteMigrationMoveKind =
-  | "legacy-store"
-  | "transcript"
-  | "trajectory"
-  | "unreferenced-jsonl";
-
-export type SessionSqliteMigrationMove = {
-  archivePath: string;
-  artifact?: MigrationArtifact;
-  kind: SessionSqliteMigrationMoveKind;
-  sessionKey?: string;
-  sourcePath: string;
-};
+export type SessionSqliteMigrationMove = z.infer<typeof MigrationMoveSchema>;
+export type SessionSqliteMigrationMoveKind = SessionSqliteMigrationMove["kind"];
 
 export type SessionSqliteMigrationTargetInput = {
   agentId: string;
@@ -39,41 +24,9 @@ export type SessionSqliteMigrationTargetInput = {
   storePath: string;
 };
 
-export type SessionSqliteMigrationTargetManifest = SessionSqliteMigrationTargetInput & {
-  completedMoves: SessionSqliteMigrationMove[];
-  issues: DoctorSessionSqliteIssue[];
-  plannedMoves: SessionSqliteMigrationMove[];
-  validationBeforeArchive: "not_run" | "passed" | "failed";
-};
-
-export type SessionSqliteMigrationGithubIssue = {
-  marker: string;
-  status: "attempted";
-  title: string;
-};
-
-export type SessionSqliteMigrationManifest = {
-  completedAt?: string;
-  failedAt?: string;
-  failureReports?: {
-    githubIssue?: SessionSqliteMigrationGithubIssue;
-    jsonPath: string;
-    markdownPath: string;
-  };
-  manifestVersion: 1 | 2 | 3 | 4;
-  openClawVersion: string;
-  restore?: {
-    attemptedAt: string;
-    consumedArchives?: string[];
-    conflicts: DoctorSessionSqliteRestoreConflict[];
-    restoredFiles: string[];
-    skippedFiles: string[];
-    status: "restored" | "partial" | "conflicts" | "failed" | "noop";
-  };
-  runId: string;
-  startedAt: string;
-  targets: SessionSqliteMigrationTargetManifest[];
-};
+export type SessionSqliteMigrationTargetManifest = z.infer<typeof MigrationTargetSchema>;
+export type SessionSqliteMigrationGithubIssue = z.infer<typeof MigrationGithubIssueSchema>;
+export type SessionSqliteMigrationManifest = z.infer<typeof MigrationManifestSchema>;
 
 export type ActiveSessionSqliteMigrationRun = {
   manifest: SessionSqliteMigrationManifest;
@@ -351,26 +304,16 @@ export function findLatestFailedSessionSqliteMigrationManifest(
     }
   | undefined {
   return listSessionSqliteMigrationManifestPaths(env)
-    .map((manifestPath) => {
+    .flatMap((manifestPath) => {
       const manifest = readSessionSqliteMigrationManifest(manifestPath);
-      return {
-        manifest,
-        manifestPath,
-        targets: manifest ? filterRestoreManifestTargets(manifest, trustedTargets) : [],
-      };
+      if (!manifest) {
+        return [];
+      }
+      const targets = filterRestoreManifestTargets(manifest, trustedTargets);
+      return isFailedSessionSqliteMigrationManifest(manifest) && targets.length > 0
+        ? [{ manifest, manifestPath, targets }]
+        : [];
     })
-    .filter(
-      (
-        item,
-      ): item is {
-        manifest: SessionSqliteMigrationManifest;
-        manifestPath: string;
-        targets: SessionSqliteMigrationTargetManifest[];
-      } =>
-        item.manifest !== undefined &&
-        isFailedSessionSqliteMigrationManifest(item.manifest) &&
-        item.targets.length > 0,
-    )
     .toSorted(
       (left, right) => manifestSortTime(right.manifest) - manifestSortTime(left.manifest),
     )[0];
@@ -513,7 +456,7 @@ export function readSessionSqliteMigrationManifest(
 
 function isRestoreMoveWithinTarget(
   move: SessionSqliteMigrationMove,
-  target: Pick<SessionSqliteMigrationTargetManifest, "storePath">,
+  target: Pick<SessionSqliteMigrationTargetInput, "storePath">,
 ): boolean {
   const sourcePath = path.resolve(move.sourcePath);
   const archivePath = path.resolve(move.archivePath);
@@ -685,7 +628,7 @@ export function uniqueRestoreMoves(
 ): SessionSqliteMigrationMove[] {
   const moves = new Map<string, SessionSqliteMigrationMove>();
   for (const move of [...target.completedMoves, ...target.plannedMoves]) {
-    moves.set(`${move.sourcePath}\u0000${move.archivePath}`, move);
+    moves.set(migrationMoveKey(move), move);
   }
   return [...moves.values()];
 }

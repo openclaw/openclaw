@@ -22,15 +22,7 @@ type ResolvedSignalTarget =
     };
 
 function normalizeAliasKey(raw: string): string | undefined {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const withoutSignal = /^signal:/i.test(trimmed)
-    ? trimmed.slice("signal:".length).trim()
-    : trimmed;
-  const normalized = normalizeLowercaseStringOrEmpty(withoutSignal);
-  return normalized || undefined;
+  return normalizeLowercaseStringOrEmpty(raw.trim().replace(/^signal:/i, "")) || undefined;
 }
 
 function resolveAliasMap(params: {

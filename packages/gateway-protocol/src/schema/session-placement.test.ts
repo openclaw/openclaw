@@ -497,8 +497,10 @@ describe("session dispatch protocol schemas", () => {
       Value.Check(SessionPlacementSchema, {
         ...failed,
         recoveryAction: "restart",
+        retryOnSend: true,
       }),
     ).toBe(true);
+    expect(Value.Check(SessionPlacementSchema, { ...failed, retryOnSend: false })).toBe(false);
     expect(
       Value.Check(SessionPlacementSchema, {
         ...failed,

@@ -580,6 +580,11 @@ openclaw-model-account-usage,
   border-bottom: 1px solid var(--border);
 }
 
+.model-provider-login__account > .btn {
+  grid-column: 2 / -1;
+  justify-self: start;
+}
+
 .model-provider-login__methods .learn-more-link {
   justify-self: start;
   margin-top: var(--space-2);

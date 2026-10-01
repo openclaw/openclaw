@@ -1,9 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { truncateUtf16Safe } from "../../../packages/normalization-core/src/utf16-slice.ts";
-import { toErrorObject as toLintErrorObject } from "../error-format.mts";
-
-export { toLintErrorObject };
 
 export function resolveCommandPath(command: string) {
   const pathValue = process.env.PATH ?? "";

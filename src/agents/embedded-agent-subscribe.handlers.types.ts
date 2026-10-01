@@ -14,8 +14,10 @@ import type { AgentItemEventData } from "../infra/agent-activity-events.js";
 import type { AssistantMessage, ThinkingContent } from "../llm/types.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { AssistantPhase } from "../shared/chat-message-content.js";
+import type { StreamDirectiveCodePrefix } from "../utils/directive-tags.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
-import type { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import type { BlockChunkMetadata, EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import type { LiveEditDiffProgressState } from "./embedded-agent-live-edit-diff.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -93,12 +95,6 @@ export type StreamBlockState = {
   pendingTagFragment?: string;
 };
 
-/** Raw offsets for literal directives whose Markdown code ownership is settled. */
-export type StreamDirectiveCodePrefix = {
-  end: number;
-  checkedRawLength: number;
-};
-
 /** Mutable subscription state shared by embedded-agent event handlers. */
 export type EmbeddedAgentSubscribeState = {
   assistantTexts: string[];
@@ -129,16 +125,7 @@ export type EmbeddedAgentSubscribeState = {
     string,
     { lastEmittedAtMs: number; itemMetadata: ExecLiveItemMetadata }
   >;
-  liveEditDiffStateById: Map<
-    string,
-    {
-      added: number;
-      removed: number;
-      emittedAdded: number;
-      emittedRemoved: number;
-      lastCheckedAtMs: number;
-    }
-  >;
+  liveEditDiffStateById: Map<string, LiveEditDiffProgressState>;
   itemActiveIds: Set<string>;
   itemStartedCount: number;
   itemCompletedCount: number;
@@ -211,9 +198,6 @@ export type EmbeddedAgentSubscribeState = {
   compactionInFlight: boolean;
   lastCompactionTokensAfter?: number;
   pendingCompactionRetry: number;
-  compactionRetryResolve?: () => void;
-  compactionRetryReject?: (reason?: unknown) => void;
-  compactionRetryPromise: Promise<void> | null;
   unsubscribed: boolean;
   replayState: EmbeddedRunReplayState;
   livenessState?: EmbeddedRunLivenessState;
@@ -236,6 +220,10 @@ export type EmbeddedAgentSubscribeState = {
   messageToolOnlySourceReplyDelivered: boolean;
   sourceReplyDelivered?: true;
   sourceReplyDeliveryState?: ReplyDeliveryState;
+  /** Whether the current provider turn's finished tools were only complete source progress. */
+  turnToolsOnlySourceProgress?: boolean;
+  /** The same fact for the latest provider turn that finished any tool. */
+  lastToolTurnOnlySourceProgress?: boolean;
   successfulCronAdds: number;
   pendingToolMediaUrls: string[];
   pendingToolMediaAttachments?: ReplyMediaAttachment[];
@@ -280,8 +268,7 @@ export type EmbeddedAgentSubscribeContext = {
   stripBlockTags: (text: string, state: StreamBlockState, options?: { final?: boolean }) => string;
   emitBlockChunk: (
     text: string,
-    options?: {
-      sourceText?: string;
+    options?: Partial<BlockChunkMetadata> & {
       assistantMessageIndex?: number;
       final?: boolean;
       finalReply?: ReplyDirectiveParseResult;
@@ -405,6 +392,8 @@ type ToolHandlerState = Pick<
   | "messageToolOnlySourceReplyDelivered"
   | "sourceReplyDelivered"
   | "sourceReplyDeliveryState"
+  | "turnToolsOnlySourceProgress"
+  | "lastToolTurnOnlySourceProgress"
   | "messagingToolSentTargets"
   | "heartbeatToolResponse"
   | "successfulCronAdds"
@@ -413,22 +402,20 @@ type ToolHandlerState = Pick<
   | "assistantMessageIndex"
 >;
 
-export type ToolHandlerContext = {
+export type ToolHandlerContext = Pick<
+  EmbeddedAgentSubscribeContext,
+  | "log"
+  | "hookRunner"
+  | "builtinToolNames"
+  | "trustedLocalMediaToolNames"
+  | "flushBlockReplyBuffer"
+  | "shouldEmitToolResult"
+  | "shouldEmitToolOutput"
+  | "emitToolSummary"
+  | "emitToolOutput"
+  | "trimMessagingToolSent"
+> & {
   params: ToolHandlerParams;
   state: ToolHandlerState;
-  log: EmbeddedSubscribeLogger;
-  hookRunner?: HookRunner;
-  builtinToolNames?: ReadonlySet<string>;
-  trustedLocalMediaToolNames?: ReadonlySet<string>;
-  flushBlockReplyBuffer: () => void | Promise<void>;
-  shouldEmitToolResult: () => boolean;
-  shouldEmitToolOutput: () => boolean;
-  emitToolSummary: (
-    toolName: string | undefined,
-    meta: string | undefined,
-    commandBearing: boolean,
-  ) => void;
-  emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
-  trimMessagingToolSent: () => void;
   consumeToolSendReceipt?: (toolCallId: string) => unknown;
 };

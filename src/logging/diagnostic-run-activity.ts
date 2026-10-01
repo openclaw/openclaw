@@ -1,4 +1,3 @@
-// Diagnostic run activity helpers summarize run lifecycle activity for diagnostics.
 import {
   getInternalDiagnosticEventSequence,
   onInternalDiagnosticEvent,
@@ -128,7 +127,6 @@ function recordToolStarted(
     toolName: event.toolName,
     toolCallId: event.toolCallId,
     startedAt: now,
-    lastProgressAt: now,
     // Start delivery is asynchronous; retain the owner's live reference across preparation.
     get deadlineAtMs() {
       return resolveToolExecutionRecoveryDeadlineAtMs(liveness?.deadlineAtMs) ?? event.deadlineAtMs;
@@ -275,7 +273,36 @@ export function markDiagnosticArgumentChurnObservation(
   }
 }
 
-export const markDiagnosticRunProgress: (params: RunProgressEvent) => void = applyRunProgress;
+export function markDiagnosticRunProgress(
+  params: RunProgressEvent & { onlyIfActive?: boolean },
+): void {
+  if (!params.onlyIfActive) {
+    applyRunProgress(params);
+    return;
+  }
+  const runId = params.runId?.trim();
+  const refs = sessionRefs(params);
+  const activity = runId
+    ? activityByRunId.get(runId)
+    : refs.map((ref) => activityByRef.get(ref)).find((candidate) => candidate !== undefined);
+  if (
+    !activity ||
+    (params.sessionId?.trim() &&
+      activity.sessionId &&
+      params.sessionId.trim() !== activity.sessionId.trim()) ||
+    (params.sessionKey?.trim() &&
+      activity.sessionKey &&
+      params.sessionKey.trim() !== activity.sessionKey.trim()) ||
+    refs.some((ref) => {
+      const current = activityByRef.get(ref);
+      return current !== undefined && current !== activity;
+    })
+  ) {
+    return;
+  }
+  // Observers may touch an existing activity, never create or merge session/run owners.
+  touchSessionActivity(activity, params.reason);
+}
 
 function applyRunProgress(
   params: RunProgressEvent,

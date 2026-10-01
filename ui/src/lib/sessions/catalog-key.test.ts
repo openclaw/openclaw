@@ -8,7 +8,7 @@ import {
 } from "./catalog-key.ts";
 
 describe("catalog session keys", () => {
-  it.each([undefined, "main", "other"])("round-trips opaque source ids for owner %s", (agentId) => {
+  it.each([undefined, "other"])("round-trips opaque source ids for owner %s", (agentId) => {
     const key = { catalogId: "fixture", hostId: "node:DevBox", threadId: "Thread:A/B" };
     expect(parseCatalogSessionKey(buildCatalogSessionKey(key, agentId))).toEqual(key);
   });

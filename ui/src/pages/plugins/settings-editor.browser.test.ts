@@ -493,15 +493,12 @@ describe("plugin map layout", () => {
     });
     editor.style.width = width > 768 ? "880px" : "100%";
     try {
-      for (const title of editor.querySelectorAll<HTMLElement>(
-        ".cfg-map > .settings-row .settings-row__title",
-      )) {
-        const bounds = title.getBoundingClientRect();
-        expect(bounds.width).toBeGreaterThan(90);
-        expect(bounds.height).toBeLessThanOrEqual(
-          Number.parseFloat(getComputedStyle(title).lineHeight) * 2,
-        );
-      }
+      expect(
+        [...editor.querySelectorAll(".plugin-editor__title")].map((title) =>
+          title.textContent?.trim(),
+        ),
+      ).toEqual(["Empty overrides", "Populated overrides"]);
+      expect(editor.querySelector(".cfg-map > .settings-row .settings-row__title")).toBeNull();
       for (const add of editor.querySelectorAll<HTMLButtonElement>(
         ".cfg-map > .settings-row button",
       )) {

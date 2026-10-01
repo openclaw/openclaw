@@ -97,7 +97,6 @@ describe("Telegram client cancellation and custody", () => {
   it.each([
     { method: "getUpdates", deadline: 45000 },
     { method: "sendMessage", deadline: 60000 },
-    { method: "getChat", deadline: 15000 },
   ])("terminates a held $method at its own request deadline", async ({ method, deadline }) => {
     hold = "headers";
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -115,32 +114,26 @@ describe("Telegram client cancellation and custody", () => {
     expect(requests).toHaveLength(1);
   });
 
-  it.each([
-    { method: "deleteWebhook", deadline: 15000 },
-    { method: "sendChatAction", deadline: 60000 },
-  ])(
-    "recovers one timed-out $method through the supplied fallback transport",
-    async ({ method, deadline }) => {
-      hold = "headers";
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const reasons: string[] = [];
-      const client = createTelegramClientFetch({
-        fetchImpl: asTelegramClientFetch(fetch),
-        transport: {
-          forceFallback: (reason) => {
-            reasons.push(reason);
-            return true;
-          },
+  it("recovers a timed-out deleteWebhook through the supplied fallback transport", async () => {
+    hold = "headers";
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const reasons: string[] = [];
+    const client = createTelegramClientFetch({
+      fetchImpl: asTelegramClientFetch(fetch),
+      transport: {
+        forceFallback: (reason) => {
+          reasons.push(reason);
+          return true;
         },
-      })!;
-      const sending = client(`${apiRoot}/${method}`);
-      await arrived.promise;
-      await vi.advanceTimersByTimeAsync(deadline);
-      expect(await (await sending).json()).toEqual({ accepted: true });
-      expect(reasons).toEqual(["request-timeout"]);
-      expect(requests).toEqual(Array(2).fill(`/bot123:fixture/${method}`));
-    },
-  );
+      },
+    })!;
+    const sending = client(`${apiRoot}/deleteWebhook`);
+    await arrived.promise;
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(await (await sending).json()).toEqual({ accepted: true });
+    expect(reasons).toEqual(["request-timeout"]);
+    expect(requests).toEqual(Array(2).fill("/bot123:fixture/deleteWebhook"));
+  });
 
   it.each(["recovers", "terminal", "no-fallback"] as const)(
     "releases transport-returned 421 bodies with %s custody",

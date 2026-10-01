@@ -258,11 +258,6 @@ describe("session origin across a channel switch (real inbound-event context bui
     conversationId: "42",
   });
 
-  it("confirms the premise: Slack DM context supplies NativeChannelId, Telegram DM context omits it", () => {
-    expect(slackCtx.NativeChannelId).toBe("D111SLACK");
-    expect(telegramCtx.NativeChannelId).toBeUndefined();
-  });
-
   it("resets the stale Slack channel id after a real-context Slack->Telegram switch", () => {
     const afterSlack = applyOrigin(undefined, slackCtx);
     expect(afterSlack.origin?.nativeChannelId).toBe("D111SLACK");
@@ -289,6 +284,41 @@ describe("session origin across a non-delivery turn", () => {
     expect(afterWebchat.origin?.nativeDirectUserId).toBe("U0001");
     expect(afterWebchat.origin?.accountId).toBe("slack-team-1");
     expect(afterWebchat.origin?.threadId).toBe("1700000000.000100");
+    expect(afterWebchat.origin).toEqual(afterSlack.origin);
+  });
+
+  it("keeps channel metadata when an internal caller explicitly delivers to the same route", () => {
+    const afterSlack = applyOrigin(undefined, slackTurn);
+    const afterWebchat = applyOrigin(afterSlack, {
+      ...webchatTurn,
+      OriginatingChannel: "slack",
+      OriginatingTo: slackTurn.To,
+      AccountId: slackTurn.AccountId,
+      MessageThreadId: slackTurn.MessageThreadId,
+      ExplicitDeliverRoute: true,
+    });
+
+    expect(afterWebchat.origin).toEqual(afterSlack.origin);
+    expect(afterWebchat.delivery).toEqual(afterSlack.delivery);
+  });
+
+  it("adopts an explicitly different external destination from an internal caller", () => {
+    const afterSlack = applyOrigin(undefined, slackTurn);
+    const afterWebchat = applyOrigin(afterSlack, {
+      ...webchatTurn,
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:42",
+      AccountId: "telegram-bot-1",
+      ExplicitDeliverRoute: true,
+    });
+
+    expect(afterWebchat.origin?.provider).toBe("telegram");
+    expect(afterWebchat.origin?.to).toBe("telegram:42");
+    expect(afterWebchat.origin?.nativeChannelId).toBeUndefined();
+    expect(afterWebchat.delivery).toMatchObject({
+      kind: "external",
+      context: { channel: "telegram", to: "telegram:42", accountId: "telegram-bot-1" },
+    });
   });
 
   it("keeps the bound channel identity across a heartbeat tick", () => {
@@ -317,20 +347,6 @@ describe("session origin across a non-delivery turn", () => {
     expect(afterCron.origin?.accountId).toBe("slack-team-1");
     expect(afterCron.origin?.threadId).toBe("1700000000.000100");
     expect(afterCron.origin?.provider).toBe("slack");
-  });
-
-  it("keeps the bound channel identity across an exec-event turn that omits the channel", () => {
-    const afterSlack = applyOrigin(undefined, slackTurn);
-    const afterExec = applyOrigin(afterSlack, {
-      InternalTurnSource: "exec",
-      ChatType: "direct",
-      From: "exec:run_REDACTED",
-      To: "exec:run_REDACTED",
-    } satisfies Partial<MsgContext>);
-
-    expect(afterExec.origin?.nativeChannelId).toBe("D111SLACK");
-    expect(afterExec.origin?.threadId).toBe("1700000000.000100");
-    expect(afterExec.origin?.provider).toBe("slack");
   });
 
   it("still adopts a real channel after an intervening non-delivery turn", () => {

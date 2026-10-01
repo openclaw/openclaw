@@ -1,6 +1,6 @@
 // Real gateway WebSocket coverage for canonical node chat subscriptions and reconnects.
 import { describe, expect, test, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import * as devicePairingNode from "../infra/device-pairing-node.js";
@@ -182,6 +182,10 @@ describe("gateway node chat subscriptions", () => {
       let node: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
       let operator: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
       const requestExecution = await observeGatewayRunExecution();
+      const finalRunId = "canonical-node-terminal-final";
+      const errorRunId = "canonical-node-terminal-error";
+      const finalTerminal = createDeferred<Record<string, unknown>>();
+      const errorTerminal = createDeferred<Record<string, unknown>>();
       const terminalPayloads = (runId: string) =>
         events
           .filter(
@@ -205,7 +209,18 @@ describe("gateway node chat subscriptions", () => {
           scopes: [],
           commands: [],
           deviceIdentity: paired.identity,
-          onEvent: (event) => events.push(event),
+          onEvent: (event) => {
+            events.push(event);
+            if (event.event !== "chat") {
+              return;
+            }
+            const payload = event.payload as Record<string, unknown>;
+            if (payload.runId === finalRunId) {
+              finalTerminal.resolve(payload);
+            } else if (payload.runId === errorRunId) {
+              errorTerminal.resolve(payload);
+            }
+          },
         });
         operator = await connectGatewayClient({
           url: `ws://127.0.0.1:${getStarted().port}`,
@@ -234,7 +249,6 @@ describe("gateway node chat subscriptions", () => {
           await params.dispatcher.waitForIdle();
           return { queuedFinal: true, counts: params.dispatcher.getQueuedCounts() };
         });
-        const finalRunId = "canonical-node-terminal-final";
         const finalStarted = await operator.request<{ runId: string; status: string }>(
           "chat.send",
           {
@@ -246,8 +260,13 @@ describe("gateway node chat subscriptions", () => {
         expect(finalStarted).toMatchObject({ runId: finalRunId, status: "started" });
         // The RPC acknowledges admission before detached dispatch and terminal effects settle.
         await requestExecution.waitForCompletion(finalRunId);
-        await vi.waitFor(() => expect(terminalPayloads(finalRunId)).toHaveLength(1));
-        expect(terminalPayloads(finalRunId)[0]).toMatchObject({
+        const finalPayload = await withTestTimeout(
+          finalTerminal.promise,
+          5_000,
+          "node final terminal was not delivered",
+        );
+        expect(terminalPayloads(finalRunId)).toHaveLength(1);
+        expect(finalPayload).toMatchObject({
           runId: finalRunId,
           sessionKey: "agent:main:main",
           state: "final",
@@ -257,7 +276,6 @@ describe("gateway node chat subscriptions", () => {
           },
         });
 
-        const errorRunId = "canonical-node-terminal-error";
         dispatchInboundMessageMock.mockRejectedValueOnce(new Error("node dispatch rejected"));
         const errorStarted = await operator.request<{ runId: string; status: string }>(
           "chat.send",
@@ -269,7 +287,11 @@ describe("gateway node chat subscriptions", () => {
         );
         expect(errorStarted).toMatchObject({ runId: errorRunId, status: "started" });
         await requestExecution.waitForCompletion(errorRunId);
-        await vi.waitFor(() => expect(terminalPayloads(errorRunId)).toHaveLength(1));
+        const errorPayload = await withTestTimeout(
+          errorTerminal.promise,
+          5_000,
+          "node error terminal was not delivered",
+        );
         await node.request("node.event", {
           event: "chat.subscribe",
           payload: { sessionKey: "main" },
@@ -277,10 +299,6 @@ describe("gateway node chat subscriptions", () => {
 
         expect(terminalPayloads(finalRunId)).toHaveLength(1);
         expect(terminalPayloads(errorRunId)).toHaveLength(1);
-        const errorPayload = terminalPayloads(errorRunId)[0];
-        if (!errorPayload) {
-          throw new Error("expected the node error terminal");
-        }
         expect(errorPayload).toMatchObject({
           runId: errorRunId,
           sessionKey: "agent:main:main",

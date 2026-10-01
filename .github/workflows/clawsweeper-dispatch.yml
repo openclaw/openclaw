@@ -20,9 +20,8 @@ permissions:
 jobs:
   dispatch:
     runs-on: ubuntu-latest
-    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
     if: >-
-      ${{ (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && (
+      ${{ (
         (github.event.action != 'edited' ||
           (github.event_name != 'issues' && github.event_name != 'pull_request_target') ||
           !github.event.changes || toJSON(github.event.changes) != '{}') &&
@@ -294,7 +293,7 @@ jobs:
         if: ${{ github.event_name == 'issues' || github.event_name == 'pull_request_target' }}
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
           package-manager-cache: false
 
       - name: Dispatch exact ClawSweeper review

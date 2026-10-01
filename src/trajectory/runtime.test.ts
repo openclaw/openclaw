@@ -50,6 +50,20 @@ function expectTrajectoryRuntimeRecorder(
   return recorder;
 }
 
+function createCapturedRuntimeRecorder(writes: string[]) {
+  return createTrajectoryRuntimeRecorder({
+    sessionId: "session-1",
+    sessionFile: "/tmp/session.jsonl",
+    writer: {
+      filePath: "/tmp/session.trajectory.jsonl",
+      write: (line) => {
+        writes.push(line);
+      },
+      flush: async () => undefined,
+    },
+  });
+}
+
 describe("trajectory runtime", () => {
   it("records sanitized runtime events by default", () => {
     const writes: string[] = [];
@@ -429,17 +443,7 @@ describe("trajectory runtime", () => {
 
   it("bounds oversized prompts before compact preservation", () => {
     const writes: string[] = [];
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
-    });
+    const recorder = createCapturedRuntimeRecorder(writes);
 
     const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
     runtimeRecorder.recordEvent("context.compiled", {
@@ -458,17 +462,7 @@ describe("trajectory runtime", () => {
 
   it("keeps normal schema-v1 event payloads unchanged", () => {
     const writes: string[] = [];
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
-    });
+    const recorder = createCapturedRuntimeRecorder(writes);
     const data = {
       prompt: "inspect",
       systemPrompt: "system prompt",
@@ -496,17 +490,7 @@ describe("trajectory runtime", () => {
       total: 724_402,
     };
     const promptCache = { readTokens: 333_824, writeTokens: 51_130 };
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
-    });
+    const recorder = createCapturedRuntimeRecorder(writes);
 
     const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
     runtimeRecorder.recordEvent("model.completed", {
@@ -531,6 +515,7 @@ describe("trajectory runtime", () => {
       assistantTexts: ["done"],
       finalPromptText: "inspect",
     });
+    expect(parsed.data.finalPromptTextOriginalLength).toBeUndefined();
     expect(parsed.data.messagesSnapshot).toBeUndefined();
     expect(parsed.data.droppedFields).toEqual(["messagesSnapshot"]);
     expect(
@@ -544,17 +529,7 @@ describe("trajectory runtime", () => {
       Array.from({ length: 64 }, (_value, index) => [`field-${index}`, "x".repeat(5_000)]),
     );
     const promptCache = { readTokens: 333_824, writeTokens: 51_130 };
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
-    });
+    const recorder = createCapturedRuntimeRecorder(writes);
 
     const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
     runtimeRecorder.recordEvent("model.completed", {
@@ -601,17 +576,7 @@ describe("trajectory runtime", () => {
   it("preserves the prompt when an oversized event drops inlined conversation state", () => {
     const writes: string[] = [];
     const prompt = "summarize the incident timeline for the deploy that failed";
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
-    });
+    const recorder = createCapturedRuntimeRecorder(writes);
 
     const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
     runtimeRecorder.recordEvent("context.compiled", {
@@ -645,17 +610,7 @@ describe("trajectory runtime", () => {
       role: index % 2 === 0 ? "user" : "assistant",
       content: `message-${index} ${"x".repeat(32_000)}`,
     }));
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
-    });
+    const recorder = createCapturedRuntimeRecorder(writes);
 
     expectTrajectoryRuntimeRecorder(recorder).recordEvent("context.compiled", {
       prompt,
@@ -683,17 +638,7 @@ describe("trajectory runtime", () => {
   it("preserves the prompt in the compact fallback for oversized events", () => {
     const writes: string[] = [];
     const prompt = "summarize the incident timeline for the deploy that failed";
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
-    });
+    const recorder = createCapturedRuntimeRecorder(writes);
 
     expectTrajectoryRuntimeRecorder(recorder).recordEvent("context.compiled", {
       prompt,
@@ -726,17 +671,7 @@ describe("trajectory runtime", () => {
       total: 724_402,
     };
     const secondUsage = { input: 12, output: 3, total: 15 };
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
-    });
+    const recorder = createCapturedRuntimeRecorder(writes);
 
     const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
     runtimeRecorder.recordEvent("model.completed", {
@@ -770,17 +705,7 @@ describe("trajectory runtime", () => {
   it("caps large final prompts and records their original length", () => {
     const writes: string[] = [];
     const finalPromptText = `prompt-${"🙂".repeat(4_096)}`;
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
-    });
+    const recorder = createCapturedRuntimeRecorder(writes);
 
     expectTrajectoryRuntimeRecorder(recorder).recordEvent("model.completed", { finalPromptText });
 
@@ -790,42 +715,9 @@ describe("trajectory runtime", () => {
     expect(parsed.data.finalPromptTextOriginalLength).toBe(finalPromptText.length);
   });
 
-  it("leaves short final prompts unchanged", () => {
-    const writes: string[] = [];
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
-    });
-
-    expectTrajectoryRuntimeRecorder(recorder).recordEvent("trace.artifacts", {
-      finalPromptText: "short prompt",
-    });
-
-    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
-    expect(parsed.data.finalPromptText).toBe("short prompt");
-    expect(parsed.data.finalPromptTextOriginalLength).toBeUndefined();
-  });
-
   it("redacts secrets before preserving usage in truncated runtime events", () => {
     const writes: string[] = [];
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
-    });
+    const recorder = createCapturedRuntimeRecorder(writes);
 
     const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
     runtimeRecorder.recordEvent("model.completed", {

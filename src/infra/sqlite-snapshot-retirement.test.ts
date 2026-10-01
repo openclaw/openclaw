@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";

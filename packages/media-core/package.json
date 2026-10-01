@@ -67,7 +67,7 @@
   },
   "dependencies": {
     "@openclaw/normalization-core": "workspace:*",
-    "file-type": "22.1.0"
+    "file-type": "22.1.1"
   },
   "scripts": {
     "build": "node --import ../../scripts/tsx.mjs ../../scripts/build-workspace-package.mts media-core"

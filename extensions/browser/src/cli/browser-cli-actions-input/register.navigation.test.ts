@@ -1,5 +1,6 @@
 // Browser tests cover register.navigation plugin behavior.
 import { Command } from "commander";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createBrowserProgram,
@@ -7,16 +8,13 @@ import {
   getBrowserCliRuntimeCapture,
   mockBrowserGateway,
 } from "../browser-cli.test-support.js";
-import * as cliCoreApiModule from "../core-api.js";
 
 const gatewayMock = mockBrowserGateway();
 const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
-  browserCliRuntime.writeJson,
-);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+vi.spyOn(defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
+vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.writeJson);
+vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
+vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
 
 const { registerBrowserNavigationCommands } = await import("./register.navigation.js");
 
@@ -120,19 +118,5 @@ describe("browser navigation commands", () => {
     const capture = getBrowserCliRuntimeCapture();
     expect(capture.runtimeErrors.join("\n")).toContain("Invalid width: maximum is 8192");
     expect(gatewayMock).not.toHaveBeenCalled();
-  });
-
-  it("navigate and resize commands are registered after removing dead import (#83878)", async () => {
-    const program = createNavigationProgram();
-    const browserCmd = program.commands.find((c) => c.name() === "browser");
-    expect(browserCmd).toBeDefined();
-
-    const cmds = browserCmd!.commands.map((c) => c.name());
-    expect(cmds).toContain("resize");
-    expect(cmds).toContain("navigate");
-
-    // Verify the shared module still exports requireRef (used by other modules)
-    const shared = await import("./shared.js");
-    expect(typeof shared.requireRef).toBe("function");
   });
 });

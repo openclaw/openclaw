@@ -31,26 +31,29 @@ const review: SessionProviderReview = {
   runtimeId: "codex",
 };
 const assertCurrent = () => {};
+const original = {
+  sessionId: target.sessionId,
+  lifecycleRevision: target.lifecycleRevision,
+  updatedAt: 1,
+};
 
 it("reopens an existing session and preserves its provider pause without a schema migration", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: target.agentId });
     const selectedTarget = { ...target, storePath: database.path };
-    const original = {
-      sessionId: target.sessionId,
-      lifecycleRevision: target.lifecycleRevision,
-      updatedAt: 1,
+    const existingEntry = {
+      ...original,
       label: "Existing session",
       lastRunId: "previous-run",
     };
-    writeSessionEntry(database, target.sessionKey, original);
+    writeSessionEntry(database, target.sessionKey, existingEntry);
     const schema = readExistingAgentSchemaMeta(database.db);
     expect(schema?.schemaVersion).toEqual(expect.any(Number));
     await closeOpenClawAgentDatabaseByPathAsync(database.path, target.agentId);
     expect(database.db.isOpen).toBe(false);
 
     const existing = await readSessionProviderReview(selectedTarget, assertCurrent);
-    expect(existing).toMatchObject(original);
+    expect(existing).toMatchObject(existingEntry);
     expect(existing?.providerReview).toBeUndefined();
     expect(
       resolveSessionWorkStartError(target.sessionKey, existing, {
@@ -83,7 +86,7 @@ it("reopens an existing session and preserves its provider pause without a schem
     expect(reopened.db.isOpen).toBe(true);
     expect(readExistingAgentSchemaMeta(reopened.db)).toEqual(schema);
     const persisted = await readSessionProviderReview(selectedTarget, assertCurrent);
-    expect(persisted).toMatchObject(original);
+    expect(persisted).toMatchObject(existingEntry);
     expect(persisted?.providerReview).toEqual(retainedReview);
     expect(
       resolveSessionWorkStartError(target.sessionKey, persisted, {
@@ -102,11 +105,6 @@ it.each(["default", "shared"] as const)(
         ...(store === "shared" ? { path: state.statePath("shared-review.sqlite") } : {}),
       });
       const selectedTarget = { ...target, storePath: database.path };
-      const original = {
-        sessionId: target.sessionId,
-        lifecycleRevision: target.lifecycleRevision,
-        updatedAt: 1,
-      };
       writeSessionEntry(database, target.sessionKey, original);
       const statementPrototype: StatementSync = Object.getPrototypeOf(
         database.db.prepare("SELECT 1"),
@@ -190,9 +188,7 @@ it("rolls back a clear when current authority is revoked at commit", async () =>
       database,
       target.sessionKey,
       {
-        sessionId: target.sessionId,
-        lifecycleRevision: target.lifecycleRevision,
-        updatedAt: 1,
+        ...original,
         providerReview: review,
       },
       { providerReviewMutation: true },
@@ -201,13 +197,13 @@ it("rolls back a clear when current authority is revoked at commit", async () =>
     let current = true;
     const admitted = vi
       .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback) =>
+      .mockImplementation((callback, attachment) =>
         createAdmission((request, grant) => {
           if (request.stage === "commit") {
             current = false;
           }
           return callback(request, grant);
-        }),
+        }, attachment),
       );
     try {
       await expect(
@@ -234,11 +230,6 @@ it("rolls back a clear when current authority is revoked at commit", async () =>
 it("preserves a current review through stale bookkeeping and drops it on lifecycle replacement", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: target.agentId });
-    const original = {
-      sessionId: target.sessionId,
-      lifecycleRevision: target.lifecycleRevision,
-      updatedAt: 1,
-    };
     writeSessionEntry(
       database,
       target.sessionKey,

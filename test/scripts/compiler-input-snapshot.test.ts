@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { ARTIFACT_CACHE_VERSION } from "../../scripts/lib/build-artifact-cache.mts";
 import { CompilerInputSnapshot } from "../../scripts/lib/compiler-input-snapshot.mts";
-import { createDeferred, withTestTimeout } from "../helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
@@ -74,6 +74,73 @@ it.each([
   f.write("tsconfig.json", config);
   expect(() => f.signature(f.snapshot())).toThrow(diagnostic);
 });
+
+it("seals an unchanged captured config at the compilation clock boundary", () => {
+  const f = fixture();
+  const stage = path.join(f.root, ".artifacts/native-declarations-fixture");
+  const config = path.join(stage, "tsconfig.json");
+  f.write(path.relative(f.root, config), '{"extends":"../../tsconfig.json"}');
+  const before = f.snapshot();
+  const signature = before.signature(config, [], [], stage);
+  const startedAt = fs.statSync(config).ctimeMs;
+  const after = f.snapshot();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    expect(after.seal(config, [], [], before, startedAt, stage).signature).toBe(signature);
+  }
+});
+
+it("does not promote config reads from an earlier seal into precompilation evidence", () => {
+  const f = fixture();
+  const stage = path.join(f.root, ".artifacts/native-declarations-fixture");
+  const config = path.join(stage, "tsconfig.json");
+  f.write(path.relative(f.root, config), '{"extends":"../../tsconfig.json"}');
+  const before = f.snapshot();
+  f.signature(before, stage);
+  const startedAt = fs.statSync(config).ctimeMs;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    expect(() => f.snapshot().seal(config, [], [], before, startedAt, stage)).toThrow(
+      `Boundary input changed during compilation: ${config}`,
+    );
+  }
+});
+
+it("keeps the clock fence for source bytes first discovered in compiler membership", () => {
+  const f = fixture();
+  f.write("src/discovered.ts", "export const discovered = 1;\n");
+  const before = f.snapshot();
+  f.signature(before);
+  const startedAt = fs.statSync(path.join(f.root, "src/discovered.ts")).ctimeMs;
+  expect(() =>
+    f.snapshot().seal("tsconfig.json", [], ["src/discovered.ts"], before, startedAt),
+  ).toThrow("Boundary input changed during compilation: src/discovered.ts");
+});
+
+it.each(["ctimeMs", "dev", "ino"] as const)(
+  "rejects a captured input whose %s changes while its bytes stay identical",
+  (field) => {
+    const f = fixture();
+    const input = path.join(f.root, "src/index.ts");
+    const captured = fs.statSync(input);
+    const before = f.snapshot();
+    f.signature(before);
+    const stat = fs.statSync.bind(fs);
+    const reader = vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+      const result = stat(...args);
+      if (args[0] === input && result) {
+        Object.defineProperty(result, field, { value: captured[field] + 1 });
+      }
+      return result;
+    });
+    try {
+      // Isolate identity comparison from the timestamp fence for late reads.
+      expect(() =>
+        f.snapshot().seal("tsconfig.json", [], ["src/index.ts"], before, captured.ctimeMs + 2),
+      ).toThrow("Boundary input changed during compilation: src/index.ts");
+    } finally {
+      reader.mockRestore();
+    }
+  },
+);
 
 it.each(["added", "removed"] as const)("identifies a %s namespace entry when sealing", (change) => {
   const f = fixture();
@@ -413,8 +480,12 @@ it("invalidates an indirect dependency symlink when its final target changes", a
   }
 });
 
-it("preloads sibling subtrees while the ordered visitor waits on a deeper directory", async () => {
-  const f = fixture();
+it("preloads sibling subtrees while the ordered visitor waits on a deeper directory", async ({
+  signal,
+  onTestFinished,
+}) => {
+  const testRoots = useAutoCleanupTempDirTracker(onTestFinished);
+  const f = fixture(testRoots.make("compiler-input-snapshot-preparation-"));
   f.write("fanout/a/deeper/input.ts", "export {};\n");
   f.write("fanout/b/deeper/input.ts", "export {};\n");
   f.write(".artifacts/ignored/input.ts", "export {};\n");
@@ -446,20 +517,30 @@ it("preloads sibling subtrees while the ordered visitor waits on a deeper direct
   });
   const snapshot = f.snapshot();
   const preparation = snapshot.prepare();
+  let cleanup: Promise<void> | undefined;
+  const finishPreparation = () =>
+    (cleanup ??= (async () => {
+      release.resolve();
+      try {
+        await preparation;
+      } finally {
+        reader.mockRestore();
+      }
+    })());
+  // Vitest runs these hooks in reverse order, after afterEach: join before removing inputs.
+  onTestFinished(finishPreparation);
   try {
-    await withTestTimeout(
-      Promise.all([heldStarted.promise, siblingStarted.promise]),
-      5_000,
-      "preparation serialized the independent directory subtrees",
+    await withinTest(
+      awaitGateBeforeSettlement(
+        Promise.all([heldStarted.promise, siblingStarted.promise]),
+        preparation,
+        "preparation serialized the independent directory subtrees",
+      ),
+      signal,
     );
     expect(peak).toBeLessThanOrEqual(16);
   } finally {
-    release.resolve();
-    try {
-      await preparation;
-    } finally {
-      reader.mockRestore();
-    }
+    await finishPreparation();
   }
   expect(active).toBe(0);
   expect(observed.has(path.join(f.root, ".artifacts"))).toBe(false);

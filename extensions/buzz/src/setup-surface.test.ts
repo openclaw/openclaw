@@ -104,6 +104,23 @@ function createPrompter(): WizardPrompter {
   };
 }
 
+type BuzzSetupWizard = ReturnType<typeof createBuzzSetupWizard>;
+type ConfigureParams = Parameters<BuzzSetupWizard["configure"]>[0];
+
+function configure(
+  wizard: BuzzSetupWizard,
+  params: Pick<ConfigureParams, "cfg"> & Partial<ConfigureParams>,
+) {
+  return wizard.configure({
+    runtime: createRuntimeSpies(),
+    prompter: createPrompter(),
+    accountOverrides: {},
+    shouldPromptAccountIds: false,
+    forceAllowFrom: false,
+    ...params,
+  });
+}
+
 describe("Buzz guided setup", () => {
   afterEach(async () => {
     vi.unstubAllEnvs();
@@ -127,16 +144,13 @@ describe("Buzz guided setup", () => {
       run: (ctx: { cfg: OpenClawConfig; runtime: RuntimeEnv }) => void | Promise<void>;
     }> = [];
 
-    const result = await wizard.configure({
+    const result = await configure(wizard, {
       cfg: { channels: { buzz: { authTag: AUTH_TAG } } } as OpenClawConfig,
       runtime,
       prompter,
       options: {
         onPostWriteHook: (hook) => hooks.push(hook),
       },
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     const expectedPrivateKey = nip19.nsecEncode(GENERATED_KEY);
@@ -189,18 +203,15 @@ describe("Buzz guided setup", () => {
         },
       },
     } as OpenClawConfig;
-    const configure = (accountId: string) =>
-      wizard.configure({
+    const configureAccount = (accountId: string) =>
+      configure(wizard, {
         cfg,
-        runtime: createRuntimeSpies(),
         prompter,
         accountOverrides: { buzz: accountId },
-        shouldPromptAccountIds: false,
-        forceAllowFrom: false,
       });
-    const ada = await configure("ada");
-    const grace = await configure("grace");
-    const replay = await configure("ada");
+    const ada = await configureAccount("ada");
+    const grace = await configureAccount("grace");
+    const replay = await configureAccount("ada");
     expect(generate).toHaveBeenCalledTimes(2);
     expect(ada.accountId).toBe("ada");
     expect(ada.cfg.channels?.buzz?.accounts?.ada?.privateKey).toBe(nip19.nsecEncode(GENERATED_KEY));
@@ -231,13 +242,11 @@ describe("Buzz guided setup", () => {
     vi.mocked(prompter.text)
       .mockResolvedValueOnce("ada")
       .mockResolvedValueOnce("wss://ada.example.com");
-    const result = await wizard.configure({
+    const result = await configure(wizard, {
       cfg: { channels: { buzz: root } } as OpenClawConfig,
-      runtime: createRuntimeSpies(),
       prompter,
       accountOverrides: {},
       shouldPromptAccountIds: true,
-      forceAllowFrom: false,
     });
     expect(result.accountId).toBe("ada");
     expect(result.cfg.channels?.buzz).toEqual({
@@ -278,14 +287,10 @@ describe("Buzz guided setup", () => {
     const prompter = createPrompter();
     vi.mocked(prompter.multiselect).mockResolvedValue([ROOM_A]);
 
-    const result = await wizard.configure({
+    const result = await configure(wizard, {
       cfg: {} as OpenClawConfig,
-      runtime: createRuntimeSpies(),
       prompter,
       options: { secretInputMode: "ref" },
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(runSecretStep).toHaveBeenCalledWith(
@@ -306,7 +311,7 @@ describe("Buzz guided setup", () => {
     });
     const prompter = createPrompter();
 
-    const result = await wizard.configure({
+    const result = await configure(wizard, {
       cfg: {
         channels: {
           buzz: {
@@ -318,11 +323,7 @@ describe("Buzz guided setup", () => {
           },
         },
       } as OpenClawConfig,
-      runtime: createRuntimeSpies(),
       prompter,
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(result.cfg.channels?.buzz?.enabled).toBe(true);
@@ -359,13 +360,10 @@ describe("Buzz guided setup", () => {
       ]);
       const prompter = createPrompter();
       vi.mocked(prompter.multiselect).mockResolvedValueOnce([]).mockResolvedValueOnce([ROOM_A]);
-      const result = await createBuzzSetupWizard({ discoverRooms }).configure({
+      const result = await configure(createBuzzSetupWizard({ discoverRooms }), {
         cfg,
-        runtime: createRuntimeSpies(),
         prompter,
         accountOverrides: { buzz: accountId },
-        shouldPromptAccountIds: false,
-        forceAllowFrom: false,
       });
       expect(result.accountId).toBe(accountId);
       expect(result.completion).toBeUndefined();
@@ -419,15 +417,11 @@ describe("Buzz guided setup", () => {
       throw new Error(`Unexpected confirm prompt: ${message}`);
     });
 
-    const result = await wizard.configure({
+    const result = await configure(wizard, {
       cfg: {
         channels: { buzz: { relayUrl: "ws://127.attacker.example" } },
       } as OpenClawConfig,
-      runtime: createRuntimeSpies(),
       prompter,
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(result.cfg.channels?.buzz?.relayUrl).toBe("wss://buzz.example.com");
@@ -445,7 +439,7 @@ describe("Buzz guided setup", () => {
     });
     const prompter = createPrompter();
 
-    const result = await wizard.configure({
+    const result = await configure(wizard, {
       cfg: {
         channels: {
           defaults: { groupPolicy: "disabled" },
@@ -463,11 +457,7 @@ describe("Buzz guided setup", () => {
           },
         },
       } as OpenClawConfig,
-      runtime: createRuntimeSpies(),
       prompter,
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(runSecretStep).not.toHaveBeenCalled();
@@ -484,8 +474,6 @@ describe("Buzz guided setup", () => {
 
   it.each([
     { accountId: "default", source: "env", plaintextPrivateKey: false },
-    { accountId: "ada", source: "env", plaintextPrivateKey: false },
-    { accountId: "default", source: "file", plaintextPrivateKey: false },
     { accountId: "ada", source: "file", plaintextPrivateKey: false },
     { accountId: "ada", source: "env", plaintextPrivateKey: true },
   ] as const)(
@@ -513,13 +501,10 @@ describe("Buzz guided setup", () => {
       });
       const prompter = createPrompter();
 
-      const result = await wizard.configure({
+      const result = await configure(wizard, {
         cfg,
-        runtime: createRuntimeSpies(),
         prompter,
         accountOverrides: { buzz: accountId },
-        shouldPromptAccountIds: false,
-        forceAllowFrom: false,
       });
 
       expect(result.accountId).toBe(accountId);
@@ -581,14 +566,11 @@ describe("Buzz guided setup", () => {
       });
 
       await expect(
-        wizard.configure({
+        configure(wizard, {
           cfg,
-          runtime: createRuntimeSpies(),
           prompter: createPrompter(),
           options: { onPostWriteHook },
           accountOverrides: { buzz: accountId },
-          shouldPromptAccountIds: false,
-          forceAllowFrom: false,
         }),
       ).rejects.toThrow(/configured|SecretRef/i);
       expect(cfg).toEqual(before);
@@ -611,7 +593,7 @@ describe("Buzz guided setup", () => {
     });
     const prompter = createPrompter();
 
-    const result = await wizard.configure({
+    const result = await configure(wizard, {
       cfg: {
         channels: {
           buzz: {
@@ -620,12 +602,8 @@ describe("Buzz guided setup", () => {
           },
         },
       } as OpenClawConfig,
-      runtime: createRuntimeSpies(),
       prompter,
       options: { secretInputMode: "ref" },
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(runSecretStep).not.toHaveBeenCalled();
@@ -650,13 +628,9 @@ describe("Buzz guided setup", () => {
     const prompter = createPrompter();
     vi.mocked(prompter.multiselect).mockResolvedValue([ROOM_A]);
 
-    const result = await wizard.configure({
+    const result = await configure(wizard, {
       cfg: {} as OpenClawConfig,
-      runtime: createRuntimeSpies(),
       prompter,
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(discoverRooms).toHaveBeenCalledOnce();

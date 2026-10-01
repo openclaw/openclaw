@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { PluginNodeHostCommandRegistration } from "../plugins/registry-types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
@@ -14,6 +15,13 @@ import {
 } from "./plugin-node-host.js";
 
 const availabilityContext = { config: {}, env: {} };
+
+function registerCommands(commands: PluginNodeHostCommandRegistration[]) {
+  const registry = createEmptyPluginRegistry();
+  registry.nodeHostCommands = commands;
+  setActivePluginRegistry(registry);
+  return registry;
+}
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
@@ -45,8 +53,7 @@ describe("plugin node-host registry", () => {
   });
 
   it("lists plugin-declared caps and commands", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
+    registerCommands([
       {
         pluginId: "browser",
         pluginName: "Browser",
@@ -77,8 +84,7 @@ describe("plugin node-host registry", () => {
         },
         source: "test",
       },
-    ];
-    setActivePluginRegistry(registry);
+    ]);
 
     expect(listRegisteredNodeHostCapsAndCommands(availabilityContext)).toEqual({
       caps: ["browser", "photos"],
@@ -88,8 +94,7 @@ describe("plugin node-host registry", () => {
   });
 
   it("lists plugin-declared agent tool descriptors", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
+    registerCommands([
       {
         pluginId: "browser",
         pluginName: "Browser",
@@ -108,8 +113,7 @@ describe("plugin node-host registry", () => {
         },
         source: "test",
       },
-    ];
-    setActivePluginRegistry(registry);
+    ]);
 
     expect(listRegisteredNodeHostCapsAndCommands(availabilityContext).nodePluginTools).toEqual([
       {
@@ -126,8 +130,7 @@ describe("plugin node-host registry", () => {
   });
 
   it("publishes a validated Computer Use descriptor beside its command pair", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
+    registerCommands([
       {
         pluginId: "computer",
         pluginName: "Computer",
@@ -147,8 +150,7 @@ describe("plugin node-host registry", () => {
         },
         source: "test",
       },
-    ];
-    setActivePluginRegistry(registry);
+    ]);
 
     expect(listRegisteredNodeHostCapsAndCommands(availabilityContext)).toMatchObject({
       caps: ["computer"],
@@ -162,8 +164,7 @@ describe("plugin node-host registry", () => {
   });
 
   it("skips agent tool descriptors with provider-unsafe names", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
+    registerCommands([
       {
         pluginId: "browser",
         pluginName: "Browser",
@@ -178,8 +179,7 @@ describe("plugin node-host registry", () => {
         },
         source: "test",
       },
-    ];
-    setActivePluginRegistry(registry);
+    ]);
 
     expect(listRegisteredNodeHostCapsAndCommands(availabilityContext)).toEqual({
       caps: ["browser"],
@@ -189,8 +189,7 @@ describe("plugin node-host registry", () => {
   });
 
   it("omits commands and capabilities unavailable in the node-local config", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
+    registerCommands([
       {
         pluginId: "browser",
         pluginName: "Browser",
@@ -212,8 +211,7 @@ describe("plugin node-host registry", () => {
         },
         source: "test",
       },
-    ];
-    setActivePluginRegistry(registry);
+    ]);
 
     expect(
       listRegisteredNodeHostCapsAndCommands({
@@ -232,8 +230,7 @@ describe("plugin node-host registry", () => {
     const cleanup = vi.fn();
     const onChange = vi.fn();
     const scopedRegistry = vi.fn();
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
+    const registry = registerCommands([
       {
         pluginId: "browser",
         pluginName: "Browser",
@@ -252,8 +249,7 @@ describe("plugin node-host registry", () => {
         },
         source: "test",
       },
-    ];
-    setActivePluginRegistry(registry);
+    ]);
 
     const stop = watchRegisteredNodeHostCommandAvailability(availabilityContext, () => {
       scopedRegistry(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
@@ -344,14 +340,14 @@ describe("plugin node-host registry", () => {
 
   it("notifies each shared plugin disconnect owner once", async () => {
     const onDisconnect = vi.fn(async () => {});
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = ["screen.snapshot", "computer.act"].map((command) => ({
-      pluginId: "computer",
-      pluginName: "Computer",
-      command: { command, onDisconnect, handle: vi.fn(async () => "{}") },
-      source: "test",
-    }));
-    setActivePluginRegistry(registry);
+    registerCommands(
+      ["screen.snapshot", "computer.act"].map((command) => ({
+        pluginId: "computer",
+        pluginName: "Computer",
+        command: { command, onDisconnect, handle: vi.fn(async () => "{}") },
+        source: "test",
+      })),
+    );
 
     await notifyRegisteredNodeHostCommandDisconnect();
 
@@ -421,8 +417,7 @@ describe("plugin node-host registry", () => {
       expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
       return paramsJSON ?? "";
     });
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
+    const registry = registerCommands([
       {
         pluginId: "browser",
         pluginName: "Browser",
@@ -433,8 +428,7 @@ describe("plugin node-host registry", () => {
         },
         source: "test",
       },
-    ];
-    setActivePluginRegistry(registry);
+    ]);
 
     const context = {
       sendNodeEvent: vi.fn(async () => undefined),
@@ -452,8 +446,7 @@ describe("plugin node-host registry", () => {
 
   it("gates duplex commands from embedded-worker manifests and supplies their IO context", async () => {
     const handle = vi.fn(async (paramsJSON?: string | null) => paramsJSON ?? "");
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
+    registerCommands([
       {
         pluginId: "terminal",
         pluginName: "Terminal",
@@ -465,8 +458,7 @@ describe("plugin node-host registry", () => {
         },
         source: "test",
       },
-    ];
-    setActivePluginRegistry(registry);
+    ]);
 
     expect(
       listRegisteredNodeHostCapsAndCommands(availabilityContext, { includeDuplex: false }),

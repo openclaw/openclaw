@@ -90,6 +90,48 @@ afterEach(() => {
 });
 
 describe("chat sidebar region", () => {
+  it("updates the conversation tab identity without relabeling other panels or their controls", async () => {
+    const layout = openSlot(openSlot({ columns: [] }, "dashboard"), "workspace");
+    const dashboard = layout.columns[0]!.panels.find((panel) => panel.slot === "dashboard")!;
+    const region = await createRegion(promoteSidebarPanel(layout, dashboard.id));
+    const label = () =>
+      root(region).querySelector('wa-tab[panel="conversation"] .tabstrip-tab__label');
+    expect(label()?.textContent).toBe("Chat");
+
+    region.conversationTab = {
+      label: "Research assistant",
+      icon: html`<span data-agent-avatar>🦉</span>`,
+    };
+    await region.updateComplete;
+    expect(label()?.textContent).toBe("Research assistant");
+    expect(
+      root(region).querySelector('wa-tab[panel="conversation"] [data-agent-avatar]'),
+    ).not.toBeNull();
+    expect(root(region).querySelector('button[aria-label="Close Chat"]')).not.toBeNull();
+    expect(
+      [...root(region).querySelectorAll(".tabstrip-tab__label")].map((tab) => tab.textContent),
+    ).toContain("Files");
+
+    region.conversationTab = { label: "", icon: html`` };
+    await region.updateComplete;
+    expect(label()?.textContent).toBe("Chat");
+    expect(
+      root(region).querySelector('wa-tab[panel="conversation"]')?.querySelector("openclaw-tooltip")
+        ?.content,
+    ).toBe("Chat");
+
+    region.conversationTab = {
+      label: "Planning assistant",
+      icon: html`<span data-agent-avatar>🦊</span>`,
+    };
+    await region.updateComplete;
+    expect(label()?.textContent).toBe("Planning assistant");
+    expect(root(region).querySelector("[data-agent-avatar]")?.textContent).toBe("🦊");
+    region.conversationTab = undefined;
+    await region.updateComplete;
+    expect(label()?.textContent).toBe("Chat");
+  });
+
   it("coalesces committed geometry and retires disconnected measurements", async () => {
     vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
     onTestFinished(() => {
@@ -337,12 +379,9 @@ describe("chat sidebar region", () => {
         onDesktopFocusTargetChange: vi.fn(),
         dashboard: nothing,
         workspace: html`<div data-panel="workspace">Workspace panel</div>`,
-        tasks: nothing,
         renderDetail: () => html``,
         digest: null,
         activeRunId: null,
-        startedAt: undefined,
-        lastReadAt: undefined,
         pullRequests: [],
         companion: {
           turns: [],
@@ -351,11 +390,8 @@ describe("chat sidebar region", () => {
         },
         onCompanionSubmit: vi.fn(),
         onCompanionDraftChange: vi.fn(),
-        onCompanionVisibilityChange: vi.fn(),
         connected: false,
         onClearCompanion: vi.fn(),
-        onRefreshTasks: vi.fn(),
-        tasksLoading: false,
         discussion: null,
         discussionAvailable: false,
         discussionOpenUrl: null,
@@ -603,7 +639,6 @@ describe("chat sidebar region", () => {
       ["terminal", "Terminal"],
       ["workspace", "Files"],
       ["companion", "Side chat"],
-      ["tasks", "Tasks"],
       ["discussion", "Discussion"],
     ] as const) {
       region.layout = openSlot({ columns: [] }, slot);
@@ -627,7 +662,6 @@ describe("chat sidebar region", () => {
       "browser",
       "workspace",
       "companion",
-      "tasks",
       "desktop",
       "discussion",
       "dashboard",
@@ -643,7 +677,6 @@ describe("chat sidebar region", () => {
       "Browser Ctrl+Alt+Shift+U",
       "Files Ctrl+Shift+B",
       "Side chat Ctrl+Shift+S",
-      "Tasks Ctrl+Alt+Shift+K",
       "Desktop Ctrl+Alt+Shift+D",
       "Discussion Ctrl+Alt+Shift+J",
       "Dashboard Ctrl+Alt+Shift+G",

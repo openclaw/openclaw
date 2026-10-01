@@ -34,18 +34,15 @@ extension AgentProTab {
         .accessibilityValue(agentRosterFilter.title)
     }
 
-    @ViewBuilder
     var gatewayToolbarButton: some View {
-        if let openSettings {
-            Button(action: openSettings) {
-                Image(systemName: self.gatewayConnected ? "antenna.radiowaves.left.and.right" : "wifi.slash")
-            }
-            .tint(self.gatewayConnected ? OpenClawBrand.ok : .secondary)
-            .accessibilityLabel(self.gatewayConnected
-                ? String(localized: "Gateway online")
-                : String(localized: "Gateway offline"))
-            .accessibilityHint("Opens Settings / Gateway")
+        Button(action: self.openSettings) {
+            Image(systemName: self.gatewayConnected ? "antenna.radiowaves.left.and.right" : "wifi.slash")
         }
+        .tint(self.gatewayConnected ? OpenClawBrand.ok : .secondary)
+        .accessibilityLabel(self.gatewayConnected
+            ? String(localized: "Gateway online")
+            : String(localized: "Gateway offline"))
+        .accessibilityHint("Opens Settings / Gateway")
     }
 
     var agentFiltersActive: Bool {
@@ -157,7 +154,7 @@ extension AgentProTab {
                 self.agentName(for: agent),
                 agent.id,
                 self.normalized(agent.workspace),
-                self.modelLabel(for: agent),
+                RootSidebar.agentModelLabel(agent),
             ]
                 .compactMap(\.self)
                 .joined(separator: " ")

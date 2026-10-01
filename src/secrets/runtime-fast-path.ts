@@ -96,25 +96,6 @@ function resolveCandidateAgentDirs(params: {
     : collectCandidateAgentDirs(params.config, params.env);
 }
 
-function hasCandidateAuthProfileStoreSource(agentDir: string): boolean {
-  return existsSync(resolveAuthProfileDatabasePath(agentDir));
-}
-
-/**
- * Returns whether canonical auth-profile databases exist for candidate agent dirs.
- */
-function hasCandidateAuthProfileStoreSources(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv | Record<string, string | undefined>;
-  agentDirs?: string[];
-}): boolean {
-  const candidateDirs = resolveCandidateAgentDirs(params);
-  return (
-    candidateDirs.some((agentDir) => hasCandidateAuthProfileStoreSource(agentDir)) ||
-    existsSync(resolveSharedAuthStorePath(params.env as NodeJS.ProcessEnv))
-  );
-}
-
 /**
  * Creates empty web-tool metadata for snapshots that do not need secret resolution.
  */
@@ -139,14 +120,13 @@ function hasActiveRuntimeWebFetchProviderSurface(
   if (!isRecord(fetch)) {
     return false;
   }
-  const fetchConfig = fetch;
-  if (fetchConfig.enabled === false) {
+  if (fetch.enabled === false) {
     return false;
   }
-  if (typeof fetchConfig.provider === "string" && fetchConfig.provider.trim()) {
+  if (typeof fetch.provider === "string" && fetch.provider.trim()) {
     return true;
   }
-  return hasCredentialBearingObjectValue(fetchConfig, defaults);
+  return hasCredentialBearingObjectValue(fetch, defaults);
 }
 
 function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
@@ -155,14 +135,10 @@ function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
   const fetchExplicitlyDisabled =
     isRecord(web) && typeof web.fetch === "object" && web.fetch?.enabled === false;
   if (isRecord(web)) {
-    const webRecord = web;
-    if ("search" in webRecord) {
+    if ("search" in web) {
       return true;
     }
-    if (
-      "fetch" in webRecord &&
-      hasActiveRuntimeWebFetchProviderSurface(webRecord.fetch, defaults)
-    ) {
+    if ("fetch" in web && hasActiveRuntimeWebFetchProviderSurface(web.fetch, defaults)) {
       return true;
     }
   }
@@ -230,11 +206,8 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
   if (includeAuthStoreRefs) {
     if (!params.loadAuthStore) {
       if (
-        hasCandidateAuthProfileStoreSources({
-          config: resolvedConfig,
-          env: runtimeEnv,
-          agentDirs: candidateDirs,
-        })
+        candidateDirs.some((agentDir) => existsSync(resolveAuthProfileDatabasePath(agentDir))) ||
+        existsSync(resolveSharedAuthStorePath(runtimeEnv))
       ) {
         return null;
       }

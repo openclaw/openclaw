@@ -38,8 +38,8 @@ import {
 import { assertReceiptOwner } from "./github-repository-publication-workspace.js";
 import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
 import { stageSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
+import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./worker-environments/workspace-manifest.js";
-import { readActualWorkspaceManifest } from "./worker-environments/workspace-reconcile-core.js";
 const mocked = vi.hoisted(() => ({ run: vi.fn(), timed: vi.fn() }));
 vi.mock("../process/exec.js", async (original) => ({
   ...(await original<typeof import("../process/exec.js")>()),
@@ -113,15 +113,15 @@ it.each([
       await registerClonedProjectRegistry({ path: source, name: "Handoff", originUrl: url });
       const scope = { agentId: "main", sessionKey: "agent:main:dashboard:handoff" };
       const store = getSessionRepositoryWorkspaceStore();
-      let repository = store.create({
+      let repository = await store.create({
         ...scope,
         url,
         runSetupScript: false,
         requestedRef: scenario === "topic" ? "topic" : undefined,
         assertCurrent: () => {},
       });
-      const base = await readActualWorkspaceManifest({ root: source, baseCommit });
-      repository = store.bindBase({
+      const base = await captureWorkspaceManifest({ root: source, baseCommit });
+      repository = await store.bindBase({
         workspaceId: repository.workspaceId,
         expectedRevision: repository.revision,
         baseCommit,
@@ -138,7 +138,7 @@ it.each([
       git(cloud, "commit", "-qam", "Cloud\n\nOpenClaw-Publication: prior-cloud-publication");
       const publishedHead = git(cloud, "rev-parse", "HEAD");
       git(cloud, "push", "origin", repository.branch);
-      const priorCurrent = await readActualWorkspaceManifest({ root: cloud, baseCommit });
+      const priorCurrent = await captureWorkspaceManifest({ root: cloud, baseCommit });
       const priorPublication = state.path("prior-publication");
       const priorDigest = execFileSync(
         process.execPath,
@@ -164,7 +164,7 @@ it.each([
         git(cloud, "add", "-f", "restored.ignored");
       }
       await fs.writeFile(path.join(cloud, "later.txt"), "accepted after publication\n");
-      const current = await readActualWorkspaceManifest({ root: cloud, baseCommit });
+      const current = await captureWorkspaceManifest({ root: cloud, baseCommit });
       const publication = state.path("publication");
       const digest = execFileSync(
         process.execPath,
@@ -358,7 +358,8 @@ it.each([
         return;
       }
       await move();
-      expect(() => assertReceiptOwner(row)).toThrow();
+      const receiptWorkspace = await store.prepare(row.workspace_id);
+      expect(() => assertReceiptOwner(row, receiptWorkspace)).toThrow();
       expect(readRepositoryGitHubPublication(row.request_id)?.pushed_head_commit).toBe(
         publishedHead,
       );
@@ -481,7 +482,7 @@ it("can hold publisher exclusion during an existing reclaim claim without taking
       sessionId: REQUEST.sessionId,
       ownerEpoch: 1,
     });
-    const active = seedActivePlacement(placements, {
+    const active = await seedActivePlacement(placements, {
       environmentId: "handoff-worker",
       ownerEpoch: 1,
     });

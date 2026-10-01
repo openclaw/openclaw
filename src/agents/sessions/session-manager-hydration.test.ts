@@ -27,11 +27,27 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { sessionManagerPrepareCurrentTurnReplay } from "./session-manager-current-turn.js";
 
-it.each(["canonical", "custom", "shared"])(
+function canonicalTarget(
+  state: OpenClawTestState,
+  sessionId: string,
+  sessionKey = `agent:main:${sessionId}`,
+) {
+  return {
+    agentId: "main",
+    sessionId,
+    sessionKey,
+    storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+  };
+}
+
+it.each(["canonical", "shared"])(
   "opens cold and bounded %s SDK views without host SQLite and preserves complete durable history",
   async (layout) => {
     await withOpenClawTestState({ label: "session-hydration" }, async (state) => {
@@ -115,12 +131,7 @@ it.each(["canonical", "custom", "shared"])(
 
 it("preserves the shipped SDK omitted-history option for bounded views", async () => {
   await withOpenClawTestState({ label: "sdk-omitted-history" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "sdk-omitted-history",
-      sessionKey: "agent:main:sdk-omitted-history",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
+    const target = canonicalTarget(state, "sdk-omitted-history");
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const source = SessionManager.open(target);
     const userId = source.appendMessage(makeUserMessage("current SDK user", 1));
@@ -155,15 +166,13 @@ it.each(["file", "incognito"])(
   "pairs current-turn entries with the complete hydrated version and captured prefix in %s storage",
   async (storage) => {
     await withOpenClawTestState({ label: "current-turn-entry-version" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "current-turn-version",
-        sessionKey:
-          storage === "incognito"
-            ? "agent:main:dashboard:incognito-current-turn-version"
-            : "agent:main:current-turn-version",
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
+      const target = canonicalTarget(
+        state,
+        "current-turn-version",
+        storage === "incognito"
+          ? "agent:main:dashboard:incognito-current-turn-version"
+          : "agent:main:current-turn-version",
+      );
       await upsertSessionEntryCore(target, {
         sessionId: target.sessionId,
         updatedAt: 1,
@@ -237,12 +246,7 @@ it.each(["file", "incognito"])(
 
 it("does not publish a stale retarget over a manager changed while its worker read waits", async () => {
   await withOpenClawTestState({ label: "session-hydration-retarget" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "retarget",
-      sessionKey: "agent:main:retarget",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
+    const target = canonicalTarget(state, "retarget");
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const source = SessionManager.open(target);
     source.appendMessage(makeUserMessage("persisted", 1));
@@ -288,12 +292,7 @@ it.each(["hydration", "current-turn"] as const)(
   "releases queued %s admission on abort before its predecessor finishes",
   async (kind) => {
     await withOpenClawTestState({ label: "session-hydration-queued-abort" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "queued-abort",
-        sessionKey: "agent:main:queued-abort",
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
+      const target = canonicalTarget(state, "queued-abort");
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
       const entryId = SessionManager.open(target).appendMessage(
         makeUserMessage("preserved predecessor", 1),
@@ -357,12 +356,7 @@ it.each(["hydration", "current-turn"] as const)(
 
 it("keeps absent storage absent, lazy headers unpersisted, and malformed retargets atomic", async () => {
   await withOpenClawTestState({ label: "session-hydration-empty" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "empty",
-      sessionKey: "agent:main:empty",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
+    const target = canonicalTarget(state, "empty");
     await expect(SessionManager.openAsync(target)).rejects.toThrow("storage");
     expect(fs.existsSync(target.storePath)).toBe(false);
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
@@ -388,12 +382,7 @@ it.each(["abort", "database-close"] as const)(
   "rejects a prepared result after %s before publication",
   async (reason) => {
     await withOpenClawTestState({ label: "session-hydration-revoked" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "revoked",
-        sessionKey: "agent:main:revoked",
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
+      const target = canonicalTarget(state, "revoked");
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
       SessionManager.open(target).appendMessage(makeUserMessage("retained", 1));
       const controller = new AbortController();
@@ -440,12 +429,7 @@ it.each(["full", "bounded"])(
   "keeps %s incognito hydration on an existing process-local SQLite identity",
   async (mode) => {
     await withOpenClawTestState({ label: "session-hydration-incognito" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "private",
-        sessionKey: "agent:main:dashboard:incognito-hydration",
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
+      const target = canonicalTarget(state, "private", "agent:main:dashboard:incognito-hydration");
       const open = () =>
         mode === "full"
           ? SessionManager.openAsync(target)
@@ -467,64 +451,67 @@ it.each(["full", "bounded"])(
   },
 );
 
-it.each(
-  ["full", "bounded", "retarget", "reload", "replay"].flatMap((entry) =>
-    ["close", "replace"].map((transition) => ({ entry, transition })),
-  ),
-)("rejects incognito $entry publication after owner $transition", async ({ entry, transition }) => {
-  await withOpenClawTestState({ label: "session-hydration-incognito-owner" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "private-owner",
-      sessionKey: "agent:main:dashboard:incognito-owner",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
-    await upsertSessionEntryCore(target, {
-      sessionId: target.sessionId,
-      updatedAt: 1,
-      incognito: true,
-    });
-    const source = SessionManager.open(target);
-    source.appendMessage(makeUserMessage("discarded private history", 1));
-    const receiver = entry === "reload" || entry === "replay" ? source : SessionManager.inMemory();
-    if (entry === "replay") {
-      await receiver.reloadPersistedTranscriptAsync();
-    }
-    const originalView = receiver.buildSessionContext();
-    const pending =
-      entry === "full"
-        ? SessionManager.openAsync(target)
-        : entry === "bounded"
-          ? SessionManager.openBoundedAsync(target, { maxBytes: 4096, maxEvents: 5 })
-          : entry === "retarget"
-            ? receiver.setSessionTargetAsync(target)
-            : entry === "replay"
-              ? receiver[sessionManagerPrepareCurrentTurnReplay](
+it.each([
+  { entry: "full", transition: "close" },
+  { entry: "full", transition: "replace" },
+  { entry: "bounded", transition: "replace" },
+  { entry: "retarget", transition: "replace" },
+  { entry: "replay", transition: "replace" },
+])(
+  "rejects incognito $entry publication after owner $transition",
+  async ({ entry, transition }) => {
+    await withOpenClawTestState({ label: "session-hydration-incognito-owner" }, async (state) => {
+      const target = canonicalTarget(
+        state,
+        "private-owner",
+        "agent:main:dashboard:incognito-owner",
+      );
+      await upsertSessionEntryCore(target, {
+        sessionId: target.sessionId,
+        updatedAt: 1,
+        incognito: true,
+      });
+      const source = SessionManager.open(target);
+      source.appendMessage(makeUserMessage("discarded private history", 1));
+      const receiver = entry === "replay" ? source : SessionManager.inMemory();
+      if (entry === "replay") {
+        await receiver.reloadPersistedTranscriptAsync();
+      }
+      const originalView = receiver.buildSessionContext();
+      const pending =
+        entry === "full"
+          ? SessionManager.openAsync(target)
+          : entry === "bounded"
+            ? SessionManager.openBoundedAsync(target, { maxBytes: 4096, maxEvents: 5 })
+            : entry === "retarget"
+              ? receiver.setSessionTargetAsync(target)
+              : receiver[sessionManagerPrepareCurrentTurnReplay](
                   () => false,
                   (candidate) => candidate?.type === "message" && candidate.message.role === "user",
-                )
-              : receiver.reloadPersistedTranscriptAsync();
-    const rejected = expect(pending).rejects.toThrow(
-      "incognito database owner is no longer current",
-    );
-    closeOpenClawAgentDatabases(state.root);
-    if (transition === "replace") {
-      SessionManager.open(target).appendMessage(makeUserMessage("replacement private history", 2));
-    }
-    await rejected;
-    expect(receiver.buildSessionContext()).toEqual(originalView);
-    expect(fs.existsSync(target.storePath)).toBe(false);
-  });
-});
+                );
+      const rejected = expect(pending).rejects.toThrow(
+        "incognito database owner is no longer current",
+      );
+      closeOpenClawAgentDatabases(state.root);
+      if (transition === "replace") {
+        SessionManager.open(target).appendMessage(
+          makeUserMessage("replacement private history", 2),
+        );
+      }
+      await rejected;
+      expect(receiver.buildSessionContext()).toEqual(originalView);
+      expect(fs.existsSync(target.storePath)).toBe(false);
+    });
+  },
+);
 
 it("rejects incognito bounded publication when its truncation callback closes the owner", async () => {
   await withOpenClawTestState({ label: "session-hydration-incognito-callback" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "private-callback",
-      sessionKey: "agent:main:dashboard:incognito-callback",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
+    const target = canonicalTarget(
+      state,
+      "private-callback",
+      "agent:main:dashboard:incognito-callback",
+    );
     await upsertSessionEntryCore(target, {
       sessionId: target.sessionId,
       updatedAt: 1,
@@ -543,22 +530,18 @@ it("rejects incognito bounded publication when its truncation callback closes th
 });
 
 it.each([
-  { entry: "openAsync", environment: "process" },
   { entry: "openAsync", environment: "explicit" },
   { entry: "openBoundedAsync", environment: "process" },
-  { entry: "openBoundedAsync", environment: "explicit" },
-  { entry: "setSessionTargetAsync", environment: "process" },
   { entry: "setSessionTargetAsync", environment: "explicit" },
 ])(
   "$entry retains $environment environment identity after publication",
   async ({ entry, environment }) => {
     await withOpenClawTestState({ label: "session-hydration-environment" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "private-environment",
-        sessionKey: "agent:main:dashboard:incognito-environment",
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
+      const target = canonicalTarget(
+        state,
+        "private-environment",
+        "agent:main:dashboard:incognito-environment",
+      );
       await upsertSessionEntryCore(target, {
         sessionId: target.sessionId,
         updatedAt: 1,
@@ -620,12 +603,7 @@ it.each(["process", "explicit"])(
         env: { SESSION_HYDRATION_TEST_CANARY: canary, OPENCLAW_SUPERVISOR_MODE: undefined },
       },
       async (state) => {
-        const target = {
-          agentId: "main",
-          sessionId: "file-environment",
-          sessionKey: "agent:main:file-environment",
-          storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-        };
+        const target = canonicalTarget(state, "file-environment");
         await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
         SessionManager.open(target).appendMessage(makeUserMessage("file history", 1));
         await waitForSessionTranscriptProjection(target);

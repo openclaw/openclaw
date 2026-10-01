@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { CompilerOptions } from "typescript/unstable/sync";
 import {
   ARTIFACT_CACHE_VERSION,
   portableRelativePath,
@@ -17,6 +18,7 @@ type CompilerInputPolicy = {
 };
 type TopologyEntry = { id: string; name: string; directory: string; file?: string };
 type NamespaceDirectory = { directory: string; realDirectory: string; installed: boolean };
+type CapturedInput = { bytes: Buffer; hash: string; ctimeMs: number; dev: number; ino: number };
 const digest = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
 const PREPARATION_CONCURRENCY = 16;
 
@@ -197,16 +199,18 @@ async function prepareBatches<T>(values: T[], prepare: (value: T) => Promise<unk
 
 /** One phase owns all byte reads; freshness never trusts persisted timestamps. */
 export class CompilerInputSnapshot {
-  private readonly files = new Map<string, { bytes: Buffer; hash: string; ctimeMs: number }>();
+  private readonly files = new Map<string, CapturedInput>();
+  private sealedInputs?: ReadonlyMap<string, CapturedInput>;
   private readonly configs = new Map<
     string,
-    { files: string[]; roots: string[]; options: Record<string, unknown> }
+    { files: string[]; roots: string[]; options: CompilerOptions }
   >();
   private topology?: TopologyEntry[];
   private readonly namespaceDigests = new Map<string | undefined, string>();
   private generatorInputs?: string[];
   private readonly policy: CompilerInputPolicy;
   private tools?: string;
+  private toolPaths?: string;
   readonly rootDir: string;
   constructor(rootDir: string, policy: CompilerInputPolicy) {
     this.rootDir = rootDir;
@@ -234,12 +238,19 @@ export class CompilerInputSnapshot {
   private capture(file: string, before: fs.Stats, bytes: Buffer, after: fs.Stats) {
     if (
       before.ctimeMs !== after.ctimeMs ||
+      before.dev !== after.dev ||
       before.ino !== after.ino ||
       before.size !== after.size
     ) {
       throw new Error(`Boundary input changed while reading: ${file}`);
     }
-    const entry = { bytes, hash: digest(bytes), ctimeMs: after.ctimeMs };
+    const entry = {
+      bytes,
+      hash: digest(bytes),
+      ctimeMs: after.ctimeMs,
+      dev: after.dev,
+      ino: after.ino,
+    };
     this.files.set(file, entry);
     return entry;
   }
@@ -274,6 +285,9 @@ export class CompilerInputSnapshot {
 
   hash = (file: string) => this.read(file).hash;
 
+  /** Supply the compiler with the same captured bytes that sealing will verify. */
+  readText = (file: string) => this.read(file).bytes.toString("utf8");
+
   private config(file: string) {
     let result = this.configs.get(file);
     if (!result) {
@@ -281,7 +295,8 @@ export class CompilerInputSnapshot {
         const parsed = readNativeTypeScriptConfig({
           cwd: this.rootDir,
           configFileName: this.inputPath(file),
-          readFile: (name) => this.read(name).bytes.toString("utf8"),
+          readFile: this.readText,
+          assertInput: this.policy.assertInput,
         });
         result = {
           files: parsed.configFiles,
@@ -496,13 +511,46 @@ export class CompilerInputSnapshot {
     return this.tools;
   }
 
-  signature(config: string, args: string[], inputs: string[], outputRoot?: string) {
+  private toolchainPaths() {
+    this.toolPaths ??= digest(
+      JSON.stringify(
+        this.toolInputs().map((file) => {
+          const absolute = this.inputPath(file);
+          return [
+            portableRelativePath(this.rootDir, absolute),
+            portableRelativePath(this.rootDir, this.inputPath(fs.realpathSync.native(absolute))),
+          ];
+        }),
+      ),
+    );
+    return this.toolPaths;
+  }
+
+  signature(
+    config: string,
+    args: string[],
+    inputs: string[],
+    outputRoot?: string,
+    resolutionFingerprint?: string,
+  ) {
     const parsed = this.config(config);
+    const namespace = this.namespace(outputRoot);
     return digest(
       JSON.stringify(
         [
           ARTIFACT_CACHE_VERSION,
-          this.namespace(outputRoot),
+          resolutionFingerprint === undefined
+            ? namespace
+            : [
+                "compiler-lookups",
+                resolutionFingerprint,
+                this.toolchainPaths(),
+                (this.topology ?? [])
+                  .filter(
+                    ({ id, name }) => path.isAbsolute(id) && name === `${id}:ancestor-install`,
+                  )
+                  .map(({ name }) => name),
+              ],
           outputRoot,
           this.toolchain(),
           config,
@@ -531,11 +579,13 @@ export class CompilerInputSnapshot {
     args: string[],
     required: string[],
     outputRoot?: string,
+    resolutionFingerprint?: string,
   ) {
     try {
       return (
         record?.inputs !== undefined &&
-        record.signature === this.signature(config, args, record.inputs, outputRoot) &&
+        record.signature ===
+          this.signature(config, args, record.inputs, outputRoot, resolutionFingerprint) &&
         required.every((file) => Object.hasOwn(record.outputs, file)) &&
         (!outputRoot ||
           listCacheFiles(
@@ -562,6 +612,9 @@ export class CompilerInputSnapshot {
     outputRoot?: string,
     producedFiles?: ReadonlySet<string>,
   ) {
+    // Sealing can read uncaptured configs and tools from before. Freeze once so
+    // successive seals cannot promote those late reads to precompilation evidence.
+    const previousInputs = (before.sealedInputs ??= new Map(before.files));
     const signature = this.signature(config, args, inputs, outputRoot);
     const previousNamespace = before.namespace(outputRoot);
     // A concurrent producer can add its exact declared files. Existing entries,
@@ -596,11 +649,16 @@ export class CompilerInputSnapshot {
     }
     for (const file of [...inputs, ...this.config(config).files, ...this.toolInputs()]) {
       const current = this.read(file);
-      const previous = before.files.get(before.inputPath(file));
-      // ctime is an invocation-only mutation fence, never a cache key or a warm
-      // acceptance path. It covers newly discovered inputs (including manifests)
-      // without assuming native XXH3 versions are SHA256 digests of disk bytes.
-      if (current.ctimeMs >= startedAt || (previous && previous.hash !== current.hash)) {
+      const previous = previousInputs.get(before.inputPath(file));
+      // Captured identity survives clock ties; newly discovered inputs still use
+      // the invocation-only ctime fence. Neither becomes a persisted cache key.
+      const changed = previous
+        ? previous.hash !== current.hash ||
+          previous.ctimeMs !== current.ctimeMs ||
+          previous.dev !== current.dev ||
+          previous.ino !== current.ino
+        : current.ctimeMs >= startedAt;
+      if (changed) {
         throw new Error(`Boundary input changed during compilation: ${file}`);
       }
     }

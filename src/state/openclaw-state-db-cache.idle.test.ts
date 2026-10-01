@@ -22,6 +22,7 @@ it.each(["path", "supplied", "busy-timeout"] as const)(
   "reuses shared-state handles until 30 minutes after their last %s acquisition",
   (acquisition) => {
     const pathname = path.join(tempDirs.make("shared-idle-"), "state.sqlite");
+    const fileUri = nodeSqlite.resolveExistingSqliteFileUri(pathname);
     const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const first = openOpenClawStateDatabase({ path: pathname });
@@ -34,7 +35,8 @@ it.each(["path", "supplied", "busy-timeout"] as const)(
     for (let index = 0; index < 100; index++) {
       expect(acquire()).toBe(first);
     }
-    const opens = () => open.mock.calls.filter(([filename]) => filename === pathname).length;
+    const opens = () =>
+      open.mock.calls.filter(([filename]) => filename === pathname || filename === fileUri).length;
     expect(opens()).toBe(1);
     vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
     expect(acquire()).toBe(first);

@@ -30,7 +30,7 @@ describe("registered Telegram stickers and local media", () => {
       description: "A waving sticker",
       cachedAt: "2026-01-20T10:00:00.000Z",
     });
-    const bot = createBot(false);
+    const bot = await createBot(false);
     const sticker = {
       file_id: "current-file",
       file_unique_id: "stable-sticker",
@@ -92,7 +92,7 @@ describe("registered Telegram stickers and local media", () => {
       await mkdir(path.join(root, token, "documents"), { recursive: true });
       await writeFile(path.join(root, token, "documents", "file.txt"), "trusted document bytes");
       await writeFile(outside, "must not enter the model");
-      const bot = createBot(false, true, {
+      const bot = await createBot(false, true, {
         channels: {
           telegram: {
             botToken: token,

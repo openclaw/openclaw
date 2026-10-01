@@ -11,8 +11,9 @@ import {
   commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase,
   upsertDeliveryQueueEntryOnceAcrossNamespacesInDatabase,
 } from "../delivery-queue-sqlite-namespace.kernel.js";
-import { deleteDeliveryQueueEntry, getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
 import {
+  deleteDeliveryQueueEntryInDatabase,
   prepareDeliveryQueueTerminalEntry,
   terminalizePendingDeliveryQueueEntryInDatabase,
 } from "../delivery-queue-sqlite.kernel.js";
@@ -170,7 +171,11 @@ describe("outbound delivery namespace ownership", () => {
       retired: false,
       status: "pending",
     });
-    deleteDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
+    deleteDeliveryQueueEntryInDatabase(
+      openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }),
+      OUTBOUND_DELIVERY_QUEUE_NAME,
+      id,
+    );
     expect(readOwner()).toEqual({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       namespace: "legacy",

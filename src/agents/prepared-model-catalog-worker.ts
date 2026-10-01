@@ -11,12 +11,17 @@ import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
 import type { Model } from "../llm/types.js";
+import {
+  captureRemoteModelCatalogSnapshot,
+  type ActiveRemoteModelCatalog,
+} from "../model-catalog/remote-overlay.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import {
   getPluginCacheRetirementSignal,
   getPluginMetadataSnapshotCache,
 } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { overlayPluginNativeAdmissions } from "../plugins/plugin-native-admission-state.js";
 import { createPluginSourceCaptureRoot } from "../plugins/plugin-source-capture-directory.js";
 import { captureProviderSyntheticAuthFacts } from "../plugins/provider-runtime.js";
 import type { PreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
@@ -48,6 +53,7 @@ import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 export type PreparedModelCatalogWorkerInput = Readonly<{
   generationFingerprint: string;
+  remoteCatalog: ActiveRemoteModelCatalog | null;
   input: PreparedModelRuntimeInput & { env: NodeJS.ProcessEnv };
   sourceConfigForSecrets: PreparedModelRuntimeInput["config"];
   configResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
@@ -98,6 +104,7 @@ export type PreparedModelWorkerResult =
               snapshot: ModelCatalogSnapshot;
               runtimeModels: Map<string, Model[]>;
               providerExpiries: Map<string, number>;
+              hookRows: Map<string, Set<string>>;
               configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"];
               providerAuthLabels: ModelCatalogAuthLabels;
             }
@@ -337,6 +344,8 @@ export function fingerprintPreparedModelCatalogGeneration(
   params: Omit<PreparedModelCatalogWorkerInput, "generationFingerprint">,
 ): string {
   return fingerprintPreparedRuntimeFacts({
+    remoteCatalogSource: params.remoteCatalog?.sourceUrl,
+    remoteCatalogRevision: params.remoteCatalog?.revision,
     input: { ...params.input, config: fingerprintPreparedModelCatalogConfig(params.input.config) },
     sourceConfigForSecrets: fingerprintPreparedModelCatalogConfig(params.sourceConfigForSecrets),
     configResolutionFacts: params.configResolutionFacts,
@@ -354,6 +363,8 @@ export function fingerprintPreparedModelCatalogPluginContext(
   value: PreparedModelCatalogWorkerInput,
 ): string {
   return fingerprintPreparedRuntimeFacts({
+    remoteCatalogSource: value.remoteCatalog?.sourceUrl,
+    remoteCatalogRevision: value.remoteCatalog?.revision,
     config: fingerprintPreparedModelCatalogConfig(value.input.config),
     sourceConfigForSecrets: fingerprintPreparedModelCatalogConfig(value.sourceConfigForSecrets),
     configResolutionFacts: value.configResolutionFacts,
@@ -393,7 +404,10 @@ export function createPreparedModelCatalogWorkerInput(params: {
       : serializeConfigResolutionFacts(sourceConfigForSecrets);
   const { normalizePluginId: _normalizePluginId, ...pluginMetadataSnapshot } =
     params.pluginMetadataSnapshot;
+  const cache = getPluginMetadataSnapshotCache(params.pluginMetadataSnapshot);
+  const index = overlayPluginNativeAdmissions(pluginMetadataSnapshot.index, cache);
   const value: Omit<PreparedModelCatalogWorkerInput, "generationFingerprint"> = {
+    remoteCatalog: captureRemoteModelCatalogSnapshot(),
     input,
     sourceConfigForSecrets,
     configResolutionFacts,
@@ -405,7 +419,14 @@ export function createPreparedModelCatalogWorkerInput(params: {
       configuredRuntimeModels: params.agentFacts.configuredRuntimeModels,
     },
     preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts === true,
-    pluginMetadataSnapshot,
+    pluginMetadataSnapshot: {
+      ...pluginMetadataSnapshot,
+      index,
+      registryIndex:
+        pluginMetadataSnapshot.registryIndex === pluginMetadataSnapshot.index
+          ? index
+          : overlayPluginNativeAdmissions(pluginMetadataSnapshot.registryIndex, cache),
+    },
   };
   return { ...value, generationFingerprint: fingerprintPreparedModelCatalogGeneration(value) };
 }
@@ -421,6 +442,7 @@ type PreparedModelCatalogWorker = Readonly<{
     Pick<PreparedModelRuntimeCatalogFacts, "modelCatalog" | "configuredRuntimeModels"> & {
       runtimeModels: Map<string, Model[]>;
       providerExpiries: Map<string, number>;
+      hookRows: Map<string, Set<string>>;
     }
   >;
 }>;
@@ -685,6 +707,7 @@ export function createPreparedModelCatalogWorker(
         configuredRuntimeModels: message.configuredRuntimeModels,
         runtimeModels: message.runtimeModels,
         providerExpiries: message.providerExpiries,
+        hookRows: message.hookRows,
       };
     },
     loadAuth: async ({ providerIds, profileIds }) => {

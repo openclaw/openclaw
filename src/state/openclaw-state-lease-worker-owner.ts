@@ -5,7 +5,7 @@ import {
 } from "@openclaw/normalization-core/error-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -16,7 +16,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { OpenClawStateWorkerLeaseContext } from "./openclaw-state-lease-context.js";
 import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
-import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
+import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 export type OpenClawStateLeaseWorkerPurpose = "write" | "acquire" | "verify" | "renew" | "release";
@@ -26,7 +26,7 @@ export type OpenClawStateLeaseWorkerAuthority = {
   beforeCommit?(this: void): void;
 };
 
-type WorkerLeaseScope = {
+export type WorkerLeaseScope = {
   identity: OpenClawStateLeaseIdentity;
   assertCurrent(this: void): void;
   createAdmission: SqliteWorkerAdmissionFactory;
@@ -82,16 +82,9 @@ function assertSynchronousAuthority(assertion: (() => void) | undefined): void {
 }
 
 function captureLeaseWorkerSource(context: OpenClawStateWorkerContext, databasePath: string) {
-  const {
-    admission,
-    maintenanceScope,
-    runInCapturedSchemaScope,
-    existingSchemaPath,
-    coordinatorRuntime,
-    environment,
-  } = context;
+  const { admission, maintenanceScope, runInCapturedSchemaScope, existingSchemaPath, environment } =
+    context;
   const sourceEnvironment = { ...environment };
-  const sourceCoordinatorRuntime = { ...coordinatorRuntime };
   const assertAdmission = admission.assertCurrent;
   const assertMaintenance = maintenanceScope?.assertAdmission;
   const assertMaintenanceOwner = maintenanceScope?.assertOwnerCurrent;
@@ -105,10 +98,8 @@ function captureLeaseWorkerSource(context: OpenClawStateWorkerContext, databaseP
       maintenanceScope?.assertOwnerCurrent !== assertMaintenanceOwner ||
       context.runInCapturedSchemaScope !== runInCapturedSchemaScope ||
       context.existingSchemaPath !== existingSchemaPath ||
-      context.coordinatorRuntime !== coordinatorRuntime ||
       context.environment !== environment ||
-      !isDeepStrictEqual(environment, sourceEnvironment) ||
-      !isDeepStrictEqual(coordinatorRuntime, sourceCoordinatorRuntime)
+      !isDeepStrictEqual(environment, sourceEnvironment)
     ) {
       throw new Error("State lease worker source binding was replaced");
     }

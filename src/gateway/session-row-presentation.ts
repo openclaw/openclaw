@@ -1,7 +1,10 @@
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { resolveSendPolicy } from "../sessions/send-policy.js";
+import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import type { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { prepareSessionFastModePresentation } from "./session-fast-mode-presentation.js";
 import {
   projectSessionParticipant,
   projectSessionProfileInvolvement,
@@ -9,8 +12,10 @@ import {
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import type * as records from "./session-row-projection-record.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 import {
   authorizeIncognitoSessionTarget,
+  authorizeSessionAgentRun,
   resolveSessionVisibility,
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
@@ -18,7 +23,10 @@ import { prepareProjectedSessionSharing } from "./session-sharing.js";
 import { projectGatewaySessionActiveRun } from "./session-utils-display.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
-type PresentationOptions = Omit<records.SnapshotOptions, "now" | "active" | "subagentRuns"> & {
+type PresentationOptions = Omit<
+  records.SnapshotOptions,
+  "now" | "active" | "subagentRuns" | "preparedFacts"
+> & {
   includeActivitySummary?: boolean;
 };
 
@@ -33,15 +41,62 @@ function toProjectedSessionSharingTarget(record: records.MaterializedRow): Sessi
   };
 }
 
+type PublicationRows = WeakMap<
+  records.MaterializedRow,
+  {
+    facts: readonly unknown[];
+    views: Map<string, GatewaySessionRow>;
+    target: SessionSharingTarget;
+  }
+>;
+type PublicationView = (context: SessionRowReadView["state"]["rowContext"]) => {
+  rows: PublicationRows;
+  subagentRuns: SessionRowReadView["state"]["rowContext"]["subagentRuns"];
+};
+
+/** Sharing decisions remain recipient-local; only their identical presented results are reused. */
+export function prepareSessionRowPublication(
+  projection: SessionRowProjection,
+  now: number,
+  read: SessionRowReadView = projection,
+) {
+  let context: SessionRowReadView["state"]["rowContext"] | undefined;
+  let revision: object | undefined;
+  let rows: PublicationRows = new WeakMap();
+  let subagentRuns: SessionRowReadView["state"]["rowContext"]["subagentRuns"];
+  const view: PublicationView = (current) => {
+    const sharingRevision = projection.sharingRevision;
+    if (context !== current || revision !== sharingRevision || sharingRevision === undefined) {
+      context = current;
+      revision = sharingRevision;
+      rows = new WeakMap();
+      subagentRuns = current.subagentRuns.atTime(now);
+    }
+    return { rows, subagentRuns };
+  };
+  return (
+    client: GatewayClient,
+    projectRun: ReturnType<typeof createVisibleActiveSessionRunProjector>,
+  ) => prepareProjectedSessionPresentation(read, client, now, projectRun, view);
+}
+
 /** Recreate after yields: the caller identity and clock belong to one synchronous presentation. */
 export function prepareProjectedSessionPresentation(
   projection: SessionRowReadView,
   client?: GatewayClient | null,
   now = Date.now(),
   projectRun?: ReturnType<typeof createVisibleActiveSessionRunProjector>,
+  publication?: PublicationView,
 ) {
   const { cfg, policyConfig, rowContext } = projection.state;
-  const subagentRuns = rowContext.subagentRuns.atTime(now);
+  const presentFastMode = prepareSessionFastModePresentation(client);
+  const models =
+    client === undefined
+      ? undefined
+      : prepareOperatorModelPresentation({ cfg, policyConfig, client });
+  const shared = publication?.(rowContext);
+  const publicationRows = shared?.rows;
+  const subagentRuns = shared?.subagentRuns ?? rowContext.subagentRuns.atTime(now);
   const active = (key: string, entry: records.MaterializedRow["entry"], agentId: string) =>
     projectRun?.({
       requestedKey: key,
@@ -59,12 +114,12 @@ export function prepareProjectedSessionPresentation(
     client: client ?? null,
     isMember: (value, identityId) =>
       projection
-        .describe({
+        .readMembership({
           agentId: value.agentId,
           key: value.storeKey,
           storePath: value.storePath,
         })
-        ?.membership.has(identityId) ?? false,
+        ?.has(identityId) ?? false,
   });
   const profile = gatewayClientSessionCreator(client ?? null);
   const profiles = rowContext.userProfileIdentityById;
@@ -80,6 +135,15 @@ export function prepareProjectedSessionPresentation(
         }
       : {}),
     sharingRole: sharing.roleForTarget(value),
+    sendDisabledReason:
+      authorizeSessionAgentRun(
+        { cfg: policyConfig, client: client ?? null, target: value },
+        { policy: sharing.policy },
+      )?.message ??
+      sharing.authorizeTarget(value)?.message ??
+      (resolveSendPolicy({ cfg, entry: value.entry, sessionKey: value.canonicalKey }) === "deny"
+        ? "send blocked by session policy"
+        : null),
   });
   const present = (
     captured: records.MaterializedRow,
@@ -93,35 +157,120 @@ export function prepareProjectedSessionPresentation(
       return null;
     }
     const run = active(record.key, record.entry, record.agentId);
-    const excludedChildKeys =
-      options.excludedChildKeys ??
-      new Set(
-        record.materialized.source.childLinks?.flatMap(({ key, entry }) =>
-          client !== undefined && sharing.entryFilter?.(key, entry) === false ? [key] : [],
-        ),
-      );
+    let excludedChildKeys = options.excludedChildKeys;
+    if (!excludedChildKeys && client !== undefined) {
+      let excluded: Set<string> | undefined;
+      for (const { key, entry } of record.materialized.source.childLinks ?? []) {
+        if (sharing.entryFilter?.(key, entry) === false) {
+          (excluded ??= new Set()).add(key);
+        }
+      }
+      excludedChildKeys = excluded;
+    }
+    const sourceSwarm = record.materialized.row.swarm;
+    let excludedSwarmKeys: Set<string> | undefined;
+    for (const group of sourceSwarm?.groups ?? []) {
+      for (const { sessionKey } of group.children ?? []) {
+        if (
+          excludedChildKeys?.has(sessionKey) ||
+          (client !== undefined &&
+            projection
+              .selectEntries({ key: sessionKey })
+              .some((child) => sharing.entryFilter?.(child.key, child.entry) === false))
+        ) {
+          (excludedSwarmKeys ??= new Set()).add(sessionKey);
+        }
+      }
+    }
+    // Keep invariant row facts out of each recipient's encoded signature. The publication
+    // owns these views; in-place preview/profile/lineage updates retire the whole row's views.
+    let published = publicationRows?.get(record);
+    if (publicationRows) {
+      const facts = [
+        record.materialized,
+        record.materializedSequence,
+        record.profileRevision,
+        record.subagentRevision,
+        record.lastMessagePreview,
+        record.fallbackModel,
+        sourceSwarm,
+      ];
+      const previous = published?.facts;
+      if (!previous || !facts.every((fact, index) => fact === previous[index])) {
+        published = { facts, views: new Map(), target: toProjectedSessionSharingTarget(record) };
+        publicationRows.set(record, published);
+      }
+    }
+    const views = published?.views;
+    const value = published?.target ?? toProjectedSessionSharingTarget(record);
+    const viewerFacts = client === undefined ? undefined : viewer(value);
+    // Permission-pending and worker availability can change without a row publication.
+    const preparedFacts = record.facts?.present();
+    const canEnsure =
+      client !== undefined && preparedFacts?.activitySummary
+        ? !authorizeIncognitoSessionTarget({
+            client: client ?? null,
+            sessionKey: value.canonicalKey,
+            target: value,
+          }) && !sharing.authorizeTarget(value)
+        : undefined;
+    const signature =
+      views &&
+      JSON.stringify([
+        presentFastMode("ultrafast"),
+        options.includeDerivedTitles,
+        options.includeLastMessage,
+        options.includeActivitySummary,
+        excludedChildKeys?.size ? [...excludedChildKeys] : undefined,
+        excludedSwarmKeys && [...excludedSwarmKeys],
+        run,
+        viewerFacts,
+        preparedFacts,
+        canEnsure,
+      ]);
+    const cached = signature === undefined ? undefined : views?.get(signature);
+    const projectModels = (row: GatewaySessionRow) => {
+      const projected = models?.session(row) ?? row;
+      if (projected === row || !views || signature === undefined) {
+        return projected;
+      }
+      const modelSignature =
+        signature +
+        JSON.stringify([
+          projected.modelProvider,
+          projected.model,
+          projected.activeModelProvider,
+          projected.activeModel,
+          projected.contextBudgetStatus,
+        ]);
+      const existing = views.get(modelSignature);
+      if (existing) {
+        return existing;
+      }
+      views.set(modelSignature, projected);
+      return projected;
+    };
+    if (cached) {
+      return projectModels(cached);
+    }
     const row = projection.present(record, {
       ...options,
       now,
       subagentRuns,
       active: run?.active,
       excludedChildKeys,
+      preparedFacts,
     });
-    if (row.swarm) {
-      row.swarm = {
-        ...row.swarm,
-        groups: row.swarm.groups.map((group) => ({
+    row.fastMode = presentFastMode(row.fastMode);
+    row.effectiveFastMode = presentFastMode(row.effectiveFastMode);
+    if (sourceSwarm) {
+      row.swarm = { ...sourceSwarm, groups: [] };
+      for (const group of sourceSwarm.groups) {
+        row.swarm.groups.push({
           ...group,
-          children: group.children?.filter(
-            ({ sessionKey }) =>
-              !excludedChildKeys.has(sessionKey) &&
-              (client === undefined ||
-                !projection
-                  .selectEntries({ key: sessionKey })
-                  .some((child) => sharing.entryFilter?.(child.key, child.entry) === false)),
-          ),
-        })),
-      };
+          children: group.children?.filter(({ sessionKey }) => !excludedSwarmKeys?.has(sessionKey)),
+        });
+      }
     }
     if (run) {
       Object.assign(
@@ -133,22 +282,16 @@ export function prepareProjectedSessionPresentation(
     if (options.includeActivitySummary === false) {
       row.activitySummary = undefined;
     }
-    if (client !== undefined) {
-      const value = toProjectedSessionSharingTarget(record);
-      Object.assign(row, viewer(value));
+    if (viewerFacts) {
+      Object.assign(row, viewerFacts);
       if (row.activitySummary) {
-        row.activitySummary = {
-          ...row.activitySummary,
-          canEnsure:
-            !authorizeIncognitoSessionTarget({
-              client: client ?? null,
-              sessionKey: value.canonicalKey,
-              target: value,
-            }) && !sharing.authorizeTarget(value),
-        };
+        row.activitySummary = { ...row.activitySummary, canEnsure: canEnsure === true };
       }
     }
-    return row;
+    if (signature !== undefined) {
+      views?.set(signature, row);
+    }
+    return projectModels(row);
   };
   return {
     rowContext: { ...rowContext, subagentRuns },

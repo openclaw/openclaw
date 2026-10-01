@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -70,7 +71,7 @@ type Fixture = Awaited<ReturnType<typeof createFixture>>;
 
 async function runUpdate(
   fixture: Fixture,
-  prepareCandidate: (packageRoot: string) => Promise<void>,
+  prepareCandidate: (packageRoot: string, prefix: string) => Promise<void>,
   runLifecycleStep?: UpdateParams["runStep"],
   admission: Pick<UpdateParams, "beforeVerifyCandidate" | "resolveLifecycleNodeRunner"> = {},
 ) {
@@ -100,7 +101,7 @@ async function runUpdate(
           path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH),
           pendingBytes,
         );
-        await prepareCandidate(packageRoot);
+        await prepareCandidate(packageRoot, prefix);
         stages.push({ prefix, packageRoot, bytes: await readPackageBytes(packageRoot) });
         return success(step);
       }
@@ -511,25 +512,39 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
     "classifies disposable prefix cleanup refusal after %s verification",
     async (phase) => {
       const fixture = await createFixture();
-      const rm = fs.rm;
-      let retainedPrefix: string | undefined;
+      const disposalRoot = await fsSafeRoot(fixture.globalRoot);
+      const prototype = Object.getPrototypeOf(disposalRoot) as Root;
+      // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted Root receiver to preserve its path and mutation authority.
+      const removeEntry = prototype.remove;
       let removalAttempts = 0;
       try {
-        const { result, stage, lifecycleCalls } = await runUpdate(fixture, async (packageRoot) => {
-          if (phase === "pre-commit") {
-            await writePackageRoot(packageRoot, "3.0.0");
-          }
-          retainedPrefix = path.resolve(packageRoot, "../../..");
-          vi.spyOn(fs, "rm").mockImplementation(async (file, options) => {
-            if (file === retainedPrefix) {
-              removalAttempts++;
-              throw Object.assign(new Error("disposable prefix cleanup denied"), {
-                code: "EACCES",
-              });
+        const { result, stage, lifecycleCalls } = await runUpdate(
+          fixture,
+          async (packageRoot, prefix) => {
+            if (phase === "pre-commit") {
+              await writePackageRoot(packageRoot, "3.0.0");
             }
-            return rm(file, options);
-          });
-        });
+            const retainedPrefix = await fs.realpath(prefix);
+            vi.spyOn(prototype, "remove").mockImplementation(async function (
+              this: Root,
+              relativePath,
+              options,
+            ) {
+              const target = path.resolve(this.rootReal, relativePath);
+              // Refuse disposal before its first leaf removal so pending evidence survives.
+              if (
+                this.rootReal === disposalRoot.rootReal &&
+                (target === retainedPrefix || target.startsWith(`${retainedPrefix}${path.sep}`))
+              ) {
+                removalAttempts++;
+                throw Object.assign(new Error("disposable prefix cleanup denied"), {
+                  code: "EACCES",
+                });
+              }
+              return removeEntry.call(this, relativePath, options);
+            });
+          },
+        );
         expect(removalAttempts).toBeGreaterThan(0);
         await expect(fs.access(stage.prefix)).resolves.toBeUndefined();
         await expectSiblingUntouched(fixture);

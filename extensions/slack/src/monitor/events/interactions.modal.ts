@@ -1,13 +1,12 @@
 import type { AllMiddlewareArgs } from "@slack/bolt";
-import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
-import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
 import { parseSlackModalPrivateMetadata } from "../../modal-metadata.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
 import { resolveSlackListenerEventScope, type SlackEventScope } from "../event-scope.js";
+import { enqueueSlackInteractionEvent } from "./interaction-event.js";
 import type { ModalInputSummary } from "./modal-input-summary.js";
 
 type SlackModalBody = {
@@ -64,14 +63,6 @@ function shouldHandleSlackModalLifecycleBody(body: unknown): boolean {
   }
   const metadata = parseSlackModalPrivateMetadata(typed.view?.private_metadata);
   return Boolean(metadata.pluginInteractiveData?.trim());
-}
-
-function resolveSlackModalPluginNamespace(data: string | undefined): string | undefined {
-  if (!data) {
-    return undefined;
-  }
-  const separatorIndex = data.indexOf(":");
-  return separatorIndex >= 0 ? data.slice(0, separatorIndex) : data;
 }
 
 function resolveSlackPluginSystemEventPayload(
@@ -262,7 +253,7 @@ async function dispatchSlackModalPluginInteractiveHandler(params: {
   });
   return {
     ...result,
-    namespace: result.matched ? resolveSlackModalPluginNamespace(params.data) : undefined,
+    namespace: result.matched ? params.data.split(":", 1)[0] : undefined,
     systemEvent: result.matched ? resolveSlackPluginSystemEventPayload(result.result) : undefined,
   };
 }
@@ -380,7 +371,7 @@ async function emitSlackModalLifecycleEvent(params: {
       })
     : undefined;
 
-  const queued = enqueueRoutedSystemEvent(
+  enqueueSlackInteractionEvent(
     params.formatSystemEvent({ ...eventPayload, ...pluginEventFields }),
     sessionRouting,
     {
@@ -394,16 +385,6 @@ async function emitSlackModalLifecycleEvent(params: {
       },
     },
   );
-  if (queued) {
-    requestHeartbeat({
-      source: "hook",
-      intent: "immediate",
-      reason: "hook:slack-interaction",
-      agentId: sessionRouting.agentId,
-      sessionKey: sessionRouting.sessionKey,
-      heartbeat: { target: "last" },
-    });
-  }
 }
 
 export function registerModalLifecycleHandler(params: {

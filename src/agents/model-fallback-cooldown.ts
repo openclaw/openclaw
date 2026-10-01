@@ -105,15 +105,7 @@ function shouldProbePrimaryDuringCooldown(params: {
   });
   // Generic 429 backoff can become stale before its local cooldown expires.
   // Provider-recorded reset windows still remain authoritative until near expiry.
-  if (
-    params.reason === "rate_limit" &&
-    !hasActiveProviderRateLimitResetWindow({
-      authStore: params.authStore,
-      profileIds: params.profileIds,
-      now: params.now,
-      model: params.model,
-    })
-  ) {
+  if (params.reason === "rate_limit" && !hasActiveProviderRateLimitResetWindow(params)) {
     return true;
   }
   if (soonest === null || !Number.isFinite(soonest)) {
@@ -180,19 +172,11 @@ export function resolveCooldownDecision(params: {
 
   // Billing can recover after a balance change; permit primary probes while
   // preserving the throttle and preference for available fallback candidates.
-  if (inferredReason === "billing") {
-    if (params.isPrimary && shouldProbe) {
-      return { type: "attempt", reason: inferredReason, markProbe: true };
-    }
-    return {
-      type: "suspend_session",
-      reason: inferredReason,
-    };
-  }
-
   const shouldAttemptDespiteCooldown =
-    (params.isPrimary && (!params.requestedModel || shouldProbe)) ||
-    (!params.isPrimary && shouldUseTransientCooldownProbeSlot(inferredReason));
+    inferredReason === "billing"
+      ? params.isPrimary && shouldProbe
+      : (params.isPrimary && (!params.requestedModel || shouldProbe)) ||
+        (!params.isPrimary && shouldUseTransientCooldownProbeSlot(inferredReason));
   if (!shouldAttemptDespiteCooldown) {
     return {
       type: "suspend_session",

@@ -29,7 +29,7 @@ Approval note:
 A Gateway can remain healthy for browser users while node hosting is unavailable. Run `openclaw doctor` on the Gateway before onboarding nodes, and check these preconditions:
 
 - **Machine authentication:** Tailscale identity headers do not authenticate node-role connections. In `gateway.auth.mode: "trusted-proxy"`, a new node also cannot supply the proxy's user identity headers. To use a shared token, switch to token mode and configure `gateway.auth.token` with a SecretRef; trusted-proxy mode rejects mixed token configuration. A trusted-proxy Gateway can use `gateway.auth.password` only for clean loopback/direct callers. See [trusted-proxy mixed token configuration](/gateway/trusted-proxy-auth#mixed-token-configuration).
-- **Node onboarding URL:** With only the default `gateway.bind: "loopback"` and no advertised endpoint, `openclaw devices join-code` reports: `Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.` Configure a reachable endpoint through Tailscale Serve, `gateway.remote.url`, or `plugins.entries.device-pair.config.publicUrl`. Remote join URLs require TLS; enabling LAN bind alone does not enable plaintext remote join URLs. Explicitly configured loopback endpoints can produce HTTP join URLs, but the joining machine must be able to reach that loopback endpoint, for example through a local tunnel. Plaintext LAN pairing can use a setup code directly.
+- **Node onboarding URL:** With only the default `gateway.bind: "loopback"` and no advertised endpoint, `openclaw devices join-code` reports that the Gateway is only bound to loopback and recommends `gateway.publicOrigin` as the primary fix. For public HTTPS ingress, set it to the proxy's reachable origin. Existing Tailscale Serve, `gateway.remote.url`, bind-derived addresses, and the pairing-specific `plugins.entries.device-pair.config.publicUrl` override retain their precedence; `publicOrigin` supplies the loopback fallback. Remote join URLs require TLS; enabling LAN bind alone does not enable plaintext remote join URLs. Explicitly configured loopback endpoints can produce HTTP join URLs, but the joining machine must be able to reach that loopback endpoint, for example through a local tunnel. Plaintext LAN pairing can use a setup code directly.
 - **Node onboarding support:** Join-code creation and `/j` redemption are core Gateway operations. They do not require enabling the `device-pair` plugin, even though its retained `publicUrl` configuration field can supply an endpoint. See [Join codes](/cli/devices#openclaw-devices-join-code) for the printed `npx openclaw connect <url>` command.
 - **Device session runtime:** Paired-device runners support the embedded OpenClaw runtime and explicitly authorized Codex `remote-exec`; ACPX routes cannot dispatch to a paired device. Codex requires `codex.exec-server.stdio.v1` in `gateway.nodes.commands.allow` plus its normal pairing and invocation approvals. Runtime policy belongs on provider/model routes, not the ignored whole-agent runtime keys. Multi-agent rosters must also set `agents.ownership: "explicit"`. See [Codex paired-device placement](/plugins/codex-harness/placement#run-codex-on-a-paired-device) and [runtime policy](/gateway/config-agents/runtime-and-cli-backends#runtime-policy).
 - **Edge routing:** When a reverse proxy or access edge fronts the Gateway, the node must satisfy edge auth on the join request, its main Gateway WebSocket, and the worker WebSocket. Keep WebSocket upgrade enabled for `/__openclaw__/worker`. You can instead exempt `/j/*` and `/__openclaw__/worker` from edge identity auth because both routes enforce their own short-lived credentials. See [worker protocol](/gateway/protocol/handshake#worker-role-and-closed-protocol).
@@ -146,8 +146,33 @@ openclaw node restart
 
 Node shutdown waits for plugin availability watchers and active computer executions
 to finish cleanup, and reports failures from those cleanup operations. If a command
-reports `Node plugin cleanup failed`, reconnect the node to retry disconnect cleanup
+reports `Node disconnect cleanup failed`, reconnect the node to retry disconnect cleanup
 before sending another command.
+
+### Session-host workspace permissions
+
+A node started with `--session-host` checks workspace staging before advertising
+session capacity. On Unix, the state directory (`OPENCLAW_STATE_DIR`, or
+`~/.openclaw`) and its canonical ancestors must satisfy the filesystem owner's
+checks. Group- or world-writable ancestors without sticky protection prevent
+session hosting, even when the `node-host` directory itself is private.
+
+The node log and `environments.list` identify the offending directory and the
+remediation: run `chmod go-w '<reported-path>'` on the node, then restart the node
+host. Review shared-directory permissions before changing them; alternatively,
+move node state under a private directory. OpenClaw does not change ancestor
+permissions or bypass staging checks. A trusted sticky system temporary directory
+remains supported.
+
+A session-host failure does not disconnect the node or disable its desktop and
+other available commands. `environments.list` keeps a connected node available,
+reports `sessionHost: false` and the hosting diagnostic, and refuses session
+placement until the hosting problem is repaired.
+
+Disabled-host reasons are published only when the Gateway advertises
+`node-worker-host-diagnostics-v1`. Older Gateways still receive disabled hosting;
+the node log retains the reason. Workspace transfers also report the same
+remediation if permissions change after startup.
 
 ### Automatic node updates
 
@@ -177,9 +202,8 @@ openclaw devices approve <deviceRequestId>
 
 If the node retries with changed auth details, re-run `openclaw devices list` and approve the current `requestId`.
 
-Restart an installed node with `openclaw node restart`, or stop and rerun its
-foreground `openclaw node run` command. A node paused on `PAIRING_REQUIRED`
-does not resume automatically after manual approval. Its reconnect creates a
+The node keeps reconnecting while device approval is pending, with exponential
+backoff capped at 30 seconds. After approval, its next reconnect creates a
 separate command-surface request. On the Gateway:
 
 ```bash
@@ -187,6 +211,10 @@ openclaw nodes pending
 openclaw nodes approve <nodeRequestId>
 openclaw nodes describe --node <id|name|ip>
 ```
+
+If an older client already reports that reconnect is paused, restart the
+installed node with `openclaw node restart`, or stop and rerun its foreground
+`openclaw node run` command once.
 
 The device and node request IDs are distinct. An initial unapproved surface has
 no effective commands. SSH-verified and bootstrap enrollment can approve the
@@ -218,6 +246,12 @@ Retired `identity/device.json` and `identity/device-auth.json` files are
 Doctor-owned migration inputs. Stop the node host and run
 `openclaw doctor --fix`; Doctor imports and verifies their rows in SQLite before
 removing the old files.
+
+The headless node and macOS app worker check this state before preparing
+capabilities. Pending device auth, exec approvals, or a missing canonical
+identity with retired identity data requires Doctor; startup preserves the
+inputs and does not create replacement keys or import execution policy. A valid
+canonical identity keeps precedence over stale `identity/device.json` data.
 
 ## System commands (node host / mac node)
 

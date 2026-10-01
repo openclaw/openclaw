@@ -117,6 +117,7 @@ suite.define(() => {
       );
       const beforeRow = before.sessions.find((row) => row.key === key);
       expect(beforeRow).toMatchObject({
+        sessionId: expect.any(String),
         modelProvider: "thinking-fixture",
         model: "with-effort",
         thinkingLevel: "off",
@@ -220,7 +221,13 @@ suite.define(() => {
             requests
               .filter((frame) => frame.method === "sessions.patch")
               .map((frame) => frame.params),
-          ).toEqual([{ key, model: "thinking-fixture/no-effort" }]);
+          ).toEqual([
+            {
+              key,
+              expectedSessionId: beforeRow?.sessionId,
+              model: "thinking-fixture/no-effort",
+            },
+          ]);
           const changes = frames
             .filter(
               ({ frame }) =>

@@ -7,19 +7,12 @@ import {
   resolveProviderModelMaterializationAuthMode,
   type ProviderModelRouteMaterializationAuthMode,
 } from "../provider-model-route-auth.js";
-import { materializePreparedRuntimeModel } from "./materialize-model.js";
+import { materializePreparedRuntimeModel, type RuntimeRouteModel } from "./materialize-model.js";
 import {
   agentRuntimeAuthPlanMatchesTarget,
   type PreparedAgentRuntimeAuthAttempt,
 } from "./prepare-auth.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
-
-type RuntimeRouteModel = {
-  provider?: string;
-  id?: string;
-  api?: string | null;
-  baseUrl?: string;
-};
 
 type RuntimeModelAuthSelection =
   | { authProfileId: string }
@@ -100,22 +93,6 @@ function shouldForceCredentialScopedModelResolve(
   );
 }
 
-/** Re-resolves metadata whenever the prepared credential can change provider limits. */
-function shouldMaterializeAuthPlanModel(
-  plan: Pick<AgentRuntimeAuthPlan, "forwardedAuthProfileId" | "modelRoute" | "selectedAuthMode">,
-  requestedProfileId?: string,
-  providerUsesProfileScopedModelMetadata = false,
-): boolean {
-  return Boolean(
-    plan.modelRoute ||
-    shouldForceCredentialScopedModelResolve(
-      plan,
-      requestedProfileId,
-      providerUsesProfileScopedModelMetadata,
-    ),
-  );
-}
-
 export function resolveCredentialScopedAuthAttemptModelDecision(params: {
   attempt: PreparedAgentRuntimeAuthAttempt;
   priorProfileAttempted: boolean;
@@ -124,11 +101,13 @@ export function resolveCredentialScopedAuthAttemptModelDecision(params: {
 }) {
   const forceResolve = shouldForceDirectAuthFallbackModelResolve(params);
   const shouldMaterialize =
-    shouldMaterializeAuthPlanModel(
+    Boolean(params.attempt.plan.modelRoute) ||
+    shouldForceCredentialScopedModelResolve(
       params.attempt.plan,
       params.requestedProfileId,
       params.providerUsesProfileScopedModelMetadata,
-    ) || forceResolve;
+    ) ||
+    forceResolve;
   return {
     forceResolve,
     shouldMaterialize,

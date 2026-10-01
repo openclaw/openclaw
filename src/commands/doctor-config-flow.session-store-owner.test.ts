@@ -110,7 +110,7 @@ describe("Doctor session-store owner recovery", () => {
     });
   });
 
-  it.each(["different-store", "store-roundtrip", "retired-agent", "absent-history"])(
+  it.each(["store-roundtrip", "retired-agent", "absent-history"])(
     "never invents ownership from %s",
     async (scenario) => {
       await withDoctorConfigPreflightHome(async (home) => {

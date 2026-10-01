@@ -68,7 +68,7 @@ final class DeepLinkHandler {
         }
         switch route {
         case .dashboard:
-            await self.openDashboard()
+            AppNavigationActions.openDashboard()
             return
         case let .agent(link):
             guard !AppStateStore.shared.isPaused else {
@@ -166,14 +166,7 @@ final class DeepLinkHandler {
         if let key = defaults.string(forKey: deepLinkKeyKey), !key.isEmpty {
             return key
         }
-        var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-        let data = Data(bytes)
-        let key = data
-            .base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
+        let key = self.generateRandomKey()
         defaults.set(key, forKey: deepLinkKeyKey)
         return key
     }
@@ -190,10 +183,6 @@ final class DeepLinkHandler {
     }
 
     // MARK: - UI
-
-    private func openDashboard() async {
-        AppNavigationActions.openDashboard()
-    }
 
     private func confirm(title: String, message: String) -> Bool {
         let alert = NSAlert()

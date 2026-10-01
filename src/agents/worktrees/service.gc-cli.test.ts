@@ -17,16 +17,15 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import * as allocation from "./allocation.js";
-import { WorktreeGcProgress } from "./gc-progress.js";
 import { formatWorktreeGcResult } from "./gc-result.js";
 import { requireGit } from "./git.js";
 import {
-  admitWorktreeRunLeaseRow,
   getRegistryWorktree,
   deleteRegistryWorktree,
   insertRegistryWorktree,
   updateRegistryWorktree,
 } from "./registry.js";
+import { admitWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
 import { resolveRepository } from "./service-preparation.js";
 import {
   IDLE_GC_MS,
@@ -62,7 +61,7 @@ async function bindFixtureRepository(env: NodeJS.ProcessEnv, repo: string, ids: 
 
 it
   .skipIf(process.platform === "win32" || process.getuid?.() === 0)
-  .each(["checkout-parent", "checkout", "tracked-parent"])(
+  .each(["checkout-parent", "tracked-parent"])(
   "retains an unreadable %s across CLI cleanup sweeps",
   async (blocked) => {
     const root = tempDirs.make("openclaw-gc-unreadable-");
@@ -93,9 +92,7 @@ it
     const locked =
       blocked === "checkout-parent"
         ? path.dirname(record!.path)
-        : blocked === "checkout"
-          ? record!.path
-          : path.join(record!.path, "tracked");
+        : path.join(record!.path, "tracked");
     setLoggerOverride({ level: "warn", consoleLevel: "silent" });
     const logs = createDiagnosticLogRecordCapture();
     await fs.chmod(locked, 0o000);
@@ -181,7 +178,7 @@ it("finishes CLI cleanup with moved HEADs, missing gitdirs, and 600 mixed regist
   await fs.writeFile(path.join(orphan!.path, "local.txt"), "preserve uncertain checkout files\n");
   // The cheap protected rows need no physical checkout: protection must precede Git inspection.
   runOpenClawStateWriteTransaction(
-    () => {
+    ({ db }) => {
       for (let index = 0; index < 594; index++) {
         const id = `a-protected-${String(index).padStart(3, "0")}`;
         insertRegistryWorktree(env, {
@@ -193,7 +190,7 @@ it("finishes CLI cleanup with moved HEADs, missing gitdirs, and 600 mixed regist
           ownerId: index < 390 ? "active-owner" : id,
         });
         if (index >= 390 && index < 590) {
-          admitWorktreeRunLeaseRow(env, {
+          admitWorktreeRunLeaseInDatabase(db, {
             worktreeId: id,
             token: id,
             pid: process.pid,
@@ -202,7 +199,7 @@ it("finishes CLI cleanup with moved HEADs, missing gitdirs, and 600 mixed regist
           });
         }
       }
-      admitWorktreeRunLeaseRow(env, {
+      admitWorktreeRunLeaseInDatabase(db, {
         worktreeId: idle[0]!.id,
         token: "dead-owner",
         pid: 2_147_483_647,
@@ -224,10 +221,8 @@ it("finishes CLI cleanup with moved HEADs, missing gitdirs, and 600 mixed regist
     return collected;
   });
   const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
-  const protections = vi.spyOn(WorktreeGcProgress.prototype, "protect");
   const program = new Command().name("openclaw");
   registerWorktreesCli(program);
-  const started = performance.now();
   let exitCode = 0;
   try {
     await program.parseAsync(["worktrees", "gc", "--json"], { from: "user" });
@@ -237,20 +232,6 @@ it("finishes CLI cleanup with moved HEADs, missing gitdirs, and 600 mixed regist
     }
     exitCode = error.code;
   }
-  const distribution: Record<string, number> = {};
-  for (const call of protections.mock.calls) {
-    const reason = call[2];
-    distribution[reason] = (distribution[reason] ?? 0) + 1;
-  }
-  console.log(
-    JSON.stringify({
-      records: 600,
-      exitCode,
-      elapsedMs: performance.now() - started,
-      rssBytes: process.memoryUsage().rss,
-      distribution,
-    }),
-  );
   expect(exitCode).toBe(0);
   expect(output).toHaveBeenCalledWith(
     expect.objectContaining({

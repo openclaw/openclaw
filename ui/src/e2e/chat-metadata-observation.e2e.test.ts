@@ -124,6 +124,7 @@ suite.define(() => {
         await expect.poll(() => panes.count()).toBe(paneCount);
         await gateway.waitForRequest("models.list");
         if (wake === "early") {
+          await gateway.waitForRequest("chat.startup");
           await setDocumentVisibility(page, "hidden");
           await setDocumentVisibility(page, "visible");
           await gateway.resolveDeferred("chat.startup");

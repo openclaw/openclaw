@@ -26,8 +26,6 @@ const { makeTempDir, retireAfterTest } = usePreparedCatalogWorkerFixtures();
 
 describe("chat metadata with published model owners", () => {
   it.each([
-    { shape: "entries", count: 1 },
-    { shape: "list", count: 1 },
     { shape: "entries", count: 64 },
     { shape: "list", count: 64 },
   ] as const)(

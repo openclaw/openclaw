@@ -8,6 +8,7 @@ import { resolveHostAccountName } from "../infra/host-account-name.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-operations.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   ensureCanonicalGatewayOwnerProfile,
   ensureCanonicalUserProfileForEmail,
@@ -105,7 +106,8 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
 }): Promise<AuthenticatedHttpUserProfile> {
   const readAdmissionPolicy = (cfg: OpenClawConfig) => {
     return {
-      auth: cfg.gateway?.auth,
+      // HTTP admission never consumes WebSocket identity grants.
+      auth: { ...cfg.gateway?.auth, identityScopes: undefined },
       roles: cfg.gateway?.roles,
       trustedProxies: cfg.gateway?.trustedProxies,
       allowRealIpFallback: cfg.gateway?.allowRealIpFallback,
@@ -195,6 +197,10 @@ async function prepareHttpProfile(
   cfg?: OpenClawConfig,
 ) {
   assertCurrent();
+  if (cfg && hasGatewayOperatorAccessPolicies(cfg)) {
+    (await prepareUserProfileCatalog()).release();
+    assertCurrent();
+  }
   const authority = await prepareUserProfileRoleAuthority(profileId);
   assertCurrent();
   if (!authority?.isCurrent()) {

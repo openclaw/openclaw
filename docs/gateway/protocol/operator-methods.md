@@ -154,7 +154,9 @@ catalog consumers, retaining cancellation and any explicit request deadline.
   retains compatible rows and reports its `providerOutcomes`; successful empty
   acquisition remains empty.
 - `provider: "<id>"` filters the published result through the captured provider
-  aliases. Unknown provider IDs are rejected.
+  aliases. Unknown provider IDs return `INVALID_REQUEST` with the rejected ID.
+  Omit the filter or run `openclaw models list --all` to list models and their
+  provider IDs.
 - `includeDetails: true` includes available input modalities, effective
   `contextTokens`, and a `local` endpoint classification. It does not expose
   endpoint URLs, headers, credentials, costs or runtime request parameters.
@@ -166,10 +168,14 @@ For a new draft, `authProfileId` previews a retained account owned by the
 identified caller with `operator.read` access. It does not save an account
 default. `sessionKey` and `authProfileId` are mutually exclusive.
 
-Saved-session metadata stays current across unrelated session writes. Before
-publishing, the Gateway rechecks the selected session's identity and canonical
-metadata, runtime configuration, and current access authority. Recreating a row
-with identical session facts does not invalidate the read.
+Saved-session metadata and draft previews stay current across unrelated session
+creations and writes. Before publishing, the Gateway rechecks the selected
+session's identity and canonical metadata, runtime configuration, and current
+access authority. Recreating a row with identical session facts does not invalidate
+the read. `chat.metadata` also tolerates title, activity, and ordinary preference
+updates to the selected row when its metadata inputs and access facts remain
+unchanged. Account, model, runtime, lifecycle, and access changes still invalidate
+an in-flight metadata read.
 
 Session and identified-account results include `accountSelection` display facts
 with the models. Collaborators do not receive another person's private account

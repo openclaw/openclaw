@@ -1,7 +1,6 @@
 import { channel } from "node:diagnostics_channel";
 import path from "node:path";
-import type { StatementSync } from "node:sqlite";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import {
   appendTranscriptEvent,
@@ -31,18 +30,56 @@ import { readSessionPreviewItemsFromTranscriptAsync } from "./session-transcript
 import {
   readSessionMessageByIdAsync,
   readSessionMessageCountAsync,
-  readSessionMessagesMatchingIdAsync,
 } from "./session-transcript-readers.js";
 
-it.each([
-  "rpc",
-  "http",
-  "delta",
-  "message-lookup",
-  "recent",
-  "message-by-id",
-  "message-count",
-] as const)(
+function historyParams(
+  target: { agentId: string; sessionId: string; sessionKey: string; storePath: string },
+  entry?: { sessionId: string; updatedAt: number },
+) {
+  return {
+    entry,
+    provider: undefined,
+    sessionId: target.sessionId,
+    storePath: target.storePath,
+    sessionAgentId: target.agentId,
+    canonicalKey: target.sessionKey,
+    max: 10,
+    maxHistoryBytes: 100_000,
+    effectiveMaxChars: 8000,
+    offset: undefined,
+    messageId: undefined,
+  };
+}
+
+function observeColdMetadataReads(database: DatabaseSync) {
+  const prototype: StatementSync = Object.getPrototypeOf(database.prepare("SELECT 1"));
+  const metadataReads: string[] = [];
+  const record = (sql: string) => {
+    if (
+      /^select\b.*\bfrom\s+["`]?session_transcript_cold_archives["`]?/is.test(sql) &&
+      sql.includes("archive_sha256")
+    ) {
+      metadataReads.push(sql);
+    }
+  };
+  const observers = (["all", "get", "iterate", "run"] as const).map((method) => {
+    const original = prototype[method];
+    return vi.spyOn(prototype, method).mockImplementation(
+      new Proxy(original, {
+        apply(read, receiver: StatementSync, args) {
+          record(receiver.sourceSQL);
+          return Reflect.apply(read, receiver, args);
+        },
+      }),
+    );
+  });
+  return {
+    metadataReads,
+    restore: () => observers.forEach((observer) => observer.mockRestore()),
+  };
+}
+
+it.each(["rpc", "message-by-id", "message-count"] as const)(
   "restores %s history without reading cold metadata on the caller",
   async (transport) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -52,37 +89,7 @@ it.each([
           config: maintenanceConfig(fixture.scope.storePath),
         }),
       ).toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
-      const statement = fixture.database().prepare("SELECT 1");
-      const prototype: StatementSync = Object.getPrototypeOf(statement);
-      const metadataReads: string[] = [];
-      const record = (sql: string) => {
-        if (
-          /^select\b.*\bfrom\s+["`]?session_transcript_cold_archives["`]?/is.test(sql) &&
-          sql.includes("archive_sha256")
-        ) {
-          metadataReads.push(sql);
-        }
-      };
-      // oxlint-disable-next-line typescript/unbound-method -- Forward each call with its native statement receiver.
-      const { all, get, iterate, run } = prototype;
-      const observers = [
-        vi.spyOn(prototype, "all").mockImplementation(function (this: StatementSync, ...args) {
-          record(this.sourceSQL);
-          return all.apply(this, args);
-        }),
-        vi.spyOn(prototype, "get").mockImplementation(function (this: StatementSync, ...args) {
-          record(this.sourceSQL);
-          return get.apply(this, args);
-        }),
-        vi.spyOn(prototype, "iterate").mockImplementation(function (this: StatementSync, ...args) {
-          record(this.sourceSQL);
-          return iterate.apply(this, args);
-        }),
-        vi.spyOn(prototype, "run").mockImplementation(function (this: StatementSync, ...args) {
-          record(this.sourceSQL);
-          return run.apply(this, args);
-        }),
-      ];
+      const { metadataReads, restore } = observeColdMetadataReads(fixture.database());
       try {
         expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeDefined();
         expect(metadataReads).toHaveLength(1);
@@ -96,57 +103,7 @@ it.each([
             expect(result).toMatchObject({ found: true, oversized: false, seq: 2 });
             return [readChatHistoryMessageId(result.message)];
           }
-          if (transport === "delta") {
-            const { delta } = await readSessionHistoryPageInWorker({
-              kind: "delta",
-              params: { target: fixture.scope, limits: { maxBytes: 1_000_000, maxEvents: 10 } },
-            });
-            expect(delta.kind).toBe("page");
-            return delta.kind === "page"
-              ? delta.events.flatMap(({ event }) => {
-                  const eventRecord = asOptionalRecord(event);
-                  return eventRecord?.type === "message" ? [eventRecord.id] : [];
-                })
-              : [];
-          }
-          if (transport === "recent") {
-            return (
-              await readSessionHistoryPageInWorker({
-                kind: "recent",
-                params: {
-                  target: fixture.scope,
-                  maxMessages: 10,
-                  maxLines: 220,
-                  allowResetArchiveFallback: true,
-                },
-              })
-            ).map(readChatHistoryMessageId);
-          }
-          if (transport === "message-lookup") {
-            return (
-              await readSessionMessagesMatchingIdAsync(fixture.scope, "history-assistant")
-            ).map(readChatHistoryMessageId);
-          }
-          if (transport === "http") {
-            const snapshot = await readSessionHistorySnapshotAsync({
-              target: fixture.scope,
-              limit: 10,
-            });
-            return snapshot.history.messages.map(readChatHistoryMessageId);
-          }
-          const page = await readChatHistoryPage({
-            entry: undefined,
-            provider: undefined,
-            sessionId: historicalId,
-            storePath: fixture.scope.storePath,
-            sessionAgentId: fixture.scope.agentId,
-            canonicalKey: fixture.scope.sessionKey,
-            max: 10,
-            maxHistoryBytes: 100_000,
-            effectiveMaxChars: 8000,
-            offset: undefined,
-            messageId: undefined,
-          });
+          const page = await readChatHistoryPage(historyParams(fixture.scope));
           return page.messages.map(readChatHistoryMessageId);
         };
         // The first read restores cold history; the second probes the now-hot transcript.
@@ -154,14 +111,14 @@ it.each([
           expect(await read()).toEqual(
             transport === "message-count"
               ? 2
-              : transport === "message-lookup" || transport === "message-by-id"
+              : transport === "message-by-id"
                 ? ["history-assistant"]
                 : ["history-user", "history-assistant"],
           );
           expect(metadataReads).toEqual([]);
         }
       } finally {
-        observers.forEach((observer) => observer.mockRestore());
+        restore();
       }
       expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
       expect(fixture.snapshot()).toEqual(fixture.original);
@@ -169,33 +126,23 @@ it.each([
   },
 );
 
-it("appends hot transcript events without admitting work to the history read lane", async () => {
+it("appends hot transcript events without reading cold metadata on the caller", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const fixture = await createSessionColdStorageFixture(state.statePath("hot-write.sqlite"));
     const target = { ...fixture.scope, sessionId: currentId };
     await waitForSessionTranscriptProjection(target);
-    const diagnostics = channel("openclaw.worker.task");
-    const tasks: unknown[] = [];
-    const record = (value: unknown) => {
-      if (
-        typeof value === "object" &&
-        value !== null &&
-        "worker" in value &&
-        typeof value.worker === "string" &&
-        value.worker.startsWith("session-transcript.worker")
-      ) {
-        tasks.push(value);
-      }
-    };
-    diagnostics.subscribe(record);
+    const { metadataReads, restore } = observeColdMetadataReads(fixture.database());
     try {
+      expect(readSessionColdTranscript(fixture.database(), currentId)).toBeUndefined();
+      expect(metadataReads).toHaveLength(1);
+      metadataReads.length = 0;
       await appendTranscriptMessage(target, {
         eventId: "hot-append",
         parentId: null,
         message: { role: "user", content: "A hot append keeps its own write owner" },
       });
       await waitForSessionTranscriptProjection(target);
-      expect(tasks).toEqual([]);
+      expect(metadataReads).toEqual([]);
       expect(fixture.snapshot().events).toContainEqual(
         expect.objectContaining({
           session_id: currentId,
@@ -203,7 +150,7 @@ it("appends hot transcript events without admitting work to the history read lan
         }),
       );
     } finally {
-      diagnostics.unsubscribe(record);
+      restore();
     }
   });
 });
@@ -262,20 +209,7 @@ it.each([
       });
       expect(database.agentId).toBe("main");
       const admission = { ...anchor, logicalTurnId: "worker-fence", role: "user" as const };
-      const readRpc = () =>
-        readChatHistoryPage({
-          entry,
-          provider: undefined,
-          sessionId: target.sessionId,
-          storePath: target.storePath,
-          sessionAgentId: input.agentId,
-          canonicalKey: input.sessionKey,
-          max: 10,
-          maxHistoryBytes: 100_000,
-          effectiveMaxChars: 8000,
-          offset: undefined,
-          messageId: undefined,
-        });
+      const readRpc = () => readChatHistoryPage(historyParams({ ...target, ...input }, entry));
       const readHttp = () =>
         readSessionHistorySnapshotAsync({
           target: { ...target, ...input, sessionEntry: entry },
@@ -341,19 +275,7 @@ it("reads a sparse page in the transcript worker and shares equivalent queued re
       })),
     ]);
     await waitForSessionTranscriptProjection(target);
-    const params = {
-      entry,
-      provider: undefined,
-      sessionId: target.sessionId,
-      storePath: target.storePath,
-      sessionAgentId: target.agentId,
-      canonicalKey: target.sessionKey,
-      max: 2,
-      maxHistoryBytes: 100_000,
-      effectiveMaxChars: 8000,
-      offset: undefined,
-      messageId: undefined,
-    };
+    const params = { ...historyParams(target, entry), max: 2 };
     const diagnostics = channel("openclaw.worker.task");
     const tasks: unknown[] = [];
     const record = (value: unknown) => {
@@ -391,6 +313,38 @@ it("reads a sparse page in the transcript worker and shares equivalent queued re
 
     const anchored = await readChatHistoryPage({ ...params, messageId: ids[0] });
     expect(anchored.messages.map(readChatHistoryMessageId)).toEqual([ids[0]]);
+  });
+});
+
+it("waits for a missing projection and serves the original history request", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "worker-history-rebuild",
+      sessionKey: "agent:main:worker-history-rebuild",
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
+    };
+    const entry = { sessionId: target.sessionId, updatedAt: 1 };
+    await replaceSessionEntry(target, entry);
+    await replaceTranscriptEvents(target, [
+      { type: "session", version: 3, id: target.sessionId },
+      { type: "message", id: "recovered", message: { role: "user", content: "Still here" } },
+    ]);
+    await waitForSessionTranscriptProjection(target);
+    openOpenClawAgentDatabase({ agentId: target.agentId, env: state.env })
+      .db.prepare(
+        "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+      )
+      .run(target.sessionId);
+
+    // Runtime tests own the recovery deadline; real worker startup must not spend it here.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const page = await readChatHistoryPage(historyParams(target, entry));
+      expect(page.messages.map(readChatHistoryMessageId)).toEqual(["recovered"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

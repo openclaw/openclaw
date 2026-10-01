@@ -76,7 +76,7 @@ describe("new-session browser preferences", () => {
     ).toBe(true);
   });
 
-  it.each([true, false, "auto"] as const)(
+  it.each([true, false, "auto", "ultrafast"] as const)(
     "round-trips a standalone Fast Mode choice %s",
     (fastMode) => {
       replaceBrowserPreference("ws://one.example", "main", { fastMode });

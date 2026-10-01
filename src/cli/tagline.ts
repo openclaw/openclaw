@@ -178,26 +178,6 @@ const onSpecificDates =
     });
   };
 
-const inYearWindow =
-  (
-    windows: Array<{
-      year: number;
-      month: number;
-      day: number;
-      duration: number;
-    }>,
-  ): HolidayRule =>
-  (date) => {
-    const parts = utcParts(date);
-    const window = windows.find((entry) => entry.year === parts.year);
-    if (!window) {
-      return false;
-    }
-    const start = Date.UTC(window.year, window.month, window.day);
-    const current = Date.UTC(parts.year, parts.month, parts.day);
-    return current >= start && current < start + window.duration * DAY_MS;
-  };
-
 const isFourthThursdayOfNovember: HolidayRule = (date) => {
   const parts = utcParts(date);
   if (parts.month !== 10) {
@@ -270,28 +250,23 @@ const HOLIDAY_RULES = new Map<string, HolidayRule>([
   ],
   [
     HOLIDAY_TAGLINES.hanukkah,
-    inYearWindow([
-      { year: 2025, month: 11, day: 15, duration: 8 },
-      { year: 2026, month: 11, day: 5, duration: 8 },
-      { year: 2027, month: 11, day: 25, duration: 8 },
-      { year: 2028, month: 11, day: 13, duration: 8 },
-      { year: 2029, month: 11, day: 2, duration: 8 },
-      { year: 2030, month: 11, day: 21, duration: 8 },
-    ]),
+    onSpecificDates(
+      [
+        [2025, 11, 15],
+        [2026, 11, 5],
+        [2027, 11, 25],
+        [2028, 11, 13],
+        [2029, 11, 2],
+        [2030, 11, 21],
+      ],
+      8,
+    ),
   ],
   [HOLIDAY_TAGLINES.halloween, onMonthDay(9, 31)],
   [HOLIDAY_TAGLINES.thanksgiving, isFourthThursdayOfNovember],
   [HOLIDAY_TAGLINES.valentines, onMonthDay(1, 14)],
   [HOLIDAY_TAGLINES.christmas, onMonthDay(11, 25)],
 ]);
-
-function isTaglineActive(tagline: string, date: Date): boolean {
-  const rule = HOLIDAY_RULES.get(tagline);
-  if (!rule) {
-    return true;
-  }
-  return rule(date);
-}
 
 export interface TaglineOptions {
   env?: NodeJS.ProcessEnv;
@@ -301,12 +276,8 @@ export interface TaglineOptions {
 }
 
 function activeTaglines(options: TaglineOptions = {}): string[] {
-  if (TAGLINES.length === 0) {
-    return [DEFAULT_TAGLINE];
-  }
   const today = options.now ? options.now() : new Date();
-  const filtered = TAGLINES.filter((tagline) => isTaglineActive(tagline, today));
-  return filtered.length > 0 ? filtered : TAGLINES;
+  return TAGLINES.filter((tagline) => HOLIDAY_RULES.get(tagline)?.(today) ?? true);
 }
 
 export function pickTagline(options: TaglineOptions = {}): string {
@@ -321,8 +292,10 @@ export function pickTagline(options: TaglineOptions = {}): string {
   if (override !== undefined) {
     const parsed = parseStrictNonNegativeInteger(override);
     if (parsed !== undefined) {
-      const pool = TAGLINES.length > 0 ? TAGLINES : [DEFAULT_TAGLINE];
-      return expectDefined(pool[parsed % pool.length], "pool entry at parsed % pool.length");
+      return expectDefined(
+        TAGLINES[parsed % TAGLINES.length],
+        "pool entry at parsed % pool.length",
+      );
     }
   }
   const pool = activeTaglines(options);

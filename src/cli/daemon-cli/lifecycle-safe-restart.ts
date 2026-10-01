@@ -14,10 +14,6 @@ import type { DaemonLifecycleOptions } from "./types.js";
 
 const SAFE_RESTART_METADATA_REFRESH_TIMEOUT_MS = 5_000;
 
-function formatSafeRestartWarnings(result: SafeGatewayRestartRequestResult): string[] | undefined {
-  return result.preflight.blockers.length === 0 ? undefined : [result.preflight.summary];
-}
-
 export function resolveGatewayRestartIntentOptions(
   opts: DaemonLifecycleOptions,
 ): GatewayRestartIntent | undefined {
@@ -123,7 +119,7 @@ export async function runSafeGatewayRestart(
     message,
     preflight: result.preflight,
     restart: result.restart,
-    warnings: formatSafeRestartWarnings(result),
+    warnings: result.preflight.blockers.length === 0 ? undefined : [result.preflight.summary],
   };
   if (opts.json) {
     writeRuntimeJson(defaultRuntime, payload);

@@ -240,6 +240,11 @@ export function archiveAuthProfileMigrationSource(
 
 export function acquireAuthProfileMigrationSourceLocks(sourcePaths: readonly string[]): () => void {
   const releases: Array<() => void> = [];
+  const releaseAll = () => {
+    for (const release of releases.toReversed()) {
+      release();
+    }
+  };
   try {
     for (const sourcePath of [
       ...new Set(sourcePaths.map((entry) => path.resolve(entry))),
@@ -247,16 +252,10 @@ export function acquireAuthProfileMigrationSourceLocks(sourcePaths: readonly str
       releases.push(acquireFileLockSyncWithRetry(sourcePath));
     }
   } catch (error) {
-    for (const release of releases.toReversed()) {
-      release();
-    }
+    releaseAll();
     throw error;
   }
-  return () => {
-    for (const release of releases.toReversed()) {
-      release();
-    }
-  };
+  return releaseAll;
 }
 
 function verifyAuthProfileMigrationTarget(receipt: AuthProfileMigrationSourceReceipt): void {
@@ -293,10 +292,11 @@ function verifyAuthProfileMigrationTarget(receipt: AuthProfileMigrationSourceRec
         throw new Error("auth profile migration target verification failed");
       }
     }
-    if (receipt.expectedStateSha256) {
-      if (digestAuthProfileMigrationValue(readTarget("state")) !== receipt.expectedStateSha256) {
-        throw new Error("auth profile migration target verification failed");
-      }
+    if (
+      receipt.expectedStateSha256 &&
+      digestAuthProfileMigrationValue(readTarget("state")) !== receipt.expectedStateSha256
+    ) {
+      throw new Error("auth profile migration target verification failed");
     }
   } finally {
     db.close();

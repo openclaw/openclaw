@@ -13,7 +13,8 @@ and requires xdotool for real pointer input.
 --window-chrome checks dragging, resizing, and window controls with xdotool and Openbox.
 --gateway-switch checks saved connections, native windows and the private credential vault.
 --gateway-onboarding checks native authority after local model setup under a Gateway base path.
---quick-chat checks real Quick Chat streaming, disclosure, drafts and agent selection.
+--quick-chat checks real Quick Chat streaming, disclosure, drafts and agent selection
+and requires a private gnome-keyring-daemon.
 --desktop-sharing checks the real native settings bridge and an owned synthetic CLI process tree.
 """
 
@@ -389,8 +390,8 @@ def main():
         for tool in ("xdotool", "wmctrl", "xprop", "xwininfo", "openbox"):
             if shutil.which(tool) is None:
                 parser.error(f"Window chrome proof requires {tool}")
-    if (args.gateway_switch or args.gateway_onboarding or args.desktop_sharing) and shutil.which("gnome-keyring-daemon") is None:
-        parser.error("Gateway switching proof requires a private gnome-keyring-daemon")
+    if (args.gateway_switch or args.gateway_onboarding or args.quick_chat or args.desktop_sharing) and shutil.which("gnome-keyring-daemon") is None:
+        parser.error("Native Gateway proof requires a private gnome-keyring-daemon")
     if args.artifacts_dir:
         args.artifacts_dir = args.artifacts_dir.resolve()
         args.artifacts_dir.mkdir(parents=True, exist_ok=True)

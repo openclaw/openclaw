@@ -1,8 +1,3 @@
-/**
- * Channel plugin helper utilities.
- *
- * Resolves default accounts, pairing hints, delimited entries, and DM security policy views.
- */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

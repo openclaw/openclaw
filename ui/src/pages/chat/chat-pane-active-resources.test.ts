@@ -94,6 +94,9 @@ function fixture() {
   });
   const owner: ActiveResourceOwner = {
     client: { request } as unknown as GatewayBrowserClient,
+    sessions: {
+      describe: (params) => owner.client.request("sessions.describe", params),
+    },
     observation,
     sessionKey: key,
     connectionEpoch: 1,

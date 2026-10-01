@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import { readEmbeddedMessageDeliveryFact } from "../../embedded-agent-message-delivery.js";
 import {
@@ -23,13 +24,7 @@ type MessageToolTerminalRoute = Omit<
 };
 
 function argsRecordForToolCall(context: AfterToolCallContext): Record<string, unknown> {
-  if (context.args && typeof context.args === "object" && !Array.isArray(context.args)) {
-    return context.args as Record<string, unknown>;
-  }
-  const fallbackArgs = context.toolCall.arguments;
-  return fallbackArgs && typeof fallbackArgs === "object" && !Array.isArray(fallbackArgs)
-    ? fallbackArgs
-    : {};
+  return asOptionalRecord(context.args) ?? asOptionalRecord(context.toolCall.arguments) ?? {};
 }
 
 /** Detects message-tool-only sends that delivered a visible current-source reply. */
@@ -48,15 +43,7 @@ function isDeliveredMessageToolOnlySourceReply(
     typeof toolArgs.channel !== "string"
       ? { ...toolArgs, provider: params.currentProvider }
       : toolArgs;
-  const pendingSend = extractMessagingToolSend(toolName, extractionArgs, {
-    config: params.config,
-    currentChannelId: params.currentChannelId,
-    currentMessagingTarget: params.currentMessagingTarget,
-    currentThreadId: params.currentThreadId,
-    currentMessageId: params.currentMessageId,
-    replyToMode: params.replyToMode,
-    hasRepliedRef: params.hasRepliedRef,
-  });
+  const pendingSend = extractMessagingToolSend(toolName, extractionArgs, params);
   const confirmedSend =
     pendingSend && extractMessagingToolSendResult(pendingSend, params.context.result);
   const deliveryFact = readEmbeddedMessageDeliveryFact(
@@ -72,14 +59,8 @@ function isDeliveredMessageToolOnlySourceReply(
     hookResult: params.context.result,
     isError,
     allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
+      ...params,
       send: confirmedSend,
-      config: params.config,
-      currentProvider: params.currentProvider,
-      currentAccountId: params.currentAccountId,
-      currentChannelId: params.currentChannelId,
-      currentMessagingTarget: params.currentMessagingTarget,
-      currentThreadId: params.currentThreadId,
-      sessionKey: params.sessionKey,
       deliveredPayload: params.context.result,
     }),
     ...(deliveryFact

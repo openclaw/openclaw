@@ -1,5 +1,3 @@
-// Xai plugin module implements model id behavior.
-
 // A Grok release id: plain, `-latest`, or a dated snapshot (grok-4.7, grok-5, grok-4.8-0115).
 // Other suffixes (fast, mini, reasoning variants) name models with their own contracts.
 const XAI_GROK_RELEASE_ID = /^grok-(\d+)(?:\.(\d+))?(?:-(?:latest|\d{4}))?$/u;

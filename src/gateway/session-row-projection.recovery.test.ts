@@ -43,6 +43,11 @@ it.each(["background", "capture"] as const)(
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = { agents: { list: [{ id: "main", default: true }, { id: "worker" }] } };
       const query = { agentId: "worker", key: "agent:worker:recovering" };
+      const unaffected = { agentId: "main", key: "agent:main:unchanged" };
+      replaceSessionEntrySync(
+        { agentId: unaffected.agentId, sessionKey: unaffected.key },
+        { sessionId: "unchanged", updatedAt: 1 },
+      );
       replaceSessionEntrySync(
         { agentId: query.agentId, sessionKey: query.key },
         { sessionId: "recovering", updatedAt: 1 },
@@ -58,7 +63,8 @@ it.each(["background", "capture"] as const)(
       recordAgentDatabaseAdmissions([refusal], { source: "startup" });
       const projection = await createSessionRowProjection({ cfg });
       try {
-        expect(projection.selectEntries()).toEqual([]);
+        expect(projection.snapshot(query).row).toBeNull();
+        let beforeRecovery = 0;
         await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, async () => {
           sessionChanges.emit({ all: true, scope: "config" });
           if (read === "capture") {
@@ -67,9 +73,12 @@ it.each(["background", "capture"] as const)(
           await projection.ensureMaterialized();
           expect(projection.snapshot(query).row).toBeNull();
           expect(listOpenClawAgentDatabasesForTest().some((db) => db.path === path)).toBe(false);
+          beforeRecovery = projection.materializedCount;
         });
         await projection.ensureMaterialized();
         expect(projection.snapshot(query).row?.sessionId).toBe("recovering");
+        expect(projection.snapshot(unaffected).row?.sessionId).toBe("unchanged");
+        expect(projection.materializedCount - beforeRecovery).toBe(1);
       } finally {
         projection.dispose();
       }

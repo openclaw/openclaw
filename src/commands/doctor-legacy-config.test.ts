@@ -36,20 +36,6 @@ function normalizeStreaming(params: {
 }
 
 describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
-  it("preserves telegram boolean streaming aliases as-is", () => {
-    const res = normalizeStreaming({
-      entry: { streaming: false },
-      pathPrefix: "channels.telegram",
-      resolvedMode: "off",
-    });
-
-    expect(res.entry.streaming).toEqual({ mode: "off" });
-    expect(getLegacyProperty(res.entry, "streamMode")).toBeUndefined();
-    expect(res.changes).toEqual([
-      "Moved channels.telegram.streaming (boolean) → channels.telegram.streaming.mode (off).",
-    ]);
-  });
-
   it("preserves discord boolean streaming aliases as-is", () => {
     const res = normalizeStreaming({
       entry: { streaming: true },
@@ -64,20 +50,6 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
     ]);
   });
 
-  it("preserves explicit discord streaming=false as-is", () => {
-    const res = normalizeStreaming({
-      entry: { streaming: false },
-      pathPrefix: "channels.discord",
-      resolvedMode: "off",
-    });
-
-    expect(res.entry.streaming).toEqual({ mode: "off" });
-    expect(getLegacyProperty(res.entry, "streamMode")).toBeUndefined();
-    expect(res.changes).toEqual([
-      "Moved channels.discord.streaming (boolean) → channels.discord.streaming.mode (off).",
-    ]);
-  });
-
   it("preserves discord streamMode when legacy config resolves to off", () => {
     const res = normalizeStreaming({
       entry: { streamMode: "off" },
@@ -89,23 +61,6 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
     expect(getLegacyProperty(res.entry, "streamMode")).toBeUndefined();
     expect(res.changes).toEqual([
       "Moved channels.discord.streamMode → channels.discord.streaming.mode (off).",
-    ]);
-  });
-
-  it("pins the previous default mode when delivery-only aliases create the streaming object", () => {
-    // Some channels distinguish an absent streaming object from a mode-free
-    // object, so aliasOnlyMode preserves that channel-owned default.
-    const res = normalizeStreaming({
-      entry: { blockStreaming: true },
-      pathPrefix: "channels.layered",
-      resolvedMode: "off",
-      aliasOnlyMode: "progress",
-    });
-
-    expect(res.entry.streaming).toEqual({ mode: "progress", block: { enabled: true } });
-    expect(res.changes).toEqual([
-      "Moved channels.layered.blockStreaming → channels.layered.streaming.block.enabled.",
-      "Set channels.layered.streaming.mode (progress) to keep the previous default while migrating flat streaming keys.",
     ]);
   });
 

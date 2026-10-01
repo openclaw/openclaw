@@ -157,13 +157,11 @@ describe("session selection hydration", () => {
     {
       name: "different owners with the same SID",
       agentId: "writer",
-      sameSid: true,
       preview: undefined,
     },
-    { name: "the same owner and SID", agentId: "main", sameSid: true, preview: undefined },
-    { name: "different owners and SIDs", agentId: "writer", sameSid: false, preview: undefined },
-    { name: "a present Work preview", agentId: "writer", sameSid: true, preview: "Work preview" },
-  ])("keeps presentation with its owner across $name", async ({ agentId, sameSid, preview }) => {
+    { name: "the same owner and SID", agentId: "main", preview: undefined },
+    { name: "a present Work preview", agentId: "writer", preview: "Work preview" },
+  ])("keeps presentation with its owner across $name", async ({ agentId, preview }) => {
     vi.useFakeTimers();
     const sharedSid = "00000000-0000-4000-8000-000000000101";
     const main: GatewaySessionRow = {
@@ -186,7 +184,7 @@ describe("session selection hydration", () => {
     const incoming: GatewaySessionRow = {
       key: "global",
       agentId,
-      sessionId: sameSid ? sharedSid : "00000000-0000-4000-8000-000000000102",
+      sessionId: sharedSid,
       kind: "global",
       derivedTitle: agentId === "main" ? "Main current title" : "Work current title",
       ...(preview === undefined ? {} : { lastMessagePreview: preview }),

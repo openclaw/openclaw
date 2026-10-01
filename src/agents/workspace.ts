@@ -1,13 +1,7 @@
-/**
- * Workspace bootstrap, template, state, and attestation helpers. This module
- * creates and reads AGENTS/SOUL/TOOLS-style bootstrap files while guarding
- * filesystem boundaries and recently-attested workspaces.
- */
-import { createHash } from "node:crypto";
-import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Minimatch } from "minimatch";
 import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
@@ -38,6 +32,7 @@ import {
   hasGlobPattern,
   normalizeWorkspacePatternPath,
   resolveGlobWalkRoot,
+  resolveWorkspaceBootstrapPath,
   type WorkspaceBootstrapFile,
   type WorkspaceBootstrapFileName,
 } from "./workspace-bootstrap-policy.js";
@@ -125,43 +120,31 @@ async function isGeneratedTemplateContent(fileName: string, content: string): Pr
   return retired !== undefined && retired.includes(sha256Hex(content));
 }
 
-function sha256Hex(content: string): string {
-  return createHash("sha256").update(content).digest("hex");
-}
-
-async function loadTemplate(name: string): Promise<string> {
-  const cached = workspaceTemplateCache.get(name);
-  if (cached) {
-    return cached;
-  }
-
-  const pending = (async () => {
-    const templateDirs = await resolveWorkspaceTemplateSearchDirs();
-    const triedPaths: string[] = [];
-    for (const templateDir of templateDirs) {
-      const templatePath = path.join(templateDir, name);
-      triedPaths.push(templatePath);
-      try {
-        const content = await fs.readFile(templatePath, "utf-8");
-        return stripFrontMatter(content);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
-          throw error;
+function loadTemplate(name: string): Promise<string> {
+  return getOrCreatePromise(
+    workspaceTemplateCache,
+    name,
+    async () => {
+      const templateDirs = await resolveWorkspaceTemplateSearchDirs();
+      const triedPaths: string[] = [];
+      for (const templateDir of templateDirs) {
+        const templatePath = path.join(templateDir, name);
+        triedPaths.push(templatePath);
+        try {
+          const content = await fs.readFile(templatePath, "utf-8");
+          return stripFrontMatter(content);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+            throw error;
+          }
         }
       }
-    }
-    throw new Error(
-      `Missing workspace template: ${name} (${triedPaths.join(", ")}). Ensure workspace templates are packaged.`,
-    );
-  })();
-
-  workspaceTemplateCache.set(name, pending);
-  try {
-    return await pending;
-  } catch (error) {
-    workspaceTemplateCache.delete(name);
-    throw error;
-  }
+      throw new Error(
+        `Missing workspace template: ${name} (${triedPaths.join(", ")}). Ensure workspace templates are packaged.`,
+      );
+    },
+    { cacheRejections: false },
+  );
 }
 
 export type ExtraBootstrapLoadDiagnosticCode =
@@ -176,14 +159,11 @@ export type ExtraBootstrapLoadDiagnostic = {
   detail: string;
 };
 
-/** Set of recognized bootstrap filenames for runtime validation */
 const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set(WORKSPACE_BOOTSTRAP_FILENAMES);
 
-const OPTIONAL_BOOTSTRAP_FILENAMES: ReadonlySet<string> = new Set([
-  DEFAULT_SOUL_FILENAME,
-  DEFAULT_IDENTITY_FILENAME,
-  DEFAULT_USER_FILENAME,
-]);
+const OPTIONAL_BOOTSTRAP_FILENAMES: ReadonlySet<string> = new Set(
+  WORKSPACE_ONBOARDING_PROFILE_FILENAMES,
+);
 
 /**
  * Bootstrap files whose absence is a normal workspace state rather than a fault:
@@ -308,31 +288,20 @@ async function workspaceRequiredBootstrapLooksCustomized(
   dir: string,
   opts?: { generatedHashes?: ReadonlyMap<string, string> },
 ): Promise<boolean> {
-  const fileNames = [DEFAULT_AGENTS_FILENAME];
   const generatedHashes = opts?.generatedHashes;
   if (generatedHashes && generatedHashes.size > 0) {
-    for (const fileName of fileNames) {
-      const filePath = path.join(dir, fileName);
-      const generatedHash = generatedHashes.get(fileName);
-      try {
-        const content = await fs.readFile(filePath, "utf-8");
-        const contentHash = sha256Hex(content);
-        if (
-          contentHash !== generatedHash &&
-          !(await isGeneratedTemplateContent(fileName, content))
-        ) {
-          return true;
-        }
-      } catch {
-        // Missing generated files are not customization evidence.
-      }
+    try {
+      const content = await fs.readFile(path.join(dir, DEFAULT_AGENTS_FILENAME), "utf-8");
+      return (
+        sha256Hex(content) !== generatedHashes.get(DEFAULT_AGENTS_FILENAME) &&
+        !(await isGeneratedTemplateContent(DEFAULT_AGENTS_FILENAME, content))
+      );
+    } catch {
+      // Missing generated files are not customization evidence.
+      return false;
     }
-    return false;
   }
-  const fileDiffs = await Promise.all(
-    fileNames.map((fileName) => fileContentDiffersFromTemplate(dir, fileName)),
-  );
-  return fileDiffs.some(Boolean);
+  return fileContentDiffersFromTemplate(dir, DEFAULT_AGENTS_FILENAME);
 }
 
 async function workspaceAttestedGeneratedFilesIntact(
@@ -350,8 +319,7 @@ async function workspaceAttestedGeneratedFilesIntact(
     }
     try {
       const content = await fs.readFile(path.join(dir, fileName), "utf-8");
-      const contentHash = createHash("sha256").update(content).digest("hex");
-      if (contentHash !== generatedHash) {
+      if (sha256Hex(content) !== generatedHash) {
         return false;
       }
     } catch {
@@ -359,10 +327,6 @@ async function workspaceAttestedGeneratedFilesIntact(
     }
   }
   return true;
-}
-
-async function workspaceHasBootstrapCompletionEvidence(params: { dir: string }): Promise<boolean> {
-  return await workspaceProfileLooksConfigured(params);
 }
 
 type WorkspaceBootstrapCompletionReconcileResult = {
@@ -386,23 +350,10 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
     return { repaired: false, bootstrapExists, state: params.state };
   }
 
-  if (params.state.bootstrapSeededAt && !bootstrapExists) {
-    const completedState: WorkspaceSetupState = {
-      ...params.state,
-      setupCompletedAt: new Date().toISOString(),
-    };
-    params.beforePersistentApply?.();
-    const persistedState = await mergeWorkspaceSetupState(params.dir, completedState, undefined, {
-      assertCurrent: params.beforePersistentApply,
-    });
-    return { repaired: true, bootstrapExists: false, state: persistedState };
-  }
-
   if (
-    !bootstrapExists ||
-    !(await workspaceHasBootstrapCompletionEvidence({
-      dir: params.dir,
-    }))
+    bootstrapExists
+      ? !(await workspaceProfileLooksConfigured({ dir: params.dir }))
+      : !params.state.bootstrapSeededAt
   ) {
     return { repaired: false, bootstrapExists, state: params.state };
   }
@@ -417,6 +368,9 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   const persistedState = await mergeWorkspaceSetupState(params.dir, repairedState, undefined, {
     assertCurrent: params.beforePersistentApply,
   });
+  if (!bootstrapExists) {
+    return { repaired: true, bootstrapExists: false, state: persistedState };
+  }
   params.beforePersistentApply?.();
   try {
     await fs.rm(params.bootstrapPath, { force: true });
@@ -545,12 +499,7 @@ async function workspaceSetupStateHasSurvivalEvidence(params: {
     return true;
   }
   const generatedHashes = await collectGeneratedBootstrapHashes(params.dir);
-  return [
-    DEFAULT_AGENTS_FILENAME,
-    DEFAULT_SOUL_FILENAME,
-    DEFAULT_IDENTITY_FILENAME,
-    DEFAULT_USER_FILENAME,
-  ].every((fileName) => generatedHashes.has(fileName));
+  return GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES.every((fileName) => generatedHashes.has(fileName));
 }
 
 async function readCanonicalWorkspaceStateSnapshot(
@@ -578,16 +527,11 @@ export async function resolveWorkspaceBootstrapStatus(
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<"pending" | "complete"> {
   const resolvedDir = resolveUserPath(dir);
-  const state = (await readCanonicalWorkspaceStateSnapshot(resolvedDir, options)).setup;
-  if (typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0) {
+  if (await isWorkspaceSetupCompleted(resolvedDir, options)) {
     return "complete";
   }
   const bootstrapPath = path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME);
-  const bootstrapExists = await pathExists(bootstrapPath);
-  if (!bootstrapExists) {
-    return "complete";
-  }
-  return "pending";
+  return (await pathExists(bootstrapPath)) ? "pending" : "complete";
 }
 
 export async function seedWorkspaceBootstrap(params: {
@@ -646,17 +590,16 @@ export async function seedWorkspaceBootstrap(params: {
   }
 
   if (!created) {
+    const statExistingBootstrap = () =>
+      fs.stat(bootstrapPath).catch((error: unknown) => {
+        throw new WorkspaceBootstrapSeedConflictError(
+          "Existing BOOTSTRAP.md could not be read safely.",
+          { cause: error },
+        );
+      });
     await retryAsync(
       async () => {
-        let statBefore: syncFs.Stats;
-        try {
-          statBefore = await fs.stat(bootstrapPath);
-        } catch (error) {
-          throw new WorkspaceBootstrapSeedConflictError(
-            "Existing BOOTSTRAP.md could not be read safely.",
-            { cause: error },
-          );
-        }
+        const statBefore = await statExistingBootstrap();
         const existing = await readWorkspaceFileWithGuards({
           filePath: bootstrapPath,
           workspaceDir: dir,
@@ -673,15 +616,7 @@ export async function seedWorkspaceBootstrap(params: {
           );
         }
         await delay(20);
-        let statAfter: syncFs.Stats;
-        try {
-          statAfter = await fs.stat(bootstrapPath);
-        } catch (error) {
-          throw new WorkspaceBootstrapSeedConflictError(
-            "Existing BOOTSTRAP.md could not be read safely.",
-            { cause: error },
-          );
-        }
+        const statAfter = await statExistingBootstrap();
         if (
           statBefore.size !== statAfter.size ||
           statBefore.mtimeMs !== statAfter.mtimeMs ||
@@ -807,6 +742,16 @@ export async function ensureAgentWorkspace(params?: {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
   const beforePersistentApply = params?.beforePersistentApply;
+  const clearExpiredState = async () => {
+    beforePersistentApply?.();
+    if (
+      !(await clearExpiredWorkspaceStateForVanishedWorkspace(dir, undefined, {
+        assertCurrent: beforePersistentApply,
+      }))
+    ) {
+      throw new WorkspaceVanishedError({ workspaceDir: dir });
+    }
+  };
   const purpose = params?.purpose?.trim();
   if (purpose && (params?.templates || getAgentWorkspaceAccess(dir))) {
     throw new WorkspaceBootstrapSeedConflictError(
@@ -843,14 +788,7 @@ export async function ensureAgentWorkspace(params?: {
     // Old setup state lived inside the workspace and disappeared with it.
     // Expired SQLite evidence must preserve that reseed contract. The write
     // transaction also catches a concurrent attestation refresh.
-    beforePersistentApply?.();
-    if (
-      !(await clearExpiredWorkspaceStateForVanishedWorkspace(dir, undefined, {
-        assertCurrent: beforePersistentApply,
-      }))
-    ) {
-      throw new WorkspaceVanishedError({ workspaceDir: dir });
-    }
+    await clearExpiredState();
   }
 
   beforePersistentApply?.();
@@ -875,14 +813,7 @@ export async function ensureAgentWorkspace(params?: {
       if (recentSetupState) {
         throw new WorkspaceVanishedError({ workspaceDir: dir });
       }
-      beforePersistentApply?.();
-      if (
-        !(await clearExpiredWorkspaceStateForVanishedWorkspace(dir, undefined, {
-          assertCurrent: beforePersistentApply,
-        }))
-      ) {
-        throw new WorkspaceVanishedError({ workspaceDir: dir });
-      }
+      await clearExpiredState();
     }
     if (purpose) {
       await publishAgentInstructions(
@@ -903,21 +834,16 @@ export async function ensureAgentWorkspace(params?: {
   const identityPath = path.join(dir, DEFAULT_IDENTITY_FILENAME);
   const userPath = path.join(dir, DEFAULT_USER_FILENAME);
 
-  const isBrandNewWorkspace = await (async () => {
-    const templatePaths = [agentsPath, soulPath, identityPath, userPath];
-    const paths = [...templatePaths, path.join(dir, "memory")];
-    const existing = await Promise.all(
-      paths.map(async (p) => {
-        try {
-          await fs.access(p);
-          return true;
-        } catch {
-          return false;
-        }
-      }),
-    );
-    return existing.every((v) => !v) && !(await hasWorkspaceUserContentEvidence(dir));
-  })();
+  const existing = await Promise.all(
+    [agentsPath, soulPath, identityPath, userPath, path.join(dir, "memory")].map((filePath) =>
+      fs.access(filePath).then(
+        () => true,
+        () => false,
+      ),
+    ),
+  );
+  const isBrandNewWorkspace =
+    existing.every((exists) => !exists) && !(await hasWorkspaceUserContentEvidence(dir));
 
   if (isBrandNewWorkspace) {
     if (recentAttestation) {
@@ -926,14 +852,7 @@ export async function ensureAgentWorkspace(params?: {
     reseedingExpiredWorkspaceState = initialState.setupExists || Boolean(initialState.attestation);
     // A wiped workspace can leave its directory (or only .git) behind. Clear
     // expired SQLite evidence before deciding whether setup already completed.
-    beforePersistentApply?.();
-    if (
-      !(await clearExpiredWorkspaceStateForVanishedWorkspace(dir, undefined, {
-        assertCurrent: beforePersistentApply,
-      }))
-    ) {
-      throw new WorkspaceVanishedError({ workspaceDir: dir });
-    }
+    await clearExpiredState();
   }
 
   if (initialState.attestation && !isBrandNewWorkspace) {
@@ -950,14 +869,7 @@ export async function ensureAgentWorkspace(params?: {
       reseedingExpiredWorkspaceState = true;
       // The transaction rejects a concurrent refresh. Only the expired
       // snapshot we just inspected may be cleared before reseeding.
-      beforePersistentApply?.();
-      if (
-        !(await clearExpiredWorkspaceStateForVanishedWorkspace(dir, undefined, {
-          assertCurrent: beforePersistentApply,
-        }))
-      ) {
-        throw new WorkspaceVanishedError({ workspaceDir: dir });
-      }
+      await clearExpiredState();
     }
   } else if (
     hasWorkspaceSetupStateMarker(initialState.setup) &&
@@ -976,14 +888,7 @@ export async function ensureAgentWorkspace(params?: {
       throw new WorkspaceVanishedError({ workspaceDir: dir });
     }
     reseedingExpiredWorkspaceState = true;
-    beforePersistentApply?.();
-    if (
-      !(await clearExpiredWorkspaceStateForVanishedWorkspace(dir, undefined, {
-        assertCurrent: beforePersistentApply,
-      }))
-    ) {
-      throw new WorkspaceVanishedError({ workspaceDir: dir });
-    }
+    await clearExpiredState();
   }
 
   const defaultAgentsTemplate =
@@ -1007,17 +912,14 @@ export async function ensureAgentWorkspace(params?: {
       skipOptionalBootstrapFiles.add(filename);
     }
   }
-  const shouldWriteBootstrapFile = (fileName: string): boolean =>
-    !OPTIONAL_BOOTSTRAP_FILENAMES.has(fileName) || !skipOptionalBootstrapFiles.has(fileName);
-
   await publishAgentInstructions(agentsPath, defaultAgentsTemplate, purpose, beforePersistentApply);
-  if (shouldWriteBootstrapFile(DEFAULT_SOUL_FILENAME)) {
+  if (!skipOptionalBootstrapFiles.has(DEFAULT_SOUL_FILENAME)) {
     await publishBootstrapFile(soulPath, soulTemplate, beforePersistentApply);
   }
-  const identityPathCreated = shouldWriteBootstrapFile(DEFAULT_IDENTITY_FILENAME)
+  const identityPathCreated = !skipOptionalBootstrapFiles.has(DEFAULT_IDENTITY_FILENAME)
     ? await publishBootstrapFile(identityPath, identityTemplate, beforePersistentApply)
     : false;
-  if (shouldWriteBootstrapFile(DEFAULT_USER_FILENAME)) {
+  if (!skipOptionalBootstrapFiles.has(DEFAULT_USER_FILENAME)) {
     await publishBootstrapFile(userPath, userTemplate, beforePersistentApply);
   }
 
@@ -1075,11 +977,7 @@ export async function ensureAgentWorkspace(params?: {
         bootstrapTemplate,
         beforePersistentApply,
       );
-      if (!wroteBootstrap) {
-        bootstrapExists = await pathExists(bootstrapPath);
-      } else {
-        bootstrapExists = true;
-      }
+      bootstrapExists = wroteBootstrap || (await pathExists(bootstrapPath));
       if (bootstrapExists && !state.bootstrapSeededAt) {
         markState({ bootstrapSeededAt: nowIso() });
       }
@@ -1187,12 +1085,6 @@ type BootstrapSessionContext = {
   workspaceDir?: string;
 };
 
-function resolveBootstrapSessionContext(
-  session?: string | BootstrapSessionContext,
-): BootstrapSessionContext {
-  return typeof session === "string" ? { sessionKey: session } : (session ?? {});
-}
-
 function filterRootMemoryBootstrapFiles(
   files: WorkspaceBootstrapFile[],
   workspaceRoot?: string,
@@ -1210,11 +1102,7 @@ function filterRootMemoryBootstrapFiles(
     if (!filePath) {
       return true;
     }
-    const resolvedPath = path.isAbsolute(filePath)
-      ? path.resolve(filePath)
-      : filePath.startsWith("~")
-        ? resolveUserPath(filePath)
-        : path.resolve(resolvedWorkspaceRoot, filePath);
+    const resolvedPath = resolveWorkspaceBootstrapPath(resolvedWorkspaceRoot, filePath);
     return resolvedPath !== rootMemoryPath;
   });
 }
@@ -1223,7 +1111,8 @@ export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
   session?: string | BootstrapSessionContext,
 ): WorkspaceBootstrapFile[] {
-  const { sessionKey, chatType, workspaceDir } = resolveBootstrapSessionContext(session);
+  const { sessionKey, chatType, workspaceDir }: BootstrapSessionContext =
+    typeof session === "string" ? { sessionKey: session } : (session ?? {});
   const isSubagent = isSubagentSessionKey(sessionKey);
   const isCron = isCronSessionKey(sessionKey);
   const effectiveChatType = chatType ?? deriveSessionChatTypeFromKey(sessionKey);
@@ -1337,11 +1226,6 @@ async function resolveExtraBootstrapPatternPaths(
   return matches.length > 0 ? matches : [pattern];
 }
 
-function patternWalkRootStaysInWorkspace(workspaceDir: string, pattern: string): boolean {
-  const walkRoot = path.resolve(workspaceDir, resolveGlobWalkRoot(pattern));
-  return isPathInside(workspaceDir, walkRoot);
-}
-
 export async function loadExtraBootstrapFilesWithDiagnostics(
   dir: string,
   extraPatterns: string[],
@@ -1356,7 +1240,7 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
   const resolvedPaths = new Set<string>();
   for (const pattern of extraPatterns) {
-    if (!patternWalkRootStaysInWorkspace(resolvedDir, pattern)) {
+    if (!isPathInside(resolvedDir, path.resolve(resolvedDir, resolveGlobWalkRoot(pattern)))) {
       diagnostics.push({
         path: path.resolve(resolvedDir, pattern),
         reason: "security",

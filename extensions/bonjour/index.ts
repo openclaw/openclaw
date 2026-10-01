@@ -31,7 +31,7 @@ export default definePluginEntry({
           import("./src/advertiser.js"),
           import("openclaw/plugin-sdk/runtime"),
         ]);
-        const advertiser = await startGatewayBonjourAdvertiser(
+        return await startGatewayBonjourAdvertiser(
           {
             instanceName: formatBonjourInstanceName(ctx.machineDisplayName),
             gatewayPort: ctx.gatewayPort,
@@ -49,7 +49,6 @@ export default definePluginEntry({
             registerUnhandledRejectionHandler,
           },
         );
-        return { stop: advertiser.stop };
       },
     });
   },

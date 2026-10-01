@@ -46,10 +46,14 @@ afterEach(() => {
 });
 
 describe("accepted input restart handoff", () => {
-  it.each(["foreground history", "background reconciliation"] as const)(
-    "demotes an unknown send after exact pending custody via %s without losing its retry payload",
-    async (delivery) => {
-      let consumed = false;
+  it.each(
+    (["foreground history", "background reconciliation"] as const).flatMap((delivery) =>
+      (["consumed", "cancelled"] as const).map((outcome) => ({ delivery, outcome })),
+    ),
+  )(
+    "retains exact custody via $delivery until its off-page $outcome receipt settles",
+    async ({ delivery, outcome }) => {
+      let settled = false;
       const visible = delivery === "foreground history";
       const host = makeChatHost({
         sessionKey: visible ? sessionKey : "agent:main:another-conversation",
@@ -58,9 +62,17 @@ describe("accepted input restart handoff", () => {
           "chat.history": () => ({
             sessionId,
             messages: [],
-            pendingInputs: consumed ? { items: [], total: 0 } : pending("queued"),
-            inputReceipts: consumed
-              ? [{ runId: item.sendRunId, state: "consumed", consumedByEventId: "canonical-input" }]
+            pendingInputs: settled ? { items: [], total: 21, nextBefore: 21 } : pending("queued"),
+            inputReceipts: settled
+              ? [
+                  outcome === "cancelled"
+                    ? { runId: item.sendRunId, state: "pending", cancelled: true }
+                    : {
+                        runId: item.sendRunId,
+                        state: "consumed",
+                        consumedByEventId: "canonical-input",
+                      },
+                ]
               : [{ runId: item.sendRunId, state: "pending" }],
             sessionInfo: { key: sessionKey, sessionId, status: "done", hasActiveRun: false },
           }),
@@ -92,7 +104,7 @@ describe("accepted input restart handoff", () => {
       expect(listStoredChatOutboxes(host)[0]?.queue[0]?.sendError).toBeUndefined();
       expect(listChatOutboxAttention(host)).toEqual([]);
       expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
-      consumed = true;
+      settled = true;
       if (visible) {
         await loadChatHistory(host);
       } else {

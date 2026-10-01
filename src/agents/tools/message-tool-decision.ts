@@ -111,21 +111,6 @@ export function createMessageToolDecisionRecorder(params: {
         ],
       });
     },
-    recordExplicitTargetMissing() {
-      record({
-        outcome: "denied",
-        reasonCode: "message_target_missing",
-        coverageState: "enforced",
-        policyRefs: ["message-target:explicit"],
-        summary: "Message action was denied because this run requires an explicit target.",
-        remediation: [
-          {
-            code: "provide_explicit_message_target",
-            text: "Provide target or targets, and channel when needed, then retry.",
-          },
-        ],
-      });
-    },
     recordPollVoteEchoSuppressed() {
       record({
         outcome: "not-applicable",

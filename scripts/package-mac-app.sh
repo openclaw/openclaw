@@ -375,8 +375,8 @@ plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleShortVersionSt
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleVersion "$APP_BUILD"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawBuildTimestamp "$BUILD_TS"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit "$BUILD_GIT_COMMIT"
-WORKER_BUILD_ID="$(node -e 'console.log(require(process.argv[1]).buildId)' "$ROOT_DIR/dist/build-info.json")"
-plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" OpenClawWorkerBuildID "$WORKER_BUILD_ID"
+RUNTIME_BUILD_ID="$(node -e 'console.log(require(process.argv[1]).buildId)' "$ROOT_DIR/dist/build-info.json")"
+plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" OpenClawRuntimeBuildID "$RUNTIME_BUILD_ID"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" PeekabooSourceCommit "$PEEKABOO_SOURCE_COMMIT"
 if [[ "$BUILD_CONFIG" == "release" ]]; then
   EMBEDDED_GIT_COMMIT="$(plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit)"
@@ -515,7 +515,8 @@ for arch in "${BUILD_ARCHS[@]}"; do
 done
 
 echo "📦 Copying CLI installer"
-INSTALL_CLI_SRC="$ROOT_DIR/scripts/install-cli.sh"
+node "$ROOT_DIR/scripts/build-installers.mjs" "$APP_STAGE_DIR/installers"
+INSTALL_CLI_SRC="$APP_STAGE_DIR/installers/install-cli.sh"
 if [ ! -f "$INSTALL_CLI_SRC" ]; then
   echo "ERROR: CLI installer missing at $INSTALL_CLI_SRC" >&2
   exit 1
@@ -523,26 +524,12 @@ fi
 cp "$INSTALL_CLI_SRC" "$APP_ROOT/Contents/Resources/install-cli.sh"
 chmod 0644 "$APP_ROOT/Contents/Resources/install-cli.sh"
 
-echo "📦 Provisioning the matching private node worker [${BUILD_ARCHS[*]}]"
-/bin/bash "$ROOT_DIR/scripts/stage-mac-node-worker.sh" "$APP_ROOT/Contents/Resources/node-worker" "${BUILD_ARCHS[@]}"
+echo "📦 Provisioning the matching private Bun runtime [${BUILD_ARCHS[*]}]"
+/bin/bash "$ROOT_DIR/scripts/stage-mac-runtime.sh" "$APP_ROOT/Contents/Resources/runtime" "${BUILD_ARCHS[@]}"
 
 echo "🌐 Copying app localizations"
 node --import tsx "$ROOT_DIR/scripts/apple-app-i18n.ts" compile-macos \
   --output "$APP_ROOT/Contents/Resources"
-
-# The native dashboard loads the Gateway-served HTTP UI. Neither the app bundle
-# nor its private `node worker` runtime serves a second Control UI copy.
-if [[ -e "$APP_ROOT/Contents/Resources/control-ui" || -L "$APP_ROOT/Contents/Resources/control-ui" ]]; then
-  echo "ERROR: Standalone Control UI assets must not be embedded in OpenClaw.app" >&2
-  exit 1
-fi
-for arch in "${BUILD_ARCHS[@]}"; do
-  worker_ui="$APP_ROOT/Contents/Resources/node-worker/$arch/lib/node_modules/openclaw/dist/control-ui"
-  if [[ -e "$worker_ui" || -L "$worker_ui" ]]; then
-    echo "ERROR: Private node worker must not embed Control UI assets: $worker_ui" >&2
-    exit 1
-  fi
-done
 
 echo "📦 Copying SwiftPM resource bundles"
 SWIFTPM_BUILD_PRODUCTS=("$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG")
@@ -650,10 +637,15 @@ if [[ "${CLOUD_WORKER_HOST:-0}" == "1" ]]; then
   fi
 fi
 for arch in "${BUILD_ARCHS[@]}"; do
-  env -i HOME="$APP_STAGE_DIR" PATH="/usr/bin:/bin:/usr/sbin:/sbin" TMPDIR="${TMPDIR:-/tmp}" \
-    "$APP_ROOT/Contents/Resources/node-worker/$arch/bin/node" \
-    "$ROOT_DIR/scripts/verify-mac-node-worker.mjs" \
-    "$APP_ROOT/Contents/Resources/node-worker/$arch" "$ROOT_DIR/dist/build-info.json"
+  if /usr/bin/arch -"$arch" /usr/bin/true 2>/dev/null; then
+    env -i HOME="$APP_STAGE_DIR" PATH="/usr/bin:/bin:/usr/sbin:/sbin" TMPDIR="${TMPDIR:-/tmp}" \
+      OPENCLAW_SQLITE_LIBRARY="$APP_ROOT/Contents/Resources/runtime/lib/libsqlite3.dylib" \
+      /usr/bin/arch -"$arch" "$APP_ROOT/Contents/Resources/runtime/bin/bun" \
+      "$ROOT_DIR/scripts/verify-mac-runtime.mjs" \
+      "$APP_ROOT/Contents/Resources/runtime" "$ROOT_DIR/dist/build-info.json" "$APP_ROOT"
+  else
+    echo "WARN: Signed runtime $arch verification skipped; install Rosetta to verify this architecture" >&2
+  fi
 done
 codesign --verify --deep --strict "$APP_ROOT"
 

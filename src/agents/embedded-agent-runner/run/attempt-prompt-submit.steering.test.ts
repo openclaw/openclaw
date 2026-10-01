@@ -5,6 +5,7 @@ import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
+import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import {
   createAssistant,
@@ -104,7 +105,7 @@ async function prepareSteering() {
           __openclaw: { runId: childRunId },
         },
       };
-      return match(event) ? { event } : undefined;
+      return matchesTranscriptEvent(event, match) ? { event } : undefined;
     },
   });
   const leaseId = "requester-steering";
@@ -301,6 +302,9 @@ it("keeps source validation until foreground delivery after pre-prompt compactio
     sessionManager,
     settingsManager: createAutoCompactionSettings(),
   });
+  // The default prompt embeds absolute checkout paths, so its size would decide
+  // whether this 4k window leaves compaction any headroom.
+  session.setBaseSystemPrompt("Use the child findings.");
   const requests: Array<{ messages: Context["messages"]; compacting: boolean }> = [];
   streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
     requests.push({

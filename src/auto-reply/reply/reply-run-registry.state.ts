@@ -1,10 +1,9 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveActiveEmbeddedRunRecoveryBlocker } from "../../agents/embedded-agent-runner/run-state.js";
-import { createAbortError } from "../../infra/abort-signal.js";
+import { isEmbeddedRunHandleCompacting } from "../../agents/embedded-agent-runner/runs.probes.js";
 import {
   getDiagnosticSessionActivitySnapshot,
-  markDiagnosticRunProgress,
   resolveRunStaleThresholdMs,
 } from "../../logging/diagnostic-run-activity.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -16,6 +15,7 @@ import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatc
 import type { ReplyOperationStaleReason } from "./reply-run-finalization-lease.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+  REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   ReplyRunAlreadyActiveError,
   ReplyRunSuccessorAdmissionBlockedError,
   type ReplyBackendHandle,
@@ -23,7 +23,7 @@ import {
   type ReplyOperationPhase,
 } from "./reply-run-registry.contracts.js";
 
-type ReplyRunWaiter = {
+export type ReplyRunWaiter = {
   finish: (ended: boolean) => void;
   timer?: NodeJS.Timeout;
 };
@@ -151,14 +151,6 @@ export const evictReplyOperationByOperation =
   replyRunState.evictOperationByOperation ??
   (replyRunState.evictOperationByOperation = new WeakMap<ReplyOperation, () => void>());
 
-export function createUserAbortError(): Error {
-  return createAbortError("Reply operation aborted by user");
-}
-
-export function registerWaitSessionId(sessionKey: string, sessionId: string): void {
-  replyRunState.waitKeysBySessionId.set(sessionId, sessionKey);
-}
-
 function clearWaitSessionIds(sessionKey: string): void {
   for (const [sessionId, mappedKey] of replyRunState.waitKeysBySessionId) {
     if (mappedKey === sessionKey) {
@@ -209,11 +201,8 @@ export function isReplyRunCompacting(operation: ReplyOperation): boolean {
   if (operation.phase === "preflight_compacting" || operation.phase === "memory_flushing") {
     return true;
   }
-  if (operation.phase !== "running") {
-    return false;
-  }
-  const backend = getAttachedBackend(operation);
-  return backend?.isCompacting?.() ?? false;
+  const backend = operation.phase === "running" ? getAttachedBackend(operation) : undefined;
+  return backend ? isEmbeddedRunHandleCompacting(operation.sessionId, backend) === true : false;
 }
 
 export function isReplyOperationPreBackendPhase(phase: ReplyOperationPhase): boolean {
@@ -246,7 +235,7 @@ const afterClearByOperation = new WeakMap<ReplyOperation, ReplyOperationAfterCle
 const successorBarrierStartsByOperation = new WeakMap<ReplyOperation, Set<() => void>>();
 type ReplyOperationSuccessorBarrierGroup = {
   registrationKey: string;
-  barriers: Set<ReplyRunAdmissionBarrier>;
+  sources: Map<string, ReplyRunAdmissionSource>;
 };
 // Alias-keyed fences registered for one lane rotate together. Rekeyed command
 // operations retain prior-lane identities so source successors do not adopt
@@ -368,8 +357,6 @@ export function retainReplyOperationUntilComplete(operation: ReplyOperation): vo
   retainStateUntilCompleteOperations.add(operation);
 }
 
-/** Queue-first compatibility adapter for shipped Plugin SDK/embedded handles. */
-
 export function runAfterReplyOperationClear(
   operation: ReplyOperation,
   afterClear: (sessionId: string) => void,
@@ -436,15 +423,13 @@ function resolveReplyRunAdmissionSource(
 function registerReplyRunAdmissionBarrier(
   barriersByKey: Map<string, ReplyRunAdmissionBarrier>,
   sessionKey: string,
-  sessionId: string,
+  initialSource: ReplyRunAdmissionSource,
   barrier: Promise<void>,
-  operation: ReplyOperation,
 ): ReplyRunAdmissionBarrier {
   const previous = barriersByKey.get(sessionKey);
-  const source = resolveReplyRunAdmissionSource(
-    operation,
-    sessionId,
-    previous?.sources.get(lifecycleAdmissionByOperation.get(operation)?.databaseIdentity),
+  const source = mergeReplyRunAdmissionSource(
+    initialSource,
+    previous?.sources.get(initialSource.databaseIdentity),
   );
   // Retain only the latest source per physical store in this pending chain.
   // A foreign global barrier must not hide a same-store compaction successor.
@@ -469,21 +454,31 @@ export function registerReplyOperationSuccessorBarrier(params: {
   sessionId: string;
   sessionKeys: readonly string[];
   start: () => PromiseLike<unknown>;
+  /** Resource release fences start at clear; moving an active owner does not release it. */
+  deferUntilClear?: boolean;
 }): void {
   const settlement = createDeferredCore();
-  const barriers = new Set<ReplyRunAdmissionBarrier>();
+  const sources = new Map<string, ReplyRunAdmissionSource>();
   for (const sessionKey of new Set(params.sessionKeys.map(normalizeOptionalString))) {
     if (sessionKey) {
-      barriers.add(
+      sources.set(sessionKey, resolveReplyRunAdmissionSource(params.operation, params.sessionId));
+    }
+  }
+  const publish = () => {
+    for (const [sessionKey, source] of sources) {
+      sources.set(
+        sessionKey,
         registerReplyRunAdmissionBarrier(
           replyRunState.successorAdmissionBarriersByKey,
           sessionKey,
-          params.sessionId,
+          source,
           settlement.promise,
-          params.operation,
-        ),
+        ).source,
       );
     }
+  };
+  if (!params.deferUntilClear) {
+    publish();
   }
   let started = false;
   const start = () => {
@@ -492,6 +487,9 @@ export function registerReplyOperationSuccessorBarrier(params: {
     }
     started = true;
     try {
+      if (params.deferUntilClear) {
+        publish();
+      }
       void Promise.resolve(params.start()).then(
         () => settlement.resolve(undefined),
         () => {},
@@ -508,7 +506,7 @@ export function registerReplyOperationSuccessorBarrier(params: {
   const groups =
     successorBarrierGroupsByOperation.get(params.operation) ??
     new Set<ReplyOperationSuccessorBarrierGroup>();
-  groups.add({ registrationKey: params.operation.key, barriers });
+  groups.add({ registrationKey: params.operation.key, sources });
   successorBarrierGroupsByOperation.set(params.operation, groups);
   const starts = successorBarrierStartsByOperation.get(params.operation) ?? new Set<() => void>();
   starts.add(start);
@@ -537,8 +535,8 @@ export function updateSuccessorAdmissionSessionId(
     if (group.registrationKey !== operation.key) {
       continue;
     }
-    for (const barrier of group.barriers) {
-      resolveReplyRunAdmissionSource(operation, sessionId, barrier.source);
+    for (const source of group.sources.values()) {
+      resolveReplyRunAdmissionSource(operation, sessionId, source);
     }
   }
 }
@@ -624,9 +622,8 @@ export function registerFollowupAdmissionBarrier(
   const entry = registerReplyRunAdmissionBarrier(
     replyRunState.followupAdmissionBarriersByKey,
     operation.key,
-    operation.sessionId,
+    resolveReplyRunAdmissionSource(operation, operation.sessionId),
     waitForReplyBarrierSettlement(barrier, timeout),
-    operation,
   );
   // A later global barrier may belong to another store. Late callbacks still
   // wait for this operation's own delivery before releasing admission.
@@ -690,19 +687,7 @@ export function clearReplyRunState(params: {
   notifyReplyRunEnded(params.sessionKey);
 }
 
-export function markReplyRunDiagnosticProgress(params: {
-  sessionKey: string;
-  sessionId: string;
-  reason: string;
-}): void {
-  markDiagnosticRunProgress({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    reason: params.reason,
-  });
-}
-
-export function isReplyRunRecoveryBlocked(operation: ReplyOperation): boolean {
+function isReplyRunRecoveryBlocked(operation: ReplyOperation): boolean {
   const backend = getAttachedBackend(operation);
   const blocker =
     !operation.result && backend
@@ -725,4 +710,33 @@ export function isReplyRunEvidenceStale(operation: ReplyOperation): boolean {
       resolveRunStaleThresholdMs(activity, Date.now() - operation.lastActivityAtMs) &&
     !recoveryBlocked
   );
+}
+
+export function expireVisibleStaleOperation(operation: ReplyOperation | undefined): boolean {
+  if (!operation) {
+    return false;
+  }
+  const idleMs = Date.now() - operation.lastActivityAtMs;
+  if (operation.result) {
+    return (
+      idleMs >= REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS &&
+      expireStaleReplyOperation(operation, "terminal_unreleased")
+    );
+  }
+  return isReplyRunEvidenceStale(operation) && expireStaleReplyOperation(operation, "no_activity");
+}
+
+export function resolveVisibleActiveWaitMs(operation: ReplyOperation | undefined): number {
+  if (!operation || isReplyRunRecoveryBlocked(operation)) {
+    return REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS;
+  }
+  const ageMs = Date.now() - operation.lastActivityAtMs;
+  const activity = getDiagnosticSessionActivitySnapshot({
+    sessionId: operation.sessionId,
+    sessionKey: operation.key,
+  });
+  const remainingMs = operation.result
+    ? REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS - ageMs
+    : resolveRunStaleThresholdMs(activity, ageMs) - ageMs;
+  return Math.min(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, Math.max(1, remainingMs));
 }

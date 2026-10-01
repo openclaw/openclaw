@@ -1,4 +1,3 @@
-// Runway provider module implements model/runtime integration.
 import {
   downloadGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
@@ -19,6 +18,7 @@ import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
@@ -91,9 +91,7 @@ function readRunwayOutputUrls(payload: RunwayTaskDetailResponse): string[] {
   if (!Array.isArray(payload.output)) {
     throw new Error("Runway video generation completed with malformed output URLs");
   }
-  const outputUrls = payload.output
-    .map((value) => normalizeOptionalString(value))
-    .filter((value): value is string => Boolean(value));
+  const outputUrls = normalizeTrimmedStringList(payload.output);
   if (!outputUrls.length) {
     throw new Error("Runway video generation completed without output URLs");
   }
@@ -119,37 +117,26 @@ function resolveSourceUri(
 }
 
 function resolveDurationSeconds(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return 5;
-  }
-  if (!Number.isSafeInteger(value)) {
+  if (value === undefined || !Number.isSafeInteger(value)) {
     return 5;
   }
   return Math.max(2, Math.min(MAX_DURATION_SECONDS, value));
 }
 
+const RUNWAY_RATIO_SIZES = new Map([
+  ["9:16", "720:1280"],
+  ["16:9", "1280:720"],
+  ["1:1", "960:960"],
+  ["3:4", "832:1104"],
+  ["4:3", "1104:832"],
+  ["21:9", "1584:672"],
+]);
+
 function resolveRunwayRatio(req: VideoGenerationRequest): string {
   const hasImageInput = (req.inputImages?.length ?? 0) > 0;
   const requested =
     normalizeOptionalString(req.size) ||
-    (() => {
-      switch (normalizeOptionalString(req.aspectRatio)) {
-        case "9:16":
-          return "720:1280";
-        case "16:9":
-          return "1280:720";
-        case "1:1":
-          return "960:960";
-        case "3:4":
-          return "832:1104";
-        case "4:3":
-          return "1104:832";
-        case "21:9":
-          return "1584:672";
-        default:
-          return undefined;
-      }
-    })();
+    RUNWAY_RATIO_SIZES.get(normalizeOptionalString(req.aspectRatio) ?? "");
   if (requested) {
     if (!hasImageInput && requested !== "1280:720" && requested !== "720:1280") {
       throw new Error("Runway text-to-video currently supports only 16:9 or 9:16 output ratios.");
@@ -179,39 +166,32 @@ function resolveEndpoint(
   return "/v1/text_to_video";
 }
 
-function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
-  const endpoint = resolveEndpoint(req);
+function buildCreateBody(
+  req: VideoGenerationRequest,
+  endpoint: ReturnType<typeof resolveEndpoint>,
+): Record<string, unknown> {
   const duration = resolveDurationSeconds(req.durationSeconds);
   const ratio = resolveRunwayRatio(req);
   const model = normalizeOptionalString(req.model) ?? DEFAULT_RUNWAY_MODEL;
-  if (endpoint === "/v1/text_to_video") {
-    if (!TEXT_ONLY_MODELS.has(model)) {
+  if (endpoint !== "/v1/video_to_video") {
+    const imageToVideo = endpoint === "/v1/image_to_video";
+    const models = imageToVideo ? IMAGE_MODELS : TEXT_ONLY_MODELS;
+    const mode = imageToVideo ? "image-to-video" : "text-to-video";
+    if (!models.has(model)) {
       throw new Error(
-        `Runway text-to-video does not support model ${model}. Use one of: ${[...TEXT_ONLY_MODELS].join(", ")}.`,
+        `Runway ${mode} does not support model ${model}. Use one of: ${[...models].join(", ")}.`,
       );
     }
-    return {
-      model,
-      promptText: req.prompt,
-      ratio,
-      duration,
-    };
-  }
-
-  if (endpoint === "/v1/image_to_video") {
-    if (!IMAGE_MODELS.has(model)) {
-      throw new Error(
-        `Runway image-to-video does not support model ${model}. Use one of: ${[...IMAGE_MODELS].join(", ")}.`,
-      );
-    }
-    const promptImage = resolveSourceUri(req.inputImages?.[0], "image/png");
-    if (!promptImage) {
+    const promptImage = imageToVideo
+      ? resolveSourceUri(req.inputImages?.[0], "image/png")
+      : undefined;
+    if (imageToVideo && !promptImage) {
       throw new Error("Runway image-to-video input is missing image data.");
     }
     return {
       model,
       promptText: req.prompt,
-      promptImage,
+      ...(imageToVideo ? { promptImage } : {}),
       ratio,
       duration,
     };
@@ -278,8 +258,8 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
         timeoutMs: req.timeoutMs,
         label: "Runway video generation",
       });
-      const requestBody = buildCreateBody(req);
       const endpoint = resolveEndpoint(req);
+      const requestBody = buildCreateBody(req, endpoint);
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
           baseUrl:

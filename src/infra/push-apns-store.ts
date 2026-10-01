@@ -6,10 +6,9 @@ import {
 import type { Selectable } from "kysely";
 import { z } from "zod";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
+import type {
+  OpenClawStateDatabase,
+  OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
@@ -17,7 +16,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { clearApnsRegistrationFromDatabase } from "./push-apns-store-transaction.js";
 import { ApnsRegistrationPairingChangedError } from "./push-apns-store.errors.js";
 import { apnsRegistrationToRow } from "./push-apns-store.rows.js";
 import type { ApnsEnvironment, ApnsRegistration } from "./push-apns-store.types.js";
@@ -35,34 +33,25 @@ export type {
   RelayApnsRegistration,
 } from "./push-apns-store.types.js";
 
-type RegisterDirectApnsParams = {
+type RegisterApnsParams = {
   nodeId: string;
-  transport?: "direct";
-  token: string;
   topic: string;
   environment?: unknown;
   expectedPairingGeneration?: string;
   assertCurrent?: () => void;
   baseDir?: string;
-};
-
-type RegisterRelayApnsParams = {
-  nodeId: string;
-  transport: "relay";
-  relayHandle: string;
-  sendGrant: string;
-  installationId: string;
-  topic: string;
-  environment?: unknown;
-  distribution?: unknown;
-  relayOrigin?: unknown;
-  tokenDebugSuffix?: unknown;
-  expectedPairingGeneration?: string;
-  assertCurrent?: () => void;
-  baseDir?: string;
-};
-
-type RegisterApnsParams = RegisterDirectApnsParams | RegisterRelayApnsParams;
+} & (
+  | { transport?: "direct"; token: string }
+  | {
+      transport: "relay";
+      relayHandle: string;
+      sendGrant: string;
+      installationId: string;
+      distribution?: unknown;
+      relayOrigin?: unknown;
+      tokenDebugSuffix?: unknown;
+    }
+);
 
 type ApnsRegistrationDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -93,14 +82,6 @@ export function isValidApnsNodeId(value: string): boolean {
 
 export function normalizeApnsToken(value: string): string {
   return normalizeLowercaseStringOrEmpty(value.trim().replace(/[<>\s]/g, ""));
-}
-
-function normalizeRelayHandle(value: string): string {
-  return value.trim();
-}
-
-function normalizeInstallationId(value: string): string {
-  return value.trim();
 }
 
 function validateRelayIdentifier(
@@ -148,13 +129,7 @@ export function isLikelyApnsToken(value: string): boolean {
 }
 
 function normalizeDistribution(value: unknown): "official" | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const normalized = normalizeOptionalString(value)
-    ? normalizeLowercaseStringOrEmpty(value)
-    : undefined;
-  return normalized === "official" ? "official" : null;
+  return normalizeLowercaseStringOrEmpty(value) === "official" ? "official" : null;
 }
 
 function normalizeRelayOrigin(
@@ -217,12 +192,18 @@ const directApnsRegistrationSchema = z.object({
 const relayApnsRegistrationSchema = z.object({
   nodeId: apnsNodeIdSchema,
   transport: z.string().transform(normalizeLowercaseStringOrEmpty).pipe(z.literal("relay")),
-  relayHandle: z.string().transform(normalizeRelayHandle).refine(isValidRelayIdentifier),
+  relayHandle: z
+    .string()
+    .transform((value) => value.trim())
+    .refine(isValidRelayIdentifier),
   sendGrant: z
     .string()
     .transform((value) => value.trim())
     .refine((value) => isValidRelayIdentifier(value, MAX_SEND_GRANT_LENGTH)),
-  installationId: z.string().transform(normalizeInstallationId).refine(isValidRelayIdentifier),
+  installationId: z
+    .string()
+    .transform((value) => value.trim())
+    .refine(isValidRelayIdentifier),
   topic: apnsTopicSchema,
   environment: apnsEnvironmentSchema,
   distribution: z.unknown().transform(normalizeDistribution).pipe(z.literal("official")),
@@ -306,31 +287,6 @@ export function apnsRegistrationFromRow(row: ApnsRegistrationRow): ApnsRegistrat
   return normalized;
 }
 
-function apnsRegistrationsEqual(left: ApnsRegistration, right: ApnsRegistration): boolean {
-  if (
-    left.nodeId !== right.nodeId ||
-    left.transport !== right.transport ||
-    left.topic !== right.topic ||
-    left.environment !== right.environment ||
-    left.updatedAtMs !== right.updatedAtMs
-  ) {
-    return false;
-  }
-  if (left.transport === "direct" && right.transport === "direct") {
-    return left.token === right.token;
-  }
-  return (
-    left.transport === "relay" &&
-    right.transport === "relay" &&
-    left.relayHandle === right.relayHandle &&
-    left.sendGrant === right.sendGrant &&
-    left.installationId === right.installationId &&
-    left.distribution === right.distribution &&
-    left.relayOrigin === right.relayOrigin &&
-    left.tokenDebugSuffix === right.tokenDebugSuffix
-  );
-}
-
 /** Persists a validated direct or relay APNs registration for one node id. */
 export async function registerApnsRegistration(
   params: RegisterApnsParams,
@@ -346,19 +302,13 @@ export async function registerApnsRegistration(
 
   let candidate: ApnsRegistration;
   if (params.transport === "relay") {
-    const relayHandle = validateRelayIdentifier(
-      normalizeRelayHandle(params.relayHandle),
-      "relayHandle",
-    );
+    const relayHandle = validateRelayIdentifier(params.relayHandle.trim(), "relayHandle");
     const sendGrant = validateRelayIdentifier(
       params.sendGrant.trim(),
       "sendGrant",
       MAX_SEND_GRANT_LENGTH,
     );
-    const installationId = validateRelayIdentifier(
-      normalizeInstallationId(params.installationId),
-      "installationId",
-    );
+    const installationId = validateRelayIdentifier(params.installationId.trim(), "installationId");
     const environment = normalizeApnsEnvironment(params.environment);
     const distribution = normalizeDistribution(params.distribution);
     const relayOrigin = normalizeRelayOrigin(params.relayOrigin);
@@ -431,7 +381,6 @@ export async function registerApnsRegistration(
   return result.registration;
 }
 
-/** Loads one normalized APNs registration by node id. */
 export async function loadApnsRegistration(
   nodeId: string,
   baseDir?: string,
@@ -448,7 +397,6 @@ export async function loadApnsRegistration(
   });
 }
 
-/** Read and decode one registration through the caller's canonical connection. */
 export function readApnsRegistrationFromDatabase(
   db: OpenClawStateDatabase["db"],
   normalizedNodeId: string,
@@ -473,11 +421,7 @@ export async function loadApnsRegistrations(
     normalizedNodeId: normalizeApnsNodeId(nodeId),
   }));
   const uniqueNodeIds = [
-    ...new Set(
-      normalizedByInput
-        .map((entry) => entry.normalizedNodeId)
-        .filter((nodeId) => isValidApnsNodeId(nodeId)),
-    ),
+    ...new Set(normalizedByInput.map((entry) => entry.normalizedNodeId).filter(isValidApnsNodeId)),
   ];
   if (uniqueNodeIds.length === 0) {
     return [];
@@ -534,18 +478,12 @@ export async function clearApnsRegistrationIfCurrent(params: {
   if (!normalizedNodeId) {
     return false;
   }
-  return runOpenClawStateWriteTransaction(({ db }) => {
-    const stateDb = getNodeSqliteKysely<ApnsRegistrationDatabase>(db);
-    const currentRow = executeSqliteQueryTakeFirstSync(
-      db,
-      stateDb.selectFrom("apns_registrations").selectAll().where("node_id", "=", normalizedNodeId),
-    );
-    if (
-      !currentRow ||
-      !apnsRegistrationsEqual(apnsRegistrationFromRow(currentRow), params.registration)
-    ) {
-      return false;
-    }
-    return clearApnsRegistrationFromDatabase(db, normalizedNodeId);
-  }, apnsStateDatabaseOptions(params.baseDir));
+  const context = captureOpenClawStateWorkerContext(apnsStateDatabaseOptions(params.baseDir));
+  const input = {
+    nodeId: normalizedNodeId,
+    registration: { ...params.registration },
+    nowMs: Date.now(),
+  };
+  const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
+  return executeOpenClawStateWorker(context, { type: "apns.registration.clearIfCurrent", input });
 }

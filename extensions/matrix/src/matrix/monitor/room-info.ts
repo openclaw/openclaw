@@ -24,8 +24,9 @@ export function createMatrixRoomInfoResolver(client: MatrixClient) {
   const getRoomName = async (
     roomId: string,
   ): Promise<Pick<MatrixRoomInfo, "name" | "nameResolved">> => {
-    if (roomNameCache.has(roomId)) {
-      return roomNameCache.get(roomId) ?? { nameResolved: false };
+    const cached = roomNameCache.get(roomId);
+    if (cached) {
+      return cached;
     }
     let name: string | undefined;
     let nameResolved = false;
@@ -93,8 +94,9 @@ export function createMatrixRoomInfoResolver(client: MatrixClient) {
 
   const getMemberDisplayName = async (roomId: string, userId: string): Promise<string> => {
     const cacheKey = `${roomId}:${userId}`;
-    if (memberDisplayNameCache.has(cacheKey)) {
-      return memberDisplayNameCache.get(cacheKey) ?? userId;
+    const cached = memberDisplayNameCache.get(cacheKey);
+    if (cached !== undefined) {
+      return cached;
     }
     let memberState: Record<string, unknown>;
     try {
@@ -115,7 +117,6 @@ export function createMatrixRoomInfoResolver(client: MatrixClient) {
   };
 
   return {
-    getRoomAliases,
     getRoomInfo,
     getMemberDisplayName,
     invalidateMemberDisplayName,

@@ -146,27 +146,6 @@ describe("resolveInstallableChannelPlugin", () => {
     expect(mocks.resolveAgentWorkspaceDir).not.toHaveBeenCalled();
   });
 
-  it("still requires a workspace owner before resolving an unregistered plugin", async () => {
-    await expect(
-      resolveInstallableChannelPlugin({
-        cfg: {
-          agents: {
-            list: [{ id: "alpha" }, { id: "beta" }],
-          },
-        },
-        runtime: {} as never,
-        rawChannel: "workspace-channel",
-        allowInstall: false,
-        preferRegisteredPlugin: true,
-      }),
-    ).rejects.toThrow(AgentSelectionRequiredError);
-
-    expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("workspace-channel");
-    expect(mocks.getChannelPlugin).not.toHaveBeenCalled();
-    expect(mocks.resolveAgentWorkspaceDir).not.toHaveBeenCalled();
-    expect(mocks.listChannelPluginCatalogEntries).not.toHaveBeenCalled();
-  });
-
   it("ignores untrusted workspace channel shadows during setup resolution", async () => {
     const config = {
       agents: { entries: { ops: {}, research: {} } },

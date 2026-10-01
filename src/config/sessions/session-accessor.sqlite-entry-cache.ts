@@ -6,11 +6,13 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
 import {
   getAdmittedSqliteSchemaFacts,
   runSqliteReadOperationSync,
 } from "../../infra/sqlite-schema-facts.js";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -20,7 +22,6 @@ import {
   loadSessionEntrySnapshot,
   projectSessionEntryCacheUpdate,
   readSessionEntrySideMetadata,
-  type SessionEntryCacheDatabase,
   type SessionEntrySideMetadata,
 } from "./session-accessor.sqlite-entry-cache-projection.js";
 import {
@@ -34,6 +35,7 @@ import {
   type SqliteSessionEntryCache,
 } from "./session-accessor.sqlite-entry-cache-state.js";
 import type {
+  SessionEntryCacheDatabase,
   SessionEntryCacheReadOptions,
   SessionEntryCacheSnapshot,
 } from "./session-accessor.sqlite-entry-cache.types.js";
@@ -54,10 +56,9 @@ import type { InternalSessionEntry, SessionEntry } from "./types.js";
 export {
   assertSessionEntryCreationPublication,
   isPreparedSessionSharingChange,
-  projectSessionSharingEntry,
   publishSessionEntryPlaceholderInsertion,
+  publishSessionEntryWorkerMetadataInvalidation,
   publishSessionSharingMemberChange,
-  readCommittedIncognitoSessionSharing,
   readSessionEntryCreationTransition,
   retainPreparedSessionGenerationFacts,
   retainPreparedSessionSharingFacts,
@@ -66,9 +67,10 @@ export {
   runWithSessionEntryCreationPublication,
   type SessionEntryReplacementPublication,
 } from "./session-accessor.sqlite-entry-cache-publication.js";
-export type {
-  SessionEntryPlaceholder,
-  SessionTranscriptInitializationPublication,
+export {
+  projectSessionSharingEntry,
+  type SessionEntryPlaceholder,
+  type SessionTranscriptInitializationPublication,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 
 type SessionEntryCacheTables = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
@@ -77,6 +79,11 @@ type SqliteSessionEntryCacheWriteGeneration = {
   after: number;
   before: number;
 };
+
+type SessionEntryCacheUpdate = { sessionKey: string } & (
+  | { entry: SessionEntry; entryJson: string; sideMetadata: SessionEntrySideMetadata }
+  | { entry?: undefined; entryJson?: never }
+);
 
 /** Commit-driven projections borrow owner memory; ordinary reads still validate SQLite. */
 export function readCommittedSessionEntryCache(database: DatabaseSync) {
@@ -92,6 +99,7 @@ export function discardCommittedSessionEntryCache(database: DatabaseSync): void 
 function readCachedExactSessionEntries(
   database: SessionEntryCacheDatabase,
   sessionKeys: readonly string[],
+  clone: boolean,
 ): Map<string, SessionEntry> | undefined {
   const cached = sessionEntryCaches.get(database.db);
   if (!cached || database.db.isTransaction) {
@@ -132,9 +140,11 @@ function readCachedExactSessionEntries(
       ) {
         return undefined;
       }
-      // Distinct raw strings may bind to the same native key, but exact batches
-      // give each raw request its own entry while sharing repeated identical keys.
-      entries.set(sessionKey, validateDeliveryCanonicalSessionEntry(key, structuredClone(entry)));
+      // Mutable reads own each raw key; internal readers borrow the frozen committed facts.
+      entries.set(
+        sessionKey,
+        validateDeliveryCanonicalSessionEntry(key, clone ? structuredClone(entry) : entry),
+      );
     }
     return sessionEntryCaches.get(database.db) === cached &&
       cacheValidityTokensEqual(validityToken, readSessionEntryCacheValidityToken(database.db))
@@ -151,12 +161,15 @@ function readCachedExactSessionEntries(
 export function readExactSessionEntryCandidatesInDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   requests: readonly (readonly string[])[],
-  projection: SessionEntryReadScope["projection"],
+  projection: SessionEntryReadScope["projection"] | "delivery",
+  options: { clone?: boolean } = {},
 ): Array<Result<ExactSessionEntry[], unknown>> {
   const entries = new Map<string, Result<ExactSessionEntry | undefined, unknown>>();
   const keys = [...new Set(requests.flat())];
   const cachedEntries =
-    projection === "list" ? readCachedExactSessionEntries(database, keys) : undefined;
+    projection === "list"
+      ? readCachedExactSessionEntries(database, keys, options.clone !== false)
+      : undefined;
   let readPrepared: (sessionKey: string) => InternalSessionEntry | undefined;
   if (cachedEntries) {
     readPrepared = (sessionKey) => cachedEntries.get(sessionKey);
@@ -216,29 +229,17 @@ export function readSessionEntryCache(
   options: SessionEntryCacheReadOptions,
 ): SessionEntryCacheSnapshot {
   return runSqliteReadOperationSync(database.db, () => {
-    const projection = options.retainFullEntry ? "full" : options.projection;
-    const prepared = assertCanonicalSqliteSessionKeysCurrent(
-      database,
-      projection !== "full" && !options.fullEntryKeys,
-    );
+    const projection = options.projection;
+    const prepared = assertCanonicalSqliteSessionKeysCurrent(database, projection !== "full");
     if (
       !options.cache ||
       options.deferParticipants ||
-      options.fullEntryKeys ||
-      options.retainFullEntry ||
       options.latest ||
       projection === "full" ||
       database.db.isTransaction ||
       !getAdmittedSqliteSchemaFacts(database.db)
     ) {
-      return loadSessionEntrySnapshot(
-        database,
-        projection,
-        prepared,
-        options.fullEntryKeys ? new Set(options.fullEntryKeys) : undefined,
-        options.retainFullEntry,
-        options.deferParticipants,
-      );
+      return loadSessionEntrySnapshot(database, projection, prepared, options.deferParticipants);
     }
     const validityToken = readSessionEntryCacheValidityToken(database.db, "cached");
     const cached = sessionEntryCaches.get(database.db);
@@ -248,6 +249,9 @@ export function readSessionEntryCache(
     // Only tracked publications identify changed rows. A generation gap can contain
     // same-timestamp or owner-only edits; updated_at cannot validate a partial reload.
     const loaded = loadSessionEntrySnapshot(database, options.projection, prepared);
+    for (const entry of loaded.entries.values()) {
+      freezeJsonSnapshot(entry);
+    }
     const next = { ...loaded, validityToken };
     sessionEntryCaches.set(database.db, next);
     return next;
@@ -270,9 +274,9 @@ function advanceSessionEntryCacheGeneration(
 
 function publishSqliteSessionEntryCacheUpsert(
   database: SessionEntryCacheDatabase,
-  update: { sessionKey: string; entry?: SessionEntry },
+  update: SessionEntryCacheUpdate,
   writeGeneration: SqliteSessionEntryCacheWriteGeneration,
-): SessionEntrySideMetadata | undefined {
+): { sideMetadata: SessionEntrySideMetadata; entry: SessionEntry | undefined } | undefined {
   const owner = sessionEntryCaches.get(database.db);
   if (!owner) {
     return undefined;
@@ -281,8 +285,24 @@ function publishSqliteSessionEntryCacheUpsert(
   let sideMetadata: SessionEntrySideMetadata | undefined;
   let entry: SessionEntry | undefined;
   try {
-    sideMetadata = readSessionEntrySideMetadata(database, sessionKey);
-    entry = update.entry ? projectSessionEntryCacheUpdate(update.entry, sideMetadata) : undefined;
+    // A tracked entry write leaves participants unchanged. Reuse only facts current
+    // before that write; raw DML and foreign commits still force an authoritative read.
+    const retained =
+      update.entry &&
+      owner.validityToken.sessionNodesGeneration === writeGeneration.before &&
+      owner.validityToken.dataVersion === readSqliteDataVersion(database.db)
+        ? owner.entries.get(sessionKey)
+        : undefined;
+    sideMetadata = readSessionEntrySideMetadata(
+      database,
+      sessionKey,
+      retained
+        ? { participants: retained.participants, participantCount: retained.participantCount }
+        : undefined,
+    );
+    entry = update.entry
+      ? projectSessionEntryCacheUpdate(update.entryJson, sideMetadata)
+      : undefined;
   } catch {
     // A failed derived projection must not roll back an authoritative write.
     publishTrackedCacheUpdate(database, () => sessionEntryCaches.delete(database.db));
@@ -305,7 +325,7 @@ function publishSqliteSessionEntryCacheUpsert(
         participantCount: _count,
         ...metadata
       } = currentEntry;
-      publishedEntry = { ...metadata, ...sideMetadata };
+      publishedEntry = freezeJsonSnapshot({ ...metadata, ...sideMetadata });
     }
     if (!publishedEntry) {
       sessionEntryCaches.delete(database.db);
@@ -317,42 +337,40 @@ function publishSqliteSessionEntryCacheUpsert(
     cached.entries.set(sessionKey, publishedEntry);
     advanceSessionEntryCacheGeneration(cached, writeGeneration);
   });
-  return sideMetadata;
+  return { sideMetadata, entry };
 }
 
 export function publishSessionEntryCacheInvalidation(
   database: SessionEntryCacheDatabase & { path: string },
-  update: {
-    sessionKey: string;
-    entry?: SessionEntry;
+  update: SessionEntryCacheUpdate & {
+    previousEntry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
     facts?: SessionRowFacts;
     sharingUnchanged?: boolean;
   },
   writeGeneration?: SqliteSessionEntryCacheWriteGeneration,
 ): void {
   let facts = update.facts;
-  publishSessionSharingEntryChange(database, update);
-  if (writeGeneration) {
-    const metadata = publishSqliteSessionEntryCacheUpsert(database, update, writeGeneration);
-    if (facts?.kind === "participants" && metadata) {
-      facts = {
-        kind: "participants",
-        projection: {
-          participants: metadata.participants,
-          participantCount: metadata.participantCount,
-        },
-      };
-    }
-  } else {
-    // A cold write has no snapshot to patch; do not hydrate owner/participants or prompt JSON.
+  const cached = writeGeneration
+    ? publishSqliteSessionEntryCacheUpsert(database, update, writeGeneration)
+    : undefined;
+  if (!writeGeneration) {
     publishTrackedCacheUpdate(database, () => sessionEntryCaches.delete(database.db));
   }
+  if (facts?.kind === "participants" && cached) {
+    facts = {
+      kind: "participants",
+      projection: {
+        participants: cached.sideMetadata.participants,
+        participantCount: cached.sideMetadata.participantCount,
+      },
+    };
+  }
+  // The writer already acquired side-table facts. A cold cache cannot force a host reload.
+  const entry = update.entry
+    ? (cached?.entry ?? projectSessionEntryCacheUpdate(update.entryJson, update.sideMetadata))
+    : undefined;
+  publishSessionSharingEntryChange(database, entry ? { ...update, entry } : update);
   const identity = findOpenClawAgentDatabaseIdentity(database);
-  // Cold writes have no captured revision; their row facts need a fresh read.
-  const entry =
-    identity && writeGeneration && update.entry
-      ? projectSessionEntryCacheUpdate(update.entry, undefined)
-      : undefined;
   const sharingChange =
     update.sharingUnchanged ||
     facts?.kind === "unchanged" ||
@@ -365,12 +383,15 @@ export function publishSessionEntryCacheInvalidation(
     update.sessionKey,
     database.agentId,
     facts,
-    identity && writeGeneration && entry
+    identity && entry
       ? {
           kind: "metadata",
           sharingChange,
           prepared: {
-            source: { ...identity, revision: writeGeneration.after },
+            source: {
+              ...identity,
+              ...(writeGeneration ? { revision: writeGeneration.after } : {}),
+            },
             entries: new Map([[update.sessionKey, entry]]),
           },
         }
@@ -398,7 +419,7 @@ export function publishSessionEntryCacheCategoryUpdate(
       } else {
         next.category = category;
       }
-      cached?.entries.set(sessionKey, next);
+      cached?.entries.set(sessionKey, freezeJsonSnapshot(next));
     }
   });
 }

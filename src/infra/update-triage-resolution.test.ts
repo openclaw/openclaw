@@ -142,7 +142,6 @@ function repair() {
         signal,
         validateDoctor,
       }),
-    budget: { maxTurns: 1 },
   });
 }
 
@@ -425,6 +424,7 @@ describe("saved update failure resolution", () => {
     "runtime-verification-failed",
     "database-schema-preflight",
     "invalid-config",
+    "config-read-failed",
     "finalize:doctor",
     "post-update-plugins",
     "restart-unhealthy",

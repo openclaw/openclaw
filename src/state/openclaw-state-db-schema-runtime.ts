@@ -6,9 +6,10 @@ import {
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
-import { withStateSchemaFence } from "../infra/state-database-coordinator.js";
+import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
 import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { hasPreJournalStateSchema } from "./agent-deletion-journal-history.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -84,7 +85,7 @@ export function ensureOpenClawStateRuntimeSchema(
     // Preserve transactional schema convergence and its diagnostics after a clean rollback.
   }
 
-  return withStateSchemaFence({ databasePath: pathname }, () => {
+  return withStateDatabaseSchemaMaintenance({ databasePath: pathname, busyTimeoutMs }, () => {
     const now = Date.now();
     const retiredTableChanges: string[] = [];
     const applied = runStateSchemaMigrationTransaction(
@@ -99,6 +100,7 @@ export function ensureOpenClawStateRuntimeSchema(
         const previousVersion = readStateSchemaMigrationVersion(db);
         const includeAgentDeletionJournal =
           tableExists(db, "agent_deletion_journal") ||
+          hasPreJournalStateSchema(db) ||
           (initialization.kind === "fresh" && isUninitializedNativeStartupDatabase(db));
         if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
           assertNoLegacyStateRuntimeRepair(db, pathname);

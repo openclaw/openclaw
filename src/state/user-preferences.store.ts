@@ -9,6 +9,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { createOpenClawStateSchemaEnsurer } from "./openclaw-state-feature-schema.js";
+import { publishUserPreferencesChange } from "./user-preferences-publication.js";
 import type {
   PreparedUserPreferenceUpdate,
   UserPreferenceError,
@@ -41,6 +42,7 @@ export function deleteUserPreference(database: DatabaseSync, profileId: string, 
       .where("profile_id", "=", profileId)
       .where("pref_key", "=", key),
   );
+  publishUserPreferencesChange(database);
 }
 
 export function selectUserPreferenceValues(
@@ -113,6 +115,7 @@ export function mergeUserPreferences(
     database,
     db.deleteFrom("user_preferences").where("profile_id", "=", sourceProfileId),
   );
+  publishUserPreferencesChange(database);
 }
 
 export function readUserPreferences(
@@ -209,5 +212,6 @@ export function writeUserPreferences(
   if (updatesGitCoauthorPreference(update)) {
     publishUserProfileAuthorityChange(sqlite, profileId);
   }
+  publishUserPreferencesChange(sqlite);
   return ok(undefined);
 }

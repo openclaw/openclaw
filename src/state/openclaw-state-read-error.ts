@@ -1,27 +1,9 @@
 import type {
-  OpenClawStateReadOptions,
   OpenClawStateReadOutcome,
   OpenClawStateReadPhase,
 } from "./openclaw-state-read.types.js";
 
 export type OpenClawStateReadReceipt = { phase: OpenClawStateReadPhase };
-
-export function mapOpenClawStateReadError<T>(
-  mapError: OpenClawStateReadOptions["mapError"],
-  read: (receipt: OpenClawStateReadReceipt) => Promise<T>,
-): Promise<T> {
-  const receipt: OpenClawStateReadReceipt = { phase: "before-read" };
-  try {
-    const result = read(receipt);
-    return mapError
-      ? result.catch((error: unknown) => {
-          throw mapError(error, receipt.phase);
-        })
-      : result;
-  } catch (error) {
-    throw mapError ? mapError(error, receipt.phase) : error;
-  }
-}
 
 export function observeReadOutcome(
   receipt: OpenClawStateReadReceipt,

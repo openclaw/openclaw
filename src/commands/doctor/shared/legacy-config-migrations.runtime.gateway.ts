@@ -25,7 +25,7 @@ const GATEWAY_BIND_RULE: LegacyConfigRule = {
   path: ["gateway", "bind"],
   message:
     'gateway.bind host aliases (for example 0.0.0.0/localhost) are legacy; use bind modes (lan/loopback/custom/tailnet/auto) instead. Run "openclaw doctor --fix".',
-  match: (value) => isLegacyGatewayBindHostAlias(value),
+  match: (value) => normalizeLegacyGatewayBindHostAlias(value) !== null,
   requireSourceLiteral: true,
 };
 
@@ -66,10 +66,6 @@ const LEGACY_GATEWAY_BIND_HOST_ALIASES = new Map<string, "lan" | "loopback">([
   ["[::1]", "loopback"],
 ]);
 
-function isLegacyGatewayBindHostAlias(value: unknown): boolean {
-  return normalizeLegacyGatewayBindHostAlias(value) !== null;
-}
-
 function normalizeLegacyGatewayBindHostAlias(value: unknown): "lan" | "loopback" | null {
   const normalized = normalizeOptionalLowercaseString(value);
   return normalized ? (LEGACY_GATEWAY_BIND_HOST_ALIASES.get(normalized) ?? null) : null;
@@ -81,6 +77,27 @@ function escapeControlForLog(value: string): string {
 
 /** Legacy config migration specs for gateway runtime config. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "gateway.webchat-remove",
+    describe: "Remove the retired WebChat gateway settings from supported releases",
+    legacyRules: [
+      {
+        path: ["gateway", "webchat"],
+        message: 'gateway.webchat is retired. Run "openclaw doctor --fix".',
+      },
+    ],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (!gateway || !Object.hasOwn(gateway, "webchat")) {
+        return;
+      }
+      delete gateway.webchat;
+      if (Object.keys(gateway).length === 0) {
+        delete raw.gateway;
+      }
+      changes.push("Removed retired gateway.webchat config.");
+    },
+  }),
   defineLegacyConfigMigration({
     id: "gateway.control-ui-tool-titles-remove",
     describe: "Remove the retired Control UI tool-title preference",
@@ -226,13 +243,8 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
         return;
       }
 
-      const normalized = normalizeOptionalLowercaseString(bindRaw);
-      if (!normalized) {
-        return;
-      }
       const mapped = normalizeLegacyGatewayBindHostAlias(bindRaw);
-
-      if (!mapped || normalized === mapped) {
+      if (!mapped) {
         return;
       }
 

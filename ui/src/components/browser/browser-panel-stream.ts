@@ -1,3 +1,4 @@
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import type { BrowserPanelTab, BrowserRequestClient } from "./browser-client.ts";
 import { isBrowserScreencastUnsupportedError, requestBrowserScreencast } from "./browser-client.ts";
 import type {
@@ -12,7 +13,6 @@ import {
 } from "./browser-screencast-client.ts";
 import { browserRouteKey } from "./browser-target.ts";
 
-const FIRST_FRAME_TIMEOUT_MS = 1500;
 const RETRY_DELAY_MS = 10_000;
 const RESIZE_RESTART_DEBOUNCE_MS = 500;
 
@@ -20,7 +20,6 @@ type StreamState = {
   activeTargetId: string | null;
   view: BrowserPanelView | null;
   tabs: BrowserPanelTab[];
-  urlDraft: string;
   loading: boolean;
 };
 
@@ -31,9 +30,9 @@ interface BrowserPanelStreamHost extends StreamState {
     BrowserPanelOperationOwnership,
     "epoch" | "route" | "isLive" | "hasPendingCapture" | "capturedTabs" | "forgetNavigation"
   >;
-  readonly urlDraftEditing: boolean;
   readonly observedViewportSize: { width: number; height: number } | null;
   setState<Key extends keyof StreamState>(key: Key, value: StreamState[Key]): void;
+  syncUrlDraft(url: string): void;
   clearUnavailableView(): boolean;
   refreshView(targetId: string): Promise<void>;
   refreshAll(): Promise<void>;
@@ -48,6 +47,7 @@ type Attempt = {
   width: number;
   live: boolean;
   connection?: BrowserScreencastClient;
+  controller: AbortController;
   firstFrame: Promise<boolean>;
   settle: (received: boolean) => void;
   metadata?: BrowserScreencastMeta;
@@ -121,7 +121,13 @@ export class BrowserPanelStream {
     const dimensions = this.dimensions();
     let settle!: Attempt["settle"];
     const firstFrame = new Promise<boolean>((resolve) => {
-      const timeout = setTimeout(() => resolve(false), FIRST_FRAME_TIMEOUT_MS);
+      const timeout = setTimeout(() => {
+        if (this.current(attempt)) {
+          this.recover(attempt);
+        } else if (this.attempt === attempt) {
+          this.close(false);
+        }
+      }, DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
       settle = (received) => {
         clearTimeout(timeout);
         resolve(received);
@@ -133,6 +139,7 @@ export class BrowserPanelStream {
       epoch,
       width: dimensions.width,
       live: false,
+      controller: new AbortController(),
       firstFrame,
       settle,
       decoding: false,
@@ -148,10 +155,11 @@ export class BrowserPanelStream {
     dimensions: { maxWidth: number; maxHeight: number },
   ): Promise<void> {
     try {
-      const response = await requestBrowserScreencast(attempt.client, {
-        targetId: attempt.targetId,
-        ...dimensions,
-      });
+      const response = await requestBrowserScreencast(
+        attempt.client,
+        { targetId: attempt.targetId, ...dimensions },
+        { signal: attempt.controller.signal },
+      );
       if (!this.current(attempt)) {
         return;
       }
@@ -268,9 +276,7 @@ export class BrowserPanelStream {
           : tab,
       ),
     );
-    if (!this.host.urlDraftEditing) {
-      this.host.setState("urlDraft", metadata.url);
-    }
+    this.host.syncUrlDraft(metadata.url);
   }
 
   flushPendingFrame(): void {
@@ -279,7 +285,7 @@ export class BrowserPanelStream {
     if (attempt && this.current(attempt) && !attempt.decoding) {
       void this.decodeFrames(attempt);
     }
-    this.restartAfterResize();
+    this.resize();
   }
 
   private async decodeFrames(attempt: Attempt): Promise<void> {
@@ -339,9 +345,7 @@ export class BrowserPanelStream {
             : {}),
         });
         this.host.operations.forgetNavigation(attempt.client, attempt.targetId);
-        if (!this.host.urlDraftEditing) {
-          this.host.setState("urlDraft", frame.url);
-        }
+        this.host.syncUrlDraft(frame.url);
         if (!attempt.presented) {
           attempt.presented = true;
           this.host.setState("loading", false);
@@ -358,15 +362,11 @@ export class BrowserPanelStream {
     }
   }
 
-  resize(): void {
-    this.restartAfterResize();
-  }
-
   private resized(attempt: Attempt): boolean {
     return Math.abs(this.dimensions().width - attempt.width) / attempt.width > 0.3;
   }
 
-  private restartAfterResize(): void {
+  resize(): void {
     const attempt = this.attempt;
     if (!attempt || !this.current(attempt) || !this.resized(attempt)) {
       return;
@@ -415,6 +415,7 @@ export class BrowserPanelStream {
     this.resizeTimer = undefined;
     const attempt = this.attempt;
     this.attempt = undefined;
+    attempt?.controller.abort();
     attempt?.settle(false);
     attempt?.connection?.close();
     for (const url of [

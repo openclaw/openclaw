@@ -1,127 +1,86 @@
+import fs from "node:fs/promises";
+import type { OwnerAndDaclResult, WindowsAccessControlEntry } from "@openclaw/fs-safe/permissions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
 
-const execMocks = vi.hoisted(() => ({
-  runExec: vi.fn(),
+const aclMocks = vi.hoisted(() => ({
+  readOwnerAndDaclBatch:
+    vi.fn<typeof import("@openclaw/fs-safe/permissions").readOwnerAndDaclBatch>(),
 }));
 
-vi.mock("../process/exec.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../process/exec.js")>()),
-  runExec: execMocks.runExec,
+vi.mock("@openclaw/fs-safe/permissions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/permissions")>()),
+  readOwnerAndDaclBatch: aclMocks.readOwnerAndDaclBatch,
 }));
-vi.mock("../infra/resolve-system-bin.js", () => ({
-  resolveSystemBin: () => "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+vi.mock("../process/exec.js", () => ({
+  runExec: () => {
+    throw new Error("Windows ACL policy must not invoke the POSIX inspection command");
+  },
 }));
 
-import { ensurePrivateSnapshotRepositoryRoot } from "./local-repository.js";
+import { assertTrustedStagingRoot } from "./local-repository-directory-policy.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const CURRENT_USER_SID = "S-1-5-21-1000";
+const CURRENT_USER_SID = "s-1-5-21-1000";
 
-type WindowsAclProbeEntry = {
-  accessType: "Allow" | "Deny";
-  inheritanceFlags: string;
-  principal: string;
-  propagationFlags: string;
-  rightsMask: number;
-};
+type WindowsPathSecurity = Extract<OwnerAndDaclResult, { status: "supported" }>;
 
-const CURRENT_USER_FULL_ACCESS: WindowsAclProbeEntry = {
-  principal: CURRENT_USER_SID,
-  accessType: "Allow",
-  rightsMask: 0x1f01ff,
-  inheritanceFlags: "None",
-  propagationFlags: "None",
+async function admitRoot(rootPath: string): Promise<string> {
+  return await assertTrustedStagingRoot(await fs.lstat(rootPath), rootPath);
+}
+
+const CURRENT_USER_FULL_ACCESS: WindowsAccessControlEntry = {
+  sid: CURRENT_USER_SID,
+  aceType: "allow",
+  mask: 0x1f01ff,
+  flags: {
+    raw: 0,
+    objectInherit: false,
+    containerInherit: false,
+    noPropagateInherit: false,
+    inheritOnly: false,
+    inherited: false,
+    successfulAccess: false,
+    failedAccess: false,
+  },
 };
 
 function mockWindowsPathSecurity(
   params: {
-    ancestorEntries?: WindowsAclProbeEntry[];
-    rootEntries?: WindowsAclProbeEntry[];
+    ancestorEntries?: WindowsAccessControlEntry[];
+    rootEntries?: WindowsAccessControlEntry[];
     rootOwnerSid?: string;
+    rootFacts?: Partial<WindowsPathSecurity>;
   } = {},
 ): void {
-  execMocks.runExec.mockImplementation(async (_command, args) => {
-    const encodedIndex = args.indexOf("-EncodedCommand");
-    const encoded = args[encodedIndex + 1];
-    if (typeof encoded !== "string") {
-      throw new Error("expected encoded PowerShell command");
-    }
-    const command = Buffer.from(encoded, "base64").toString("utf16le");
-    const pathsPayload = /FromBase64String\('([^']+)'\)/u.exec(command)?.[1];
-    if (!pathsPayload) {
-      throw new Error("expected encoded path payload");
-    }
-    const paths = JSON.parse(Buffer.from(pathsPayload, "base64").toString("utf8")) as string[];
-    return {
-      stdout: Buffer.from(
-        JSON.stringify({
-          currentUserSid: CURRENT_USER_SID,
-          paths: paths.map((entry, index) => ({
-            path: entry,
-            ownerSid: index === 0 ? (params.rootOwnerSid ?? CURRENT_USER_SID) : CURRENT_USER_SID,
-            entries:
-              index === 0
-                ? (params.rootEntries ?? [CURRENT_USER_FULL_ACCESS])
-                : (params.ancestorEntries ?? [CURRENT_USER_FULL_ACCESS]),
-          })),
-        }),
-        "utf8",
-      ).toString("base64"),
-    };
-  });
+  aclMocks.readOwnerAndDaclBatch.mockImplementation(async (paths) =>
+    paths.map((_, index) => ({
+      status: "supported",
+      currentUserSid: CURRENT_USER_SID,
+      ownerSid: index === 0 ? (params.rootOwnerSid ?? CURRENT_USER_SID) : CURRENT_USER_SID,
+      daclPresent: true,
+      isLocal: true,
+      complete: true,
+      unsupportedAceTypes: [],
+      aces:
+        index === 0
+          ? (params.rootEntries ?? [CURRENT_USER_FULL_ACCESS])
+          : (params.ancestorEntries ?? [CURRENT_USER_FULL_ACCESS]),
+      ...(index === 0 ? params.rootFacts : {}),
+    })),
+  );
 }
 
 describe("fail-closed Windows ACL probe", () => {
-  it("budgets for cold PowerShell startup and sanitizes the spawn failure", async () => {
+  it("reports the failed inspection and preserves its diagnostic cause", async () => {
     const tempDir = tempDirs.make("openclaw-snapshot-windows-acl-probe-");
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const encodedPayload = Buffer.from("private PowerShell script bytes").toString("base64");
-    const command = `powershell.exe -EncodedCommand ${encodedPayload}`;
-    const spawnError = Object.assign(
-      new Error(`Command timed out after 60000 milliseconds: ${command}`),
-      {
-        code: "ETIMEDOUT",
-        command,
-        escapedCommand: command,
-        killed: true,
-        stderr: "boring stderr line\n-EncodedCommand secret",
-      },
-    );
-    execMocks.runExec.mockRejectedValue(spawnError);
-
-    const error = await ensurePrivateSnapshotRepositoryRoot(tempDir).catch(
-      (cause: unknown) => cause,
-    );
-
-    expect(error).toMatchObject({
+    const error = new Error("Windows permission inspection timed out after 60000ms");
+    aclMocks.readOwnerAndDaclBatch.mockRejectedValue(error);
+    await expect(admitRoot(tempDir)).rejects.toMatchObject({
       message: expect.stringContaining("Unable to verify private Windows ACL for SQLite staging"),
+      cause: error,
     });
-    const causes: Error[] = [];
-    let current: unknown = error;
-    while (current instanceof Error) {
-      causes.push(current);
-      current = (current as Error & { cause?: unknown }).cause;
-    }
-    expect(causes.map((cause) => cause.message).join("\n")).toContain(
-      "Unable to verify private Windows ACL",
-    );
-    expect(causes.at(-1)?.message).toContain("code=ETIMEDOUT, killed=true");
-    expect(causes.at(-1)?.message).toContain("stderr: boring stderr line");
-    expect(causes).not.toContain(spawnError);
-    for (const cause of causes) {
-      const retainedText = Object.getOwnPropertyNames(cause)
-        .map((key) => String((cause as unknown as Record<string, unknown>)[key]))
-        .join("\n");
-      expect(retainedText).not.toMatch(/encodedcommand/iu);
-      expect(retainedText).not.toContain(encodedPayload);
-    }
-    expect(execMocks.runExec).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.any(Array),
-      expect.objectContaining({ timeoutMs: WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS }),
-    );
   });
 
   it("names the untrusted root principal and rights without weakening rejection", async () => {
@@ -130,26 +89,77 @@ describe("fail-closed Windows ACL probe", () => {
     mockWindowsPathSecurity({
       rootEntries: [
         {
-          principal: "S-1-1-0",
-          accessType: "Allow",
-          rightsMask: 0x120089,
-          inheritanceFlags: "ContainerInherit, ObjectInherit",
-          propagationFlags: "None",
+          ...CURRENT_USER_FULL_ACCESS,
+          sid: "s-1-1-0",
+          mask: 0x120089,
+          flags: {
+            ...CURRENT_USER_FULL_ACCESS.flags,
+            raw: 3,
+            containerInherit: true,
+            objectInherit: true,
+          },
         },
       ],
     });
 
-    await expect(ensurePrivateSnapshotRepositoryRoot(tempDir)).rejects.toThrow(
+    await expect(admitRoot(tempDir)).rejects.toThrow(
       /repository root: path=.* principal=S-1-1-0 rights=.*Remove the untrusted grant/u,
     );
   });
 
-  it("accepts a private local Windows repository root", async () => {
+  it.each([
+    CURRENT_USER_SID,
+    "s-1-5-18",
+    "s-1-5-32-544",
+    "s-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464",
+  ])("accepts a private local Windows repository owned by %s", async (rootOwnerSid) => {
     const tempDir = tempDirs.make("openclaw-snapshot-windows-acl-private-");
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    mockWindowsPathSecurity();
+    mockWindowsPathSecurity({
+      rootOwnerSid,
+      rootEntries: [CURRENT_USER_SID, "s-1-5-18", "s-1-5-32-544", "s-1-3-0"].map((sid) =>
+        Object.assign({}, CURRENT_USER_FULL_ACCESS, { sid }),
+      ),
+    });
 
-    await expect(ensurePrivateSnapshotRepositoryRoot(tempDir)).resolves.toBe(tempDir);
+    await expect(admitRoot(tempDir)).resolves.toBe(tempDir);
+  });
+
+  it.each([
+    { role: "root", rightsMask: 0x100000, inheritOnly: false, allowed: true },
+    { role: "ancestor", rightsMask: 0x000001, inheritOnly: false, allowed: true },
+    { role: "ancestor", rightsMask: 0x040000, inheritOnly: false, allowed: false },
+    { role: "ancestor", rightsMask: 0x040000, inheritOnly: true, allowed: true },
+    { role: "root", rightsMask: 0x040000, inheritOnly: true, allowed: false },
+    { role: "root", rightsMask: 0x80000000, inheritOnly: false, allowed: false },
+    { role: "ancestor", rightsMask: 0x000200, inheritOnly: false, allowed: false },
+  ])("enforces $role access for mask $rightsMask with inheritOnly=$inheritOnly", async (row) => {
+    const tempDir = tempDirs.make("openclaw-snapshot-windows-acl-rights-");
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const entries: WindowsAccessControlEntry[] = [
+      CURRENT_USER_FULL_ACCESS,
+      {
+        ...CURRENT_USER_FULL_ACCESS,
+        sid: "s-1-1-0",
+        mask: row.rightsMask,
+        flags: {
+          ...CURRENT_USER_FULL_ACCESS.flags,
+          raw: row.inheritOnly ? 11 : 3,
+          objectInherit: true,
+          containerInherit: true,
+          inheritOnly: row.inheritOnly,
+        },
+      },
+    ];
+    mockWindowsPathSecurity(
+      row.role === "root" ? { rootEntries: entries } : { ancestorEntries: entries },
+    );
+    const result = admitRoot(tempDir);
+    if (row.allowed) {
+      await expect(result).resolves.toBe(tempDir);
+    } else {
+      await expect(result).rejects.toThrow("Windows ACL permits untrusted SQLite staging access");
+    }
   });
 
   it.each([
@@ -158,18 +168,15 @@ describe("fail-closed Windows ACL probe", () => {
       params: {
         rootEntries: [
           {
-            principal: "S-1-1-0",
-            accessType: "Allow" as const,
-            rightsMask: 0x1f01ff,
-            inheritanceFlags: "ContainerInherit, ObjectInherit",
-            propagationFlags: "None",
+            ...CURRENT_USER_FULL_ACCESS,
+            sid: "s-1-1-0",
           },
         ],
       },
       expected: /repository root: path=.*principal=S-1-1-0 rights=.*shared or synced root/u,
     },
     {
-      label: "a network-share root owned by another principal",
+      label: "a root owned by another principal",
       params: { rootOwnerSid: "S-1-5-21-2000" },
       expected:
         /repository root is owned by an untrusted principal: path=.*principal=S-1-5-21-2000/u,
@@ -179,11 +186,9 @@ describe("fail-closed Windows ACL probe", () => {
       params: {
         ancestorEntries: [
           {
-            principal: "S-1-1-0",
-            accessType: "Allow" as const,
-            rightsMask: 0x000040,
-            inheritanceFlags: "ContainerInherit, ObjectInherit",
-            propagationFlags: "None",
+            ...CURRENT_USER_FULL_ACCESS,
+            sid: "s-1-1-0",
+            mask: 0x000040,
           },
         ],
       },
@@ -194,6 +199,35 @@ describe("fail-closed Windows ACL probe", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     mockWindowsPathSecurity(params);
 
-    await expect(ensurePrivateSnapshotRepositoryRoot(tempDir)).rejects.toThrow(expected);
+    await expect(admitRoot(tempDir)).rejects.toThrow(expected);
+  });
+
+  it.each([
+    { label: "null DACL", facts: { daclPresent: false } },
+    { label: "unknown ACE types", facts: { complete: false, unsupportedAceTypes: [5] } },
+    { label: "remote filesystem", facts: { isLocal: false } },
+    { label: "empty DACL", facts: { aces: [] } },
+    {
+      label: "deny-only DACL",
+      facts: { aces: [{ ...CURRENT_USER_FULL_ACCESS, aceType: "deny" as const }] },
+    },
+  ])("rejects a root with $label", async ({ facts }) => {
+    const tempDir = tempDirs.make("openclaw-snapshot-windows-acl-incomplete-");
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mockWindowsPathSecurity({ rootFacts: facts });
+    await expect(admitRoot(tempDir)).rejects.toThrow(
+      "Unable to verify private Windows ACL for SQLite staging",
+    );
+  });
+
+  it("rejects unsupported descriptor inspection", async () => {
+    const tempDir = tempDirs.make("openclaw-snapshot-windows-acl-unsupported-");
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    aclMocks.readOwnerAndDaclBatch.mockImplementation(async (paths) =>
+      paths.map(() => ({ status: "unsupported-platform", platform: "linux" })),
+    );
+    await expect(admitRoot(tempDir)).rejects.toThrow(
+      "Unable to verify private Windows ACL for SQLite staging",
+    );
   });
 });

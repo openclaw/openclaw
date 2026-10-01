@@ -12,6 +12,10 @@ import {
   buildTypedApprovalPendingReplyPayload,
   buildTypedPluginApprovalPendingReplyPayload,
 } from "../plugin-sdk/approval-renderers.js";
+import {
+  buildSystemAgentApprovalResolvedText,
+  SYSTEM_AGENT_APPROVAL_EXPIRED_TEXT,
+} from "../plugin-sdk/approval-terminal.js";
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
@@ -29,6 +33,11 @@ import {
   type PluginApprovalRequest,
   type PluginApprovalResolved,
 } from "./plugin-approvals.js";
+import {
+  SYSTEM_AGENT_APPROVAL_DECISIONS,
+  type SystemAgentApprovalRequest,
+  type SystemAgentApprovalResolved,
+} from "./system-agent-approvals.js";
 
 function formatApprovalCommand(command: string): { inline: boolean; text: string } {
   return !command.includes("\n") && !command.includes("`")
@@ -196,5 +205,66 @@ export function buildForwardedPluginResolvedPayload(params: {
     renderParams: params,
     resolveRenderer: (adapter) => adapter?.render?.plugin?.buildResolvedPayload,
     buildFallback: () => buildPluginApprovalResolvedReplyPayload({ resolved: params.resolved }),
+  });
+}
+
+function buildForwardedSystemAgentApprovalRequest(
+  request: SystemAgentApprovalRequest,
+  nowMs: number,
+): string {
+  const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMs) / 1000));
+  return [
+    "🛠️ OpenClaw change requires approval",
+    `Change: ${request.request.description}`,
+    ...(request.request.agentId ? [`Agent: ${request.request.agentId}`] : []),
+    `ID: ${request.id}`,
+    `Expires in: ${expiresIn}s`,
+    `Reply with: /approve ${request.id} ${SYSTEM_AGENT_APPROVAL_DECISIONS.join("|")}`,
+  ].join("\n");
+}
+
+export function buildForwardedSystemAgentPendingPayload(params: {
+  cfg: OpenClawConfig;
+  request: SystemAgentApprovalRequest;
+  target: ExecApprovalForwardTarget;
+  nowMs: number;
+}): ReplyPayload {
+  return buildTypedApprovalPendingReplyPayload({
+    approvalKind: "system-agent",
+    approvalId: params.request.id,
+    approvalSlug: params.request.id.slice(0, 8),
+    text: buildForwardedSystemAgentApprovalRequest(params.request, params.nowMs),
+    agentId: params.request.request.agentId ?? null,
+    allowedDecisions: SYSTEM_AGENT_APPROVAL_DECISIONS,
+    sessionKey: params.request.request.sessionKey ?? null,
+  });
+}
+
+export function buildForwardedSystemAgentResolvedPayload(params: {
+  cfg: OpenClawConfig;
+  resolved: SystemAgentApprovalResolved;
+  target: ExecApprovalForwardTarget;
+}): ReplyPayload {
+  const { resolved } = params;
+  return buildApprovalResolvedReplyPayload({
+    approvalId: resolved.id,
+    approvalSlug: resolved.id.slice(0, 8),
+    text:
+      resolved.terminalStatus === "expired"
+        ? SYSTEM_AGENT_APPROVAL_EXPIRED_TEXT
+        : buildSystemAgentApprovalResolvedText({
+            approvalKind: "system-agent",
+            approvalId: resolved.id,
+            phase: "resolved",
+            title: "OpenClaw change",
+            description: resolved.request?.description ?? null,
+            metadata: [],
+            commandText: resolved.request?.description ?? "",
+            operationSummary: resolved.request?.description ?? "the requested change",
+            decision: resolved.decision,
+            resolvedBy: resolved.resolvedBy,
+            applicationStatus: resolved.applicationStatus,
+            terminalStatus: resolved.terminalStatus,
+          }),
   });
 }

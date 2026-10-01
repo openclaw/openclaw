@@ -670,23 +670,14 @@ export async function runExecProcess({
   });
   const sanitizeStderr = createStreamingBinaryOutputSanitizer();
 
-  const handleStdout = (data: string) => {
-    onActivity?.(session.processActivity?.lastOutputAtMs ?? Date.now());
-    const str = sanitizeStdout(data);
-    for (const chunk of chunkString(str)) {
-      appendOutput(session, "stdout", chunk);
-      emitUpdate();
-    }
-  };
-
-  const handleStderr = (data: string) => {
-    onActivity?.(session.processActivity?.lastOutputAtMs ?? Date.now());
-    const str = sanitizeStderr(data);
-    for (const chunk of chunkString(str)) {
-      appendOutput(session, "stderr", chunk);
-      emitUpdate();
-    }
-  };
+  const handleOutput =
+    (stream: "stdout" | "stderr", sanitize: (data: string) => string) => (data: string) => {
+      onActivity?.(session.processActivity?.lastOutputAtMs ?? Date.now());
+      for (const chunk of chunkString(sanitize(data))) {
+        appendOutput(session, stream, chunk);
+        emitUpdate();
+      }
+    };
 
   const timeoutMs = resolveExecTimeoutMs(opts.timeoutSec);
   let sandboxFinalizeToken: unknown;
@@ -881,8 +872,8 @@ export async function runExecProcess({
       env: spawnSpec.env,
       timeoutMs,
       captureOutput: false,
-      onStdout: handleStdout,
-      onStderr: handleStderr,
+      onStdout: handleOutput("stdout", sanitizeStdout),
+      onStderr: handleOutput("stderr", sanitizeStderr),
     };
     await assertPreSpawnAuthorized();
     if (spawnSpec.mode === "pty") {

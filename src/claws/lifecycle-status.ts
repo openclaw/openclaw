@@ -1,4 +1,7 @@
+import { realpath } from "node:fs/promises";
+import { resolve } from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
@@ -11,7 +14,7 @@ import {
 } from "../plugins/install-artifact-inspection.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { readClawCronRefs, type PersistedClawCronRef } from "./cron.js";
-import { digestClawAgentConfig } from "./lifecycle-config-removal.js";
+import { digestClawValue } from "./digest.js";
 import {
   ClawRemoveError,
   inspectClawBootstrap,
@@ -27,6 +30,11 @@ import {
   type PersistedClawMcpServerRef,
 } from "./mcp.js";
 import {
+  normalizeWorkspaceConfig,
+  resolveMigrationAgentSettings,
+  withAuthoredAgentRoster,
+} from "./migrate-validation.js";
+import {
   inspectClawPackage,
   type ClawPackageInspection,
   type PackageRemovalDeps,
@@ -37,7 +45,11 @@ import {
   type PersistedClawInstall,
   type PersistedClawPackageRef,
 } from "./provenance.js";
-import { CLAW_OUTPUT_STABILITY, type ClawPackagePreflight } from "./types.js";
+import {
+  CLAW_OUTPUT_STABILITY,
+  type ClawAppliedExtension,
+  type ClawPackagePreflight,
+} from "./types.js";
 import { readAllClawWorkspaceFiles, readClawWorkspaceFiles } from "./workspace.js";
 
 const CLAW_STATUS_SCHEMA_VERSION = "openclaw.clawStatus.v1" as const;
@@ -71,12 +83,7 @@ async function inspectClawPackageCompatibility(params: {
   if (!params.packageRef.extension || inspected.state !== "present") {
     return inspected;
   }
-  let current: {
-    detectedFormat: NonNullable<ClawPackageInspection["extension"]>["detectedFormat"];
-    mapped: string[];
-    unavailable: string[];
-    adapterIdentity: string;
-  };
+  let current: Omit<ClawAppliedExtension, "id" | "format">;
   if (params.packagePreflight) {
     const preflight = await params.packagePreflight(params.packageRef, params.install.workspace);
     if (!preflight.ok) {
@@ -121,10 +128,7 @@ async function inspectClawPackageCompatibility(params: {
   };
   inspected.extensionCompatibility = {
     state: stableStringify(current) === stableStringify(recorded) ? "compatible" : "drifted",
-    detectedFormat: current.detectedFormat,
-    mapped: current.mapped,
-    unavailable: current.unavailable,
-    adapterIdentity: current.adapterIdentity,
+    ...current,
   };
   return inspected;
 }
@@ -238,7 +242,26 @@ export async function readClawStatus(
   const records: ClawStatusRecord[] = [];
   const packagePreflight = options.packagePreflight;
   for (const install of installs) {
-    const agent = listAgentEntries(config).find((candidate) => candidate.id === install.agentId);
+    const lifecycleConfig =
+      install.agentOrigin === "adopted" && listedMcp?.ok
+        ? withAuthoredAgentRoster(config, listedMcp.sourceConfigBeforeMigrations)
+        : config;
+    const agent = listAgentEntries(lifecycleConfig).find(
+      (candidate) => candidate.id === install.agentId,
+    );
+    let comparableAgent = agent;
+    if (agent?.id && install.agentOrigin === "adopted") {
+      try {
+        comparableAgent = normalizeWorkspaceConfig(
+          resolveMigrationAgentSettings(lifecycleConfig, agent),
+          await realpath(resolveAgentWorkspaceDir(config, install.agentId, options.env)).catch(() =>
+            resolve(resolveAgentWorkspaceDir(config, install.agentId, options.env)),
+          ),
+        );
+      } catch {
+        comparableAgent = undefined;
+      }
+    }
     const packageRefs = allPackageRefs.filter(
       (packageRef) => packageRef.agentId === install.agentId,
     );
@@ -257,7 +280,7 @@ export async function readClawStatus(
       ...(installAgentIds.has(install.agentId) ? {} : { orphaned: true }),
       agentState: !agent
         ? "missing"
-        : digestClawAgentConfig(agent) === install.agentConfigDigest
+        : digestClawValue(comparableAgent) === install.agentConfigDigest
           ? "present"
           : "modified",
       bootstrapState: bootstrap.state,
@@ -281,6 +304,9 @@ export async function readClawStatus(
       cronJobs: readClawCronRefs(install.agentId, options),
     });
   }
+  const packages = records.flatMap((record) => record.packages);
+  const mcpServers = records.flatMap((record) => record.mcpServers);
+  const cronJobs = records.flatMap((record) => record.cronJobs);
   return {
     schemaVersion: CLAW_STATUS_SCHEMA_VERSION,
     stability: CLAW_OUTPUT_STABILITY,
@@ -294,35 +320,29 @@ export async function readClawStatus(
       driftedFiles: records
         .flatMap((record) => record.workspaceFiles)
         .filter((file) => file.state !== "unchanged").length,
-      packageRefs: records.flatMap((record) => record.packages).length,
-      missingPackages: records
-        .flatMap((record) => record.packages)
-        .filter((pkg) => pkg.state === "missing").length,
-      driftedPackages: records
-        .flatMap((record) => record.packages)
-        .filter(
-          (pkg) =>
-            pkg.state === "modified" ||
-            pkg.state === "ambiguous" ||
-            pkg.extensionCompatibility?.state === "drifted",
-        ).length,
-      unavailableExtensions: records
-        .flatMap((record) => record.packages)
-        .filter((pkg) => pkg.extensionCompatibility?.state === "unavailable").length,
-      incompletePackages: records
-        .flatMap((record) => record.packages)
-        .filter((pkg) => pkg.state === "incomplete").length,
-      mcpServerRefs: records.flatMap((record) => record.mcpServers).length,
-      driftedMcpServers: records
-        .flatMap((record) => record.mcpServers)
-        .filter((server) => server.state === "modified" || server.state === "missing").length,
-      unresolvedMcpServerRefs: records
-        .flatMap((record) => record.mcpServers)
-        .filter((server) => server.state === "pending" || server.state === "failed").length,
-      cronRefs: records.flatMap((record) => record.cronJobs).length,
-      unresolvedCronRefs: records
-        .flatMap((record) => record.cronJobs)
-        .filter((cron) => cron.status !== "complete" || !cron.schedulerJobId).length,
+      packageRefs: packages.length,
+      missingPackages: packages.filter((pkg) => pkg.state === "missing").length,
+      driftedPackages: packages.filter(
+        (pkg) =>
+          pkg.state === "modified" ||
+          pkg.state === "ambiguous" ||
+          pkg.extensionCompatibility?.state === "drifted",
+      ).length,
+      unavailableExtensions: packages.filter(
+        (pkg) => pkg.extensionCompatibility?.state === "unavailable",
+      ).length,
+      incompletePackages: packages.filter((pkg) => pkg.state === "incomplete").length,
+      mcpServerRefs: mcpServers.length,
+      driftedMcpServers: mcpServers.filter(
+        (server) => server.state === "modified" || server.state === "missing",
+      ).length,
+      unresolvedMcpServerRefs: mcpServers.filter(
+        (server) => server.state === "pending" || server.state === "failed",
+      ).length,
+      cronRefs: cronJobs.length,
+      unresolvedCronRefs: cronJobs.filter(
+        (cron) => cron.status !== "complete" || !cron.schedulerJobId,
+      ).length,
     },
   };
 }

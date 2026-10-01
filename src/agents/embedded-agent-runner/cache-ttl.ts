@@ -1,6 +1,3 @@
-/**
- * Resolves cache-TTL eligibility and session markers for prompt-cache retention.
- */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -28,7 +25,6 @@ type CacheTtlContext = {
   modelId?: string;
 };
 
-/** Returns whether this provider/model pair supports cache-TTL session markers. */
 export function isCacheTtlEligibleProvider(
   provider: string,
   modelId: string,
@@ -51,6 +47,11 @@ export function isCacheTtlEligibleProvider(
     return pluginEligibility;
   }
   return (
+    // Config-only OpenAI-compatible providers have no hook; require an explicit opt-in.
+    (route?.supportsPromptCacheKey === true &&
+      (modelApi === "openai-responses" ||
+        modelApi === "openai-completions" ||
+        modelApi === "openai-chatgpt-responses")) ||
     isAnthropicFamilyCacheTtlEligible({
       provider: normalizedProvider,
       modelId: normalizedModelId,
@@ -61,10 +62,6 @@ export function isCacheTtlEligibleProvider(
   );
 }
 
-function normalizeCacheTtlKey(value: string | undefined): string | undefined {
-  return normalizeOptionalLowercaseString(value);
-}
-
 function matchesCacheTtlContext(
   data: Partial<CacheTtlEntryData> | undefined,
   context: CacheTtlContext | undefined,
@@ -72,31 +69,19 @@ function matchesCacheTtlContext(
   if (!context) {
     return true;
   }
-  const expectedProvider = normalizeCacheTtlKey(context.provider);
-  if (expectedProvider && normalizeCacheTtlKey(data?.provider) !== expectedProvider) {
-    return false;
-  }
-  const expectedModelId = normalizeCacheTtlKey(context.modelId);
-  if (expectedModelId && normalizeCacheTtlKey(data?.modelId) !== expectedModelId) {
-    return false;
-  }
-  return true;
+  return (["provider", "modelId"] as const).every((key) => {
+    const expected = normalizeOptionalLowercaseString(context[key]);
+    return !expected || normalizeOptionalLowercaseString(data?.[key]) === expected;
+  });
 }
 
-/** Transcript entries visible to cache-TTL marker readers; stores without entries read as empty. */
-function readCacheTtlEntries(sessionManager: unknown): CustomEntryLike[] {
-  const sm = sessionManager as { getEntries?: () => CustomEntryLike[] };
-  return sm?.getEntries ? sm.getEntries() : [];
-}
-
-/** Reads the most recent cache-TTL marker that matches the optional provider/model context. */
 export function readLastCacheTtlTimestamp(
   sessionManager: unknown,
   context?: CacheTtlContext,
 ): number | null {
   try {
-    const entries = readCacheTtlEntries(sessionManager);
-    let last: number | null = null;
+    const sm = sessionManager as { getEntries?: () => CustomEntryLike[] };
+    const entries = sm?.getEntries ? sm.getEntries() : [];
     for (let i = entries.length - 1; i >= 0; i--) {
       const entry = entries[i];
       if (entry?.type !== "custom" || entry?.customType !== CACHE_TTL_CUSTOM_TYPE) {
@@ -108,11 +93,10 @@ export function readLastCacheTtlTimestamp(
       }
       const ts = typeof data?.timestamp === "number" ? data.timestamp : null;
       if (ts && Number.isFinite(ts)) {
-        last = ts;
-        break;
+        return ts;
       }
     }
-    return last;
+    return null;
   } catch {
     return null;
   }

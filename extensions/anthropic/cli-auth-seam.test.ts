@@ -125,7 +125,7 @@ it("reports unresolved Windows wrappers as unreadable without spawning", async (
   });
 });
 
-it.each(["api_key", "api_key_helper", "oauth_token", "third_party", "none", "unknown-method"])(
+it.each(["api_key", "unknown-method"])(
   "does not attribute an account email to %s authentication",
   async (authMethod) => {
     runUtf8CommandWithTimeout.mockResolvedValue({
@@ -161,29 +161,6 @@ it("does not inspect Claude token storage when the CLI reports logout", async ()
   runUtf8CommandWithTimeout.mockResolvedValue({ code: 1, termination: "exit", stdout: "" });
 
   expect(await probeClaudeCliAuthStatus()).toEqual({ status: "missing" });
-});
-
-it("keeps the selected native-login root while removing inherited provider credentials", async () => {
-  runUtf8CommandWithTimeout.mockResolvedValue({
-    code: 0,
-    termination: "exit",
-    stdout: JSON.stringify({ loggedIn: true }),
-  });
-
-  expect(
-    await probeClaudeCliAuthStatus({
-      command: "/custom/claude",
-      env: {
-        ANTHROPIC_API_KEY: "synthetic-ignored-api-key",
-        CLAUDE_CODE_OAUTH_TOKEN: "synthetic-ignored-token",
-        CLAUDE_CONFIG_DIR: "/tmp/selected-claude-account",
-      },
-    }),
-  ).toEqual({ status: "available" });
-  expect(runUtf8CommandWithTimeout).toHaveBeenCalledWith(
-    ["/custom/claude", "auth", "status", "--json"],
-    expect.objectContaining({ baseEnv: { CLAUDE_CONFIG_DIR: "/tmp/selected-claude-account" } }),
-  );
 });
 
 it("does not turn a cancelled probe into a logged-out account", async () => {

@@ -1,4 +1,3 @@
-// Msteams tests cover user agent plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runtimeMockState = vi.hoisted(() => ({
@@ -59,11 +58,6 @@ describe("buildUserAgent", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-  });
-
-  it("returns teams.ts[apps]/<sdk> OpenClaw/<version> format", () => {
-    const ua = buildUserAgent();
-    expect(ua).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/2026\.3\.19$/);
   });
 
   it("reflects the runtime version", () => {

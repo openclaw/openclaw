@@ -16,14 +16,13 @@ import type {
   NodeSkillDescriptor,
 } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { setActiveNodeContext } from "../infra/active-node-context.js";
+import { setActiveNodeContexts } from "../infra/active-node-context.js";
 import type { PairedDeviceNodeBinding } from "../infra/device-pairing-node-state.js";
 import { isPrivateNodeInvokeCommand, NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import {
   intersectNodePermissionSurface,
   type NodeApprovalSurface,
 } from "../infra/node-pairing-surface.js";
-import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
 import type { NodeHostStats } from "../shared/node-host-stats.js";
@@ -38,6 +37,7 @@ import {
 } from "./node-command-policy.js";
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
 import { isSerializedEventPayload, type SerializedEventPayload } from "./node-event-payload.js";
+import { sendNodeWebSocketEvent } from "./node-event-send.js";
 import {
   buildNodeInvokeCancel,
   buildNodeInvokeInput,
@@ -75,18 +75,26 @@ import {
 import {
   updateNodePresenceActivity,
   clearNodePresenceActivity,
+  selectActiveNode,
+  selectActiveNodesByProfile,
   type NodePresenceActivityUpdate,
 } from "./node-registry.presence.js";
 import { isNodeWorkerHostClientId } from "./node-runner-inventory-runtime.js";
 import type { NodeSession } from "./node-session.types.js";
 import { normalizeNodeSkillDescriptors } from "./node-skill-descriptors.js";
-import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
-import { closeGatewayTransportWithGrace } from "./server/connection-transport-close.js";
+import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 export type { NodeInvokeResult } from "./node-invoke.types.js";
 export { serializeEventPayload } from "./node-event-payload.js";
 export type { SerializedEventPayload } from "./node-event-payload.js";
+
+export type NodeEventPayloadPreparation = (connId: string) =>
+  | {
+      payloadJSON: SerializedEventPayload | null;
+      onSent?: () => void;
+    }
+  | undefined;
 
 export type { NodeSession } from "./node-session.types.js";
 
@@ -146,7 +154,6 @@ export type NodeConnectivityResult =
   | { ok: false; error: { code: string; message: string } };
 
 const AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS = 5 * 60 * 1000;
-const SLOW_CONSUMER_CLOSE_CODE = 1008;
 const FAILED_EVENT_LOG_INTERVAL_MS = 30_000;
 const log = createSubsystemLogger("gateway/nodes");
 const failedEventLogAtByNode = new WeakMap<NodeSession, number>();
@@ -156,8 +163,6 @@ export type NodeEventTransport = {
   sendRaw: (event: string, payloadJSON?: SerializedEventPayload | null) => boolean;
   checkConnectivity?: (timeoutMs: number) => Promise<NodeConnectivityResult>;
 };
-
-type PairedDeviceNodeBindingSnapshot = PairedDeviceNodeBinding;
 
 type NodeSessionRegistrationOptions = {
   remoteIp?: string | undefined;
@@ -171,9 +176,7 @@ export type NodeRegistryOptions = {
     | (() => readonly RegisteredNodePluginToolCommand[] | undefined)
     | undefined;
   getConfig?: () => OpenClawConfig;
-  resolveCurrentPairingState?: (
-    nodeId: string,
-  ) => Promise<PairedDeviceNodeBindingSnapshot | undefined>;
+  resolveCurrentPairingState?: (nodeId: string) => Promise<PairedDeviceNodeBinding | undefined>;
   isPairingStateCurrent?: (nodeId: string, expected: PairedDeviceNodeBinding) => boolean;
   onPairingGenerationChanged?: (params: {
     nodeId: string;
@@ -245,23 +248,16 @@ export class NodeRegistry {
       }
     },
     disconnectPending: (pending) => {
-      if (pending.command === NODE_MCP_TOOLS_CALL_COMMAND) {
-        pending.resolve({
-          ok: false,
-          error: {
-            code: "MCP_SERVER_UNAVAILABLE",
-            message: "node host disconnected during MCP tool call",
-          },
-        });
-      } else {
-        pending.resolve({
-          ok: false,
-          error: {
-            code: "DISCONNECTED",
-            message: `node disconnected (${pending.command})`,
-          },
-        });
-      }
+      pending.resolve({
+        ok: false,
+        error:
+          pending.command === NODE_MCP_TOOLS_CALL_COMMAND
+            ? {
+                code: "MCP_SERVER_UNAVAILABLE",
+                message: "node host disconnected during MCP tool call",
+              }
+            : { code: "DISCONNECTED", message: `node disconnected (${pending.command})` },
+      });
     },
   });
   private authorizedSystemRunEvents = new Map<string, AuthorizedSystemRunEvent>();
@@ -359,7 +355,7 @@ export class NodeRegistry {
         ? { status: "current", session: current }
         : { status: "stale", presenceInvalidated: false };
     }
-    let currentPairingState: PairedDeviceNodeBindingSnapshot | undefined;
+    let currentPairingState: PairedDeviceNodeBinding | undefined;
     try {
       currentPairingState = await resolveCurrentPairingState(lease.nodeId);
     } catch {
@@ -637,7 +633,7 @@ export class NodeRegistry {
 
   /** Filter connected sessions against an already-loaded pairing-state snapshot. */
   listConnectedForPairingStates(
-    currentPairingStates: ReadonlyMap<string, PairedDeviceNodeBindingSnapshot>,
+    currentPairingStates: ReadonlyMap<string, PairedDeviceNodeBinding>,
   ): NodeSession[] {
     return this.listConnectedSessions().filter((node) => {
       const current = currentPairingStates.get(node.nodeId);
@@ -651,8 +647,7 @@ export class NodeRegistry {
     if (!isPairingStateCurrent) {
       return this.listConnected();
     }
-    const connected: NodeSession[] = [];
-    let invalidatedPresence = false;
+    const resolved: PairingLeaseResolution[] = [];
     for (const candidate of this.listConnectedSessions()) {
       const lease = this.capturePairingLease(candidate);
       let isCurrent: boolean;
@@ -661,21 +656,9 @@ export class NodeRegistry {
       } catch {
         continue;
       }
-      const resolution = this.settlePairingLease({
-        lease,
-        isCurrent,
-        invalidateStale: true,
-      });
-      if (resolution.status === "current") {
-        connected.push(resolution.session);
-      } else if (resolution.status === "stale") {
-        invalidatedPresence ||= resolution.presenceInvalidated;
-      }
+      resolved.push(this.settlePairingLease({ lease, isCurrent, invalidateStale: true }));
     }
-    if (invalidatedPresence) {
-      this.publishActiveNodeContext();
-    }
-    return connected;
+    return this.projectPairingLeaseResolutions(resolved);
   }
 
   /** Resolve persistent pairing state before projecting connected sessions. */
@@ -698,6 +681,12 @@ export class NodeRegistry {
         this.resolvePairingLease(this.capturePairingLease(node), { invalidateStale: true }),
       ),
     );
+    return this.projectPairingLeaseResolutions(resolved);
+  }
+
+  private projectPairingLeaseResolutions(
+    resolved: readonly PairingLeaseResolution[],
+  ): NodeSession[] {
     const connected: NodeSession[] = [];
     let invalidatedPresence = false;
     for (const result of resolved) {
@@ -869,48 +858,33 @@ export class NodeRegistry {
   getActiveNode(
     connectedNodes: readonly NodeSession[] = this.listConnected(),
   ): NodeSession | undefined {
-    let active: NodeSession | undefined;
-    for (const node of connectedNodes) {
-      if (node.lastActiveAtMs === undefined) {
-        continue;
-      }
-      if (
-        !active ||
-        node.lastActiveAtMs > (active.lastActiveAtMs ?? 0) ||
-        (node.lastActiveAtMs === active.lastActiveAtMs &&
-          (node.presenceUpdatedAtMs ?? 0) > (active.presenceUpdatedAtMs ?? 0))
-      ) {
-        active = node;
-      }
-    }
-    return active;
+    return selectActiveNode(connectedNodes);
   }
 
   private publishActiveNodeContext(): void {
-    const active = this.getActiveNode(this.listConnectedSessions()) as
-      | PairingBoundNodeSession
-      | undefined;
-    const lease = active ? this.capturePairingLease(active) : undefined;
-    setActiveNodeContext(
-      active
-        ? {
-            nodeId: active.nodeId,
-            ...(active.pairingGeneration ? { pairingGeneration: active.pairingGeneration } : {}),
-          }
-        : null,
-      lease
-        ? {
-            prepare: () => this.getCurrentConnected(lease.nodeId),
-            isCurrent: () => {
-              if (!this.currentSessionForLease(lease)) {
-                return false;
-              }
-              return this.options.isPairingStateCurrent
-                ? this.options.isPairingStateCurrent(lease.nodeId, lease.binding)
-                : true;
-            },
-          }
-        : undefined,
+    const selected = selectActiveNodesByProfile(this.listConnectedSessions());
+    setActiveNodeContexts(
+      [...selected].map(([profileId, active]) => {
+        const lease = this.capturePairingLease(active);
+        const authenticatedProfileId = active.client.authenticatedUserProfile?.profileId;
+        return {
+          nodeId: active.nodeId,
+          profileId,
+          pairingGeneration: active.pairingGeneration,
+          prepare: () => this.getCurrentConnected(lease.nodeId),
+          isCurrent: () => {
+            if (
+              !this.currentSessionForLease(lease) ||
+              active.client.authenticatedUserProfile?.profileId !== authenticatedProfileId
+            ) {
+              return false;
+            }
+            return this.options.isPairingStateCurrent
+              ? this.options.isPairingStateCurrent(lease.nodeId, lease.binding)
+              : true;
+          },
+        };
+      }),
     );
   }
 
@@ -942,7 +916,7 @@ export class NodeRegistry {
       return currentConnectionResult(result);
     }
     const socket = node.client.webSocket;
-    if (!this.isNodeWebSocketOpen(node)) {
+    if (node.client.socket.readyState !== WEBSOCKET_OPEN_READY_STATE) {
       return {
         ok: false,
         error: { code: "NOT_CONNECTED", message: "node socket not open" },
@@ -1348,10 +1322,17 @@ export class NodeRegistry {
     pairingGeneration: string,
     event: string,
     payloadJSON?: SerializedEventPayload | null,
+    preparePayload?: NodeEventPayloadPreparation,
   ): Promise<boolean> {
     const previous = this.pairingGenerationEventChains.get(nodeId) ?? Promise.resolve();
     const send = previous.then(() =>
-      this.sendEventRawForPairingGenerationNow(nodeId, pairingGeneration, event, payloadJSON),
+      this.sendEventRawForPairingGenerationNow(
+        nodeId,
+        pairingGeneration,
+        event,
+        payloadJSON,
+        preparePayload,
+      ),
     );
     const tail = send.then(
       () => undefined,
@@ -1372,6 +1353,7 @@ export class NodeRegistry {
     pairingGeneration: string,
     event: string,
     payloadJSON?: SerializedEventPayload | null,
+    preparePayload?: NodeEventPayloadPreparation,
   ): Promise<boolean> {
     let node = this.getRegisteredSessionForPairingGeneration(nodeId, pairingGeneration);
     if (!node) {
@@ -1389,7 +1371,20 @@ export class NodeRegistry {
       }
       node = resolution.session;
     }
-    return this.observeEventSend(node, event, this.sendEventRawInternal(node, event, payloadJSON));
+    // Select stream baselines after queued sends and pairing verification settle.
+    const prepared = preparePayload?.(node.connId);
+    if (preparePayload && !prepared) {
+      return false;
+    }
+    const sent = this.observeEventSend(
+      node,
+      event,
+      this.sendEventRawInternal(node, event, prepared ? prepared.payloadJSON : payloadJSON),
+    );
+    if (sent && this.nodesById.get(nodeId) === node) {
+      prepared?.onSent?.();
+    }
+    return sent;
   }
 
   private sendEventInternal(node: NodeSession, event: string, payload: unknown): boolean {
@@ -1403,18 +1398,7 @@ export class NodeRegistry {
     if (eventTransport) {
       return eventTransport.send(event, payload);
     }
-    if (!this.isNodeWebSocketOpen(node)) {
-      return false;
-    }
-    if (this.rejectSlowNodeSocket(node)) {
-      return false;
-    }
-    try {
-      node.client.socket.send(serializeNodeEvent(event, payload));
-      return true;
-    } catch {
-      return false;
-    }
+    return sendNodeWebSocketEvent(node.client.socket, () => serializeNodeEvent(event, payload));
   }
 
   private sendEventRawInternal(
@@ -1439,21 +1423,10 @@ export class NodeRegistry {
     if (eventTransport) {
       return eventTransport.sendRaw(event, payloadJSON);
     }
-    if (!this.isNodeWebSocketOpen(node)) {
-      return false;
-    }
-    if (this.rejectSlowNodeSocket(node)) {
-      return false;
-    }
-    try {
+    return sendNodeWebSocketEvent(node.client.socket, () => {
       const payloadFragment = payloadJSON ? `,"payload":${payloadJSON.json}` : "";
-      node.client.socket.send(
-        `{"type":"event","event":${JSON.stringify(event)}${payloadFragment}}`,
-      );
-      return true;
-    } catch {
-      return false;
-    }
+      return `{"type":"event","event":${JSON.stringify(event)}${payloadFragment}}`;
+    });
   }
 
   private sendEventToSession(node: NodeSession, event: string, payload: unknown): boolean {
@@ -1471,27 +1444,6 @@ export class NodeRegistry {
       log.warn("node event delivery failed", { nodeId: node.nodeId, event });
     }
     return sent;
-  }
-
-  private isNodeWebSocketOpen(node: NodeSession): boolean {
-    // ws.send() does not throw after entering CLOSING; it only accounts the
-    // unsent bytes. Keep the synchronous send-admission result truthful.
-    return node.client.socket.readyState === WEBSOCKET_OPEN_READY_STATE;
-  }
-
-  private rejectSlowNodeSocket(node: NodeSession): boolean {
-    const socket = node.client.socket;
-    if (!(socket.bufferedAmount > MAX_BUFFERED_BYTES)) {
-      return false;
-    }
-    logRejectedLargePayload({
-      surface: "gateway.ws.outbound_buffer",
-      bytes: socket.bufferedAmount,
-      limitBytes: MAX_BUFFERED_BYTES,
-      reason: "ws_send_buffer_close",
-    });
-    closeGatewayTransportWithGrace(socket, SLOW_CONSUMER_CLOSE_CODE, "slow consumer");
-    return true;
   }
 }
 

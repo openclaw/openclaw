@@ -11,9 +11,12 @@ export function resolveCodexNativeModelInputTools(config: JsonObject): CodexNati
       ? multiAgent.tool_namespace.trim()
       : "collaboration";
   return [
+    "spawn_agent",
     "multi_agent_v1send_input",
     "send_message",
     "followup_task",
-    ...(namespace ? [`${namespace}send_message`, `${namespace}followup_task`] : []),
+    ...(namespace
+      ? [`${namespace}spawn_agent`, `${namespace}send_message`, `${namespace}followup_task`]
+      : []),
   ];
 }

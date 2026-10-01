@@ -24,7 +24,9 @@ import {
 import {
   configWithInstalledPackageTreeBlockPolicy,
   createInstalledPackageTreePolicyExec,
+  installNpmPlugin,
   installProjectDependencies,
+  registerNpmPayloadIdentityTests,
 } from "./install.npm-spec.test-support.js";
 import { runPluginPayloadSmokeCheck } from "./payload-verification.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
@@ -89,23 +91,9 @@ function useRegistry(registry: string): void {
   process.env.npm_config_registry = registry;
 }
 
-async function installNpmPlugin(params: {
-  config?: OpenClawConfig;
-  expectedIntegrity?: string;
-  npmRoot: string;
-  spec: string;
-}) {
-  return await installPluginFromNpmSpec({
-    ...(params.config ? { config: params.config } : {}),
-    ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
-    spec: params.spec,
-    npmDir: params.npmRoot,
-    logger: { info: () => {}, warn: () => {} },
-    timeoutMs: 120_000,
-  });
-}
-
 describe("installPluginFromNpmSpec e2e", () => {
+  registerNpmPayloadIdentityTests({ makeInstallFixture, uniquePackageName, useStaticRegistry });
+
   it.each(["npm", "npm-pack"] as const)(
     "preserves a real %s successor when an earlier lifecycle lease has closed",
     { timeout: 120_000 },

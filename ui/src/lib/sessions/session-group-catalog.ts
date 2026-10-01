@@ -1,3 +1,4 @@
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { formatUiError } from "../format-error.ts";
 import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
@@ -35,16 +36,7 @@ function readLegacyStoredGroups(): string[] {
     const parsed: unknown = JSON.parse(
       getSafeLocalStorage()?.getItem(LEGACY_GROUPS_STORAGE_KEY) ?? "[]",
     );
-    return Array.isArray(parsed)
-      ? [
-          ...new Set(
-            parsed
-              .filter((name): name is string => typeof name === "string")
-              .map((name) => name.trim())
-              .filter(Boolean),
-          ),
-        ]
-      : [];
+    return normalizeUniqueTrimmedStringList(parsed);
   } catch {
     return [];
   }

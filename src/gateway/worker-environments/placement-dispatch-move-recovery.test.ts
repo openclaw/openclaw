@@ -16,7 +16,7 @@ describe("worker Gateway move recovery", () => {
   it("preserves the environment when Gateway move preparation loses its recovery owner", async () => {
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     const original = createHarness(support.testState.stateDb, placements);
-    const active = original.placements.seedActive(2);
+    const active = await original.placements.seedActive(2);
     if (active.state !== "active") {
       throw new Error("Move source was not active");
     }
@@ -93,7 +93,7 @@ describe("worker Gateway move recovery", () => {
         ownerEpoch: ready.ownerEpoch,
         sessionId: REQUEST.sessionId,
       });
-      const active = seedActivePlacement(placements, {
+      const active = await seedActivePlacement(placements, {
         environmentId: ready.environmentId,
         ownerEpoch: attached.ownerEpoch,
       });
@@ -170,7 +170,7 @@ describe("worker Gateway move recovery", () => {
             sessionId: REQUEST.sessionId,
             ownerEpoch: 9,
           });
-          replacement = seedActivePlacement(restartedStore, {
+          replacement = await seedActivePlacement(restartedStore, {
             environmentId: "replacement-environment",
             ownerEpoch: 9,
           });

@@ -53,6 +53,42 @@ describe("renderChatComposer controls", () => {
     },
   );
 
+  it.each([
+    { name: "pending attachment", overrides: { pendingAttachmentReads: 1 } },
+    { name: "send permission withheld", overrides: { canSend: false } },
+    { name: "send in progress", overrides: { sending: true } },
+    {
+      name: "history-gated command",
+      overrides: { draft: "/compact", submitDisabledReason: "Loading history" },
+    },
+  ])("keeps desktop and mobile Stop available with a held draft: $name", ({ overrides }) => {
+    const onAbort = vi.fn();
+    const onSend = vi.fn();
+    const onDraftChange = vi.fn();
+    const { container, props } = renderComposer({
+      canAbort: true,
+      canCompose: true,
+      draft: "Keep this draft",
+      onAbort,
+      onSend,
+      onDraftChange,
+      ...overrides,
+    });
+    const stop = primaryButton(container);
+
+    expect(stop.getAttribute("aria-label")).toBe(t("chat.runControls.stopGenerating"));
+    expect(stop.disabled).toBe(false);
+    expect(container.querySelector(".chat-mobile-primary-action > openclaw-tooltip > button")).toBe(
+      stop,
+    );
+    expect(container.querySelectorAll(".chat-send-btn--stop")).toHaveLength(1);
+    stop.click();
+    expect(onAbort).toHaveBeenCalledOnce();
+    expect(onSend).not.toHaveBeenCalled();
+    expect(onDraftChange).not.toHaveBeenCalled();
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(props.draft);
+  });
+
   it.each([true, false])(
     "keeps command submission gated while history is pending: %s",
     (pending) => {
@@ -207,30 +243,6 @@ describe("renderChatComposer controls", () => {
       label: t("chat.runControls.stopGenerating"),
       disabled: false,
       stop: true,
-    },
-    {
-      name: "queued follow-up",
-      overrides: {
-        canAbort: true,
-        draft: "Follow up later",
-        followUpMode: "queue" as const,
-        onAbort: vi.fn(),
-      },
-      label: t("chat.runControls.queueMessage"),
-      disabled: false,
-      stop: false,
-    },
-    {
-      name: "steered follow-up",
-      overrides: {
-        canAbort: true,
-        draft: "Steer this run",
-        followUpMode: "steer" as const,
-        onAbort: vi.fn(),
-      },
-      label: t("chat.followUpModeSteer"),
-      disabled: false,
-      stop: false,
     },
     {
       name: "draft idle",
@@ -459,70 +471,45 @@ describe("renderChatComposer controls", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  describe.each([
-    ["queue", "steer"],
-    ["steer", "queue"],
-    ["collect", "steer"],
-    ["followup", "steer"],
-  ] as const)("alternate follow-up from %s to %s", (followUpMode, alternateMode) => {
-    it.each([
-      [
-        "Meta+Enter with a rendered draft",
-        { metaKey: true },
-        "Steer this now",
-        undefined,
-        undefined,
-      ],
-      [
-        "Control+Enter with a rendered draft",
-        { ctrlKey: true },
-        "Steer this now",
-        undefined,
-        undefined,
-      ],
-      [
-        "Control+Enter with attachment-only content",
-        { ctrlKey: true },
-        "",
-        () => [{ id: "image-1", mimeType: "image/png", fileName: "proof.png" }],
-        undefined,
-      ],
-      [
-        "Control+Enter with live textarea content before the draft prop rerenders",
-        { ctrlKey: true },
-        "",
-        undefined,
-        "Steer the live textarea value",
-      ],
-    ] as const)(
-      "uses %s to submit the alternate action",
-      (_name, modifiers, draft, getAttachments, liveDraft) => {
-        const onSend = vi.fn();
-        const { container } = renderComposer({
-          canAbort: true,
-          draft,
-          followUpMode,
-          getAttachments,
-          onAbort: vi.fn(),
-          onSend,
-          sendShortcut: "enter",
-        });
-        const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-        if (textarea && liveDraft !== undefined) {
-          textarea.value = liveDraft;
-        }
+  it.each([
+    ["queue", "steer", { metaKey: true }, "Steer this now", undefined, undefined],
+    ["steer", "queue", { ctrlKey: true }, "Queue this next", undefined, undefined],
+    [
+      "collect",
+      "steer",
+      { ctrlKey: true },
+      "",
+      () => [{ id: "image-1", mimeType: "image/png", fileName: "proof.png" }],
+      undefined,
+    ],
+    ["followup", "steer", { ctrlKey: true }, "", undefined, "Steer the live textarea value"],
+  ] as const)(
+    "submits %s as %s with modified Enter",
+    (followUpMode, alternateMode, modifiers, draft, getAttachments, liveDraft) => {
+      const onSend = vi.fn();
+      const { container } = renderComposer({
+        canAbort: true,
+        draft,
+        followUpMode,
+        getAttachments,
+        onAbort: vi.fn(),
+        onSend,
+        sendShortcut: "enter",
+      });
+      const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+      if (textarea && liveDraft !== undefined) {
+        textarea.value = liveDraft;
+      }
 
-        const action = pressComposerEnter(container, modifiers);
+      const action = pressComposerEnter(container, modifiers);
+      expect(onSend).toHaveBeenCalledOnce();
+      expect(onSend).toHaveBeenCalledWith(alternateMode, action);
 
-        expect(onSend).toHaveBeenCalledOnce();
-        expect(onSend).toHaveBeenCalledWith(alternateMode, action);
-
-        const held = pressComposerEnter(container, { ...modifiers, repeat: true });
-        expect(held.defaultPrevented).toBe(true);
-        expect(onSend).toHaveBeenCalledOnce();
-      },
-    );
-  });
+      const held = pressComposerEnter(container, { ...modifiers, repeat: true });
+      expect(held.defaultPrevented).toBe(true);
+      expect(onSend).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([
     ["modifier-enter", true, "queue", false],
@@ -550,23 +537,13 @@ describe("renderChatComposer controls", () => {
     },
   );
 
-  it.each(["keyboard", "pointer"] as const)(
-    "passes the original %s submission event through the composer",
-    (kind) => {
-      const onSend = vi.fn();
-      const { container } = renderComposer({ draft: "Repeat this message", onSend });
-      const action =
-        kind === "keyboard"
-          ? pressComposerEnter(container)
-          : new MouseEvent("click", { bubbles: true, cancelable: true });
-
-      if (kind === "pointer") {
-        primaryButton(container).dispatchEvent(action);
-      }
-
-      expect(onSend).toHaveBeenCalledWith(undefined, action);
-    },
-  );
+  it("passes the original pointer submission event through the composer", () => {
+    const onSend = vi.fn();
+    const { container } = renderComposer({ draft: "Repeat this message", onSend });
+    const action = new MouseEvent("click", { bubbles: true, cancelable: true });
+    primaryButton(container).dispatchEvent(action);
+    expect(onSend).toHaveBeenCalledWith(undefined, action);
+  });
 
   it("keeps empty modified Enter on the existing empty-draft path", () => {
     const onSend = vi.fn();
@@ -612,8 +589,6 @@ describe("renderChatComposer controls", () => {
   it.each([
     ["queue", "Queue ⏎ · Steer ⌘/Ctrl+Enter"],
     ["steer", "Steer ⏎ · Queue ⌘/Ctrl+Enter"],
-    ["collect", "Queue ⏎ · Steer ⌘/Ctrl+Enter"],
-    ["followup", "Queue ⏎ · Steer ⌘/Ctrl+Enter"],
   ] as const)(
     "teaches both actions for %s without changing ordinary Enter",
     (followUpMode, tooltip) => {

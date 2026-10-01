@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveQaStagedBundledPluginsRoot } from "./bundled-plugin-staging.js";
 import { createQaGatewayChild } from "./gateway-child.js";
@@ -23,6 +24,7 @@ const dirs = createTempDirHarness();
 const owners: ReturnType<typeof createQaGatewayChild>[] = [];
 const groups: number[] = [];
 const artifactDirs: string[] = [];
+const privateStateDirs: string[] = [];
 beforeEach(() => {
   rpcStop.mockReset().mockResolvedValue(undefined);
   vi.stubEnv("OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN", undefined);
@@ -42,6 +44,13 @@ afterEach(async () => {
   }
   owners.length = 0;
   groups.length = 0;
+  for (const stateDir of privateStateDirs.splice(0)) {
+    await fs.chmod(stateDir, 0o700).catch((error: unknown) => {
+      if (extractErrorCode(error) !== "ENOENT") {
+        throw error;
+      }
+    });
+  }
   await dirs.cleanup();
   await Promise.all(
     artifactDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
@@ -64,7 +73,7 @@ async function readArtifacts(dir: string) {
   );
 }
 
-async function fixture(failReplacement: boolean | "descendant" = false) {
+async function fixture(failReplacement: boolean | "descendant" = false, privateState = false) {
   const root = await dirs.makeTempDir("qa-lifetime-");
   const record = path.join(root, "children.json");
   const cli = path.join(root, "gateway.mjs");
@@ -92,6 +101,9 @@ if (command === "descendant") {
   process.send("ready");
 } else if (command === "models") {
   for await (const ignored of process.stdin) {}
+  if (process.env.QA_PRIVATE_STATE === "1") {
+    fs.chmodSync(process.env.OPENCLAW_STATE_DIR, 0);
+  }
   process.exit(0);
 }
 if (command === "gateway") {
@@ -120,6 +132,7 @@ http.createServer((_request, response) => response.end("ok")).listen(Number(args
     },
     transportBaseUrl: "http://127.0.0.1:1",
     controlUiEnabled: false,
+    ...(privateState ? { runtimeEnvPatch: { QA_PRIVATE_STATE: "1" } } : {}),
   };
   const pids = () => {
     const children = JSON.parse(readFileSync(record, "utf8")) as number[];
@@ -212,21 +225,6 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
     expect(await fs.readdir(root)).toEqual(["gateway.mjs"]);
   });
 
-  it("retains the startup error and confirms teardown after listening fails", async () => {
-    const { params, pids } = await fixture();
-    const failure = new Error("listening callback failed");
-    const owner = own({
-      ...params,
-      onListening: () => {
-        pids();
-        throw failure;
-      },
-    });
-    await expect(owner.start()).rejects.toMatchObject({ cause: failure });
-    await expect(owner.stop()).resolves.toEqual({ process: "confirmed-stopped", errors: [] });
-    expect(pids().every((pid) => !isQaPosixProcessGroupAlive(pid))).toBe(true);
-  });
-
   it.each([
     { failedWork: false, label: "successful" },
     { failedWork: true, label: "failed" },
@@ -312,32 +310,24 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
     expect(groups.every((pid) => !isQaPosixProcessGroupAlive(pid))).toBe(true);
   });
 
-  it("settles a failed replacement, not only its stopped predecessor", async () => {
-    const { params, pids } = await fixture(true);
-    const owner = own(params);
-    const gateway = await owner.start();
-    pids();
-    await expect(gateway.restartAfterStateMutation(async () => {})).rejects.toThrow("exitCode=17");
-    await expect(owner.stop()).resolves.toEqual({ process: "confirmed-stopped", errors: [] });
-    expect(pids()).toHaveLength(2);
-    expect(pids().every((pid) => !isQaPosixProcessGroupAlive(pid))).toBe(true);
-  });
-
   it.each(["startup", "replacement"] as const)(
     "preserves sanitized log evidence when explicit stop follows %s failure",
     async (phase) => {
       const { params, pids } = await fixture(phase === "replacement");
+      const failure = new Error("fixture listening failed");
       const owner = own({
         ...params,
         onListening: () => {
           pids();
           if (phase === "startup") {
-            throw new Error("fixture listening failed");
+            throw failure;
           }
         },
       });
       if (phase === "startup") {
-        await expect(owner.start()).rejects.toThrow("fixture listening failed");
+        const started = owner.start();
+        await expect(started).rejects.toThrow("fixture listening failed");
+        await expect(started).rejects.toMatchObject({ cause: failure });
       } else {
         const gateway = await owner.start();
         await expect(gateway.restartAfterStateMutation(async () => {})).rejects.toThrow(
@@ -356,6 +346,7 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
         expect(log).toContain(`QA_GATEWAY_ATTEMPT_${phase === "startup" ? 1 : 2}`);
         expect(log).toContain("apiKey=<redacted>");
         expect(log).not.toContain("synthetic-fixture-secret");
+        expect(pids()).toHaveLength(phase === "startup" ? 1 : 2);
         expect(pids().every((pid) => !isQaPosixProcessGroupAlive(pid))).toBe(true);
       } finally {
         await fs.rm(preserveToDir, { recursive: true, force: true });
@@ -577,75 +568,87 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
     await expect(fs.stat(gateway.tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("removes isolated runtime state through its boundary after shutdown and artifact preservation", async () => {
-    const { params, pids } = await fixture();
-    const preserveToDir = await makeArtifactDir();
-    const originalRm = fs.rm;
-    const cleanup = vi.fn(async (tempRoot: string) => {
-      expect(pids().every((pid) => !isQaPosixProcessGroupAlive(pid))).toBe(true);
-      expect((await readArtifacts(preserveToDir))[0]).toContain("QA_GATEWAY_ATTEMPT_1");
-      await originalRm(tempRoot, { recursive: true, force: true });
-    });
-    boundary.create.mockImplementation(async ({ tempRoot }: { tempRoot: string }) => ({
-      prepare: async ({ env }: { env: NodeJS.ProcessEnv }) => ({ env }),
-      accept: async () => ({}),
-      signal: async () => {},
-      markReady: async () => {},
-      markExited: async () => {},
-      cleanupTempRoot: () => cleanup(tempRoot),
-    }));
-    const owner = own({
-      ...params,
-      runtimePreloads: ["file:///adapter-first.mjs", "qa-second-preload"],
-      command: {
-        ...params.command,
-        processBoundary: {
-          kind: "linux-proc-v1",
-          evidenceDir: params.command.tempParentDir,
-          expectedGid: 1,
-          expectedUid: 1,
-          forwardedEnvKeys: [],
-          runtimeArgsPrefix: ["--import", "/tmp/boundary-preload.mjs", "/tmp/index.js"],
-          runtimeExecutablePath: process.execPath,
-          terminationRetryTimeoutMs: 45_000,
-        },
-      },
-    });
-    const gateway = await owner.start();
-    expect(boundary.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          runtimeArgsPrefix: [
-            "--import",
-            "file:///adapter-first.mjs",
-            "--import",
-            "qa-second-preload",
-            "--import",
-            "/tmp/boundary-preload.mjs",
-            "/tmp/index.js",
-          ],
-        }),
-      }),
-    );
-    expect(gateway.cliCommand).toBeUndefined();
-    pids();
-    const denied = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
-      if (target === gateway.tempRoot) {
-        throw Object.assign(new Error("isolated state belongs to another UID"), { code: "EACCES" });
-      }
-      return originalRm(target, options);
-    });
-    try {
-      await expect(owner.stop({ preserveToDir })).resolves.toEqual({
-        process: "confirmed-stopped",
-        errors: [],
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "removes isolated runtime state through its boundary after shutdown and artifact preservation",
+    async () => {
+      const { params, pids } = await fixture(false, true);
+      const preserveToDir = await makeArtifactDir();
+      const originalRm = fs.rm;
+      const cleanup = vi.fn(async (tempRoot: string) => {
+        expect(pids().every((pid) => !isQaPosixProcessGroupAlive(pid))).toBe(true);
+        expect((await readArtifacts(preserveToDir))[0]).toContain("QA_GATEWAY_ATTEMPT_1");
+        await expect(
+          fs.stat(path.join(tempRoot, "state", "state", "openclaw.sqlite")),
+        ).rejects.toMatchObject({ code: "EACCES" });
+        await fs.chmod(path.join(tempRoot, "state"), 0o700);
+        await originalRm(tempRoot, { recursive: true, force: true });
       });
-      expect(cleanup).toHaveBeenCalledOnce();
-      await expect(fs.stat(gateway.tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      denied.mockRestore();
-    }
-  });
+      boundary.create.mockImplementation(async ({ tempRoot }: { tempRoot: string }) => {
+        privateStateDirs.push(path.join(tempRoot, "state"));
+        return {
+          prepare: async ({ env }: { env: NodeJS.ProcessEnv }) => ({ env }),
+          accept: async () => ({}),
+          signal: async () => {},
+          markReady: async () => {},
+          markExited: async () => {},
+          cleanupTempRoot: () => cleanup(tempRoot),
+        };
+      });
+      const owner = own({
+        ...params,
+        runtimePreloads: ["file:///adapter-first.mjs", "qa-second-preload"],
+        command: {
+          ...params.command,
+          processBoundary: {
+            kind: "linux-proc-v1",
+            evidenceDir: params.command.tempParentDir,
+            expectedGid: 1,
+            expectedUid: 1,
+            forwardedEnvKeys: [],
+            runtimeArgsPrefix: ["--import", "/tmp/boundary-preload.mjs", "/tmp/index.js"],
+            runtimeExecutablePath: process.execPath,
+            terminationRetryTimeoutMs: 45_000,
+          },
+        },
+      });
+      const gateway = await owner.start();
+      expect(boundary.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: expect.objectContaining({
+            runtimeArgsPrefix: [
+              "--import",
+              "file:///adapter-first.mjs",
+              "--import",
+              "qa-second-preload",
+              "--import",
+              "/tmp/boundary-preload.mjs",
+              "/tmp/index.js",
+            ],
+          }),
+        }),
+      );
+      expect(gateway.cliCommand).toBeUndefined();
+      pids();
+      const denied = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+        if (target === gateway.tempRoot) {
+          throw Object.assign(new Error("isolated state belongs to another UID"), {
+            code: "EACCES",
+          });
+        }
+        return originalRm(target, options);
+      });
+      try {
+        await expect(owner.stop({ preserveToDir })).resolves.toEqual({
+          process: "confirmed-stopped",
+          errors: [],
+        });
+        expect(cleanup).toHaveBeenCalledOnce();
+        await expect(fs.stat(gateway.tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        denied.mockRestore();
+      }
+    },
+  );
 
   it("retries failed preservation after confirming process shutdown", async () => {
     const { params, pids } = await fixture();

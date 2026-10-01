@@ -152,7 +152,7 @@ export async function collectHeartbeatTaskMigrationFindings(
   return findings;
 }
 
-function taskJobInput(params: {
+type TaskJobInput = {
   agentId: string;
   task: LegacyHeartbeatTask;
   occurrenceIndex: number;
@@ -160,7 +160,9 @@ function taskJobInput(params: {
   lastRunAtMs?: number;
   existing?: CronJob;
   nowMs: number;
-}) {
+};
+
+function taskJobInput(params: TaskJobInput) {
   const existingAnchor =
     params.existing?.schedule.kind === "every" &&
     params.existing.schedule.everyMs === params.intervalMs
@@ -230,15 +232,7 @@ function taskDeclarativeFields(job: CronJob) {
   };
 }
 
-function convergeTaskJob(params: {
-  agentId: string;
-  task: LegacyHeartbeatTask;
-  occurrenceIndex: number;
-  intervalMs: number;
-  lastRunAtMs?: number;
-  existing?: CronJob;
-  nowMs: number;
-}): CronJob {
+function convergeTaskJob(params: TaskJobInput): CronJob {
   const input = taskJobInput(params);
   if (!params.existing) {
     const { state, ...fields } = input;

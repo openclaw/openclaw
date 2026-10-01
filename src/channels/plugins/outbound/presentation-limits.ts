@@ -1,8 +1,4 @@
-/**
- * Presentation limit adapters for channel outbound payloads.
- *
- * Splits text and reshapes portable controls to match per-channel limits.
- */
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -19,6 +15,7 @@ import type {
   MessagePresentationButton,
   MessagePresentationOption,
 } from "../../../interactive/payload.js";
+import { chunkItems } from "../../../utils/chunk-items.js";
 import type { ChannelPresentationCapabilities } from "../outbound.types.js";
 
 type ActionLimits = NonNullable<NonNullable<ChannelPresentationCapabilities["limits"]>["actions"]>;
@@ -50,20 +47,14 @@ function positiveInteger(value: number | undefined): number | undefined {
 
 function truncateText(value: string, maxLength: number | undefined): string {
   const limit = positiveInteger(maxLength);
-  if (!limit || value.length <= limit) {
-    return value;
-  }
-  // A code point uses at most two UTF-16 units; later units cannot affect this prefix.
-  return Array.from(value.slice(0, limit * 2))
-    .slice(0, limit)
-    .join("");
+  return limit ? truncateCodePoints(value, limit) : value;
 }
 
 function truncateUtf8Bytes(value: string, limit: number): string {
   let bytes = 0;
   let result = "";
   for (const char of value) {
-    const nextBytes = utf8ByteLength(char);
+    const nextBytes = Buffer.byteLength(char, "utf8");
     if (bytes + nextBytes > limit) {
       break;
     }
@@ -126,13 +117,9 @@ function presentationTextBlocks(params: {
   });
 }
 
-function utf8ByteLength(value: string): number {
-  return Buffer.byteLength(value, "utf8");
-}
-
 function fitsByteLimit(value: string | undefined, maxBytes: number | undefined): boolean {
   const limit = positiveInteger(maxBytes);
-  return !value || !limit || utf8ByteLength(value) <= limit;
+  return !value || !limit || Buffer.byteLength(value, "utf8") <= limit;
 }
 
 function fallbackListBlocks(params: {
@@ -188,21 +175,6 @@ function consumeButtonBudget(budget: ActionBudget, count: number): void {
   }
 }
 
-function chunkButtons(
-  buttons: readonly MessagePresentationButton[],
-  maxActionsPerRow: number | undefined,
-): MessagePresentationButton[][] {
-  const rowSize = positiveInteger(maxActionsPerRow);
-  if (!rowSize) {
-    return buttons.length > 0 ? [[...buttons]] : [];
-  }
-  const rows: MessagePresentationButton[][] = [];
-  for (let index = 0; index < buttons.length; index += rowSize) {
-    rows.push(buttons.slice(index, index + rowSize));
-  }
-  return rows;
-}
-
 function hasActionSlotBudget(budget: ActionBudget): boolean {
   return budget.remainingActions !== 0 && budget.remainingRows !== 0;
 }
@@ -216,30 +188,36 @@ function consumeSelectBudget(budget: ActionBudget, count = 1): void {
   }
 }
 
+function adaptControl<Control extends MessagePresentationButton | MessagePresentationOption>(
+  control: Control,
+  action: ReturnType<typeof resolveMessagePresentationButtonAction>,
+  limits: SelectLimits | undefined,
+): Control | undefined {
+  if (!action) {
+    return undefined;
+  }
+  const legacyValueFits = fitsByteLimit(control.value, limits?.maxValueBytes);
+  if (
+    control.action !== undefined
+      ? !fitsByteLimit(resolveMessagePresentationActionValue(action), limits?.maxValueBytes)
+      : action.type === "callback" && !legacyValueFits
+  ) {
+    return undefined;
+  }
+  const adapted = { ...control, label: truncateText(control.label, limits?.maxLabelLength) };
+  if (!legacyValueFits) {
+    delete adapted.value;
+  }
+  return adapted;
+}
+
 function adaptButton(
   button: MessagePresentationButton,
   limits: ActionLimits | undefined,
 ): MessagePresentationButton | undefined {
-  const hasExplicitAction = button.action !== undefined;
-  const action = resolveMessagePresentationButtonAction(button);
-  if (!action) {
+  const adapted = adaptControl(button, resolveMessagePresentationButtonAction(button), limits);
+  if (!adapted || (button.disabled === true && limits?.supportsDisabled !== true)) {
     return undefined;
-  }
-  const actionValue = resolveMessagePresentationActionValue(action);
-  const actionFits = actionValue === undefined || fitsByteLimit(actionValue, limits?.maxValueBytes);
-  const legacyValueFits = fitsByteLimit(button.value, limits?.maxValueBytes);
-  if (
-    (hasExplicitAction ? !actionFits : action.type === "callback" && !legacyValueFits) ||
-    (button.disabled === true && limits?.supportsDisabled !== true)
-  ) {
-    return undefined;
-  }
-  const adapted: MessagePresentationButton = {
-    ...button,
-    label: truncateText(button.label, limits?.maxLabelLength),
-  };
-  if (!legacyValueFits) {
-    delete adapted.value;
   }
   if (limits?.supportsStyles === false) {
     delete adapted.style;
@@ -285,39 +263,19 @@ function adaptButtonsBlock(
   if (buttons.length === 0) {
     return fallback;
   }
-  const blocks: MessagePresentationBlock[] = chunkButtons(buttons, limits?.maxActionsPerRow).map(
-    (row) => ({
-      type: "buttons",
-      buttons: row,
-    }),
-  );
-  blocks.push(...fallback);
-  return blocks;
+  return [
+    ...chunkItems(buttons, positiveInteger(limits?.maxActionsPerRow) ?? buttons.length).map(
+      (row): MessagePresentationBlock => ({ type: "buttons", buttons: row }),
+    ),
+    ...fallback,
+  ];
 }
 
 function adaptOption(
   option: MessagePresentationOption,
   limits: SelectLimits | undefined,
 ): MessagePresentationOption | undefined {
-  const hasExplicitAction = option.action !== undefined;
-  const action = resolveMessagePresentationOptionAction(option);
-  if (!action) {
-    return undefined;
-  }
-  const actionValue = resolveMessagePresentationActionValue(action);
-  const actionFits = actionValue === undefined || fitsByteLimit(actionValue, limits?.maxValueBytes);
-  const legacyValueFits = fitsByteLimit(option.value, limits?.maxValueBytes);
-  if (hasExplicitAction ? !actionFits : !legacyValueFits) {
-    return undefined;
-  }
-  const adapted: MessagePresentationOption = {
-    ...option,
-    label: truncateText(option.label, limits?.maxLabelLength),
-  };
-  if (!legacyValueFits) {
-    delete adapted.value;
-  }
-  return adapted;
+  return adaptControl(option, resolveMessagePresentationOptionAction(option), limits);
 }
 
 function adaptSelectBlock(
@@ -355,7 +313,7 @@ function adaptSelectBlock(
     return fallback;
   }
   consumeSelectBudget(budget);
-  const blocks: MessagePresentationBlock[] = [
+  return [
     {
       type: "select",
       ...(block.placeholder
@@ -363,9 +321,8 @@ function adaptSelectBlock(
         : {}),
       options,
     },
+    ...fallback,
   ];
-  blocks.push(...fallback);
-  return blocks;
 }
 
 function countRenderableSelectBlocks(
@@ -454,12 +411,7 @@ function selectButtonsByPriority(
     .slice(0, capacity);
 }
 
-/**
- * Adapt a portable presentation to the target channel's advertised capabilities.
- *
- * Unsupported controls are downgraded to text/context fallback blocks where possible, and
- * controls honor channel limits while authored and fallback text retain every character.
- */
+/** Limit native controls while preserving authored and fallback text in full. */
 export function adaptMessagePresentationForChannel(params: {
   presentation: MessagePresentation;
   capabilities?: ChannelPresentationCapabilities;
@@ -481,91 +433,68 @@ export function adaptMessagePresentationForChannel(params: {
         limits: limits?.text,
       })
     : [];
-  const blocks: MessagePresentationBlock[] = titleBlocks.slice(1);
-  for (const block of params.presentation.blocks) {
+  const blocks = params.presentation.blocks.flatMap((block): MessagePresentationBlock[] => {
     if (block.type === "text" || block.type === "context") {
-      blocks.push(
-        ...presentationTextBlocks({
-          blockType: block.type === "context" ? fallbackBlockType : "text",
-          text: block.text,
-          limits: limits?.text,
-          continuation:
-            Object.getOwnPropertyDescriptor(block, PRESENTATION_FALLBACK_CONTINUATION)?.value ===
-            true,
-        }),
-      );
-      continue;
+      return presentationTextBlocks({
+        blockType: block.type === "context" ? fallbackBlockType : "text",
+        text: block.text,
+        limits: limits?.text,
+        continuation:
+          Object.getOwnPropertyDescriptor(block, PRESENTATION_FALLBACK_CONTINUATION)?.value ===
+          true,
+      });
     }
-    if (block.type === "chart" && capabilities?.charts !== true) {
-      blocks.push(
-        ...presentationTextBlocks({
-          blockType: fallbackBlockType,
-          text: renderMessagePresentationChartFallbackText(block),
-          limits: limits?.text,
-        }),
-      );
-      continue;
+    if (
+      (block.type === "chart" && capabilities?.charts !== true) ||
+      (block.type === "table" && capabilities?.tables !== true)
+    ) {
+      return presentationTextBlocks({
+        blockType: fallbackBlockType,
+        text:
+          block.type === "chart"
+            ? renderMessagePresentationChartFallbackText(block)
+            : renderMessagePresentationTableFallbackText(block),
+        limits: limits?.text,
+      });
     }
-    if (block.type === "table" && capabilities?.tables !== true) {
-      blocks.push(
-        ...presentationTextBlocks({
-          blockType: fallbackBlockType,
-          text: renderMessagePresentationTableFallbackText(block),
-          limits: limits?.text,
-        }),
-      );
-      continue;
+    if (
+      (block.type === "buttons" && capabilities?.buttons === false) ||
+      (block.type === "select" && capabilities?.selects === false)
+    ) {
+      return fallbackListBlocks({
+        blockType: fallbackBlockType,
+        heading: block.type === "buttons" ? "Actions" : (block.placeholder ?? "Options"),
+        labels: (block.type === "buttons" ? block.buttons : block.options).map(
+          renderMessagePresentationControlFallbackLabel,
+        ),
+        limits: limits?.text,
+      });
     }
     if (block.type === "buttons") {
-      if (capabilities?.buttons === false) {
-        blocks.push(
-          ...fallbackListBlocks({
-            blockType: fallbackBlockType,
-            heading: "Actions",
-            labels: block.buttons.map(renderMessagePresentationControlFallbackLabel),
-            limits: limits?.text,
-          }),
-        );
-        continue;
-      }
-      blocks.push(
-        ...adaptButtonsBlock(
-          block,
-          limits?.actions,
-          actionBudget,
-          fallbackBlockType,
-          buttonSelection,
-          limits?.text,
-        ),
+      return adaptButtonsBlock(
+        block,
+        limits?.actions,
+        actionBudget,
+        fallbackBlockType,
+        buttonSelection,
+        limits?.text,
       );
-      continue;
     }
     if (block.type === "select") {
-      if (capabilities?.selects === false) {
-        blocks.push(
-          ...fallbackListBlocks({
-            blockType: fallbackBlockType,
-            heading: block.placeholder ?? "Options",
-            labels: block.options.map(renderMessagePresentationControlFallbackLabel),
-            limits: limits?.text,
-          }),
-        );
-        continue;
-      }
-      blocks.push(
-        ...adaptSelectBlock(block, limits?.selects, actionBudget, fallbackBlockType, limits?.text),
+      return adaptSelectBlock(
+        block,
+        limits?.selects,
+        actionBudget,
+        fallbackBlockType,
+        limits?.text,
       );
-      continue;
     }
-    if (block.type === "divider" && capabilities?.divider === false) {
-      continue;
-    }
-    blocks.push(block);
-  }
+    return block.type === "divider" && capabilities?.divider === false ? [] : [block];
+  });
   return {
     ...params.presentation,
     ...(params.presentation.title ? { title: titleBlocks[0]?.text } : {}),
-    blocks,
+    blocks: [...titleBlocks.slice(1), ...blocks],
   };
 }
 

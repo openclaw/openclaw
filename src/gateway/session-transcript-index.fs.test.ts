@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
+import * as fileReads from "@openclaw/fs-safe/advanced";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
-import * as fileReads from "../infra/file-read.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
 import {
@@ -16,6 +16,10 @@ import {
   parseTranscriptRecord,
   type TranscriptRecord,
 } from "./session-transcript-record-parser.js";
+
+vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/advanced")>()),
+}));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());

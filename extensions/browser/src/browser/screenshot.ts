@@ -42,8 +42,6 @@ export async function normalizeBrowserScreenshot(
   const sideGrid = buildImageResizeSideGrid(maxSide, sideStart);
 
   let smallestSize: number | undefined;
-  let processorUnavailableError: unknown;
-
   for (const side of sideGrid) {
     for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
       let out: Buffer;
@@ -56,8 +54,7 @@ export async function normalizeBrowserScreenshot(
         });
       } catch (err) {
         if (isImageProcessorUnavailableError(err)) {
-          processorUnavailableError = err;
-          break;
+          throw toErrorObject(err, "Non-Error thrown");
         }
         throw err;
       }
@@ -70,13 +67,6 @@ export async function normalizeBrowserScreenshot(
         return { buffer: out, contentType: "image/jpeg", sourceDimensions: meta };
       }
     }
-    if (processorUnavailableError) {
-      break;
-    }
-  }
-
-  if (processorUnavailableError) {
-    throw toErrorObject(processorUnavailableError, "Non-Error thrown");
   }
 
   const bestSize = smallestSize ?? buffer.byteLength;

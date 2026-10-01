@@ -1,4 +1,3 @@
-// Microsoft provider module implements model/runtime integration.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
@@ -15,6 +14,7 @@ import {
   asBoolean,
   asFiniteNumber,
   asOptionalRecord,
+  filterStringRecord,
   normalizeOptionalString as trimToUndefined,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { edgeTTS, inferEdgeExtension } from "./tts.js";
@@ -116,8 +116,10 @@ async function listMicrosoftVoices(
 ): Promise<SpeechVoiceOption[]> {
   const { assertOkOrThrowProviderError, readProviderJsonResponse } =
     await import("openclaw/plugin-sdk/provider-http");
-  const { captureHttpExchange, isDebugProxyGlobalFetchPatchInstalled } =
-    await import("openclaw/plugin-sdk/proxy-capture");
+  const proxyCaptureSdk = await import("openclaw/plugin-sdk/proxy-capture");
+  // The shipped 2026.9.6 host lacks async diagnostics; remove optionality when the minimum advances.
+  const captureHost: Partial<Pick<typeof proxyCaptureSdk, "captureHttpExchangeAsync">> =
+    proxyCaptureSdk;
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
   const url =
@@ -134,18 +136,21 @@ async function listMicrosoftVoices(
     timeoutMs,
   });
   try {
-    if (!isDebugProxyGlobalFetchPatchInstalled()) {
-      captureHttpExchange({
-        url,
-        method: "GET",
-        requestHeaders: headers,
-        response,
-        transport: "http",
-        meta: {
-          provider: "microsoft",
-          capability: "speech-voices",
-        },
-      });
+    if (!proxyCaptureSdk.isDebugProxyGlobalFetchPatchInstalled()) {
+      // Finalization retains capture failures; observe the Promise returned by the SDK view.
+      void captureHost
+        .captureHttpExchangeAsync?.({
+          url,
+          method: "GET",
+          requestHeaders: headers,
+          response,
+          transport: "http",
+          meta: {
+            provider: "microsoft",
+            capability: "speech-voices",
+          },
+        })
+        .catch(() => {});
     }
     await assertOkOrThrowProviderError(response, "Microsoft voices API error");
     const voices = await readProviderJsonResponse<unknown>(response, "microsoft.speech-voices");
@@ -189,40 +194,25 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
       return {
         ...base,
         enabled: true,
-        ...(trimToUndefined(talkProviderConfig.voiceId) == null
-          ? {}
-          : { voice: trimToUndefined(talkProviderConfig.voiceId) }),
-        ...(trimToUndefined(talkProviderConfig.languageCode) == null
-          ? {}
-          : { lang: trimToUndefined(talkProviderConfig.languageCode) }),
-        ...(trimToUndefined(talkProviderConfig.outputFormat) == null
-          ? {}
-          : { outputFormat: trimToUndefined(talkProviderConfig.outputFormat) }),
-        ...(trimToUndefined(talkProviderConfig.pitch) == null
-          ? {}
-          : { pitch: trimToUndefined(talkProviderConfig.pitch) }),
-        ...(trimToUndefined(talkProviderConfig.rate) == null
-          ? {}
-          : { rate: trimToUndefined(talkProviderConfig.rate) }),
-        ...(trimToUndefined(talkProviderConfig.volume) == null
-          ? {}
-          : { volume: trimToUndefined(talkProviderConfig.volume) }),
-        ...(trimToUndefined(talkProviderConfig.proxy) == null
-          ? {}
-          : { proxy: trimToUndefined(talkProviderConfig.proxy) }),
+        ...filterStringRecord({
+          voice: trimToUndefined(talkProviderConfig.voiceId),
+          lang: trimToUndefined(talkProviderConfig.languageCode),
+          outputFormat: trimToUndefined(talkProviderConfig.outputFormat),
+          pitch: trimToUndefined(talkProviderConfig.pitch),
+          rate: trimToUndefined(talkProviderConfig.rate),
+          volume: trimToUndefined(talkProviderConfig.volume),
+          proxy: trimToUndefined(talkProviderConfig.proxy),
+        }),
         ...(asFiniteNumber(talkProviderConfig.timeoutMs) == null
           ? {}
           : { timeoutMs: asFiniteNumber(talkProviderConfig.timeoutMs) }),
       };
     },
-    resolveTalkOverrides: ({ params }) => ({
-      ...(trimToUndefined(params.voiceId) == null
-        ? {}
-        : { voice: trimToUndefined(params.voiceId) }),
-      ...(trimToUndefined(params.outputFormat) == null
-        ? {}
-        : { outputFormat: trimToUndefined(params.outputFormat) }),
-    }),
+    resolveTalkOverrides: ({ params }) =>
+      filterStringRecord({
+        voice: trimToUndefined(params.voiceId),
+        outputFormat: trimToUndefined(params.outputFormat),
+      }) ?? {},
     listVoices: async (req) => {
       const config = readMicrosoftProviderConfig(req.providerConfig ?? {});
       return await listMicrosoftVoices(config.timeoutMs ?? req.timeoutMs);

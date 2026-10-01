@@ -35,14 +35,6 @@ import {
 } from "./realtime-output-owner.js";
 import { createMeetingRealtimeToolContinuity } from "./realtime-tool-continuity.js";
 
-export {
-  formatMeetingAgentAudioModelLog,
-  formatMeetingAgentTtsResultLog,
-  formatMeetingTranscriptSummaryLog,
-  meetingOutputBytesPerMs,
-  normalizeMeetingTtsPromptText,
-  resolveMeetingRealtimeTranscriptionProvider,
-} from "./realtime-engine-support.js";
 export type MeetingRuntimePlatform = {
   /** Adapter-owned identity keeps platform names and log prefixes out of core. */
   displayName: string;

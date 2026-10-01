@@ -29,27 +29,11 @@ export function buildCodexMediaUnderstandingProvider(
     id: CODEX_MEDIA_PROVIDER_ID,
     capabilities: ["image"],
     defaultModels: { image: DEFAULT_CODEX_IMAGE_MODEL },
-    describeImage: async (req) =>
+    describeImage: async ({ buffer, fileName, mime, ...req }) =>
       describeCodexImages(
         {
-          images: [
-            {
-              buffer: req.buffer,
-              fileName: req.fileName,
-              mime: req.mime,
-            },
-          ],
-          provider: req.provider,
-          model: req.model,
-          prompt: req.prompt,
-          maxTokens: req.maxTokens,
-          timeoutMs: req.timeoutMs,
-          ...(req.signal ? { signal: req.signal } : {}),
-          profile: req.profile,
-          preferredProfile: req.preferredProfile,
-          authStore: req.authStore,
-          agentDir: req.agentDir,
-          cfg: req.cfg,
+          ...req,
+          images: [{ buffer, fileName, mime }],
         },
         options,
       ),

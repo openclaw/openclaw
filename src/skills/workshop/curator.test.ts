@@ -20,6 +20,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { recordSkillExperienceReviewOutcome } from "./collection-review-state.js";
+import { readSkillCuratorReviewStatus } from "./collection-review-state.test-support.js";
 import { getSkillCuratorStatus, registerSkillUsageTracking } from "./curator.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 
@@ -55,6 +56,22 @@ afterEach(async () => {
 });
 
 describe("skill curator usage tracking", () => {
+  it("reads review outcomes from the selected database without leaking ambient state", async () => {
+    const selectedStore = { path: testState.path("selected-review.sqlite") };
+    const review = { attemptedAtMs: 1200, outcome: "nothing" as const };
+    await recordSkillExperienceReviewOutcome(
+      "main",
+      testState.path("workspace"),
+      review,
+      selectedStore,
+    );
+
+    expect(Object.values(readSkillCuratorReviewStatus(selectedStore).experienceReviews)).toEqual([
+      review,
+    ]);
+    expect(readSkillCuratorReviewStatus().experienceReviews).toEqual({});
+  });
+
   it("settles accepted trusted usage and reads live status without caller SQL", async () => {
     const config = {};
     const skillDir = path.join(

@@ -1,29 +1,18 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
-import {
-  loadSessionEntryReadOnly,
-  type SessionTranscriptRuntimeTarget,
-} from "../../../config/sessions/session-accessor.js";
+import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
+import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { resolveSessionStorePathForScope } from "../../../config/sessions/session-store-path.js";
 import { formatErrorMessage, readErrorName } from "../../../infra/errors.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import {
   getGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
-import type { DetachedTaskFindResult } from "../../../tasks/detached-task-runtime-contract.js";
-import { DetachedTaskLegacyRuntimeError } from "../../../tasks/detached-task-runtime-errors.js";
-import {
-  completeTaskRunByRunIdAsync,
-  failTaskRunByRunIdAsync,
-  setDetachedTaskDeliveryStatusByRunIdAsync,
-} from "../../../tasks/detached-task-runtime.async.js";
-import {
-  isTerminalTaskStatus,
-  type TaskDeliveryStatus,
-} from "../../../tasks/task-registry.types.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
@@ -32,19 +21,20 @@ import { isSilentAgentReplyText } from "../../embedded-agent-runner/message-visi
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
-  clearDeliveryState,
   ensureCompletionState,
   ensureDeliveryState,
+  loadPendingFinalDeliveryPayload,
 } from "./subagent-delivery-state.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
-import { resolveFinalizedSubagentTaskState } from "./subagent-registry-completion.js";
 import { capFrozenResultText } from "./subagent-registry-helpers.js";
 import type {
   SubagentLifecycleCommonContext,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle-context.js";
+import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
+import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { PendingFinalDeliveryPayload } from "./subagent-registry-read.types.js";
-import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
@@ -142,21 +132,6 @@ export const recordAnnounceDeliveryResult = (
     delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");
 };
 
-export const markRequesterSettleWakePending = (
-  entry: SubagentRunRecord,
-  options?: { retireAfterSettle?: boolean },
-) => {
-  const existing = entry.requesterSettleWake;
-  entry.requesterSettleWake = {
-    ...structuredClone(existing),
-    status: existing?.status ?? "pending",
-    attemptCount: existing?.attemptCount ?? 0,
-    ...(existing?.retireAfterSettle === true || options?.retireAfterSettle === true
-      ? { retireAfterSettle: true }
-      : {}),
-  } satisfies RequesterSettleWakeState;
-};
-
 export const hasPriorRequesterDeliveryMirror = async (
   params: SubagentLifecycleOptions,
   entry: SubagentRunRecord,
@@ -234,173 +209,11 @@ export const hasPriorRequesterDeliveryMirror = async (
   }
 };
 
-const resolveSubagentTaskTarget = (
-  params: SubagentLifecycleOptions,
-  entry: SubagentRunRecord,
-  resolution = params.resolveSubagentTask(entry),
-) => {
-  const durableTaskRunId = entry.taskRunId ?? entry.runId;
-  return {
-    ...(resolution.task ? { taskId: resolution.task.taskId } : {}),
-    runId:
-      resolution.lookup === "available"
-        ? (resolution.task?.runId ?? durableTaskRunId)
-        : durableTaskRunId,
-    sessionKey:
-      resolution.lookup === "available"
-        ? (resolution.task?.childSessionKey ?? entry.childSessionKey)
-        : entry.childSessionKey,
-  };
-};
-
-export const safeSetSubagentTaskDeliveryStatus = async (
-  params: SubagentLifecycleOptions,
-  args: {
-    entry: SubagentRunRecord;
-    deliveryStatus: Extract<TaskDeliveryStatus, "pending" | "delivered" | "failed">;
-    deliveryError?: string;
-    isCurrent: () => boolean;
-  },
-) => {
-  const target = resolveSubagentTaskTarget(params, args.entry);
-  const runId = args.entry.runId;
-  const generation = args.entry.generation;
-  const delivery = args.entry.delivery;
-  const assertCurrent = () => {
-    if (
-      !args.isCurrent() ||
-      params.runs.get(runId) !== args.entry ||
-      args.entry.runId !== runId ||
-      args.entry.generation !== generation ||
-      args.entry.delivery !== delivery ||
-      args.entry.delivery?.status !== args.deliveryStatus
-    ) {
-      throw new Error("subagent task delivery owner changed before commit");
-    }
-  };
-  try {
-    await setDetachedTaskDeliveryStatusByRunIdAsync(
-      {
-        runId: target.runId,
-        sessionKey: target.sessionKey,
-        runtime: "subagent",
-        deliveryStatus: args.deliveryStatus,
-        error: args.deliveryStatus === "failed" ? args.deliveryError : undefined,
-      },
-      assertCurrent,
-    );
-  } catch (err) {
-    assertCurrent();
-    if (!(err instanceof DetachedTaskLegacyRuntimeError)) {
-      throw err;
-    }
-    params.warn("failed to update subagent background task delivery state", {
-      error: buildSafeLifecycleErrorMeta(err),
-      runId: maskLifecycleIdentifier(target.runId, "run"),
-      childSessionKey: maskLifecycleIdentifier(target.sessionKey, "session"),
-      deliveryStatus: args.deliveryStatus,
-    });
-  }
-  assertCurrent();
-};
-
-export const finalizeSubagentTaskRun = async (
-  params: SubagentLifecycleOptions,
-  args: {
-    entry: SubagentRunRecord;
-    outcome: SubagentRunOutcome;
-    taskResolution?: DetachedTaskFindResult;
-  },
-): ReturnType<typeof completeTaskRunByRunIdAsync> => {
-  const terminal = resolveFinalizedSubagentTaskState(args.entry);
-  if (!terminal) {
-    return [];
-  }
-  const taskResolution = args.taskResolution ?? params.resolveSubagentTask(args.entry);
-  const pendingTask =
-    taskResolution.lookup === "available" &&
-    taskResolution.task &&
-    !isTerminalTaskStatus(taskResolution.task.status)
-      ? taskResolution.task
-      : undefined;
-  const target = resolveSubagentTaskTarget(params, args.entry, taskResolution);
-  // Provisional completion is staged off-registry; retain its canonical kill owner.
-  const runId = args.entry.runId;
-  const owner = params.runs.get(runId);
-  const generation = owner?.generation;
-  const execution = owner?.execution;
-  const killReconciliation = owner?.killReconciliation;
-  const assertCurrent = () => {
-    if (
-      !owner ||
-      params.runs.get(runId) !== owner ||
-      owner.runId !== runId ||
-      owner.generation !== generation ||
-      owner.execution !== execution ||
-      owner.killReconciliation !== killReconciliation
-    ) {
-      throw new Error("subagent task completion owner changed before commit");
-    }
-  };
-  const { status, error, terminalOutcome, ...details } = terminal;
-  const suppressDelivery = args.entry.suppressCompletionDelivery === true;
-  let finalized: Awaited<ReturnType<typeof completeTaskRunByRunIdAsync>>;
-  try {
-    if (status === "succeeded") {
-      finalized = await completeTaskRunByRunIdAsync(
-        {
-          ...target,
-          runtime: "subagent",
-          ...details,
-          terminalOutcome,
-          suppressDelivery,
-        },
-        assertCurrent,
-      );
-    } else {
-      finalized = await failTaskRunByRunIdAsync(
-        {
-          ...target,
-          runtime: "subagent",
-          ...details,
-          status,
-          error,
-          suppressDelivery,
-        },
-        assertCurrent,
-      );
-    }
-  } catch (err) {
-    assertCurrent();
-    params.warn("failed to finalize subagent background task state", {
-      error: buildSafeLifecycleErrorMeta(err),
-      runId: maskLifecycleIdentifier(args.entry.runId, "run"),
-      childSessionKey: maskLifecycleIdentifier(args.entry.childSessionKey, "session"),
-      outcomeStatus: args.outcome.status,
-    });
-    if (pendingTask || !(err instanceof DetachedTaskLegacyRuntimeError)) {
-      throw err;
-    }
-    return [];
-  }
-  assertCurrent();
-  // A failed task write must keep the native terminal owner replayable.
-  // Otherwise cleanup can discard the only outcome that repairs the running task.
-  if (
-    pendingTask &&
-    !finalized?.some(
-      (task) => task.taskId === pendingTask.taskId && isTerminalTaskStatus(task.status),
-    )
-  ) {
-    throw new Error("subagent task projection did not finalize");
-  }
-  return finalized;
-};
-
 export const freezeRunResultAtCompletion = async (
   context: SubagentLifecycleCommonContext,
   entry: SubagentRunRecord,
   outcome: SubagentRunOutcome,
+  assertCurrent: () => void,
 ): Promise<boolean> => {
   const params = context.options;
   if (ensureCompletionState(entry).resultText !== undefined) {
@@ -412,6 +225,23 @@ export const freezeRunResultAtCompletion = async (
     completion.capturedAt = Date.now();
     return true;
   }
+  const owner = params.runs.get(entry.runId);
+  const generation = owner?.generation;
+  const execution = owner?.execution;
+  const isOwnerCurrent = () =>
+    owner !== undefined &&
+    params.runs.get(entry.runId) === owner &&
+    owner.generation === generation &&
+    owner.execution === execution &&
+    entry.pauseReason !== "sessions_yield" &&
+    owner.pauseReason !== "sessions_yield" &&
+    !context.newerGenerationOwnsSession(entry);
+  const assertCaptureCurrent = () => {
+    assertCurrent();
+    if (!isOwnerCurrent()) {
+      throw new Error("Subagent completion capture lost its original owner");
+    }
+  };
   let resultText: string | null;
   try {
     const transcriptTarget = entry.execution.transcriptTarget;
@@ -429,34 +259,53 @@ export const freezeRunResultAtCompletion = async (
           storePath: configuredStorePath,
         })
       : undefined;
-    const sessionId =
-      transcriptTarget?.sessionId ??
-      (agentId && storePath
-        ? loadSessionEntryReadOnly({ agentId, sessionKey, storePath })?.sessionId
-        : undefined);
-    const sessionTarget: SessionTranscriptRuntimeTarget | undefined =
-      agentId && sessionId && storePath ? { agentId, sessionId, sessionKey, storePath } : undefined;
-    const captured = await withPluginRuntimeGatewayContextResolver(
-      getGatewayContextResolver(entry),
-      () =>
-        params.captureSubagentCompletionReply(entry.childSessionKey, {
-          waitForReply: entry.expectsCompletionMessage === true,
-          outcome,
-          ...(sessionTarget ? { sessionTarget } : {}),
-        }),
-    );
+    const capture = async (sessionId: string | undefined) => {
+      assertCaptureCurrent();
+      const sessionTarget: SessionTranscriptRuntimeTarget | undefined =
+        agentId && sessionId && storePath
+          ? { agentId, sessionId, sessionKey, storePath }
+          : undefined;
+      const result = await withPluginRuntimeGatewayContextResolver(
+        getGatewayContextResolver(entry),
+        () =>
+          params.captureSubagentCompletionReply(entry.childSessionKey, {
+            waitForReply: entry.expectsCompletionMessage === true,
+            outcome,
+            ...(sessionTarget ? { sessionTarget } : {}),
+          }),
+      );
+      assertCaptureCurrent();
+      return result;
+    };
+    const captured =
+      !transcriptTarget?.sessionId && agentId && storePath
+        ? await withSessionEntryReadOnlyInWorker(
+            { agentId, sessionKey, storePath },
+            assertCaptureCurrent,
+            async (read, reader) => {
+              if (!read.ok) {
+                throw read.error;
+              }
+              reader.assertCurrent();
+              return capture(read.value?.sessionId);
+            },
+          )
+        : await capture(transcriptTarget?.sessionId);
     resultText = captured?.trim() ? capFrozenResultText(captured) : null;
-  } catch {
+  } catch (error) {
+    if (hasSqliteWorkerOutcomeUnknown(error)) {
+      throw error;
+    }
+    if (!isOwnerCurrent()) {
+      return false;
+    }
+    assertCurrent();
     resultText = null;
   }
-  const liveEntry = params.runs.get(entry.runId);
-  if (
-    entry.pauseReason === "sessions_yield" ||
-    liveEntry?.pauseReason === "sessions_yield" ||
-    context.newerGenerationOwnsSession(entry)
-  ) {
+  if (!isOwnerCurrent()) {
     return false;
   }
+  assertCurrent();
   const completion = ensureCompletionState(entry);
   if (completion.resultText !== undefined) {
     return false;
@@ -494,6 +343,15 @@ export const refreshFrozenResultFromSession = async (
     return false;
   }
   const generation = entry.generation;
+  const stateContext = captureOpenClawStateWorkerContext();
+  const previousResultText = entry.completion?.resultText;
+  const previousCapturedAt = entry.completion?.capturedAt;
+  const isCurrent = () =>
+    params.runs.get(entry.runId) === entry &&
+    entry.generation === generation &&
+    entry.pauseReason !== "sessions_yield" &&
+    entry.cleanupCompletedAt === undefined &&
+    !context.newerGenerationOwnsSession(entry);
 
   let captured: string | undefined;
   try {
@@ -509,22 +367,33 @@ export const refreshFrozenResultFromSession = async (
   }
   // Reply capture yields while registration can transfer session ownership.
   // Only the exact row and generation that started capture may commit its text.
+  assertSubagentRegistryWriteSourceCurrent(stateContext);
   if (
-    params.runs.get(entry.runId) !== entry ||
-    entry.generation !== generation ||
-    context.newerGenerationOwnsSession(entry)
+    !isCurrent() ||
+    entry.completion?.resultText !== previousResultText ||
+    entry.completion?.capturedAt !== previousCapturedAt
   ) {
     return false;
   }
 
   const nextFrozen = capFrozenResultText(trimmed);
-  const completion = ensureCompletionState(entry);
-  if (completion.resultText === nextFrozen) {
+  if (entry.completion?.resultText === nextFrozen) {
     return false;
   }
-  completion.resultText = nextFrozen;
-  completion.capturedAt = Date.now();
-  params.persist(entry.runId);
+  await commitSubagentLifecycleMutation(context, {
+    entry,
+    stateContext,
+    assertCurrent() {
+      if (!isCurrent()) {
+        throw new Error("Subagent frozen-result owner changed before persistence.");
+      }
+    },
+    mutate() {
+      const completion = ensureCompletionState(entry);
+      completion.resultText = nextFrozen;
+      completion.capturedAt = Date.now();
+    },
+  });
   return true;
 };
 
@@ -533,6 +402,7 @@ export const emitCompletionEndedHookIfNeeded = async (
   entry: SubagentRunRecord,
   reason: SubagentLifecycleEndedReason,
   isCurrent?: () => boolean,
+  prepareCurrent?: () => Promise<boolean>,
 ) => {
   if (params.shouldEmitEndedHookForRun({ entry, reason })) {
     await params.emitSubagentEndedHookForRun({
@@ -540,49 +410,9 @@ export const emitCompletionEndedHookIfNeeded = async (
       reason,
       sendFarewell: true,
       isCurrent,
+      prepareCurrent,
     });
   }
-};
-
-export const clearSubagentPendingDelivery = (entry: SubagentRunRecord) => {
-  const delivery = ensureDeliveryState(entry);
-  delivery.payload = undefined;
-  delivery.createdAt = undefined;
-  delivery.lastAttemptAt = undefined;
-  delivery.nextAttemptAt = undefined;
-  delivery.attemptCount = undefined;
-  delivery.lastError = undefined;
-  delivery.suspendedAt = undefined;
-  delivery.suspendedReason = undefined;
-  if (delivery.status !== "delivered" && delivery.status !== "failed") {
-    clearDeliveryState(entry);
-  }
-};
-
-export const loadPendingFinalDeliveryPayload = (
-  entry: SubagentRunRecord,
-): PendingFinalDeliveryPayload => {
-  return {
-    requesterSessionKey: entry.delivery?.payload?.requesterSessionKey ?? entry.requesterSessionKey,
-    requesterOrigin: entry.delivery?.payload?.requesterOrigin ?? entry.requesterOrigin,
-    requesterDisplayKey: entry.delivery?.payload?.requesterDisplayKey ?? entry.requesterDisplayKey,
-    childSessionKey: entry.delivery?.payload?.childSessionKey ?? entry.childSessionKey,
-    childRunId: entry.delivery?.payload?.childRunId ?? entry.runId,
-    task: entry.delivery?.payload?.task ?? entry.task,
-    label: entry.delivery?.payload?.label ?? entry.label,
-    startedAt: entry.delivery?.payload?.startedAt ?? entry.execution.startedAt,
-    endedAt: entry.delivery?.payload?.endedAt ?? entry.execution.endedAt,
-    outcome: entry.delivery?.payload?.outcome ?? entry.execution.outcome,
-    expectsCompletionMessage:
-      entry.delivery?.payload?.expectsCompletionMessage ?? entry.expectsCompletionMessage,
-    completionTarget: entry.completionTarget,
-    completionRequesterSessionId: entry.completionRequesterSessionId,
-    spawnMode: entry.delivery?.payload?.spawnMode ?? entry.spawnMode,
-    wakeOnDescendantSettle:
-      entry.delivery?.payload?.wakeOnDescendantSettle ?? entry.wakeOnDescendantSettle,
-    // Completion is the terminal-reply owner; a retry payload can predate its final receipt.
-    terminalReply: entry.completion?.terminalReply ?? entry.delivery?.payload?.terminalReply,
-  };
 };
 
 export const markPendingFinalDelivery = (args: { entry: SubagentRunRecord; error?: string }) => {

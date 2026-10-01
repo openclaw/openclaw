@@ -246,6 +246,10 @@ it("blocks repeat install when saved-state reads fail, then reconciles aliases a
   otherInstall.reject(new Error("Another registry is unavailable"));
   await installingOther;
   expect(page.messages[otherIdentity]?.text).toContain("Another registry is unavailable");
+  expect(page.messages[otherIdentity]?.text).toContain("Reconnect and check installed plugins");
+  expect(page.consentController.installProgress.get(otherIdentity)?.failure?.title).toBe(
+    "Installation status unknown",
+  );
   expect(page.consentController.installProgress.get(otherIdentity)?.canRetry).toBe(false);
   expect(page.consentController.installProgress.get(otherIdentity)?.finishedAt).toBeTypeOf(
     "number",

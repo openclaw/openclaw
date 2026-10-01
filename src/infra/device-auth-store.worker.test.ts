@@ -69,8 +69,6 @@ it("keeps cold, warm, read-only, ordered token-data operations and cleanup off t
       expect(await tokens.clearOriginDeviceToken(origin)).toBe(true);
       await closeOpenClawStateDatabaseAsync();
       expect(Object.values(sql.counts().data)).toEqual(Array(7).fill(0));
-      expect(Object.values(sql.counts().coordinator)).toEqual(Array(7).fill(0));
-      expect(Object.values(sql.counts().runtimeInitialization)).toEqual(Array(7).fill(0));
       expect(Object.values(sql.counts().unknown)).toEqual(Array(7).fill(0));
       await expect(fs.stat(state.path("changed-state"))).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
@@ -220,7 +218,7 @@ it("retains host lifecycle custody while a native writer overlaps a token commit
     const originalAdmission = mutationAdmission.createSqliteWorkerOperationAdmission;
     let nativeWriteStarted = false;
     vi.spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit) =>
+      (admit, attachment) =>
         originalAdmission((request, grant) => {
           admit(request, grant);
           if (request.stage === "transaction" && !nativeWriteStarted) {
@@ -236,7 +234,7 @@ it("retains host lifecycle custody while a native writer overlaps a token commit
               { env: state.env },
             );
           }
-        }),
+        }, attachment),
     );
     await expect(
       tokens.storeDeviceAuthToken({

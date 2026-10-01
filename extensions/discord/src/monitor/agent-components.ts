@@ -1,11 +1,11 @@
 import { Modal, type BaseMessageInteractiveComponent } from "../internal/discord.js";
-import type { AgentComponentContext } from "./agent-components-helpers.js";
 import { discordComponentControlHandlers } from "./agent-components.handlers.js";
 import { DiscordComponentModal } from "./agent-components.modal.js";
 import {
   createAgentComponentButton,
   createAgentSelectMenu,
 } from "./agent-components.system-controls.js";
+import type { AgentComponentContext } from "./agent-components.types.js";
 import {
   createDiscordComponentButtonControl,
   createDiscordComponentChannelSelectControl,

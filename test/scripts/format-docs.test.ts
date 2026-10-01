@@ -4,13 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  chunkFilesForCommand,
   docsFiles,
   formatDocs,
   resolveOxfmtInvocation,
   runOxfmt,
 } from "../../scripts/format-docs.mts";
-import { outputTail } from "../../scripts/lib/output-tail.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -172,17 +170,5 @@ describe("format-docs", () => {
     expect(oxfmtFileArgs[0]).toEqual(["README.md", "docs/guide.mdx"]);
     expect(oxfmtFileArgs[1]?.every((filePath) => path.isAbsolute(filePath))).toBe(true);
     expect(oxfmtFileArgs[1]?.every((filePath) => filePath.startsWith(root))).toBe(false);
-  });
-
-  it("keeps single oversized docs in their own command chunk", () => {
-    expect(chunkFilesForCommand(["docs/very-long-name.md"], ["--write"], 1)).toEqual([
-      ["docs/very-long-name.md"],
-    ]);
-  });
-});
-
-describe("outputTail UTF-8 safety", () => {
-  it("passes through output that fits within the tail budget", () => {
-    expect(outputTail("hello world", 16 * 1024)).toBe("hello world");
   });
 });

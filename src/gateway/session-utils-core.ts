@@ -9,6 +9,7 @@ import {
 } from "../agents/subagents/registry/subagent-run-liveness.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import type { SynchronousWork } from "../shared/synchronous-work.js";
 import {
   estimateAggregateUsageCost,
@@ -30,27 +31,17 @@ export function deriveSessionTitle(
     return undefined;
   }
 
-  const label = normalizeOptionalString(entry.label);
-  if (label) {
-    return label;
-  }
-
-  const displayName =
-    normalizeOptionalString(externalDisplayName) ?? normalizeOptionalString(entry.displayName);
-  if (displayName) {
-    return displayName;
-  }
-
-  const subject = normalizeOptionalString(entry.subject);
-  if (subject) {
-    return subject;
-  }
-
   // When no model label was persisted, prefer a task-bearing sentence over a
   // raw first-bubble truncation so Control UI and gateway clients stay readable.
   // Derived titles are human content only; UI/TUI/ACP own key-based fallbacks,
   // which an id prefix here would mask.
-  return deriveGoalSessionTitle(firstUserMessage) || undefined;
+  return (
+    normalizeOptionalString(entry.label) ??
+    normalizeOptionalString(externalDisplayName) ??
+    normalizeOptionalString(entry.displayName) ??
+    normalizeOptionalString(entry.subject) ??
+    (deriveGoalSessionTitle(firstUserMessage) || undefined)
+  );
 }
 
 export function prepareSessionTitleRead(
@@ -162,14 +153,26 @@ function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean
   );
 }
 
-/** Resolve navigation owners from canonical existence and current run liveness. */
+const emptyChildOwners: readonly string[] = Object.freeze([]);
+const sessionChildOwners = new WeakMap<
+  SessionEntry,
+  {
+    revision: object;
+    key: string;
+    controller?: string;
+    parent?: string;
+    owners: readonly string[];
+  }
+>();
+
+/** Reuse owner identities, but recheck time and live authority on every read. */
 export function resolveSessionChildOwners(params: {
   key: string;
   entry: SessionEntry;
   now: number;
   subagentRuns: SessionListRowContext["subagentRuns"];
   hasActiveRun?: boolean;
-}): string[] {
+}): readonly string[] {
   const { key, entry, now, subagentRuns } = params;
   const latest = subagentRuns.getDisplaySubagentRun(key);
   const keep =
@@ -180,18 +183,43 @@ export function resolveSessionChildOwners(params: {
           now,
         })
       : shouldKeepStoreOnlyChildLink(entry, now));
-  if (!keep) {
-    return [];
+  // Runtime control replaces spawnedBy, but only retained runs own controller links.
+  const controller = keep
+    ? latest
+      ? normalizeOptionalString(latest.controllerSessionKey) ||
+        normalizeOptionalString(latest.requesterSessionKey)
+      : normalizeOptionalString(entry.spawnedBy)
+    : undefined;
+  // Persistent dashboard navigation outlives the individual run, including forks.
+  const parent =
+    keep || parseAgentSessionKey(key)?.rest.startsWith("dashboard:")
+      ? normalizeOptionalString(entry.parentSessionKey)
+      : undefined;
+  const cached = sessionChildOwners.get(entry);
+  if (
+    cached?.revision === subagentRuns.revision &&
+    cached.key === key &&
+    cached.controller === controller &&
+    cached.parent === parent
+  ) {
+    return cached.owners;
   }
-  // Runtime control replaces spawnedBy, but explicit navigation lineage survives moves.
-  const controller = latest
-    ? normalizeOptionalString(latest.controllerSessionKey) ||
-      normalizeOptionalString(latest.requesterSessionKey)
-    : normalizeOptionalString(entry.spawnedBy);
-  const parent = normalizeOptionalString(entry.parentSessionKey);
-  return [...new Set([controller, parent])].filter(
-    (owner): owner is string => owner !== undefined && owner !== key,
-  );
+  const owners: string[] = [];
+  if (controller && controller !== key) {
+    owners.push(controller);
+  }
+  if (parent && parent !== key && parent !== controller) {
+    owners.push(parent);
+  }
+  const result = owners.length ? Object.freeze(owners) : emptyChildOwners;
+  sessionChildOwners.set(entry, {
+    revision: subagentRuns.revision,
+    key,
+    controller,
+    parent,
+    owners: result,
+  });
+  return result;
 }
 
 export type SessionChildLink = { key: string; entry: SessionEntry };

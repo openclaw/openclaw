@@ -1,9 +1,10 @@
-import type { Server } from "node:http";
 import type { Request, Response } from "express";
+import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-targets";
 import {
   DEFAULT_WEBHOOK_MAX_BODY_BYTES,
   isDangerousNameMatchingEnabled,
-  keepHttpServerTaskAlive,
   mergeAllowlist,
   resolveChannelMediaMaxBytes,
   summarizeMapping,
@@ -17,16 +18,11 @@ import { formatUnknownError } from "./errors.js";
 import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
 import { runMSTeamsFileConsentInvokeHandler } from "./file-consent-invoke.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
-import {
-  isCardActionInvokeAuthorized,
-  isSigninInvokeAuthorized,
-  createMSTeamsActivityHandler,
-} from "./monitor-handler.js";
+import { isMSTeamsInvokeAuthorized, createMSTeamsActivityHandler } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import {
   publishMSTeamsBlocked,
   publishMSTeamsReady,
-  publishMSTeamsRecovering,
   publishMSTeamsStopped,
   type MSTeamsStatusSink,
 } from "./monitor-status.js";
@@ -57,7 +53,8 @@ import {
 } from "./sdk.js";
 import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
 import { resolveMSTeamsCredentials } from "./token.js";
-import { applyMSTeamsWebhookTimeouts } from "./webhook-timeouts.js";
+import { createMSTeamsWebhookHandler } from "./webhook-handler.js";
+import { resolveMSTeamsLegacyWebhook, resolveMSTeamsWebhookPathIssue } from "./webhook-route.js";
 
 type MonitorMSTeamsOpts = {
   cfg: OpenClawConfig;
@@ -92,7 +89,7 @@ export async function monitorMSTeamsProvider(
     publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams credentials are not configured");
     return { app: null, shutdown: async () => {} };
   }
-  const appId = creds.appId; // Extract for use in closures
+  const appId = creds.appId;
 
   const runtime: RuntimeEnv = opts.runtime ?? {
     log: console.log,
@@ -198,7 +195,14 @@ export async function monitorMSTeamsProvider(
     },
   };
 
-  const port = msteamsCfg.webhook?.port ?? 3978;
+  const legacyListener = resolveMSTeamsLegacyWebhook(msteamsCfg);
+  const pathIssue = resolveMSTeamsWebhookPathIssue({ cfg });
+  if (pathIssue) {
+    if (!legacyListener) {
+      throw new Error(pathIssue);
+    }
+    log.warn?.(pathIssue);
+  }
   const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "msteams");
   const mediaMaxBytes =
     resolveChannelMediaMaxBytes({
@@ -208,21 +212,24 @@ export async function monitorMSTeamsProvider(
   const conversationStore = opts.conversationStore ?? createMSTeamsConversationStoreState();
   const pollStore = opts.pollStore ?? createMSTeamsPollStoreState();
 
-  log.info(`starting provider (port ${port})`);
+  log.info("starting provider on Gateway HTTP routes");
 
-  // Dynamic import to avoid loading SDK when provider is disabled
   const express = await import("express");
 
-  // Create Express server first, then wrap it with the SDK's ExpressAdapter
-  // so the App registers its route handler on it (including JWT validation).
   const expressApp = express.default();
+  const privateQaRuntime = resolveMSTeamsPrivateQaRuntime();
+  const privateQaToken = await privateQaRuntime?.token();
 
   // Cheap auth-presence gate: reject requests without a Bearer token before
   // JSON parsing. Bearer-shaped junk still hits the bounded parser below before
   // the SDK's route-level parser and full JWT validation.
   expressApp.use((req: Request, res: Response, next: (err?: unknown) => void) => {
     const auth = req.headers.authorization;
-    if (!auth || !auth.startsWith("Bearer ")) {
+    if (
+      !auth ||
+      !auth.startsWith("Bearer ") ||
+      (privateQaToken && !safeEqualSecret(auth.slice(7), privateQaToken))
+    ) {
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
@@ -237,15 +244,13 @@ export async function monitorMSTeamsProvider(
     next(err);
   });
 
-  const configuredPath = (msteamsCfg.webhook?.path ?? "/api/messages") as `/${string}`;
+  const configuredPath = (msteamsCfg.webhook?.path || "/api/messages") as `/${string}`;
   const ssoConnectionName =
     msteamsCfg.sso?.enabled && msteamsCfg.sso.connectionName
       ? msteamsCfg.sso.connectionName
       : undefined;
 
-  // Lazy-load the SDK and create the App with ExpressAdapter. The SDK
-  // registers POST /api/messages (or configured path) and handles JWT
-  // validation + body parsing internally.
+  // The SDK owns request parsing and JWT validation on its messaging route.
   const { app } = await loadMSTeamsSdkWithAuth(creds, {
     ...resolveMSTeamsSdkCloudOptions(msteamsCfg),
     httpServerAdapter: await createMSTeamsExpressAdapter(expressApp),
@@ -253,12 +258,8 @@ export async function monitorMSTeamsProvider(
     ...(ssoConnectionName ? { oauthDefaultConnectionName: ssoConnectionName } : {}),
   });
 
-  // Existing Azure Bot registrations may still point at the legacy
-  // `/api/messages` endpoint while an operator has configured a custom
-  // `webhook.path`. Forward to the configured path with a one-time deprecation
-  // warning so those registrations keep working through the transition. The
-  // forwarder runs after the SDK route is registered, so it only matches
-  // requests that the SDK route itself didn't claim.
+  // Existing Azure Bot registrations may retain /api/messages after webhook.path changes.
+  // Forward requests the SDK did not claim until operators update those registrations.
   if (configuredPath !== "/api/messages") {
     let warnedLegacyMessagesRoute = false;
     expressApp.post(
@@ -271,17 +272,13 @@ export async function monitorMSTeamsProvider(
               "update your Azure Bot endpoint — this fallback will be removed in a future release",
           );
         }
-        // Rewrite the URL so the SDK's registered handler picks it up. Express
-        // app instances are themselves request handlers (Application extends
-        // IRouter extends RequestHandler), so re-invoking the app re-runs the
-        // middleware chain (including the SDK-registered route).
+        // Re-enter the middleware chain so the configured SDK route still authenticates it.
         req.url = configuredPath;
         expressApp(req, res, next);
       },
     );
   }
 
-  // Build a token provider adapter for Graph API operations
   const tokenProvider = createMSTeamsTokenProvider(app);
 
   const ssoDeps = ssoConnectionName
@@ -339,22 +336,20 @@ export async function monitorMSTeamsProvider(
       if (vote) {
         const voterId = activity?.from?.aadObjectId ?? activity?.from?.id ?? "unknown";
         try {
-          if (!(await isCardActionInvokeAuthorized(adaptedCtx, handlerDeps))) {
-            return {
-              statusCode: 200,
-              type: "application/vnd.microsoft.activity.message",
-              value: "Not authorized.",
-            };
+          if (
+            !(await isMSTeamsInvokeAuthorized({
+              context: adaptedCtx,
+              deps: handlerDeps,
+              invokeKind: "card action",
+            }))
+          ) {
+            return cardActionMessage("Not authorized.");
           }
 
           const existingPoll = await pollStore.getPoll(vote.pollId);
           if (!existingPoll) {
             log.debug?.("poll vote ignored (poll not found)", { pollId: vote.pollId });
-            return {
-              statusCode: 200,
-              type: "application/vnd.microsoft.activity.message",
-              value: "Poll not found.",
-            };
+            return cardActionMessage("Poll not found.");
           }
           const pollConversationId = existingPoll.conversationId
             ? normalizeMSTeamsConversationId(existingPoll.conversationId)
@@ -368,11 +363,7 @@ export async function monitorMSTeamsProvider(
               expectedConversationId: pollConversationId,
               receivedConversationId: activityConversationId || undefined,
             });
-            return {
-              statusCode: 200,
-              type: "application/vnd.microsoft.activity.message",
-              value: "Poll not found.",
-            };
+            return cardActionMessage("Poll not found.");
           }
 
           const poll = await pollStore.recordVote({
@@ -382,61 +373,29 @@ export async function monitorMSTeamsProvider(
           });
           if (poll) {
             log.info("recorded poll vote", { pollId: vote.pollId, voterId });
-            return {
-              statusCode: 200,
-              type: "application/vnd.microsoft.activity.message",
-              value: "Vote recorded.",
-            };
+            return cardActionMessage("Vote recorded.");
           }
           log.debug?.("poll vote ignored (poll not found)", { pollId: vote.pollId });
-          return {
-            statusCode: 200,
-            type: "application/vnd.microsoft.activity.message",
-            value: "Poll not found.",
-          };
+          return cardActionMessage("Poll not found.");
         } catch (err) {
           log.error("failed to record poll vote", {
             pollId: vote.pollId,
             error: formatUnknownError(err),
           });
-          return {
-            statusCode: 500,
-            type: "application/vnd.microsoft.error",
-            value: {
-              code: "RECORD_VOTE_FAILED",
-              message: "Could not record vote.",
-              innerHttpError: { statusCode: 500, body: null },
-            },
-          };
+          return cardActionError("RECORD_VOTE_FAILED", "Could not record vote.");
         }
       }
       // The SDK has already authenticated this invoke. Acknowledge only after
       // the raw activity is durable; agent work drains independently.
       await ingress.accept(activity, adaptedCtx);
-      return {
-        statusCode: 200,
-        type: "application/vnd.microsoft.activity.message",
-        value: "OK",
-      };
+      return cardActionMessage("OK");
     } catch (err) {
       log.error("msteams card.action failed", { error: formatUnknownError(err) });
-      return {
-        statusCode: 500,
-        type: "application/vnd.microsoft.error",
-        value: {
-          code: "CARD_ACTION_FAILED",
-          message: "Card action failed.",
-          innerHttpError: { statusCode: 500, body: null },
-        },
-      };
+      return cardActionError("CARD_ACTION_FAILED", "Card action failed.");
     }
   });
 
-  // File-consent invokes (large-file upload accept/decline). We register
-  // typed handlers so the SDK writes the HTTP InvokeResponse for us — the
-  // old `ctx.sendActivity({ type: "invokeResponse" })` shape no longer
-  // works on the new SDK because that ctx call becomes an outbound BF
-  // activity instead of the HTTP response (Brad #2 / codex #4).
+  // Typed routes let the SDK acknowledge consent before the delayed upload work.
   app.on("file.consent.accept", (ctx) => {
     void runMSTeamsFileConsentInvokeHandler(adaptSdkContext(ctx, app), log);
   });
@@ -444,37 +403,31 @@ export async function monitorMSTeamsProvider(
     void runMSTeamsFileConsentInvokeHandler(adaptSdkContext(ctx, app), log);
   });
 
-  const handleSdkSigninInvoke = async (
-    ctx: unknown,
-    delegateName: "onTokenExchange" | "onVerifyState",
-  ) => {
-    const adaptedCtx = adaptSdkContext(ctx, app);
-    if (!(await isSigninInvokeAuthorized(adaptedCtx, handlerDeps))) {
+  // The SDK transport calls this public operation after validating the request token.
+  // Its system SSO routes precede user middleware, so authorization must run before process.
+  const processActivity = app.process.bind(app);
+  app.process = async (event) => {
+    const activity = event.body;
+    if (
+      activity.type !== "invoke" ||
+      !("name" in activity) ||
+      (activity.name !== "signin/tokenExchange" && activity.name !== "signin/verifyState")
+    ) {
+      return processActivity(event);
+    }
+    const context = { activity: { ...activity, type: activity.type, name: activity.name } };
+    if (!(await isMSTeamsInvokeAuthorized({ context, deps: handlerDeps, invokeKind: "signin" }))) {
       return { status: 200, body: {} };
     }
     if (!ssoDeps) {
       log.debug?.("signin invoke received but msteams.sso is not configured", {
-        name: adaptedCtx.activity?.name,
+        name: activity.name,
       });
       return { status: 200, body: {} };
     }
 
-    const sdkSigninApp = app as MSTeamsApp & {
-      onTokenExchange?: (ctx: unknown) => Promise<unknown>;
-      onVerifyState?: (ctx: unknown) => Promise<unknown>;
-    };
-    const delegate = sdkSigninApp[delegateName];
-    if (typeof delegate !== "function") {
-      throw new Error(`Teams SDK ${delegateName} handler is unavailable`);
-    }
-    return delegate.call(sdkSigninApp, ctx);
+    return processActivity(event);
   };
-
-  // Replace the SDK's default sign-in invoke routes with an authz gate that
-  // delegates to the same SDK handlers only after sender policy passes. Registering
-  // a user route with the same name intentionally replaces the SDK system route.
-  app.on("signin.token-exchange", (ctx) => handleSdkSigninInvoke(ctx, "onTokenExchange"));
-  app.on("signin.verify-state", (ctx) => handleSdkSigninInvoke(ctx, "onVerifyState"));
 
   // The delegated SDK sign-in handlers emit `signin` only after a successful
   // token exchange/lookup. Persist that token for later OpenClaw use.
@@ -482,7 +435,13 @@ export async function monitorMSTeamsProvider(
     app.event("signin", (ctx) => {
       void (async () => {
         const adaptedCtx = adaptSdkContext(ctx, app);
-        if (!(await isSigninInvokeAuthorized(adaptedCtx, handlerDeps))) {
+        if (
+          !(await isMSTeamsInvokeAuthorized({
+            context: adaptedCtx,
+            deps: handlerDeps,
+            invokeKind: "signin",
+          }))
+        ) {
           return;
         }
 
@@ -541,9 +500,6 @@ export async function monitorMSTeamsProvider(
     }
   });
 
-  // Catch all inbound activities from the SDK and delegate to our existing
-  // handler dispatch system. The SDK has already validated JWT and parsed the
-  // activity by this point.
   app.on("activity", async (ctx) => {
     const adaptedCtx = adaptSdkContext(ctx, app);
     const activity = adaptedCtx.activity;
@@ -571,56 +527,88 @@ export async function monitorMSTeamsProvider(
     }
   });
 
-  // Initialize the SDK App — registers the POST route on Express and sets up
-  // JWT validation middleware internally.
   await app.initialize();
   ingress.start();
 
-  // Start listening and fail fast if bind/listen fails.
-  // skipAuth is private-QA-only and must never expose an unauthenticated
-  // webhook beyond loopback. Production keeps Express' existing bind behavior.
-  const privateQaRuntime = resolveMSTeamsPrivateQaRuntime();
-  const httpServer = await new Promise<Server>((resolve, reject) => {
-    const onListen = (err?: Error) => (err ? reject(err) : resolve(server));
-    const server = privateQaRuntime
-      ? expressApp.listen(port, privateQaRuntime.listenHost, onListen)
-      : expressApp.listen(port, onListen);
-  }).catch(async (err: unknown) => {
-    log.error("msteams server error", { error: formatUnknownError(err) });
+  const unregisterRoutes: Array<() => void> = [];
+  const webhook = createMSTeamsWebhookHandler(expressApp, (message) => log.warn?.(message));
+  try {
+    unregisterRoutes.push(
+      registerPluginHttpRoute({
+        path: configuredPath,
+        auth: "plugin",
+        pluginId: "msteams",
+        source: "msteams-webhook",
+        accountId: appId,
+        handler: webhook.handler,
+        legacyListener: legacyListener
+          ? {
+              ...legacyListener,
+              timeouts: { headers: 15_000, request: 30_000, socket: 30_000 },
+            }
+          : undefined,
+        throwOnFailure: true,
+        log: (message) => log.warn?.(message),
+      }),
+    );
+    if (configuredPath !== "/api/messages") {
+      unregisterRoutes.push(
+        registerPluginHttpRoute({
+          path: "/api/messages",
+          auth: "plugin",
+          pluginId: "msteams",
+          source: "msteams-webhook-alias",
+          accountId: appId,
+          handler: webhook.handler,
+          log: (message) => log.warn?.(message),
+        }),
+      );
+    }
+  } catch (error) {
+    for (const unregister of unregisterRoutes) {
+      unregister();
+    }
     await ingress.stop();
-    throw err;
-  });
-  log.info(`msteams provider started on port ${port}`);
+    throw error;
+  }
+  log.info(`msteams provider started on Gateway route ${configuredPath}`);
   publishMSTeamsReady(opts.statusSink);
-  applyMSTeamsWebhookTimeouts(httpServer);
 
-  httpServer.on("error", (err) => {
-    log.error("msteams server error", { error: formatUnknownError(err) });
-    publishMSTeamsRecovering(opts.statusSink, formatUnknownError(err));
-  });
-
-  const shutdown = async () => {
-    log.info("shutting down msteams provider");
-    await new Promise<void>((resolve) => {
-      httpServer.close((err) => {
-        if (err) {
-          log.debug?.("msteams server close error", { error: formatUnknownError(err) });
-        }
-        resolve();
-      });
-    });
-    await ingress.stop();
-    publishMSTeamsStopped(opts.statusSink);
+  let shutdownTask: Promise<void> | undefined;
+  const shutdown = () => {
+    shutdownTask ??= (async () => {
+      await webhook.close();
+      for (const unregister of unregisterRoutes.splice(0)) {
+        unregister();
+      }
+      await ingress.stop();
+      publishMSTeamsStopped(opts.statusSink);
+    })();
+    return shutdownTask;
   };
-
-  // Keep this task alive until close so gateway runtime does not treat startup as exit.
-  await keepHttpServerTaskAlive({
-    server: httpServer,
-    abortSignal: opts.abortSignal,
-    onAbort: shutdown,
-  });
+  try {
+    await waitUntilAbort(opts.abortSignal, shutdown);
+  } finally {
+    await shutdown();
+  }
 
   return { app: expressApp, shutdown };
+}
+
+function cardActionMessage(value: string): MSTeamsCardActionResponse {
+  return { statusCode: 200, type: "application/vnd.microsoft.activity.message", value };
+}
+
+function cardActionError(code: string, message: string): MSTeamsCardActionResponse {
+  return {
+    statusCode: 500,
+    type: "application/vnd.microsoft.error",
+    value: {
+      code,
+      message,
+      innerHttpError: { statusCode: 500, body: null },
+    },
+  };
 }
 
 /**

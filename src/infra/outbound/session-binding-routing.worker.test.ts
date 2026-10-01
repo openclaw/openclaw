@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  observeParentSqlite,
+  sqliteMethods as methods,
+  emptySqliteCounts as emptyCounts,
+} from "../../../test/helpers/sqlite-parent-observer.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveBoundAcpDispatchSessionKey } from "../../auto-reply/reply/dispatch-from-config.context.js";
 import { resolveIngressFailureDisposition } from "../../channels/message/ingress-retry-policy.js";
@@ -19,72 +24,9 @@ import {
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { openNodeSqliteDatabase, requireNodeSqlite } from "../node-sqlite.js";
+import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { inspectCurrentConversationBindingRecord } from "./current-conversation-bindings.js";
 import { readSessionBindingSelectionCurrent, testing } from "./session-binding-service.js";
-
-const methods = ["construct", "close", "prepare", "exec", "get", "all", "run", "iterate"] as const;
-type SqliteCounts = Record<(typeof methods)[number], number>;
-const emptyCounts = (): SqliteCounts => ({
-  construct: 0,
-  close: 0,
-  prepare: 0,
-  exec: 0,
-  get: 0,
-  all: 0,
-  run: 0,
-  iterate: 0,
-});
-
-function observeParentSqlite() {
-  const sqlite = requireNodeSqlite();
-  const { DatabaseSync, StatementSync } = sqlite;
-  const counts = emptyCounts();
-  const restores: Array<() => void> = [];
-  const constructor = Object.getOwnPropertyDescriptor(sqlite, "DatabaseSync");
-  if (!constructor?.writable || constructor.value !== DatabaseSync) {
-    throw new Error("All eight parent SQLite counters require a writable constructor");
-  }
-  Object.defineProperty(sqlite, "DatabaseSync", {
-    ...constructor,
-    value: new Proxy(DatabaseSync, {
-      construct(target, args, newTarget) {
-        counts.construct += 1;
-        return Reflect.construct(target, args, newTarget);
-      },
-    }),
-  });
-  restores.push(() => Object.defineProperty(sqlite, "DatabaseSync", constructor));
-  try {
-    for (const [prototype, names] of [
-      [DatabaseSync.prototype, ["close", "prepare", "exec"]],
-      [StatementSync.prototype, ["get", "all", "run", "iterate"]],
-    ] as const) {
-      for (const name of names) {
-        const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
-        if (!descriptor?.writable || typeof descriptor.value !== "function") {
-          throw new Error(`Parent SQLite counter unavailable: ${name}`);
-        }
-        Object.defineProperty(prototype, name, {
-          ...descriptor,
-          value(this: unknown, ...args: unknown[]) {
-            counts[name] += 1;
-            return Reflect.apply(descriptor.value, this, args);
-          },
-        });
-        restores.push(() => Object.defineProperty(prototype, name, descriptor));
-      }
-    }
-    return {
-      counts,
-      reset: () => Object.assign(counts, emptyCounts()),
-      restore: () => restores.toReversed().forEach((restore) => restore()),
-    };
-  } catch (error) {
-    restores.toReversed().forEach((restore) => restore());
-    throw error;
-  }
-}
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const stateKey = Symbol("binding-routing-worker-proof");

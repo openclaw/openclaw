@@ -31,20 +31,20 @@ export async function inspectManagedWorktreeCheckout(
   kind: "lossless" | "provisioned" | "nested-repository",
   context: { env: NodeJS.ProcessEnv; getConfig: () => OpenClawConfig },
 ) {
+  const input =
+    kind === "nested-repository"
+      ? { kind, checkoutPath: record.path }
+      : {
+          kind,
+          checkoutPath: record.path,
+          provisionedPaths: await getRegistryWorktreeProvisionedPaths(context.env, record.id),
+        };
+  // Known provisioning ledgers need only filesystem checks. Legacy rows without
+  // a ledger retain Git admission so missing metadata still reaches orphan recovery.
+  if (input.kind === "provisioned" && input.provisionedPaths !== undefined) {
+    return await runGitWorkerOperation({ type: "worktree.cleanup-inspection", input });
+  }
   return await withManagedWorktreeGit({ record, ...context }, async (git) =>
-    runGitWorkerOperation(
-      {
-        type: "worktree.cleanup-inspection",
-        input:
-          kind === "nested-repository"
-            ? { kind, checkoutPath: record.path }
-            : {
-                kind,
-                checkoutPath: record.path,
-                provisionedPaths: await getRegistryWorktreeProvisionedPaths(context.env, record.id),
-              },
-      },
-      { git: git.worker },
-    ),
+    runGitWorkerOperation({ type: "worktree.cleanup-inspection", input }, { git: git.worker }),
   );
 }

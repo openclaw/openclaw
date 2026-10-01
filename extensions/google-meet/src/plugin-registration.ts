@@ -9,7 +9,7 @@ import {
   asNonArrayRecord as asParamRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isGoogleMeetBrowserManualActionError } from "./browser-manual-action-error.js";
+import { GoogleMeetBrowserManualActionError } from "./browser-manual-action-error.js";
 import {
   resolveGoogleMeetGatewayOperationTimeoutMs,
   type GoogleMeetConfig,
@@ -19,12 +19,11 @@ import {
 import type { GoogleMeetRuntime } from "./runtime.js";
 import { GOOGLE_MEET_NODE_COMMAND } from "./transports/google-meet-platform-constants.js";
 
-export { asParamRecord };
-
 export const loadGoogleMeetPluginHelpers = createLazyRuntimeModule(
   () => import("./plugin-helpers.js"),
 );
 export const loadGoogleMeetCliModule = createLazyRuntimeModule(() => import("./cli.js"));
+export const loadGoogleMeetCreateModule = createLazyRuntimeModule(() => import("./create.js"));
 export const loadGoogleMeetNodeHostModule = createLazyRuntimeModule(() => import("./node-host.js"));
 
 const loadGoogleMeetRuntimeModule = createLazyRuntimeModule(() => import("./runtime.js"));
@@ -35,12 +34,10 @@ const loadGoogleMeetGatewayRuntimeModule = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/gateway-runtime"),
 );
 
-type GoogleMeetGatewayRuntimeModule = Awaited<
-  ReturnType<typeof loadGoogleMeetGatewayRuntimeModule>
->;
-type CallGatewayFromCli = GoogleMeetGatewayRuntimeModule["callGatewayFromCli"];
-type GoogleMeetGatewayError = NonNullable<Parameters<GatewayRequestHandlerOptions["respond"]>[2]>;
-type GoogleMeetGatewayErrorCode = GoogleMeetGatewayError["code"];
+type CallGatewayFromCli = typeof import("openclaw/plugin-sdk/gateway-runtime").callGatewayFromCli;
+type GoogleMeetGatewayErrorCode = NonNullable<
+  Parameters<GatewayRequestHandlerOptions["respond"]>[2]
+>["code"];
 
 type LoadGoogleMeetNodeInvokePolicy = (
   config: GoogleMeetConfig,
@@ -84,6 +81,8 @@ type GoogleMeetGatewayToolAction =
   | "create"
   | "status"
   | "transcript"
+  | "participation_context"
+  | "participate"
   | "recover_current_tab"
   | "setup_status"
   | "leave"
@@ -94,6 +93,8 @@ type GoogleMeetGatewayToolAction =
 
 function googleMeetGatewayMethodForToolAction(action: GoogleMeetGatewayToolAction): string {
   switch (action) {
+    case "participation_context":
+      return "googlemeet.participationContext";
     case "recover_current_tab":
       return "googlemeet.recoverCurrentTab";
     case "setup_status":
@@ -109,13 +110,53 @@ function googleMeetGatewayMethodForToolAction(action: GoogleMeetGatewayToolActio
   }
 }
 
-function isGoogleMeetAgentToolActionUnsupportedOnHost(params: {
+export function readGoogleMeetParticipationParams(raw: Record<string, unknown>): {
+  sessionId: string;
+  request: Parameters<GoogleMeetRuntime["participate"]>[1];
+} {
+  const sessionId = normalizeOptionalString(raw.sessionId);
+  if (!sessionId) {
+    throw new Error("sessionId required");
+  }
+  const requestId = normalizeOptionalString(raw.requestId);
+  if (!requestId) {
+    throw new Error("requestId required");
+  }
+  for (const name of ["sourceId", "correctionOf"] as const) {
+    if (raw[name] !== undefined && !normalizeOptionalString(raw[name])) {
+      throw new Error(`${name} must be a non-empty string`);
+    }
+  }
+  const action = asParamRecord(raw.participationAction);
+  const type = normalizeOptionalString(action.type);
+  if (!type) {
+    throw new Error("participationAction.type required");
+  }
+  for (const name of ["text", "reaction"] as const) {
+    if (action[name] !== undefined && typeof action[name] !== "string") {
+      throw new Error(`participationAction.${name} must be a string`);
+    }
+  }
+  return {
+    sessionId,
+    request: {
+      requestId,
+      ...(raw.sourceId !== undefined ? { sourceId: normalizeOptionalString(raw.sourceId) } : {}),
+      ...(raw.correctionOf !== undefined
+        ? { correctionOf: normalizeOptionalString(raw.correctionOf) }
+        : {}),
+      action: { ...action, type },
+    },
+  };
+}
+
+export function assertGoogleMeetAgentToolActionSupported(params: {
   config: GoogleMeetConfig;
   raw: Record<string, unknown>;
-}): boolean {
+}): void {
   const platform = googleMeetToolDeps.platform();
   if (platform === "darwin" || platform === "linux") {
-    return false;
+    return;
   }
   const action = params.raw.action;
   if (
@@ -123,33 +164,19 @@ function isGoogleMeetAgentToolActionUnsupportedOnHost(params: {
     action !== "test_speech" &&
     !(action === "create" && shouldJoinCreatedMeet(params.raw))
   ) {
-    return false;
+    return;
   }
   const transport = normalizeTransport(params.raw.transport) ?? params.config.defaultTransport;
   const mode =
     action === "test_speech"
       ? "agent"
       : (normalizeMode(params.raw.mode) ?? params.config.defaultMode);
-  return transport === "chrome" && (mode === "agent" || mode === "bidi");
-}
-
-export function assertGoogleMeetAgentToolActionSupported(params: {
-  config: GoogleMeetConfig;
-  raw: Record<string, unknown>;
-}): void {
-  if (!isGoogleMeetAgentToolActionUnsupportedOnHost(params)) {
+  if (transport !== "chrome" || (mode !== "agent" && mode !== "bidi")) {
     return;
   }
   throw new Error(
     "Google Meet local Chrome talk-back audio requires macOS with BlackHole 2ch or Linux with PipeWire-Pulse. On this host, use mode: transcribe, transport: twilio, or a supported chrome-node.",
   );
-}
-
-function readGatewayErrorDetails(err: unknown): unknown {
-  if (!err || typeof err !== "object" || !("details" in err)) {
-    return undefined;
-  }
-  return (err as { details?: unknown }).details;
 }
 
 export async function callGoogleMeetGatewayFromTool(params: {
@@ -184,7 +211,7 @@ export async function callGoogleMeetGatewayFromTool(params: {
       { progress: false, scopes: ["operator.admin"] },
     );
   } catch (err) {
-    const details = readGatewayErrorDetails(err);
+    const details = err && typeof err === "object" && "details" in err ? err.details : undefined;
     if (details && typeof details === "object") {
       return details;
     }
@@ -270,7 +297,7 @@ export function createLazyGoogleMeetNodeInvokePolicy(
 }
 
 export function formatGoogleMeetGatewayError(err: unknown) {
-  return isGoogleMeetBrowserManualActionError(err)
+  return err instanceof GoogleMeetBrowserManualActionError
     ? err.payload
     : { error: formatErrorMessage(err) };
 }

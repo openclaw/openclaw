@@ -7,6 +7,7 @@ import {
   collectChannelDoctorPreviewWarnings,
   collectChannelDoctorStaleConfigMutations,
   createChannelDoctorEmptyAllowlistPolicyHooks,
+  runChannelDoctorConfigSequences,
 } from "./channel-doctor.js";
 
 const mocks = vi.hoisted(() => ({
@@ -249,6 +250,71 @@ describe("channel doctor compatibility mutations", () => {
     expect(normalizeCompatibilityConfig).toHaveBeenCalledTimes(1);
     expectMatrixDoctorLookupCalls(cfg);
     expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalledWith("discord");
+  });
+
+  it("preserves the merged adapter as the compatibility hook receiver", () => {
+    mockReadOnlyMatrixPlugin({
+      groupModel: "sender",
+      normalizeCompatibilityConfig({ cfg }: { cfg: unknown }) {
+        return { config: cfg, changes: [this.groupModel] };
+      },
+    });
+    const cfg = createMatrixEnabledConfig();
+
+    expect(collectChannelDoctorCompatibilityMutations(cfg)).toEqual([
+      { config: cfg, changes: ["sender"] },
+    ]);
+  });
+
+  it("preserves config and continues after a channel repair throws", () => {
+    const cfg = { channels: { matrix: { enabled: true }, slack: { enabled: true } } };
+    mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({
+      plugins: [
+        {
+          id: "matrix",
+          doctor: {
+            normalizeCompatibilityConfig({ cfg: candidate }: { cfg: typeof cfg }) {
+              candidate.channels.matrix.enabled = false;
+              throw new Error("fixture repair failed");
+            },
+          },
+        },
+        {
+          id: "slack",
+          doctor: { normalizeCompatibilityConfig: createNormalizeCompatibilityConfig("slack") },
+        },
+      ],
+    });
+
+    expect(collectChannelDoctorCompatibilityMutations(cfg)).toEqual([
+      {
+        config: cfg,
+        changes: ["slack"],
+        warnings: [expect.stringContaining('Plugin "matrix" config repair failed')],
+      },
+    ]);
+    expect(cfg.channels.matrix.enabled).toBe(true);
+  });
+
+  it("retains informational channel guidance separately from changes and warnings", async () => {
+    mockReadOnlyMatrixPlugin({
+      runConfigSequence: () => ({
+        changeNotes: ["Migrated explicit listener settings."],
+        infoNotes: ["The default listener remains available; set legacyWebhook:false to close it."],
+        warningNotes: ["The callback path requires Gateway authentication."],
+      }),
+    });
+    await expect(
+      runChannelDoctorConfigSequences({
+        cfg: createMatrixEnabledConfig(),
+        env: {},
+        shouldRepair: false,
+      }),
+    ).resolves.toEqual({
+      changeNotes: ["Migrated explicit listener settings."],
+      infoNotes: ["The default listener remains available; set legacyWebhook:false to close it."],
+      warningNotes: ["The callback path requires Gateway authentication."],
+    });
   });
 
   it("keeps unresolved SecretRef preview reads non-fatal", async () => {

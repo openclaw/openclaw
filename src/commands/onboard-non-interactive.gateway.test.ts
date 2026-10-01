@@ -23,6 +23,7 @@ import {
   gatewayOnboardRuntime as runtime,
   testConfigStore,
   useGatewayOnboardTestHarness,
+  waitForGatewayReachableMock,
 } from "./onboard-non-interactive.gateway.test-mocks.js";
 import {
   createOnboardGatewayTimeoutCapture,
@@ -664,7 +665,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
-  it("completes explicit no-daemon setup when no gateway is listening", async () => {
+  it("completes explicit no-daemon setup without a startup wait when no gateway is listening", async () => {
     await withStateDir("state-local-health-hint-", async (stateDir) => {
       gatewayReachableState.mock = vi.fn(async () => ({
         ok: false,
@@ -680,6 +681,8 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(log.mock.calls.flat().join("\n")).toMatch(
         /Setup complete; gateway was not installed or started because daemon installation was explicitly skipped\.[\s\S]*Gateway did not become reachable[\s\S]*Classification: not-listening[\s\S]*only waits for an already-running gateway unless you pass `--install-daemon` to `openclaw onboard`[\s\S]*openclaw onboard --install-daemon[\s\S]*openclaw onboard --skip-health/,
       );
+      expect(gatewayReachableState.mock).toHaveBeenCalledOnce();
+      expect(waitForGatewayReachableMock).not.toHaveBeenCalled();
     });
   }, 60_000);
 
@@ -876,43 +879,48 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
-  it("emits structured JSON failure when a reachable gateway fails its health check", async () => {
-    await withStateDir("state-local-daemon-health-exit-json-", async (stateDir) => {
-      gatewayReachableState.mock = vi.fn(async () => ({ ok: true }));
-      healthCommandMock.mockImplementationOnce(async (...args: unknown[]) => {
-        // healthCommand prints its reachable-gateway diagnostic before its
-        // CLI-style exit; the capture runtime must keep it off JSON stdout.
-        // importActual yields the ExitError instance the prod graph sees; the
-        // test file's static import can be a second class instance under Vitest.
-        const { ExitError: RuntimeExitError } =
-          await vi.importActual<typeof import("../runtime.js")>("../runtime.js");
-        const healthRuntime = args[1] as RuntimeEnv;
-        healthRuntime.log("Gateway is reachable.");
-        healthRuntime.log("Gateway credentials rejected.");
-        throw new RuntimeExitError(1);
-      });
+  it.each([false, true])(
+    "emits structured JSON failure when a reachable gateway fails its health check (installDaemon: %s)",
+    async (installDaemon) => {
+      await withStateDir("state-local-daemon-health-exit-json-", async (stateDir) => {
+        gatewayReachableState.mock = vi.fn(async () => ({ ok: true }));
+        healthCommandMock.mockImplementationOnce(async (...args: unknown[]) => {
+          // healthCommand prints its reachable-gateway diagnostic before its
+          // CLI-style exit; the capture runtime must keep it off JSON stdout.
+          // importActual yields the ExitError instance the prod graph sees; the
+          // test file's static import can be a second class instance under Vitest.
+          const { ExitError: RuntimeExitError } =
+            await vi.importActual<typeof import("../runtime.js")>("../runtime.js");
+          const healthRuntime = args[1] as RuntimeEnv;
+          healthRuntime.log("Gateway is reachable.");
+          healthRuntime.log("Gateway credentials rejected.");
+          throw new RuntimeExitError(1);
+        });
 
-      const { runtimeWithCapture, readCapturedJson } = createOnboardJsonCaptureRuntime();
-      await expectOnboardLocalJsonSetupFailure({
-        runSetup: runNonInteractiveSetup,
-        stateDir,
-        runtime: runtimeWithCapture,
-      });
+        const { runtimeWithCapture, readCapturedJson } = createOnboardJsonCaptureRuntime();
+        await expectOnboardLocalJsonSetupFailure({
+          runSetup: (opts, runtimeEnv) =>
+            runNonInteractiveSetup({ ...opts, installDaemon }, runtimeEnv),
+          stateDir,
+          runtime: runtimeWithCapture,
+        });
 
-      const parsed = JSON.parse(readCapturedJson()) as {
-        ok: boolean;
-        phase: string;
-        message: string;
-        detail?: string;
-        hints?: string[];
-      };
-      expect(parsed.ok).toBe(false);
-      expect(parsed.phase).toBe("gateway-health");
-      expect(parsed.message).toContain("health check failed");
-      expect(parsed.detail).toContain("Gateway credentials rejected.");
-      expect(parsed.hints).toContain("Run `openclaw health` for full diagnostics.");
-    });
-  }, 60_000);
+        const parsed = JSON.parse(readCapturedJson()) as {
+          ok: boolean;
+          phase: string;
+          message: string;
+          detail?: string;
+          hints?: string[];
+        };
+        expect(parsed.ok).toBe(false);
+        expect(parsed.phase).toBe("gateway-health");
+        expect(parsed.message).toContain("health check failed");
+        expect(parsed.detail).toContain("Gateway credentials rejected.");
+        expect(parsed.hints).toContain("Run `openclaw health` for full diagnostics.");
+      });
+    },
+    60_000,
+  );
 
   it("routes thrown health-check errors through the onboarding failure owner", async () => {
     await withStateDir("state-local-health-failure-text-", async (stateDir) => {
