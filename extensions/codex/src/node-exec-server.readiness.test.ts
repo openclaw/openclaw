@@ -7,6 +7,7 @@ import type { OpenClawPluginNodeHostCommandIo } from "openclaw/plugin-sdk/node-h
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import * as tempPaths from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { setManagedCodexPluginRoot } from "./app-server/managed-binary.js";
 import * as transport from "./app-server/transport-stdio.js";
 import * as transportLifecycle from "./app-server/transport.js";
@@ -35,7 +36,8 @@ async function startFixture(readyBeforeRegistrationReturns = false) {
   const receiver = vi.fn((_receive: (message: Uint8Array) => void | Promise<void>) => () => {});
   const send = vi.fn(async (_message: Uint8Array) => {});
   const assertExecAuthorized = vi.fn();
-  const release = vi.fn();
+  const released = createDeferred<void>();
+  const release = vi.fn(() => released.resolve());
   const command = createCodexNodeExecServerCommand();
   const io = {
     signal: controller.signal,
@@ -110,6 +112,7 @@ async function startFixture(readyBeforeRegistrationReturns = false) {
     send,
     assertExecAuthorized,
     release,
+    released: released.promise,
     command,
     privateHome: privateHome!,
     outcome,
@@ -178,7 +181,9 @@ describe("Codex node native readiness", () => {
     }
   });
 
-  it("retains workspace resources after an unconfirmed stop until the child closes", async () => {
+  it("retains workspace resources after an unconfirmed stop until the child closes", async ({
+    signal,
+  }) => {
     const harness = await startFixture(true);
     const close = transportLifecycle.closeCodexAppServerTransportAndWait;
     const failedClose = vi
@@ -201,10 +206,10 @@ describe("Codex node native readiness", () => {
       failedClose.mockRestore();
       failedTreeKill.mockRestore();
       await close(harness.child);
-      await vi.waitFor(async () => {
-        expect(harness.release).toHaveBeenCalledOnce();
-        await expect(access(harness.privateHome)).rejects.toThrow();
-      });
+      // The process owner releases the workspace after output and HOME cleanup settle.
+      await withinTest(harness.released, signal);
+      expect(harness.release).toHaveBeenCalledOnce();
+      await expect(access(harness.privateHome)).rejects.toThrow();
       await harness.command.onDisconnect?.();
       expect(harness.release).toHaveBeenCalledOnce();
       expect(harness.command.hasActiveWork?.()).toBe(false);

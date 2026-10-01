@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../../../test/helpers/promise.js";
+import * as outputFiles from "./output-files.js";
 import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 
 describe("Playwright download capture cancellation", () => {
@@ -146,9 +148,21 @@ describe("Playwright download capture cancellation", () => {
     }
   });
 
-  it("cancels an in-progress download without publishing staged output", async () => {
+  it("cancels an in-progress download without publishing staged output", async ({ signal }) => {
     const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-cancel-"));
     const outputPath = path.join(outputRoot, "cancelled.bin");
+    const writeSettled = createDeferred<void>();
+    const writeOutput = outputFiles.writeExternalFileWithinOutputRoot;
+    const write = vi
+      .spyOn(outputFiles, "writeExternalFileWithinOutputRoot")
+      .mockImplementation((params) => {
+        const pending = writeOutput(params);
+        void pending.then(
+          () => writeSettled.resolve(),
+          () => writeSettled.resolve(),
+        );
+        return pending;
+      });
     const page = new EventEmitter();
     const state = { downloadWaiterDepth: 0 };
     const controller = new AbortController();
@@ -181,7 +195,7 @@ describe("Playwright download capture cancellation", () => {
         saveAs,
         cancel,
       });
-      const partialPath = await saveStarted.promise;
+      const partialPath = await withinTest(saveStarted.promise, signal);
       await expect(fs.readFile(partialPath, "utf8")).resolves.toBe("cancelled partial contents");
 
       controller.abort(reason);
@@ -191,22 +205,41 @@ describe("Playwright download capture cancellation", () => {
 
       expect(cancel).toHaveBeenCalledOnce();
       await expect(outcome).resolves.toBe(reason);
-      await vi.waitFor(async () => {
-        await expect(fs.access(partialPath)).rejects.toMatchObject({ code: "ENOENT" });
-      });
+      // Capture rejection precedes the writer's staging cleanup; join that exact writer.
+      await withinTest(writeSettled.promise, signal);
+      await expect(fs.access(partialPath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(state.downloadWaiterDepth).toBe(0);
       expect(page.listenerCount("download")).toBe(0);
     } finally {
       saveGate.resolve();
       await outcome;
+      // Teardown joins admitted writes even after the test signal has aborted.
+      if (write.mock.calls.length > 0) {
+        await writeSettled.promise;
+      }
+      write.mockRestore();
       await fs.rm(outputRoot, { recursive: true, force: true });
     }
   });
 
-  it("cancels a timed-out in-progress download without publishing staged output", async () => {
+  it("cancels a timed-out in-progress download without publishing staged output", async ({
+    signal,
+  }) => {
     const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-timeout-"));
     const outputPath = path.join(outputRoot, "timed-out.bin");
+    const writeSettled = createDeferred<void>();
+    const writeOutput = outputFiles.writeExternalFileWithinOutputRoot;
+    const write = vi
+      .spyOn(outputFiles, "writeExternalFileWithinOutputRoot")
+      .mockImplementation((params) => {
+        const pending = writeOutput(params);
+        void pending.then(
+          () => writeSettled.resolve(),
+          () => writeSettled.resolve(),
+        );
+        return pending;
+      });
     vi.useFakeTimers();
     const page = new EventEmitter();
     const state = { downloadWaiterDepth: 0 };
@@ -237,20 +270,25 @@ describe("Playwright download capture cancellation", () => {
         saveAs,
         cancel,
       });
-      const partialPath = await saveStarted.promise;
+      const partialPath = await withinTest(saveStarted.promise, signal);
       await vi.advanceTimersByTimeAsync(25);
 
       await expect(Promise.race([outcome, Promise.resolve("pending")])).resolves.toMatchObject({
         message: "Timeout waiting for download",
       });
       expect(cancel).toHaveBeenCalledOnce();
-      await vi.waitFor(async () => {
-        await expect(fs.access(partialPath)).rejects.toMatchObject({ code: "ENOENT" });
-      });
+      // Capture rejection precedes the writer's staging cleanup; join that exact writer.
+      await withinTest(writeSettled.promise, signal);
+      await expect(fs.access(partialPath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       saveGate.resolve();
       await outcome;
+      // Teardown joins admitted writes even after the test signal has aborted.
+      if (write.mock.calls.length > 0) {
+        await writeSettled.promise;
+      }
+      write.mockRestore();
       vi.useRealTimers();
       await fs.rm(outputRoot, { recursive: true, force: true });
     }

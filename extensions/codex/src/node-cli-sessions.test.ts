@@ -6,7 +6,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import {
   createCodexCliSessionNodeHostCommands,
@@ -33,6 +39,14 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
 let tempDir: string;
 let previousCodexHome: string | undefined;
 const resolveCatalogSource = vi.fn<Parameters<typeof createCodexCliSessionNodeHostCommands>[0]>();
+let receipts: FixtureReceiptChannel;
+
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 
 async function completeResume(argv: string[]) {
   const outputPath = argv[argv.indexOf("--output-last-message") + 1];
@@ -358,7 +372,9 @@ describe("codex cli node sessions", () => {
     },
   );
 
-  it("cancels a running node resume before a delayed write and releases its reservation", async () => {
+  it("cancels a running node resume before a delayed write and releases its reservation", async ({
+    signal,
+  }) => {
     const { runCommandBuffered } = await vi.importActual<
       typeof import("openclaw/plugin-sdk/process-runtime")
     >("openclaw/plugin-sdk/process-runtime");
@@ -368,9 +384,12 @@ describe("codex cli node sessions", () => {
       runCommandBuffered(
         [
           process.execPath,
+          "--input-type=module",
           "-e",
-          `const fs = require("node:fs");
+          `${fixtureReceiptClientSource(receipts.endpoint)}
+           import fs from "node:fs";
            fs.writeFileSync(process.argv[1], "ready");
+           sendReceipt(process.argv[1], "ready");
            setTimeout(() => {
              fs.writeFileSync(process.argv[2], "unexpected write");
              fs.writeFileSync(process.argv[3], "late reply");
@@ -395,12 +414,28 @@ describe("codex cli node sessions", () => {
       signal: controller.signal,
       sendNodeEvent: async () => undefined,
     });
-    const rejected = expect(result).rejects.toThrow("node invocation canceled");
-    await vi.waitFor(async () => expect(await fs.readFile(ready, "utf8")).toBe("ready"));
-    controller.abort(new Error("node invocation canceled"));
-    await rejected;
-    await expect(fs.stat(lateWrite)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(command.handle(request)).resolves.toContain("final answer");
+    // Receipts and command settlement are unordered; the file is written before either.
+    const readyAfterSettlement = result.then(
+      async () => expect(await fs.readFile(ready, "utf8")).toBe("ready"),
+      async (error: unknown) => {
+        if ((await fs.readFile(ready, "utf8").catch(() => "")) !== "ready") {
+          throw error;
+        }
+      },
+    );
+    try {
+      await withinTest(
+        Promise.race([receipts.waitFor(ready, "ready"), readyAfterSettlement]),
+        signal,
+      );
+      controller.abort(new Error("node invocation canceled"));
+      await expect(result).rejects.toThrow("node invocation canceled");
+      await expect(fs.stat(lateWrite)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(command.handle(request)).resolves.toContain("final answer");
+    } finally {
+      controller.abort(new Error("node invocation canceled"));
+      await result.catch(() => undefined);
+    }
   });
 
   it("does not start a node resume canceled while its source is resolving", async () => {

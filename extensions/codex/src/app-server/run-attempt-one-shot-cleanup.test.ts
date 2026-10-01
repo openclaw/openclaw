@@ -2,10 +2,12 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isPidAlive } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerClient } from "./client.js";
 import { isJsonObject } from "./protocol.js";
@@ -31,7 +33,19 @@ import {
 import * as processSnapshot from "./transport-process-snapshot.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
-async function stopTaskOwnedProcess(pid: number): Promise<void> {
+// The deliberately retired root cannot report reaping its detached descendants.
+// Observe those foreign PIDs only until the owning test is aborted.
+async function waitForTaskOwnedProcessExit(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    while (isPidAlive(pid)) {
+      await waitForProcessTick(10, undefined, { signal });
+    }
+  } catch (error) {
+    throw new Error(`Task-owned descendant ${pid} did not exit`, { cause: error });
+  }
+}
+
+async function stopTaskOwnedProcess(pid: number, signal: AbortSignal): Promise<void> {
   try {
     process.kill(pid, "SIGKILL");
   } catch (error) {
@@ -39,7 +53,7 @@ async function stopTaskOwnedProcess(pid: number): Promise<void> {
       throw error;
     }
   }
-  await expect.poll(() => isPidAlive(pid), { timeout: 2_000 }).toBe(false);
+  await waitForTaskOwnedProcessExit(pid, signal);
 }
 
 function runOneShot(
@@ -196,9 +210,9 @@ describe("Codex one-shot cleanup receipts", () => {
 
   it
     .skipIf(process.platform === "win32")
-    .each(["confirmed", "unknown", "forced", "signalled", "retired-command"])(
+    .for(["confirmed", "unknown", "forced", "signalled", "retired-command"])(
     "records one-shot cleanup accurately after %s app-server shutdown",
-    async (shutdown) => {
+    async (shutdown, { signal }) => {
       const rootPath = path.join(tempDir, "cleanup-root.mjs");
       const descendantPath = path.join(tempDir, "cleanup-descendant.mjs");
       const descendantPidPath = path.join(tempDir, "cleanup-descendant.pid");
@@ -281,22 +295,29 @@ process.stdin.on("end", () => ${
       const warning = vi.spyOn(embeddedAgentLog, "warn");
       const run = runOneShot(client);
       try {
-        await Promise.race([
-          turnStarted.promise,
-          run.then(() => {
-            throw new Error("Codex attempt settled before the fixture emitted turn/started");
-          }),
-        ]);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            turnStarted.promise,
+            run,
+            "Codex attempt settled before the fixture emitted turn/started",
+          ),
+          signal,
+        );
         client.notify("test/complete");
-        expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
-        await exited;
+        expect(readAttemptTerminal(await withinTest(run, signal))).toMatchObject({
+          aborted: false,
+          timedOut: false,
+        });
+        await withinTest(exited, signal);
         const descendantPid = Number(await fs.readFile(descendantPidPath, "utf8"));
         const signalled = shutdown === "forced" || shutdown === "signalled";
         expect(child.exitCode).toBe(signalled ? null : 0);
         expect(child.signalCode).toBe(signalled ? "SIGKILL" : null);
-        await expect
-          .poll(() => isPidAlive(descendantPid), { timeout: 2_000 })
-          .toBe(shutdown === "unknown" || shutdown === "retired-command");
+        const retained = shutdown === "unknown" || shutdown === "retired-command";
+        if (!retained) {
+          await waitForTaskOwnedProcessExit(descendantPid, signal);
+        }
+        expect(isPidAlive(descendantPid)).toBe(retained);
         // This is the cleanup guard that also records the one-shot recovery
         // receipt; a clean root exit must not bypass its failure path.
         if (shutdown === "confirmed") {
@@ -314,7 +335,7 @@ process.stdin.on("end", () => ${
         await run.catch(() => undefined);
         const descendantPid = Number(await fs.readFile(descendantPidPath, "utf8").catch(() => ""));
         if (descendantPid) {
-          await stopTaskOwnedProcess(descendantPid);
+          await stopTaskOwnedProcess(descendantPid, signal);
         }
       }
     },
