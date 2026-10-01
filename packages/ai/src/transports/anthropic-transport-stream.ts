@@ -12,10 +12,7 @@ import {
 import {
   buildAnthropicClaudeCodeIdentity,
   prepareClaudeNoPrefillRequestContext,
-  resolveClaudeOpus5ModelIdentity,
-  resolveClaudeSonnet55ModelIdentity,
   supportsClaudeAdaptiveThinking,
-  usesClaudeFable5MessagesContract,
   usesClaudeStreamingRefusalContract,
 } from "../providers/anthropic-model-contract.js";
 import { redactDiagnosticText } from "../utils/credential-redaction.js";
@@ -25,7 +22,10 @@ import {
   suppressAnthropicCompaction,
 } from "./anthropic-compaction-replay.js";
 import { buildAnthropicRequest, prepareAnthropicRequest } from "./anthropic-messages.js";
-import { isDirectAnthropicModel } from "./anthropic-payload-policy.js";
+import {
+  isDirectAnthropicModel,
+  supportsAnthropicServerSideFallback,
+} from "./anthropic-payload-policy.js";
 import { consumeAnthropicStream, type AnthropicStreamBlock } from "./anthropic-stream-reducer.js";
 import {
   resolveAnthropicTransportOptions,
@@ -54,27 +54,10 @@ const ANTHROPIC_MESSAGES_ERROR_BODY_READ_IDLE_TIMEOUT_MS = 10_000;
 // Mirror the fetch sanitizer cap here because compatible routes such as Kimi
 // bypass that layer; without a parser-local guard, partial frames grow forever.
 const ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS = 16 * 1024 * 1024;
-type AnthropicTransportModel = Model<"anthropic-messages"> & {
-  headers?: Record<string, string>;
-  provider: string;
-};
+type AnthropicTransportModel = Model<"anthropic-messages">;
 
 function isKimiAnthropicProvider(provider: string | undefined): boolean {
   return /^kimi(?:-|$)/.test(normalizeLowercaseStringOrEmpty(provider ?? ""));
-}
-
-/**
- * Server-side refusal fallback is a first-party Claude API beta: proxies and
- * Bedrock/Vertex/Foundry reject the `fallbacks` param, and OAuth (Claude Code
- * identity) requests are excluded until the beta is verified there.
- */
-function useAnthropicServerSideFallback(model: AnthropicTransportModel): boolean {
-  return (
-    (usesClaudeFable5MessagesContract(model) ||
-      resolveClaudeOpus5ModelIdentity(model) !== undefined ||
-      resolveClaudeSonnet55ModelIdentity(model) !== undefined) &&
-    isDirectAnthropicModel(model)
-  );
 }
 
 function buildAnthropicBetaHeader(
@@ -439,7 +422,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           transportOptions,
           "transport",
           isOAuthToken,
-          !isOAuthToken && useAnthropicServerSideFallback(model),
+          !isOAuthToken && supportsAnthropicServerSideFallback(model),
           claudeCodeVersion,
         );
         usedCompactionReplay = builtParams.usedCompactionReplay;

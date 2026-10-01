@@ -338,18 +338,6 @@ export function coercePersistedAuthProfileStore(raw: unknown): AuthProfileStore 
   };
 }
 
-// Merge store/state records by key. Undefined means "no persisted record", not
-// "empty override", so preserve the other side in that case.
-function mergeRecord<T>(
-  base?: Record<string, T>,
-  override?: Record<string, T>,
-): Record<string, T> | undefined {
-  if (!base && !override) {
-    return undefined;
-  }
-  return { ...base, ...override };
-}
-
 function groupProfileIdsByProvider(profiles: AuthProfileStore["profiles"]): Map<string, string[]> {
   const grouped = new Map<string, string[]>();
   for (const [profileId, credential] of Object.entries(profiles)) {
@@ -383,8 +371,9 @@ function mergeProfileOrderWithOverridePrecedence(params: {
   baseOrder: AuthProfileStore["order"] | undefined;
   overrideOrder: AuthProfileStore["order"] | undefined;
   overrideProfiles: AuthProfileStore["profiles"];
+  mergedOrder: AuthProfileStore["order"] | undefined;
 }): AuthProfileStore["order"] | undefined {
-  const mergedOrder = mergeRecord(params.baseOrder, params.overrideOrder);
+  const { mergedOrder } = params;
   if (!mergedOrder) {
     return undefined;
   }
@@ -657,10 +646,12 @@ export function mergeAuthProfileStores(
   for (const profileId of removedRuntimeExternalProfileIds) {
     delete profiles[profileId];
   }
+  const mergedState = mergeAuthProfileState(base, override);
   const mergedOrder = mergeProfileOrderWithOverridePrecedence({
     baseOrder: base.order,
     overrideOrder: override.order,
     overrideProfiles: override.profiles,
+    mergedOrder: mergedState.order,
   });
   const order = mergedOrder
     ? Object.fromEntries(
@@ -675,16 +666,14 @@ export function mergeAuthProfileStores(
           .filter(([, profileIds]) => Array.isArray(profileIds) && profileIds.length > 0),
       )
     : undefined;
-  const mergedLastGood = mergeRecord(base.lastGood, override.lastGood);
-  const lastGood = mergedLastGood
+  const lastGood = mergedState.lastGood
     ? Object.fromEntries(
-        Object.entries(mergedLastGood).filter(([, profileId]) => profiles[profileId]),
+        Object.entries(mergedState.lastGood).filter(([, profileId]) => profiles[profileId]),
       )
     : undefined;
-  const mergedUsageStats = mergeRecord(base.usageStats, override.usageStats);
-  const usageStats = mergedUsageStats
+  const usageStats = mergedState.usageStats
     ? Object.fromEntries(
-        Object.entries(mergedUsageStats).filter(([profileId]) =>
+        Object.entries(mergedState.usageStats).filter(([profileId]) =>
           isRetainedUsageStatsId(profileId, profiles),
         ),
       )

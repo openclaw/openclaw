@@ -246,10 +246,8 @@ async function sleepGitHubDevicePollDelay(
 }
 
 function normalizeGitHubDeviceVerificationUrl(raw: string, domain: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
+  const parsed = URL.parse(raw);
+  if (!parsed) {
     throw new Error("GitHub device flow returned an invalid verification URL");
   }
 
