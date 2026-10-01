@@ -265,10 +265,9 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
       `Cannot inventory invalid syntax in ${path.relative(root, invalidSource.fileName ?? root)}`,
     );
   }
-  return sources
-    .flatMap((source) => {
-      const file = path.relative(root, source.fileName).replaceAll(path.sep, "/");
-      const calls = findCalls(source);
+  return files
+    .flatMap((file, index) => {
+      const calls = findCalls(sources[index]);
       return calls.length ? [{ file, owner: ownerOf(file), calls, ...classify(file) }] : [];
     })
     .toSorted(

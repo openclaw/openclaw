@@ -8,7 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-it("rejects T1 growth with call sites and allows unchanged, shrinking, and worker calls", () => {
+it("rejects total T1 growth with call sites and allows splits, shrinkage, and worker calls", () => {
   const root = tempDirs.make("openclaw-sqlite-ratchet-");
   const git = (...args: string[]) =>
     execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
@@ -43,9 +43,12 @@ it("rejects T1 growth with call sites and allows unchanged, shrinking, and worke
   fs.writeFileSync(file, "export {};\n");
   expect(main(root, ["--base", "HEAD"])).toBe(0);
   expect(errors).not.toHaveBeenCalled();
-  fs.writeFileSync(file, source.repeat(2));
-  git("mv", "src/runtime.ts", "src/renamed.ts");
+  fs.writeFileSync(file, source);
+  fs.writeFileSync(path.join(root, "src/split.ts"), source);
   expect(main(root, ["--base", "HEAD"])).toBe(0);
-  fs.writeFileSync(path.join(root, "src/renamed.ts"), source.repeat(3));
+  fs.writeFileSync(path.join(root, "src/split.ts"), source.repeat(2));
   expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(errors).toHaveBeenCalledWith(
+    expect.stringContaining("src/split.ts:2:1 executeSqliteQuerySync"),
+  );
 });

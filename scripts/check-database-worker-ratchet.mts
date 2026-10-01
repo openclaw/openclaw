@@ -2,7 +2,6 @@ import { inventory } from "./database-worker-inventory.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   compareRatchetCounts,
-  listRatchetRenames,
   parseRatchetArgs,
   reportRatchetFailures,
   reportRatchetSuccess,
@@ -23,24 +22,22 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       new Map(rows.filter((row) => row.tier === "T1").map((row) => [row.file, row.calls.length]));
     const head = inventory(root, "", args.staged);
     const before = counts(inventory(root, base));
-    const oldPaths = new Map(
-      listRatchetRenames(root, base, args.staged, []).map(({ from, to }) => [to, from]),
-    );
     const after = counts(head);
-    const { increased } = compareRatchetCounts(
-      after,
-      new Map([...after.keys()].map((file) => [file, before.get(oldPaths.get(file) ?? file) ?? 0])),
-    );
+    const total = (files: ReadonlyMap<string, number>) =>
+      [...files.values()].reduce((sum, count) => sum + count, 0);
+    const { increased } = compareRatchetCounts(after, before);
     if (
+      total(after) > total(before) &&
       reportRatchetFailures(
         [
           {
-            title: "Main-thread SQLite T1 call counts grew:",
+            title: `Main-thread SQLite T1 total grew: ${total(before)} -> ${total(after)}`,
             entries: increased.flatMap(({ entry, allowed, current }) =>
               [`${entry}: ${allowed} -> ${current}`].concat(
                 head
-                  .find((row) => row.file === entry)!
-                  .calls.map((call) => `${entry}:${call.line}:${call.column} ${call.primitive}`),
+                  .filter((row) => row.file === entry)
+                  .flatMap((row) => row.calls)
+                  .map((call) => `${entry}:${call.line}:${call.column} ${call.primitive}`),
               ),
             ),
           },
