@@ -114,7 +114,11 @@ if (args.includes("--fix")) {
           ? { check: "core/config", message: "Invalid configuration" }
           : { check: "lint", code: "candidate-checks-timeout" },
       ]);
-      expect(report).toContain(mode === "failed" ? "Invalid configuration" : "checks phase");
+      expect(report).toContain(
+        mode === "failed"
+          ? "Invalid configuration"
+          : "candidate-migration-rehearsal: lint exceeded budget",
+      );
     } else {
       expect(result, report).toMatchObject({ status: "ok", phase: "readiness" });
       expect(step.failureFacts).toBeUndefined();

@@ -310,12 +310,8 @@ function resolveDeliverableOpenRouterVideoUrl(value: string | undefined): string
   if (!normalized) {
     return undefined;
   }
-  try {
-    const url = new URL(normalized);
-    return url.protocol === "https:" || url.protocol === "http:" ? normalized : undefined;
-  } catch {
-    return undefined;
-  }
+  const url = URL.parse(normalized);
+  return url?.protocol === "https:" || url?.protocol === "http:" ? normalized : undefined;
 }
 
 async function downloadOpenRouterVideo(params: {

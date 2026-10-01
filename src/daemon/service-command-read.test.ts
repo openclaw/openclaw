@@ -137,7 +137,12 @@ describe("native service command inspection", () => {
           args[1]?.startsWith("system/")
             ? { code: 113, termination: "exit", stdout: "", stderr: "Could not find service" }
             : condition === "registered"
-              ? { code: 0, termination: "exit", stdout: "state = waiting", stderr: "" }
+              ? {
+                  code: 0,
+                  termination: "exit",
+                  stdout: `${args[1]} = {\n\tstate = waiting\n}`,
+                  stderr: "",
+                }
               : {
                   code: 1,
                   termination: "error",

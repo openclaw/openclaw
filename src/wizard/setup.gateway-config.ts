@@ -112,10 +112,10 @@ export async function configureGatewayForSetup(
 
   let authMode = quickstartGateway.authMode;
 
-  const tailscaleMode: GatewayWizardSettings["tailscaleMode"] =
+  const tailscaleMode: QuickstartGatewayDefaults["tailscaleMode"] =
     flow === "quickstart"
       ? quickstartGateway.tailscaleMode
-      : await prompter.select<GatewayWizardSettings["tailscaleMode"]>({
+      : await prompter.select<QuickstartGatewayDefaults["tailscaleMode"]>({
           message: t("wizard.gateway.tailscaleExposure"),
           options: getLocalizedTailscaleExposureOptions(),
           initialValue: quickstartGateway.tailscaleMode,
@@ -302,7 +302,6 @@ export async function configureGatewayForSetup(
       customBindHost: bind === "custom" ? customBindHost : undefined,
       authMode,
       gatewayToken,
-      tailscaleMode,
     },
   };
 }

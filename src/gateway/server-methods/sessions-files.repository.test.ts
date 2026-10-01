@@ -50,7 +50,7 @@ import { serializeWorkerWorkspaceManifest } from "../worker-environments/workspa
 import { createWorkerWorkspaceOperationCoordinator } from "../worker-environments/workspace-operation-coordinator.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import { loadSessionDiff } from "./sessions-diff.js";
-import { resolveLocalSessionWorkspaceRoot, sessionsFilesHandlers } from "./sessions-files.js";
+import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
   createSessionFilesHandlerInvoker,
   createWorkspaceFixture,
@@ -448,7 +448,6 @@ it("browses, previews, edits and diffs only the live repository without a Gatewa
     "package.json",
   );
   expect(list.root).toBeUndefined();
-  expect(resolveLocalSessionWorkspaceRoot({ sessionKey })).toBeUndefined();
   const before = expectOkPayload(
     await invoke("sessions.files.get", { sessionKey, path: "changed.txt" }, context),
   );

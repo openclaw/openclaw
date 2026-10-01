@@ -490,6 +490,9 @@ async function runDoctorHealthFlowWithResult(
           await maintenance.repairSqliteNoCow(sqliteNoCowPaths);
         }
       }
+      if (ctx && maintenance && ctx.prompter.shouldRepair) {
+        await maintenance.cleanupRetainedRuntimes();
+      }
     } catch (error) {
       failure = error;
       throw error;

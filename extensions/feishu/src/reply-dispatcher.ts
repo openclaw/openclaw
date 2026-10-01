@@ -70,10 +70,7 @@ function mergeStreamingFinalText(
   nextText: string,
   appendError: boolean,
 ): string {
-  if (!appendError || !previousText) {
-    return nextText;
-  }
-  if (nextText.startsWith(previousText)) {
+  if (!appendError || !previousText || nextText.startsWith(previousText)) {
     return nextText;
   }
   if (previousText.endsWith(`\n\n${nextText}`)) {
@@ -945,15 +942,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     return result;
   };
 
-  const markClosedStreamingContentClaimed = (generation: number | undefined): void => {
-    if (generation !== undefined) {
-      const settlement = closedStreamingSettlements.get(generation);
-      if (settlement) {
-        settlement.contentClaimed = true;
-      }
-    }
-  };
-
   const ensureVisibleStreamingDelivery = async (
     result: FeishuReplyDeliveryResult | undefined,
     content: string | undefined,
@@ -987,7 +975,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             closeOutcome.generation !== undefined &&
             completion.streamingGeneration === closeOutcome.generation;
           if (completions.some((completion) => ownsCurrentClose(completion))) {
-            markClosedStreamingContentClaimed(closeOutcome.generation);
+            claimClosedStreamingResult(closeOutcome.generation, undefined);
           }
           for (const completion of completions) {
             const claimedSettlement = ownsCurrentClose(completion)
@@ -1060,11 +1048,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (deliveryError !== undefined) {
               completion.reject(
                 createFeishuPartialReplyDeliveryError(
-                  isChannelPartialDeliveryError(deliveryError) && deliveryError instanceof Error
+                  (isChannelPartialDeliveryError(deliveryError) &&
+                    deliveryError instanceof Error) ||
+                    deliveryError instanceof FeishuStreamingFinalizationError
                     ? (deliveryError.cause ?? deliveryError)
-                    : deliveryError instanceof FeishuStreamingFinalizationError
-                      ? (deliveryError.cause ?? deliveryError)
-                      : deliveryError,
+                    : deliveryError,
                   settledResult,
                 ),
               );

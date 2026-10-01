@@ -51,7 +51,7 @@ export function createDiffsHttpHandler(params: {
   });
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
-    const parsed = parseRequestUrl(req.url);
+    const parsed = req.url ? URL.parse(req.url, "http://127.0.0.1") : null;
     if (!parsed) {
       return false;
     }
@@ -133,17 +133,6 @@ export function createDiffsHttpHandler(params: {
       return true;
     }
   };
-}
-
-function parseRequestUrl(rawUrl?: string): URL | null {
-  if (!rawUrl) {
-    return null;
-  }
-  try {
-    return new URL(rawUrl, "http://127.0.0.1");
-  } catch {
-    return null;
-  }
 }
 
 async function serveAsset(

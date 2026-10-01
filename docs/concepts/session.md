@@ -28,6 +28,9 @@ DM channels, with group activity and background work flowing into it — see
 | Cron jobs       | Fresh session per run         |
 | Webhooks        | Isolated per hook             |
 
+Native catalog source IDs, Matrix room and thread IDs, and Signal group IDs are
+case-sensitive: IDs that differ only by case identify different conversations.
+
 With `session.scope: "global"`, the selected agent still owns its session.
 The shared key `global` does not merge different agents' conversations:
 commands, skills, replies, and background task notifications retain the

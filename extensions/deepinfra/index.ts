@@ -47,9 +47,6 @@ export default defineSingleProviderPluginEntry({
       run: buildDeepInfraApiKeyCatalog,
       staticRun: async () => ({ provider: buildStaticDeepInfraProvider() }),
     },
-    normalizeConfig: ({ providerConfig }) => providerConfig,
-    normalizeTransport: ({ api, baseUrl }) =>
-      baseUrl === "https://api.deepinfra.com/v1/openai" ? { api, baseUrl } : undefined,
     ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
     wrapStreamFn: (ctx) => {
       const thinkingLevel = isProxyReasoningUnsupported(ctx.modelId)

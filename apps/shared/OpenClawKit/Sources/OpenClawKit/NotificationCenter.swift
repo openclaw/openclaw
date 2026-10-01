@@ -12,6 +12,13 @@ public enum NotificationAuthorizationStatus: Sendable {
     case authorized
     case provisional
     case ephemeral
+
+    public var allowsNotifications: Bool {
+        switch self {
+        case .authorized, .provisional, .ephemeral: true
+        case .denied, .notDetermined: false
+        }
+    }
 }
 
 public protocol NotificationCentering: Sendable {

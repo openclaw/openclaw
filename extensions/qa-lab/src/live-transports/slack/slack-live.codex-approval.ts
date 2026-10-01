@@ -9,7 +9,7 @@ import {
   SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS,
   type SlackQaCodexApprovalMethod,
   type SlackQaCodexApprovalScenarioRun,
-  type SlackQaScenarioContext,
+  type SlackQaApprovalContext,
   type SlackQaScenarioMetadata,
   type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
@@ -129,7 +129,7 @@ function assertCodexApprovalTranscriptSucceeded(
 }
 
 export async function assertCodexApprovalOperationSucceeded(params: {
-  context: Omit<SlackQaScenarioContext, "sentTs">;
+  context: SlackQaApprovalContext;
   run: SlackQaCodexApprovalScenarioRun;
   sessionKey: string;
 }) {
@@ -193,7 +193,7 @@ export async function assertPendingCodexPluginApproval(params: {
   approvalId: string;
   appServerMethod: SlackQaCodexApprovalMethod;
   channelId: string;
-  context: Omit<SlackQaScenarioContext, "sentTs">;
+  context: SlackQaApprovalContext;
   sessionKey: string;
   sutAccountId: string;
 }) {
@@ -221,7 +221,7 @@ export async function assertPendingCodexPluginApproval(params: {
 
 export async function startCodexApprovalAgentRun(params: {
   channelId: string;
-  context: Omit<SlackQaScenarioContext, "sentTs">;
+  context: SlackQaApprovalContext;
   primaryModel: string;
   run: SlackQaCodexApprovalScenarioRun;
   runId: string;
@@ -266,7 +266,7 @@ export function buildCodexApprovalSessionKey(params: {
 }
 
 export async function waitForCodexApprovalAgentRun(params: {
-  context: Omit<SlackQaScenarioContext, "sentTs">;
+  context: SlackQaApprovalContext;
   runId: string;
   timeoutMs: number;
 }) {
@@ -284,7 +284,7 @@ export async function waitForCodexApprovalAgentRun(params: {
 }
 
 export async function quiesceCodexApprovalAgentRun(params: {
-  context: Omit<SlackQaScenarioContext, "sentTs">;
+  context: SlackQaApprovalContext;
   preserveDebugArtifacts: boolean;
   runId: string;
   sessionKey: string;

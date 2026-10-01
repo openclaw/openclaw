@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { PendingBridgeRequest } from "./code-mode-worker-types.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";

@@ -65,6 +65,7 @@ export function renderGitTestClock(
     realDrain?: boolean;
     virtualBackoff?: boolean;
     readyFetchClockAdvanceSeconds?: number;
+    cancelDuringCleanup?: boolean;
   } = {},
 ): string {
   // Change Python before shell quoting, so injected clock literals cannot alter
@@ -73,15 +74,40 @@ export function renderGitTestClock(
   if (embedded.test(source)) {
     return source.replace(embedded, (_match, prefix: string, body: string, suffix: string) => {
       const adjusted = renderGitTestClock(body.replaceAll("'\\''", "'"), options);
+      if (options.cancelDuringCleanup && !adjusted.includes("cleanup-cancelled.json")) {
+        throw new Error("Missing embedded Git owner cleanup cancellation boundary");
+      }
       return prefix + adjusted.replaceAll("'", "'\\''") + suffix;
     });
+  }
+  let cancellationSource = source;
+  if (options.cancelDuringCleanup && source.includes("def run_git(")) {
+    const boundary = "            group_signal(child.pid, signal.SIGTERM, deadline)";
+    if (source.split(boundary).length !== 2) {
+      throw new Error("Missing unique Git owner cleanup cancellation boundary");
+    }
+    // Only the selected actor arms this exact child. Keep the real signal,
+    // descendant drain, and owner's cancellation checkpoints intact.
+    cancellationSource = source.replace(
+      boundary,
+      `${boundary}
+            fixture_cancel = os.path.join(os.environ["TMPDIR"], f"cleanup-target-{child.pid}.json")
+            if os.path.exists(fixture_cancel):
+                os.unlink(fixture_cancel)
+                os.kill(os.getpid(), signal.SIGTERM)
+                with open(os.path.join(os.environ["TMPDIR"], "cleanup-cancelled.json"), "x") as receipt:
+                    json.dump(child.pid, receipt)`,
+    );
   }
   // Command deadlines and TERM grace are independent. Real-clock callers keep
   // real grace unless they explicitly opt into the fixture's immediate escalation.
   const clockSource =
     (options.realDrain ?? options.realClock)
-      ? source
-      : source.replace("kill_at = deadline - cleanup_seconds / 2", "kill_at = time.monotonic()");
+      ? cancellationSource
+      : cancellationSource.replace(
+          "kill_at = deadline - cleanup_seconds / 2",
+          "kill_at = time.monotonic()",
+        );
   // Keep the owner's cancellation checkpoints and requested backoff duration,
   // but advance its policy clock without sleeping. Cancellation proofs opt out.
   const backoffSource =

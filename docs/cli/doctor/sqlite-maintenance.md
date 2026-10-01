@@ -173,6 +173,17 @@ core import completed. Doctor owns the repair and the Gateway keeps serving SQLi
 Recovery reports include every remaining issue code and distinguish unresolved
 findings from completed validation.
 
+For a zero-byte retained transcript, recovery lists its `.jsonl.bak-<pid>-<timestamp>`
+siblings and verifies the largest backup against the canonical session. Missing
+suffix events use the existing historical importer; current session settings and
+deleted sessions are not replayed. All backup candidates must be covered before
+Doctor archives the empty original with a recoverable warning. The backup files
+remain untouched. Without backups, an identified canonical session with transcript
+rows can establish that the empty source is superseded. If neither source proves
+the history, Doctor preserves the file and names the exact transcript and database
+paths to restore from a verified backup before retrying recovery. Keep moved
+transcripts and their backups together at the reported original paths.
+
 When both a recorded legacy index and its archive are missing, Doctor verifies
 the remaining transcripts against canonical SQLite before reporting that the
 canonical transcripts are complete and the legacy index entries are informational.

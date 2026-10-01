@@ -1,8 +1,12 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
-import { createUpdateDoctorDatabaseWriteCapture } from "../infra/update-doctor-result.js";
+import {
+  createUpdateDoctorDatabaseWriteCapture,
+  DoctorMaintenanceRefusalError,
+} from "../infra/update-doctor-result.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
   type OpenClawDatabaseMaintenanceScope,
@@ -43,6 +47,10 @@ export function createDoctorMaintenanceState(options: {
   const closeResources = async () => {
     await resources?.close();
     await inspections?.close();
+    // Auth inspection readers are pooled separately from canonical agent handles.
+    const { closeAuthProfileReadPool } =
+      await import("../agents/auth-profiles/sqlite-read-pool.js");
+    closeAuthProfileReadPool({ kind: "root", rootPath: resolveStateDir(selectedEnv) });
     resources = undefined;
     inspections = undefined;
   };
@@ -206,6 +214,54 @@ export function createDoctorMaintenanceState(options: {
         });
       } finally {
         // Restoration and update receipts use a fresh scope for the new file identity.
+        await enterResources(owner!);
+      }
+    },
+    async cleanupRetainedRuntimes(inspectService: boolean) {
+      const { captureRetainedNativeWorkerSource } =
+        await import("../infra/worker-native-lifecycle.js");
+      const { retireIdleOpenClawStateReadWorkers } =
+        await import("../state/openclaw-state-read-worker.js");
+      const { prepareRetainedUpdateRuntimeCleanup } = await import("./doctor-retained-runtime.js");
+      options.assertCurrent?.();
+      owner!.assertCurrent();
+      const cleanup = await state.run(() =>
+        prepareRetainedUpdateRuntimeCleanup(selectedEnv, { inspectService }),
+      );
+      const nativeSource = captureRetainedNativeWorkerSource();
+      // This phase runs after the tracked Doctor callback has settled.
+      let readersRetired: boolean;
+      let brokerRetired: boolean;
+      try {
+        await closeResources();
+        readersRetired = await retireIdleOpenClawStateReadWorkers(nativeSource);
+        brokerRetired = await nativeSource.retireIdleBroker();
+      } catch (cause) {
+        throw new DoctorMaintenanceRefusalError(
+          `Doctor inspection resource cleanup failed: ${formatErrorMessage(cause)}. Resolve this cleanup failure before restarting the Gateway or rerunning openclaw doctor --fix.`,
+          { kind: "data-at-risk", reason: "active-mutation" },
+          { cause },
+        );
+      }
+      try {
+        await owner!.run(() =>
+          cleanup(true, {
+            assertCurrent() {
+              options.assertCurrent?.();
+              owner!.assertCurrent();
+              owner!.assertDatabaseAccess(resolveOpenClawStateSqlitePath(selectedEnv));
+            },
+            assertResourcesSettled() {
+              // Worker threads share this PID and are invisible to the process census.
+              if (!readersRetired || !brokerRetired || nativeSource.hasActiveWorkers) {
+                throw new Error(
+                  `independent native work in this process (PID: ${process.pid}); let these holders finish, then rerun openclaw doctor --fix`,
+                );
+              }
+            },
+          }),
+        );
+      } finally {
         await enterResources(owner!);
       }
     },

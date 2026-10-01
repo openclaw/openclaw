@@ -6,6 +6,7 @@ import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv } from "../test-utils/env.js";
+import { messageCommand } from "./message.js";
 
 type ResetPluginRuntimeStateForTest =
   typeof import("../plugins/runtime.js").resetPluginRuntimeStateForTest;
@@ -116,14 +117,12 @@ vi.mock("../infra/outbound/message-action-runner.js", () => ({
   runMessageAction: runMessageActionMock,
 }));
 
-let messageCommand: typeof import("./message.js").messageCommand;
 let envSnapshot: ReturnType<typeof captureEnv>;
 
 beforeAll(async () => {
   ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } =
     await import("../plugins/runtime.js"));
   ({ createTestRegistry } = await import("../test-utils/channel-plugins.js"));
-  ({ messageCommand } = await import("./message.js"));
 });
 
 const runtime: RuntimeEnv = {

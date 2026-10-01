@@ -5,6 +5,14 @@ if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 
 fi
 set -euo pipefail
 
+# Direct callers use the same total envelope as CI; never restart an inherited budget.
+CELL_DEADLINE_EPOCH_SECONDS="${CELL_DEADLINE_EPOCH_SECONDS:-$(( $(date +%s) + 525 ))}"
+if ! [[ "$CELL_DEADLINE_EPOCH_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid published-driver cell deadline" >&2
+  exit 2
+fi
+export CELL_DEADLINE_EPOCH_SECONDS
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
@@ -35,6 +43,7 @@ docker_e2e_package_mount_args "$PACKAGE_TGZ"
 RUNTIME_VOLUME="$(docker_e2e_docker_cmd volume create)"
 docker_e2e_run_with_harness \
   --init \
+  -e CELL_DEADLINE_EPOCH_SECONDS \
   --mount "type=volume,source=$RUNTIME_VOLUME,target=/tmp" \
   -v "$ARTIFACT_DIR:/tmp/published-driver-artifacts" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
