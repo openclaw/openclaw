@@ -55,6 +55,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
   );
   const {
     params,
+    agentEvents,
     attemptClientFactory,
     bindingStore,
     appServer,
@@ -83,7 +84,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     params.config?.tools?.loopDetection?.enabled ??
     false;
   try {
-    void emitCodexAppServerEvent(params, {
+    void emitCodexAppServerEvent(agentEvents, {
       stream: "codex_app_server.lifecycle",
       data: { phase: "startup" },
     });
@@ -210,7 +211,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     state.codexEnvironmentSelection = startupResult.environmentSelection;
     state.codexExecutionCwd = startupResult.executionCwd;
     state.codexSandboxPolicy = startupResult.sandboxPolicy;
-    void emitCodexAppServerEvent(params, {
+    void emitCodexAppServerEvent(agentEvents, {
       stream: "codex_app_server.lifecycle",
       data: {
         phase: "thread_ready",

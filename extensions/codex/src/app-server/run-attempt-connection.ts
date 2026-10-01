@@ -61,7 +61,11 @@ import {
 } from "./shared-client.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
 
-export async function prepareCodexAttemptConnection({ params, options }: CodexRunAttemptInput) {
+export async function prepareCodexAttemptConnection({
+  params,
+  options,
+  agentEvents,
+}: CodexRunAttemptInput) {
   const attemptStartedAt = Date.now();
   const profilerEnabled = isCodexAppServerProfilerEnabled(params.config);
   const codexModelCallTrace = freezeDiagnosticTraceContext(
@@ -502,6 +506,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     // Host capabilities are identity-keyed; carry generation proof separately.
     return {
       params,
+      agentEvents,
       assertCurrent,
       options,
       attemptStartedAt,

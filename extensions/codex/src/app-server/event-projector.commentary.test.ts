@@ -4,8 +4,6 @@ import {
   expect,
   it,
   vi,
-  CodexAppServerEventProjector,
-  createCodexTestModel,
   THREAD_ID,
   TURN_ID,
   createParams,
@@ -15,7 +13,6 @@ import {
   forCurrentTurn,
   agentMessageDelta,
   turnCompleted,
-  type EmbeddedRunAttemptParams,
 } from "./event-projector.test-harness.js";
 
 registerCodexEventProjectorTestLifecycle();
@@ -684,22 +681,8 @@ describe("CodexAppServerEventProjector commentary projection", () => {
     expect(result.lastAssistant).toBeUndefined();
   });
 
-  it("preserves accepted session spawns as yield continuation evidence", () => {
-    const projector = new CodexAppServerEventProjector(
-      {
-        prompt: "hello",
-        sessionId: "session-1",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        runId: "run-1",
-        provider: "openai",
-        modelId: "gpt-5.4-codex",
-        model: createCodexTestModel(),
-        thinkLevel: "medium",
-      } as EmbeddedRunAttemptParams,
-      THREAD_ID,
-      TURN_ID,
-    );
+  it("preserves accepted session spawns as yield continuation evidence", async () => {
+    const projector = await createProjector();
 
     const result = projector.buildResult(
       {

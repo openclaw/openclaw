@@ -1,6 +1,9 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { emitAgentRunOutputTokens } from "../../infra/agent-events.js";
+import {
+  emitAgentEventForAdmittedRun,
+  emitAgentRunOutputTokens,
+} from "../../infra/agent-events.js";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import {
   getInstallationTarget,
@@ -458,6 +461,21 @@ export function createAgentHarnessHostCapabilities(params: {
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
     assertActive,
+    publishAgentEvent: (event) => {
+      const accepted = emitAgentEventForAdmittedRun(
+        { runId, lifecycleGeneration, sessionKey, stream: event.stream, data: event.data },
+        delegatedAuthority,
+        () => {
+          assertActive();
+          // Resolver and source-claim callbacks can close this host synchronously.
+          // The emitter rechecks the admitted root before assigning sequence or lifecycle facts.
+          return active && !attemptSignal?.aborted && !workSignal?.aborted;
+        },
+      );
+      if (!accepted) {
+        throw new Error("agent harness event publication is no longer active");
+      }
+    },
     reportOutputTokens: (outputTokens) => {
       assertActive();
       const data = emitAgentRunOutputTokens({

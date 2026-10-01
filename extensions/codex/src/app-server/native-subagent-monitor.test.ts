@@ -6,6 +6,7 @@ import type {
   AgentHarnessTaskRuntimeScope,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { captureCodexAgentEventBinding } from "./agent-event-publication.js";
 import {
   claimCodexAppServerLiveThread,
   consumeCodexAppServerLiveThread,
@@ -127,26 +128,28 @@ function createRuntime() {
     path: "direct" | "steered" | "none";
     error?: string;
   };
-  const createRunningTaskRun = vi.fn((params): AgentHarnessTaskRecord => ({
-    taskId: params.sourceId ?? params.runId,
-    runtime: "subagent",
-    taskKind: "codex-native",
-    sourceId: params.sourceId,
-    requesterSessionKey: "agent:main:main",
-    ownerKey: "agent:main:main",
-    scopeKind: "session",
-    agentId: params.agentId,
-    runId: params.runId,
-    label: params.label,
-    task: params.task,
-    status: "running",
-    deliveryStatus: params.deliveryStatus ?? "not_applicable",
-    notifyPolicy: params.notifyPolicy ?? "silent",
-    createdAt: params.startedAt ?? Date.now(),
-    startedAt: params.startedAt,
-    lastEventAt: params.lastEventAt,
-    progressSummary: params.progressSummary,
-  }));
+  const createRunningTaskRun = vi.fn((params): AgentHarnessTaskRecord => {
+    return {
+      taskId: params.sourceId ?? params.runId,
+      runtime: "subagent",
+      taskKind: "codex-native",
+      sourceId: params.sourceId,
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      agentId: params.agentId,
+      runId: params.runId,
+      label: params.label,
+      task: params.task,
+      status: "running",
+      deliveryStatus: params.deliveryStatus ?? "not_applicable",
+      notifyPolicy: params.notifyPolicy ?? "silent",
+      createdAt: params.startedAt ?? Date.now(),
+      startedAt: params.startedAt,
+      lastEventAt: params.lastEventAt,
+      progressSummary: params.progressSummary,
+    };
+  });
   const taskRuntime = {
     createRunningTaskRun,
     tryCreateRunningTaskRun: vi.fn((params) => createRunningTaskRun(params)),
@@ -160,10 +163,12 @@ function createRuntime() {
   return {
     ...taskRuntime,
     createAgentHarnessTaskRuntime: vi.fn(() => taskRuntime),
-    deliverAgentHarnessTaskCompletion: vi.fn(async (): Promise<DeliveryResult> => ({
-      delivered: true,
-      path: "direct",
-    })),
+    deliverAgentHarnessTaskCompletion: vi.fn(async (): Promise<DeliveryResult> => {
+      return {
+        delivered: true,
+        path: "direct",
+      };
+    }),
   };
 }
 
@@ -466,10 +471,12 @@ describe("CodexNativeSubagentMonitor", () => {
         const owner = registerParent(monitor);
         owner.bindTurn("parent-turn");
         await notifyChildStarted(client, "parent-thread", "child-thread", "/root/worker");
+        const params = await createParams();
         const projector = new CodexAppServerEventProjector(
-          await createParams(),
+          params,
           "parent-thread",
           "parent-turn",
+          captureCodexAgentEventBinding(params),
         );
         let lastAnswer = "";
         const answer = async (text: string, id: string) => {

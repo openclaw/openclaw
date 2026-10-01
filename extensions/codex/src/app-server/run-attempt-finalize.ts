@@ -61,6 +61,7 @@ export async function finalizeCodexAttempt(
   const { effectiveRuntimeProviderId, effectiveRuntimeModelId } = runtime;
   const {
     params,
+    agentEvents,
     terminalState,
     runAbortController,
     activeContextEngine,
@@ -658,7 +659,7 @@ export async function finalizeCodexAttempt(
       !finalAborted &&
       !finalPromptError
     ) {
-      void emitCodexAppServerEvent(params, {
+      void emitCodexAppServerEvent(agentEvents, {
         stream: "assistant",
         data: { text: terminalAssistantText },
       });

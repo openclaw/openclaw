@@ -59,6 +59,7 @@ export async function startCodexAttemptTurn(
     runtime;
   const {
     params,
+    agentEvents,
     usesSupervisionConnection,
     runAbortController,
     activeContextEngine,
@@ -85,7 +86,7 @@ export async function startCodexAttemptTurn(
       );
       const compactTurnCompleted = await waitForActiveNativeTurnCompletion();
       if (compactTurnCompleted && !runAbortController.signal.aborted) {
-        void emitCodexAppServerEvent(params, {
+        void emitCodexAppServerEvent(agentEvents, {
           stream: "codex_app_server.lifecycle",
           data: {
             phase: "turn_start_retry_after_compact",
@@ -151,7 +152,7 @@ export async function startCodexAttemptTurn(
               },
             );
           }
-          void emitCodexAppServerEvent(params, {
+          void emitCodexAppServerEvent(agentEvents, {
             stream: "codex_app_server.lifecycle",
             data: { phase: "thread_ready_retry", threadId: resourceState.thread.threadId },
           });
@@ -183,7 +184,7 @@ export async function startCodexAttemptTurn(
           params.expectedSessionRuntimeOwnership,
         );
       }
-      void emitCodexAppServerEvent(params, {
+      void emitCodexAppServerEvent(agentEvents, {
         stream: "codex_app_server.lifecycle",
         data: { phase: "turn_start_failed", error: message },
       });

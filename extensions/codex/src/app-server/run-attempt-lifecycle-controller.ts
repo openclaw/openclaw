@@ -30,6 +30,7 @@ export function createCodexAttemptLifecycleController(
   const { connection } = prompt.context.runtime;
   const {
     params,
+    agentEvents,
     attemptStartedAt,
     runAbortController,
     fastModeAutoStartedAtMs,
@@ -124,7 +125,7 @@ export function createCodexAttemptLifecycleController(
     scheduleTerminalDynamicToolReleaseCheck();
   };
   const emitLifecycleStart = () => {
-    void emitCodexAppServerEvent(params, {
+    void emitCodexAppServerEvent(agentEvents, {
       stream: "lifecycle",
       data: { phase: "start", startedAt: attemptStartedAt },
     });
@@ -138,7 +139,7 @@ export function createCodexAttemptLifecycleController(
     ) {
       return;
     }
-    void emitCodexAppServerEvent(params, {
+    void emitCodexAppServerEvent(agentEvents, {
       stream: "lifecycle",
       data: {
         startedAt: attemptStartedAt,
@@ -187,7 +188,7 @@ export function createCodexAttemptLifecycleController(
     fastAutoOnSeconds?: number;
   }) => {
     const summary = formatFastModeAutoProgressText(payload);
-    await emitCodexAppServerEvent(params, {
+    await emitCodexAppServerEvent(agentEvents, {
       stream: "item",
       data: { kind: "status", title: "Fast", phase: "update", summary },
     });

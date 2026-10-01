@@ -23,6 +23,7 @@ import {
   makeAgentUserMessage,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureCodexAgentEventBinding } from "./agent-event-publication.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import {
   buildEmptyToolTelemetry,
@@ -2108,6 +2109,7 @@ describe("mirrorCodexAppServerTranscript", () => {
             attemptParams,
             "thread-1",
             attempt.turnId,
+            captureCodexAgentEventBinding(attemptParams),
           );
           await projector.handleNotification({
             method: "turn/completed",
@@ -2184,7 +2186,12 @@ describe("mirrorCodexAppServerTranscript", () => {
         sessionTarget: target,
         workspaceDir: path.dirname(target.storePath),
       };
-      const projector = new CodexAppServerEventProjector(params, "thread-1", "turn-1");
+      const projector = new CodexAppServerEventProjector(
+        params,
+        "thread-1",
+        "turn-1",
+        captureCodexAgentEventBinding(params),
+      );
       await projector.handleNotification(
         forCurrentTurn("item/reasoning/summaryTextDelta", {
           itemId: "reason-1",

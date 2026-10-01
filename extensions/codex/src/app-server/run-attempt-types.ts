@@ -3,6 +3,7 @@ import type {
   NativeHookRelayEvent,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import type { CodexAgentEventBinding } from "./agent-event-publication.js";
 import type { CodexAppServerBindingStore } from "./session-binding.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
 
@@ -26,4 +27,5 @@ export type CodexRunAttemptOptions = {
 export type CodexRunAttemptInput = {
   params: EmbeddedRunAttemptParams;
   options: CodexRunAttemptOptions;
+  agentEvents: CodexAgentEventBinding;
 };

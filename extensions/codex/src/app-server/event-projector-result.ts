@@ -6,6 +6,7 @@ import {
   type MessagingToolSourceReplyPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexTtsProvenanceTransfer } from "openclaw/plugin-sdk/codex-mcp-projection";
+import type { CodexAgentEventBinding } from "./agent-event-publication.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
 import { CodexAsyncDeliveryProjection } from "./event-projector-async-delivery.js";
@@ -73,6 +74,7 @@ export abstract class CodexTurnProjection {
     protected readonly params: EmbeddedRunAttemptParams,
     protected readonly threadId: string,
     protected readonly turnId: string,
+    private readonly agentEvents: CodexAgentEventBinding,
     protected readonly options: CodexAppServerEventProjectorOptions = {},
   ) {
     this.settlement = new CodexProjectionSettlement(params, () => !this.projectionClosed);
@@ -337,7 +339,7 @@ export abstract class CodexTurnProjection {
     event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
   ): void {
     if (!this.projectionClosed) {
-      emitCodexAgentEvent(this.params, event);
+      emitCodexAgentEvent(this.agentEvents, event);
     }
   }
 }

@@ -1,4 +1,5 @@
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { captureCodexAgentEventBinding } from "./agent-event-publication.js";
 import { createCodexAttemptPreparationTiming } from "./attempt-preparation-timing.js";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { activateCodexAttemptTurn } from "./run-attempt-active-turn.js";
@@ -24,9 +25,10 @@ export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParamsV2,
   options: CodexRunAttemptOptions,
 ): Promise<EmbeddedRunAttemptResult> {
+  const agentEvents = captureCodexAgentEventBinding(params);
   const preparation = createCodexAttemptPreparationTiming(params);
   const connection = await preparation.measure("connection", () =>
-    prepareCodexAttemptConnection({ params, options }),
+    prepareCodexAttemptConnection({ params, options, agentEvents }),
   );
   try {
     const runtime = await preparation.measure("runtime", () =>

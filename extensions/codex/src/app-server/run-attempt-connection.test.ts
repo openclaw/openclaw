@@ -5,6 +5,7 @@ import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { captureCodexAgentEventBinding } from "./agent-event-publication.js";
 import * as appServerPolicy from "./app-server-policy.js";
 import { applyCodexAppServerAuthProfile } from "./auth-bridge.js";
 import * as bindingConnection from "./binding-connection.js";
@@ -63,6 +64,7 @@ describe("prepareCodexAttemptConnection", () => {
       registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
       const connection = await prepareCodexAttemptConnection({
         params,
+        agentEvents: captureCodexAgentEventBinding(params),
         options: {
           bindingStore: testCodexAppServerBindingStore,
           pluginConfig: {
@@ -110,7 +112,11 @@ describe("prepareCodexAttemptConnection", () => {
     await bindingStore.mutate(previous, { kind: "set", binding });
     const originalHostCapabilities = params.hostCapabilities;
 
-    const connection = await prepareCodexAttemptConnection({ params, options: { bindingStore } });
+    const connection = await prepareCodexAttemptConnection({
+      params,
+      options: { bindingStore },
+      agentEvents: captureCodexAgentEventBinding(params),
+    });
     expect(bindingStore.read(current)).toEqual(binding);
     expect(connection.params.hostCapabilities).toBe(originalHostCapabilities);
     expect(() => connection.assertCurrent()).not.toThrow();
@@ -156,6 +162,7 @@ describe("prepareCodexAttemptConnection", () => {
       await expect(
         prepareCodexAttemptConnection({
           params,
+          agentEvents: captureCodexAgentEventBinding(params),
           options: { bindingStore: testCodexAppServerBindingStore },
         }),
       ).rejects.toMatchObject({
@@ -317,7 +324,11 @@ describe("prepareCodexAttemptConnection", () => {
           }
         : {}),
     };
-    const pending = prepareCodexAttemptConnection({ params, options });
+    const pending = prepareCodexAttemptConnection({
+      params,
+      options,
+      agentEvents: captureCodexAgentEventBinding(params),
+    });
     if (placement !== "local" && !placement.startsWith("ordinary-")) {
       await expect(pending).rejects.toThrow("saved prompt");
       const clientFactory = vi.fn(async () => {
@@ -362,6 +373,7 @@ describe("prepareCodexAttemptConnection", () => {
 
     const connection = await prepareCodexAttemptConnection({
       params,
+      agentEvents: captureCodexAgentEventBinding(params),
       options: { bindingStore: testCodexAppServerBindingStore },
     });
 
@@ -386,6 +398,7 @@ describe("prepareCodexAttemptConnection", () => {
 
     const connection = await prepareCodexAttemptConnection({
       params,
+      agentEvents: captureCodexAgentEventBinding(params),
       options: { bindingStore: testCodexAppServerBindingStore },
     });
 
@@ -447,6 +460,7 @@ describe("prepareCodexAttemptConnection", () => {
 
       const connection = await prepareCodexAttemptConnection({
         params,
+        agentEvents: captureCodexAgentEventBinding(params),
         options: { bindingStore: testCodexAppServerBindingStore },
       });
 
@@ -520,6 +534,7 @@ describe("prepareCodexAttemptConnection", () => {
 
       const connection = await prepareCodexAttemptConnection({
         params,
+        agentEvents: captureCodexAgentEventBinding(params),
         options: { bindingStore: testCodexAppServerBindingStore },
       });
 
@@ -560,6 +575,7 @@ describe("prepareCodexAttemptConnection", () => {
 
     const connection = await prepareCodexAttemptConnection({
       params,
+      agentEvents: captureCodexAgentEventBinding(params),
       options: {
         bindingStore: testCodexAppServerBindingStore,
         pluginConfig: { appServer: { homeScope: "user" } },
@@ -609,6 +625,7 @@ describe("prepareCodexAttemptConnection", () => {
 
     const connection = await prepareCodexAttemptConnection({
       params,
+      agentEvents: captureCodexAgentEventBinding(params),
       options: { bindingStore: testCodexAppServerBindingStore },
     });
 
@@ -655,6 +672,7 @@ describe("prepareCodexAttemptConnection", () => {
 
     const connection = await prepareCodexAttemptConnection({
       params,
+      agentEvents: captureCodexAgentEventBinding(params),
       options: { bindingStore: testCodexAppServerBindingStore },
     });
 
@@ -706,6 +724,7 @@ describe("prepareCodexAttemptConnection", () => {
         await expect(
           prepareCodexAttemptConnection({
             params,
+            agentEvents: captureCodexAgentEventBinding(params),
             options: { bindingStore: testCodexAppServerBindingStore },
           }),
         ).rejects.toBe(rotationError);
@@ -742,6 +761,7 @@ describe("prepareCodexAttemptConnection", () => {
     await expect(
       prepareCodexAttemptConnection({
         params,
+        agentEvents: captureCodexAgentEventBinding(params),
         options: {
           bindingStore: testCodexAppServerBindingStore,
           pluginConfig: { appServer: { approvalPolicy: "untrusted" } },
@@ -766,6 +786,7 @@ describe("prepareCodexAttemptConnection", () => {
     const resolveConnection = vi.spyOn(bindingConnection, "resolveCodexBindingAppServerConnection");
     const connection = await prepareCodexAttemptConnection({
       params,
+      agentEvents: captureCodexAgentEventBinding(params),
       options: { bindingStore: testCodexAppServerBindingStore },
     });
 
@@ -794,6 +815,7 @@ describe("prepareCodexAttemptConnection", () => {
 
     const connection = await prepareCodexAttemptConnection({
       params,
+      agentEvents: captureCodexAgentEventBinding(params),
       options: { bindingStore: testCodexAppServerBindingStore },
     });
 
@@ -822,6 +844,7 @@ describe("prepareCodexAttemptConnection", () => {
     await expect(
       prepareCodexAttemptConnection({
         params,
+        agentEvents: captureCodexAgentEventBinding(params),
         options: { bindingStore: testCodexAppServerBindingStore },
       }),
     ).rejects.toThrow("effective tools.exec.mode=deny");
@@ -847,6 +870,7 @@ describe("prepareCodexAttemptConnection", () => {
 
     const connection = await prepareCodexAttemptConnection({
       params,
+      agentEvents: captureCodexAgentEventBinding(params),
       options: { bindingStore: testCodexAppServerBindingStore },
     });
 
@@ -889,6 +913,7 @@ describe("prepareCodexAttemptConnection", () => {
 
       const connection = await prepareCodexAttemptConnection({
         params,
+        agentEvents: captureCodexAgentEventBinding(params),
         options: { bindingStore: testCodexAppServerBindingStore },
       });
 

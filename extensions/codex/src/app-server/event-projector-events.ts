@@ -1,6 +1,5 @@
 import {
   embeddedAgentLog,
-  emitAgentEvent as emitGlobalAgentEvent,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -8,6 +7,7 @@ import {
   asFiniteNumber,
   readStringField as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CodexAgentEventBinding } from "./agent-event-publication.js";
 import {
   isNonSuccessItemStatus,
   itemKind,
@@ -35,19 +35,12 @@ import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
 
 /** Downstream event consumers must never corrupt the canonical Codex turn projection. */
-export function emitCodexAgentEvent(params: EmbeddedRunAttemptParams, event: AgentEvent): void {
-  try {
-    emitGlobalAgentEvent({
-      runId: params.runId,
-      stream: event.stream,
-      data: event.data,
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    });
-  } catch (error) {
-    embeddedAgentLog.debug("codex app-server global agent event emit failed", { error });
+export function emitCodexAgentEvent(binding: CodexAgentEventBinding, event: AgentEvent): void {
+  if (!binding.publish(event)) {
+    return;
   }
   try {
-    const maybePromise = params.onAgentEvent?.(event);
+    const maybePromise = binding.onAgentEvent?.(event);
     void Promise.resolve(maybePromise).catch((error: unknown) => {
       embeddedAgentLog.debug("codex app-server agent event handler rejected", { error });
     });

@@ -50,7 +50,8 @@ export function createCodexAttemptServerRequestController(
   const { context } = prompt;
   const { runtime, attemptTools } = context;
   const { connection } = runtime;
-  const { params, computerUseConfig, runAbortController, appServer, sessionAgentId } = connection;
+  const { params, agentEvents, computerUseConfig, runAbortController, appServer, sessionAgentId } =
+    connection;
   const autoApprove = shouldAutoApproveCodexAppServerApprovals(appServer);
   const {
     compactionPlanState,
@@ -182,7 +183,7 @@ export function createCodexAttemptServerRequestController(
       const commandBearing = isCodexCommandBearingToolCall(call.tool, toolArgs);
       const shouldEmitDynamicToolProgress = shouldEmitTranscriptToolProgress(call.tool, toolArgs);
       if (shouldEmitDynamicToolProgress) {
-        void emitCodexAppServerEvent(params, {
+        void emitCodexAppServerEvent(agentEvents, {
           stream: "tool",
           data: {
             phase: "start",
@@ -289,7 +290,7 @@ export function createCodexAttemptServerRequestController(
         }
         if (shouldEmitDynamicToolProgress) {
           const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);
-          void emitCodexAppServerEvent(params, {
+          void emitCodexAppServerEvent(agentEvents, {
             stream: "tool",
             data: {
               phase: "result",

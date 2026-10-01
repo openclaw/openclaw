@@ -42,6 +42,7 @@ export async function prepareCodexAttemptTurnRequest(
   const { tools, toolBridge } = attemptTools;
   const {
     params,
+    agentEvents,
     usesSupervisionConnection,
     codexModelCallId,
     codexModelCallTrace,
@@ -232,7 +233,7 @@ export async function prepareCodexAttemptTurnRequest(
     state.latestStartupErrorNotification = undefined;
     state.rateLimitsRevisionBeforeLastTurnStart = readCodexRateLimitsRevision(resourceState.client);
     activeTurnRoute.armTurn();
-    void emitCodexAppServerEvent(params, {
+    void emitCodexAppServerEvent(agentEvents, {
       stream: "codex_app_server.lifecycle",
       data: {
         phase: "turn_starting",
@@ -289,7 +290,7 @@ export async function prepareCodexAttemptTurnRequest(
       "codex app-server resumed thread has active native turn; waiting before turn/start",
       { threadId: resourceState.thread.threadId },
     );
-    void emitCodexAppServerEvent(params, {
+    void emitCodexAppServerEvent(agentEvents, {
       stream: "codex_app_server.lifecycle",
       data: {
         phase: "turn_start_waiting_for_native_turn",

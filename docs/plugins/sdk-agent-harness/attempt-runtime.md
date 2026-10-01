@@ -98,6 +98,33 @@ field; OpenClaw does not infer it from assistant prose. The helper
 intentionally leaves prompt errors, in-flight turns, and intentional silent
 replies such as `NO_REPLY` unclassified.
 
+## Admitted event publication
+
+Current hosts install optional
+`params.hostCapabilities.publishAgentEvent({ stream, data }): void` even when
+`params.onAgentEvent` is absent. It publishes through the captured admitted run,
+with host-owned routing, lifecycle generation, and private claim attribution.
+Plugins supply event content, not run authority. Publication throws when that
+owner is closed, aborted, replaced, or otherwise no longer current.
+
+At attempt entry, before the first `await`, capture the publisher function or
+its absence, the optional `onAgentEvent` observer, and any legacy routing values.
+Carry that choice through lifecycle emitters, projectors, and derived observer
+wrappers. Do not renegotiate from mutable attempt parameters for each event.
+
+When the captured publisher is present, call it synchronously once, then call
+the captured observer once only after publication succeeds. The host publisher
+does not invoke the observer. A rejected publication must not fall back to
+global emission or invoke the observer. Observer failures remain isolated from
+the native turn; retain compaction and streaming bookkeeping before invoking
+the external observer.
+
+When the capability was absent at entry, retain the existing ordinary global
+publication and optional observer behavior. This supports newer Codex plugins
+on older hosts. Older plugins on newer hosts also keep their existing behavior;
+`onAgentEvent` is still an observer, not a newly implied publication capability.
+This addition does not change the host capability version or token accounting.
+
 ## Live output-token usage
 
 Call `params.hostCapabilities.reportOutputTokens?.(outputTokens)` once per
