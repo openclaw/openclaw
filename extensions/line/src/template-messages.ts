@@ -1,4 +1,6 @@
 import type { messagingApi } from "@line/bot-sdk";
+import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { messageAction, postbackAction, uriAction, type Action } from "./actions.js";
 import type { LineTemplateActionPayload, LineTemplateMessagePayload } from "./types.js";
 
@@ -8,7 +10,6 @@ type CarouselColumn = messagingApi.CarouselColumn;
 
 const COMPACT_TEMPLATE_TEXT_LIMIT = 60;
 const TEMPLATE_ALT_TEXT_LIMIT = 1500;
-const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function buildTemplatePayloadAction(action: LineTemplateActionPayload): Action {
   if (action.type === "uri" && action.uri) {
@@ -39,25 +40,9 @@ function resolveTemplateTextLimit(params: {
 }
 
 function truncateTemplateText(text: string, limit: number): string {
-  let result = "";
-  for (const { segment } of graphemeSegmenter.segment(text)) {
-    if (result.length + segment.length > limit) {
-      // A pathological grapheme can exceed LINE's whole field limit. Preserve
-      // graphemes normally, but keep required text non-empty without splitting
-      // a surrogate pair when the first grapheme alone cannot fit.
-      if (!result) {
-        for (const codePoint of segment) {
-          if (result.length + codePoint.length > limit) {
-            break;
-          }
-          result += codePoint;
-        }
-      }
-      break;
-    }
-    result += segment;
-  }
-  return result;
+  const end = findGraphemeChunkEnd(text, 0, limit, limit, false);
+  // Required text still needs a surrogate-safe prefix when its first grapheme exceeds the cap.
+  return end > 0 ? text.slice(0, end) : truncateUtf16Safe(text, limit);
 }
 
 function resolveTemplateAltText(value: string | undefined, fallback: string): string {

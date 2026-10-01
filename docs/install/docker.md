@@ -257,6 +257,15 @@ archives follow the normal Doctor repair rules. Keep these files with your
 pre-upgrade backup; a rollback must restore the matching state as well as the old
 image. See [rollback](/install/updating#rollback).
 
+Retries with the same candidate build, database files, and target schemas verify and reuse the
+first completed backup group for the full database inventory, including after a
+partially completed migration. A temporary `.bak.capturing` file records an
+unfinished capture and is durably removed before migration starts. An interrupted
+capture is recaptured; a missing or damaged member of a completed group stops
+migration and preserves the surviving snapshots for recovery. Repeated
+failed attempts therefore do not create another full backup group each time.
+Older backup groups remain available for operator-managed rollback.
+
 On FUSE filesystems such as Unraid's `shfs`, a missing native no-replace rename
 does not require an operator step. The migration owner publishes a complete,
 exclusive hardlink, syncs it before removing the old name, and can recover an
@@ -274,6 +283,10 @@ database path, rebuilt indexes, and elapsed time. Current-schema shape refusal
 reports list all affected databases in stable path order. Missing required tables,
 incompatible columns, and other changes that cannot be reconstructed safely still require Doctor; startup
 does not recreate a missing data table as an empty one.
+
+On Linux hosts without file creation timestamps, normal SQLite writes and
+permission repairs can change the reported file birth time. These changes do
+not invalidate the open database; actual file replacement still stops admission.
 
 Startup exits with code `78` when required state cannot be migrated safely:
 for example, source identities conflict, data is unreadable, another writer owns

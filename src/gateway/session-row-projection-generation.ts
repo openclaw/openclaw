@@ -5,7 +5,10 @@ import {
   prepareSessionStoreTargetInventory,
 } from "../config/sessions/session-store-target-inventory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import {
+  readDatabaseIdentityBirthtime,
+  readDatabasePathIdentitySync,
+} from "../infra/sqlite-worker-identity.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { SessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import * as records from "./session-row-projection-record.js";
@@ -23,7 +26,7 @@ function samePhysicalFile(candidate: PhysicalCandidate, pathname = candidate.pat
     return Boolean(
       file?.isFile() &&
       `${file.dev}:${file.ino}` === candidate.identity &&
-      file.birthtimeNs.toString() === candidate.birthtime,
+      readDatabaseIdentityBirthtime(file) === candidate.birthtime,
     );
   } catch {
     return false;
@@ -105,7 +108,7 @@ export function createSessionRowGenerationObservations(owner: {
             candidates.set(candidate.path, {
               path: candidate.path,
               identity: `${file.dev}:${file.ino}`,
-              birthtime: file.birthtimeNs.toString(),
+              birthtime: readDatabaseIdentityBirthtime(file),
             });
           }
         }

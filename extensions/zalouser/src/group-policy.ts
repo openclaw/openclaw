@@ -1,21 +1,11 @@
 import type { ScopeTree } from "openclaw/plugin-sdk/channel-policy";
-import {
-  normalizeOptionalLowercaseString,
-  uniqueStrings,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeChannelSlug } from "openclaw/plugin-sdk/channel-targets";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ZalouserGroupConfig } from "./types.js";
 
 type ZalouserGroups = Record<string, ZalouserGroupConfig>;
 
 const toGroupCandidate = (value?: string | null) => value?.trim() ?? "";
-
-function normalizeZalouserGroupSlug(raw?: string | null): string {
-  const trimmed = normalizeOptionalLowercaseString(raw) ?? "";
-  return trimmed
-    .replace(/^#/, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
 
 export function buildZalouserGroupCandidates(params: {
   groupId?: string | null;
@@ -34,7 +24,7 @@ export function buildZalouserGroupCandidates(params: {
     candidates.push(`group:${groupId}`);
   }
   if (params.allowNameMatching !== false) {
-    candidates.push(groupChannel, groupName, normalizeZalouserGroupSlug(groupName));
+    candidates.push(groupChannel, groupName, normalizeChannelSlug(groupName));
   }
   if (params.includeWildcard !== false) {
     candidates.push("*");

@@ -148,6 +148,9 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANDROID_RELEASE_DESTINATION: ${{ (github.event_name == 'schedule' || inputs.operation == 'internal') && 'internal' || 'play-store' }}
           GOOGLE_PLAY_JSON_KEY_DATA: ${{ secrets.GOOGLE_PLAY_JSON_KEY_DATA }}
+          FIREBASE_APP_DISTRIBUTION_JSON_KEY_DATA: ${{ secrets.FIREBASE_APP_DISTRIBUTION_JSON_KEY_DATA }}
+          FIREBASE_APP_ID: "1:627614795142:android:3daa833ca787ca67959807"
+          FIREBASE_TESTER_GROUPS: android-daily
           GOOGLE_PLAY_PACKAGE_NAME: ai.openclaw.app
           GOOGLE_PLAY_RELEASE_STATUS: completed
           GOOGLE_PLAY_TRACK: internal
@@ -176,6 +179,7 @@ jobs:
           path: |
             ${{ runner.temp }}/android-release-recovery/release-notes.json
             ${{ runner.temp }}/android-release-recovery/android-plan.json
+            ${{ runner.temp }}/android-release-recovery/firebase-result.json
           if-no-files-found: error
           retention-days: 30
 

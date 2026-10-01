@@ -220,7 +220,7 @@ describe("update repair ledger recovery", () => {
         }),
       );
       await updateRepairCommand({});
-      expect(mocks.finalize).toHaveBeenCalledExactlyOnceWith({}, []);
+      expect(mocks.finalize).toHaveBeenCalledExactlyOnceWith({}, [], undefined);
     },
   );
 
@@ -487,7 +487,7 @@ describe("update repair ledger recovery", () => {
       expect(mocks.finalize).not.toHaveBeenCalled();
       await updateRepairCommand({});
 
-      expect(mocks.finalize).toHaveBeenCalledExactlyOnceWith({}, []);
+      expect(mocks.finalize).toHaveBeenCalledExactlyOnceWith({}, [], undefined);
       expect(getUpdateRun(run.runId)).toMatchObject({ status: "failed", reason: "abandoned" });
     },
   );
@@ -504,7 +504,7 @@ describe("update repair ledger recovery", () => {
       await updateRepairCommand({});
 
       if (offset > 0) {
-        expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId]);
+        expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId], undefined);
         expect(getUpdateRun(run.runId)).toEqual(recorded);
       } else {
         expect(mocks.finalize).not.toHaveBeenCalled();
@@ -552,7 +552,7 @@ describe("update repair ledger recovery", () => {
       await expect(updateRepairCommand(opts)).rejects.toThrow("Stop the service through its owner");
 
       expect(getUpdateRun(run.runId)).toEqual(run);
-      expect(mocks.finalize).toHaveBeenCalledWith(opts, [run.runId]);
+      expect(mocks.finalize).toHaveBeenCalledWith(opts, [run.runId], undefined);
     },
   );
 
@@ -580,7 +580,7 @@ describe("update repair ledger recovery", () => {
       await expect(updateRepairCommand({})).rejects.toThrow("Stop the service through its owner");
 
       expect(getUpdateRun(run.runId)).toEqual(recorded);
-      expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId]);
+      expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId], undefined);
     },
   );
 
@@ -600,7 +600,7 @@ describe("update repair ledger recovery", () => {
 
     await expect(updateRepairCommand({})).rejects.toThrow("Stop the service through its owner");
 
-    expect(mocks.finalize).toHaveBeenCalledWith({}, [old.runId, newer.runId]);
+    expect(mocks.finalize).toHaveBeenCalledWith({}, [old.runId, newer.runId], undefined);
     expect(mocks.reachable).not.toHaveBeenCalled();
     expect(listUpdateRuns()).toEqual(recorded);
   });
@@ -763,7 +763,7 @@ describe("update repair ledger recovery", () => {
     await expect(updateRepairCommand({})).rejects.toThrow("Stop the service through its owner");
 
     expect(getUpdateRun(run.runId)?.status).toBe("running");
-    expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId]);
+    expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId], undefined);
   });
 
   it.each([
