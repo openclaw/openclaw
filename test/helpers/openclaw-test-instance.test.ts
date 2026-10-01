@@ -22,7 +22,7 @@ import {
   drainFileLockStateForTest,
   FILE_LOCK_TIMEOUT_ERROR_CODE,
   resetFileLockStateForTest,
-} from "../../src/infra/file-lock.js";
+} from "../../src/plugin-sdk/file-lock.js";
 import { resolveMaxOutputBytes } from "../../src/process/exec-output.js";
 import { withEnvAsync } from "../../src/test-utils/env.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";

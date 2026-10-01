@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { resolveArchiveKind, resolvePackedRootDir } from "./archive.js";
 import { pathExists, withTimeout } from "./fs-safe.js";
-import { JsonFileReadError, readJsonFileStrict } from "./json-files.js";
+import { JsonFileReadError, readJson } from "./json-files.js";
 
 const tempDirs = createTrackedTempDirs();
 const createTempDir = () => tempDirs.make("openclaw-archive-helper-test-");
@@ -100,8 +100,8 @@ describe("archive helpers", () => {
     await fs.writeFile(jsonPath, '{"ok":true}', "utf8");
     await fs.writeFile(badPath, "{not json", "utf8");
 
-    await expect(readJsonFileStrict<{ ok: boolean }>(jsonPath)).resolves.toEqual({ ok: true });
-    await expect(readJsonFileStrict(badPath)).rejects.toBeInstanceOf(JsonFileReadError);
+    await expect(readJson<{ ok: boolean }>(jsonPath)).resolves.toEqual({ ok: true });
+    await expect(readJson(badPath)).rejects.toBeInstanceOf(JsonFileReadError);
     await expect(pathExists(jsonPath)).resolves.toBe(true);
     await expect(pathExists(path.join(dir, "missing.json"))).resolves.toBe(false);
   });

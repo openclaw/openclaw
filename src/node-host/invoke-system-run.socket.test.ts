@@ -6,8 +6,10 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { testing as approvalsTesting } from "../infra/exec-approvals-store.test-support.js";
-import { saveExecApprovals } from "../infra/exec-approvals.js";
+import {
+  saveExecApprovals,
+  testing as approvalsTesting,
+} from "../infra/exec-approvals-store.test-support.js";
 import { requestExecHostViaSocket, type ExecHostRequest } from "../infra/exec-host.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";

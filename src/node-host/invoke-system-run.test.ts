@@ -20,13 +20,15 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { deleteExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
-import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
+import {
+  saveExecApprovals,
+  testing as execApprovalsStoreTesting,
+} from "../infra/exec-approvals-store.test-support.js";
 import type { ExecAsk, ExecSecurity, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import {
   commitExecAuthorizationLocked,
   createExecApprovalPolicySnapshot,
   loadExecApprovals,
-  saveExecApprovals,
 } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import * as commandResolution from "../infra/exec-command-resolution.js";

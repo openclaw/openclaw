@@ -5,10 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, test } from "vitest";
 import type { WebSocket } from "ws";
 import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.js";
-import {
-  onDiagnosticEvent,
-  type DiagnosticPayloadLargeEvent,
-} from "../../infra/diagnostic-events.js";
+import { onDiagnosticEvent, type DiagnosticEventPayload } from "../../infra/diagnostic-events.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { installGatewayTestHooks, rpcReq, testState, writeSessionStore } from "../test-helpers.js";
 import { installConnectedControlUiServerSuite } from "../test-with-server.js";
@@ -28,7 +25,7 @@ describe("chat.history request truncation diagnostic", () => {
     const textBytes = 100_000;
     const budgetBytes = getMaxChatHistoryMessagesBytes();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chat-history-omit-"));
-    const captured: DiagnosticPayloadLargeEvent[] = [];
+    const captured: Extract<DiagnosticEventPayload, { type: "payload.large" }>[] = [];
     const unsubscribe = onDiagnosticEvent((event) => {
       if (event.type === "payload.large" && event.surface === "gateway.chat.history") {
         captured.push(event);

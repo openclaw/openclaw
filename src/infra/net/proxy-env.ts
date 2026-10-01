@@ -3,7 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 // adding OpenClaw NO_PROXY CIDR/wildcard bypass checks.
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 
-export const PROXY_ENV_KEYS = [
+const PROXY_ENV_KEYS = [
   "HTTP_PROXY",
   "HTTPS_PROXY",
   "ALL_PROXY",

@@ -2346,7 +2346,6 @@ src/infra/exec-approval-policy-snapshot.ts	2
 src/infra/exec-approval-reply.ts	2
 src/infra/exec-approvals-allowlist.ts	7
 src/infra/exec-approvals-config.ts	4
-src/infra/exec-approvals-socket.ts	1
 src/infra/exec-approvals-store.ts	1
 src/infra/exec-argv-analysis.ts	1
 src/infra/exec-host.ts	3

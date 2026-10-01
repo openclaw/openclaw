@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { saveExecApprovals } from "../../infra/exec-approvals-store.test-support.js";
 import {
   makeExecutable,
   makeExecApprovalsTempDir,
 } from "../../infra/exec-approvals-test-helpers.js";
-import { loadExecApprovals, saveExecApprovals } from "../../infra/exec-approvals.js";
+import { loadExecApprovals } from "../../infra/exec-approvals.js";
 import type { CliBackendToolPermissionResult } from "../../plugins/cli-backend.types.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {

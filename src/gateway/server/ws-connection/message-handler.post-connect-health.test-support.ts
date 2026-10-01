@@ -6,7 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { prepareSystemAgentRunAdmission } from "../../../agents/admitted-run-context.js";
 import {
   onInternalDiagnosticEvent,
-  type DiagnosticSecurityEvent,
+  type DiagnosticEventPayload,
 } from "../../../infra/diagnostic-events.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
@@ -48,10 +48,10 @@ export const BACKEND_CONNECT_PARAMS = {
 } as const satisfies Record<string, unknown>;
 
 export function captureSecurityEvents(): {
-  events: DiagnosticSecurityEvent[];
+  events: Extract<DiagnosticEventPayload, { type: "security.event" }>[];
   stop: () => void;
 } {
-  const events: DiagnosticSecurityEvent[] = [];
+  const events: Extract<DiagnosticEventPayload, { type: "security.event" }>[] = [];
   const stop = onInternalDiagnosticEvent((event, metadata) => {
     if (metadata.trusted && event.type === "security.event") {
       events.push(event);

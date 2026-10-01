@@ -11,7 +11,8 @@ import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { loadCronStore, resolveCronJobsStorePath, saveCronStore } from "../cron/store.js";
-import { readExecApprovalsSnapshot, saveExecApprovals } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { readExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { readAgentProvenance, recordAgentProvenance } from "../state/agent-provenance.js";

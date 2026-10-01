@@ -1,7 +1,7 @@
+import fs from "node:fs";
 // Session utility tests cover key parsing, store migration, agent/default rows,
 // model identity resolution, title derivation, and byte-capped row payloads.
 import "./session-utils-provider.test-support.js";
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -26,6 +26,7 @@ import type { CronJob } from "../cron/types.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
 import * as execApprovalsStore from "../infra/exec-approvals-store.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -2440,7 +2441,7 @@ describe("gateway session utils", () => {
     },
   ])("listAgentsForGateway never overstates $name", async ({ cfg, approvals, expected }) => {
     await withAgentPermissionState(async () => {
-      execApprovalsStore.saveExecApprovals(approvals);
+      saveExecApprovals(approvals);
       const agent = (await listAgentsForGateway(cfg)).agents.find((entry) => entry.id === "main");
       expect(agent).toBeDefined();
       if (expected === undefined) {

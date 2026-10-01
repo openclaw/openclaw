@@ -47,7 +47,7 @@ import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/sessi
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
+import { onDiagnosticEvent, type DiagnosticEventPayload } from "../infra/diagnostic-events.js";
 import { readPersistedMediaFacts } from "../media/media-facts.js";
 import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
 import { getMediaDir } from "../media/store.js";
@@ -6012,7 +6012,7 @@ describe("gateway server chat", () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await prepareMainHistoryHarness({ ws, createSessionDir });
       const projectedSiblingCount = 70;
-      const captured: DiagnosticPayloadLargeEvent[] = [];
+      const captured: Extract<DiagnosticEventPayload, { type: "payload.large" }>[] = [];
       const unsubscribe = onDiagnosticEvent((event) => {
         if (event.type === "payload.large" && event.surface === "gateway.chat.history") {
           captured.push(event);

@@ -53,7 +53,7 @@ function findWindowsUnsupportedToken(command: string): string | null {
   return null;
 }
 
-export function tokenizeWindowsSegment(segment: string): string[] | null {
+function tokenizeWindowsSegment(segment: string): string[] | null {
   const tokens: string[] = [];
   let buf = "";
   let inDouble = false;

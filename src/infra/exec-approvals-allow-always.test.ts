@@ -16,12 +16,11 @@ import {
   evaluateShellAllowlistWithAuthorization,
   requiresExecApproval,
   resolveAllowAlwaysPersistenceDecision,
-  resolveAllowAlwaysPatterns,
   resolveSafeBins,
 } from "./exec-approvals.js";
 import { buildCwdBoundHashedArgPattern, matchAllowlist } from "./exec-command-resolution.js";
 
-describe("resolveAllowAlwaysPatterns", () => {
+describe("allow-always pattern persistence", () => {
   async function evaluateCommand(
     command: string,
     allowlist: Parameters<typeof evaluateShellAllowlistWithAuthorization>[0]["allowlist"],
@@ -124,9 +123,9 @@ describe("resolveAllowAlwaysPatterns", () => {
     const context = { cwd: dir, env, platform: process.platform };
     const analysis = analyzeArgvCommand({ argv: command.split(" "), ...context });
     expect(analysis.ok).toBe(true);
-    expect(resolveAllowAlwaysPatterns({ segments: analysis.segments, ...context })).toStrictEqual(
-      [],
-    );
+    expect(
+      resolveAllowAlwaysPatternEntries({ segments: analysis.segments, ...context }),
+    ).toStrictEqual([]);
 
     const { persisted } = await resolvePersistedPatterns(command, dir, env);
     expect(persisted).toStrictEqual([]);
@@ -342,9 +341,9 @@ describe("resolveAllowAlwaysPatterns", () => {
       ...context,
     });
     expect(analysis.ok).toBe(true);
-    expect(resolveAllowAlwaysPatterns({ segments: analysis.segments, ...context })).toStrictEqual(
-      [],
-    );
+    expect(
+      resolveAllowAlwaysPatternEntries({ segments: analysis.segments, ...context }),
+    ).toStrictEqual([]);
   });
 
   it("matches persisted shell script paths through dispatch wrappers", async () => {
@@ -555,9 +554,9 @@ $0 \\"$1\\"" touch {marker}`,
     const context = { cwd: dir, env, platform: process.platform };
     const analysis = analyzeArgvCommand({ argv: [busybox, "sed", "-n", "1p"], ...context });
     expect(analysis.ok).toBe(true);
-    expect(resolveAllowAlwaysPatterns({ segments: analysis.segments, ...context })).toStrictEqual(
-      [],
-    );
+    expect(
+      resolveAllowAlwaysPatternEntries({ segments: analysis.segments, ...context }),
+    ).toStrictEqual([]);
   });
 
   it("prevents opaque startup shells from reusing broad grants", async () => {
