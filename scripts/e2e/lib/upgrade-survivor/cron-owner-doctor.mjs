@@ -250,9 +250,8 @@ function seedSession(p) {
   assert.equal(history.sessionId, created.sessionId);
   assert(
     history.messages.some(
-      (message) =>
-        message.__openclaw?.id === injected.messageId &&
-        JSON.stringify(message.content).includes(sessionMarker),
+      ({ __openclaw: metadata, content }) =>
+        metadata?.id === injected.messageId && JSON.stringify(content).includes(sessionMarker),
     ),
   );
   writeJson(path.join(p.artifacts, "cron-owner-session.json"), {
