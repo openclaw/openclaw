@@ -167,6 +167,15 @@ media policy. Include its returned text and images in the native context budget;
 do not append them as an unbounded suffix. See the
 [runtime media contract](/plugins/sdk-runtime) for limits and older-host behavior.
 
+For transfer into a native environment, optional `resolveInputAttachmentMedia()`
+returns a frozen, detached copy of the current admitted input's original media
+facts, including images removed from `params.media` by inline projection. It
+resolves deferred transcript media under the captured attempt's live authority;
+it does not change transcript content or grant file-reading permission. Keep
+source validation and transfer with the harness's existing attachment owner.
+Older hosts without this capability provide only the current attempt's
+`params.media`; do not reconstruct missing sources from prompt text or history.
+
 When trajectory capture has a valid host-owned session target,
 `params.hostCapabilities.trajectory` provides closure-bound `recordEvent(...)`
 and `flush()` operations. The host adds session attribution, bounds and redacts

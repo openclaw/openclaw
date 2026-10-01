@@ -13,6 +13,10 @@ export type DatabasePathIdentity = DatabaseFileIdentity & Readonly<{ canonicalPa
 // The physical host policy stays fixed across every admission in this process.
 const useDatabaseBirthtime = process.platform !== "linux";
 
+export function databaseFileIdentityKey(file: Pick<BigIntStats, "dev" | "ino">): string {
+  return `${file.dev}:${file.ino}`;
+}
+
 export function readDatabaseIdentityBirthtime(file: BigIntStats): string {
   // Node does not expose Linux STATX_BTIME availability and can substitute ctime.
   // Keep the unknown creation-time value stable across ordinary database writes.
@@ -54,7 +58,7 @@ export function assertDatabaseFileIdentity(
 ): void {
   if (
     !file.isFile() ||
-    `file:${file.dev}:${file.ino}` !== expected.key ||
+    `file:${databaseFileIdentityKey(file)}` !== expected.key ||
     (expected.birthtime !== undefined && readDatabaseIdentityBirthtime(file) !== expected.birthtime)
   ) {
     throw new Error("SQLite database file identity changed before existing-only open");
@@ -77,7 +81,7 @@ function existingIdentity(
     throw new Error("SQLite database pathname changed during admission");
   }
   return {
-    key: `file:${file.dev}:${file.ino}`,
+    key: `file:${databaseFileIdentityKey(file)}`,
     canonicalPath: normalizeDatabasePath(canonicalPath),
     birthtime: readDatabaseIdentityBirthtime(file),
   };

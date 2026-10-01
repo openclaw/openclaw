@@ -853,7 +853,9 @@ extension OpenClawChatViewModel {
             if self.transport.outboxRequiresSessionRoutingContract,
                next.routingContract != routeLease.sessionRoutingContract
             {
-                guard await self.parkOutboxCommandForChangedTarget(next, outbox: outbox) else { break }
+                guard await self.parkOutboxCommand(
+                    next, outbox: outbox, reason: OpenClawChatSQLiteTranscriptCache.outboxChangedTargetError)
+                else { break }
                 continue
             }
             switch await self.deliverOutboxCommand(next, outbox: outbox, routeLease: routeLease) {
@@ -966,11 +968,13 @@ extension OpenClawChatViewModel {
             return await self.stopAfterUnconfirmedDelivery(command, outbox: outbox)
         } catch let error as GatewayResponseError {
             if error.detailsReason == OpenClawChatSessionRoutingContract.changedErrorReason {
-                let parked = await self.parkOutboxCommandForChangedTarget(command, outbox: outbox)
+                let parked = await self.parkOutboxCommand(
+                    command, outbox: outbox, reason: OpenClawChatSQLiteTranscriptCache.outboxChangedTargetError)
                 return parked ? .continueFlush : .stop
             }
             if error.detailsReason == OpenClawChatSessionSettingsContract.changedErrorReason {
-                let parked = await self.parkOutboxCommandForChangedSettings(command, outbox: outbox)
+                let parked = await self.parkOutboxCommand(
+                    command, outbox: outbox, reason: OpenClawChatSQLiteTranscriptCache.outboxSettingsChangedError)
                 return parked ? .continueFlush : .stop
             }
             // A response error proves the gateway rejected the request; unlike
@@ -1073,26 +1077,16 @@ extension OpenClawChatViewModel {
         return update
     }
 
-    private func parkOutboxCommandForChangedTarget(
+    private func parkOutboxCommand(
         _ command: OpenClawChatOutboxCommand,
-        outbox: any OpenClawChatCommandOutbox) async -> Bool
+        outbox: any OpenClawChatCommandOutbox,
+        reason: String) async -> Bool
     {
         await self.failOutboxCommand(
             command,
             outbox: outbox,
             retryCount: command.retryCount,
-            reason: OpenClawChatSQLiteTranscriptCache.outboxChangedTargetError) != .unavailable
-    }
-
-    private func parkOutboxCommandForChangedSettings(
-        _ command: OpenClawChatOutboxCommand,
-        outbox: any OpenClawChatCommandOutbox) async -> Bool
-    {
-        await self.failOutboxCommand(
-            command,
-            outbox: outbox,
-            retryCount: command.retryCount,
-            reason: OpenClawChatSQLiteTranscriptCache.outboxSettingsChangedError) != .unavailable
+            reason: reason) != .unavailable
     }
 
     /// Gateway rejections ("error"/"timeout" send acks) burn a retry attempt

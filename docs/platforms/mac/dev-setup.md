@@ -239,6 +239,15 @@ and `AppDefaults` freeze their identity for the process. Tests needing another
 singleton identity require a fresh process. The cooperative helper does not
 isolate unrelated tests or the process from the host.
 
+Swift Testing runs suites concurrently in one process, so never replace the
+global executor (for example `withMainSerialExecutor` or
+`uncheckedUseMainSerialExecutor` from ConcurrencyExtras). Its hook moves every
+other suite's global jobs, actor work, and timer wakeups onto the main thread;
+one non-yielding loop there starves the timeout that would cancel it, and the
+job hangs until CI cancels it. To assert that a late reply changed nothing,
+await the task that settles that reply, as provider wizard and manual-key
+actions return it.
+
 ## Troubleshooting
 
 ### Build fails while freezing Peekaboo sources

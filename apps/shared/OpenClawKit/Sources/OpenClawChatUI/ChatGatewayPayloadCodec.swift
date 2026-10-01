@@ -3,6 +3,16 @@ import OpenClawKit
 import OpenClawProtocol
 
 public enum OpenClawChatSessionKey {
+    public static func matchesIncludingDefaultMainAlias(_ incoming: String, _ current: String) -> Bool {
+        let incoming = incoming.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let current = current.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if incoming == current {
+            return true
+        }
+        return (incoming == "agent:main:main" && current == "main") ||
+            (incoming == "main" && current == "agent:main:main")
+    }
+
     public static func agentID(from sessionKey: String?) -> String? {
         let parts = (sessionKey ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -15,6 +25,26 @@ public enum OpenClawChatSessionKey {
 
 /// Canonical gateway payload mapping shared by the native Apple chat transports.
 public enum OpenClawChatGatewayPayloadCodec {
+    private enum SpeechError: LocalizedError {
+        case emptyAudio
+
+        var errorDescription: String? {
+            "Gateway tts.speak returned empty audio"
+        }
+    }
+
+    public static func decodeSpeechClip(_ data: Data) throws -> OpenClawChatSpeechClip {
+        let response = try JSONDecoder().decode(TtsSpeakResult.self, from: data)
+        guard let audioData = Data(base64Encoded: response.audiobase64), !audioData.isEmpty else {
+            throw SpeechError.emptyAudio
+        }
+        return OpenClawChatSpeechClip(
+            data: audioData,
+            outputFormat: response.outputformat,
+            mimeType: response.mimetype,
+            fileExtension: response.fileextension)
+    }
+
     public static func decodeReactionsList(_ data: Data) throws -> OpenClawChatReactionsListResult {
         let result = try JSONDecoder().decode(SessionReactionsListResult.self, from: data)
         return try OpenClawChatReactionsListResult(

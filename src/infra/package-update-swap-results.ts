@@ -1,4 +1,5 @@
-import { isErrno } from "./errors.js";
+import { formatErrorMessage, isErrno } from "./errors.js";
+import { PackageIntegrityMismatchError } from "./package-update-integrity.js";
 import type {
   StagedPackageSwapParams,
   StagedPackageSwapResult,
@@ -15,6 +16,7 @@ export function createPackageSwapResults(
   startedAt: number,
 ) {
   const warnings: string[] = [];
+  const integrityFailures: NonNullable<UpdateStepResult["failureFacts"]> = [];
   const step = (
     exitCode: number,
     stdoutTail: string | null,
@@ -32,15 +34,17 @@ export function createPackageSwapResults(
     ...(warnings.length > 0 ? { warnings: [...warnings] } : {}),
     ...(exitCode !== 0
       ? {
-          failureFacts: [
-            failureError
-              ? { ...createUpdateErrorFact("package-swap", failureError), code }
-              : createUpdateFailureFact({
-                  check: "package-swap",
-                  code,
-                  message: stderrTail ?? undefined,
-                }),
-          ],
+          failureFacts: integrityFailures.length
+            ? [...integrityFailures]
+            : [
+                failureError
+                  ? { ...createUpdateErrorFact("package-swap", failureError), code }
+                  : createUpdateFailureFact({
+                      check: "package-swap",
+                      code,
+                      message: stderrTail ?? undefined,
+                    }),
+              ],
         }
       : {}),
     ...(exitCode === 0 && warnings.length > 0
@@ -55,6 +59,22 @@ export function createPackageSwapResults(
   return {
     warnings,
     step,
+    rollbackError(error: unknown): string {
+      if (error instanceof PackageIntegrityMismatchError && error.differences.length > 0) {
+        integrityFailures.splice(
+          0,
+          integrityFailures.length,
+          ...error.differences.map((message) =>
+            createUpdateFailureFact({
+              check: "package-swap",
+              code: "package-integrity-changed",
+              message,
+            }),
+          ),
+        );
+      }
+      return formatErrorMessage(error);
+    },
     invalidLayout(activePackageRoot: string | null): StagedPackageSwapResult {
       return {
         status: "failed",

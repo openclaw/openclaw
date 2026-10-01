@@ -277,6 +277,7 @@ describe("SQLite session row persistence", () => {
         skills: [{ name: "demo" }],
         skillFilter: ["demo"],
         resolvedSkills,
+        discoverySkills: resolvedSkills,
         version: 7,
       },
     };
@@ -302,5 +303,6 @@ describe("SQLite session row persistence", () => {
       version: 7,
     });
     expect(entry.skillsSnapshot?.resolvedSkills).toBe(resolvedSkills);
+    expect(entry.skillsSnapshot?.discoverySkills).toBe(resolvedSkills);
   });
 });

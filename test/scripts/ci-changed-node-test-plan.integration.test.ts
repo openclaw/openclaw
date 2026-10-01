@@ -180,6 +180,7 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
       "src/agents/live-model-dynamic-candidates.test.ts",
       "src/agents/live-target-matcher.test.ts",
       "src/agents/model-compat.test.ts",
+      "test/scripts/pr-worktree-provision.test.ts",
     ]),
   );
   // These whole-UI and transitive consumers belonged to the old broad fallback.
@@ -189,7 +190,6 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
     "src/audit/execution-decision-facts.test.ts",
     "src/auto-reply/reply/commands-export-session.test.ts",
     "src/gateway/server-methods/session-change-event.fallback.test.ts",
-    "test/scripts/pr-worktree-provision.test.ts",
     "test/scripts/pr-merge-recovery.test.ts",
     "test/scripts/mobile-release-ci.test.ts",
   ]) {
