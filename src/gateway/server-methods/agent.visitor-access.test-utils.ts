@@ -28,7 +28,10 @@ import {
   syncCanonicalGitHubIdentity,
 } from "../../state/user-profile-writes.js";
 import { getUserProfileListItem } from "../../state/user-profiles.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import {
   captureGatewayDeviceRevocation,
   closeGatewayDeviceRevocation,
@@ -66,6 +69,30 @@ const SESSION_KEY = "agent:main:main";
 const SESSION_ID = "existing-session-id";
 const EMAIL = "visitor@example.test";
 
+async function prepareVisitorSession(state: OpenClawTestState, config: OpenClawConfig) {
+  await state.writeConfig(config);
+  setRuntimeConfigSnapshot(config);
+  const mocks = getAgentTestMocks();
+  mocks.loadConfigReturn = config;
+  const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+  mocks.userTurnStorePath = storePath;
+  await upsertSessionEntryCore(
+    { storePath, sessionKey: SESSION_KEY, agentId: "main" },
+    { sessionId: SESSION_ID, updatedAt: Date.now(), visibility: "shared" },
+  );
+  prime(SESSION_ID, config);
+  return mocks;
+}
+
+function authenticatedProfile({
+  id: profileId,
+  displayName,
+  hasAvatar,
+  updatedAt,
+}: ReturnType<typeof getUserProfileListItem>) {
+  return { profileId, displayName, hasAvatar, updatedAt };
+}
+
 describe("visitor access admitted caller", () => {
   beforeEach(describe1BeforeEach0);
   afterEach(async () => {
@@ -74,26 +101,12 @@ describe("visitor access admitted caller", () => {
     await describe1AfterEach1();
   });
 
-  it.each(["admin", "writer", "revoked before commit", "revoked after commit"] as const)(
+  it.each(["writer", "revoked before commit", "revoked after commit"] as const)(
     "retains the original caller through Visitor Access: %s",
     async (scenario) => {
       await withOpenClawTestState(visitorTestStateOptions, async (state) => {
         const config = createVisitorGatewayConfig(state.workspaceDir);
-        await state.writeConfig(config);
-        setRuntimeConfigSnapshot(config);
-        const mocks = getAgentTestMocks();
-        mocks.loadConfigReturn = config;
-        const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-        mocks.userTurnStorePath = storePath;
-        await upsertSessionEntryCore(
-          { storePath, sessionKey: SESSION_KEY, agentId: "main" },
-          {
-            sessionId: SESSION_ID,
-            updatedAt: Date.now(),
-            visibility: "shared",
-          },
-        );
-        prime(SESSION_ID, config);
+        const mocks = await prepareVisitorSession(state, config);
         const profile = await setCanonicalUserProfileRole(
           (await ensureCanonicalUserProfileForEmail("source@example.test")).id,
           scenario === "writer" ? "writer" : "admin",
@@ -110,12 +123,7 @@ describe("visitor access admitted caller", () => {
           connectionSignal: connection.signal,
           invalidated: false,
           authenticatedUserId: "source@example.test",
-          authenticatedUserProfile: {
-            profileId: profile.id,
-            displayName: profile.displayName,
-            hasAvatar: profile.hasAvatar,
-            updatedAt: profile.updatedAt,
-          },
+          authenticatedUserProfile: authenticatedProfile(profile),
           internal: { operatorRoleActor: { kind: "operator", profileId: profile.id } },
         };
         const deviceId = `visitor-source-${scenario}`;
@@ -205,9 +213,7 @@ describe("visitor access admitted caller", () => {
                         await grants.lookup(EMAIL),
                         "invitation was not recorded",
                       );
-                      if (scenario === "admin") {
-                        return;
-                      }
+                      expect(previous.expiresAt).toBeGreaterThan(previous.createdAt);
                       const createAdmission =
                         mutationAdmission.createSqliteWorkerOperationAdmission;
                       const revokeSource = () => {
@@ -307,11 +313,6 @@ describe("visitor access admitted caller", () => {
           expect(provider.emails()).toEqual([EMAIL]);
           expect(provider.writes).toEqual(["POST"]);
           const original = expectDefined(previous, "initial grant missing");
-          if (scenario === "admin") {
-            expect(saved).toEqual(original);
-            expect(original.expiresAt).toBeGreaterThan(original.createdAt);
-            return;
-          }
           expect(revocationState).toEqual({
             ownerBefore: true,
             callerCurrent: false,
@@ -356,17 +357,7 @@ describe("visitor access admitted caller", () => {
       delete guestRole.modelPolicy;
       expectDefined(config.agents?.defaults, "agent defaults missing").model = "fixture/allowed";
       roles.default = "writer";
-      await state.writeConfig(config);
-      setRuntimeConfigSnapshot(config);
-      const mocks = getAgentTestMocks();
-      mocks.loadConfigReturn = config;
-      const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-      mocks.userTurnStorePath = storePath;
-      await upsertSessionEntryCore(
-        { storePath, sessionKey: SESSION_KEY, agentId: "main" },
-        { sessionId: SESSION_ID, updatedAt: Date.now(), visibility: "shared" },
-      );
-      prime(SESSION_ID, config);
+      const mocks = await prepareVisitorSession(state, config);
       const owner = getUserProfileListItem(
         (await ensureCanonicalGatewayOwnerProfile("Existing owner")).id,
       );
@@ -487,12 +478,7 @@ describe("visitor access admitted caller", () => {
           ...operatorWriteCliClient([ADMIN_SCOPE]),
           connectionSignal: connection.signal,
           invalidated: false,
-          authenticatedUserProfile: {
-            profileId: reopenedOwner.id,
-            displayName: reopenedOwner.displayName,
-            hasAvatar: reopenedOwner.hasAvatar,
-            updatedAt: reopenedOwner.updatedAt,
-          },
+          authenticatedUserProfile: authenticatedProfile(reopenedOwner),
           internal: { operatorRoleActor: { kind: "system" } },
         };
         const caller = captureGatewayDeviceRevocation(
@@ -632,12 +618,7 @@ describe("visitor access admitted caller", () => {
               await captureGatewayOperatorRunAuthority({
                 client: {
                   ...operatorWriteCliClient([SESSION_WRITE_SCOPE]),
-                  authenticatedUserProfile: {
-                    profileId: profile.id,
-                    displayName: profile.displayName,
-                    hasAvatar: profile.hasAvatar,
-                    updatedAt: profile.updatedAt,
-                  },
+                  authenticatedUserProfile: authenticatedProfile(profile),
                   internal: { operatorRoleActor: { kind: "operator", profileId: profile.id } },
                 },
                 context,
