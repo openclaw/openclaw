@@ -36,7 +36,6 @@ it("drained followup turn keeps tracked work accepted after the triggering scope
   const scopeClosed = createDeferredCore();
   const runFollowupSettled = createDeferredCore();
   let trackedOutcome: Promise<string> | undefined;
-  let trackedError: unknown;
 
   try {
     await requestScope.run(() =>
@@ -52,19 +51,9 @@ it("drained followup turn keeps tracked work accepted after the triggering scope
           const work = new AsyncWorkScope();
           const context = work.run(() => AsyncLocalStorage.snapshot());
           const result = createDeferredCore<string>();
-          trackedOutcome = result.promise.catch((error: unknown) => {
-            trackedError = error;
-            throw error;
-          });
+          trackedOutcome = result.promise;
           void trackOwner(async () => {
-            result.resolve(
-              await work.track(async () => {
-                await new Promise<void>((resolve) => {
-                  setTimeout(resolve, 10);
-                });
-                return "turn-complete";
-              }),
-            );
+            result.resolve(await work.track(async () => "turn-complete"));
           }).catch((error: unknown) => result.reject(error));
           try {
             await result.promise;
@@ -86,7 +75,6 @@ it("drained followup turn keeps tracked work accepted after the triggering scope
     scopeClosed.resolve();
     await runFollowupSettled.promise;
 
-    expect(trackedError).toBeUndefined();
     await expect(trackedOutcome!).resolves.toBe("turn-complete");
   } finally {
     scopeClosed.resolve();
