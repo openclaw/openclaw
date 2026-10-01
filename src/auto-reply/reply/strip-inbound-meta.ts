@@ -3,7 +3,13 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { escapeRegExp } from "../../shared/regexp.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "./delivery-hints.js";
-import { INBOUND_CONTEXT_MARKER } from "./inbound-context-marker.js";
+import { INBOUND_CONTEXT_MARKER, REQUESTER_PROFILE_GUIDANCE } from "./inbound-context-marker.js";
+
+/** Unmarked injected lines that strippers remove by exact match. */
+const INJECTED_HINT_LINES: readonly string[] = [
+  ...MESSAGE_TOOL_DELIVERY_HINTS,
+  REQUESTER_PROFILE_GUIDANCE,
+];
 
 const LEADING_TIMESTAMP_PREFIX_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
 const CHANNEL_CONTEXT_HEADER = `Context: ${INBOUND_CONTEXT_MARKER}`;
@@ -13,11 +19,11 @@ const ACTIVE_MEMORY_CLOSE_TAG = "</active_memory_plugin>";
 export const INBOUND_METADATA_MARKERS = [
   "[",
   INBOUND_CONTEXT_MARKER,
-  ...MESSAGE_TOOL_DELIVERY_HINTS,
+  ...INJECTED_HINT_LINES,
   ACTIVE_MEMORY_CONTEXT_HEADER,
 ];
 const METADATA_TOKENS_RE = new RegExp(
-  [INBOUND_CONTEXT_MARKER, ...MESSAGE_TOOL_DELIVERY_HINTS].map(escapeRegExp).join("|"),
+  [INBOUND_CONTEXT_MARKER, ...INJECTED_HINT_LINES].map(escapeRegExp).join("|"),
   "g",
 );
 
@@ -60,15 +66,15 @@ function isInboundContextHeaderLine(line: string): boolean {
   return line.length > INBOUND_CONTEXT_MARKER.length && line.endsWith(INBOUND_CONTEXT_MARKER);
 }
 
-function isMessageToolDeliveryHintLine(line: string): boolean {
-  return MESSAGE_TOOL_DELIVERY_HINTS.some((hint) => hint === line);
+function isInjectedHintLine(line: string): boolean {
+  return INJECTED_HINT_LINES.some((hint) => hint === line);
 }
 
 /** Fast check for whether text contains any inbound metadata sentinel. */
 export function hasInboundMetadataSentinel(text: string): boolean {
   return (
     text.includes(INBOUND_CONTEXT_MARKER) ||
-    MESSAGE_TOOL_DELIVERY_HINTS.some((hint) => text.includes(hint)) ||
+    INJECTED_HINT_LINES.some((hint) => text.includes(hint)) ||
     // Bare Context: is a sentinel only as a complete line.
     (text.includes(ACTIVE_MEMORY_CONTEXT_HEADER) && /^[ \t]*Context:[ \t]*$/m.test(text))
   );
@@ -161,7 +167,7 @@ export function stripInboundMetadata(text: string): string {
     if (isInboundContextHeaderLine(line.trimmed)) {
       tokens.lastIndex = metadataBlockEnd(source, line);
       spans.push({ start, next: tokens.lastIndex });
-    } else if (isMessageToolDeliveryHintLine(line.trimmed)) {
+    } else if (isInjectedHintLine(line.trimmed)) {
       spans.push({ start, next: line.next });
     }
   }
@@ -179,8 +185,8 @@ export function stripLeadingInboundMetadata(text: string): string {
   const source = stripActiveMemoryPromptPrefixBlocks(text);
   let start = skipEmptyLines(source, 0, false);
   let line = readTextLine(source, start);
-  const strippedDeliveryHint = Boolean(line && isMessageToolDeliveryHintLine(line.trimmed));
-  while (line && isMessageToolDeliveryHintLine(line.trimmed)) {
+  const strippedDeliveryHint = Boolean(line && isInjectedHintLine(line.trimmed));
+  while (line && isInjectedHintLine(line.trimmed)) {
     start = skipEmptyLines(source, line.next, false);
     line = readTextLine(source, start);
   }

@@ -23,7 +23,7 @@ import {
   neutralizeMarkdownFences,
   selectInboundHistoryContext,
 } from "./channel-prompt-context.js";
-import { markInboundContextLabel } from "./inbound-context-marker.js";
+import { markInboundContextLabel, REQUESTER_PROFILE_GUIDANCE } from "./inbound-context-marker.js";
 
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
 const MAX_ACTIVE_GOAL_OBJECTIVE_CHARS = 200;
@@ -609,9 +609,7 @@ export function buildInboundUserContextPrefix(
       formatContextJsonBlock(markInboundContextLabel("Conversation info:"), conversationInfo),
     );
     if (requester) {
-      blocks.push(
-        'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.',
-      );
+      blocks.push(REQUESTER_PROFILE_GUIDANCE);
     }
   }
 
