@@ -53,11 +53,10 @@ for fault in ["reused-pid", "member-race", "termination-race"]:
     finally:
         g["query_job"]=original_query;g["terminate_job"]=real_terminate
         real_terminate(job,1)
-        # Join immutable child handles after Job termination; the caller owns the deadline.
-        member.wait()
-        if racing:racing.wait()
+        member.wait(timeout=10)
+        if racing:racing.wait(timeout=10)
         alive=sentinel.poll() is None
-        sentinel.kill();sentinel.wait()
+        sentinel.kill();sentinel.wait(timeout=10)
         g["close_handle"](job)
     assert failure, fault
     assert alive, "unrelated sentinel was terminated"
