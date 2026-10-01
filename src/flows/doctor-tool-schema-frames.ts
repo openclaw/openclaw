@@ -85,14 +85,15 @@ export async function prepareDoctorToolSchemaFrames(
     options.mode !== undefined && options.mode !== "lint" && !isUpdateDoctorLintPass(env);
   const frames: DoctorToolSchemaFrame[] = [];
   const findings: HealthFinding[] = [];
-  for (const agentId of listAgentIds(cfg)) {
-    const agent = resolveAgentConfig(cfg, agentId);
-    if (agent?.runtime?.type === "acp") {
-      continue;
-    }
-    const agentDir = resolveAgentDir(cfg, agentId, env);
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId, env);
-    const prepare = async () => {
+  const prepareAll = async () => {
+    for (const agentId of listAgentIds(cfg)) {
+      const agent = resolveAgentConfig(cfg, agentId);
+      if (agent?.runtime?.type === "acp") {
+        continue;
+      }
+      const agentDir = resolveAgentDir(cfg, agentId, env);
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId, env);
+      const prepare = async () => {
       const modelRef = standalone
         ? resolveDoctorPrimaryModelRef(cfg, agent?.model)
         : resolveDefaultModelForAgent({ cfg, agentId, allowPluginNormalization: true });
@@ -150,15 +151,17 @@ export async function prepareDoctorToolSchemaFrames(
       });
       frames.push({ agentId, agentDir, workspaceDir, modelRef, model, capabilityProfile });
     };
-    try {
-      if (options.runWithPluginMetadataSnapshot) {
-        await options.runWithPluginMetadataSnapshot({ config: cfg, workspaceDir }, prepare);
-      } else {
+      try {
         await prepare();
+      } catch (error) {
+        findings.push(modelContextFinding(agentId, formatErrorMessage(error)));
       }
-    } catch (error) {
-      findings.push(modelContextFinding(agentId, formatErrorMessage(error)));
     }
+  };
+  if (options.runWithPluginMetadataSnapshot) {
+    await options.runWithPluginMetadataSnapshot({ config: cfg }, prepareAll);
+  } else {
+    await prepareAll();
   }
   return { frames, findings };
 }
