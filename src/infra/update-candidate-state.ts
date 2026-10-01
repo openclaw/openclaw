@@ -664,6 +664,9 @@ export async function snapshotUpdateCandidateState(
       sourcePath: file,
       targetPath: target,
       sourceAcquisition: { mode: "isolated-process", stagingRoot: input.targetStateDir },
+      // The rehearsal is private and disposable; compaction would create another
+      // full image and alter implicit row IDs before candidate migrations run.
+      preserveRowIds: true,
       onProgress: progress.onProgress,
       ...(file === shared
         ? {

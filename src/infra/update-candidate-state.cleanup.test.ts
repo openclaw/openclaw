@@ -95,7 +95,9 @@ it.each(
     const sourceBytes = await fs.readFile(source);
     const sourceEntries = await fs.readdir(path.dirname(source));
     const preload = path.join(fixture, "deletion-fault.mjs");
-    // Fault this child's copied payload removal, leaving copy/read/cleanup owners intact.
+    // Successful publication consumes the payload; its staging directory still needs retirement.
+    // Versions and failed reads retain their payload-removal coverage.
+    const removeDirectory = mode === "snapshot" && !scenario.readError;
     await fs.writeFile(
       preload,
       `
@@ -106,12 +108,14 @@ it.each(
       const stagingRoot = ${JSON.stringify(stagingRoot)};
       const attemptsPath = ${JSON.stringify(attemptsPath)};
       const fault = ${JSON.stringify(scenario.cleanup)};
+      const removeDirectory = ${JSON.stringify(removeDirectory)};
       let attempts = 0;
       const prepareRemoval = (location) => {
         const snapshot = String(location);
-        const directory = path.dirname(snapshot);
+        const directory = removeDirectory ? snapshot : path.dirname(snapshot);
         if (path.dirname(directory) !== stagingRoot ||
-            path.basename(snapshot) !== "database.sqlite") {
+            !path.basename(directory).startsWith("openclaw-sqlite-readonly-") ||
+            (!removeDirectory && path.basename(snapshot) !== "database.sqlite")) {
           return undefined;
         }
         attempts++;
@@ -505,13 +509,17 @@ setInterval(() => {}, 60_000);
     const previousCache = process.env.XDG_CACHE_HOME;
     process.env.XDG_CACHE_HOME = cache;
     const controller = new AbortController();
+    const operation = readUpdateStateSchemaVersions({
+      stateDir: path.join(root, "unused-state"),
+      config: {},
+      nodeRunner: runner,
+      signal: controller.signal,
+    });
+    const settled = operation.then(
+      () => {},
+      () => {},
+    );
     try {
-      const operation = readUpdateStateSchemaVersions({
-        stateDir: path.join(root, "unused-state"),
-        config: {},
-        nodeRunner: runner,
-        signal: controller.signal,
-      });
       const pid = await waitForPidFile(pidPath, 5_000);
       const cancellation = new Error("test cancellation");
       controller.abort(cancellation);
@@ -521,6 +529,8 @@ setInterval(() => {}, 60_000);
       await expect(fs.stat(stagingRoot)).rejects.toMatchObject({ code: "ENOENT" });
       expect(await fs.readdir(cacheOwner)).toEqual([]);
     } finally {
+      controller.abort();
+      await settled;
       if (previousCache === undefined) {
         delete process.env.XDG_CACHE_HOME;
       } else {
