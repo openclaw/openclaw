@@ -252,6 +252,21 @@ describe("prompt-build current input on real runtimes", () => {
         sinceIndex: outboundStartIndex,
         timeoutMs: 180_000,
       });
+      // The CLI backend path is only covered if a real child process ran the turn:
+      // the fake CLI writes these markers and its reply reaches the channel.
+      const outbound = state
+        .getSnapshot()
+        .messages.filter((message) => message.direction === "outbound")
+        .slice(outboundStartIndex);
+      const cliObservation = {
+        turnStarted: fs.existsSync(path.join(fakeDir, "turn-started.json")),
+        turnFinished: fs.existsSync(path.join(fakeDir, "turn-finished.json")),
+        reply: outbound.at(-1)?.text ?? null,
+      };
+      process.stdout.write(`CLI_PROCESS_TRACE ${JSON.stringify(cliObservation)}\n`);
+      expect(cliObservation.turnStarted).toBe(true);
+      expect(cliObservation.turnFinished).toBe(true);
+      expect(cliObservation.reply).toMatch(/^fake-claude reply /);
 
       const captured = (await readProbeCaptures(gateway)).at(-1);
       expect(captured).toBeDefined();
