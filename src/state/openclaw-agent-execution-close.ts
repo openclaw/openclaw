@@ -7,7 +7,7 @@ import {
 import type { SqliteWorkerCloseReceipt } from "../infra/sqlite-worker-contract.js";
 import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
 import { closeOpenClawAgentDatabaseByPath } from "./openclaw-agent-db-lifecycle.js";
-import type { AgentDatabaseExecutionIdentity } from "./openclaw-agent-execution-contract.js";
+import type { AgentDatabaseFileExecutionIdentity } from "./openclaw-agent-execution-contract.js";
 
 export function closeAgentDatabaseExecution({
   database,
@@ -17,7 +17,7 @@ export function closeAgentDatabaseExecution({
   releaseSharedBorrow,
 }: {
   database: OpenClawAgentDatabase | undefined;
-  identity: AgentDatabaseExecutionIdentity | undefined;
+  identity: AgentDatabaseFileExecutionIdentity | undefined;
   closeDomain: () => void;
   releaseBorrow: (() => void) | undefined;
   releaseSharedBorrow: () => void;

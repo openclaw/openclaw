@@ -18,6 +18,55 @@ candidate main-thread paths from SQL already executing in workers.
 
 ## Keep one store owner
 
+### Incognito worker ownership (P1, inactive)
+
+The accepted incognito migration extends the canonical agent execution owner
+with an explicit ephemeral target. P1 supplies isolated actor creation,
+existing-only lookup, memory diagnostics, and close. Production incognito stays
+with its current host owner until P7; there is no flag selecting competing
+writers, no session-domain routing change, and no reduction in main-thread
+database access yet.
+
+Each agent and state-root namespace has one pinned actor on a dedicated broker
+worker. Concurrent creation joins the same opening owner. Existing-only misses
+create nothing. Process-private opaque handles and incarnations bind work to
+that exact actor; they are locators, never permission. Reads and future writes
+share the existing agent writer queue, and caller authority is checked after
+waits and before disclosure. Explicit close seals admission, joins accepted work
+and native cleanup, then releases the namespace. Failed cleanup keeps custody.
+Idle borrows never evict an incognito database.
+
+Maintainer decisions accepted for this staged migration:
+
+- Worker loss ends that agent's incognito sessions. Old handles return the typed
+  `INCOGNITO_SESSION_ENDED` error; new sessions may create a new incarnation after
+  cleanup. There is no recovery copy or replay into an empty replacement.
+- Connections use `:memory:` and `temp_store=MEMORY`, with no durable database
+  registration, lease, WAL, archive, snapshot, or backing file. The reserved
+  sentinel remains a namespace and existing files there are refused. OS swap and
+  crash dumps remain outside the application's memory-store guarantee.
+- There is no new content cap or eviction policy. The per-agent diagnostics
+  gauge reports `page_count * page_size`; it excludes SQLite allocator overhead,
+  decoded results, process RSS, and transport buffers. Pinned actors share the
+  broker's finite worker capacity with durable actors; capacity exhaustion
+  visibly refuses creation without evicting a live store.
+- Shared ACP metadata keeps its existing persistence and retention.
+- Bundled persistence callers will become asynchronous. Public synchronous
+  persistence remains supported through the current Plugin SDK major, with
+  documented deprecation and one warning per plugin. P7's compatibility bridge
+  must settle the committed actor write before returning, use a bounded wait,
+  require no host callback, and fail actionably on timeout or actor loss. Removal
+  belongs to the next SDK major. P1 does not implement or activate that bridge.
+
+P2 adds session facts, creation, and authority; P3 adds side-data adapters;
+P4 migrates transcript mutation and lifecycle; P5 adds history and compute
+routing; P6 completes ACP and the shared-owner audit. P7 switches all reachable
+callers together and deletes the host incognito routes. The existing 24-hour,
+nonrenewing session deadline and restart loss remain unchanged. P1 has no update
+behavior, schema change, migration, or operator action because it is inactive.
+
+### Existing worker flows
+
 Shared-state transaction diagnostics inherit the executing worker command name
 when the store does not supply a more specific operation label. Slow holds and
 failed lock waits therefore identify the domain operation without logging its
