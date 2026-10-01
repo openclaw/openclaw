@@ -40,6 +40,7 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
     { reason: "timeout", sourceTool: "subagent_announce", harness: "openclaw" },
     { reason: "timeout", sourceTool: "subagent_settle", harness: "codex" },
     { reason: "overloaded", sourceTool: "subagent_settle", harness: "openclaw" },
+    { reason: "server_error", sourceTool: "subagent_settle", harness: "openclaw" },
   ] as const)(
     "preserves delegation after a same-model $reason retry of $sourceTool under $harness",
     async ({ reason, sourceTool, harness }) => {
@@ -51,7 +52,13 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
             terminal: {
               kind: "failed",
               source: "prompt",
-              error: new Error(reason === "timeout" ? "LLM request timed out." : "overloaded"),
+              error: new Error(
+                reason === "timeout"
+                  ? "LLM request timed out."
+                  : reason === "server_error"
+                    ? "HTTP 520: controlled provider server error"
+                    : "overloaded",
+              ),
             },
           }),
         )
