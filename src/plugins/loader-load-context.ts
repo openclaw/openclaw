@@ -363,6 +363,11 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const shouldActivate = options.mode !== "cli-metadata" && options.activate !== false;
   // Staged runtime registration is independent of publishing the process registry.
   const runtimeSideEffects = options.runtimeSideEffects ?? shouldActivate;
+  const registrationConfigOrigin = options.registrationConfigOrigin;
+  const registrationGeneration =
+    !shouldActivate && registrationConfigOrigin && getRuntimeConfigCapture(registrationConfigOrigin)
+      ? resolveRuntimeBindingCacheId(registrationConfigOrigin)
+      : undefined;
   const manifestRegistry =
     options.manifestRegistry ??
     (options.discovery === undefined ? currentMetadataSnapshot?.manifestRegistry : undefined);
@@ -411,14 +416,10 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     allowProcessHomeSessionCatalogs: options.allowProcessHomeSessionCatalogs,
     activate: shouldActivate,
     runtimeSideEffects,
-    registrationConfigOrigin: resolveRuntimeBindingCacheId(options.registrationConfigOrigin),
-    registrationSnapshots:
-      !shouldActivate && getRuntimeConfigCapture(options.registrationConfigOrigin)
-        ? [
-            activationConfigFingerprint(runtimeConfig),
-            activationConfigFingerprint(activationConfig),
-          ]
-        : undefined,
+    registrationConfigOrigin: registrationGeneration,
+    registrationSnapshots: registrationGeneration
+      ? [activationConfigFingerprint(runtimeConfig), activationConfigFingerprint(activationConfig)]
+      : undefined,
     expectedSourceDigests: options.expectedSourceDigests,
     mode: options.mode ?? "full",
   });
@@ -434,6 +435,10 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const capture = () => {
     if (!captured) {
       const cfg = captureRuntimeConfig(runtimeConfig);
+      if (registrationGeneration !== undefined && cfg !== runtimeConfig) {
+        // api.config reentry belongs to the load already registering this generation.
+        runtimeBindingCacheIds.set(cfg, registrationGeneration);
+      }
       const activationSourceConfig =
         activationConfig === runtimeConfig ? cfg : captureRuntimeConfig(activationConfig);
       const capturedNormalized = normalizePluginsConfig(cfg.plugins);

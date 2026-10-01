@@ -82,11 +82,12 @@ it("retains the selected alias's runtime metadata instead of normalizing it agai
 });
 
 it.each([
-  { agents: 200, providers: ["doctor-shared"] },
-  { agents: 2, providers: ["doctor-alpha", "doctor-beta"] },
+  { agents: 200, providers: ["doctor-shared"], reenter: false },
+  { agents: 2, providers: ["doctor-alpha", "doctor-beta"], reenter: false },
+  { agents: 2, providers: ["doctor-shared"], reenter: true },
 ])(
-  "bounds provider registrations and config captures for $agents agents",
-  async ({ agents, providers }) => {
+  "bounds provider registrations and config captures for $agents agents (reentry: $reenter)",
+  async ({ agents, providers, reenter }) => {
     await withOpenClawTestState(
       { env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
       async (state) => {
@@ -94,10 +95,20 @@ it.each([
           typeof import("../agents/embedded-agent-runner/model.js")
         >("../agents/embedded-agent-runner/model.js");
         const stores = real.createEmptyAgentDiscoveryStores();
+        const { resolveProviderRuntimePlugin } =
+          await import("../plugins/provider-hook-runtime.js");
         const event = `doctor-frame-registration:${state.root}`;
         const registrations = new Map<string, number>();
-        const onRegistration = (provider: string) => {
+        const onRegistration = (provider: string, config: OpenClawConfig) => {
           registrations.set(provider, (registrations.get(provider) ?? 0) + 1);
+          if (reenter) {
+            resolveProviderRuntimePlugin({
+              provider,
+              config,
+              workspaceDir: state.path("workspace0"),
+              env: state.env,
+            });
+          }
         };
         const paths: string[] = [];
         for (const provider of providers) {
@@ -105,7 +116,7 @@ it.each([
             await state.writeText(
               `plugins/${provider}/index.cjs`,
               `module.exports = { id: ${JSON.stringify(provider)}, register(api) {
-              process.emit(${JSON.stringify(event)}, ${JSON.stringify(provider)});
+              process.emit(${JSON.stringify(event)}, ${JSON.stringify(provider)}, api.config);
               api.registerProvider({ id: ${JSON.stringify(provider)}, label: "Doctor fixture", auth: [],
                 normalizeResolvedModel: ({ model, workspaceDir }) => ({
                   ...model, name: ${JSON.stringify(provider)} + ":" + workspaceDir,
