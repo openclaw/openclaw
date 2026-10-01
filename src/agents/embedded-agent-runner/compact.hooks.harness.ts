@@ -21,7 +21,10 @@ import {
   type CompactHooksQueuedCompaction,
   type MockResolvedModel,
 } from "./compact.hooks.metadata.test-support.js";
-import { mockCompactHooksTools } from "./compact.hooks.tools.test-support.js";
+import {
+  mockCompactHooksSkills,
+  mockCompactHooksTools,
+} from "./compact.hooks.tools.test-support.js";
 import { createCompactionSessionManagerMock } from "./compact.session-manager.test-support.js";
 import type { resolveModelAsync } from "./model.js";
 import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
@@ -871,22 +874,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     limitHistoryTurns: limitHistoryTurnsMock,
   }));
 
-  vi.doMock("../../skills/runtime/env-overrides.js", () => ({
-    applySkillEnvOverrides: vi.fn(() => () => {}),
-    applySkillEnvOverridesFromSnapshot: vi.fn(() => () => {}),
-  }));
-
-  vi.doMock("../../skills/loading/workspace-skill-loader.js", () => {
-    return {
-      prepareWorkspaceSkills: vi.fn<
-        typeof import("../../skills/loading/workspace-skill-loader.js").prepareWorkspaceSkills
-      >(async () => []),
-    };
-  });
-
-  vi.doMock("../../skills/loading/workspace-skill-prompt.js", () => ({
-    resolveSkillsPrompt: resolveSkillsPromptMock,
-  }));
+  mockCompactHooksSkills(resolveSkillsPromptMock);
 
   vi.doMock("../agent-scope.js", async () => {
     const { listAgentIds } = await import("../agent-scope-config.js");
