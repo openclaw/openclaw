@@ -16,8 +16,10 @@ import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 
 vi.mock("node:fs", async (importOriginal) => ({
@@ -199,75 +201,85 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
       if (unresolved) {
         ancestryInspection.mockReturnValue({ pids: new Set([process.pid]), complete: false });
       }
-      await withEnvAsync(
-        {
-          OPENCLAW_UPDATE_RUN_HANDOFF: identity === "missing marker" ? undefined : "1",
-          OPENCLAW_UPDATE_RUN_ID:
-            identity === "missing run" ? undefined : phase === "inspect" ? runId : randomUUID(),
-          [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]:
-            identity === "missing metadata" ? undefined : metaPath,
-          OPENCLAW_SERVICE_MARKER: inherited ? "openclaw" : undefined,
-          OPENCLAW_SERVICE_KIND: inherited ? "gateway" : undefined,
-          OPENCLAW_GATEWAY_SERVICE_PID: inherited ? String(gatewayPid) : undefined,
-        },
-        async () => {
-          const service = handoffService(home, {}, gatewayPid);
-          mocks.service.mockReturnValue(service);
-          const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
-            root,
-            handoffRoot: splitRoot ? packageRoot : undefined,
-            updateInstallKind: "package",
-            shouldRestart: true,
-            jsonMode: true,
-            phase,
+      try {
+        await withEnvAsync(
+          {
+            OPENCLAW_UPDATE_RUN_HANDOFF: identity === "missing marker" ? undefined : "1",
+            OPENCLAW_UPDATE_RUN_ID:
+              identity === "missing run" ? undefined : phase === "inspect" ? runId : randomUUID(),
+            [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]:
+              identity === "missing metadata" ? undefined : metaPath,
+            OPENCLAW_SERVICE_MARKER: inherited ? "openclaw" : undefined,
+            OPENCLAW_SERVICE_KIND: inherited ? "gateway" : undefined,
+            OPENCLAW_GATEWAY_SERVICE_PID: inherited ? String(gatewayPid) : undefined,
+          },
+          async () => {
+            const service = handoffService(home, {}, gatewayPid);
+            mocks.service.mockReturnValue(service);
             // Candidate admission inspects before supplying the ledger run context.
-            updateRun: phase === "inspect" ? undefined : { runId, env: process.env },
-            handoffFromGateway: async () => false,
-          });
-          expect(inspected.serviceUpdateVerdict?.kind).toBe("owned");
-          if (authorized || external) {
-            expect(inspected.blockMessage).toBeUndefined();
-          } else {
-            expect(inspected.blockFailureFacts).toEqual([
-              expect.objectContaining({
-                check: "managed-service-preflight",
-                code: reparented
-                  ? scenario.membership === "inside"
-                    ? "inside-gateway-service"
-                    : "service-membership-unverified"
-                  : unresolved
-                    ? "service-ancestry-unverified"
-                    : "inside-gateway-process-tree",
-              }),
-            ]);
-            if (reparented) {
-              expect(inspected.blockMessage).toContain("service");
-            } else if (unresolved) {
-              expect(inspected.blockMessage).toContain(
-                "Process ancestry could not be fully inspected",
-              );
+            const updateRun = phase === "inspect" ? undefined : { runId, env: process.env };
+            const { recordPhase } = createUpdateCommandExecutionGuards(
+              { run: updateRun },
+              packageRoot,
+            );
+            const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
+              root,
+              handoffRoot: splitRoot ? packageRoot : undefined,
+              updateInstallKind: "package",
+              shouldRestart: true,
+              jsonMode: true,
+              phase,
+              updateRun,
+              recordPhase,
+              handoffFromGateway: async () => false,
+            });
+            expect(inspected.serviceUpdateVerdict?.kind).toBe("owned");
+            if (authorized || external) {
+              expect(inspected.blockMessage).toBeUndefined();
             } else {
-              expect(inspected.blockMessage).toBe(
-                `This command is running inside the gateway process tree (gateway PID ${gatewayPid}).\nStopping or restarting the gateway from here would kill this command, so it cannot safely manage the gateway that owns it.\nRun this command from a shell outside the gateway service.`,
+              expect(inspected.blockFailureFacts).toEqual([
+                expect.objectContaining({
+                  check: "managed-service-preflight",
+                  code: reparented
+                    ? scenario.membership === "inside"
+                      ? "inside-gateway-service"
+                      : "service-membership-unverified"
+                    : unresolved
+                      ? "service-ancestry-unverified"
+                      : "inside-gateway-process-tree",
+                }),
+              ]);
+              if (reparented) {
+                expect(inspected.blockMessage).toContain("service");
+              } else if (unresolved) {
+                expect(inspected.blockMessage).toContain(
+                  "Process ancestry could not be fully inspected",
+                );
+              } else {
+                expect(inspected.blockMessage).toBe(
+                  `This command is running inside the gateway process tree (gateway PID ${gatewayPid}).\nStopping or restarting the gateway from here would kill this command, so it cannot safely manage the gateway that owns it.\nRun this command from a shell outside the gateway service.`,
+                );
+              }
+            }
+            expect(service.stop).toHaveBeenCalledTimes(
+              (authorized || external) && phase === "prepare" ? 1 : 0,
+            );
+            if ((authorized || external) && phase === "prepare") {
+              expect(service.stop).toHaveBeenCalledWith(
+                expect.objectContaining({
+                  updateHandoff: { root: packageRoot, runId },
+                }),
               );
             }
-          }
-          expect(service.stop).toHaveBeenCalledTimes(
-            (authorized || external) && phase === "prepare" ? 1 : 0,
-          );
-          if ((authorized || external) && phase === "prepare") {
-            expect(service.stop).toHaveBeenCalledWith(
-              expect.objectContaining({
-                updateHandoff: { root: packageRoot, runId },
-              }),
-            );
-          }
-          expect(service.start).not.toHaveBeenCalled();
-          expect(service.restart).not.toHaveBeenCalled();
-          expect(service.stage).not.toHaveBeenCalled();
-          expect(service.install).not.toHaveBeenCalled();
-        },
-      );
+            expect(service.start).not.toHaveBeenCalled();
+            expect(service.restart).not.toHaveBeenCalled();
+            expect(service.stage).not.toHaveBeenCalled();
+            expect(service.install).not.toHaveBeenCalled();
+          },
+        );
+      } finally {
+        await closeStateDatabaseForTest();
+      }
     }),
 );
 
@@ -326,26 +338,33 @@ it
           stop,
         }),
       );
-      await withEnvAsync(
-        {
-          OPENCLAW_UPDATE_RUN_HANDOFF: "1",
-          [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
-        },
-        async () => {
-          await expect(
-            maybeStopManagedServiceBeforeMutableUpdate({
-              root,
-              updateInstallKind: "package",
-              shouldRestart: true,
-              jsonMode: true,
-              phase: "prepare",
-              updateRun: { runId, env: process.env },
-            }).then(() => undefined),
-          ).rejects.toThrow(
-            `This command is running inside the gateway process tree (gateway PID ${process.ppid}).\nStopping or restarting the gateway from here would kill this command, so it cannot safely manage the gateway that owns it.\nRun this command from a shell outside the gateway service.`,
-          );
-        },
-      );
+      try {
+        await withEnvAsync(
+          {
+            OPENCLAW_UPDATE_RUN_HANDOFF: "1",
+            [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
+          },
+          async () => {
+            const updateRun = { runId, env: process.env };
+            const { recordPhase } = createUpdateCommandExecutionGuards({ run: updateRun }, root);
+            await expect(
+              maybeStopManagedServiceBeforeMutableUpdate({
+                root,
+                updateInstallKind: "package",
+                shouldRestart: true,
+                jsonMode: true,
+                phase: "prepare",
+                updateRun,
+                recordPhase,
+              }).then(() => undefined),
+            ).rejects.toThrow(
+              `This command is running inside the gateway process tree (gateway PID ${process.ppid}).\nStopping or restarting the gateway from here would kill this command, so it cannot safely manage the gateway that owns it.\nRun this command from a shell outside the gateway service.`,
+            );
+          },
+        );
+      } finally {
+        await closeStateDatabaseForTest();
+      }
       expect(runtimeReads).toBe(2);
       expect(stop).not.toHaveBeenCalled();
     }),

@@ -2,6 +2,7 @@ import type { AssistantMessage, Context, Model, ProviderReplayState } from "@ope
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   buildProviderReplayContext,
+  isProviderReplayContext,
   providerReplayContextMatches,
 } from "./provider-replay-context.js";
 
@@ -90,12 +91,8 @@ function isAnthropicCompactionState(
   if (
     state.v !== 1 ||
     typeof state.data !== "string" ||
-    typeof state.provider !== "string" ||
-    typeof state.api !== "string" ||
-    typeof state.model !== "string" ||
     typeof state.baseUrlHash !== "string" ||
-    (state.sessionHash !== undefined && typeof state.sessionHash !== "string") ||
-    (state.authProfileHash !== undefined && typeof state.authProfileHash !== "string")
+    !isProviderReplayContext(state)
   ) {
     return false;
   }

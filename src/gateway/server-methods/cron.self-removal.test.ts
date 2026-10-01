@@ -14,6 +14,11 @@ import {
   createTestGatewayScheduler,
 } from "../../test-utils/gateway-scheduler-clock.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
+import {
+  createCronCreatorAuthorityRunScope,
+  mintCronCreatorAuthorityGrant,
+  revokeCronCreatorAuthorityRunScope,
+} from "../cron-creator-authority-grant.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { cronHandlers } from "./cron.js";
 import type { GatewayClient, RespondFn } from "./types.js";
@@ -46,6 +51,7 @@ describe.each(
           ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
         },
       });
+      const creatorScope = createCronCreatorAuthorityRunScope(`run-${job.id}`, { kind: "local" });
       try {
         const admitted = await admission.admit("embedded");
         await executionIdentity?.onPostAdmission?.(admitted);
@@ -62,6 +68,13 @@ describe.each(
               sessionKey: `agent:main:cron:${job.id}`,
               operationalRunInstance: admitted.operationalRunInstance,
               delegatedAuthority: { kind: "local", ...delegatedAuthority },
+              cronCreatorAuthorityGrant: mintCronCreatorAuthorityGrant(
+                creatorScope,
+                abortSignal,
+                undefined,
+                undefined,
+                "requester",
+              ),
               cronSelfManagementContext: { jobId: job.id, expiresAtMs: Date.now() + 60_000 },
             },
           },
@@ -92,6 +105,7 @@ describe.each(
           notify: "final reply after self-cleanup",
         };
       } finally {
+        revokeCronCreatorAuthorityRunScope(creatorScope);
         admission.close();
       }
     };

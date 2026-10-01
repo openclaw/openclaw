@@ -81,14 +81,10 @@ type ComfyStatusResponse = {
   message?: string;
   error?: string;
 };
-type ComfyNetworkPolicy = {
-  apiPolicy?: SsrFPolicy;
-};
 type ComfyApiKeyResolution =
   | {
       status: "available";
       apiKey: string;
-      source: string;
     }
   | {
       status: "missing";
@@ -163,7 +159,6 @@ function resolveComfyApiKey(
       ? {
           status: "available",
           apiKey,
-          source: "plugins.entries.comfy.config.apiKey",
         }
       : { status: "missing" };
   }
@@ -186,7 +181,6 @@ function resolveComfyApiKey(
       ? {
           status: "available",
           apiKey,
-          source: `plugins.entries.comfy.config.apiKey (${envVarName})`,
         }
       : { status: "configured_unavailable" };
   }
@@ -201,30 +195,19 @@ function getRequiredConfigString(config: ComfyProviderConfig, key: string): stri
   return value;
 }
 
-function resolveComfyWorkflowSource(config: ComfyProviderConfig): {
-  workflow?: ComfyWorkflow;
-  workflowPath?: string;
-} {
+async function loadComfyWorkflow(config: ComfyProviderConfig): Promise<ComfyWorkflow> {
   const workflow = config.workflow;
   if (isRecord(workflow)) {
-    return { workflow: structuredClone(workflow) };
+    return structuredClone(workflow);
   }
   const workflowPath = normalizeOptionalString(config.workflowPath);
-  return { workflowPath };
-}
-
-async function loadComfyWorkflow(config: ComfyProviderConfig): Promise<ComfyWorkflow> {
-  const source = resolveComfyWorkflowSource(config);
-  if (source.workflow) {
-    return source.workflow;
-  }
-  if (!source.workflowPath) {
+  if (!workflowPath) {
     throw new Error(
       "plugins.entries.comfy.config.<capability>.workflow or workflowPath is required",
     );
   }
 
-  const resolvedPath = resolveUserPath(source.workflowPath);
+  const resolvedPath = resolveUserPath(workflowPath);
   const raw = await fs.readFile(resolvedPath, "utf8");
   const parsed = JSON.parse(raw) as unknown;
   if (!isRecord(parsed)) {
@@ -283,29 +266,26 @@ function resolveComfyNetworkPolicy(params: {
   allowPrivateNetwork: boolean;
   explicitAllowPrivateNetwork: boolean;
   mode: ComfyMode;
-}): ComfyNetworkPolicy {
-  let parsed: URL;
-  try {
-    parsed = new URL(params.baseUrl);
-  } catch {
-    return {};
+}): SsrFPolicy | undefined {
+  const parsed = URL.parse(params.baseUrl);
+  if (!parsed) {
+    return undefined;
   }
 
   const hostname = normalizeOptionalLowercaseString(parsed.hostname) ?? "";
   if (!hostname) {
-    return {};
+    return undefined;
   }
   const localHostnamePolicy: SsrFPolicy | undefined =
     params.mode === "local" ? { hostnameAllowlist: [hostname] } : undefined;
-  const hostnameOnlyPolicy = localHostnamePolicy ? { apiPolicy: localHostnamePolicy } : {};
   if (!params.allowPrivateNetwork) {
-    return hostnameOnlyPolicy;
+    return localHostnamePolicy;
   }
   // Local mode auto-trusts loopback/IP targets and Compose-style single-label
   // service names; public-looking FQDNs require the operator's explicit
   // allowPrivateNetwork opt-in.
   if (!params.explicitAllowPrivateNetwork && params.mode !== "local") {
-    return {};
+    return undefined;
   }
   if (
     !params.explicitAllowPrivateNetwork &&
@@ -313,18 +293,17 @@ function resolveComfyNetworkPolicy(params: {
     !isPrivateOrLoopbackHost(hostname) &&
     !isSingleLabelServiceHostname(hostname)
   ) {
-    return hostnameOnlyPolicy;
+    return localHostnamePolicy;
   }
 
   const originPolicy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(params.baseUrl);
   if (!originPolicy) {
-    return hostnameOnlyPolicy;
+    return localHostnamePolicy;
   }
 
-  return {
-    apiPolicy:
-      params.mode === "local" ? mergeSsrFPolicies(originPolicy, localHostnamePolicy) : originPolicy,
-  };
+  return params.mode === "local"
+    ? mergeSsrFPolicies(originPolicy, localHostnamePolicy)
+    : originPolicy;
 }
 
 function isSingleLabelServiceHostname(hostname: string): boolean {
@@ -357,22 +336,6 @@ async function readJsonResponse<T>(params: {
   }
 }
 
-function resolveFileExtension(params: { fileName?: string; mimeType?: string }): string {
-  const extension = extensionForMime(params.mimeType);
-  if (extension) {
-    return extension.slice(1);
-  }
-  const fileName = params.fileName?.trim();
-  if (!fileName) {
-    return "bin";
-  }
-  const dotIndex = fileName.lastIndexOf(".");
-  if (dotIndex < 0 || dotIndex === fileName.length - 1) {
-    return "bin";
-  }
-  return fileName.slice(dotIndex + 1);
-}
-
 async function uploadInputImage(params: {
   baseUrl: string;
   headers: Headers;
@@ -388,7 +351,7 @@ async function uploadInputImage(params: {
     "image",
     new Blob([bufferToBlobPart(params.image.buffer)], { type: params.image.mimeType }),
     normalizeOptionalString(params.image.fileName) ||
-      `input.${resolveFileExtension({ mimeType: params.image.mimeType })}`,
+      `input.${extensionForMime(params.image.mimeType)?.slice(1) || "bin"}`,
   );
   form.set("type", "input");
   form.set("overwrite", "true");
@@ -562,7 +525,7 @@ async function downloadOutputFile(params: {
   mode: ComfyMode;
   capability: ComfyCapability;
   maxBytes: number;
-}): Promise<{ buffer: Buffer; mimeType: string }> {
+}): Promise<{ buffer: Buffer; mimeType: string; fileName: string }> {
   const fileName =
     normalizeOptionalString(params.file.filename) || normalizeOptionalString(params.file.name);
   if (!fileName) {
@@ -609,7 +572,7 @@ async function downloadOutputFile(params: {
           new Error(`${downloadLabel} stalled after ${chunkTimeoutMs}ms`),
       },
     );
-    return { buffer, mimeType };
+    return { buffer, mimeType, fileName };
   } finally {
     await firstResponse.release();
   }
@@ -650,8 +613,7 @@ export function isComfyCapabilityConfigured(params: {
   const { config } = getComfyConfig(params.cfg);
   const capabilityConfig = getComfyCapabilityConfig(config, params.capability);
   const hasWorkflow = Boolean(
-    resolveComfyWorkflowSource(capabilityConfig).workflow ||
-    normalizeOptionalString(capabilityConfig.workflowPath),
+    isRecord(capabilityConfig.workflow) || normalizeOptionalString(capabilityConfig.workflowPath),
   );
   const hasPromptNode = Boolean(normalizeOptionalString(capabilityConfig.promptNodeId));
   if (!hasWorkflow || !hasPromptNode) {
@@ -729,24 +691,22 @@ export async function runComfyWorkflow(params: {
   }
 
   const pluginApiKey = resolveComfyApiKey(capabilityConfig, params.cfg);
-  const resolvedAuth =
+  const apiKey =
     mode === "cloud"
       ? pluginApiKey.status === "available"
-        ? {
-            apiKey: pluginApiKey.apiKey,
-            source: pluginApiKey.source,
-            mode: "api-key" as const,
-          }
+        ? pluginApiKey.apiKey
         : pluginApiKey.status === "configured_unavailable"
-          ? null
-          : await resolveApiKeyForProvider({
-              provider: "comfy",
-              cfg: params.cfg,
-              agentDir: params.agentDir,
-              store: params.authStore,
-            })
-      : null;
-  if (mode === "cloud" && !resolvedAuth?.apiKey) {
+          ? undefined
+          : (
+              await resolveApiKeyForProvider({
+                provider: "comfy",
+                cfg: params.cfg,
+                agentDir: params.agentDir,
+                store: params.authStore,
+              })
+            ).apiKey
+      : undefined;
+  if (mode === "cloud" && !apiKey) {
     throw new Error("Comfy Cloud API key missing");
   }
 
@@ -761,7 +721,7 @@ export async function runComfyWorkflow(params: {
       defaultHeaders:
         mode === "cloud"
           ? {
-              "X-API-Key": resolvedAuth?.apiKey ?? "",
+              "X-API-Key": apiKey ?? "",
               "Content-Type": "application/json",
             }
           : {
@@ -791,7 +751,7 @@ export async function runComfyWorkflow(params: {
       baseUrl: normalizedBaseUrl,
       headers: new Headers(headers),
       timeoutMs,
-      policy: networkPolicy.apiPolicy,
+      policy: networkPolicy,
       dispatcherPolicy,
       image: params.inputImage,
       mode,
@@ -807,9 +767,7 @@ export async function runComfyWorkflow(params: {
 
   const submitPayload = {
     prompt: workflow,
-    ...(mode === "cloud" && resolvedAuth?.apiKey
-      ? { extra_data: { api_key_comfy_org: resolvedAuth.apiKey } }
-      : {}),
+    ...(mode === "cloud" && apiKey ? { extra_data: { api_key_comfy_org: apiKey } } : {}),
   };
 
   const promptResponse = await readJsonResponse<ComfyPromptResponse>({
@@ -820,7 +778,7 @@ export async function runComfyWorkflow(params: {
       body: JSON.stringify(submitPayload),
     },
     timeoutMs,
-    policy: networkPolicy.apiPolicy,
+    policy: networkPolicy,
     dispatcherPolicy,
     auditContext: `comfy-${params.capability}-generate`,
     errorPrefix: "Comfy workflow submit failed",
@@ -837,7 +795,7 @@ export async function runComfyWorkflow(params: {
     headers: new Headers(headers),
     timeoutMs,
     pollIntervalMs,
-    policy: networkPolicy.apiPolicy,
+    policy: networkPolicy,
     dispatcherPolicy,
     mode,
   });
@@ -860,28 +818,20 @@ export async function runComfyWorkflow(params: {
   const assets: ComfyGeneratedAsset[] = [];
   const outputKind = params.capability === "music" ? "audio" : params.capability;
   const maxOutputBytes = resolveGeneratedMediaMaxBytes(params.cfg, outputKind);
-  let assetIndex = 0;
   for (const output of outputFiles) {
     const downloaded = await downloadOutputFile({
       baseUrl: normalizedBaseUrl,
       headers: new Headers(headers),
       timeoutMs,
-      policy: networkPolicy.apiPolicy,
+      policy: networkPolicy,
       dispatcherPolicy,
       file: output.file,
       mode,
       capability: params.capability,
       maxBytes: maxOutputBytes,
     });
-    assetIndex += 1;
-    const originalName =
-      normalizeOptionalString(output.file.filename) || normalizeOptionalString(output.file.name);
     assets.push({
-      buffer: downloaded.buffer,
-      mimeType: downloaded.mimeType,
-      fileName:
-        originalName ||
-        `${params.capability}-${assetIndex}.${resolveFileExtension({ mimeType: downloaded.mimeType })}`,
+      ...downloaded,
       metadata: { nodeId: output.nodeId, promptId },
     });
   }

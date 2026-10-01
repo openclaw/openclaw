@@ -201,27 +201,19 @@ export class RealtimeTalkWebRtcOfferExchange {
   }): Promise<string | undefined> {
     const request = this.beginRequest();
     try {
-      let response: Response;
-      try {
-        response = await fetch(
-          resolveRealtimeTalkOfferUrl(params.session.offerUrl, params.gatewayUrl),
-          {
-            method: "POST",
-            body: params.offer.sdp,
-            headers: {
-              ...params.session.offerHeaders,
-              Authorization: `Bearer ${params.session.clientSecret}`,
-              "Content-Type": "application/sdp",
-            },
-            signal: request.controller.signal,
+      const response = await fetch(
+        resolveRealtimeTalkOfferUrl(params.session.offerUrl, params.gatewayUrl),
+        {
+          method: "POST",
+          body: params.offer.sdp,
+          headers: {
+            ...params.session.offerHeaders,
+            Authorization: `Bearer ${params.session.clientSecret}`,
+            "Content-Type": "application/sdp",
           },
-        );
-      } catch (error) {
-        if (!params.isCurrent()) {
-          return undefined;
-        }
-        throw error;
-      }
+          signal: request.controller.signal,
+        },
+      );
       if (!params.isCurrent()) {
         void response.body?.cancel().catch(() => undefined);
         return undefined;
@@ -230,23 +222,20 @@ export class RealtimeTalkWebRtcOfferExchange {
         void response.body?.cancel().catch(() => undefined);
         throw new Error(`Realtime WebRTC setup failed (${response.status})`);
       }
-      let answer: string;
-      try {
-        const maxBytes = params.session.offerResponseMaxBytes;
-        answer =
-          maxBytes === undefined
-            ? await response.text()
-            : await readResponseTextWithLimit(response, {
-                maxBytes,
-                tooLargeMessage: `Realtime WebRTC SDP answer: text response exceeds ${maxBytes} bytes`,
-              });
-      } catch (error) {
-        if (!params.isCurrent()) {
-          return undefined;
-        }
-        throw error;
-      }
+      const maxBytes = params.session.offerResponseMaxBytes;
+      const answer =
+        maxBytes === undefined
+          ? await response.text()
+          : await readResponseTextWithLimit(response, {
+              maxBytes,
+              tooLargeMessage: `Realtime WebRTC SDP answer: text response exceeds ${maxBytes} bytes`,
+            });
       return params.isCurrent() ? answer : undefined;
+    } catch (error) {
+      if (!params.isCurrent()) {
+        return undefined;
+      }
+      throw error;
     } finally {
       this.finishRequest(request);
     }

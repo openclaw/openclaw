@@ -58,7 +58,6 @@ type StagedInput = {
   command: unknown;
 };
 let pendingInput: StagedInput | undefined;
-const actorPaths = new Map<number, string>();
 const stateContexts = new Map<number, SqliteWorkerStateContext>();
 let sourceLoaderRegistered = false;
 let nativeCleanupFailure: OpenClawStateWorkerErrorPayload | undefined;
@@ -362,7 +361,6 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       }
       // SAFETY: The validated backend and its typed client own the private command contract.
       actors.set(request.actor, backend as SqliteWorkerPreparedBackend<SqliteWorkerOperations>);
-      actorPaths.set(request.actor, request.databasePath);
     } else if (request.type === "close") {
       const backend = actors.get(request.actor);
       if (!backend) {
@@ -378,7 +376,6 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         throw error;
       }
       actors.delete(request.actor);
-      actorPaths.delete(request.actor);
       stateContexts.delete(request.actor);
     } else {
       await executeCommand(deserialize(request.input));

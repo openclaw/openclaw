@@ -3,12 +3,10 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaRunnerTransportArtifacts } from "openclaw/plugin-sdk/qa-runner-runtime";
 import type { QaEvidenceSummaryV3Json } from "./evidence-summary.js";
-import type { QaLabLatestReport } from "./lab-server.types.js";
 import { remapModelRefForForcedRuntime } from "./model-selection.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import type { RuntimeId } from "./runtime-id.js";
 import { runRuntimeParityScenario, type RuntimeParityCell } from "./runtime-parity.js";
-import { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import { createQaSuiteEvidenceInvocation, rebaseQaSuiteEvidence } from "./suite-evidence.js";
 import {
   collectQaSuiteTransportPolicy,
@@ -17,6 +15,7 @@ import {
   scenarioRequiresControlUi,
 } from "./suite-planning.js";
 import { createQaSuiteProgressController } from "./suite-progress.js";
+import { completeQaSuiteRun } from "./suite-run-completion.js";
 import { buildRuntimeParityScenarioResult } from "./suite-runtime-parity-result.js";
 import type {
   QaSuiteRunParams,
@@ -167,11 +166,7 @@ export async function runQaRuntimeParitySuite(
                 );
                 // A callback can capture an unfinished child with no selection.
                 // Admit that pending history too before an exception unwinds it.
-                if (selected === null) {
-                  cells.invocation.select(cellIndex, null);
-                } else {
-                  cells.invocation.select(cellIndex, selected);
-                }
+                cells.invocation.select(cellIndex, selected);
                 return selected;
               };
               let cellResult: QaSuiteResult;
@@ -342,8 +337,8 @@ export async function runQaRuntimeParitySuite(
     terminalScenarios = scenarios;
     publishTerminalResult = async () => {
       const finishedAt = new Date();
-      const { evidence, evidencePath, report, reportPath, summaryPath } =
-        await writeQaSuiteArtifacts({
+      return await completeQaSuiteRun(
+        {
           repoRoot: params.repoRoot,
           outputDir: params.outputDir,
           startedAt: params.startedAt,
@@ -367,26 +362,13 @@ export async function runQaRuntimeParitySuite(
               : undefined,
           runtimePair: params.runtimePair,
           writeEvidenceFile: params.writeEvidenceFile,
-        });
-      lab.setLatestReport({
-        outputPath: reportPath,
-        markdown: report,
-        generatedAt: finishedAt.toISOString(),
-      } satisfies QaLabLatestReport);
-      progress.complete([], finishedAt.toISOString());
-      return {
-        outputDir: params.outputDir,
-        evidence,
-        evidencePath,
-        reportPath,
-        summaryPath,
-        report,
-        scenarios,
-        startedScenarioIds: params.selectedScenarios
+        },
+        lab,
+        progress,
+        params.selectedScenarios
           .filter((_scenario, index) => startedScenarioIndexes.has(index))
           .map((scenario) => scenario.id),
-        watchUrl: lab.baseUrl,
-      } satisfies QaSuiteResult;
+      );
     };
   } catch (error) {
     runFailed = true;

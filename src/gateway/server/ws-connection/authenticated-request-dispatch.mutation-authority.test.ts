@@ -215,7 +215,7 @@ describe("authenticated request mutation custody", () => {
     });
   });
 
-  it("keeps retained authority current when another identity's scopes change", async () => {
+  it("fences stale requests without revoking retained work until its committed grant changes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const identity = "retained@example.test";
       const profile = ensureProfileForEmail(identity);
@@ -285,9 +285,28 @@ describe("authenticated request mutation custody", () => {
         expect(harness.close).not.toHaveBeenCalled();
 
         committedConfig = structuredClone(committedConfig);
+        committedConfig.gateway!.trustedProxies = ["192.0.2.10"];
+        setRuntimeConfigSnapshot(committedConfig);
+        await harness.dispatcher.dispatch(
+          { type: "req", id: "transport-fenced", method: "test.identity-scopes", params: {} },
+          client,
+        );
+        expect(harness.close).toHaveBeenCalledWith(
+          4001,
+          "client invalidated: gateway-policy-changed",
+        );
+        expect(client).toMatchObject({ sourceInvalidated: false });
+        expect(authority.signal?.aborted).toBe(false);
+        expect(authority.assertCurrent).not.toThrow();
+
+        committedConfig = structuredClone(committedConfig);
         delete committedConfig.gateway!.auth!.identityScopes![identity];
         setRuntimeConfigSnapshot(committedConfig);
-        publishOperatorRoleConfigChange(context);
+        await harness.dispatcher.dispatch(
+          { type: "req", id: "grant-revoked", method: "test.identity-scopes", params: {} },
+          client,
+        );
+        expect(client).toMatchObject({ sourceInvalidated: true });
         expect(authority.signal?.aborted).toBe(true);
         expect(() => authority.assertCurrent()).toThrow(/authority is no longer active/);
         expect(() => mutationGuard.assertWorkerCurrent()).toThrow(
@@ -317,7 +336,10 @@ describe("authenticated request mutation custody", () => {
       });
       client.usesSharedGatewayAuth = true;
       client.sharedGatewaySessionGeneration = "generation-a";
-      client.authPolicy = captureGatewayAuthPolicy(committedConfig, null);
+      client.authPolicy = captureGatewayAuthPolicy(committedConfig, {
+        role: "operator",
+        authMethod: "tailscale",
+      });
       client.connectionSignal = connection.signal;
       client.internal = {
         operatorRoleActor: {

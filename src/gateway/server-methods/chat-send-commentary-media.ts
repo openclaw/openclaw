@@ -169,9 +169,7 @@ export function observeChatSendCommentaryMedia(params: {
                   sessionKey: scope.sessionKey,
                   agentId: scope.agentId,
                   items: prepareOutgoingMediaFromReplyPayload(payload),
-                  localRoots: getWebchatReplyMediaLocalRoots({
-                    ...mediaScope,
-                  }),
+                  localRoots: getWebchatReplyMediaLocalRoots(mediaScope),
                   continueOnPrepareError: true,
                   assertCurrent: mediaScope.assertCurrent,
                   abortSignal: params.abortSignal,

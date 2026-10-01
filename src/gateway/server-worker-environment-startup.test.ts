@@ -102,7 +102,7 @@ describe("gateway worker environment startup", () => {
           resolveGatewayContext: () => undefined,
           desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
           startup,
-          log: { child: () => ({ warn: () => {} }) },
+          log: { child: () => ({ info: () => {}, warn: () => {} }) },
         });
         try {
           if (cleanupFails) {
@@ -139,7 +139,7 @@ describe("gateway worker environment startup", () => {
         resolveGatewayContext: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         startup,
-        log: { child: () => ({ warn: () => {} }) },
+        log: { child: () => ({ info: () => {}, warn: () => {} }) },
       });
       const service = runtime.workerEnvironmentService;
       if (!service) {
@@ -207,7 +207,7 @@ describe("gateway worker environment startup", () => {
         resolveGatewayContext: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         startup,
-        log: { child: () => ({ warn: () => {} }) },
+        log: { child: () => ({ info: () => {}, warn: () => {} }) },
       });
       const service = runtime.workerEnvironmentService;
       if (!service) {
@@ -284,7 +284,7 @@ describe("gateway worker environment startup", () => {
         resolveGatewayContext: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         startup,
-        log: { child: () => ({ warn: () => {} }) },
+        log: { child: () => ({ info: () => {}, warn: () => {} }) },
       });
       const service = runtime.workerEnvironmentService;
       if (!service) {
@@ -384,7 +384,7 @@ describe("gateway worker environment startup", () => {
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         nodeDesktopStreamBroker: createNodeDesktopStreamBroker(),
         startup,
-        log: { child: () => ({ warn: () => {} }) },
+        log: { child: () => ({ info: () => {}, warn: () => {} }) },
       });
       const service = runtime.workerEnvironmentService;
       try {

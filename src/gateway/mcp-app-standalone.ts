@@ -293,10 +293,8 @@ export async function handleMcpAppStandaloneHttpRequest(
     ticketSecret?: Buffer;
   } = {},
 ): Promise<boolean> {
-  let url: URL;
-  try {
-    url = new URL(req.url ?? "/", "http://localhost");
-  } catch {
+  const url = URL.parse(req.url ?? "/", "http://localhost");
+  if (!url) {
     return false;
   }
   const route = classifyMcpAppStandalonePath(url.pathname);

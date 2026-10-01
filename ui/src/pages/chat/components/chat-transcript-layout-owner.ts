@@ -1,6 +1,9 @@
 import { nothing } from "lit";
 import { Directive, directive, type ElementPart } from "lit/directive.js";
-import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
+import {
+  publishTranscriptScroll,
+  readTranscriptViewport,
+} from "./chat-transcript-scroll-events.ts";
 
 /** The native scroll range changes only at these viewport and content writes. */
 export class TranscriptLayoutOwner {
@@ -94,12 +97,15 @@ export class TranscriptLayoutOwner {
     if (!viewport) {
       return;
     }
-    const after = viewport.scrollTop;
+    // Publish the native clamp before another measurement can move the anchor.
+    const measuredViewport = readTranscriptViewport(viewport);
+    const after = measuredViewport.scrollTop;
     if (before !== after) {
       this.onClamp(before, after);
     }
     publishTranscriptScroll(viewport, {
       type: "resize",
+      viewport: measuredViewport,
       ...(before !== after ? { scrollCorrection: { before, after } } : {}),
     });
   }

@@ -48,9 +48,9 @@ describe("Mantis Crabbox binary admission", () => {
       };
 
       expect(process.cwd()).not.toBe(repoRoot);
-      await expect(
-        resolveCrabboxBin({ env, envName: "OPENCLAW_MANTIS_CRABBOX_BIN", explicit, repoRoot }),
-      ).resolves.toBe(explicit ?? executable);
+      await expect(resolveCrabboxBin({ env, explicit, repoRoot })).resolves.toBe(
+        explicit ?? executable,
+      );
       expect(await fs.realpath((await fs.readFile(cwdFile, "utf8")).trim())).toBe(
         await fs.realpath(repoRoot),
       );

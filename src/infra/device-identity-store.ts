@@ -403,8 +403,6 @@ export function repairInvalidStoredDeviceIdentity(
   validateStoredDeviceIdentity(candidate, resolved.identityKey);
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      let repaired = false;
-      let rotated = false;
       let existingRow: DeviceIdentityRow | null = null;
       try {
         existingRow = readStoredIdentityRowFromDatabase({ db }, resolved.identityKey);
@@ -413,7 +411,7 @@ export function repairInvalidStoredDeviceIdentity(
           : null;
         if (existing) {
           validateStoredDeviceIdentity(existing, resolved.identityKey);
-          return { identity: existing, repaired, rotated };
+          return { identity: existing, repaired: false, rotated: false };
         }
       } catch (error) {
         if (!(error instanceof DeviceIdentityStorageError)) {
@@ -447,7 +445,7 @@ export function repairInvalidStoredDeviceIdentity(
             );
           }
           validateStoredDeviceIdentity(authoritative, resolved.identityKey);
-          return { identity: authoritative, repaired: true, rotated };
+          return { identity: authoritative, repaired: true, rotated: false };
         }
         executeSqliteQuerySync(
           db,
@@ -459,9 +457,6 @@ export function repairInvalidStoredDeviceIdentity(
 
       // An absent row after an invalid-row detection still means identity continuity was lost.
       // Report the generated winner so Doctor always surfaces the required re-approval.
-      repaired = true;
-      rotated = true;
-
       executeSqliteQuerySync(
         db,
         getNodeSqliteKysely<DeviceIdentityDatabase>(db)
@@ -476,7 +471,7 @@ export function repairInvalidStoredDeviceIdentity(
         );
       }
       validateStoredDeviceIdentity(authoritative, resolved.identityKey);
-      return { identity: authoritative, repaired, rotated };
+      return { identity: authoritative, repaired: true, rotated: true };
     },
     { env: options.env, path: resolved.databasePath },
     { operationLabel: "device-identity.doctor-repair" },

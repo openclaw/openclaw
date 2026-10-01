@@ -1,5 +1,3 @@
-// Settings page owning this browser's Gateway connection draft (URL, credential,
-// default session) and the live handshake summary.
 import "../../styles/connection.css";
 import { consume } from "@lit/context";
 import { html } from "lit";
@@ -69,22 +67,15 @@ export class ConnectionPage extends OpenClawLightDomElement {
 
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
-    invalidateRequests: () => {
-      this.systemInfoLoading = false;
-      this.resetDiagnostics();
-    },
+    invalidateRequests: () => this.resetDiagnostics(),
     onSnapshot: (change) => this.handleGatewaySnapshot(change),
     onPageActivation: () => this.syncDiagnosticsPolling(),
   });
 
   override disconnectedCallback() {
     this.resetDiagnostics();
-    this.resetSensitiveUi();
-    super.disconnectedCallback();
-  }
-
-  private resetSensitiveUi() {
     this.gatewaySecretVisible = false;
+    super.disconnectedCallback();
   }
 
   private handleGatewaySnapshot({
@@ -107,7 +98,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
       this.systemInfo = null;
       this.systemInfoUnavailable = false;
     } else if (snapshot.phase !== "connected") {
-      this.resetSensitiveUi();
+      this.gatewaySecretVisible = false;
       this.systemInfo = null;
     }
     if (snapshot.phase === "connected" && snapshot.hello) {
@@ -285,7 +276,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
     const { gatewayUrl, token, password } = this.context.gateway.connection;
     this.settings = { ...this.settings, gatewayUrl, token };
     this.password = password;
-    this.resetSensitiveUi();
+    this.gatewaySecretVisible = false;
   }
 
   private resetSessionDraft() {
@@ -322,14 +313,6 @@ export class ConnectionPage extends OpenClawLightDomElement {
       gateway.forgetDeviceToken?.();
       this.requestUpdate();
     }
-  }
-
-  private connect() {
-    this.context.gateway.connect({
-      gatewayUrl: this.settings.gatewayUrl,
-      token: this.settings.token,
-      password: this.password,
-    });
   }
 
   private updateConnection(patch: Partial<Pick<UiSettings, "gatewayUrl" | "token">>) {
@@ -389,7 +372,12 @@ export class ConnectionPage extends OpenClawLightDomElement {
       onToggleGatewaySecretVisibility: () => {
         this.gatewaySecretVisible = !this.gatewaySecretVisible;
       },
-      onConnect: () => this.connect(),
+      onConnect: () =>
+        this.context.gateway.connect({
+          gatewayUrl: this.settings.gatewayUrl,
+          token: this.settings.token,
+          password: this.password,
+        }),
       onDiscardConnection: () => this.resetConnectionDraft(),
       onReconnect: () => this.context.gateway.connect(),
       onSaveSession: () => this.saveSession(),

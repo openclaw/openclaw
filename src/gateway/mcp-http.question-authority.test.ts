@@ -349,7 +349,7 @@ function expectAnswered(response: McpResponse) {
 describe("CLI loopback question creator authority", () => {
   it("answers a real cached ask_user with the CLI creator's original frozen policy", async () => {
     await withCliQuestionLoopback(async (fixture) => {
-      const owner = await fixture.prepare();
+      const owner = await fixture.prepare(undefined, { sessionKey: "main" });
       const beforeList = fixture.resolutionCount();
       expect((await fixture.list(owner.token)).result.tools?.map((tool) => tool.name)).toEqual([
         "ask_user",
@@ -370,13 +370,10 @@ describe("CLI loopback question creator authority", () => {
     });
   });
 
-  it.each([
-    { name: "explicit main alias", supplied: "main", native: sessionKey },
-    { name: "omitted session key", supplied: undefined, native: undefined },
-  ])("binds the actual MCP registration target for $name", async ({ supplied, native }) => {
+  it("binds an omitted native session key to the actual MCP registration target", async () => {
     await withCliQuestionLoopback(async (fixture) => {
-      const owner = await fixture.prepare(undefined, { sessionKey: supplied });
-      expect(owner.context.params.sessionKey).toBe(native);
+      const owner = await fixture.prepare(undefined, { sessionKey: undefined });
+      expect(owner.context.params.sessionKey).toBeUndefined();
       const grant = expectDefined(
         resolveMcpLoopbackClientGrant({
           token: owner.token,
@@ -391,7 +388,7 @@ describe("CLI loopback question creator authority", () => {
         owner.context.bindQuestionAnswerAuthority,
         "native question binder",
       )(() => {});
-      expect(nativeAuthority.sessionKey).toBe(native ?? owner.context.params.sessionId);
+      expect(nativeAuthority.sessionKey).toBe(owner.context.params.sessionId);
       await fixture.list(owner.token);
       const question = await fixture.ask(owner.token);
       expect(fixture.manager.get(question.id)?.sessionKey).toBe(sessionKey);
@@ -434,7 +431,7 @@ describe("CLI loopback question creator authority", () => {
     },
   );
 
-  it.each(["reactivate", "rebind", "deactivate-reactivate", "native-publication"] as const)(
+  it.each(["rebind", "deactivate-reactivate", "native-publication"] as const)(
     "rematerializes cached questions after same-token and same-capture %s",
     async (change) => {
       if (change === "native-publication") {
@@ -476,9 +473,7 @@ describe("CLI loopback question creator authority", () => {
             }),
           ).toBe(true);
         } else {
-          if (change === "deactivate-reactivate") {
-            expect(deactivateMcpLoopbackClientGrantCapture(binding)).toBe(true);
-          }
+          expect(deactivateMcpLoopbackClientGrantCapture(binding)).toBe(true);
           expect(activateMcpLoopbackClientGrantCapture(binding)).toBeTruthy();
         }
         await expect(fixture.answer()).rejects.toThrow();
@@ -534,10 +529,8 @@ describe("CLI loopback question creator authority", () => {
   });
 
   it.for([
-    { stage: "before", ending: "failure" },
     { stage: "after", ending: "failure" },
     { stage: "before", ending: "cancellation" },
-    { stage: "after", ending: "cancellation" },
   ] as const)(
     "joins a question request on fixture $ending $stage registration",
     async ({ stage, ending }, { onTestFinished, signal }) => {

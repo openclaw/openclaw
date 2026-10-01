@@ -32,12 +32,13 @@ export function createGatewayWorkerPlacementMoveDestinationResolver(params: {
       return undefined;
     }
     const sessionRuntime = await params.loadSessionRuntime();
-    const { config, target, entry } = resolveWorkerPlacementSessionTarget({
+    const { config, target, entry, assertCurrent } = await resolveWorkerPlacementSessionTarget({
       sessionRuntime,
       config: params.getConfig(),
       ...identity,
       errorMessage: `Session ${identity.sessionKey} changed before placement move recovery.`,
     });
+    assertCurrent(params.getConfig());
     const destination = resolveWorkerPlacementDestination({
       cfg: config,
       ...(moveTarget.kind === "profile"
@@ -81,6 +82,7 @@ export function createGatewayWorkerPlacementMoveDestinationResolver(params: {
         throw new Error(eligibility.error);
       }
     }
+    assertCurrent(params.getConfig());
     return { executionMode, ...destination.value, ...(devicePlacement ? { devicePlacement } : {}) };
   };
 }

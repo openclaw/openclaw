@@ -44,19 +44,31 @@ function formatWorkspaceRelativePath(filePath: string, workspace: string | null 
   if (normalizedWorkspace && normalizedPath.startsWith(`${normalizedWorkspace}/`)) {
     return normalizedPath.slice(normalizedWorkspace.length + 1) || ".";
   }
-  const pathParts = normalizedPath.split(/[\\/]+/);
-  for (let index = pathParts.length - 1; index >= 0; index -= 1) {
-    const pathPart = pathParts[index];
-    if (pathPart) {
-      return pathPart;
-    }
-  }
-  return normalizedPath;
+  return normalizedPath.split(/[\\/]+/).findLast(Boolean) ?? normalizedPath;
 }
 
 function toDomId(value: string) {
   const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, "-");
   return normalized.replace(/^-+|-+$/g, "") || "preview";
+}
+
+function closeAgentFilePreview(event: Event, focusEditor = false) {
+  const button = event.currentTarget;
+  if (!(button instanceof HTMLElement)) {
+    return;
+  }
+  const modal = button.closest<OpenClawModalDialog>("openclaw-modal-dialog");
+  if (!modal) {
+    return;
+  }
+  if (focusEditor) {
+    const textarea = modal
+      .closest(".settings-group")
+      ?.querySelector<HTMLElement>(".agent-file-textarea");
+    modal.setReturnFocusTarget(textarea ?? null);
+  }
+  modal.hide();
+  resetAgentFilePreview(modal);
 }
 
 export function renderAgentFiles(params: {
@@ -271,23 +283,20 @@ export function renderAgentFiles(params: {
                             ${agentFilePreview(
                               [params.agentId, activeEntry.name, hasContent],
                               () => {
-                                const previewHtml = activeEntry
-                                  ? toSanitizedMarkdownHtml(draft, {
-                                      codeBlockChrome: "none",
-                                      mode: "document",
-                                    })
-                                  : "";
+                                const previewHtml = toSanitizedMarkdownHtml(draft, {
+                                  codeBlockChrome: "none",
+                                  mode: "document",
+                                });
                                 const draftByteSize = formatBytes(
                                   new TextEncoder().encode(draft).length,
                                 );
                                 const draftWordCount = countWords(draft);
                                 const draftLineCount = countLines(draft);
-                                const activePathLabel = activeEntry
-                                  ? formatWorkspaceRelativePath(activeEntry.path, list?.workspace)
-                                  : "";
-                                const previewTitleId = activeEntry
-                                  ? `agent-file-preview-title-${toDomId(activeEntry.name)}`
-                                  : "";
+                                const activePathLabel = formatWorkspaceRelativePath(
+                                  activeEntry.path,
+                                  list?.workspace,
+                                );
+                                const previewTitleId = `agent-file-preview-title-${toDomId(activeEntry.name)}`;
                                 const previewStatusLabel = showMissing
                                   ? t("agents.files.willCreateOnSave")
                                   : isDirty || conflictName
@@ -361,24 +370,7 @@ export function renderAgentFiles(params: {
                                           type="button"
                                           class="btn btn--sm md-preview-icon-btn"
                                           aria-label=${t("agents.files.editFile")}
-                                          @click=${(e: Event) => {
-                                            const button = e.currentTarget;
-                                            if (!(button instanceof HTMLElement)) {
-                                              return;
-                                            }
-                                            const modal =
-                                              button.closest<OpenClawModalDialog>(
-                                                "openclaw-modal-dialog",
-                                              );
-                                            const textarea = modal
-                                              ?.closest(".settings-group")
-                                              ?.querySelector<HTMLElement>(".agent-file-textarea");
-                                            modal?.setReturnFocusTarget(textarea ?? null);
-                                            modal?.hide();
-                                            if (modal) {
-                                              resetAgentFilePreview(modal);
-                                            }
-                                          }}
+                                          @click=${(event: Event) => closeAgentFilePreview(event, true)}
                                         >
                                           <span aria-hidden="true">${icons.edit}</span>
                                         </button>
@@ -388,20 +380,7 @@ export function renderAgentFiles(params: {
                                           type="button"
                                           class="btn btn--sm md-preview-icon-btn"
                                           aria-label=${t("agents.files.closePreview")}
-                                          @click=${(e: Event) => {
-                                            const button = e.currentTarget;
-                                            if (!(button instanceof HTMLElement)) {
-                                              return;
-                                            }
-                                            const modal =
-                                              button.closest<OpenClawModalDialog>(
-                                                "openclaw-modal-dialog",
-                                              );
-                                            modal?.hide();
-                                            if (modal) {
-                                              resetAgentFilePreview(modal);
-                                            }
-                                          }}
+                                          @click=${closeAgentFilePreview}
                                         >
                                           <span aria-hidden="true">${icons.x}</span>
                                         </button>

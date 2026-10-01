@@ -5,11 +5,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import type {
-  WorkerDesktopEndpoint,
-  WorkerProfile,
-  WorkerSshEndpoint,
-} from "../../plugins/capability-provider.types.js";
+import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/capability-provider.types.js";
 import type {
   DB as StateDatabase,
   WorkerEnvironmentCredentials,
@@ -80,12 +76,6 @@ function endpointFrom(row: Row, fallbackPorts: readonly number[]): WorkerSshEndp
     keyRef: JSON.parse(encoded) as WorkerSshEndpoint["keyRef"],
   });
 }
-function desktopFrom(row: Row): WorkerDesktopEndpoint | null {
-  if (row.desktop_json === null) {
-    return null;
-  }
-  return normalizeWorkerDesktopEndpoint(JSON.parse(row.desktop_json));
-}
 function bootstrapReceiptFrom(row: Row): WorkerEnvironmentBootstrapReceipt | null {
   const {
     bootstrap_bundle_hash: bundleHash,
@@ -123,7 +113,10 @@ export function decodeWorkerEnvironmentRow(
     sharedHost: row.shared_host === null ? null : row.shared_host === 1,
     leaseId: row.lease_id,
     sshEndpoint: endpointFrom(row, fallbackPorts),
-    desktop: desktopFrom(row),
+    desktop:
+      row.desktop_json === null
+        ? null
+        : normalizeWorkerDesktopEndpoint(JSON.parse(row.desktop_json)),
     bootstrapReceipt: bootstrapReceiptFrom(row),
     ownerEpoch: row.owner_epoch,
     teardownTerminalState: teardownTerminalStateFrom(row.teardown_terminal_state),

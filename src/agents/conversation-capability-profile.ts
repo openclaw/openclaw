@@ -4,20 +4,14 @@
  * new public access-profile config surface.
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
-import type { SkillSnapshot } from "../skills/types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
-import {
-  resolveEffectiveToolPolicy,
-  resolveTrustedGroupId,
-  sessionKeyNamesGroupConversation,
-} from "./agent-tools.policy.js";
+import { resolveEffectiveToolPolicy, resolveTrustedGroupId } from "./agent-tools.policy.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
@@ -31,7 +25,6 @@ import type {
   PreparedSessionCapabilityEntry,
   SessionCapabilityStore,
 } from "./subagents/spawn/subagent-capabilities.js";
-import type { PromptMode } from "./system-prompt.types.js";
 import {
   collectExplicitAllowlist,
   collectExplicitDenylist,
@@ -39,8 +32,6 @@ import {
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
-
-type ConversationCapabilityScope = "direct" | "shared" | "unknown";
 
 function resolveManifestToolProfileNames(
   snapshot: Pick<PluginMetadataSnapshot, "plugins"> | undefined,
@@ -72,22 +63,13 @@ export type ConversationCapabilityProfileParams = {
   sessionId?: string;
   runId?: string;
   agentId?: string;
-  agentDir?: string;
   agentAccountId?: string | null;
   messageProvider?: string | null;
   messageChannel?: string | null;
-  chatType?: string;
-  messageTo?: string | null;
-  messageThreadId?: string | number | null;
   conversationToolPolicy?: GroupToolPolicyConfig;
-  currentChannelId?: string | null;
-  currentMessagingTarget?: string | null;
-  currentThreadTs?: string | null;
-  currentMessageId?: string | number | null;
   groupId?: string | null;
   groupChannel?: string | null;
   groupSpace?: string | null;
-  memberRoleIds?: readonly string[];
   spawnedBy?: string | null;
   senderId?: string | null;
   senderName?: string | null;
@@ -96,15 +78,9 @@ export type ConversationCapabilityProfileParams = {
   senderIsOwner?: boolean;
   modelProvider?: string;
   modelId?: string;
-  modelApi?: string;
-  modelContextWindowTokens?: number;
-  modelHasVision?: boolean;
   workspaceDir?: string;
   cwd?: string;
   spawnWorkspaceDir?: string;
-  isCanonicalWorkspace?: boolean;
-  promptMode?: PromptMode;
-  skillsSnapshot?: SkillSnapshot;
   sandboxToolPolicy?: SandboxToolPolicy;
   runtimeToolAllowlist?: string[];
   /** Persist the runtime allowlist as real parent authority on spawned children. */
@@ -120,13 +96,7 @@ export type ConversationCapabilityProfileParams = {
 
 export function resolveConversationCapabilityProfile(params: ConversationCapabilityProfileParams) {
   const messageProvider = params.messageProvider;
-  const effective = resolveEffectiveToolPolicy({
-    config: params.config,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-  });
+  const effective = resolveEffectiveToolPolicy(params);
   const sandboxToolPolicy = resolveSessionPlacementSandboxToolPolicy(params.sandboxToolPolicy, {
     runId: params.runId,
     agentId: effective.agentId,
@@ -151,27 +121,14 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
     channel: messageProvider ?? undefined,
   });
   const requesterPolicies = resolveRequesterToolPolicies({
-    config: params.config,
-    sessionKey: params.sessionKey,
+    ...params,
     subagentSessionKey,
-    preparedSessionEntry: params.preparedSessionEntry,
-    preparedSessionCapabilityStore: params.preparedSessionCapabilityStore,
     agentId: effective.agentId,
-    spawnedBy: params.spawnedBy,
     messageProvider: callerContext.local ? messageProvider : callerContext.channel,
     groupId: trustedGroup.groupId,
     groupChannel: trustedGroupChannel,
     groupSpace: trustedGroupSpace,
     accountId: params.scheduledToolPolicy?.ownerAccountId ?? params.agentAccountId,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-    inputProvenance: params.inputProvenance,
-    trustedInternalHandoff: params.trustedInternalHandoff,
-    sessionId: params.sessionId,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
     senderPolicyMode: params.scheduledToolPolicy || isOwnerInternalSession ? "never" : "always",
     groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
     requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
@@ -227,93 +184,43 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
   return {
     agentId: effective.agentId,
     serviceIdentity: {
-      agentId: effective.agentId,
-      agentDir: params.agentDir,
       accountId: params.agentAccountId,
-      runId: params.runId,
-      sessionId: params.sessionId,
     },
     model: {
       provider: params.modelProvider,
       id: params.modelId,
-      api: params.modelApi,
-      contextWindowTokens: params.modelContextWindowTokens,
-      hasVision: params.modelHasVision,
     },
     conversation: {
-      scope: resolveConversationScope({
-        chatType: params.chatType,
-        sessionKey: params.sessionKey,
-        runSessionKey: params.runSessionKey,
-        trustedGroup,
-        groupChannel: trustedGroupChannel,
-        groupSpace: trustedGroupSpace,
-      }),
-      chatType: normalizeChatType(params.chatType),
       sessionKey: params.runSessionKey ?? params.sessionKey,
       policySessionKey: params.sessionKey,
       runSessionKey: params.runSessionKey,
       sessionId: params.sessionId,
       messageProvider,
       messageChannel: params.messageChannel,
-      messageTo: params.messageTo,
-      messageThreadId: params.messageThreadId,
-      currentChannelId: params.currentChannelId,
-      currentMessagingTarget: params.currentMessagingTarget,
-      currentThreadTs: params.currentThreadTs,
-      currentMessageId: params.currentMessageId,
       groupId: trustedGroup.groupId,
       groupChannel: trustedGroupChannel,
       groupSpace: trustedGroupSpace,
-      memberRoleIds: params.memberRoleIds,
       spawnedBy: params.spawnedBy,
     },
     sender: {
-      id: params.senderId,
-      name: params.senderName,
-      username: params.senderUsername,
-      e164: params.senderE164,
       isOwner: params.senderIsOwner,
     },
     workspace: {
-      workspaceDir: params.workspaceDir,
-      cwd: params.cwd,
-      spawnWorkspaceDir: params.spawnWorkspaceDir,
       workspaceRoot: resolveWorkspaceRoot(params.workspaceDir),
       runtimeRoot: resolveWorkspaceRoot(params.cwd ?? params.workspaceDir),
       spawnWorkspaceRoot: params.spawnWorkspaceDir
         ? resolveWorkspaceRoot(params.spawnWorkspaceDir)
         : undefined,
-      instructionRoot: params.agentDir ?? params.workspaceDir,
-      isCanonicalWorkspace: params.isCanonicalWorkspace,
-    },
-    instructions: {
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      promptMode: params.promptMode,
-      isCanonicalWorkspace: params.isCanonicalWorkspace,
-    },
-    skills: {
-      snapshot: params.skillsSnapshot,
     },
     policy: {
-      agentId: effective.agentId,
+      ...effective,
       sessionKey: params.sessionKey,
       subagentSessionKey,
       trustedGroup,
-      profile: effective.profile,
-      providerProfile: effective.providerProfile,
-      sources: effective.sources,
-      profiles: effective.profiles,
-      gatewayConfigReadAllowed: effective.gatewayConfigReadAllowed,
       profilePolicy,
       providerProfilePolicy,
       profileAlsoAllow: mergeRuntimeToolAlsoAllowlist(effective.profileAlsoAllow),
       providerProfileAlsoAllow: mergeRuntimeToolAlsoAllowlist(effective.providerProfileAlsoAllow),
-      globalPolicy: effective.globalPolicy,
-      globalProviderPolicy: effective.globalProviderPolicy,
-      agentPolicy: effective.agentPolicy,
-      agentProviderPolicy: effective.agentProviderPolicy,
       groupPolicy,
       senderPolicy,
       sandboxPolicy: sandboxToolPolicy,
@@ -334,39 +241,3 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
 export type ResolvedConversationCapabilityProfile = ReturnType<
   typeof resolveConversationCapabilityProfile
 >;
-
-function resolveConversationScope(params: {
-  chatType?: string;
-  sessionKey?: string;
-  runSessionKey?: string;
-  trustedGroup: { groupId: string | null | undefined; dropped: boolean };
-  groupChannel?: string | null;
-  groupSpace?: string | null;
-}): ConversationCapabilityScope {
-  const chatType = normalizeChatType(params.chatType);
-  if (chatType === "direct") {
-    return "direct";
-  }
-  if (chatType === "group" || chatType === "channel") {
-    return "shared";
-  }
-  // Without a live chat type, classify only from server-derived session keys
-  // and trust-checked group facts. A caller-supplied group id that
-  // resolveTrustedGroupId dropped must not flip an unknown-audience
-  // conversation to "shared": downstream audience and credential decisions
-  // read this field, and the profile already publishes that group as null.
-  if (
-    sessionKeyNamesGroupConversation(params.runSessionKey) ||
-    sessionKeyNamesGroupConversation(params.sessionKey)
-  ) {
-    return "shared";
-  }
-  if (params.trustedGroup.dropped) {
-    return "unknown";
-  }
-  return params.trustedGroup.groupId?.trim() ||
-    params.groupChannel?.trim() ||
-    params.groupSpace?.trim()
-    ? "shared"
-    : "unknown";
-}

@@ -2,12 +2,6 @@ import { readFileSync, statSync } from "node:fs";
 import { win32 } from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { z } from "zod";
-import {
-  DEFAULT_SANDBOX_BASELINE,
-  resolveSandboxBaseline,
-  type SandboxBaselinePolicy,
-  type SandboxBaselinePolicyInput,
-} from "./sandbox-baseline.js";
 
 type SandboxPolicyLoaderOptions = {
   policyPaths?: readonly string[];
@@ -27,11 +21,13 @@ type SandboxConfiguredPaths = {
   readwritePaths: readonly SandboxConfiguredPathEntry[];
 };
 
-type SandboxPolicyLayer = SandboxBaselinePolicyInput & {
+type SandboxPolicyLayer = {
+  process?: { timeoutSeconds?: number };
   configuredPaths: SandboxConfiguredPaths;
 };
 
-export type LoadedSandboxBaselinePolicy = SandboxBaselinePolicy & {
+export type LoadedSandboxBaselinePolicy = {
+  process: { timeoutSeconds: number };
   configuredPaths: SandboxConfiguredPaths;
 };
 
@@ -66,18 +62,7 @@ export function loadSandboxBaselinePolicy(
   options: SandboxPolicyLoaderOptions = {},
 ): LoadedSandboxBaselinePolicy {
   const layers = (options.policyPaths ?? []).map(readSandboxPolicyFile);
-  const merged = mergeSandboxPolicyLayers(layers);
-  const resolved = resolveSandboxBaseline(merged);
-  return {
-    ...resolved,
-    process: {
-      ...resolved.process,
-      timeoutSecondsConfigured: layers.some(
-        (policy) => policy.process?.timeoutSeconds !== undefined,
-      ),
-    },
-    configuredPaths: merged.configuredPaths,
-  };
+  return mergeSandboxPolicyLayers(layers);
 }
 
 function readSandboxPolicyFile(policyPath: string): SandboxPolicyLayer {
@@ -108,7 +93,7 @@ function parseSandboxPolicyLayer(value: unknown, sourceLabel: string): SandboxPo
   );
 
   return {
-    ...parsed.data,
+    process: parsed.data.process,
     configuredPaths: {
       readonlyPaths,
       readwritePaths,
@@ -116,8 +101,10 @@ function parseSandboxPolicyLayer(value: unknown, sourceLabel: string): SandboxPo
   };
 }
 
-function mergeSandboxPolicyLayers(layers: readonly SandboxPolicyLayer[]): SandboxPolicyLayer {
-  const timeoutCandidates = [DEFAULT_SANDBOX_BASELINE.process.timeoutSeconds];
+function mergeSandboxPolicyLayers(
+  layers: readonly SandboxPolicyLayer[],
+): LoadedSandboxBaselinePolicy {
+  const timeoutCandidates = [300];
   const configuredPathMaps: MutableConfiguredPathMaps = {
     readonlyPaths: new Map<string, SandboxConfiguredPathEntry>(),
     readwritePaths: new Map<string, SandboxConfiguredPathEntry>(),
@@ -139,16 +126,6 @@ function mergeSandboxPolicyLayers(layers: readonly SandboxPolicyLayer[]): Sandbo
   }
 
   return {
-    filesystem: {
-      // The schema admits only true, so configured layers cannot relax the baseline.
-      restrictToProjectDir: DEFAULT_SANDBOX_BASELINE.filesystem.restrictToProjectDir,
-      additionalReadonlyPaths: [...configuredPathMaps.readonlyPaths.values()].map(
-        (entry) => entry.path,
-      ),
-      additionalReadwritePaths: [...configuredPathMaps.readwritePaths.values()].map(
-        (entry) => entry.path,
-      ),
-    },
     process: {
       timeoutSeconds: Math.min(...timeoutCandidates),
     },
@@ -263,9 +240,6 @@ function formatSandboxPolicyIssue(sourceLabel: string, issue: z.ZodIssue | undef
   }
   if (issue.code === "invalid_type" && issue.path.length === 1) {
     return `Sandbox policy section ${fieldLabel} must be a JSON object.`;
-  }
-  if (issue.code === "invalid_type") {
-    return `Sandbox policy field ${fieldLabel} ${issue.message}.`;
   }
   if (issue.code === "too_small") {
     return `Sandbox policy field ${fieldLabel} must be a positive number.`;

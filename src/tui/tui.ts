@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { Container, Loader, matchesKey, Text, TuiMainScreen } from "@earendil-works/pi-tui";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyGatewayConnectFailure } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
@@ -131,7 +132,6 @@ export async function resolveCodexCliBin(): Promise<string | null> {
     if (result.code !== 0 || result.termination !== "exit") {
       return null;
     }
-    // Use the first PATH match.
     return result.stdout.trim().split(/\r?\n/)[0]?.trim() || null;
   } catch {
     return null;
@@ -353,16 +353,11 @@ export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?:
 }
 
 export function isIgnorableTuiStopError(error: unknown): boolean {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-  const err = error as { code?: unknown; syscall?: unknown; message?: unknown };
-  const code = typeof err.code === "string" ? err.code : "";
-  const syscall = typeof err.syscall === "string" ? err.syscall : "";
-  const message = typeof err.message === "string" ? err.message : "";
-  if (code === "EBADF" && syscall === "setRawMode") {
+  const err = asOptionalObjectRecord(error);
+  if (err?.code === "EBADF" && err.syscall === "setRawMode") {
     return true;
   }
+  const message = typeof err?.message === "string" ? err.message : "";
   return /setRawMode/i.test(message) && /EBADF/i.test(message);
 }
 
@@ -382,16 +377,12 @@ type TerminalLossEmitter = {
 };
 
 export function isTuiTerminalLossError(error: unknown): boolean {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-  const err = error as { code?: unknown; message?: unknown; syscall?: unknown };
-  const code = typeof err.code === "string" ? err.code : "";
-  const message = typeof err.message === "string" ? err.message : "";
-  const syscall = typeof err.syscall === "string" ? err.syscall : "";
-  if (code === "EIO" || code === "EPIPE") {
+  const err = asOptionalObjectRecord(error);
+  if (err?.code === "EIO" || err?.code === "EPIPE") {
     return true;
   }
+  const message = typeof err?.message === "string" ? err.message : "";
+  const syscall = typeof err?.syscall === "string" ? err.syscall : "";
   return (
     /\b(EIO|EPIPE)\b/i.test(message) && /\b(read|write|TTY|stdin|stdout)\b/i.test(message + syscall)
   );

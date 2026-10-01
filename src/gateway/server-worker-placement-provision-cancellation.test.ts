@@ -28,6 +28,7 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { createRuntime } from "./server-worker-placement-provision-cancellation.test-support.js";
 import { installWorkerPlacementReconcileGuard } from "./server-worker-placement-reconcile-guard.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import {
@@ -35,6 +36,7 @@ import {
   seedActivePlacement,
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
+import type { WorkerPlacementRecoveryAdmission } from "./worker-environments/placement-recovery-contract.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { deriveEnvironmentIntent } from "./worker-environments/service-contract.js";
 import * as support from "./worker-environments/service.test-support.js";
@@ -74,13 +76,101 @@ describe("dispatch Stop before provider allocation", () => {
     moveDestinationMocks.resolveGatewaySessionTarget.mockReturnValue(target);
     moveDestinationMocks.resolveCanonicalSession.mockReturnValue(entry);
     moveDestinationMocks.findManagedWorktree.mockReturnValue(worktree);
-    moveDestinationMocks.resolveSessionTarget.mockReturnValue({
+    moveDestinationMocks.resolveSessionTarget.mockResolvedValue({
+      assertCurrent: () => {},
+      assertBindingCurrent: () => {},
       config: support.testState.config,
       target,
       entry,
       worktree,
       workspace: { kind: "local", path: worktree.path },
     });
+  });
+
+  it("lends local dispatch admission to targeted recovery while interrupting work after writing requested", async () => {
+    const createDispatch = runtimeFactoryMocks.createDispatch.getMockImplementation()!;
+    const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
+    const claim = await placements.claimTurn({
+      ...REQUEST,
+      claimId: "local-drain-claim",
+      runId: "local-drain-run",
+      owner: { kind: "local" },
+    });
+    const interrupted = createDeferredCore();
+    const targetedAdmission = createDeferredCore();
+    const cleanup = new AbortController();
+    const waitForClaim = placements.waitForTurnClaimRelease.bind(placements);
+    vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementation((sessionId, options) => {
+      const waiting = waitForClaim(sessionId, {
+        ...options,
+        signal: options.signal ? AbortSignal.any([options.signal, cleanup.signal]) : cleanup.signal,
+      });
+      return waiting;
+    });
+    let stateAtRecovery: string | undefined;
+    const recover = vi.fn(async (_mode?: "results-only") => {
+      stateAtRecovery = placements.get(REQUEST.sessionId)?.state;
+      await placements.releaseTurn(claim);
+    });
+    runtimeFactoryMocks.createDispatch.mockImplementation((options) => ({
+      ...createDispatch(options),
+      reconcileActive: async (
+        environmentId: string | undefined,
+        admit?: WorkerPlacementRecoveryAdmission,
+      ) => {
+        const recovery = admit!(
+          [environmentId === "unrelated" ? "unrelated" : REQUEST.sessionId],
+          environmentId === "unrelated" ? async () => {} : recover,
+        );
+        targetedAdmission.resolve();
+        await recovery;
+      },
+    }));
+    workspace.preflight.mockResolvedValue(undefined);
+    const environments = support.createService(support.createProvider());
+    vi.spyOn(environments, "prepareProjectIntent").mockRejectedValue(
+      new Error("fixture: barrier complete"),
+    );
+    const allocate = vi.spyOn(environments, "createWithRequest");
+    const start = vi.spyOn(placements, "startDispatch");
+    const runtime = createRuntime(placements, environments);
+    const admission = await beginSessionWorkAdmission({
+      scope: `${support.testState.root}/sessions.sqlite`,
+      identities: [REQUEST.sessionKey, REQUEST.sessionId],
+      assertAllowed: () => {},
+      onInterrupt: () => {
+        interrupted.resolve();
+      },
+    });
+    const dispatching = runtime.dispatchService.dispatch(REQUEST).catch((error: unknown) => error);
+    let recovery: Promise<void> | undefined;
+    try {
+      await Promise.race([
+        interrupted.promise,
+        dispatching.then(() => {
+          throw new Error("Dispatch ended before interrupting work");
+        }),
+      ]);
+      recovery = admission
+        .run(() => runtime.dispatchService.reconcileActive("local-result"))
+        .finally(() => admission.release());
+      await targetedAdmission.promise;
+      await runtime.dispatchService.reconcileActive("unrelated");
+      expect(recover).toHaveBeenCalledOnce();
+      expect(recover).toHaveBeenCalledWith("results-only");
+      await recovery;
+      expect(stateAtRecovery).toBe("requested");
+      expect(placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
+      await expect(dispatching).resolves.toMatchObject({
+        message: "fixture: barrier complete",
+      });
+      expect(start).toHaveBeenCalledOnce();
+      expect(allocate).not.toHaveBeenCalled();
+    } finally {
+      admission.release();
+      cleanup.abort();
+      await Promise.allSettled([dispatching, recovery]);
+    }
   });
 
   it.each([
@@ -306,16 +396,7 @@ describe("dispatch Stop before provider allocation", () => {
     });
     const environments = support.createService(support.createProvider({ provision }));
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-    const runtime = createGatewayWorkerPlacementRuntime({
-      scheduler: createTestGatewayScheduler(),
-      getCommittedRuntimeConfig: getRuntimeConfig,
-      placements,
-      environments,
-      gatewayNamespace: "gateway-test",
-      warn: vi.fn(),
-      cancelSessionWork: vi.fn(async () => {}),
-      revokeSessionAuthority: vi.fn(),
-    });
+    const runtime = createRuntime(placements, environments);
     const dispatch = runtime.dispatchService.dispatch(REQUEST).catch((error: unknown) => error);
     await entered.promise;
     expect(placements.get(REQUEST.sessionId)).toBeUndefined();
@@ -394,16 +475,7 @@ describe("dispatch Stop before provider allocation", () => {
         await release.promise;
       });
       const create = vi.spyOn(environments, "createWithRequest");
-      const runtime = createGatewayWorkerPlacementRuntime({
-        scheduler: createTestGatewayScheduler(),
-        getCommittedRuntimeConfig: getRuntimeConfig,
-        placements,
-        environments,
-        gatewayNamespace: "gateway-test",
-        warn: vi.fn(),
-        cancelSessionWork: vi.fn(async () => {}),
-        revokeSessionAuthority: vi.fn(),
-      });
+      const runtime = createRuntime(placements, environments);
       const sweep = runtime.dispatchService.reconcileActive();
       await entered.promise;
       const dispatch = runtime.dispatchService.dispatch(REQUEST).then(
@@ -439,16 +511,7 @@ describe("dispatch Stop before provider allocation", () => {
       assertAllowed: () => {},
       onInterrupt: interrupted,
     });
-    const runtime = createGatewayWorkerPlacementRuntime({
-      scheduler: createTestGatewayScheduler(),
-      getCommittedRuntimeConfig: getRuntimeConfig,
-      placements,
-      environments,
-      gatewayNamespace: "gateway-test",
-      warn: vi.fn(),
-      cancelSessionWork: vi.fn(async () => {}),
-      revokeSessionAuthority: vi.fn(),
-    });
+    const runtime = createRuntime(placements, environments);
     try {
       await expect(runtime.dispatchService.reclaim(REQUEST)).rejects.toThrow();
       expect(interrupted).not.toHaveBeenCalled();
@@ -539,16 +602,7 @@ describe("dispatch Stop before provider allocation", () => {
         ...support.createService(support.createProvider()),
         ...harness.environments,
       };
-      const runtime = createGatewayWorkerPlacementRuntime({
-        scheduler: createTestGatewayScheduler(),
-        getCommittedRuntimeConfig: getRuntimeConfig,
-        placements,
-        environments,
-        gatewayNamespace: "gateway-test",
-        warn: vi.fn(),
-        cancelSessionWork: vi.fn(async () => {}),
-        revokeSessionAuthority: vi.fn(),
-      });
+      const runtime = createRuntime(placements, environments);
       const initial =
         phase === "recovery"
           ? await harness.placements.seedProvisioning("remote-exec")
@@ -668,16 +722,7 @@ describe("dispatch Stop before provider allocation", () => {
           new Error("Bootstrap failed"),
         );
       }
-      const runtime = createGatewayWorkerPlacementRuntime({
-        scheduler: createTestGatewayScheduler(),
-        getCommittedRuntimeConfig: getRuntimeConfig,
-        placements,
-        environments,
-        gatewayNamespace: "gateway-test",
-        warn: vi.fn(),
-        cancelSessionWork: vi.fn(async () => {}),
-        revokeSessionAuthority: vi.fn(),
-      });
+      const runtime = createRuntime(placements, environments);
       const uninstall = installWorkerPlacementReconcileGuard({
         placements,
         environments,

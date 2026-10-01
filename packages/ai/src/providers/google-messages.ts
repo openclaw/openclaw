@@ -59,21 +59,10 @@ export function requiresGoogleToolCallId(modelId: string): boolean {
   return modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-");
 }
 
-function getGeminiMajorVersion(modelId: string): number | undefined {
-  const match = modelId.toLowerCase().match(/(?:^|\/)gemini(?:-live)?-(\d+)/);
-  if (!match) {
-    return undefined;
-  }
-  const majorVersion = match.at(1);
-  return majorVersion === undefined ? undefined : Number.parseInt(majorVersion, 10);
-}
-
 function supportsMultimodalFunctionResponse(modelId: string): boolean {
-  const geminiMajorVersion = getGeminiMajorVersion(modelId);
-  if (geminiMajorVersion !== undefined) {
-    return geminiMajorVersion >= 3;
-  }
-  return true;
+  const match = modelId.toLowerCase().match(/(?:^|\/)gemini(?:-live)?-(\d+)/);
+  const majorVersion = match?.at(1);
+  return majorVersion === undefined || Number.parseInt(majorVersion, 10) >= 3;
 }
 
 /** Project a prepared transcript; route repair and trusted video admission remain caller-owned. */

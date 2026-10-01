@@ -90,19 +90,20 @@ describe("cron model schema regressions", () => {
     },
   );
 
-  it("accepts a typed false failure-alert sentinel through runtime argument validation", () => {
+  it.each(["add", "update"])("preserves failure-alert values for %s", (action) => {
     expect(propertyAt(schema, "job.failureAlert")?.anyOf).toContainEqual({
       type: "boolean",
       const: false,
     });
     for (const [failureAlert, accepted] of [
+      [null, true],
       [false, true],
       [{ after: 3, cooldownMs: 0, includeSkipped: true }, true],
       [undefined, true],
       [true, false],
       ["invalid", false],
     ] as const) {
-      const args = { action: "update", job: { failureAlert } };
+      const args = { action, job: { failureAlert } };
       const validate = () =>
         validateToolArguments(tool, {
           type: "toolCall",

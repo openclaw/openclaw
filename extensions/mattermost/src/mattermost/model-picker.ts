@@ -86,26 +86,19 @@ function buildButton(params: {
   model?: string;
   style?: "default" | "primary" | "danger";
 }): MattermostInteractiveButtonInput {
-  const baseState =
-    params.action === "providers" || params.action === "back"
+  const baseState = {
+    action: params.action,
+    ownerUserId: params.ownerUserId,
+    ...(params.action === "list" || params.action === "select"
       ? {
-          action: params.action,
-          ownerUserId: params.ownerUserId,
+          provider: normalizeProviderId(params.provider ?? ""),
+          page: normalizePage(params.page),
         }
-      : params.action === "list"
-        ? {
-            action: "list" as const,
-            ownerUserId: params.ownerUserId,
-            provider: normalizeProviderId(params.provider ?? ""),
-            page: normalizePage(params.page),
-          }
-        : {
-            action: "select" as const,
-            ownerUserId: params.ownerUserId,
-            provider: normalizeProviderId(params.provider ?? ""),
-            page: normalizePage(params.page),
-            model: normalizeStringifiedOptionalString(params.model) ?? "",
-          };
+      : {}),
+    ...(params.action === "select"
+      ? { model: normalizeStringifiedOptionalString(params.model) ?? "" }
+      : {}),
+  };
 
   const digest = createHash("sha256").update(JSON.stringify(baseState)).digest("hex").slice(0, 12);
   return {

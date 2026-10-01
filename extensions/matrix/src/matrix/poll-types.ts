@@ -176,30 +176,12 @@ export function parsePollStart(content: PollStartContent): ParsedPollStart | nul
   };
 }
 
-export function parsePollStartContent(content: PollStartContent): PollSummary | null {
-  const parsed = parsePollStart(content);
-  if (!parsed) {
-    return null;
-  }
-
-  return {
-    eventId: "",
-    roomId: "",
-    sender: "",
-    senderName: "",
-    question: parsed.question,
-    answers: parsed.answers.map((answer) => answer.text),
-    kind: parsed.kind,
-    maxSelections: parsed.maxSelections,
-  };
-}
-
-export function formatPollAsText(summary: PollSummary): string {
+export function formatPollAsText(summary: ParsedPollStart): string {
   const lines = [
     "[Poll]",
     summary.question,
     "",
-    ...summary.answers.map((answer, idx) => `${idx + 1}. ${answer}`),
+    ...summary.answers.map((answer, idx) => `${idx + 1}. ${answer.text}`),
   ];
   return lines.join("\n");
 }
@@ -271,7 +253,7 @@ export function buildPollResultsSummary(params: {
   const answerIds = new Set(parsed.answers.map((answer) => answer.id));
   const latestVoteBySender = new Map<string, string[]>();
 
-  const orderedRelationEvents = [...params.relationEvents].toSorted((left, right) => {
+  const orderedRelationEvents = params.relationEvents.toSorted((left, right) => {
     const leftTs = asFiniteNumber(left.origin_server_ts) ?? Number.POSITIVE_INFINITY;
     const rightTs = asFiniteNumber(right.origin_server_ts) ?? Number.POSITIVE_INFINITY;
     if (leftTs !== rightTs) {

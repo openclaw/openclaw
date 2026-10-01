@@ -5,7 +5,6 @@ type IncompleteUsageRetryOptions = {
   retry: () => void | Promise<void>;
   onExhausted?: () => void;
   retryMs?: number | ((attempt: number) => number);
-  limit?: number;
 };
 
 /** Closed convergence state: an incomplete payload is never a rendered answer. */
@@ -48,7 +47,7 @@ export class IncompleteUsageRetry {
   }
 
   private armRetry(): UsageRetryState {
-    if (this.attempts >= (this.options.limit ?? INCOMPLETE_USAGE_RETRY_LIMIT)) {
+    if (this.attempts >= INCOMPLETE_USAGE_RETRY_LIMIT) {
       // Nothing will converge this payload on its own, so the caller has to
       // report it. Rendering the empty provider list as a loaded answer is the
       // silent-failure this marker exists to avoid.

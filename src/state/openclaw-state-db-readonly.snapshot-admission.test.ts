@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
+import { createRetainedOperation, type RetainedOperation } from "../infra/retained-operation.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -10,6 +11,17 @@ import type {
   OpenClawStateReadLocation,
   OpenClawStateReadOutcome,
 } from "./openclaw-state-read.types.js";
+
+// These awaited fixtures observe Promise settlement; they do not prove blocked-host progress.
+function observeAsyncFixture<T>(run: () => Promise<T>): RetainedOperation<T> {
+  const completion = createRetainedOperation<T>(() => undefined);
+  try {
+    void run().then(completion.resolve, completion.reject);
+  } catch (error) {
+    completion.reject(error);
+  }
+  return completion.operation;
+}
 
 const mocks = vi.hoisted(() => ({
   capture: vi.fn(),
@@ -59,13 +71,28 @@ vi.mock("./openclaw-state-db-read-connection.js", () => ({
   withOpenClawStateReadOnlyLocation: mocks.forbiddenNative,
 }));
 
-vi.mock("./openclaw-state-read-worker.js", () => ({
-  createOpenClawStateReadTransport: () => ({
-    read: mocks.read,
-    validateFresh: async () => {},
-    close: async () => {},
-  }),
-}));
+vi.mock("./openclaw-state-read-worker.js", () => {
+  const progress = new Set<() => void>();
+  return {
+    captureOpenClawStateReadSource: () => ({
+      createTransport: () => ({
+        startRead: (source: OpenClawStateReadLocation, authority: OpenClawStateReadAuthority) =>
+          observeAsyncFixture(() => mocks.read(source, authority)),
+        startValidateFresh: () => observeAsyncFixture(async () => {}),
+        startClose: () => observeAsyncFixture(async () => {}),
+      }),
+      own(service: () => void) {
+        progress.add(service);
+        return () => progress.delete(service);
+      },
+      service() {
+        for (const service of Array.from(progress)) {
+          service();
+        }
+      },
+    }),
+  };
+});
 
 import { isStateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import {

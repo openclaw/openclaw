@@ -39,38 +39,26 @@ export function registerModelRuntimeDirectiveTests(harness: RuntimeDirectiveTest
     queueMocks,
     stickyModelMock,
   } = harness;
-  it.each(["", " --runtime codex"])(
-    "clears an inherited incompatible runtime but rejects an explicit one (%s)",
-    async (runtime) => {
-      const sessionEntry = createSessionEntry({
-        providerOverride: "openai",
-        modelOverride: "gpt-4o",
-        modelOverrideSource: "user",
-        agentRuntimeOverride: "codex",
-        nativeRuntimeConsent: "codex",
-      });
-      const initial = { ...sessionEntry };
-      const { persisted } = await persistModelDirectiveForTest({
-        command: `/model anthropic/claude-opus-4-6${runtime} hello`,
-        allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
-        sessionEntry,
-        provider: "openai",
-        model: "gpt-4o",
-        initialModelLabel: "openai/gpt-4o",
-      });
-
-      if (runtime) {
-        expect(persisted.errorText).toContain('Runtime "codex" is not supported');
-        expect(sessionEntry).toEqual(initial);
-      } else {
-        expect(persisted.errorText).toBeUndefined();
-        expect(persisted).toMatchObject({ provider: "anthropic", model: "claude-opus-4-6" });
-        expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
-        expect(sessionEntry.nativeRuntimeConsent).toBeUndefined();
-        expect(sessionEntry.modelOverride).toBeUndefined();
-      }
-    },
-  );
+  it("rejects an explicit incompatible runtime without changing the session", async () => {
+    const sessionEntry = createSessionEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+      modelOverrideSource: "user",
+      agentRuntimeOverride: "codex",
+      nativeRuntimeConsent: "codex",
+    });
+    const initial = { ...sessionEntry };
+    const { persisted } = await persistModelDirectiveForTest({
+      command: "/model anthropic/claude-opus-4-6 --runtime codex hello",
+      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
+      sessionEntry,
+      provider: "openai",
+      model: "gpt-4o",
+      initialModelLabel: "openai/gpt-4o",
+    });
+    expect(persisted.errorText).toContain('Runtime "codex" is not supported');
+    expect(sessionEntry).toEqual(initial);
+  });
 
   it("switches a directive-only alias to configured routing and clears incompatible consent", async () => {
     const cfg: OpenClawConfig = {

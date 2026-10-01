@@ -2,6 +2,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 import {
   compileSqliteQueryBindings,
+  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import {
@@ -46,6 +47,16 @@ function insertChildren<T>(
 }
 
 export function insertCard(db: DatabaseSync, card: WorkboardCard): void {
+  const board = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<{ workboard_boards: { id: string; kind: string | null } }>(db)
+      .selectFrom("workboard_boards")
+      .select("kind")
+      .where("id", "=", cardBoardId(card)),
+  );
+  if (board?.kind === "sessions") {
+    throw new Error("Sessions boards do not hold cards");
+  }
   const execution = card.execution;
   const metadata = card.metadata;
   const query = getNodeSqliteKysely<WorkboardCardDatabase>(db);

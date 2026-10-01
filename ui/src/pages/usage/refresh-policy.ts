@@ -8,33 +8,6 @@ import type { ProviderUsageRequestResult } from "../../lib/provider-usage-reques
 const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
 
 type UsageRefreshReason = "focus" | "manual" | "poll" | "publication" | "reconnect";
-type UsageRefreshDecision = "defer" | "fetch" | "skip";
-
-function decideUsageRefresh(params: {
-  reason: UsageRefreshReason;
-  visible: boolean;
-  interrupted: boolean;
-  nowMs: number;
-  lastLoadedAtMs: number | null;
-  ttlMs?: number;
-}): UsageRefreshDecision {
-  if (params.reason === "manual") {
-    return "fetch";
-  }
-  if (!params.visible) {
-    return "defer";
-  }
-  // A disconnect invalidates in-flight work. Once active, retry it even when
-  // the prior payload is still fresh.
-  if (params.interrupted) {
-    return "fetch";
-  }
-  const ttlMs = params.ttlMs ?? USAGE_PAYLOAD_TTL_MS;
-  if (params.lastLoadedAtMs !== null && params.nowMs - params.lastLoadedAtMs < ttlMs) {
-    return "skip";
-  }
-  return "fetch";
-}
 
 type UsageRefreshPolicyOptions = {
   isLoading: () => boolean;
@@ -125,20 +98,21 @@ export class UsageRefreshPolicy {
       return;
     }
     this.pendingAutomaticRefresh = false;
-    const decision = decideUsageRefresh({
-      reason,
-      visible: document.visibilityState === "visible" && document.hasFocus(),
-      interrupted: this.reloadPending,
-      nowMs: Date.now(),
-      lastLoadedAtMs: this.lastLoadedAtMs,
-    });
-    if (decision === "fetch") {
-      if (reason === "manual" || (reason !== "poll" && !this.publicationPending)) {
-        this.incompleteUsageRetry.startCycle();
-      }
-      this.publicationPending = false;
-      await this.options.reload(reason);
+    if (
+      reason !== "manual" &&
+      (document.visibilityState !== "visible" ||
+        !document.hasFocus() ||
+        (!this.reloadPending &&
+          this.lastLoadedAtMs !== null &&
+          Date.now() - this.lastLoadedAtMs < USAGE_PAYLOAD_TTL_MS))
+    ) {
+      return;
     }
+    if (reason === "manual" || (reason !== "poll" && !this.publicationPending)) {
+      this.incompleteUsageRetry.startCycle();
+    }
+    this.publicationPending = false;
+    await this.options.reload(reason);
   }
 
   flushPending(): void {

@@ -42,6 +42,7 @@ import {
   buildTelegramGroupPeerId,
   buildTelegramThreadParams,
   getTelegramTextParts,
+  joinTelegramTextParts,
   hasBotMention,
   resolveTelegramPrimaryMedia,
   type TelegramThreadSpec,
@@ -314,12 +315,12 @@ export function createTelegramInboundMedia({
         return;
       }
       const captionParts = entry.messages
-        .map(({ msg }) => getTelegramTextParts(msg))
-        .filter(({ text }) => text.trim());
+        .map(({ msg }) => msg)
+        .filter((msg) => getTelegramTextParts(msg).text.trim());
       if (captionParts.length > 1) {
         const botUsername = primary.ctx.me?.username;
-        const commandCaptionIndex = captionParts.findIndex(({ text }) =>
-          hasControlCommand(text, entry.authorizationCfg, {
+        const commandCaptionIndex = captionParts.findIndex((msg) =>
+          hasControlCommand(getTelegramTextParts(msg).text, entry.authorizationCfg, {
             botUsername,
           }),
         );
@@ -330,18 +331,10 @@ export function createTelegramInboundMedia({
             captionParts.unshift(commandCaption);
           }
         }
-        let caption = "";
-        const captionEntities: NonNullable<Message["caption_entities"]> = [];
-        for (const { text, entities } of captionParts) {
-          if (caption) {
-            caption += "\n";
-          }
-          const offset = caption.length;
-          caption += text;
-          for (const entity of entities) {
-            captionEntities.push({ ...entity, offset: entity.offset + offset });
-          }
-        }
+        const { text: caption, entities: captionEntities } = joinTelegramTextParts(
+          captionParts,
+          "\n",
+        );
         const combinedMessage = {
           ...primary.msg,
           text: undefined,

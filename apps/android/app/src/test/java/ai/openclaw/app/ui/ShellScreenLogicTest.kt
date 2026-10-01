@@ -50,11 +50,8 @@ class ShellScreenLogicTest {
   }
 
   @Test
-  fun appearanceThemeLabelsRoundTripFromSettingsOptions() {
-    assertEquals(listOf("System", "Dark", "Light"), appearanceThemeOptions())
-    assertEquals(AppearanceThemeMode.System, appearanceThemeModeForLabel("System"))
-    assertEquals(AppearanceThemeMode.Dark, appearanceThemeModeForLabel("Dark"))
-    assertEquals(AppearanceThemeMode.Light, appearanceThemeModeForLabel("Light"))
+  fun appearanceThemeLabelsFollowSettingsOptionOrder() {
+    assertEquals(listOf("System", "Dark", "Light"), AppearanceThemeMode.entries.map(::appearanceThemeSummary))
   }
 
   @Test

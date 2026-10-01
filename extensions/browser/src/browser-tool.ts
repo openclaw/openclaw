@@ -17,7 +17,6 @@ import {
   resolveBrowserBaseUrl,
   resolveBrowserToolNodeTarget,
   resolveBrowserToolTimeoutMs,
-  type BrowserNodeTarget,
 } from "./browser-tool.routing.js";
 import {
   type AnyAgentTool,
@@ -379,15 +378,13 @@ export function createBrowserTool(
       // existing-session profiles can attach through the selected host or browser node,
       // but they must never fall back into the sandbox browser.
       const isUserBrowserProfile = profileCapabilities?.usesChromeMcp === true;
-      if (isUserBrowserProfile) {
-        if (target === "sandbox") {
-          throw new Error(
-            `profile="${profile}" cannot use the sandbox browser; use target="host" or omit target.`,
-          );
-        }
+      if (isUserBrowserProfile && target === "sandbox") {
+        throw new Error(
+          `profile="${profile}" cannot use the sandbox browser; use target="host" or omit target.`,
+        );
       }
 
-      let nodeTarget: BrowserNodeTarget | null = null;
+      let nodeTarget: Awaited<ReturnType<typeof resolveBrowserToolNodeTarget>> = null;
       try {
         nodeTarget = await resolveBrowserToolNodeTarget({
           requestedNode: requestedNode ?? undefined,

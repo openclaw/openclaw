@@ -29,6 +29,7 @@ import {
   deliverGoogleChatReply,
   type GoogleChatTypingMessage,
 } from "./monitor-reply-delivery.js";
+import { normalizeGoogleChatReplyTarget } from "./monitor-reply-target.js";
 import {
   registerGoogleChatWebhookTarget,
   setGoogleChatWebhookEventProcessor,
@@ -299,7 +300,7 @@ async function processGoogleChatEvent(
     typingIndicator = "message";
   }
   let typingMessage: GoogleChatTypingMessage | undefined;
-  const typingMessageThreadName =
+  const effectiveReplyThreadName =
     account.config.replyToMode && account.config.replyToMode !== "off"
       ? replyThreadName
       : undefined;
@@ -315,12 +316,12 @@ async function processGoogleChatEvent(
         account,
         space: spaceId,
         text: `_${botName} is typing..._`,
-        thread: typingMessageThreadName,
+        thread: effectiveReplyThreadName,
       });
       if (result?.messageName) {
         typingMessage = createGoogleChatTypingMessage({
           messageName: result.messageName,
-          requestedThreadName: typingMessageThreadName,
+          requestedThreadName: effectiveReplyThreadName,
           deliveredThreadName: result.threadName,
         });
       }
@@ -352,14 +353,22 @@ async function processGoogleChatEvent(
         delivery: {
           durable: (payload, info) =>
             resolveGoogleChatDurableReplyOptions({
-              payload,
+              payload: normalizeGoogleChatReplyTarget({
+                payload,
+                sourceMessageName: message.name,
+                replyThreadName: effectiveReplyThreadName,
+              }),
               infoKind: info.kind,
               spaceId,
               hasTypingMessage: Boolean(typingMessage),
             }),
           deliver: async (payload) => {
             await deliverGoogleChatReply({
-              payload,
+              payload: normalizeGoogleChatReplyTarget({
+                payload,
+                sourceMessageName: message.name,
+                replyThreadName: effectiveReplyThreadName,
+              }),
               account,
               spaceId,
               runtime,

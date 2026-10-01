@@ -13,6 +13,27 @@ import {
   getFeishuSendRateLimitCodeFromResponse,
 } from "./send-rate-limit.js";
 
+export type FeishuDriveCommentReply = {
+  reply_id?: string;
+  user_id?: string;
+  create_time?: number;
+  update_time?: number;
+  content?: { elements?: unknown[] };
+};
+
+export type FeishuDriveCommentCard = {
+  comment_id?: string;
+  user_id?: string;
+  create_time?: number;
+  update_time?: number;
+  is_solved?: boolean;
+  is_whole?: boolean;
+  has_more?: boolean;
+  page_token?: string;
+  quote?: string;
+  reply_list?: { replies?: FeishuDriveCommentReply[] };
+};
+
 export class FeishuReplyCommentError extends Error {
   httpStatus?: number;
   feishuCode?: number | string;

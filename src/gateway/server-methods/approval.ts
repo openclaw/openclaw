@@ -1,4 +1,3 @@
-// Unified operator approval lookup and first-answer resolution handlers.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -175,7 +174,6 @@ async function applyApprovalDecision<TPayload>(params: {
   };
 }
 
-/** Creates kind-agnostic approval lookup and resolution handlers. */
 export function createApprovalHandlers(
   params: CreateApprovalHandlersParams,
 ): GatewayRequestHandlers {

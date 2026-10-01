@@ -3,6 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { McpCatalogTool } from "./agent-bundle-mcp-types.js";
 
 // Name sanitizers for tools exposed by bundle MCP servers. Provider/tool names
 // must fit model-facing schema limits while remaining stable and collision-free.
@@ -10,6 +11,14 @@ const TOOL_NAME_SAFE_RE = /[^A-Za-z0-9_-]/g;
 export const TOOL_NAME_SEPARATOR = "__";
 const TOOL_NAME_MAX_PREFIX = 30;
 const TOOL_NAME_MAX_TOTAL = 64;
+
+export function compareMcpCatalogTools(left: McpCatalogTool, right: McpCatalogTool): number {
+  return (
+    left.safeServerName.localeCompare(right.safeServerName) ||
+    left.toolName.localeCompare(right.toolName) ||
+    left.serverName.localeCompare(right.serverName)
+  );
+}
 
 /** Builds stable node-ID prefixes capped at 32 characters. */
 export function sanitizeNodeIdFragment(value: string): string {
@@ -64,10 +73,6 @@ export function assignSafeServerNames(serverNames: Iterable<string>): Map<string
   return assignments;
 }
 
-function sanitizeToolName(raw: string): string {
-  return sanitizeToolFragment(raw, "tool");
-}
-
 /** Normalizes reserved tool names for collision checks. */
 export function normalizeReservedToolNames(names?: Iterable<string>): Set<string> {
   return new Set(
@@ -83,7 +88,7 @@ export function buildSafeToolName(params: {
   toolName: string;
   reservedNames: Set<string>;
 }): string {
-  const cleanedToolName = sanitizeToolName(params.toolName);
+  const cleanedToolName = sanitizeToolFragment(params.toolName, "tool");
   const maxToolChars = Math.max(
     1,
     TOOL_NAME_MAX_TOTAL - params.serverName.length - TOOL_NAME_SEPARATOR.length,

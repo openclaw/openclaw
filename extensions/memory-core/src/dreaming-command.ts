@@ -11,31 +11,6 @@ function resolveDreamingPluginConfig(cfg: OpenClawConfig): Record<string, unknow
   return asNullableRecord(entry?.config) ?? {};
 }
 
-function updateDreamingEnabledInConfig(cfg: OpenClawConfig, enabled: boolean): OpenClawConfig {
-  const entries = { ...cfg.plugins?.entries };
-  const existingEntry = asNullableRecord(entries["memory-core"]) ?? {};
-  const existingConfig = asNullableRecord(existingEntry.config) ?? {};
-  const existingSleep = asNullableRecord(existingConfig.dreaming) ?? {};
-  entries["memory-core"] = {
-    ...existingEntry,
-    config: {
-      ...existingConfig,
-      dreaming: {
-        ...existingSleep,
-        enabled,
-      },
-    },
-  };
-
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      entries,
-    },
-  };
-}
-
 function formatEnabled(value: boolean): string {
   return value ? "on" : "off";
 }
@@ -121,8 +96,21 @@ export async function handleDreamingCommand(api: OpenClawPluginApi, ctx: PluginC
         assertCurrent: Array.isArray(ctx.gatewayClientScopes) ? undefined : ctx.assertOwnerCurrent,
       },
       mutate: (draft) => {
-        const nextConfig = updateDreamingEnabledInConfig(draft, enabled);
-        Object.assign(draft, nextConfig);
+        const entries = { ...draft.plugins?.entries };
+        const existingEntry = asNullableRecord(entries["memory-core"]) ?? {};
+        const existingConfig = asNullableRecord(existingEntry.config) ?? {};
+        const existingSleep = asNullableRecord(existingConfig.dreaming) ?? {};
+        entries["memory-core"] = {
+          ...existingEntry,
+          config: {
+            ...existingConfig,
+            dreaming: {
+              ...existingSleep,
+              enabled,
+            },
+          },
+        };
+        draft.plugins = { ...draft.plugins, entries };
       },
     });
     return {

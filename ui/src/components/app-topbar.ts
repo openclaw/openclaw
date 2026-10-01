@@ -41,6 +41,7 @@ class AppTopbar extends OpenClawLightDomContentsElement {
               <img
                 class="topbar-brand__logo"
                 src=${controlUiPublicAssetPath("apple-touch-icon.png", this.resourceBasePath)}
+                loading="lazy"
                 alt=""
                 aria-hidden="true"
               />

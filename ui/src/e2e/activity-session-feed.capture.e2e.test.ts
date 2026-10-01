@@ -46,7 +46,7 @@ suite.define(() => {
         const since = new Date(
           current.getFullYear(),
           current.getMonth(),
-          current.getDate(),
+          current.getDate() - 7,
         ).getTime();
         const until = new Date(
           current.getFullYear(),
@@ -71,11 +71,11 @@ suite.define(() => {
           activityPulse: {
             since,
             until,
-            hours: Array.from({ length: Math.ceil((until - since) / 3_600_000) }, () => 0),
-            sessions: 0,
+            buckets: [0, 0, 0, 0, 0, 0, 5, 0],
+            sessions: 5,
             started: 0,
-            people: 0,
-            running: 0,
+            people: 3,
+            running: 1,
           },
           peopleIncomplete: true,
           people: [
@@ -390,7 +390,7 @@ suite.define(() => {
         await expect.poll(() => activityPage.count()).toBe(1);
         await activityPage.locator(".activity-pulse__bars").waitFor();
         expect(await activityPage.locator(".activity-pulse__bars > span").count()).toBe(
-          sessionList.activityPulse.hours.length,
+          sessionList.activityPulse.buckets.length,
         );
         // The title sits centered in the toolbar row; the intro copy and the
         // mode tabs share the content's left edge below it.

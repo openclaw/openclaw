@@ -142,8 +142,9 @@ it.each([
     sessionId: "save-warning-session",
   };
   await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
+  // Keep the append fault local so worker admission sees the canonical schema.
   openOpenClawAgentDatabase(scope).db.exec(
-    "CREATE TRIGGER reject_abort_reply BEFORE INSERT ON transcript_events " +
+    "CREATE TEMP TRIGGER reject_abort_reply BEFORE INSERT ON transcript_events " +
       "WHEN json_extract(NEW.event_json, '$.message.openclawAbort.runId') = 'run-save-failure' " +
       "BEGIN SELECT RAISE(ABORT, 'fixture transcript write failed'); END",
   );
@@ -248,6 +249,9 @@ it.each([
     });
   }
   expect(active.controller.signal.aborted).toBe(true);
+  expect(context.logGateway.warn).toHaveBeenCalledWith(
+    expect.stringContaining("fixture transcript write failed"),
+  );
   expect(await loadTranscriptEvents(scope)).not.toContainEqual(
     expect.objectContaining({
       message: expect.objectContaining({ idempotencyKey: "run-save-failure:assistant" }),

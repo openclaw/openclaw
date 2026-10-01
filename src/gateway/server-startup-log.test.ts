@@ -1,5 +1,5 @@
 // Startup log tests cover security warnings, model detail formatting, plugin
-// summaries, bind URLs, ANSI output, and dangerous config reporting.
+// summaries, ANSI output, and dangerous config reporting.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
@@ -43,9 +43,7 @@ async function startup(overrides: Partial<Parameters<typeof logGatewayStartup>[0
     cfg: {},
     env: {},
     manifestRecords: [],
-    bindHost: "127.0.0.1",
     loadedPluginIds: [],
-    port: 18789,
     log: { info, warn },
     isNixMode: false,
     ...overrides,
@@ -93,9 +91,7 @@ describe("gateway startup log", () => {
         },
         env: {},
         manifestRecords: [],
-        bindHost: "127.0.0.1",
         loadedPluginIds: [],
-        port: 18789,
         log: { info, warn: vi.fn() },
         isNixMode: false,
       });
@@ -364,7 +360,6 @@ describe("gateway startup log", () => {
     vi.setSystemTime(new Date("2026-04-03T10:00:16.000Z"));
 
     const { info } = await startup({
-      bindHosts: ["127.0.0.1", "::1"],
       loadedPluginIds: ["delta", "alpha", "delta", "beta"],
       startupStartedAt: Date.parse("2026-04-03T10:00:00.000Z"),
     });

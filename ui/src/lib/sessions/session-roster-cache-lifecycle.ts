@@ -30,6 +30,9 @@ export function createSessionRosterCacheLifecycle(
     profileId: cachedProfileId,
     query: {},
   };
+  const routingDefaults = options.bootRecord
+    ? { mainKey: options.bootRecord.agents.mainKey, scope: options.bootRecord.agents.scope }
+    : undefined;
   // Connection readiness releases waiters even if the lazy module or IndexedDB stalls.
   const settled = new Promise<void>((resolve) => {
     if (!options.bootRecord || gateway.snapshot.phase === "connected") {
@@ -46,6 +49,14 @@ export function createSessionRosterCacheLifecycle(
 
   return {
     settled,
+    get routingDefaults() {
+      return !retirement.signal.aborted &&
+        gateway.snapshot.phase !== "connected" &&
+        currentScope() === initial.scope &&
+        gateway.connectionRevision === initial.connectionRevision
+        ? routingDefaults
+        : undefined;
+    },
     synchronize(snapshot: SessionGateway["snapshot"]): void {
       if (snapshot.phase === "connected") {
         retirement.abort();

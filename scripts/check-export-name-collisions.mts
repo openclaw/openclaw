@@ -2,6 +2,7 @@
 
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
+import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
@@ -55,7 +56,6 @@ export type ModuleExports = {
   valueDefinitions: Map<string, ExportedValueDefinition>;
 };
 
-const failurePrefix = "check-export-name-collisions";
 const extraExcludedFileSuffixes = [".test-support.ts", ".test-helpers.ts", ".d.ts"];
 
 function normalizeRelativePath(filePath: string) {
@@ -865,15 +865,8 @@ export async function main(
   return 1;
 }
 
-runAsScript(import.meta.url, async () => {
-  let exitCode = 1;
-  try {
-    exitCode = await main();
-  } catch (error) {
-    console.error(error);
-  }
-  if (exitCode !== 0) {
-    process.exitCode = exitCode;
-    console.error(`[${failurePrefix}] FAILED (exit ${exitCode})`);
-  }
-});
+runAsScript(import.meta.url, () =>
+  runWithFailedTrailer("check-export-name-collisions", async () => {
+    process.exitCode = await main();
+  }),
+);

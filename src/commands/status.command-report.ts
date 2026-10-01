@@ -1,15 +1,9 @@
-// Renders the standard `openclaw status` report from prebuilt section data.
-// Report data assembly stays separate so tests can validate rows without terminal formatting.
-
-import type { RenderTableOptions, TableColumn } from "../../packages/terminal-core/src/table.js";
+import type { TableColumn } from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { statusOverviewTableColumns } from "./status-all/report-tables.js";
 import { appendStatusReportLines, appendStatusReportTable } from "./status-all/text-report.js";
 
-/** Builds terminal lines for the standard status report. */
 export async function buildStatusCommandReportLines(params: {
-  heading: (text: string) => string;
-  muted: (text: string) => string;
-  renderTable: (input: RenderTableOptions) => string;
   width: number;
   overviewRows: Array<{ Item: string; Value: string }>;
   pluginCompatibilityLines: string[];
@@ -28,13 +22,12 @@ export async function buildStatusCommandReportLines(params: {
   footerLines: string[];
 }) {
   const lines: string[] = [];
-  lines.push(params.heading("OpenClaw status"));
+  lines.push(theme.heading("OpenClaw status"));
 
   const report = {
     lines,
-    heading: params.heading,
+    heading: theme.heading,
     width: params.width,
-    renderTable: params.renderTable,
   };
   // Prepare callbacks and column snapshots before rendering any table, as one report view.
   const overviewColumns = [...statusOverviewTableColumns];
@@ -45,11 +38,10 @@ export async function buildStatusCommandReportLines(params: {
   const modelSelectionLines = params.modelSelectionLines;
   const securityAuditLines = params.securityAuditLines;
   const channelsMessage =
-    params.channelsRows.length === 0 ? params.muted("No channels configured") : undefined;
+    params.channelsRows.length === 0 ? theme.muted("No channels configured") : undefined;
   const channelsColumns = channelsMessage === undefined ? [...params.channelsColumns] : [];
   const channelsRows = channelsMessage === undefined ? params.channelsRows : [];
-  const sessionsMessage =
-    params.sessionsRows.length === 0 ? params.muted("No sessions") : undefined;
+  const sessionsMessage = params.sessionsRows.length === 0 ? theme.muted("No sessions") : undefined;
   const sessionsColumns = sessionsMessage === undefined ? [...params.sessionsColumns] : [];
   const sessionsRows = sessionsMessage === undefined ? params.sessionsRows : [];
   const systemEventsColumns = [{ key: "Event", header: "Event", flex: true, minWidth: 24 }];

@@ -171,10 +171,13 @@ export function createProviderReviewRun(input: {
           );
         } finally {
           try {
-            const { clearSessionQueues } =
+            const { clearSessionLifecycleQueues } =
               await import("../../../auto-reply/reply/queue/cleanup.js");
-            assertCurrent();
-            clearSessionQueues([ownedTarget.sessionKey, attempt.sessionIdUsed]);
+            clearSessionLifecycleQueues({
+              ...ownedTarget,
+              keys: [ownedTarget.sessionKey, attempt.sessionIdUsed],
+              assertCurrent,
+            });
           } catch (cause) {
             stop(new Error("Provider precaution queue settlement did not complete", { cause }));
           }

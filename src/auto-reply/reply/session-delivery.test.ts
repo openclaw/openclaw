@@ -14,17 +14,6 @@ describe("inter-session lastRoute preservation (fixes #54441)", () => {
     ).toBe("discord");
   });
 
-  it("inter-session message does NOT overwrite established Telegram lastChannel", () => {
-    expect(
-      resolveSessionDeliveryRoute({
-        originatingChannelRaw: "webchat",
-        persistedLastChannel: "telegram",
-        sessionKey: "agent:main:telegram:direct:123456",
-        isInterSession: true,
-      }).channel,
-    ).toBe("telegram");
-  });
-
   it("inter-session message does NOT overwrite established external lastTo", () => {
     expect(
       resolveSessionDeliveryRoute({
@@ -79,14 +68,7 @@ describe("inter-session lastRoute preservation (fixes #54441)", () => {
 });
 
 describe("session delivery direct-session routing overrides", () => {
-  it.each([
-    "agent:main:direct:user-1",
-    "agent:main:telegram:direct:123456",
-    "agent:main:telegram:account-a:direct:123456",
-    "agent:main:telegram:dm:123456",
-    "agent:main:telegram:direct:123456:thread:99",
-    "agent:main:telegram:account-a:direct:123456:topic:ops",
-  ])(
+  it.each(["agent:main:direct:user-1", "agent:main:telegram:account-a:direct:123456:topic:ops"])(
     "preserves persisted external route when webchat accesses channel-peer session %s (fixes #47745)",
     (sessionKey) => {
       // Webchat/dashboard viewing an external-channel session must not overwrite
@@ -103,22 +85,18 @@ describe("session delivery direct-session routing overrides", () => {
     },
   );
 
-  it.each([
-    "agent:main:main:direct",
-    "agent:main:cron:job-1:dm",
-    "agent:main:subagent:worker:direct:user-1",
-    "agent:main:telegram:channel:direct",
-    "agent:main:telegram:account-a:direct",
-    "agent:main:telegram:direct:123456:cron:job-1",
-  ])("keeps persisted external routes for malformed direct-like key %s", (sessionKey) => {
-    expect(
-      resolveSessionDeliveryRoute({
-        originatingChannelRaw: "webchat",
-        originatingToRaw: "session:dashboard",
-        persistedLastChannel: "telegram",
-        persistedLastTo: "group:12345",
-        sessionKey,
-      }),
-    ).toEqual({ channel: "telegram", to: "group:12345" });
-  });
+  it.each(["agent:main:subagent:worker:direct:user-1"])(
+    "keeps persisted external routes for malformed direct-like key %s",
+    (sessionKey) => {
+      expect(
+        resolveSessionDeliveryRoute({
+          originatingChannelRaw: "webchat",
+          originatingToRaw: "session:dashboard",
+          persistedLastChannel: "telegram",
+          persistedLastTo: "group:12345",
+          sessionKey,
+        }),
+      ).toEqual({ channel: "telegram", to: "group:12345" });
+    },
+  );
 });

@@ -16,7 +16,6 @@ const RETRY_START_MS = 1_000;
 const RETRY_MAX_MS = 5 * 60_000;
 
 type CanvasSurfaceRefresh = {
-  surface: "canvas";
   canvasUrl: string;
   expiresAtMs?: number;
 };
@@ -169,7 +168,6 @@ function parseCanvasSurfaceRefresh(value: unknown): CanvasSurfaceRefresh | undef
     return undefined;
   }
   return {
-    surface: "canvas",
     canvasUrl: canvasUrl.trim(),
     ...(expiresAtMs === undefined ? {} : { expiresAtMs }),
   };

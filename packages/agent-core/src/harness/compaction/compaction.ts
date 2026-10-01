@@ -817,21 +817,12 @@ export function prepareCompaction(
 
   const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;
   const messagesToSummarize: AgentMessage[] = [...resetPreludeMessages];
-  for (let i = boundaryStart; i < historyEnd; i++) {
+  const turnPrefixMessages: AgentMessage[] = [];
+  for (let i = boundaryStart; i < cutPoint.firstKeptEntryIndex; i++) {
     const entry = effectiveEntries.at(i);
     const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
     if (msg) {
-      messagesToSummarize.push(msg);
-    }
-  }
-  const turnPrefixMessages: AgentMessage[] = [];
-  if (cutPoint.isSplitTurn) {
-    for (let i = cutPoint.turnStartIndex; i < cutPoint.firstKeptEntryIndex; i++) {
-      const entry = effectiveEntries.at(i);
-      const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
-      if (msg) {
-        turnPrefixMessages.push(msg);
-      }
+      (i < historyEnd ? messagesToSummarize : turnPrefixMessages).push(msg);
     }
   }
   if (messagesToSummarize.length === 0 && turnPrefixMessages.length === 0) {

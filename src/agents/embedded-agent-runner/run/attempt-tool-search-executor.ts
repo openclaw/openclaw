@@ -6,6 +6,7 @@ import {
   readNestedToolActivity,
   type NestedToolActivity,
 } from "../../../sessions/nested-tool-activity.js";
+import { notifyToolActivity } from "../../../shared/tool-activity-heartbeat.js";
 import { raceWithAbortSignal } from "../../agent-tools.abort.js";
 import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
@@ -22,7 +23,6 @@ import type { AnyAgentTool } from "../../tools/common.js";
 import { redactTranscriptMessage } from "../../transcript-redact.js";
 import { recordEmbeddedToolReceipt } from "../tool-send-receipts.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
-import { notifyToolActivity } from "./tool-activity-heartbeat.js";
 
 /** One owner for nested execution, acceptance, and durable display activity. */
 export function createSubscribedToolSearchExecutor(params: {

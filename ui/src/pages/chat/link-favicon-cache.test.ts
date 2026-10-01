@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { readLinkFavicon } from "./link-favicon-cache.ts";
-import type { LinkFaviconFetcher } from "./link-favicon-loader.ts";
+import { readLinkFavicon, type LinkFaviconFetcher } from "./link-favicon-cache.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -9,6 +8,24 @@ afterEach(() => {
 });
 
 describe("readLinkFavicon", () => {
+  it("does not reuse a hostname miss across Gateway credential contexts", async () => {
+    const first = vi.fn<LinkFaviconFetcher>().mockResolvedValue(null);
+    const firstSettled = createDeferred();
+    readLinkFavicon("scoped.example.com", first, firstSettled.resolve);
+    await firstSettled.promise;
+    expect(readLinkFavicon("scoped.example.com", first, firstSettled.resolve)).toBeNull();
+
+    const replacement = vi.fn<LinkFaviconFetcher>().mockResolvedValue("blob:replacement");
+    const replacementSettled = createDeferred();
+    expect(
+      readLinkFavicon("scoped.example.com", replacement, replacementSettled.resolve),
+    ).toBeUndefined();
+    await replacementSettled.promise;
+    expect(readLinkFavicon("scoped.example.com", replacement, replacementSettled.resolve)).toBe(
+      "blob:replacement",
+    );
+  });
+
   it("shares one in-flight fetch and notifies each subscriber once before reusing the URL", async () => {
     const pending = createDeferred<string | null>();
     const fetcher = vi.fn<LinkFaviconFetcher>().mockReturnValue(pending.promise);

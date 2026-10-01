@@ -52,11 +52,3 @@ export function isFailoverWorthyBackendError(attempt: BackendAttempt): boolean {
     )
   );
 }
-
-/** Returns whether another backend candidate remains after the current index. */
-export function shouldAttemptBackendFailover(params: {
-  backendIndex: number;
-  candidateBackends: readonly string[];
-}): boolean {
-  return params.backendIndex < params.candidateBackends.length - 1;
-}

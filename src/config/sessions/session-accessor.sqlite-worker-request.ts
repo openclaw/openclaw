@@ -5,15 +5,19 @@ import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import {
   adoptOpenClawAgentDatabaseValidation,
+  captureOpenClawAgentDatabaseValidationTransfer,
   getOpenClawAgentDatabaseValidation,
+  getOpenClawAgentDatabaseValidationForTransfer,
   type OpenClawAgentDatabaseValidation,
 } from "../../state/openclaw-agent-db-validation-cache.js";
+import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-contract.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
   registerOpenClawStateDatabaseAsyncResource,
 } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { SqliteSessionReclamationAdmissionDiagnostics } from "./session-accessor.sqlite-contract.js";
+import type { SessionMaintenanceLiveProtection } from "./session-accessor.sqlite-lifecycle-types.js";
 import { revokeSqliteReclamationCommit } from "./session-accessor.sqlite-reclamation-commit.js";
 import {
   observeSqliteMutationWorkerEnd,
@@ -79,14 +83,22 @@ export function withSqliteMutationWorkerLifetime<T>(
 }
 
 export type SqliteWorkerWriteAdmission<Result> = (
-  run: (refusal?: { error: unknown }) => Promise<Result | undefined>,
+  run: (
+    refusal?: { error: unknown },
+    maintenanceProtection?: SessionMaintenanceLiveProtection,
+  ) => Promise<Result | undefined>,
   diagnostics: SqliteSessionReclamationAdmissionDiagnostics,
 ) => Promise<void>;
 
-export type SqliteMutationWorkerValidationOwner = {
-  database: OpenClawAgentReadOnlyDatabase;
-  isCurrent: () => boolean;
-};
+export type SqliteMutationWorkerValidationOwner =
+  | {
+      database: OpenClawAgentReadOnlyDatabase;
+      isCurrent: () => boolean;
+    }
+  | {
+      source: { agentId: string; path: string };
+      claim: AgentDatabaseGenerationClaim;
+    };
 
 export type SqliteMutationWorkerMessage<Result> =
   | { type: "refused"; operationId: number; settled: true }
@@ -115,11 +127,52 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
   onCommitRequest: () => void;
   withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
   validationOwner?: SqliteMutationWorkerValidationOwner;
+  /** Opening proof remains revocable and is adopted only against the worker's native identity. */
+  readOpeningValidation?: () => OpenClawAgentDatabaseValidation | undefined;
   dispatch?: () => void;
   getFailure?: () => Error | undefined;
   onExit?: (code: number) => void;
 }): Promise<Result> {
   const { transport, operationId } = params;
+  const validationOwner = params.validationOwner;
+  if (validationOwner && "source" in validationOwner) {
+    validationOwner.claim.assertCurrent();
+  }
+  const receiveValidation =
+    validationOwner && "source" in validationOwner
+      ? captureOpenClawAgentDatabaseValidationTransfer(validationOwner.source)
+      : undefined;
+  const readValidation = () => {
+    if (!validationOwner) {
+      return params.readOpeningValidation?.();
+    }
+    if ("database" in validationOwner) {
+      return validationOwner.isCurrent()
+        ? getOpenClawAgentDatabaseValidation(validationOwner.database)
+        : undefined;
+    }
+    validationOwner.claim.assertCurrent();
+    const validation = getOpenClawAgentDatabaseValidationForTransfer(validationOwner.source);
+    return validation?.identity === validationOwner.claim.identity ? validation : undefined;
+  };
+  const adoptValidation = (validation: OpenClawAgentDatabaseValidation) => {
+    if (!validationOwner) {
+      return;
+    }
+    if ("database" in validationOwner) {
+      if (validationOwner.isCurrent()) {
+        adoptOpenClawAgentDatabaseValidation(validationOwner.database, validation);
+      }
+      return;
+    }
+    try {
+      validationOwner.claim.assertCurrent();
+    } catch {
+      // Retirement after settlement cannot revive proof or reject an acknowledged result.
+      return;
+    }
+    receiveValidation?.(validationOwner.claim.identity, validation);
+  };
   const worker = transport.channel;
   return new Promise((resolve, reject) => {
     // oxlint-disable-next-line no-warning-comments -- remove after the upstream Bun Worker fix ships.
@@ -187,8 +240,8 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
           } else if (result === undefined) {
             reject(new Error("SQLite session reclamation Worker exited without results"));
           } else {
-            if (validation && params.validationOwner?.isCurrent()) {
-              adoptOpenClawAgentDatabaseValidation(params.validationOwner.database, validation);
+            if (validation) {
+              adoptValidation(validation);
             }
             resolve(result);
           }
@@ -235,7 +288,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
         };
         admission = requested;
         const task = params
-          .withWriteAdmission(async (refusal) => {
+          .withWriteAdmission(async (refusal, maintenanceProtection) => {
             if (completed) {
               return undefined;
             }
@@ -249,10 +302,8 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
                 operationId,
                 admissionId: requested.id,
                 allowed,
-                validation:
-                  allowed && params.validationOwner?.isCurrent()
-                    ? getOpenClawAgentDatabaseValidation(params.validationOwner.database)
-                    : undefined,
+                maintenanceProtection,
+                validation: allowed ? readValidation() : undefined,
               },
               [],
             );

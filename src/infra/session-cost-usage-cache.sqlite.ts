@@ -1,3 +1,4 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import { resolveStateDir } from "../config/state-dir.js";
@@ -115,27 +116,20 @@ export async function deleteSessionCostUsageRollupsExcept(params: {
 }
 
 function parseRefreshLock(raw: string | null): SessionCostUsageRefreshLock | null {
-  if (!raw) {
+  const value = safeParseJsonRecord(raw ?? "");
+  if (
+    !value ||
+    typeof value.pid !== "number" ||
+    !Number.isInteger(value.pid) ||
+    value.pid <= 0 ||
+    typeof value.startedAt !== "number" ||
+    !Number.isFinite(value.startedAt) ||
+    typeof value.ownerNonce !== "string" ||
+    !value.ownerNonce
+  ) {
     return null;
   }
-  try {
-    const value = JSON.parse(raw) as Partial<SessionCostUsageRefreshLock> | null;
-    if (
-      !value ||
-      typeof value.pid !== "number" ||
-      !Number.isInteger(value.pid) ||
-      value.pid <= 0 ||
-      typeof value.startedAt !== "number" ||
-      !Number.isFinite(value.startedAt) ||
-      typeof value.ownerNonce !== "string" ||
-      !value.ownerNonce
-    ) {
-      return null;
-    }
-    return { pid: value.pid, startedAt: value.startedAt, ownerNonce: value.ownerNonce };
-  } catch {
-    return null;
-  }
+  return { pid: value.pid, startedAt: value.startedAt, ownerNonce: value.ownerNonce };
 }
 
 export async function isSessionCostUsageRefreshRunning(

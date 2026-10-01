@@ -2,6 +2,7 @@
 // `hello-ok` handshake. Kept out of chat-attachments.ts so the handshake path
 // does not pull the media probe/store graph in just to read two numbers.
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveChatAttachmentFrameBudgetBytes } from "../shared/chat-attachment-frame-budget.js";
 import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
@@ -16,10 +17,7 @@ export const DEFAULT_CHAT_ATTACHMENT_MAX_BYTES = DEFAULT_CHAT_ATTACHMENT_MAX_MB 
 /** Resolve the maximum decoded attachment size accepted for chat inputs. */
 export function resolveChatAttachmentMaxBytes(cfg: OpenClawConfig): number {
   const configured = cfg.agents?.defaults?.mediaMaxMb;
-  const mb =
-    typeof configured === "number" && Number.isFinite(configured) && configured > 0
-      ? configured
-      : DEFAULT_CHAT_ATTACHMENT_MAX_MB;
+  const mb = asPositiveFiniteNumber(configured) ?? DEFAULT_CHAT_ATTACHMENT_MAX_MB;
   // mediaMaxMb only has to be positive, so a sub-byte value would floor to 0 and
   // a huge one overflows to Infinity, which serializes as null on the handshake
   // frame and fails its integer schema. Both ends have to stay representable.

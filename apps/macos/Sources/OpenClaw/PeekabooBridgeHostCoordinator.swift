@@ -71,9 +71,7 @@ final class PeekabooBridgeHostCoordinator {
     static let allowedClientTeamIDs = PeekabooBridgeConstants.trustedReleaseTeamIDs
     static let allowedClientBundleIDs: Set<String> = ["boo.peekaboo.peekaboo"]
 
-    private static let legacySocketDirectoryNames = ["clawdbot", "clawdis", "moltbot"]
-
-    private let logger: Logger
+    private let logger = Logger(subsystem: "ai.openclaw", category: "PeekabooBridge")
     private let runtimeFactory: RuntimeFactory
     private let aliasManager: LegacyPeekabooSocketAliasManager
 
@@ -82,8 +80,10 @@ final class PeekabooBridgeHostCoordinator {
     private var reconciliationTail: Task<Void, Never>?
 
     init() {
-        let socketPath = Self.openclawSocketPath
-        self.logger = Logger(subsystem: "ai.openclaw", category: "PeekabooBridge")
+        let fileManager = FileManager.default
+        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+        let socketPath = Self.makeSocketPath(for: "OpenClaw", in: base)
         self.runtimeFactory = {
             PeekabooEmbeddedBridgeRuntime.make(
                 configuration: .init(
@@ -99,11 +99,10 @@ final class PeekabooBridgeHostCoordinator {
         }
         self.aliasManager = LegacyPeekabooSocketAliasManager(
             targetSocketPath: socketPath,
-            aliasSocketPaths: Self.legacySocketPaths)
+            aliasSocketPaths: ["clawdbot", "clawdis", "moltbot"].map { Self.makeSocketPath(for: $0, in: base) })
     }
 
     init(runtimeFactory: @escaping RuntimeFactory, aliasManager: LegacyPeekabooSocketAliasManager) {
-        self.logger = Logger(subsystem: "ai.openclaw", category: "PeekabooBridge")
         self.runtimeFactory = runtimeFactory
         self.aliasManager = aliasManager
     }
@@ -113,7 +112,12 @@ final class PeekabooBridgeHostCoordinator {
         let predecessor = self.reconciliationTail
         let operation = Task { @MainActor [weak self] in
             await predecessor?.value
-            await self?.reconcileDesiredState()
+            guard let self else { return }
+            if self.desiredEnabled {
+                await self.ensureStarted()
+            } else {
+                await self.ensureStopped()
+            }
         }
         self.reconciliationTail = operation
         await operation.value
@@ -123,33 +127,11 @@ final class PeekabooBridgeHostCoordinator {
         await self.setEnabled(false)
     }
 
-    private static var openclawSocketPath: String {
-        let fileManager = FileManager.default
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        return Self.makeSocketPath(for: "OpenClaw", in: base)
-    }
-
     private static func makeSocketPath(for directoryName: String, in baseDirectory: URL) -> String {
         baseDirectory
             .appendingPathComponent(directoryName, isDirectory: true)
             .appendingPathComponent(PeekabooBridgeConstants.socketName, isDirectory: false)
             .path
-    }
-
-    private static var legacySocketPaths: [String] {
-        let fileManager = FileManager.default
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        return Self.legacySocketDirectoryNames.map { Self.makeSocketPath(for: $0, in: base) }
-    }
-
-    private func reconcileDesiredState() async {
-        if self.desiredEnabled {
-            await self.ensureStarted()
-        } else {
-            await self.ensureStopped()
-        }
     }
 
     private func ensureStarted() async {

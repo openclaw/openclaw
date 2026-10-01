@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, vi, type Mock } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import {
   createConfigIO,
   setRuntimeConfigSnapshotRefreshHandler,
@@ -21,10 +21,14 @@ import {
 } from "../../infra/update-doctor-result.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { updateRecoverySchema } from "../../infra/update-recovery.js";
+import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
+import { defaultRuntime } from "../../runtime.js";
+import { printResult } from "./progress.js";
 import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
+import { completeUpdateCommandRun } from "./update-command-run.js";
 
 export function writeDoctorRollbackConfig(stateDir: string, change: string) {
   const configPath = path.join(stateDir, "openclaw.json");
@@ -305,4 +309,89 @@ export async function expectActiveRollbackIdentity(params: {
         : `Recovery outcome: package rollback verified (2026.9.1); Gateway health ${health}. Run \`openclaw gateway status --deep\``,
     );
   }
+}
+
+export function registerRollbackReportTests(
+  getFixture: () => { candidateRoot: string; previousRoot: string; stateDir: string },
+) {
+  it.each(["advisory", "failed", "thrown"] as const)(
+    "reports retained rollback %s through JSON, history, and human output",
+    async (outcome) => {
+      const { candidateRoot, previousRoot, stateDir } = getFixture();
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      const configSnapshot = await createConfigIO({
+        env,
+        pluginValidation: "skip",
+      }).readConfigFileSnapshot();
+      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      const schemaVersions = await readUpdateStateSchemaVersions({
+        stateDir,
+        config: configSnapshot.sourceConfigBeforeMigrations ?? configSnapshot.sourceConfig,
+        env,
+      });
+      const message =
+        outcome === "advisory"
+          ? "Restored detached HEAD; branch main still points to the activated commit."
+          : `Cannot verify rollback branch transition: expected ${"a".repeat(40)} -> ${"b".repeat(40)}.`;
+      const restored = {
+        name: "git-runtime-rollback",
+        command: "restore previous Git runtime",
+        cwd: previousRoot,
+        durationMs: 0,
+        exitCode: outcome === "advisory" ? 0 : 1,
+        ...(outcome === "advisory"
+          ? { advisory: { kind: "recoverable-maintenance" as const, message } }
+          : { stderrTail: message }),
+      };
+      const rolledBack = await rollbackFailedUpdate({
+        definitionRecovery: {},
+        result: {
+          status: "error",
+          mode: "git",
+          root: candidateRoot,
+          reason: "readyz-unhealthy",
+          verification: { readyz: false, settled: false },
+          steps: [],
+          durationMs: 1,
+        },
+        previousRoot,
+        schemaVersions,
+        configSnapshot,
+        opts: { json: true, run },
+        timeoutMs: 1_000,
+        packageTransaction: {
+          backupRoot: previousRoot,
+          complete: async () => {},
+          rollback: async () => {
+            if (outcome === "thrown") {
+              throw new Error(message);
+            }
+            return { ...restored, activePackageRoot: previousRoot };
+          },
+        },
+      });
+      expect(getUpdateRun(run.runId, { env })?.steps).toContainEqual(
+        expect.objectContaining({ step: "package rollback", detail: message }),
+      );
+      const result = completeUpdateCommandRun(rolledBack.result, run);
+      const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      await printResult(result, { json: true, run });
+      expect(json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ...(outcome === "thrown" ? {} : { steps: expect.arrayContaining([restored]) }),
+          run: expect.objectContaining({
+            steps: expect.arrayContaining([
+              expect.objectContaining({
+                step: outcome === "advisory" ? "warning:git-runtime-rollback" : "package rollback",
+                detail: message,
+              }),
+            ]),
+          }),
+        }),
+      );
+      await printResult(result, { run });
+      expect(log).toHaveBeenCalledWith(expect.stringContaining(message));
+    },
+  );
 }

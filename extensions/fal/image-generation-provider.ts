@@ -147,19 +147,9 @@ function parseFalImageGenerationResponse(payload: unknown): {
   if (!isRecord(payload)) {
     throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
   }
-  const rawImages = payload.images;
-  if (rawImages === undefined || rawImages === null) {
-    return { images: [], prompt: normalizeOptionalString(payload.prompt) };
-  }
-  if (!Array.isArray(rawImages)) {
+  const images = payload.images ?? [];
+  if (!Array.isArray(images) || !images.every(isRecord)) {
     throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
-  }
-  const images: Record<string, unknown>[] = [];
-  for (const entry of rawImages) {
-    if (!isRecord(entry)) {
-      throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
-    }
-    images.push(entry);
   }
   return { images, prompt: normalizeOptionalString(payload.prompt) };
 }
@@ -289,7 +279,7 @@ function parseSize(raw: string | undefined): { width: number; height: number } |
   }
   const width = Number.parseInt(match[1] ?? "", 10);
   const height = Number.parseInt(match[2] ?? "", 10);
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+  if (width <= 0 || height <= 0) {
     return null;
   }
   return { width, height };
@@ -426,14 +416,10 @@ function resolveClosestFalAspectRatioForSize(
   }, undefined);
 }
 
-function resolveKreaCreativity(raw: string | undefined): string {
-  const normalized = normalizeLowercaseStringOrEmpty(raw);
-  return (KREA_CREATIVITY_LEVELS as readonly string[]).includes(normalized) ? normalized : "medium";
-}
-
 function resolveFalCreativityOption(providerOptions: Record<string, unknown> | undefined): string {
   const falOptions = isRecord(providerOptions?.fal) ? providerOptions.fal : undefined;
-  return typeof falOptions?.creativity === "string" ? falOptions.creativity : "";
+  const normalized = normalizeLowercaseStringOrEmpty(falOptions?.creativity);
+  return KREA_CREATIVITY_LEVELS.some((level) => level === normalized) ? normalized : "medium";
 }
 
 function resolveNativeFalAspectRatio(params: {
@@ -478,14 +464,7 @@ function applyFalImageGeometry(params: {
       params.requestBody.aspect_ratio = nativeAspectRatio;
     }
     if (params.resolution && params.schema.referenceImages === "image_urls") {
-      // Schemas may opt in to resolution validation by declaring `resolutions`.
-      // - `resolutions: undefined` (default, e.g. Nano Banana 2): forward the
-      //   uppercase value unchanged, matching legacy behaviour.
-      // - `resolutions: ["1K", "2K"]` with `resolutionCase: "lower"` (Grok
-      //   Imagine): validate against the allowlist and lowercase before
-      //   sending.
-      // - `resolutions: []` (Nano Banana 2 Lite): reject overrides when the
-      //   published endpoint schema has no resolution field.
+      // An absent allowlist forwards resolutions; an empty one rejects all overrides.
       const allowedResolutions = params.schema.resolutions;
       if (allowedResolutions === undefined) {
         params.requestBody.resolution = params.resolution;
@@ -516,7 +495,7 @@ function applyFalReferenceImages(params: {
   schema: FalImageModelSchema;
   inputImages: ImageGenerationSourceImage[];
 }) {
-  const encoded = params.inputImages.map((img) => toImageDataUrl(img));
+  const encoded = params.inputImages.map(toImageDataUrl);
   if (params.schema.referenceImages === "image_urls") {
     params.requestBody.image_urls = encoded;
     return;
@@ -708,10 +687,8 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       }
 
       // Flux/custom edit endpoints use the singular image_url contract.
-      if (hasInputImages && schema.referenceImages === "image_url") {
-        if (req.aspectRatio) {
-          throw new Error("fal flux image edit endpoint does not support aspectRatio overrides");
-        }
+      if (hasInputImages && schema.referenceImages === "image_url" && req.aspectRatio) {
+        throw new Error("fal flux image edit endpoint does not support aspectRatio overrides");
       }
       if (!schema.supportsCount && (req.count ?? 1) > 1) {
         throw new Error(`fal ${requestedModel} supports one output image per request`);
@@ -734,9 +711,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         ...(isGptImage25 && req.background ? { background: req.background } : {}),
       };
       if (schema.referenceImages === "image_style_references") {
-        requestBody.creativity = resolveKreaCreativity(
-          resolveFalCreativityOption(req.providerOptions),
-        );
+        requestBody.creativity = resolveFalCreativityOption(req.providerOptions);
       }
       applyFalImageGeometry({
         requestBody,
@@ -789,9 +764,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
           images.push({
             buffer: downloaded.buffer,
             mimeType: downloaded.mimeType,
-            fileName: `image-${imageIndex}.${imageFileExtensionForMimeType(
-              downloaded.mimeType || normalizeOptionalString(entry.content_type),
-            )}`,
+            fileName: `image-${imageIndex}.${imageFileExtensionForMimeType(downloaded.mimeType)}`,
           });
         }
 

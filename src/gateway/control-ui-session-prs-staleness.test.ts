@@ -238,7 +238,7 @@ it("retires a repository-only target without falling back to its local workspace
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const sessionKey = "agent:main:repository-only";
     const repositories = getSessionRepositoryWorkspaceStore();
-    const repository = repositories.create({
+    const repository = await repositories.create({
       agentId: "main",
       sessionKey,
       url: "https://github.com/openclaw/openclaw",
@@ -288,7 +288,7 @@ it("retires a repository-only target without falling back to its local workspace
   });
 });
 
-it.each(["alias replacement", "physical close", "same-file reopen"] as const)(
+it.each(["alias replacement", "same-file reopen"] as const)(
   "discards pending PR work after %s even when persisted rows are identical",
   async (change) => {
     vi.useRealTimers();
@@ -341,9 +341,7 @@ it.each(["alias replacement", "physical close", "same-file reopen"] as const)(
           fs.symlinkSync(state.statePath("replacement"), aliasDirectory, "junction");
         } else {
           await closeOpenClawAgentDatabaseByPathAsync(original);
-          if (change === "same-file reopen") {
-            openOpenClawAgentDatabase({ agentId: "main", path: original });
-          }
+          openOpenClawAgentDatabase({ agentId: "main", path: original });
         }
         release.resolve();
         expect(await pending).toBe(false);

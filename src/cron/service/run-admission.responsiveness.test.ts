@@ -45,6 +45,7 @@ it.each(["activation", "cleanup", "family", "worker control"] as const)(
       }
       const identity = reserveQueuedCronRun(state, job.id, now, {
         runReceipt: reserved.runReceipt,
+        runReceiptContext: reserved.runReceiptContext,
       });
       const context = captureOpenClawStateWorkerContext();
       expect(context.admission.databasePath.startsWith(fixture.stateDir)).toBe(true);

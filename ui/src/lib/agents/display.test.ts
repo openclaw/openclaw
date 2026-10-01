@@ -1,5 +1,6 @@
 // Control UI tests cover agents utils behavior.
 import { describe, expect, it } from "vitest";
+import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../../../../src/shared/avatar-limits.js";
 import {
   isRenderableControlUiAvatarUrl,
@@ -11,7 +12,6 @@ import {
   buildAgentContext,
   buildModelOptions,
   createPrimaryModelExclusion,
-  formatAgentRuntimeLabel,
   formatBytes,
   listSelectableAgents,
   normalizeAgentLabel,

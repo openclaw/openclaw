@@ -47,6 +47,7 @@ export async function runSessionCollaborationWrite<
     operation: Pick<SqliteWorkerStore<SessionSharingWorkerOperations>, "execute">,
     scope: SessionAccessScope,
   ) => Promise<void>,
+  uncertainCategoryKeys?: () => readonly string[] | undefined,
 ): Promise<T> {
   const resolved = resolveSqliteScope(scope);
   const resolvedOptions = toDatabaseOptions(resolved);
@@ -137,14 +138,24 @@ export async function runSessionCollaborationWrite<
                 if (capturedCommand.type === "category.apply") {
                   discardCommittedSessionEntryCache(database.db);
                 }
-                sessionChanges.emit(
-                  capturedCommand.type === "category.apply"
-                    ? {
-                        all: true,
-                        scope: { storePath: location.storePath },
-                        factsInvalidated: true,
-                      }
-                    : { ...location, factsInvalidated: true },
+                const categoryKeys =
+                  capturedCommand.type === "category.apply" ? uncertainCategoryKeys?.() : undefined;
+                sessionChanges.emitBatch(
+                  categoryKeys
+                    ? categoryKeys.map((sessionKey) => ({
+                        storePath: location.storePath,
+                        sessionKey,
+                        factsInvalidated: "category" as const,
+                      }))
+                    : [
+                        capturedCommand.type === "category.apply"
+                          ? {
+                              all: true,
+                              scope: { storePath: location.storePath },
+                              factsInvalidated: true,
+                            }
+                          : { ...location, factsInvalidated: true },
+                      ],
                 );
               }
               throw error;

@@ -79,15 +79,6 @@ function normalizeCliRuntimeDisplayRef(
   };
 }
 
-/** Resolves only the model id to show for a session row. */
-export function resolveSessionDisplayModel(
-  cfg: OpenClawConfig,
-  row: SessionDisplayModelRow,
-  classifyCliProvider?: CliProviderClassifier,
-): string {
-  return resolveSessionDisplayModelRef(cfg, row, classifyCliProvider).model;
-}
-
 /** Resolves provider/model display metadata for a session row. */
 export function resolveSessionDisplayModelRef(
   cfg: OpenClawConfig,

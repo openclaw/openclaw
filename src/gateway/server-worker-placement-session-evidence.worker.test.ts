@@ -10,7 +10,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WorkerTaskPool } from "../infra/worker-task-pool.js";
-import type { WorkerTaskPoolOptions } from "../infra/worker-task-pool.types.js";
+import type {
+  WorkerTaskPoolOptions,
+  WorkerTaskPoolOwnerOptions,
+} from "../infra/worker-task-pool.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -36,12 +39,18 @@ vi.mock("../infra/worker-task-pool.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/worker-task-pool.js")>();
   return {
     ...actual,
-    createOwnedWorkerTaskPool: <Input, Output>(options: WorkerTaskPoolOptions<Output>) => {
+    createOwnedWorkerTaskPool: <Input, Output>(
+      options: WorkerTaskPoolOptions<Output>,
+      ownerOptions?: WorkerTaskPoolOwnerOptions,
+    ) => {
       // Exercise real queue admission without retaining hundreds of megabytes.
-      const pool = actual.createOwnedWorkerTaskPool<Input, Output>({
-        ...options,
-        maxPendingBytes: 256 * 1024,
-      });
+      const pool = actual.createOwnedWorkerTaskPool<Input, Output>(
+        {
+          ...options,
+          maxPendingBytes: 256 * 1024,
+        },
+        ownerOptions,
+      );
       let observedRead = false;
       return {
         ...pool,

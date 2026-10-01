@@ -298,17 +298,7 @@ export class SidebarPeopleRuntime {
       this.portal.pointerOverCard = false;
       this.portal.scheduleClose();
     });
-    card.addEventListener("keydown", (event) => {
-      const links = this.portal.focusables();
-      if (
-        event.key === "Tab" &&
-        document.activeElement === (event.shiftKey ? links[0] : links.at(-1))
-      ) {
-        event.preventDefault();
-        this.returnFocus();
-        this.close();
-      }
-    });
+    card.addEventListener("keydown", this.portal.handleCardKeyDown);
     this.portal.mount(active.row, card, "horizontal", true, () => render(nothing, card));
   }
 

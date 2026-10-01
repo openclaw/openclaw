@@ -54,9 +54,6 @@ type TranscriptMirrorResolution =
 function resolveTranscriptMirrorOwner(
   payloads: readonly ReplyPayload[],
 ): TranscriptMirrorResolution {
-  if (payloads.length === 0) {
-    return { kind: "none" };
-  }
   const owners = payloads.map(
     (payload) => getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror,
   );
@@ -189,11 +186,17 @@ export async function finalizeChatSendDispatchedReplies(params: {
     rawFinalPayloads.every((payload) =>
       isChatSendReplyDeliveryAuthorized({ agentId, payload, sessionLoadOptions }),
     );
-  if (!deliveryAuthorized()) {
+  const authorizeDelivery = (stage: string) => {
+    if (deliveryAuthorized()) {
+      return true;
+    }
     context.logGateway.warn(
-      "webchat settled final reply skipped: session writer changed before finalization",
+      `webchat settled final reply skipped: session writer changed before ${stage}`,
     );
     broadcastChatFinal({ context, runId: clientRunId, sessionKey, agentId });
+    return false;
+  };
+  if (!authorizeDelivery("finalization")) {
     return;
   }
   const transcriptMirrorResolution = resolveTranscriptMirrorOwner(rawFinalPayloads);
@@ -322,11 +325,7 @@ export async function finalizeChatSendDispatchedReplies(params: {
   } else {
     await persistUserTurnTranscript();
   }
-  if (!deliveryAuthorized()) {
-    context.logGateway.warn(
-      "webchat settled final reply skipped: session writer changed before transcript append",
-    );
-    broadcastChatFinal({ context, runId: clientRunId, sessionKey, agentId });
+  if (!authorizeDelivery("transcript append")) {
     return;
   }
   if (shouldAppendAssistantTranscript) {
@@ -391,11 +390,7 @@ export async function finalizeChatSendDispatchedReplies(params: {
       usage: { input: 0, output: 0, totalTokens: 0 },
     };
   }
-  if (!deliveryAuthorized()) {
-    context.logGateway.warn(
-      "webchat settled final reply skipped: session writer changed before broadcast",
-    );
-    broadcastChatFinal({ context, runId: clientRunId, sessionKey, agentId });
+  if (!authorizeDelivery("broadcast")) {
     return;
   }
   const run = context.chatRunState.runs.get(clientRunId);

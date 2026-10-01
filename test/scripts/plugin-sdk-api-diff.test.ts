@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   expandPluginSdkApiDiffSet,
   selectPluginSdkApiReleaseEvidence,
@@ -20,10 +20,31 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../src/infra/runtime-worker-url.js";
-import { withTestTimeout } from "../helpers/promise.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { withinTest } from "../helpers/promise.js";
+import { withRuntimePreload } from "../helpers/runtime-preload.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const pendingChildCompletions = new Set<Promise<unknown>>();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    // Timed-out bodies can still be joining installers and deleting worktrees in finally.
+    await Promise.allSettled(pendingChildCompletions);
+    cleanup();
+  }),
+);
+
+function ownChildCompletion<T>(completion: Promise<T>): Promise<T> {
+  const owned = completion.finally(() => {
+    pendingChildCompletions.delete(owned);
+  });
+  pendingChildCompletions.add(owned);
+  return owned;
+}
 const emptyDiff = {
   entrypointsAdded: [],
   entrypointsRemoved: [],
@@ -77,24 +98,48 @@ function runCli(repo: string, runnerTemp: string, binDir: string, args: string[]
   );
 }
 
-async function waitFor(
-  check: () => boolean,
-  timeoutMs: number,
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+
+function writeInstallReceipt(binDir: string): string {
+  const receiptPath = join(binDir, "install-receipt.mjs");
+  writeFileSync(
+    receiptPath,
+    `${fixtureReceiptClientSource(receipts.endpoint)}
+sendReceipt(process.argv[2], "ready");
+// This reporter is a short-lived shell child: retain the socket until its write drains.
+fixtureReceiptSocket.ref();
+fixtureReceiptSocket.end();
+`,
+  );
+  return `'${process.execPath.replace(/'/gu, `'\\''`)}' '${receiptPath.replace(/'/gu, `'\\''`)}'`;
+}
+
+async function installBeforeSettlement(
+  marker: string,
+  close: PromiseLike<unknown>,
   label = "Plugin SDK API diff child",
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!check()) {
-    if (Date.now() >= deadline) {
-      throw new Error(`timed out waiting for ${label}`);
-    }
-    await new Promise((resolveWait) => {
-      setTimeout(resolveWait, 25);
-    });
-  }
+  // The fixture writes its marker before reporting; socket delivery may follow CLI close.
+  await Promise.race([
+    receipts.waitFor(marker, "ready"),
+    Promise.resolve(close).then(() => {
+      if (!existsSync(marker)) {
+        throw new Error(`timed out waiting for ${label}`);
+      }
+    }),
+  ]);
 }
 
 describe("Plugin SDK API diff CLI", () => {
-  it("finishes every revision install before starting declaration rendering", async () => {
+  it("finishes every revision install before starting declaration rendering", async ({
+    signal,
+  }) => {
     const repo = tempDirs.make("plugin-sdk-install-order-repo-");
     const runnerTemp = tempDirs.make("plugin-sdk-install-order-temp-");
     const binDir = tempDirs.make("plugin-sdk-install-order-bin-");
@@ -141,6 +186,7 @@ if mkdir "$PNPM_MARKER" 2>/dev/null; then
   exit 0
 fi
 : > "$PNPM_BLOCKED"
+${writeInstallReceipt(binDir)} "$PNPM_BLOCKED"
 while [ ! -e "$PNPM_RELEASE" ]; do sleep 0.05; done
 `,
     );
@@ -193,9 +239,8 @@ if (process.argv.includes("--render-root")) {
       {
         cwd: repo,
         env: {
-          ...process.env,
+          ...withRuntimePreload(process.env, renderProbe),
           PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
-          NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require=${renderProbe}`.trim(),
           PNPM_MARKER: installClaim,
           PNPM_BLOCKED: blockedMarker,
           PNPM_RELEASE: releaseMarker,
@@ -207,18 +252,24 @@ if (process.argv.includes("--render-root")) {
         stdio: ["ignore", "ignore", "pipe"],
       },
     );
+    const close = ownChildCompletion(
+      new Promise<number | null>((resolveClose) => {
+        child.once("close", resolveClose);
+      }),
+    );
     let stderr = "";
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
     });
-    const close = new Promise<number | null>((resolveClose) => {
-      child.once("close", resolveClose);
-    });
+
     let exitCode: number | null = null;
     try {
-      await waitFor(() => existsSync(blockedMarker), 15_000, "second revision install");
-      exitCode = await withTestTimeout(close, 30_000, "Plugin SDK API diff did not finish");
+      await withinTest(
+        installBeforeSettlement(blockedMarker, close, "second revision install"),
+        signal,
+      );
+      exitCode = await withinTest(close, signal);
     } finally {
       writeFileSync(releaseMarker, "release\n");
       if (child.exitCode === null) {
@@ -329,7 +380,7 @@ if (process.argv.includes("--render-root")) {
     35_000,
   );
 
-  it("interrupts a running child and removes its registered worktree", async () => {
+  it("interrupts a running child and removes its registered worktree", async ({ signal }) => {
     // Keep revision checkout bounded so startup reaches the child this test cancels.
     const repo = tempDirs.make("plugin-sdk-api-diff-repo-");
     const runnerTemp = tempDirs.make("plugin-sdk-api-diff-temp-");
@@ -349,7 +400,7 @@ if (process.argv.includes("--render-root")) {
     const fakePnpm = join(binDir, "pnpm");
     writeFileSync(
       fakePnpm,
-      "#!/bin/sh\n: > \"$PNPM_MARKER\"\ntrap 'exit 143' INT TERM\nwhile :; do sleep 1; done\n",
+      `#!/bin/sh\ntrap 'exit 143' INT TERM\n: > "$PNPM_MARKER"\n${writeInstallReceipt(binDir)} "$PNPM_MARKER"\nwhile :; do sleep 1; done\n`,
     );
     chmodSync(fakePnpm, 0o755);
 
@@ -379,19 +430,22 @@ if (process.argv.includes("--render-root")) {
     );
 
     let closed = false;
+    const close = ownChildCompletion(
+      new Promise<number | null>((resolveClose) => {
+        child.once("close", (code) => {
+          closed = true;
+          resolveClose(code);
+        });
+      }),
+    );
     let stderr = "";
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
     });
-    const close = new Promise<number | null>((resolveClose) => {
-      child.once("close", (code) => {
-        closed = true;
-        resolveClose(code);
-      });
-    });
+
     try {
-      await waitFor(() => existsSync(pnpmMarker) || closed, 10_000);
+      await withinTest(installBeforeSettlement(pnpmMarker, close), signal);
       expect(closed, stderr).toBe(false);
       const revisionRoot = git(repo, ["worktree", "list", "--porcelain", "-z"])
         .split("\0")
@@ -403,7 +457,7 @@ if (process.argv.includes("--render-root")) {
       expect(existsSync(temporaryRoot)).toBe(true);
       const interruptedAt = Date.now();
       child.kill("SIGTERM");
-      const exitCode = await withTestTimeout(close, 5_000, "Plugin SDK API diff ignored SIGTERM");
+      const exitCode = await withinTest(close, signal);
 
       expect(exitCode).toBe(143);
       expect(Date.now() - interruptedAt).toBeLessThan(5_000);
@@ -414,7 +468,8 @@ if (process.argv.includes("--render-root")) {
       expect(readFileSync(runnerSentinel, "utf8")).toBe("preserve\n");
     } finally {
       if (!closed) {
-        child.kill("SIGKILL");
+        // Let the CLI join its installer and remove revision worktrees on test cancellation.
+        child.kill("SIGTERM");
         await close;
       }
     }

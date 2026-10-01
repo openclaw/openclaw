@@ -1,13 +1,17 @@
-import { spawnSync } from "node:child_process";
-import * as childProcess from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { testApi } from "../logging/logger.test-support.js";
+import { forceKillChildProcessTree } from "../process/child-process-tree.js";
+import { isPidAlive } from "../shared/pid-alive.js";
 import { openOpenClawStateReadConnection } from "../state/openclaw-state-db-read-connection.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import * as nodeSqlite from "./node-sqlite.js";
+import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   releaseSnapshotTempDirectory,
@@ -24,8 +28,7 @@ import {
   reclaimAbandonedSqliteSnapshots,
   reclaimAbandonedSqliteSnapshotsAsync,
 } from "./sqlite-snapshot-staging.js";
-
-vi.mock("node:child_process", { spy: true });
+import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -55,51 +58,64 @@ beforeAll(async () => {
 });
 
 it("shares one token process across concurrent and nested async snapshot lifetimes", async () => {
-  const cache = tempDirs.make("sqlite-staging-async-owner-");
-  const started = performance.now();
-  const children = vi.spyOn(childProcess, "spawn");
-  const nativeOpen = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation(() => {
-    throw new Error("snapshot token opened on the host");
-  });
-  const directories: string[] = [];
-  try {
-    directories.push(
-      ...(await Promise.all(
-        Array.from({ length: 3 }, () =>
-          createSqliteSnapshotStagingDirectory(cache, false, undefined, true),
-        ),
-      )),
-    );
-    await expect(
-      createSqliteSnapshotStagingDirectory(path.join(cache, "missing"), false, undefined, true),
-    ).rejects.toThrow();
-    expect(directories.every((directory) => fs.existsSync(directory))).toBe(true);
-    const nested = await createSqliteSnapshotStagingDirectory(
-      directories[0],
-      false,
-      undefined,
-      true,
-    );
-    directories.push(nested);
-    const sessions = children.mock.calls.filter(
-      ([, args]) => Array.isArray(args) && args.includes("session"),
-    );
-    expect(sessions).toHaveLength(1);
-    console.info("async snapshot token owner", {
-      directories: directories.length,
-      tokenProcesses: sessions.length,
-      elapsedMs: Math.round(performance.now() - started),
-    });
-  } finally {
-    try {
-      for (const directory of directories.toReversed()) {
-        expect(await removeTempDirectoryAsync(directory)).toBe(true);
-      }
-    } finally {
-      nativeOpen.mockRestore();
+  const root = tempDirs.make("sqlite-staging-async-owner-");
+  const cache = path.join(root, "cache");
+  const processRecord = path.join(root, "token-processes");
+  fs.mkdirSync(cache);
+  // The token child now launches inside its native owner, beyond the host's spawn binding.
+  const preloadPath = path.join(root, "token-preload.cjs");
+  const preload = `
+    const { appendFileSync } = require("node:fs");
+    const { isMainThread } = require("node:worker_threads");
+    if (isMainThread && process.argv[2] === ${JSON.stringify(SQLITE_READONLY_CHILD_ARG)} && process.argv[3] === "session") {
+      appendFileSync(${JSON.stringify(processRecord)}, String(process.pid) + String.fromCharCode(10));
     }
-  }
-  expect(fs.readdirSync(cache)).toEqual([]);
+  `;
+  fs.writeFileSync(preloadPath, preload);
+  await withEnvAsync(sqliteWorkerPreloadEnv(preloadPath), async () => {
+    const nativeOpen = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation(() => {
+      throw new Error("snapshot token opened on the host");
+    });
+    const directories: string[] = [];
+    const allocations = Array.from({ length: 3 }, async () => {
+      const directory = await createSqliteSnapshotStagingDirectory(cache, false, undefined, true);
+      directories.push(directory);
+      return directory;
+    });
+    let tokenPid: number;
+    try {
+      await Promise.all(allocations);
+      await expect(
+        createSqliteSnapshotStagingDirectory(path.join(cache, "missing"), false, undefined, true),
+      ).rejects.toThrow("snapshot staging root");
+      const nested = await createSqliteSnapshotStagingDirectory(
+        directories[0],
+        false,
+        undefined,
+        true,
+      );
+      directories.push(nested);
+      expect(new Set(directories).size).toBe(4);
+      expect(directories.every((directory) => fs.existsSync(directory))).toBe(true);
+      const processes = fs.readFileSync(processRecord, "utf8").trim().split("\n");
+      expect(processes).toHaveLength(1);
+      tokenPid = Number(processes[0]);
+      expect(tokenPid).toBeGreaterThan(0);
+      expect(isPidAlive(tokenPid)).toBe(true);
+    } finally {
+      try {
+        // A rejected allocation must not discard successful siblings' cleanup custody.
+        await Promise.allSettled(allocations);
+        for (const directory of directories.toReversed()) {
+          expect.soft(await removeTempDirectoryAsync(directory), directory).toBe(true);
+        }
+      } finally {
+        nativeOpen.mockRestore();
+      }
+    }
+    expect(fs.readdirSync(cache)).toEqual([]);
+    expect(isPidAlive(tokenPid)).toBe(false);
+  });
 });
 
 function createFixture() {
@@ -146,6 +162,43 @@ function runChild(script: string, signal?: NodeJS.Signals) {
     expect(result.signal, result.stderr).toBe(signal);
   }
   return result.stdout;
+}
+
+async function runOwnedChild(script: string, signal: AbortSignal): Promise<string> {
+  const child = spawn(process.execPath, [...nodeArguments, script], {
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  let failure: Error | undefined;
+  child.stdout.on("data", (chunk: Buffer) => {
+    stdout += chunk.toString();
+  });
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString();
+  });
+  child.once("error", (error) => {
+    failure = error;
+  });
+  const closed = new Promise<void>((resolve) => {
+    child.once("close", () => resolve());
+  });
+  let joined = false;
+  try {
+    await withinTest(closed, signal);
+    joined = true;
+    expect(failure, stderr).toBeUndefined();
+    expect(child.exitCode, stderr).toBe(0);
+    expect(child.signalCode, stderr).toBeNull();
+    return stdout;
+  } finally {
+    if (!joined) {
+      // The blocked reclaimer cannot run its own finally; retire its entire fixture family.
+      forceKillChildProcessTree(child);
+    }
+    await closed;
+  }
 }
 
 it("reconciles a released fresh token without waiting for idle reclamation", () => {
@@ -411,7 +464,7 @@ it("preserves a live snapshot when its owner PID is invisible", () => {
 
 it.skipIf(process.platform === "win32")(
   "arbitrates an orphan worker allocating after reclamation inspects its parent",
-  () => {
+  async ({ signal }) => {
     for (const { legacyParent, cacheContainer } of [
       { legacyParent: false, cacheContainer: false },
       { legacyParent: true, cacheContainer: false },
@@ -420,7 +473,6 @@ it.skipIf(process.platform === "win32")(
     ]) {
       for (const stage of ["inspection", "retirement"] as const) {
         const { root, cache, source } = createFixture();
-        const resultFile = path.join(root, "worker-result.json");
         const childPrelude = `
       import fs from 'node:fs';
       import path from 'node:path';
@@ -456,22 +508,34 @@ it.skipIf(process.platform === "win32")(
         } catch (error) {
           result = { error: error.message, code: error.code, causeCode: error.cause?.code };
         }
-        fs.writeFileSync(${JSON.stringify(`${resultFile}.partial`)}, JSON.stringify(result));
-        fs.renameSync(${JSON.stringify(`${resultFile}.partial`)}, ${JSON.stringify(resultFile)});
+        fs.writeSync(4, JSON.stringify(result));
+        fs.closeSync(4);
         process.removeAllListeners('message');
         process.once('message', () => { prepared?.cleanup(); process.disconnect(); });
       });
       process.send('ready');
     `;
-        const output = runChild(`${childPrelude}
+        const output = await runOwnedChild(
+          `${childPrelude}
       import { spawn } from 'node:child_process';
       import { once } from 'node:events';
-      const launch = (script) => spawn(process.execPath, [...${JSON.stringify(nodeArguments)}, script], {
-        stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
+      import koffi from 'koffi';
+      const launch = (script, resultFd) => spawn(process.execPath, [...${JSON.stringify(nodeArguments)}, script], {
+        stdio: ['ignore', 'ignore', 'inherit', 'ipc', resultFd ?? 'ignore'],
       });
       const parent = launch(${JSON.stringify(parentScript)});
       const [directory] = await once(parent, 'message');
-      const worker = launch(${JSON.stringify(workerScript)});
+      // A real blocking pipe keeps the synchronous reclaimer observer on its original turn.
+      const libc = koffi.load(null);
+      const pipe = libc.func('int pipe(_Out_ int *fds)');
+      const close = libc.func('int close(int fd)');
+      const fcntl = libc.func('int fcntl(int fd, int cmd, ...)');
+      const resultPipe = [-1, -1];
+      if (pipe(resultPipe) !== 0) throw new Error('worker result pipe failed');
+      // POSIX F_SETFD=2/FD_CLOEXEC=1 prevents unrelated descendants retaining the writer.
+      if (resultPipe.some(fd => fcntl(fd, 2, 'int', 1) !== 0)) throw new Error('worker result pipe close-on-exec failed');
+      const worker = launch(${JSON.stringify(workerScript)}, resultPipe[1]);
+      close(resultPipe[1]);
       const workerClosed = once(worker, 'close');
       const parentClosed = once(parent, 'close');
       let inspected = false;
@@ -489,13 +553,9 @@ it.skipIf(process.platform === "win32")(
           if (String(pathname) === directory && !inspected) {
             inspected = true;
             worker.send(${JSON.stringify(cacheContainer)} ? path.join(directory, 'openclaw') : directory);
-            const deadline = Date.now() + 10_000;
-            const barrier = new Int32Array(new SharedArrayBuffer(4));
-            while (!fs.existsSync(${JSON.stringify(resultFile)})) {
-              if (Date.now() > deadline) throw new Error('worker did not reach allocation barrier');
-              Atomics.wait(barrier, 0, 0, 10);
-            }
-            outcome = JSON.parse(fs.readFileSync(${JSON.stringify(resultFile)}, 'utf8'));
+            const result = fs.readFileSync(resultPipe[0], 'utf8');
+            if (!result) throw new Error('worker did not reach allocation barrier');
+            outcome = JSON.parse(result);
           }
         };
         fs.readdirSync = (...args) => {
@@ -521,8 +581,11 @@ it.skipIf(process.platform === "win32")(
         if (worker.connected && outcome) worker.send('finish');
         else worker.kill('SIGKILL');
         await Promise.all([parentClosed, workerClosed]);
+        close(resultPipe[0]);
       }
-    `);
+    `,
+          signal,
+        );
         const result = JSON.parse(output) as {
           inspected: boolean;
           workerAlive: boolean;

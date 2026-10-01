@@ -147,12 +147,7 @@ function parseDistractions(day: string, value: unknown): LogbookDistraction[] {
   return distractions;
 }
 
-export function parseCardsJson(params: {
-  raw: string;
-  day: string;
-  windowStartMs: number;
-  windowEndMs: number;
-}): CardParseResult {
+export function parseCardsJson(params: { raw: string; day: string }): CardParseResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(extractJsonPayload(params.raw));
@@ -223,6 +218,12 @@ export function parseCardsJson(params: {
       };
     }
     if (overlapMs > 0) {
+      if (current.endMs <= previous.endMs) {
+        return {
+          ok: false,
+          error: `Card ${normalized.length}: endTime must be after the previous card's endTime.`,
+        };
+      }
       // Trim sub-minute overlaps instead of round-tripping to the model again.
       normalized.push({ ...current, startMs: previous.endMs });
     } else {

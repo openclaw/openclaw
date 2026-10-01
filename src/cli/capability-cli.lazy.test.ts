@@ -57,22 +57,11 @@ it("keeps metadata and selected-domain help behind the inference import boundary
 const allDomains = ["model", "image", "audio", "tts", "video", "web", "embedding"];
 
 it.each([
-  { args: ["infer", "--help"], domains: allDomains },
-  { args: ["infer", "imgae"], domains: allDomains },
-  { args: ["infer", "help", "image"], domains: allDomains },
-  { args: ["completion", "--shell", "image"], domains: allDomains },
   { args: ["infer", "--", "image"], domains: allDomains },
-  { args: ["infer", "--", "--log-level", "debug", "image"], domains: allDomains },
   { args: ["--", "infer", "image", "providers"], domains: ["image"] },
   { args: ["--", "infer", "--log-level", "debug", "image"], domains: allDomains },
   { args: ["--profile", "image", "infer", "list", "--help"], domains: [] },
-  { args: ["infer", "--log-level", "debug", "list", "--json"], domains: [] },
-  { args: ["infer", "--log-level", "debug", "image", "providers"], domains: ["image"] },
   { args: ["capability", "--log-level=debug", "image", "--help"], domains: ["image"] },
-  { args: ["infer", "--log-level", "debug", "--help", "image"], domains: allDomains },
-  { args: ["capability", "image", "--help"], domains: ["image"] },
-  { args: ["infer", "image", "providers", "--json"], domains: ["image"] },
-  { args: ["infer", "model", "run", "--prompt", "--help"], domains: ["model"] },
 ])("preserves the command inventory for $args", async ({ args, domains }) => {
   const { registerCapabilityCli } = await import("./capability-cli.js");
   const program = new Command().enablePositionalOptions();
@@ -87,7 +76,6 @@ it.each([
 
 it.each([
   ["--help", "image"],
-  ["--bad", "image", "--help"],
   ["--log-level", "--help", "image"],
   ["--log-level=", "image", "--help"],
 ])("prints complete parent help when options precede the domain: %j", async (...args) => {

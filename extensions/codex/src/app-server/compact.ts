@@ -8,7 +8,7 @@ import { runWithAsyncWorkResources } from "openclaw/plugin-sdk/agent-harness-too
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
-import { isIncognitoSessionKey } from "../incognito-session.js";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
@@ -20,7 +20,7 @@ import {
   consumeCodexAppServerLiveThread,
   protectCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
-  revertCodexAppServerLiveThreadSkillsCatalog,
+  revertCodexAppServerLiveThreadInstructions,
 } from "./client-runtime.js";
 import type { CodexAppServerLiveThreadOwnership } from "./client-thread-owner.js";
 import {
@@ -644,8 +644,8 @@ export async function maybeCompactCodexAppServerSession(
               if (compactionSucceeded) {
                 // An incognito thread keeps its separately owned subscription, so
                 // it never reaches the re-retain below. Correct its record in place
-                // or the discarded catalog refresh is never delivered again.
-                revertCodexAppServerLiveThreadSkillsCatalog(client, binding.threadId);
+                // or the discarded instruction refresh is never delivered again.
+                revertCodexAppServerLiveThreadInstructions(client, binding.threadId);
               }
               if (canRetainThreadOwnership && retainedThreadOwnership) {
                 const ownership = retainedThreadOwnership;
@@ -669,12 +669,13 @@ export async function maybeCompactCodexAppServerSession(
                       // next turn reads a live ephemeral thread as policy drift. A
                       // completed compaction rebuilt initial context from the
                       // creation-time developer instructions and discarded the
-                      // injected catalog refresh, so record that reversion and let
-                      // the next turn deliver the current catalog again.
+                      // injected instruction refresh, so record that reversion and let
+                      // the next turn deliver the current instructions again.
                       ownership.ephemeralPolicy && compactionSucceeded
                         ? {
                             ...ownership.ephemeralPolicy,
-                            skillsInstructions: ownership.ephemeralPolicy.nativeSkillsInstructions,
+                            refreshableInstructions:
+                              ownership.ephemeralPolicy.nativeRefreshableInstructions,
                           }
                         : ownership.ephemeralPolicy,
                     );

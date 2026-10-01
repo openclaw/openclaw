@@ -679,6 +679,7 @@ struct RootSidebar: View {
             }
             .commandSessionActions(
                 session: session,
+                mainSessionKey: self.resolvedMainSessionKey,
                 categories: self.sessionCategories,
                 isEnabled: self.appModel.isOperatorGatewayConnected,
                 canArchive: ChatSessionSidebarModel.canArchiveSession(

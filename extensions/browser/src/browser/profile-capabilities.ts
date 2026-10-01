@@ -1,9 +1,3 @@
-/**
- * Browser profile capability resolution.
- *
- * Derives transport and driver capability flags used by routes and the Browser
- * tool to choose CDP, Playwright, or Chrome MCP behavior.
- */
 import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveBrowserEngine } from "./engines/registry.js";
 import type { BrowserProfileCapabilities } from "./engines/types.js";
@@ -47,12 +41,4 @@ export function shouldUsePlaywrightForScreenshot(params: {
   element?: string;
 }): boolean {
   return !params.wsUrl || Boolean(params.ref) || Boolean(params.element);
-}
-
-/** Return true when ARIA snapshots should use Playwright for the profile. */
-export function shouldUsePlaywrightForAriaSnapshot(params: {
-  profile: ResolvedBrowserProfile;
-  wsUrl?: string;
-}): boolean {
-  return !params.wsUrl;
 }

@@ -161,17 +161,9 @@ export function mapExecDecisionToOutcome(
 }
 
 /** Runs one complete host approval request and maps transport failures to a closed outcome. */
-export async function requestPluginApprovalOutcome(params: {
-  hostCapabilities: AgentHarnessHostCapabilities;
-  signal?: AbortSignal;
-  title: string;
-  description: string;
-  allowedDecisions?: ExecApprovalDecision[];
-  toolName: string;
-  toolCallId?: string;
-  mcpTool?: { server: string; tool: string };
-  isMcpToolApprovalActive?: () => boolean;
-}): Promise<PluginApprovalOutcome> {
+export async function requestPluginApprovalOutcome(
+  params: Omit<Parameters<typeof requestPluginApproval>[0], "severity">,
+): Promise<PluginApprovalOutcome> {
   try {
     const requestResult = await requestPluginApproval({
       ...params,

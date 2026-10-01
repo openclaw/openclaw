@@ -9,7 +9,6 @@ describe("Checkout chip state", () => {
         destination: "cloud" as const,
         repository,
         worktree: !repository,
-        worktreeAvailable: true,
         baseRef,
         label: baseRef ? `From ${baseRef}` : "Starting branch",
       })),
@@ -18,7 +17,6 @@ describe("Checkout chip state", () => {
       destination: "remote",
       repository: true,
       worktree: false,
-      worktreeAvailable: true,
       baseRef: "release",
       label: "Remote checkout from release",
     },
@@ -26,22 +24,18 @@ describe("Checkout chip state", () => {
       destination: "remote",
       repository: true,
       worktree: false,
-      worktreeAvailable: true,
       baseRef: "",
       label: "Remote checkout",
     },
     {
       destination: "remote",
       worktree: true,
-      worktreeAvailable: false,
       baseRef: "",
       label: "New worktree",
     },
-    { destination: "local", worktree: false, worktreeAvailable: false, baseRef: "", label: null },
     {
       destination: "local",
       worktree: false,
-      worktreeAvailable: true,
       headBranch: "feature",
       baseRef: "main",
       label: "feature",
@@ -49,14 +43,12 @@ describe("Checkout chip state", () => {
     {
       destination: "local",
       worktree: false,
-      worktreeAvailable: true,
       baseRef: "main",
       label: "Current checkout",
     },
     {
       destination: "local",
       worktree: true,
-      worktreeAvailable: true,
       headBranch: "feature",
       baseRef: "main",
       label: "New worktree from main",
@@ -64,18 +56,12 @@ describe("Checkout chip state", () => {
     {
       destination: "local",
       worktree: true,
-      worktreeAvailable: false,
       baseRef: "",
       label: "New worktree",
     },
-  ] as const)(
-    "$destination worktree=$worktree available=$worktreeAvailable: $label",
-    ({ label, ...params }) => {
-      expect(resolveCheckoutChip({ worktreeName: "", ...params })).toEqual(
-        label === null ? null : { label },
-      );
-    },
-  );
+  ] as const)("$destination worktree=$worktree: $label", ({ label, ...params }) => {
+    expect(resolveCheckoutChip({ worktreeName: "", ...params })).toEqual({ label });
+  });
 
   it.each([
     {
@@ -117,7 +103,6 @@ describe("Checkout chip state", () => {
     ({ name, label, ...params }) => {
       expect(
         resolveCheckoutChip({
-          worktreeAvailable: true,
           headBranch: "main",
           baseRef: "main",
           worktreeName: name,
