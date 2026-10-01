@@ -36,6 +36,7 @@ jobs:
           cache-mode: "off"
       - name: Resolve published driver
         id: driver
+        timeout-minutes: 1
         run: |
           node --input-type=module <<'NODE'
           import { execFileSync } from "node:child_process";
@@ -48,11 +49,13 @@ jobs:
           NODE
       - name: Restore published driver install
         id: driver_cache
+        timeout-minutes: 2
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .cache/published-driver-install/${{ steps.driver.outputs.version }}/driver.tar
           key: published-driver-update-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/e2e/Dockerfile') }}-${{ steps.driver.outputs.version }}
       - name: Prepare main published driver seed
+        timeout-minutes: 3
         if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name) && steps.driver_cache.outputs.cache-hit != 'true'
         env:
           DRIVER_VERSION: ${{ steps.driver.outputs.version }}
@@ -69,9 +72,11 @@ jobs:
               set -euo pipefail
               prefix=$(mktemp -d)
               npm install --global --prefix "$prefix" "openclaw@$DRIVER_VERSION" --no-audit --no-fund
-              tar -cf /tmp/published-driver-cache/driver.tar -C "$prefix" .
+              tar -cf /tmp/published-driver-cache/driver.tar.pending -C "$prefix" .
+              mv /tmp/published-driver-cache/driver.tar.pending /tmp/published-driver-cache/driver.tar
             '
       - name: Save main published driver seed
+        timeout-minutes: 2
         if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name) && steps.driver_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
