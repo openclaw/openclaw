@@ -55,10 +55,7 @@ import {
 } from "./agent-restart-recovery-context.js";
 import { createAgentRunDiagnostics } from "./agent-run-diagnostics.js";
 import { withAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
-import {
-  resolveAbortedAgentStopReason,
-  dispatchAgentRunFromGateway,
-} from "./agent-run-dispatch.js";
+import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineage.js";
 import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.js";
 import { settleUnstartedGatewayFollowup } from "./agent-run-subagent.js";
@@ -214,7 +211,7 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
         });
       };
       const finishUndispatchedAbort = async () => {
-        const stopReason = resolveAbortedAgentStopReason(prepared.activeRunAbort.entry);
+        const stopReason = prepared.activeRunAbort.entry?.abortStopReason?.trim() || "rpc";
         const outcome = buildAgentRunTerminalOutcome({
           status: "timeout",
           stopReason,
@@ -529,6 +526,8 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
                 },
                 internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,
                 internalDeliverySuppressText: params.client?.internal?.internalDeliverySuppressText,
+                internalDeliverySuppressErrors:
+                  params.client?.internal?.internalDeliverySuppressErrors,
                 suppressPromptPersistence: prepared.userTurn.suppressPromptPersistence,
                 userTurnTranscriptRecorder,
                 cleanupBundleMcpOnRunEnd: params.request.cleanupBundleMcpOnRunEnd,

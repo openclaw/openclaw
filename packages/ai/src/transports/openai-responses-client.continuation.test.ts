@@ -2,9 +2,9 @@ import path from "node:path";
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useSessionStoreTempDirs } from "../../../../src/test-utils/session-state-cleanup.js";
 import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { Agent } from "../../../agent-core/src/agent.js";
 
 type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
@@ -83,7 +83,7 @@ import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 
 const initialHost = getAiTransportHost();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-responses-transcript-");
 const model = {
   id: "gpt-5.6-luna",
   name: "GPT-5.6 Luna",
@@ -545,7 +545,7 @@ describe("native OpenAI Responses SSE continuation", () => {
         );
       }
 
-      const dir = tempDirs.make("openclaw-responses-transcript-");
+      const dir = sessionDirs.make();
       const scope = {
         agentId: "main",
         sessionId: "session-1",

@@ -114,7 +114,6 @@ export async function countPendingDescendantRuns(
   return count;
 }
 
-/** Resolves the requester session and normalized origin for a child subagent session. */
 export function resolveRequesterForChildSession(childSessionKey: string): {
   requesterSessionKey: string;
   requesterAgentId?: string;
@@ -149,7 +148,6 @@ export function isSubagentSessionRunActive(childSessionKey: string): boolean {
   );
 }
 
-/** Lists process-local runs requested by one session key. */
 export function listSubagentRunsForRequester(
   requesterSessionKey: string,
   options?: Parameters<typeof listRunsForRequesterFromRuns>[2],
@@ -158,7 +156,6 @@ export function listSubagentRunsForRequester(
   return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey, options);
 }
 
-/** Returns the preferred child-session run from its scoped readable snapshot. */
 export function getSubagentRunByChildSessionKey(childSessionKey: string): SubagentRunRecord | null {
   return getSubagentRunByChildSessionKeyFromRuns(
     getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey),
@@ -166,7 +163,6 @@ export function getSubagentRunByChildSessionKey(childSessionKey: string): Subage
   );
 }
 
-/** Returns the most recently created run for a child session from readable registry state. */
 export function getLatestSubagentRunByChildSessionKey(
   childSessionKey: string,
 ): SubagentRunRecord | null {
@@ -189,9 +185,6 @@ export function getLatestLiveSubagentRunByChildSessionKey(
   matches?: (entry: SubagentRunRecord) => boolean,
 ): SubagentRunRecord | null {
   const key = childSessionKey.trim();
-  if (!key) {
-    return null;
-  }
   // Mutation ownership is process-local; persisted rows can be stale after a replacement.
   return (
     getLatestSubagentRunByChildSessionKeyFromRuns(

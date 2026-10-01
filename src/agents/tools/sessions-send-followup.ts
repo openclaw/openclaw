@@ -47,7 +47,6 @@ export async function startSessionsSendFollowup(
         targetAgentId: request.targetAgentId,
         requesterAgentId: request.requesterAgentId,
         requesterSessionKey: request.requesterSessionKey,
-        maxPingPongTurns: 0,
         replyMode: "one-way",
         notifyRequesterOnWaitFailure: true,
       });
@@ -78,6 +77,7 @@ export async function dispatchSessionsSendFollowup(
   params: Parameters<typeof startSessionsSendAgentRun>[0],
   replyContext: Parameters<typeof startSessionsSendFollowup>[2],
   options: {
+    message: string;
     ownChild: boolean;
     nativeChild: boolean;
     watch: boolean;
@@ -191,7 +191,7 @@ export async function dispatchSessionsSendFollowup(
               requesterAgentId: options.requesterAgentId,
               requesterTurnRunId: watchedTurn,
               requesterOrigin: replyContext.requesterOrigin,
-              task: replyContext.message,
+              task: options.message,
               cleanup: "keep",
               spawnMode: "session",
               expectsCompletionMessage: true,

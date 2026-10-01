@@ -241,9 +241,7 @@ describe("child followup requester continuation", () => {
       displayKey: CHILD,
       requesterSessionKey: SESSION,
       requesterAgentId: "main",
-      message: "finish authorized task",
-      announceTimeoutMs: 1000,
-      maxPingPongTurns: 0,
+      replyTimeoutMs: 1000,
       replyMode: "one-way",
     });
     await released.promise;

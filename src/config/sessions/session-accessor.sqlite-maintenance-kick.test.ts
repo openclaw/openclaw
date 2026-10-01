@@ -8,6 +8,7 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -92,6 +93,39 @@ it.each(["before kick", "before immediate", "before periodic", "before another k
     expect(dispatch).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS + 1);
     expect(dispatch).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["immediate", "periodic"] as const)(
+  "retires automatic maintenance when database admission is refused before its %s pass",
+  async (when) => {
+    const { request } = createStore();
+    const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
+    kickSessionEntryMaintenanceAfterWrite(request);
+    if (when === "periodic") {
+      await yieldToEventLoop();
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      dispatch.mockClear();
+    }
+    recordAgentDatabaseAdmissions(
+      [
+        {
+          agentId: "main",
+          paths: [request.storePath],
+          code: "agent-database-inspection-pending",
+          reason: "maintenance admission revoked",
+          repairHint: "finish fixture inspection",
+        },
+      ],
+      { source: "startup" },
+    );
+    try {
+      await yieldToEventLoop();
+      await vi.advanceTimersByTimeAsync(ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS + 1);
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally {
+      recordAgentDatabaseAdmissions([], { source: "startup" });
+    }
   },
 );
 

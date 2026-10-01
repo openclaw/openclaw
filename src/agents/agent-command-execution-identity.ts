@@ -245,6 +245,7 @@ export function sanitizePublicAgentCommandIngressOpts(
     onAdmittedRunContext: undefined,
     onPostAdmittedRunContext: undefined,
     beforeTerminalDelivery: undefined,
+    internalDeliverySuppressErrors: undefined,
   });
 }
 

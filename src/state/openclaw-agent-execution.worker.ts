@@ -2,8 +2,6 @@ import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
-import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import {
@@ -22,7 +20,6 @@ import {
 import {
   requestSqliteWorkerOperationAdmission,
   takeSqliteWorkerOperationAdmissionAttachment,
-  deferSqliteWorkerCommitReceipt,
   SqliteWorkerOpenRefusedError,
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
@@ -56,10 +53,26 @@ import {
   type AgentDatabaseAdmissionRestriction,
 } from "./openclaw-agent-execution-domain.js";
 import {
+  loadAgentTranscriptOperations,
+  loadAgentReplacementOperations,
+  loadAgentEntryReadOperations,
+  loadAgentTrajectoryOperations,
+  loadAgentArchiveOperations,
+  loadAgentAcpOperations,
+  loadAgentProviderReviewOperations,
+  loadAgentReactionOperations,
+  loadAgentPendingInputOperations,
+  loadAgentArchivePruningOperations,
+  prepareAgentTranscript,
+  type RegisteredAgentWorkerOperations,
+} from "./openclaw-agent-execution-operations.js";
+import type { AgentWorkerOperationContext } from "./openclaw-agent-operation-context.js";
+import {
   requireOpenClawStateDatabaseIdentity,
   retainOpenClawStateDatabase,
 } from "./openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
 export function createSqliteWorkerBackend(
   input: AgentDatabaseExecutionOpen,
@@ -330,33 +343,31 @@ function openAgentDatabaseBackend(
       { operationLabel },
     );
   };
-  let providerReview:
-    | typeof import("../config/sessions/provider-review-store.worker.js")
-    | undefined;
-  let reactions: typeof import("../config/sessions/session-reaction-store.kernel.js") | undefined;
-  let entryReader:
-    | typeof import("../config/sessions/session-accessor.sqlite-entry-read.js")
-    | undefined;
-  let archives:
-    | typeof import("../config/sessions/session-accessor.sqlite-archive-store-kernel.js")
-    | undefined;
-  let archivePruning:
-    | typeof import("../config/sessions/session-history-archive-pruning.worker.js")
-    | undefined;
-  let transcript:
-    | {
-        initialize: typeof import("../config/sessions/session-accessor.sqlite-transcript-header.js").ensureTranscriptHeader;
-        assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity;
-      }
-    | undefined;
-  let replacements:
-    | typeof import("../config/sessions/session-accessor.sqlite-replacement-state.js")
-    | undefined;
-  let trajectory: typeof import("../trajectory/runtime-store.sqlite.js") | undefined;
-  let acpEntry: typeof import("../acp/runtime/session-meta-entry.worker.js") | undefined;
-  let pendingInputWithdrawal:
-    | typeof import("../config/sessions/session-pending-input-withdrawal.worker.js")
-    | undefined;
+  const registry = createWorkerOperationRegistry<
+    RegisteredAgentWorkerOperations,
+    AgentWorkerOperationContext,
+    keyof RegisteredAgentWorkerOperations
+  >({
+    "session.entry.read": loadAgentEntryReadOperations,
+    "trajectory.events.append": loadAgentTrajectoryOperations,
+    "session.archives.preparePublication": loadAgentArchiveOperations,
+    "session.archives.recordPublication": loadAgentArchiveOperations,
+    "session.transcript.initialize": loadAgentTranscriptOperations,
+    "session.entries.replace": loadAgentReplacementOperations,
+    "session.entry.acp": loadAgentAcpOperations,
+    "session.providerReview.compare": loadAgentProviderReviewOperations,
+    "session.reaction.set": loadAgentReactionOperations,
+    "session.pendingInputs.withdraw": loadAgentPendingInputOperations,
+    "session.archivePruning.deletePublished": loadAgentArchivePruningOperations,
+    "session.archivePruning.removeLegacy": loadAgentArchivePruningOperations,
+    "session.archivePruning.reclaimPages": loadAgentArchivePruningOperations,
+  });
+  const context: AgentWorkerOperationContext = {
+    open: openWriter,
+    options,
+    admit,
+    writeTransaction,
+  };
   const domain = createAgentDatabaseDomainOwner({
     databasePath: input.databasePath,
     assertCurrent() {
@@ -406,234 +417,23 @@ function openAgentDatabaseBackend(
         }
       );
     }
-    if (command.type === "session.entry.read" && entryReader) {
-      return entryReader.readSessionEntryRow(openWriter(), command.input.sessionKey)?.entry;
-    }
-    if (command.type === "trajectory.events.append" && trajectory) {
-      const append = trajectory.appendSqliteTrajectoryRuntimeEventsInTransaction;
-      return writeTransaction("trajectory.runtime.append", "Trajectory append", (current) => {
-        append(current, command.input);
-        deferSqliteWorkerCommitReceipt(current.db, { kind: "trajectory-runtime-append" });
-        admit("commit");
-      });
-    }
-    if (
-      (command.type === "session.archives.preparePublication" ||
-        command.type === "session.archives.recordPublication") &&
-      archives
-    ) {
-      const kernel = archives;
-      return writeTransaction(
-        "session.archive.publish",
-        "Session archive publication",
-        (current) => {
-          const result =
-            command.type === "session.archives.preparePublication"
-              ? kernel.prepareSessionTranscriptArchivePublishPlans(current, command.input)
-              : kernel.recordSessionTranscriptArchivePublishResults(
-                  current,
-                  command.input.results,
-                  command.input.nowMs,
-                );
-          admit("commit");
-          return result;
-        },
-      );
-    }
-    if (command.type === "session.transcript.initialize" && transcript) {
-      const assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity =
-        transcript.assertIdentity;
-      assertIdentity(command.input);
-      const initialize = transcript.initialize;
-      return writeTransaction(
-        "session.entry.create-with-transcript",
-        "Session transcript",
-        (current) => {
-          const publication: SessionTranscriptInitializationPublication = {
-            kind: "session-transcript-initialized",
-            sessionKey: command.input.sessionKey,
-          };
-          initialize(
-            current,
-            { agentId: input.agentId, path: input.databasePath, ...command.input },
-            command.input.cwd,
-            {
-              onPlaceholderInserted: ({ sessionId }) => {
-                publication.placeholder = { sessionId };
-              },
-            },
-          );
-          deferSqliteWorkerCommitReceipt(current.db, publication);
-          admit("commit", publication);
-          return publication;
-        },
-      );
-    }
-    if (command.type === "session.entry.acp" && acpEntry) {
-      return acpEntry.mutateAcpSessionEntryInWorker(openWriter(), options, command.input, admit);
-    }
-    if (command.type === "session.entries.replace" && replacements) {
-      const replace = replacements.commitSessionEntryReplacementsInDatabase;
-      const preparePublication = replacements.prepareSessionEntryReplacementPublication;
-      return writeTransaction("session.entry-replacements", "Session replacement", (current) => {
-        const result = replace(current, command.input, () => {
-          const initialization = command.input.initializeTranscript;
-          if (!initialization) {
-            return;
-          }
-          try {
-            if (!transcript) {
-              throw new Error("Session transcript initialization was not prepared");
-            }
-            const assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity =
-              transcript.assertIdentity;
-            assertIdentity(initialization);
-            transcript.initialize(
-              current,
-              { agentId: input.agentId, path: input.databasePath, ...initialization },
-              initialization.cwd,
-            );
-          } catch (error) {
-            throw Object.assign(new Error(formatErrorMessage(error), { cause: error }), {
-              name: "SessionTranscriptInitializationError",
-            });
-          }
-        });
-        const publication = preparePublication(result);
-        deferSqliteWorkerCommitReceipt(current.db, publication);
-        admit("commit", publication);
-        return result;
-      });
-    }
-    if (command.type === "session.providerReview.compare" && providerReview) {
-      return providerReview.compareSessionProviderReviewInWorker(
-        openWriter(),
-        options,
-        command.input,
-        admit,
-      );
-    }
-    if (command.type === "session.reaction.set" && reactions) {
-      const setReaction = reactions.setSessionReactionInDatabase;
-      return writeTransaction("session.reaction.set", "Reaction write", (current) => {
-        const result = setReaction(current, command.input.sessionKey, command.input.params);
-        admit("commit");
-        return result;
-      });
-    }
-    if (command.type === "session.pendingInputs.withdraw" && pendingInputWithdrawal) {
-      return pendingInputWithdrawal.discardSessionPendingInputInWorker(
-        openWriter(),
-        options,
-        command.input,
-        admit,
-      );
-    }
-    if (command.type === "session.archivePruning.deletePublished" && archivePruning) {
-      return archivePruning.deletePublishedSessionArchiveInDatabase(
-        openWriter(),
-        options,
-        command.input,
-        admit,
-      );
-    }
-    if (command.type === "session.archivePruning.removeLegacy" && archivePruning) {
-      return archivePruning.removeLegacySessionArchiveInDatabase(
-        openWriter(),
-        options,
-        command.input.filePath,
-        admit,
-      );
-    }
-    if (command.type === "session.archivePruning.reclaimPages" && archivePruning) {
-      return archivePruning.reclaimSessionArchivePagesInWorker(
-        openWriter(),
-        command.input.maxPages,
-        admit,
-      );
-    }
-    throw new Error("Unknown agent database operation");
+    return registry.execute(command, context);
   };
   return {
     prepare(command) {
       if (
-        command.type === "session.transcript.initialize" ||
-        (command.type === "session.entries.replace" && command.input.initializeTranscript)
+        command.type === "database.domain.bind" ||
+        command.type === "database.domain.publish" ||
+        command.type === "database.domain.execute" ||
+        command.type === "database.domain.close"
       ) {
-        return Promise.all([
-          import("../config/sessions/session-accessor.sqlite-transcript-header.js"),
-          import("../config/sessions/session-accessor.sqlite-scope.js"),
-          command.type === "session.entries.replace"
-            ? import("../config/sessions/session-accessor.sqlite-replacement-state.js")
-            : undefined,
-        ]).then(([header, scope, replacement]) => {
-          replacements = replacement ?? replacements;
-          transcript = {
-            initialize: header.ensureTranscriptHeader,
-            assertIdentity: scope.assertSqliteTranscriptWriteIdentity,
-          };
-        });
+        return domain.prepare(command);
       }
-      switch (command.type) {
-        case "session.entry.acp":
-          return import("../acp/runtime/session-meta-entry.worker.js").then((module) => {
-            acpEntry = module;
-          });
-        case "session.entry.read":
-          return import("../config/sessions/session-accessor.sqlite-entry-read.js").then(
-            (module) => {
-              entryReader = module;
-            },
-          );
-        case "trajectory.events.append":
-          return import("../trajectory/runtime-store.sqlite.js").then((module) => {
-            trajectory = module;
-          });
-        case "session.archives.preparePublication":
-        case "session.archives.recordPublication":
-          return import("../config/sessions/session-accessor.sqlite-archive-store-kernel.js").then(
-            (module) => {
-              archives = module;
-            },
-          );
-        case "session.archivePruning.deletePublished":
-        case "session.archivePruning.removeLegacy":
-        case "session.archivePruning.reclaimPages":
-          return import("../config/sessions/session-history-archive-pruning.worker.js").then(
-            (module) => {
-              archivePruning = module;
-            },
-          );
-        case "session.entries.replace":
-          return import("../config/sessions/session-accessor.sqlite-replacement-state.js").then(
-            (module) => {
-              replacements = module;
-            },
-          );
-        case "session.providerReview.compare":
-          return import("../config/sessions/provider-review-store.worker.js").then((module) => {
-            providerReview = module;
-          });
-        case "session.reaction.set":
-          return import("../config/sessions/session-reaction-store.kernel.js").then((module) => {
-            reactions = module;
-          });
-        case "session.pendingInputs.withdraw":
-          return import("../config/sessions/session-pending-input-withdrawal.worker.js").then(
-            (module) => {
-              pendingInputWithdrawal = module;
-            },
-          );
-        case "database.domain.bind":
-        case "database.domain.publish":
-        case "database.domain.execute":
-        case "database.domain.close":
-          return domain.prepare(command);
-        case "database.prepareWrite":
-        case "database.walMaintenance":
-          return undefined;
+      const preparing = registry.prepare(command.type);
+      if (command.type === "session.entries.replace" && command.input.initializeTranscript) {
+        return Promise.all([preparing, prepareAgentTranscript()]).then(() => {});
       }
-      return undefined;
+      return preparing;
     },
     [SQLITE_WORKER_PREPARE_ADMITTED](command) {
       if (command.type !== "database.domain.publish") {

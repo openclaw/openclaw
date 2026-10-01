@@ -1,6 +1,5 @@
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { sanitizeChatHistoryMessages } from "../../gateway/chat-display-projection.sanitize.js";
@@ -16,12 +15,11 @@ import {
   onInternalSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { isIntermediateAssistantTranscriptMessage } from "../embedded-agent-runner/message-visibility.js";
 import { persistCliAssistantTranscript } from "./cli-run-transcript.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => closeOpenClawAgentDatabasesForTest());
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cli-coordination-transcript-");
 afterEach(() => resetGlobalHookRunner());
 
 it.each([
@@ -30,7 +28,7 @@ it.each([
 ])(
   "preserves CLI $sourceTool output with its display policy after hooks",
   async ({ sourceTool, hidden }) => {
-    const root = tempDirs.make("openclaw-cli-coordination-transcript-");
+    const root = sessionDirs.make();
     const target = {
       agentId: "main",
       sessionId: "cli-coordination-session",
@@ -96,7 +94,7 @@ it.each([
 ] as const)(
   "prepares the $kind CLI assistant before its first transcript publication",
   async ({ yielded, stopReason }) => {
-    const root = tempDirs.make("openclaw-cli-media-transcript-");
+    const root = sessionDirs.make();
     const target = {
       agentId: "main",
       sessionId: "cli-media-session",

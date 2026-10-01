@@ -248,7 +248,6 @@ async function createCompletion(context: GatewayRequestContext, yieldedFollowup 
                   requesterAgentId: "main",
                   targetRequesterSessionKey: requesterSessionKey,
                   triggerMessage: "Retained child result",
-                  steerMessage: "Retained child result",
                   sourceSessionKey: childSessionKey,
                   settleWakeSourceSessionKeys: [childSessionKey],
                   sourceTool: "subagent_settle",

@@ -3,7 +3,6 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
@@ -18,6 +17,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 
 const resetBoundaryMocks = vi.hoisted(() => ({
   clearBootstrap: vi.fn(),
@@ -287,7 +287,7 @@ describe("createPersistCronSessionEntry", () => {
   // transcript used to create the header from process.cwd(), so the window
   // persisted the gateway process directory as its workspace.
   it("records the cron workspace in the header when a stale reset lands on an empty window", async () => {
-    const dir = makeTempDir(cronSessionTempDirs, "openclaw-cron-session-");
+    const dir = sessionDirs.make();
     const storePath = path.join(dir, "sessions.json");
     const agentSessionKey = "agent:main:cron:stale-empty-window";
     const lifecycleRevision = crypto.randomUUID();
@@ -632,7 +632,7 @@ describe("createPersistCronSessionEntry", () => {
   });
 
   it("restores resumable cron fields once the transcript exists", async () => {
-    const dir = makeTempDir(cronSessionTempDirs, "openclaw-cron-session-");
+    const dir = sessionDirs.make();
     const storePath = path.join(dir, "sessions.json");
     await appendTranscriptMessage(
       {
@@ -1063,8 +1063,4 @@ describe("createPersistCronSessionEntry", () => {
   });
 });
 
-const cronSessionTempDirs: string[] = [];
-
-afterAll(() => {
-  cleanupTempDirs(cronSessionTempDirs);
-});
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cron-session-");

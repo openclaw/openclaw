@@ -4,7 +4,6 @@ import { readGatewayRunId } from "../subagents/spawn/subagent-spawn-gateway.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 
-/** Adapts a visible spawn to the existing placement and native launch owners. */
 export async function startVisibleCloudSession(params: {
   cfg: OpenClawConfig;
   key: string;

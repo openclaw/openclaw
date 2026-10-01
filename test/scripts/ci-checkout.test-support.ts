@@ -231,14 +231,9 @@ export async function withCiCheckoutFixture<T>(
         (process.platform === "win32"
           ? termination?.processTreeState === "terminated"
           : inspectManagedProcessGroup(supervisor, { errorPolicy: "indeterminate" }) === "dead");
-      // Join actual close before checking extinction, sharing the original cleanup budget.
-      const didClose = await Promise.race([
-        closed.then(() => true),
-        new Promise<boolean>((resolve) => {
-          timer = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now()));
-        }),
-      ]);
-      clearTimeout(timer);
+      // SIGKILL retires this direct child; retain its native close rather than
+      // abandoning the join when a loaded host delays event delivery.
+      await closed;
       while (!groupDead()) {
         const remaining = deadline - Date.now();
         if (remaining <= 0) {
@@ -248,7 +243,7 @@ export async function withCiCheckoutFixture<T>(
       }
       console.error(
         `Checkout fixture retained at ${root}; no completed report. ` +
-          `Supervisor close: ${didClose}; group extinction: ${groupDead()}. ` +
+          `Supervisor close: true; group extinction: ${groupDead()}. ` +
           `Inspect workflow.log and stop remaining owned writers before removing this exact directory.\n${stderr}`,
       );
     }

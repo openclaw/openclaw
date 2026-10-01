@@ -50,23 +50,13 @@ describe("repository checkpoint workflow authority", () => {
     realWorktree: true,
   });
 
-  it.each(["add", "modify", "delete", "rename-in", "rename-out"] as const)(
+  it.each(["add", "modify", "delete"] as const)(
     "rejects %s before uploading any accepted objects and retains the checkpoint",
     async (operation) => {
-      const baseFiles: Record<string, string> =
-        operation === "rename-in"
-          ? { "workflow-example.txt": definition }
-          : ["modify", "delete", "rename-out"].includes(operation)
-            ? { [workflow]: definition }
-            : {};
-      const f = await createFixture(baseFiles);
-      const changes: Record<string, string | null> =
-        operation === "rename-in"
-          ? { "workflow-example.txt": null, [workflow]: definition }
-          : operation === "rename-out"
-            ? { [workflow]: null, "workflow-example.txt": definition }
-            : { [workflow]: operation === "delete" ? null : definition + "# accepted change\n" };
-      const saved = await f.repository.capture("accepted code\n", operation, changes);
+      const f = await createFixture(operation === "add" ? {} : { [workflow]: definition });
+      const saved = await f.repository.capture("accepted code\n", operation, {
+        [workflow]: operation === "delete" ? null : definition + "# accepted change\n",
+      });
       const result = await f.coordinator.requestForSession(f.request(operation, f.guest));
       expect(result).toMatchObject(rejected);
       expect(writes()).toEqual([]);

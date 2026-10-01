@@ -105,9 +105,6 @@ function exactCommandMarker(command: string): string {
 }
 
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
-const buildExecApprovalFollowupTargetMock = vi.hoisted(() =>
-  vi.fn<typeof import("./bash-tools.exec-host-shared.js").buildExecApprovalFollowupTarget>(),
-);
 const evaluateShellAllowlistWithAuthorizationMock = vi.hoisted(() =>
   vi.fn<() => MockAllowlistResult>(),
 );
@@ -207,11 +204,9 @@ vi.mock("./tools/gateway.js", () => ({
 vi.mock("./bash-tools.exec-host-shared.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./bash-tools.exec-host-shared.js")>();
   createExecApprovalRequestRouteMock.mockImplementation(actual.createExecApprovalRequestRoute);
-  buildExecApprovalFollowupTargetMock.mockImplementation(actual.buildExecApprovalFollowupTarget);
   return {
     ...actual,
     resolveExecHostApprovalContext: resolveExecHostApprovalContextMock,
-    buildExecApprovalFollowupTarget: buildExecApprovalFollowupTargetMock,
     buildExecApprovalPendingToolResult: buildExecApprovalPendingToolResultMock,
     createExecApprovalRequestRoute: createExecApprovalRequestRouteMock,
     sendExecApprovalFollowupResult: sendExecApprovalFollowupResultMock,
@@ -278,7 +273,6 @@ describe("processGatewayAllowlist", () => {
     resetGatewayWorkAdmission();
     resetDiagnosticEventsForTest();
     buildExecApprovalPendingToolResultMock.mockReset();
-    buildExecApprovalFollowupTargetMock.mockClear();
     evaluateShellAllowlistWithAuthorizationMock.mockReset();
     mockAllowlist({
       allowlistSatisfied: true,
@@ -1235,7 +1229,6 @@ describe("processGatewayAllowlist", () => {
 
     expect(result.pendingResult?.details.status).toBe("approval-pending");
     await vi.waitFor(() => expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce());
-    expect(buildExecApprovalFollowupTargetMock.mock.calls[0]?.[0].direct).toBe(true);
 
     const followupTarget = sendExecApprovalFollowupResultMock.mock.calls[0]?.[0];
     expect(followupTarget?.direct).toBe(true);

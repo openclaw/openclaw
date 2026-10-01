@@ -1283,6 +1283,10 @@ describe("test-projects build admission", () => {
       await start(mixed ? [e2eTarget, avatarTarget] : [avatarTarget]);
       await Promise.race([runtime.started, terminal.promise]);
       const ui = createPreparationGate<number>(commands.prepare);
+      if (mixed) {
+        // E2E reuse still needs the UI's stricter current-head preparation.
+        commands.prepare.mockResolvedValueOnce(0);
+      }
       try {
         expect(commands.reader).not.toHaveBeenCalled();
         expect(commands.uiAssets).not.toHaveBeenCalled();
@@ -1309,11 +1313,10 @@ describe("test-projects build admission", () => {
       }
       expect(outcome).toMatch(/^\[test\] passed /u);
       expect(commands.prepareE2e).toHaveBeenCalledTimes(mixed ? 1 : 0);
-      expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual(
-        mixed
-          ? [["scripts/ui.js", "build"]]
-          : [["scripts/prepare-vitest-runtime.mjs"], ["scripts/ui.js", "build"]],
-      );
+      expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual([
+        ["scripts/prepare-vitest-runtime.mjs", "--require-current-head"],
+        ["scripts/ui.js", "build"],
+      ]);
       expect(commands.uiAssets).toHaveBeenCalledTimes(2);
       expect(process.exitCode).toBe(0);
     },
@@ -1334,7 +1337,7 @@ describe("test-projects build admission", () => {
       await terminal.promise;
       expect(commands.reader).not.toHaveBeenCalled();
       expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual([
-        ["scripts/prepare-vitest-runtime.mjs"],
+        ["scripts/prepare-vitest-runtime.mjs", "--require-current-head"],
         ["scripts/ui.js", "build"],
       ]);
       expect(process.exitCode).toBe(outcome === "nonzero" ? 7 : 1);
@@ -1373,9 +1376,9 @@ describe("test-projects build admission", () => {
         source.resolve();
         await rejected;
       }
-      expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual(
-        mixed ? [] : [["scripts/prepare-vitest-runtime.mjs"]],
-      );
+      expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual([
+        ["scripts/prepare-vitest-runtime.mjs", "--require-current-head"],
+      ]);
       expect(commands.uiAssets).not.toHaveBeenCalled();
       expect(commands.reader).not.toHaveBeenCalled();
       expect(exitBySignal).toHaveBeenCalledExactlyOnceWith("SIGTERM");

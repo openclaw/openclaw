@@ -234,7 +234,6 @@ const MAX_CHANGED_EXTENSION_FALLBACK_JOBS = 50;
 // integration tests past the global timeout.
 const SERIAL_CHANGED_TARGET_RE = /^extensions\/memory-core\//u;
 const BOUNDARY_NODE_TEST_CONFIG = "test/vitest/vitest.boundary.config.ts";
-const TUI_PTY_ASSERTION_TEST = "src/tui/tui-pty-harness-assertion-test-support.test.ts";
 const publicPluginSdkEntrySources = Object.values(
   buildPluginSdkEntrySources(publicPluginSdkEntrypoints),
 );
@@ -1052,7 +1051,6 @@ export function createChangedNodeTestShards(
       separateContract ||
       extensionOwner ||
       uncoveredChannels ||
-      (options.dedicatedBuildArtifacts === false && target === TUI_PTY_ASSERTION_TEST) ||
       plans.every(
         (plan) =>
           !nodeTestConfigRequiresCanonicalMetadata(plan.config) &&
@@ -1075,12 +1073,6 @@ export function createChangedNodeTestShards(
   }
   const canonicalTargets = prTargetPlans
     .filter(({ target }) => !target.startsWith("extensions/"))
-    // The PTY artifact descriptor only admits process proofs. Its source assertion
-    // helper keeps the exact-file TUI config without requiring the built CLI.
-    .filter(
-      ({ target }) =>
-        options.dedicatedBuildArtifacts !== false || target !== TUI_PTY_ASSERTION_TEST,
-    )
     .filter(
       ({ plans }) =>
         plans.every((plan) => plan.includePatterns) &&

@@ -5,6 +5,7 @@ import * as runtimePaths from "../../daemon/runtime-paths.js";
 import * as daemonService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import * as gatewaySupervision from "../../infra/gateway-supervision.js";
+import * as activationPaths from "../../infra/package-update-activation-paths.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateGlobal from "../../infra/update-global.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -47,6 +48,13 @@ it.each([
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", undefined);
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_REQUIRE", undefined);
     fixture.managedServiceNodeRunner = "/service/node";
+    const captureRuntime = activationPaths.capturePackageActivationRuntime;
+    vi.spyOn(activationPaths, "capturePackageActivationRuntime").mockImplementation(
+      (kind, executable) =>
+        executable === "/service/node" || executable === "/current/node"
+          ? { kind, path: executable, identity: `synthetic:${executable}` }
+          : captureRuntime(kind, executable),
+    );
     const provisionRuntime = vi
       .spyOn(runtimeRecovery, "resolveTargetNodeRuntime")
       .mockRejectedValue(new Error("A retained service runtime must not be provisioned"));

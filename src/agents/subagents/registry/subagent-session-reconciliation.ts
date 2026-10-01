@@ -1,8 +1,3 @@
-/**
- * Subagent session-store reconciliation.
- *
- * Infers child completion from persisted session entries when registry updates arrive late.
- */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { getRuntimeConfig } from "../../../config/config.js";
 import {
@@ -34,7 +29,6 @@ export type SubagentRunOrphanReason =
   | "missing-session-id"
   | "stale-unended-run";
 
-/** Completion inferred from the child session store. */
 export type SubagentSessionCompletion = {
   startedAt?: number;
   endedAt: number;
@@ -88,7 +82,6 @@ export function loadSubagentSessionEntry(params: {
   });
 }
 
-/** Resolves whether a registry row is orphaned from its child session entry. */
 export function resolveSubagentRunOrphanReason(params: {
   entry: SubagentRunRecord;
   includeStaleUnended?: boolean;
@@ -144,7 +137,6 @@ export function resolveSubagentRunOrphanReason(params: {
   }
 }
 
-/** Convert persisted session status into a subagent completion outcome. */
 export function resolveCompletionFromSessionEntry(
   sessionEntry: SessionEntry | undefined,
   fallbackEndedAt: number,
@@ -187,7 +179,6 @@ export function resolveCompletionFromSessionEntry(
   };
 }
 
-/** Resolve child completion by reading its persisted session entry. */
 export async function resolveSubagentSessionCompletion(params: {
   childSessionKey: string;
   childAgentId?: string;
@@ -226,7 +217,6 @@ async function withSubagentSessionEntry<T>(
   );
 }
 
-/** Resolve a fresh child session start time for lifecycle reconciliation. */
 export async function resolveSubagentSessionStartedAt(params: {
   childSessionKey: string;
   notBeforeMs?: number;

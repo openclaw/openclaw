@@ -131,6 +131,7 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
     });
     expect(
       await markRequesterTurnYieldedInRuns({
+        preparedAuthority: null,
         requesterSessionKey: REQUESTER,
         requesterAgentId: "main",
         requesterTurnRunId: REQUESTER_TURN,
@@ -178,6 +179,7 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
         await persistSubagentRunsToDiskAsyncOrThrow(params.runs, [sibling.runId], { context });
       }
       const requester = {
+        preparedAuthority: null,
         requesterSessionKey: REQUESTER,
         requesterAgentId: "main",
         requesterTurnRunId: REQUESTER_TURN,
@@ -382,6 +384,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
 
     expect(
       await markRequesterTurnYieldedInRuns({
+        preparedAuthority: null,
         requesterSessionKey: REQUESTER,
         requesterTurnRunId: REQUESTER_TURN,
         runs,
@@ -650,6 +653,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
 
       expect(
         await markRequesterTurnYieldedInRuns({
+          preparedAuthority: null,
           requesterSessionKey: REQUESTER,
           requesterTurnRunId: REQUESTER_TURN,
           runs,
@@ -747,6 +751,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       if (requesterYielded) {
         expect(
           await markRequesterTurnYieldedInRuns({
+            preparedAuthority: null,
             requesterSessionKey: REQUESTER,
             requesterTurnRunId: REQUESTER_TURN,
             runs,

@@ -4,6 +4,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
+import { bindHostSkillCatalog } from "../harness/host-skills.js";
+import { readInstalledSkill } from "../installed-skill-catalog.js";
 import { resolveSandboxDockerConfig } from "./config.js";
 import { resolveSandboxFileIdentity } from "./file-mutation-identity.js";
 import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
@@ -36,6 +39,77 @@ function mountedSandbox(
 
 describe("sandbox effective filesystem mounts", () => {
   installFsBridgeTestHarness();
+
+  it("binds skill instructions to the source of the guarded workspace read", async () => {
+    await withTempDir("openclaw-skill-source-", async (root) => {
+      const workspaceDir = path.join(root, "workspace");
+      const outsideDir = path.join(root, "outside");
+      await fs.mkdir(workspaceDir);
+      await fs.mkdir(outsideDir);
+      await fs.writeFile(path.join(workspaceDir, "SKILL.md"), "Inside instructions");
+      await fs.writeFile(path.join(outsideDir, "SKILL.md"), "Outside instructions");
+      const alias = path.join(workspaceDir, "alias.md");
+      await fs.symlink("SKILL.md", alias);
+      const sandbox = mountedSandbox(workspaceDir, { binds: [`${outsideDir}:/data:ro`] });
+      const bridge = createSandboxFsBridge({ sandbox });
+      sandbox.fsBridge = bridge;
+      mockContainerCanonicalPaths({ "/workspace/alias.md": "/workspace/SKILL.md" });
+      const source = await bridge.readFileWithSource!({ filePath: "alias.md", maxBytes: 64 });
+      expect(source).toEqual({
+        data: Buffer.from("Inside instructions"),
+        canonicalPath: "/workspace/SKILL.md",
+        workspaceRelativePath: "SKILL.md",
+      });
+      await expect(bridge.readFile({ filePath: "alias.md", maxBytes: 2 })).rejects.toThrow(
+        "exceeds",
+      );
+      const skill = {
+        ...createCanonicalFixtureSkill({
+          name: "guide",
+          description: "Guide",
+          filePath: alias,
+          baseDir: workspaceDir,
+          source: "workspace",
+        }),
+        readContent: "Cached content must not bypass the bridge",
+      };
+      sandbox.skillUsagePaths = [
+        {
+          skillName: "guide",
+          skillSource: "workspace",
+          skillFile: alias,
+          readPath: alias,
+        },
+      ];
+      const getSkills = bindHostSkillCatalog({
+        workspaceDir,
+        requiredRoot: workspaceDir,
+        sandbox,
+        readable: true,
+        assertCurrent: () => {},
+        snapshot: {
+          prompt: "",
+          skills: [{ name: "guide", skillKey: "guide" }],
+          resolvedSkills: [],
+          discoverySkills: [skill],
+        },
+      });
+      const catalog = getSkills(null);
+      await expect(readInstalledSkill(catalog, "guide")).resolves.toBe("Inside instructions");
+      await fs.unlink(alias);
+      await fs.symlink("/data/SKILL.md", alias);
+      mockContainerCanonicalPaths({ "/workspace/alias.md": "/data/SKILL.md" });
+      const external = await bridge.readFileWithSource!({ filePath: "alias.md", maxBytes: 64 });
+      expect(external).toEqual({
+        data: Buffer.from("Outside instructions"),
+        canonicalPath: "/data/SKILL.md",
+      });
+      await expect(bridge.readFile({ filePath: "alias.md" })).resolves.toEqual(external.data);
+      await expect(readInstalledSkill(catalog, "guide")).rejects.toThrow(
+        "escape the captured required workspace",
+      );
+    });
+  });
 
   it("uses the last global/agent /data bind and its read-only access", async () => {
     await withTempDir("openclaw-effective-mounts-", async (workspaceDir) => {

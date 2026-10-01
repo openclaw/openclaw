@@ -5,7 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { expect, it, vi } from "vitest";
-import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { recordBackupRunOutcome } from "../state/backup-run-records.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
@@ -505,7 +505,7 @@ it("refuses replacement while a competing native SQLite reader owns exclusion", 
   });
 });
 
-it("refuses replacement while a foreign process owns state maintenance", async () => {
+it("refuses replacement while a foreign process owns state maintenance", async ({ signal }) => {
   await withFixture(async (fixture) => {
     await fixture.close();
     const assertUnchanged = await unchangedFiles(fixture);
@@ -524,17 +524,32 @@ it("refuses replacement while a foreign process owns state maintenance", async (
       ],
       { stdio: ["ignore", "ignore", "pipe", "ipc"] },
     );
+    const closed = once(child, "close");
+    void closed.catch(() => undefined);
     try {
-      expect((await once(child, "message", { signal: AbortSignal.timeout(5_000) }))[0]).toEqual({
+      expect(
+        (
+          await withinTest(
+            awaitGateBeforeSettlement(
+              once(child, "message"),
+              closed,
+              "Foreign state owner exited before readiness",
+            ),
+            signal,
+          )
+        )[0],
+      ).toEqual({
         ready: true,
       });
       await expect(fixture.restore()).rejects.toThrow("failed to acquire gateway state ownership");
       await assertUnchanged();
-      const closed = once(child, "close", { signal: AbortSignal.timeout(5_000) });
       child.send({ release: true });
-      expect(await closed).toEqual([0, null]);
+      expect(await withinTest(closed, signal)).toEqual([0, null]);
     } finally {
-      await stopChildProcess(child, 5_000);
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+      await closed;
     }
   });
 });

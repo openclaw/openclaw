@@ -1,6 +1,7 @@
 import { lstatSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import { resolveInstallAgentDir } from "../agents/install-agent-dir.js";
@@ -1202,17 +1203,13 @@ function buildLegacyStateMigrationSteps(
     "managed-worktrees": [
       [
         stateDatabase,
-        ...[
-          ...new Set([
-            ...detected.worktrees.legacyIds,
-            ...detected.worktrees.pathRewrites.map((rewrite) => rewrite.id),
-          ]),
-        ]
-          .toSorted()
-          .map((id) => ({
-            kind: "owner" as const,
-            id: `core:managed-worktree:${id}`,
-          })),
+        ...sortUniqueStrings([
+          ...detected.worktrees.legacyIds,
+          ...detected.worktrees.pathRewrites.map((rewrite) => rewrite.id),
+        ]).map((id) => ({
+          kind: "owner" as const,
+          id: `core:managed-worktree:${id}`,
+        })),
       ],
       (isDoctor && detected.worktrees.hasLegacy) || detected.worktrees.pathRewrites.length > 0,
       [stateDatabase],
@@ -2437,15 +2434,15 @@ async function runLegacyStateMigrationSteps(
 function completedPluginMigrationFields(
   sources: readonly MigrationMessages[],
 ): Pick<MigrationMessages, "completedPluginIds" | "requiredPluginIds" | "statelessPluginIds"> {
-  const completedPluginIds = [
-    ...new Set(sources.flatMap((source) => source.completedPluginIds ?? [])),
-  ].toSorted();
-  const requiredPluginIds = [
-    ...new Set(sources.flatMap((source) => source.requiredPluginIds ?? [])),
-  ].toSorted();
-  const statelessPluginIds = [
-    ...new Set(sources.flatMap((source) => source.statelessPluginIds ?? [])),
-  ].toSorted();
+  const completedPluginIds = sortUniqueStrings(
+    sources.flatMap((source) => source.completedPluginIds ?? []),
+  );
+  const requiredPluginIds = sortUniqueStrings(
+    sources.flatMap((source) => source.requiredPluginIds ?? []),
+  );
+  const statelessPluginIds = sortUniqueStrings(
+    sources.flatMap((source) => source.statelessPluginIds ?? []),
+  );
   return {
     ...(completedPluginIds.length > 0 ? { completedPluginIds } : {}),
     ...(requiredPluginIds.length > 0 ? { requiredPluginIds } : {}),
@@ -2812,7 +2809,7 @@ async function executeLegacyStateMigrations(
             message: discoveredSessionStores.warnings.join("\n"),
           }
         : undefined;
-    const steps = buildLegacyStateMigrationSteps({
+    return buildLegacyStateMigrationSteps({
       mode,
       detected: migrationDetection,
       config: pluginDoctorConfig,
@@ -2831,7 +2828,6 @@ async function executeLegacyStateMigrations(
       legacySessionSurfaces,
       beforeWorkspaceStateMigration: params.beforeWorkspaceStateMigration,
     }).filter((step) => step.id !== "state-schema" && step.id !== "plugin-install-index");
-    return steps;
   };
   const completeBlockedPlanReceipts = async (paramsForBlockedPlan: {
     receipts: readonly LegacyStateMigrationStepReceipt[];

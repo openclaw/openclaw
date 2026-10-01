@@ -1,6 +1,3 @@
-/**
- * Requester completion calls, direct fallback, and source-delivery evidence.
- */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizePendingFinalDeliveryText } from "../../../auto-reply/reply/pending-final-delivery-state.js";
 import {
@@ -40,7 +37,6 @@ import {
   summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
 import {
-  dispatchSubagentAnnounceAgent,
   sendSubagentAnnounceMessage,
   tryResolveSubagentRequesterAgentId,
 } from "./subagent-announce-delivery.runtime.js";
@@ -50,6 +46,7 @@ import {
 } from "./subagent-announce-dispatch.js";
 import type { SubagentCompletionToolHandoffRegistration } from "./subagent-announce-handoff.js";
 import { inferDeliveryTargetChatType } from "./subagent-announce-origin.js";
+import { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
 
 export async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
@@ -90,7 +87,7 @@ export async function runAnnounceAgentCall(params: {
   timer?.unref?.();
   try {
     signal.throwIfAborted();
-    const dispatch = dispatchSubagentAnnounceAgent(params.agentParams, {
+    const dispatch = dispatchGatewayMethodInProcess("agent", params.agentParams, {
       cancelOnDeadline: true,
       privateCompletion: params.privateCompletion,
       settleWakeReplay: params.settleWakeSourceSessionKeys

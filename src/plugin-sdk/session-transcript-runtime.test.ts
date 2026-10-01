@@ -238,6 +238,62 @@ describe("session transcript runtime SDK", () => {
     }
   });
 
+  it("serializes caller-checked idempotency inside scoped locked appends", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "caller-checked-lock-session",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    const steps: string[] = [];
+    const firstRead = createDeferredCore();
+    const releaseFirst = createDeferredCore();
+    const appendIfMissing = async (label: string) =>
+      await withSessionTranscriptWriteLock(scope, async (locked) => {
+        steps.push(`${label}:read`);
+        const events = await locked.readEvents();
+        const alreadyAppended = events.some((event) => {
+          const message = (event as { message?: { idempotencyKey?: unknown } }).message;
+          return message?.idempotencyKey === "mirror-once";
+        });
+        if (label === "first") {
+          firstRead.resolve();
+          await releaseFirst.promise;
+        }
+        if (!alreadyAppended) {
+          await locked.appendMessage({
+            idempotencyLookup: "caller-checked",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: label }],
+              idempotencyKey: "mirror-once",
+              timestamp: 1,
+            },
+          });
+        }
+        steps.push(`${label}:done`);
+      });
+
+    const first = appendIfMissing("first");
+    await Promise.resolve();
+    const second = appendIfMissing("second");
+    const writes = Promise.all([first, second]);
+    try {
+      await Promise.race([firstRead.promise, writes]);
+    } finally {
+      releaseFirst.resolve();
+      await Promise.allSettled([first, second]);
+    }
+    await writes;
+
+    expect(steps).toEqual(["first:read", "first:done", "second:read", "second:done"]);
+    const assistantMessages = (await readSessionTranscriptEvents(scope)).filter((event) => {
+      const message = (event as { message?: { role?: unknown } }).message;
+      return message?.role === "assistant";
+    });
+    expect(assistantMessages).toHaveLength(1);
+  });
+
   it("does not publish queued locked updates when the callback throws", async () => {
     const scope = await createScope();
     const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");

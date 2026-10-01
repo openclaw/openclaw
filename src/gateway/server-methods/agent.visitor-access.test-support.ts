@@ -6,6 +6,7 @@ import { createPluginStateKeyedStore } from "../../plugin-state/plugin-state-sto
 import { activatePluginRegistry } from "../../plugins/loader-shared.js";
 import { clearActivePluginRegistry } from "../../plugins/runtime.js";
 import { startPluginServices, type PluginServicesHandle } from "../../plugins/services.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   createCoreGatewayMethodDescriptors,
@@ -78,17 +79,30 @@ export function createVisitorGrantStore(env: NodeJS.ProcessEnv) {
 
 export function createAccessPolicyTransport(initialEmails: readonly string[] = []) {
   const policiesPath = "/client/v4/accounts/test-account/access/apps/test-app/policies";
-  let emails = [...initialEmails];
+  let targets: Array<string | number> = [...initialEmails];
   const writes: string[] = [];
   const policy = () => ({
     id: "visitors",
     name: "Visitors (openclaw-managed)",
     decision: "allow",
-    include: emails.map((email) => ({ email: { email } })),
+    include: targets.map((target) =>
+      typeof target === "string"
+        ? { email: { email: target } }
+        : {
+            oidc: {
+              identity_provider_id: "test-oidc",
+              claim_name: "github_id",
+              claim_value: String(target),
+            },
+          },
+    ),
   });
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : input);
     const method = init?.method ?? "GET";
+    if (url.href === "https://api.github.com/users/fresh-account" && method === "GET") {
+      return Response.json({ id: 42, login: "fresh-account", email: null });
+    }
     const collection = url.pathname === policiesPath;
     if (
       url.origin !== "https://api.cloudflare.com" ||
@@ -99,7 +113,7 @@ export function createAccessPolicyTransport(initialEmails: readonly string[] = [
     if (method === "GET") {
       return Response.json({
         success: true,
-        result: collection ? (emails.length ? [policy()] : []) : policy(),
+        result: collection ? (targets.length ? [policy()] : []) : policy(),
       });
     }
     const bodyText = init?.body;
@@ -113,7 +127,16 @@ export function createAccessPolicyTransport(initialEmails: readonly string[] = [
     if (!isRecord(body) || !Array.isArray(body.include)) {
       throw new Error("Expected an email policy");
     }
-    emails = body.include.map((rule: unknown) => {
+    targets = body.include.map((rule: unknown) => {
+      if (
+        isRecord(rule) &&
+        isRecord(rule.oidc) &&
+        rule.oidc.identity_provider_id === "test-oidc" &&
+        rule.oidc.claim_name === "github_id" &&
+        rule.oidc.claim_value === "42"
+      ) {
+        return 42;
+      }
       if (!isRecord(rule) || !isRecord(rule.email) || typeof rule.email.email !== "string") {
         throw new Error("Expected an email policy rule");
       }
@@ -122,7 +145,7 @@ export function createAccessPolicyTransport(initialEmails: readonly string[] = [
     writes.push(method);
     return Response.json({ success: true, result: policy() });
   });
-  return { fetcher, writes, emails: () => emails };
+  return { fetcher, writes, emails: () => targets.filter((target) => typeof target === "string") };
 }
 
 export async function startVisitorGateway({
@@ -156,6 +179,7 @@ export async function startVisitorGateway({
     loadIntent: "startup",
   });
   const registry = loaded.pluginRegistry;
+  const catalog = await prepareUserProfileCatalog();
   let services: PluginServicesHandle | undefined;
   const stop = async () => {
     try {
@@ -164,6 +188,7 @@ export async function startVisitorGateway({
         expect(stopped.errors).toEqual([]);
       }
     } finally {
+      catalog.release();
       loaded.retireGatewayRuntimeBindings();
       await clearActivePluginRegistry(registry);
     }

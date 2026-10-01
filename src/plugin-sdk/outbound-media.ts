@@ -408,10 +408,7 @@ export function createHostedOutboundMediaStore(
       ) {
         break;
       }
-      const id = parseHostedOutboundMediaMetaKey(row.key);
-      if (!id) {
-        continue;
-      }
+      const id = row.value.id;
       // Capacity eviction is speculative until a candidate has no admitted
       // readers. Skip active capabilities instead of revoking them on failure.
       if ((activeReaders.get(id) ?? 0) > 0) {

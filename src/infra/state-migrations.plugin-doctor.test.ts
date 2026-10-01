@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createOpenClawStateLeaseLostError } from "../state/openclaw-state-lease-error.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   autoMigrateLegacyPluginDoctorState,
@@ -32,7 +33,16 @@ vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => {
         // The lease owner validates again after the callback returns. Model a lost
         // lease at that boundary, after migrations have already committed.
         if (controls.failSettlement) {
-          throw new Error("lease settlement failed");
+          throw createOpenClawStateLeaseLostError(
+            {
+              scope: "core:agent-database-maintenance",
+              key: "global",
+              leaseLabel: "agent database maintenance lease",
+            },
+            new Error(
+              "state lease heartbeat exited: lease expired or ownership lost (exitCode=0, acquiredAt=1800000000000, lastRenewedAt=1800000020000)",
+            ),
+          );
         }
         return result;
       })) satisfies typeof actual.withPluginLifecycleLease,
@@ -264,7 +274,7 @@ describe("plugin Doctor migrations", () => {
               ? "refusal"
               : failure === "detector"
                 ? "second detector failed"
-                : "lease settlement failed",
+                : "lease expired or ownership lost (exitCode=0, acquiredAt=1800000000000, lastRenewedAt=1800000020000)",
         );
       }
 

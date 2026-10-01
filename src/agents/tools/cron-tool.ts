@@ -488,7 +488,11 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
             const creatorToolAllowlistCaptureRef = resolvedAuthority
               ? { value: resolvedAuthority.provenance }
               : opts?.creatorToolAllowlistCaptureRef;
-            capCronJobToolsAllowOnCreate(job, creatorToolAllowlist);
+            capCronJobToolsAllowOnCreate(
+              job,
+              creatorToolAllowlist,
+              resolvedAuthority?.holdsRuntimeAuthority,
+            );
             assertInheritedCronToolCaptureReady(job, creatorToolAllowlistCaptureRef);
             const { alias } = resolveMainSessionAlias(runtimeConfig);
             const resolvedSessionKey = opts?.agentSessionKey

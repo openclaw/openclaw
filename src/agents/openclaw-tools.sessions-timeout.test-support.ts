@@ -12,7 +12,6 @@ import {
 } from "./tool-search-catalog.js";
 import { resolveToolSearchConfig } from "./tool-search-config.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
-import { testing as agentStepTesting } from "./tools/agent-step.test-support.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type SessionsSendTimeoutFixtures = {
@@ -239,8 +238,6 @@ export function registerSessionsSendLateReplyTests({
       });
       let requesterProviderStarts = 0;
       let requesterAdmissionClosed: boolean | undefined;
-      let finalAnnounceProviderStarts = 0;
-      let finalAnnounceAdmissionClosed: boolean | undefined;
       callGatewayMock.mockImplementation(async (opts: unknown) => {
         const request = opts as { method?: string; params?: unknown };
         calls.push(request);
@@ -290,22 +287,6 @@ export function registerSessionsSendLateReplyTests({
         }
         return {};
       });
-      await agentStepTesting.setDepsForTest({
-        agentCommandFromIngress: async (opts) => {
-          expect(opts.sessionKey).toBe(targetKey);
-          expect(opts.extraSystemPrompt).toContain("Agent-to-agent announce step");
-          finalAnnounceAdmissionClosed =
-            gatewayWorkAdmission.isGatewaySubordinateWorkAdmissionClosed();
-          if (finalAnnounceAdmissionClosed) {
-            throw new gatewayWorkAdmission.GatewayDrainingError();
-          }
-          finalAnnounceProviderStarts += 1;
-          return {
-            payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
-            meta: { durationMs: 1 },
-          };
-        },
-      });
 
       const tool = getSessionTool("sessions_send", {
         agentSessionKey: requesterKey,
@@ -334,9 +315,9 @@ export function registerSessionsSendLateReplyTests({
           status: pendingError ? "timeout" : "accepted",
           sessionKey: targetKey,
           ...(!pendingError ? { targetDisposition: "queued" } : {}),
-          delivery: { status: "pending", mode: "announce" },
+          delivery: { status: cronRequester ? "skipped" : "pending" },
         });
-        expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(1);
+        expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(cronRequester ? 0 : 1);
         expect(requesterProviderStarts).toBe(0);
         releaseDelayedWait();
 
@@ -352,7 +333,7 @@ export function registerSessionsSendLateReplyTests({
         await vi.waitFor(() => {
           expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
         });
-        expect(requesterProviderStarts).toBe(cronRequester ? 0 : spawned ? 1 : 3);
+        expect(requesterProviderStarts).toBe(cronRequester ? 0 : 1);
 
         const requesterReplyCall = calls.find(
           (call) =>
@@ -380,17 +361,11 @@ export function registerSessionsSendLateReplyTests({
             isCompletionReportInputProvenance(replyParams?.inputProvenance),
             "requested child results use the completion boundary so parent answers remain visible",
           ).toBe(spawned);
-          if (spawned) {
-            expect(replyParams?.extraSystemPrompt).not.toContain("REPLY_SKIP");
-          } else {
-            expect(replyParams?.extraSystemPrompt).toContain("Agent-to-agent reply step");
-            expect(replyParams?.extraSystemPrompt).toContain("Current agent: Agent 1 (requester)");
+          if (!failure) {
+            expect(replyParams?.extraSystemPrompt).toContain("This result is delivered once");
           }
         }
         expect(calls.find((call) => call.method === "send")).toBeUndefined();
-        const announces = !spawned || (cronRequester && !failure);
-        expect(finalAnnounceAdmissionClosed).toBe(announces ? false : undefined);
-        expect(finalAnnounceProviderStarts).toBe(announces ? 1 : 0);
       }, releaseDelayedWait);
     },
   );

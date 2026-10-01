@@ -32,7 +32,9 @@ session list without live run state, and custom groups in browser storage. Recen
 transcripts use the existing chat cache. On reload, the shell, sidebar, and cached
 conversation can appear while the Gateway is still connecting. Agent pickers and
 the agent directory wait for a live roster from the Gateway; stored agent lists
-cannot establish the current role's discovery permissions. Live state replaces
+cannot establish the current role's discovery permissions. Short conversation links
+use cached routing defaults and session rows without waiting for agent discovery.
+The Gateway verifies the established session after connecting. Live state replaces
 the cached session roster on connect, and chat requests changes from its saved transcript cursor.
 The first chat request waits up to 300 ms after connecting for the stored transcript,
 then falls back to live history if it is not ready. A stored transcript belongs to its selected

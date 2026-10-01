@@ -18,7 +18,7 @@ afterEach(async () => {
 });
 
 it.skipIf(process.platform === "win32")(
-  "replays the pending receipt with the validated Node when PATH has no node",
+  "replays the pending receipt with the validated runtime when PATH has no node",
   () =>
     fixture.lifetime.run(async () => {
       const { root, childGuardEnv } = fixture.setup();

@@ -1,10 +1,9 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { seedSessionStore } from "./embedded-agent-subscribe.compaction-test-helpers.js";
 import {
   createStubSessionHarness,
@@ -20,6 +19,8 @@ import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.h
 import type { AgentMessage } from "./runtime/index.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-compaction-handler-");
 
 function createCompactionContext(messages: AgentMessage[] = []): EmbeddedAgentSubscribeContext {
   const ctx = createContext(undefined);
@@ -144,61 +145,57 @@ describe("compaction handlers", () => {
   ] as const)(
     "preserves local compaction facts under $name",
     async ({ options, expectedCount, expectedEventCount }) => {
-      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-handler-"));
+      const tmp = sessionDirs.make();
       const storePath = path.join(tmp, "sessions.json");
       const agentId = "test-agent";
       const runId = `run-compaction-owner-${randomUUID()}`;
       const sessionKey = `agent:${agentId}:${runId}`;
+      await seedSessionStore({ storePath, sessionKey, compactionCount: 1 });
+      const before = structuredClone(
+        loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
+      );
+      const onAgentEvent = vi.fn();
+      const { emit, subscription } = createSubscribedSessionHarness({
+        ...options,
+        runId,
+        sessionId: "session-1",
+        sessionKey,
+        agentId,
+        config: { session: { store: storePath } },
+        sessionExtras: { messages: [] },
+        onAgentEvent,
+      });
       try {
-        await seedSessionStore({ storePath, sessionKey, compactionCount: 1 });
-        const before = structuredClone(
-          loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
-        );
-        const onAgentEvent = vi.fn();
-        const { emit, subscription } = createSubscribedSessionHarness({
-          ...options,
-          runId,
-          sessionId: "session-1",
+        emit(completedCompactionEnd());
+        emit(completedCompactionEnd());
+        await subscription.waitForPendingEvents();
+        await vi.dynamicImportSettled();
+        // Join the writer queue without advancing the seeded floor.
+        await reconcileSessionStoreCompactionCountAfterSuccess({
           sessionKey,
           agentId,
-          config: { session: { store: storePath } },
-          sessionExtras: { messages: [] },
-          onAgentEvent,
+          configStore: storePath,
+          observedCompactionCount: 1,
         });
-        try {
-          emit(completedCompactionEnd());
-          emit(completedCompactionEnd());
-          await subscription.waitForPendingEvents();
-          await vi.dynamicImportSettled();
-          // Join the writer queue without advancing the seeded floor.
-          await reconcileSessionStoreCompactionCountAfterSuccess({
-            sessionKey,
-            agentId,
-            configStore: storePath,
-            observedCompactionCount: 1,
-          });
-          expect(subscription.getCompactionCount()).toBe(2);
-          expect(subscription.getLastCompactionTokensAfter()).toBe(50);
-          expect(onAgentEvent).toHaveBeenCalledTimes(2);
-          expect(onAgentEvent).toHaveBeenCalledWith({
-            stream: "compaction",
-            data: { phase: "end", completed: true, willRetry: false, outcome: "completed" },
-          });
-          const events = listSessionStateEventsSince(sessionKey, agentId, 0).events.filter(
-            (event) => event.runId === runId,
-          );
-          expect(events).toHaveLength(expectedEventCount);
-          expect(events.every((event) => event.kind === "compacted")).toBe(true);
-          const after = loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" });
-          expect(after?.compactionCount).toBe(expectedCount);
-          if (expectedCount === 1) {
-            expect(after).toEqual(before);
-          }
-        } finally {
-          subscription.unsubscribe();
+        expect(subscription.getCompactionCount()).toBe(2);
+        expect(subscription.getLastCompactionTokensAfter()).toBe(50);
+        expect(onAgentEvent).toHaveBeenCalledTimes(2);
+        expect(onAgentEvent).toHaveBeenCalledWith({
+          stream: "compaction",
+          data: { phase: "end", completed: true, willRetry: false, outcome: "completed" },
+        });
+        const events = listSessionStateEventsSince(sessionKey, agentId, 0).events.filter(
+          (event) => event.runId === runId,
+        );
+        expect(events).toHaveLength(expectedEventCount);
+        expect(events.every((event) => event.kind === "compacted")).toBe(true);
+        const after = loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" });
+        expect(after?.compactionCount).toBe(expectedCount);
+        if (expectedCount === 1) {
+          expect(after).toEqual(before);
         }
       } finally {
-        await fs.rm(tmp, { recursive: true, force: true });
+        subscription.unsubscribe();
       }
     },
   );
