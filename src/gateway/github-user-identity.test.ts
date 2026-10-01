@@ -420,6 +420,28 @@ describe("authenticated GitHub identity sync", () => {
     });
   });
 
+  it("resolves verified Cloudflare email-code users without treating their id as GitHub credit", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+        githubResponse({
+          id: 58493,
+          email: "ADA@example.com",
+          idp: { type: "onetimepin" },
+        }),
+      );
+      const result = await cloudflareSync({})?.();
+      expect(getUserProfileListItem(result!.profileId)).toMatchObject({
+        emails: ["ada@example.com"],
+        githubIdentity: null,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      fetchMock.mockResolvedValueOnce(
+        githubResponse({ email: "mallory@example.com", idp: { type: "onetimepin" } }),
+      );
+      await expect(cloudflareSync({})?.()).rejects.toThrow("principal did not match");
+    });
+  });
+
   it.each([
     { name: "malformed JWT", assertion: "not-a-jwt" },
     { name: "oversized JWT", assertion: "x".repeat(16 * 1024 + 1) },
