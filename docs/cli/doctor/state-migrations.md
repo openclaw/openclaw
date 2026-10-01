@@ -14,6 +14,10 @@ and profile state, and Microsoft Teams conversations, polls, SSO tokens, and
 feedback learnings are no longer imported from JSON files. If those sources
 remain, Doctor preserves them and directs you to [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
 and run its migrations first. Existing SQLite state remains authoritative.
+Doctor archives a retired Telegram `thread-bindings-*.json` file as a completed
+no-op only when it is a regular file containing exactly version `1` and an empty
+`bindings` array. Nonempty, malformed, symlinked, or otherwise uncertain files
+remain preserved for operator review.
 Retired `subagents/runs.json` files are also ignored and left untouched;
 transient runs are never restored from them.
 
