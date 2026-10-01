@@ -1,23 +1,23 @@
 // Qa Lab tests cover model catalog plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasErrnoCode } from "openclaw/plugin-sdk/infra-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { hasErrnoCode } from "../../../src/infra/errno.js";
-import {
-  fixtureReceiptClientSource,
-  openFixtureReceiptChannel,
-  type FixtureReceiptChannel,
-} from "../../../test/helpers/fixture-receipts.js";
-import { withinTest } from "../../../test/helpers/promise.js";
 import { loadQaRunnerModelOptions } from "./model-catalog.runtime.js";
-import { isProcessAlive, waitForDead } from "./process-wait.test-helper.js";
+import {
+  fixtureReadyClientSource,
+  isProcessAlive,
+  openFixtureReadyChannel,
+  waitForDead,
+  withinTest,
+} from "./process-wait.test-helper.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const { cleanup, makeTempDir } = createTempDirHarness();
 
-let receipts: FixtureReceiptChannel;
+let receipts: Awaited<ReturnType<typeof openFixtureReadyChannel>>;
 beforeAll(async () => {
-  receipts = await openFixtureReceiptChannel();
+  receipts = await openFixtureReadyChannel();
 });
 afterAll(async () => {
   await receipts?.close();
@@ -49,7 +49,7 @@ async function fixtureReadyBeforeSettlement(
       }
     },
   );
-  await Promise.race([receipts.waitFor(recordPath, "ready"), settled]);
+  await Promise.race([receipts.waitFor(recordPath), settled]);
 }
 
 describe("qa runner model catalog", () => {
@@ -121,11 +121,11 @@ describe("qa runner model catalog", () => {
       const controller = new AbortController();
       let runPromise: ReturnType<typeof loadQaRunnerModelOptions> | undefined;
       const childScript = [
-        fixtureReceiptClientSource(receipts.endpoint),
+        fixtureReadyClientSource(receipts.port),
         "import fs from 'node:fs';",
         "process.on('SIGTERM', () => {});",
         `fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));`,
-        `sendReceipt(${JSON.stringify(pidPath)}, 'ready');`,
+        `sendReady(${JSON.stringify(pidPath)});`,
         "setInterval(() => {}, 1000);",
       ].join("\n");
       const catalogScript = [
@@ -172,7 +172,7 @@ describe("qa runner model catalog", () => {
       const controller = new AbortController();
       let runPromise: ReturnType<typeof loadQaRunnerModelOptions> | undefined;
       const childScript = [
-        fixtureReceiptClientSource(receipts.endpoint),
+        fixtureReadyClientSource(receipts.port),
         "import fs from 'node:fs';",
         `fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));`,
         "process.on('SIGTERM', () => {",
@@ -182,7 +182,7 @@ describe("qa runner model catalog", () => {
         "  }, 75);",
         "});",
         `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
-        `sendReceipt(${JSON.stringify(readyPath)}, 'ready');`,
+        `sendReady(${JSON.stringify(readyPath)});`,
         "setInterval(() => {}, 1000);",
       ].join("\n");
       const catalogScript = [

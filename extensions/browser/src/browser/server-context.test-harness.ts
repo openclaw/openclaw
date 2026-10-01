@@ -95,3 +95,36 @@ export function mockLaunchedChrome(
   launchOpenClawChrome.mockResolvedValue(running);
   return running;
 }
+
+// Keep fixture waits timer-free while allowing Vitest cancellation to reach finally cleanup.
+export function withinTest<T>(work: PromiseLike<T>, signal: AbortSignal): Promise<Awaited<T>> {
+  let onAbort = (): void => {};
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => {
+      const reason: unknown = signal.reason;
+      reject(reason instanceof Error ? reason : new Error("test aborted", { cause: reason }));
+    };
+  });
+  if (signal.aborted) {
+    onAbort();
+  } else {
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
+  return Promise.race([work, aborted]).finally(() => {
+    signal.removeEventListener("abort", onAbort);
+  });
+}
+
+// A fixture must reach its gate before its owning operation settles; preserve early rejections.
+export function awaitGateBeforeSettlement<T>(
+  gate: PromiseLike<T>,
+  operation: PromiseLike<unknown>,
+  message: string,
+): Promise<Awaited<T>> {
+  return Promise.race([
+    gate,
+    Promise.resolve(operation).then((): never => {
+      throw new Error(message);
+    }),
+  ]);
+}

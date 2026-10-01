@@ -5,10 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
 import type { PosixProcess } from "./transport-process-snapshot.js";
+import { awaitGateBeforeSettlement, withinTest } from "./transport-procfs.test-support.js";
 import { closeCodexAppServerTransportAndWait } from "./transport.js";
 
 type FixtureEvent = {

@@ -8,12 +8,6 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { hasErrnoCode } from "../../../src/infra/errno.js";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const spawnSyncMock = vi.hoisted(() => vi.fn());
@@ -36,7 +30,12 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-import { isProcessAlive, waitForDead } from "./process-wait.test-helper.js";
+import {
+  awaitGateBeforeSettlement,
+  isProcessAlive,
+  waitForDead,
+  withinTest,
+} from "./process-wait.test-helper.js";
 import {
   resetQaScenarioCommandCleanupTimings,
   runQaScenarioCommandLifecycle,
@@ -48,16 +47,6 @@ type ParentHandler = (() => void) | ((signal: ParentSignal) => void);
 
 function spyOnProcessKill() {
   return vi.spyOn(process, "kill");
-}
-
-function killCommandProcessGroup(pid: number): void {
-  try {
-    process.kill(-pid, "SIGKILL");
-  } catch (error) {
-    if (!hasErrnoCode(error, "ESRCH")) {
-      throw error;
-    }
-  }
 }
 
 function createChild(pid = 42) {
@@ -91,12 +80,27 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
   });
 
   it("settles within a bound after the leader writes its final result with inherited stdio open", async ({
+    onTestFinished,
     signal,
   }) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "qa-command-settlement-"));
-    const ready = createDeferred();
+    const ready = Promise.withResolvers<void>();
     let commandChild: ChildProcess | undefined;
     let pending: ReturnType<typeof runQaScenarioCommandLifecycle> | undefined;
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () => {
+      cleanupPromise ??= (async () => {
+        if (signal.aborted && commandChild?.exitCode === null && commandChild.signalCode === null) {
+          // The held child owns this identity; its exit starts the product's graceful group cleanup.
+          commandChild.kill("SIGTERM");
+        }
+        await pending?.catch(() => undefined);
+        await rm(root, { force: true, recursive: true });
+      })();
+      return cleanupPromise;
+    };
+    // Vitest abandons timed-out bodies; its hook must join the same finally cleanup.
+    onTestFinished(cleanup);
     let stdout = "";
     spawnMock.mockImplementation((...args: Parameters<NonNullable<typeof actualSpawn.value>>) => {
       if (!actualSpawn.value) {
@@ -166,11 +170,7 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
         stderr: "",
       });
     } finally {
-      if (signal.aborted && commandChild?.pid !== undefined) {
-        killCommandProcessGroup(commandChild.pid);
-      }
-      await pending?.catch(() => undefined);
-      await rm(root, { force: true, recursive: true });
+      await cleanup();
     }
   });
 
