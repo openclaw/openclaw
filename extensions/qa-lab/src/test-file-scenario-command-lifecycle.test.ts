@@ -7,6 +7,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -30,12 +31,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-import {
-  awaitGateBeforeSettlement,
-  isProcessAlive,
-  waitForDead,
-  withinTest,
-} from "./process-wait.test-helper.js";
+import { isProcessAlive, waitForDead } from "./process-wait.test-helper.js";
 import {
   resetQaScenarioCommandCleanupTimings,
   runQaScenarioCommandLifecycle,

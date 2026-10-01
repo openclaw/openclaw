@@ -9,16 +9,17 @@ import {
   tempWorkspaceSync,
   type TempWorkspaceSync,
 } from "openclaw/plugin-sdk/temp-path";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  withinTest,
+  type FixtureReceiptChannel,
+} from "openclaw/plugin-sdk/test-fixtures";
 import { build } from "tsdown";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createStateSchemaInlinePlugin } from "../../../scripts/lib/state-schema-inline-plugin.mjs";
 import { encodeOnePasswordSecretId } from "../onepassword-secret-id.js";
-import {
-  createTrustedNodeFixture,
-  fixtureReadyClientSource,
-  openFixtureReadyChannel,
-  withinTest,
-} from "./trusted-node.test-support.js";
+import { createTrustedNodeFixture } from "./trusted-node.test-support.js";
 
 const sourceResolverPath = fileURLToPath(
   new URL("../onepassword-secret-ref-resolver.js", import.meta.url),
@@ -41,10 +42,10 @@ let timeoutResolverPath: string;
 let stagedResolverRoot: string | undefined;
 let trustedNodeRoot: string | undefined;
 let trustedNodePath: string;
-let receipts: Awaited<ReturnType<typeof openFixtureReadyChannel>>;
+let receipts: FixtureReceiptChannel;
 
 beforeAll(async () => {
-  receipts = await openFixtureReadyChannel();
+  receipts = await openFixtureReceiptChannel();
   const tempRoot = path.join(process.cwd(), ".tmp");
   fs.mkdirSync(tempRoot, { recursive: true });
   stagedResolverRoot = fs.mkdtempSync(path.join(tempRoot, "onepassword-resolver-"));
@@ -749,11 +750,11 @@ setInterval(() => {}, 1000);
       const tempDir = fixtureWorkspace.dir;
       const descendantPidPath = path.join(tempDir, "timed-out-descendant.pid");
       const descendantBody = `import fs from "node:fs";
-${fixtureReadyClientSource(receipts.port)}
+${fixtureReceiptClientSource(receipts.endpoint)}
 process.on("SIGTERM", () => {});
 fs.writeFileSync(${JSON.stringify(`${descendantPidPath}.tmp`)}, String(process.pid));
 fs.renameSync(${JSON.stringify(`${descendantPidPath}.tmp`)}, ${JSON.stringify(descendantPidPath)});
-sendReady(${JSON.stringify(descendantPidPath)});
+sendReceipt(${JSON.stringify(descendantPidPath)}, "ready");
 setInterval(() => {}, 1000);
 `;
       let opPath = process.execPath;
@@ -790,7 +791,7 @@ while true; do sleep 1; done
         // If exit wins, the durable record still proves SIGTERM immunity was installed.
         await withinTest(
           Promise.race([
-            receipts.waitFor(descendantPidPath),
+            receipts.waitFor(descendantPidPath, "ready"),
             resultPromise.then((result) => {
               if (!fs.existsSync(descendantPidPath)) {
                 throw new Error(
