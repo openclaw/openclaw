@@ -71,10 +71,7 @@ export function resolveRequesterInternalSessionKey(params: {
   const { alias } = resolveMainSessionAlias(params.cfg);
   const requesterSessionKey = normalizeOptionalString(params.requesterSessionKey);
   return requesterSessionKey
-    ? resolveInternalSessionKey({
-        key: requesterSessionKey,
-        alias,
-      })
+    ? resolveInternalSessionKey({ key: requesterSessionKey, alias })
     : alias;
 }
 

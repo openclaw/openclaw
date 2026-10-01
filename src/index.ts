@@ -6,6 +6,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { tryRunUpdateAdmissionBeforeStartup } from "./cli/run-main-update-admission.js";
+import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { isMainModule } from "./infra/is-main.js";
 
 const isMain = isMainModule({
@@ -31,27 +32,8 @@ if (
   }
 }
 
-const [
-  { formatCliFailureLines, formatCliJsonFailure, isExpectedCliError },
-  { isJsonOutputModeActive },
-  { runCliWithExitFinalization },
-  { withCliProcessScope },
-  { installDistEsmResolveFastPath },
-  { tryHandleRootVersionFastPath },
-  { formatUncaughtError },
-  { runFatalErrorHooks },
-  { installUnhandledRejectionHandler, isBenignUncaughtExceptionError, isUncaughtExceptionHandled },
-] = await Promise.all([
-  import("./cli/failure-output.js"),
-  import("./cli/json-output-mode.js"),
-  import("./cli/one-shot-exit.js"),
-  import("./cli/runtime-cleanup-scope.js"),
-  import("./entry.esm-resolve-fast-path.js"),
-  import("./entry.version-fast-path.js"),
-  import("./infra/errors.js"),
-  import("./infra/fatal-error-hooks.js"),
-  import("./infra/unhandled-rejections.js"),
-]);
+const handledRootVersion =
+  isMain && !handledAdmission && tryHandleRootVersionFastPath(process.argv);
 
 type LegacyCliDeps = {
   runCli: (
@@ -102,12 +84,6 @@ export async function runLegacyCliEntry(
   await runCli(argv, options);
 }
 
-if (isMain && !handledAdmission) {
-  installDistEsmResolveFastPath(import.meta.url);
-}
-const handledRootVersion =
-  isMain && !handledAdmission && tryHandleRootVersionFastPath(process.argv);
-
 if (!isMain) {
   ({
     applyTemplate,
@@ -132,6 +108,31 @@ if (!isMain) {
 }
 
 if (isMain && !handledRootVersion && !handledAdmission) {
+  const [
+    { formatCliFailureLines, formatCliJsonFailure, isExpectedCliError },
+    { isJsonOutputModeActive },
+    { runCliWithExitFinalization },
+    { withCliProcessScope },
+    { installDistEsmResolveFastPath: installFastPath },
+    { formatUncaughtError },
+    { runFatalErrorHooks },
+    {
+      installUnhandledRejectionHandler,
+      isBenignUncaughtExceptionError,
+      isUncaughtExceptionHandled,
+    },
+  ] = await Promise.all([
+    import("./cli/failure-output.js"),
+    import("./cli/json-output-mode.js"),
+    import("./cli/one-shot-exit.js"),
+    import("./cli/runtime-cleanup-scope.js"),
+    import("./entry.esm-resolve-fast-path.js"),
+    import("./infra/errors.js"),
+    import("./infra/fatal-error-hooks.js"),
+    import("./infra/unhandled-rejections.js"),
+  ]);
+  installFastPath(import.meta.url);
+
   const { defaultRuntime, restoreRuntimeTerminalState } = await import("./runtime.js");
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.

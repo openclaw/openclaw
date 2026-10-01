@@ -22,7 +22,6 @@ import {
 import { recordResponsesContextUsage } from "../transports/openai-responses-context-usage.js";
 import { responsesPromptObserver } from "../transports/openai-responses-contracts.js";
 import { ResponsesStreamFailure } from "../transports/openai-responses-debug.js";
-import { resolveOpenAIResponsesTextFormat } from "../transports/openai-responses-params-internal.js";
 import { createResponsesPromptEgressObserver } from "../transports/openai-responses-prompt-observer-internal.js";
 import {
   commitResponsesEncryptedContentAttempt,
@@ -85,6 +84,7 @@ import {
   resolveOpenAIRequestReasoning,
   type OpenAIRequestReasoningEffort,
 } from "./openai-request-reasoning.js";
+import { resolveOpenAIResponsesTextFormat } from "./openai-response-format.js";
 import {
   applyResponsesServiceTierPricing,
   convertResponsesMessages,

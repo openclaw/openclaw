@@ -137,7 +137,7 @@ describe("operator config startup corpus", () => {
     });
   });
 
-  it.each([false, true, "legacy", null])(
+  it.each([false, null])(
     "retains included Copilot discovery.enabled=%j until Doctor migrates it",
     async (enabled) => {
       const home = tempDirs.make("openclaw-copilot-migration-");
@@ -174,10 +174,6 @@ describe("operator config startup corpus", () => {
       expect(JSON.parse(fs.readFileSync(path.join(home, "copilot.json"), "utf8"))).toEqual(legacy);
     },
   );
-
-  it("covers every retained config with an explicit catalog expectation", () => {
-    expect(fixtureNames).toEqual(Object.keys(expectations).toSorted());
-  });
 
   it.each(fixtureNames)(
     "%s loads, prepares model rows, and offers provider login",

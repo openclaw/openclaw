@@ -23,14 +23,29 @@ import {
 } from "./runtime-source-projection.js";
 import type { OpenClawConfig } from "./types.js";
 
-describe("prepared runtime snapshots", () => {
-  const unregister: Array<() => void> = [];
+const unregister: Array<() => void> = [];
 
-  afterEach(() => {
-    unregister.splice(0).forEach((release) => release());
-    resetConfigRuntimeState();
+afterEach(() => {
+  unregister.splice(0).forEach((release) => release());
+  resetConfigRuntimeState();
+  vi.unstubAllEnvs();
+});
+
+function gatedPreparer() {
+  const started = createDeferredCore();
+  const deferred = createDeferredCore<() => void>();
+  const syncPrepare = vi.fn();
+  const release = registerRuntimeConfigSnapshotPreparer(syncPrepare, {
+    prepareAsync: () => {
+      started.resolve();
+      return deferred.promise;
+    },
   });
+  unregister.push(release);
+  return { started: started.promise, deferred, syncPrepare, release };
+}
 
+describe("prepared runtime snapshots", () => {
   it("keeps registration and setters synchronous when an async companion is available", () => {
     const active: OpenClawConfig = { gateway: { port: 18789 } };
     setRuntimeConfigSnapshot(active);
@@ -51,25 +66,15 @@ describe("prepared runtime snapshots", () => {
     const candidate: OpenClawConfig = { gateway: { port: 19001 } };
     const facts = createConfigResolutionFacts([]);
     setConfigResolutionFacts(candidate, facts);
-    const started = createDeferredCore();
-    const deferred = createDeferredCore<() => void>();
-    const syncPrepare = vi.fn();
+    const { started, deferred, syncPrepare } = gatedPreparer();
     const contribute = vi.fn(() => {
       expect(getRuntimeConfigSnapshot()).toBeNull();
       expect(getConfigResolutionFacts(candidate)).toBe(facts);
     });
     const legacyPrepare = vi.fn();
-    unregister.push(
-      registerRuntimeConfigSnapshotPreparer(syncPrepare, {
-        prepareAsync: () => {
-          started.resolve();
-          return deferred.promise;
-        },
-      }),
-      registerRuntimeConfigSnapshotPreparer(legacyPrepare),
-    );
+    unregister.push(registerRuntimeConfigSnapshotPreparer(legacyPrepare));
     const pending = loadPinnedRuntimeConfigAsync(async () => ({ config: candidate }));
-    await started.promise;
+    await started;
     expect(getRuntimeConfigSnapshot()).toBeNull();
     expect(getRuntimeConfigSnapshotMetadata()).toBeNull();
     expect(contribute).not.toHaveBeenCalled();
@@ -234,18 +239,10 @@ describe("prepared runtime snapshots", () => {
     "candidate facts",
   ])("discards a cold candidate after %s changes during preparation", async (change) => {
     const candidate: OpenClawConfig = { gateway: { port: 19001 } };
-    const started = createDeferredCore();
-    const deferred = createDeferredCore<() => void>();
+    const { started, deferred, release } = gatedPreparer();
     const contribute = vi.fn();
-    const release = registerRuntimeConfigSnapshotPreparer(() => {}, {
-      prepareAsync: () => {
-        started.resolve();
-        return deferred.promise;
-      },
-    });
-    unregister.push(release);
     const pending = loadPinnedRuntimeConfigAsync(async () => ({ config: candidate }));
-    await started.promise;
+    await started;
     switch (change) {
       case "publication":
         setRuntimeConfigSnapshot({ gateway: { port: 20000 } });
@@ -309,18 +306,10 @@ describe("prepared runtime snapshots", () => {
   });
 
   it("joins rejected preparation companions before failing the cold load", async () => {
-    const deferred = createDeferredCore<() => void>();
+    const { started, deferred, syncPrepare } = gatedPreparer();
     const remaining = createDeferredCore<() => void>();
-    const started = createDeferredCore();
-    const syncPrepare = vi.fn();
     const contribute = vi.fn();
     unregister.push(
-      registerRuntimeConfigSnapshotPreparer(syncPrepare, {
-        prepareAsync: () => {
-          started.resolve();
-          return deferred.promise;
-        },
-      }),
       registerRuntimeConfigSnapshotPreparer(() => {}, {
         prepareAsync: () => remaining.promise,
       }),
@@ -330,7 +319,7 @@ describe("prepared runtime snapshots", () => {
     }));
     const completed = vi.fn();
     const observed = pending.then(completed, completed);
-    await started.promise;
+    await started;
     deferred.reject(new Error("preparation failed"));
     await setImmediate();
     expect(completed).not.toHaveBeenCalled();
@@ -346,12 +335,6 @@ describe("prepared runtime snapshots", () => {
 });
 
 describe("async cold runtime pin", () => {
-  const unregister: Array<() => void> = [];
-  afterEach(() => {
-    unregister.splice(0).forEach((release) => release());
-    resetConfigRuntimeState();
-  });
-
   it("reuses the active runtime without invoking a cold loader", async () => {
     const current: OpenClawConfig = { gateway: { port: 19001 } };
     setRuntimeConfigSnapshot(current);
@@ -395,17 +378,8 @@ describe("async cold runtime pin", () => {
   });
 
   it("rechecks caller authority after preparation without publishing environment or config", async () => {
-    const started = createDeferredCore();
-    const gate = createDeferredCore<() => void>();
+    const { started, deferred } = gatedPreparer();
     const contribution = vi.fn();
-    unregister.push(
-      registerRuntimeConfigSnapshotPreparer(() => {}, {
-        prepareAsync: () => {
-          started.resolve();
-          return gate.promise;
-        },
-      }),
-    );
     let current = true;
     const publish = vi.fn();
     const pending = loadPinnedRuntimeConfigAsync(
@@ -421,10 +395,10 @@ describe("async cold runtime pin", () => {
         },
       },
     );
-    await started.promise;
+    await started;
     current = false;
     const rejected = expect(pending).rejects.toThrow("caller superseded");
-    gate.resolve(contribution);
+    deferred.resolve(contribution);
     await rejected;
     expect(publish).not.toHaveBeenCalled();
     expect(contribution).not.toHaveBeenCalled();
@@ -475,11 +449,6 @@ describe("async cold runtime pin", () => {
 });
 
 describe("captured async runtime reads", () => {
-  afterEach(() => {
-    resetConfigRuntimeState();
-    vi.unstubAllEnvs();
-  });
-
   it.each(["source", "reset", "captured source"])(
     "keeps the selected runtime/source pair after %s changes before continuation",
     async (change) => {

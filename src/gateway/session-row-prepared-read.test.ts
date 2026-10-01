@@ -250,6 +250,7 @@ it.each(["child", "parent"] as const)(
       referenced: (key) => projection.describe({ agentId: "main", key }),
       lookup: projection.describe,
       prepareExactRows: () => undefined,
+      prepareSelection: () => undefined,
       retainExactPreparation: () => () => {},
       assertExactRowsPrepared: () => {},
       retainArchiveRows: () => ({ update: () => {}, release: () => {} }),

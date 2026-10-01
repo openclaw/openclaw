@@ -159,10 +159,7 @@ describe("parent Swarm outcome projection", () => {
         sessionKey: `agent:other:${suffix}`,
       });
       const { alias } = resolveMainSessionAlias(globalConfig);
-      const requesterKey = resolveInternalSessionKey({
-        key: admitted.canonicalKey,
-        alias,
-      });
+      const requesterKey = resolveInternalSessionKey({ key: admitted.canonicalKey, alias });
       expect(requesterKey).toBe(suffix === "global" ? "agent:other:global" : "global");
       await withCollectors(
         [

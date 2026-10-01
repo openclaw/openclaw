@@ -541,13 +541,14 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       const context = requestContext({});
       await initializeSessionReadContext(context);
       const projection = getSessionRowProjection(context)!;
-      const original = projection.ensureMaterialized;
+      const original = projection.prepareSelection;
       const readiness = vi
-        .spyOn(projection, "ensureMaterialized")
-        .mockImplementationOnce(async () => {
-          await original();
+        .spyOn(projection, "prepareSelection")
+        .mockImplementationOnce(async (...args) => {
+          const result = await original(...args);
           // Identity changes while the request awaits readiness, before selection and presentation.
           linkEmail("creator@preparation.test", callerId);
+          return result;
         });
       const result = await listSessions({ client, context, request: { limit: 100 } });
       expect(readiness).toHaveBeenCalled();

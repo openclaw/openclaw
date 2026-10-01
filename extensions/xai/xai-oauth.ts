@@ -113,12 +113,10 @@ function fetchXaiOAuth(url: string, options: XaiOAuthFetchOptions, body?: Record
 }
 
 function requireTrustedXaiOAuthEndpoint(endpoint: string, label: string): string {
-  try {
-    const url = new URL(endpoint);
-    if (url.protocol === "https:" && (url.hostname === "x.ai" || url.hostname.endsWith(".x.ai"))) {
-      return endpoint;
-    }
-  } catch {}
+  const url = URL.parse(endpoint);
+  if (url?.protocol === "https:" && (url.hostname === "x.ai" || url.hostname.endsWith(".x.ai"))) {
+    return endpoint;
+  }
   throw new Error(`xAI OAuth discovery returned untrusted ${label}`);
 }
 
@@ -466,12 +464,8 @@ function resolveXaiOAuthIdentity(tokens: XaiOAuthTokenResponse): XaiOAuthIdentit
 }
 
 function isLegacyXaiOAuthTokenEndpoint(endpoint: string): boolean {
-  try {
-    const url = new URL(endpoint);
-    return `${url.origin}${url.pathname}` === XAI_LEGACY_OAUTH_TOKEN_ENDPOINT;
-  } catch {
-    return false;
-  }
+  const url = URL.parse(endpoint);
+  return url !== null && `${url.origin}${url.pathname}` === XAI_LEGACY_OAUTH_TOKEN_ENDPOINT;
 }
 
 async function resolveXaiOAuthRefreshTokenEndpoint(

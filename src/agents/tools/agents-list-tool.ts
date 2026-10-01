@@ -68,10 +68,7 @@ export function createAgentsListTool(opts?: {
       const { alias } = resolveMainSessionAlias(cfg);
       const requesterInternalKey =
         typeof opts?.agentSessionKey === "string" && opts.agentSessionKey.trim()
-          ? resolveInternalSessionKey({
-              key: opts.agentSessionKey,
-              alias,
-            })
+          ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias })
           : alias;
       const requesterAgentId = resolveSessionAgentIds({
         config: cfg,

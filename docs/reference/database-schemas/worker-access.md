@@ -632,9 +632,10 @@ prepare up to 64 dirty persistent rows in the history worker: entry metadata,
 board presence, and activity-summary watermarks share one read snapshot per
 physical store. Membership comes from the worker-maintained compact projection,
 which also retains participant display facts for per-viewer reads. The projection
-retains each store through consumption and rejects replies after stored-fact or
-registry invalidation. Runtime owners classify their exact run, capacity, and
-Swarm notifications separately, so current display and activity changes do not
+retains each store through consumption and rejects replies after stored-fact
+invalidation. Registry renewal prepares current lineage before consumption without
+repeating an unchanged SQLite read. Runtime owners classify their exact run,
+capacity, and Swarm notifications separately, so current display and activity changes do not
 discard an unchanged database read. The same projection prepares current runtime
 facts before consumption; explicit stored facts, membership changes, and unknown
 notifications retain their invalidation checks. Rows replaced or
@@ -651,8 +652,12 @@ history worker, with foreground priority and row-generation checks before
 publication. The host evaluates fallback notices using its current runtime plugin
 aliases; configuration and model policy do not travel to the read worker.
 
-Catalog-only replacement reuses complete accepted database facts for live resident
-rows while rebuilding their model presentation. Stored-data, configuration,
+List pages wait for current selection metadata, then materialize their selected
+rows. Concurrent pages share bounded exact-row preparation; an admitted background
+batch may finish, and the remaining display drain resumes after those requests
+release their priority. Catalog-only replacement
+reuses complete accepted database facts for live resident rows while rebuilding
+their selected model presentation, without another worker transfer. Stored-data, configuration,
 physical-store, and lifecycle invalidations revoke those facts. Transcript updates
 revoke watermarks immediately even inside a coalesced presentation window. Cold
 archives retain no complete snapshot; exact archive reads remain bounded by the

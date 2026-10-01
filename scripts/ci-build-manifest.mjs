@@ -89,6 +89,9 @@ const changedNodeTestPlan = await importTargetPlan(
 const dockerSeedPlan = existsSync("./scripts/lib/ci-docker-seed-plan.mts")
   ? await import(fromTarget("./scripts/lib/ci-docker-seed-plan.mts"))
   : {};
+const publishedDriverUpdatePlan = existsSync("./scripts/lib/ci-published-driver-update-plan.mts")
+  ? await import(fromTarget("./scripts/lib/ci-published-driver-update-plan.mts"))
+  : {};
 const channelContractPlan = await importTargetPlan(
   existsSync("./scripts/lib/channel-contract-test-plan.mts")
     ? "./scripts/lib/channel-contract-test-plan.mts"
@@ -469,6 +472,9 @@ const targetWorkflow = existsSync(".github/workflows/ci.yml")
 const supportsOpenClawKitTests = targetWorkflow.includes("openclawkit-tests-contract-v1");
 const supportsCurrentAndroidCi = targetWorkflow.includes("android-ci-contract-v2");
 const supportsDockerSeedE2e = targetWorkflow.includes("docker-seed-e2e-contract-v1");
+const supportsPublishedDriverUpdate = targetWorkflow.includes(
+  "published-driver-update-contract-v1",
+);
 const useCompatibleAndroidCi = compatibilityTarget && !supportsCurrentAndroidCi;
 const androidTestTier = !fullNativeValidation && !useCompatibleAndroidCi;
 // Unit tests do not compile the benchmark. Keep its build when inputs
@@ -717,6 +723,19 @@ const dockerSeedLanes =
           : ["published-upgrade-survivor"]
         : []
     : [];
+if (
+  supportsPublishedDriverUpdate &&
+  typeof publishedDriverUpdatePlan.shouldRunPublishedDriverUpdate !== "function"
+) {
+  throw new Error("Current CI target requires the published-driver update owner selector");
+}
+const publishedDriverUpdate =
+  isCanonicalRepository &&
+  supportsPublishedDriverUpdate &&
+  !docsOnly &&
+  (runtimePullRequest
+    ? publishedDriverUpdatePlan.shouldRunPublishedDriverUpdate(changedPaths)
+    : runProofTier && (ownerPathEvent || eventName === "workflow_dispatch" || mainValidation));
 // Canonical pushes also use compact bins: 80+ single-group jobs
 // drain the runner pool for minutes, and per-shard check names on
 // main have no branch-protection consumers. Dispatch (release
@@ -1324,6 +1343,7 @@ const manifest = {
   run_node: runNode,
   run_docker_seed_e2e: dockerSeedLanes.length > 0,
   docker_seed_lanes: dockerSeedLanes.join(" "),
+  run_published_driver_update: publishedDriverUpdate,
   run_macos: runMacos,
   run_android: runAndroid,
   run_skills_python: runSkillsPython,
@@ -1572,6 +1592,7 @@ if (hybridHostedEligible) {
         process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY,
     ),
     "control-ui-performance": count(manifest.run_control_ui_performance),
+    "published-driver-update": count(manifest.run_published_driver_update),
     "native-i18n": count(manifest.run_native_i18n),
     "control-ui-i18n": count(manifest.run_control_ui_i18n),
     "checks-baseline-ratchets": count(hostedControlJobs && manifest.run_baseline_ratchets),
@@ -1739,6 +1760,7 @@ manifest.pr_job_count =
         "run_check_docs",
         "run_skills_python_job",
         "run_docker_seed_e2e",
+        "run_published_driver_update",
       ].reduce((sum, key) => sum + countPrJobs(manifest[key]), 0) +
       [
         ["run_checks_fast_core", "checks_fast_core_matrix"],
