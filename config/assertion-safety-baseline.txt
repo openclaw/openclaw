@@ -372,7 +372,7 @@ extensions/feishu/src/setup-core.ts	1
 extensions/feishu/src/setup-surface.ts	17
 extensions/feishu/src/thread-bindings.ts	2
 extensions/feishu/src/tool-account.ts	1
-extensions/feishu/src/typing-backoff.ts	3
+extensions/feishu/src/typing-backoff.ts	2
 extensions/feishu/src/wiki.ts	2
 extensions/file-transfer/index.ts	4
 extensions/file-transfer/src/node-host/dir-fetch.ts	1
