@@ -166,6 +166,35 @@ it("renders the people facet, rereads the selected view and restores it only for
     expect(peoplePicker(other).value).toBe("everyone");
     other.dispose();
   }
+  // A reconnect within one mount may belong to another viewer: the scope is reloaded,
+  // the stale selection is not carried over, and the previous scope keeps its own choice.
+  const reconnecting = sessionsPage();
+  await reconnecting.connect();
+  expect(peoplePicker(reconnecting).value).toBe("profile:ada");
+  reconnecting.fixture.connection.connected = false;
+  reconnecting.fixture.notify();
+  await vi.advanceTimersByTimeAsync(0);
+  const previous = expectDefined(reconnecting.request.getMockImplementation(), "request");
+  reconnecting.request.mockImplementation(async (method, params) => {
+    if (method === "users.self") {
+      return { profile: { id: "colleague" } };
+    }
+    return previous(method, params);
+  });
+  await reconnecting.connect();
+  expect(peoplePicker(reconnecting).value).toBe("everyone");
+  peoplePicker(reconnecting).onSelect("me");
+  await vi.advanceTimersByTimeAsync(0);
+  reconnecting.dispose();
+  const original = sessionsPage();
+  await original.connect();
+  expect(peoplePicker(original).value).toBe("profile:ada");
+  original.dispose();
+  const colleague = sessionsPage({ profileId: "colleague" });
+  await colleague.connect();
+  expect(peoplePicker(colleague).value).toBe("me");
+  colleague.dispose();
+
   const everyone = sessionsPage();
   await everyone.connect();
   peoplePicker(everyone).onSelect("everyone");

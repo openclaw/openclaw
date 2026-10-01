@@ -42,18 +42,33 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
     gatewayId && viewerProfileId
       ? `openclaw.workboard.sessions.people:${JSON.stringify([gatewayId, viewerProfileId, id])}`
       : undefined;
+  // The preference scope follows the live connection: a reconnect within one mount may
+  // belong to another viewer or Gateway, so identity reloads whenever the view activates.
+  const resetIdentity = () => {
+    identityLoad = undefined;
+    gatewayId = undefined;
+    viewerProfileId = undefined;
+    restoredBoardId = undefined;
+  };
   const loadIdentity = () =>
-    (identityLoad ??= Promise.allSettled([
-      host.request<{ deviceId: string }>("gateway.identity.get", {}),
-      host.request<UsersSelfResult>("users.self", {}),
-    ]).then(([gateway, viewer]) => {
+    (identityLoad ??= (async () => {
+      const receipt = generation;
+      const [gateway, viewer] = await Promise.allSettled([
+        host.request<{ deviceId: string }>("gateway.identity.get", {}),
+        host.request<UsersSelfResult>("users.self", {}),
+      ]);
+      if (receipt !== generation) {
+        // A newer activation owns the scope; let its own read load identity again.
+        identityLoad = undefined;
+        return;
+      }
       if (gateway.status === "fulfilled") {
         gatewayId = gateway.value.deviceId;
       }
       if (viewer.status === "fulfilled") {
         viewerProfileId = viewer.value.profile.id;
       }
-    }));
+    })());
   const restoreFilter = (id: string) => {
     if (restoredBoardId === id) {
       return;
@@ -224,6 +239,10 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
           peopleFilter = "everyone";
           snapshot = undefined;
           error = undefined;
+        }
+        if (enabled && !active) {
+          resetIdentity();
+          peopleFilter = "everyone";
         }
         boardId = nextId;
         active = enabled;
