@@ -233,7 +233,9 @@ describe("prompt-build current input on real runtimes", () => {
       const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "qa-fake-claude-"));
       // Registered before the Gateway so it runs after Gateway shutdown, when the
       // CLI child has released the executable.
-      cleanups.push(() => fs.rmSync(fakeDir, { recursive: true, force: true }));
+      cleanups.push(async () => {
+        fs.rmSync(fakeDir, { recursive: true, force: true });
+      });
       const fakeBin = path.join(fakeDir, "claude");
       fs.writeFileSync(fakeBin, FAKE_CLAUDE, { mode: 0o755 });
       const { gateway, state, transport } = await startGateway(withCliBackendConfig, () => {
