@@ -72,9 +72,15 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
       case "message_update":
         void scheduleEvent(evt, () => handleMessageUpdate(ctx, evt));
         return;
-      case "message_end":
-        void scheduleEvent(evt, () => handleMessageEnd(ctx, evt));
+      case "message_end": {
+        // Persistence rewrites the message after listeners return; queued delivery owns its copy.
+        const completedEvent =
+          evt.message.role === "assistant" && ctx.state.pendingEventChain
+            ? { ...evt, message: structuredClone(evt.message) }
+            : evt;
+        void scheduleEvent(completedEvent, () => handleMessageEnd(ctx, completedEvent));
         return;
+      }
       case "turn_end":
         void scheduleEvent(evt, () => ctx.noteLastAssistant(evt.message));
         return;
