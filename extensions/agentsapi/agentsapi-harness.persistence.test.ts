@@ -242,6 +242,77 @@ it.each(["inline images", "oversized original"])(
   },
 );
 
+it("skips canonical empty media slots while preserving numbered originals and source validation", async () => {
+  await withOpenClawTestState({ label: "agentsapi-empty-media-slots" }, async (state) => {
+    const params = await createAttempt(state.stateDir);
+    const create = vi
+      .spyOn(AgentsApiClient.prototype, "create")
+      .mockResolvedValue("sparse-session");
+    vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue(undefined);
+    const upload = vi
+      .spyOn(AgentsApiClient.prototype, "uploadFile")
+      .mockResolvedValue({ status: "uploaded" });
+    const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue(undefined);
+    vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
+    // Canonical hydration keeps serialized null slots as empty positional facts.
+    const empty = { transcribed: false };
+    let media: NonNullable<AgentHarnessAttemptParamsV2["media"]> = Array.from(
+      { length: 51 },
+      () => empty,
+    );
+    const hostCapabilities = {
+      ...params.hostCapabilities,
+      resolveInputAttachmentMedia: async () => media,
+    };
+    const harness = registerHarness(state.env);
+    try {
+      expect(await harness.runAttempt({ ...params, hostCapabilities })).toMatchObject({
+        terminal: { kind: "ok" },
+      });
+      expect(create.mock.calls[0]?.[3]?.files).toEqual([]);
+      expect(message.mock.calls[0]?.[1]).toContain(params.prompt);
+      expect(message.mock.calls[0]?.[1]).not.toContain("Input attachment feedback:");
+
+      const bytes = Buffer.from("The launch window is October.");
+      const saved = await saveMediaBuffer(bytes, "text/plain", "inbound");
+      media = [
+        ...Array.from({ length: 50 }, () => empty),
+        { url: `media://inbound/${saved.id}`, fileName: "brief.txt" },
+      ];
+      expect(
+        await harness.runAttempt({ ...params, hostCapabilities, runId: "sparse-file-turn" }),
+      ).toMatchObject({
+        terminal: { kind: "ok" },
+      });
+      expect(upload).toHaveBeenCalledTimes(1);
+      const file = upload.mock.calls[0]![1];
+      expect(Buffer.from(file.data, "base64")).toEqual(bytes);
+      expect(message.mock.calls[1]?.[1]).toContain(
+        JSON.stringify([{ attachment: 51, name: "brief.txt", path: file.path }]),
+      );
+
+      media = [{ contentType: "image/png" }];
+      expect(
+        await harness.runAttempt({ ...params, hostCapabilities, runId: "missing-source-turn" }),
+      ).toMatchObject({
+        terminal: {
+          kind: "failed",
+          error: expect.objectContaining({
+            message: "Agents API input attachment requires a host-prepared managed media source",
+          }),
+        },
+      });
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(message.mock.calls.map(([sessionId]) => sessionId)).toEqual([
+        "sparse-session",
+        "sparse-session",
+      ]);
+    } finally {
+      await harness.dispose();
+    }
+  });
+});
+
 it.each([
   { availability: "connected", uploadsBeforeDisconnect: 2 },
   { availability: "disconnected", uploadsBeforeDisconnect: 0 },

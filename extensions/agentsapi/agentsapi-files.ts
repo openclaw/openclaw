@@ -60,10 +60,22 @@ export async function prepareInputs(
   const files: AgentsApiInputFile[] = [];
   const mapping: { attachment: number; name: string; path: string }[] = [];
   const omitted: { attachment: number; reason: string }[] = [];
-  const beyondCountLimit = Math.max(0, (media?.length ?? 0) - maxFiles);
+  // Empty positional slots do not consume the file budget. Keep metadata-only
+  // candidates for validation and retain original positions in the execution mapping.
+  const candidates = Array.from((media ?? []).entries()).filter(([, fact]) =>
+    Boolean(
+      fact.path ||
+      fact.url ||
+      fact.contentType ||
+      fact.kind ||
+      fact.fileName ||
+      fact.sizeBytes !== undefined,
+    ),
+  );
+  const beyondCountLimit = Math.max(0, candidates.length - maxFiles);
   let staged: Awaited<ReturnType<typeof preparedWorkspaceReader>> | undefined;
   let totalBytes = 0;
-  for (const [index, fact] of (media ?? []).slice(0, maxFiles).entries()) {
+  for (const [index, fact] of candidates.slice(0, maxFiles)) {
     assertCurrent();
     signal.throwIfAborted();
     if (
