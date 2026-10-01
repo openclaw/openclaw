@@ -105,14 +105,14 @@ it.concurrent.for([
 ])(
   "preserves checkout ownership and fixture isolation (Linux=$linux, $scenario)",
   { timeout: 55_000 },
-  async ({ scenario, attempts, code, checkout, linux, deletions }, { signal }) => {
+  async ({ scenario, attempts, code, checkout, linux, deletions }, { signal: testSignal }) => {
     const setupFailure = scenario.startsWith("non-executable-");
     const run = readCiCheckoutStep(linux ? "checks-fast-core" : "checks-windows").run;
 
     const policyScenario = `${linux ? "linux:" : ""}${scenario}`;
     await withCiCheckoutFixture(
       policyScenario,
-      signal,
+      testSignal,
       (root) => {
         const workspace = path.join(root, "workspace");
         if (scenario === "cancel-SIGTERM") {

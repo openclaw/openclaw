@@ -193,8 +193,8 @@ export async function withCiCheckoutFixture<T>(
   let closeResult: CloseResult | undefined;
   // An error can precede close, including failed spawn. Never reject this join.
   const closed = new Promise<CloseResult>((resolve) => {
-    supervisor.once("close", (code, signal) => {
-      closeResult = { code, signal };
+    supervisor.once("close", (code, exitSignal) => {
+      closeResult = { code, signal: exitSignal };
       resolve(closeResult);
     });
   });
@@ -226,7 +226,9 @@ export async function withCiCheckoutFixture<T>(
         reject(reason instanceof Error ? reason : new Error("test aborted", { cause: reason }));
       };
       signal.addEventListener("abort", onAbort, { once: true });
-      if (signal.aborted) onAbort();
+      if (signal.aborted) {
+        onAbort();
+      }
       void closed.then(resolve);
     });
     report = reportSchema.parse(JSON.parse(readFileSync(path.join(root, "report.json"), "utf8")));
