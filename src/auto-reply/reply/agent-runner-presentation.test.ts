@@ -29,7 +29,7 @@ function normalizeStreamingTextReference(
 ): { text?: string; skip: boolean } {
   let text = payload.text;
   const reply = resolveSendableOutboundReplyParts(payload);
-  if (options.silentExpected) {
+  if (options.silentExpected || text?.trim() === "N") {
     return { skip: true };
   }
   if (!options.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
@@ -582,6 +582,17 @@ describe("agent runner streaming presentation", () => {
         expect(actual).toEqual(expected);
       }
     }
+  });
+
+  it("holds a lone N preview until it diverges from NO_REPLY (#122476)", () => {
+    const presentation = createPresentation();
+
+    expect(presentation.classifyStreamingPartial({ text: "N" })).toEqual({ skip: true });
+    expect(presentation.classifyStreamingPartial({ text: "No, that is wrong." })).toEqual({
+      text: "No, that is wrong.",
+      skip: false,
+    });
+    expect(presentation.normalizeStreamingText({ text: "N" })).toEqual({ text: "N", skip: false });
   });
 
   it("keeps silent-expected and heartbeat-run classification eager", () => {

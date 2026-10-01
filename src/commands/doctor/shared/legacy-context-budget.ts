@@ -1,18 +1,21 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ConfigValidationIssue, OpenClawConfig } from "./types.openclaw.js";
+import type { ConfigValidationIssue } from "../../../config/types.openclaw.js";
 
 type JsonRecord = Record<string, unknown>;
 
 const MODEL_CONTEXT_TOKENS_REPLACEMENT = "models.providers.<provider>.models[].contextTokens";
 
-type ContextBudgetConfigMigration<T = unknown> = {
-  config: T;
+type ContextBudgetConfigMigration = {
+  config: JsonRecord;
   changed: boolean;
   changes: ConfigValidationIssue[];
   warnings: ConfigValidationIssue[];
 };
 
-function hasLegacyContextBudgetConfig(root: JsonRecord): boolean {
+export function hasLegacyContextBudgetConfig(root: unknown): boolean {
+  if (!isRecord(root)) {
+    return false;
+  }
   const providers = isRecord(root.models) ? root.models.providers : undefined;
   if (
     isRecord(providers) &&
@@ -125,13 +128,9 @@ function migrateProviderContextBudgets(
   }
 }
 
-/** Removes retired context-budget keys before strict config validation. */
-export function migrateLegacyContextBudgetConfig(
-  raw: OpenClawConfig,
-): ContextBudgetConfigMigration<OpenClawConfig>;
-export function migrateLegacyContextBudgetConfig(raw: unknown): ContextBudgetConfigMigration;
-export function migrateLegacyContextBudgetConfig(raw: unknown): ContextBudgetConfigMigration {
-  if (!isRecord(raw) || !hasLegacyContextBudgetConfig(raw)) {
+/** Doctor preserves provider budgets and reports unrepresentable agent caps before validation. */
+export function migrateLegacyContextBudgetConfig(raw: JsonRecord): ContextBudgetConfigMigration {
+  if (!hasLegacyContextBudgetConfig(raw)) {
     return { config: raw, changed: false, changes: [], warnings: [] };
   }
   const next = structuredClone(raw);

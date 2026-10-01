@@ -1,3 +1,4 @@
+import { parseLocalSchemaRefPointer } from "@openclaw/normalization-core/json-schema";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
 import { Pointer } from "typebox/schema";
@@ -37,16 +38,19 @@ function resolveRootSchemaRef(
   schema: JsonSchemaObject,
   root: JsonSchemaObject | undefined,
 ): JsonSchemaObject | undefined {
-  const match =
-    typeof schema.$ref === "string"
-      ? schema.$ref.match(/^#\/(\$defs|definitions)\/([^/]+)$/)
-      : null;
-  const encodedName = match?.[2];
-  if (!root || !match || encodedName === undefined || hasSchemaScope(schema)) {
+  const tokens =
+    typeof schema.$ref === "string" ? parseLocalSchemaRefPointer(schema.$ref) : undefined;
+  const [tableName, name] = tokens ?? [];
+  if (
+    !root ||
+    tokens?.length !== 2 ||
+    (tableName !== "$defs" && tableName !== "definitions") ||
+    !name ||
+    hasSchemaScope(schema)
+  ) {
     return undefined;
   }
-  const table = match[1] === "$defs" ? root.$defs : root.definitions;
-  const name = encodedName.replaceAll("~1", "/").replaceAll("~0", "~");
+  const table = tableName === "$defs" ? root.$defs : root.definitions;
   const target = table && Object.hasOwn(table, name) ? table[name] : undefined;
   // Scoped documents stay on their existing path; never reinterpret their refs at the tool root.
   return isJsonSchemaObject(target) && !hasSchemaScope(target) ? target : undefined;

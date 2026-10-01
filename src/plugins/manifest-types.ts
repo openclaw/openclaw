@@ -4,22 +4,18 @@ import type { PluginUiCapability } from "../../packages/gateway-protocol/src/plu
 import type { PluginCategorySlug } from "../../packages/plugin-package-contract/src/index.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
-import type { ConfigUiPresentation, ConfigUiGroup } from "../shared/config-ui-hints-types.js";
+import type { ConfigUiHint, ConfigUiGroup } from "../shared/config-ui-hints-types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
+import type { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
 /** UI hint metadata for plugin config schema fields. */
-export type PluginConfigUiHint = {
-  label?: string;
-  help?: string;
-  tags?: string[];
-  advanced?: boolean;
-  sensitive?: boolean;
-  placeholder?: string;
-  presentation?: ConfigUiPresentation;
-};
+export type PluginConfigUiHint = Pick<
+  ConfigUiHint,
+  "label" | "help" | "tags" | "advanced" | "sensitive" | "placeholder" | "presentation"
+>;
 
 /** Static, portable palettes; no plugin JavaScript or native UI activation is required. */
 export type PluginManifestTheme = {
@@ -547,40 +543,9 @@ export type PluginManifest = {
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
 };
 
-export type PluginManifestContracts = {
-  /** Executor ids implemented by the plugin's code-mode-executor-api artifact. */
-  codeModeExecutors?: string[];
-  embeddedExtensionFactories?: string[];
-  agentToolResultMiddleware?: string[];
-  trustedToolPolicies?: string[];
-  /**
-   * Provider ids whose external auth profile hook can contribute runtime-only
-   * credentials. Declaring this lets auth-store overlays load only the owning
-   * plugin instead of every provider plugin.
-   */
-  externalAuthProviders?: string[];
-  decisionProviders?: string[];
-  embeddingProviders?: string[];
-  speechProviders?: string[];
-  realtimeTranscriptionProviders?: string[];
-  realtimeVoiceProviders?: string[];
-  mediaUnderstandingProviders?: string[];
-  transcriptSourceProviders?: string[];
-  documentExtractors?: string[];
-  imageGenerationProviders?: string[];
-  videoGenerationProviders?: string[];
-  musicGenerationProviders?: string[];
-  webContentExtractors?: string[];
-  webFetchProviders?: string[];
-  webSearchProviders?: string[];
-  workerProviders?: string[];
-  storageProviders?: string[];
-  /** Provider ids whose plugin owns usage auth and snapshot hooks. */
-  usageProviders?: string[];
-  migrationProviders?: string[];
-  gatewayMethodDispatch?: string[];
-  tools?: string[];
-};
+export type PluginManifestContracts = Partial<
+  Record<(typeof PLUGIN_MANIFEST_CONTRACT_KEYS)[number], string[]>
+>;
 
 export type PluginManifestMediaUnderstandingCapability = "image" | "audio" | "video";
 

@@ -2021,10 +2021,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       }
       expect(isPolicyTestOwnedPath(changedPath), changedPath).toBe(false);
     }
-    const unrelatedTargets = resolvePolicyTestTargets(["src/plugins/unrelated-new-plugin.ts"]);
+    const newModule = "src/plugins/unrelated-new-plugin.ts";
+    const newModuleTargets = resolvePolicyTestTargets([newModule]);
+    const testOnlyTargets = resolvePolicyTestTargets(["src/plugins/unrelated-new-plugin.test.ts"]);
     for (const guard of guards) {
-      expect(unrelatedTargets).not.toContain(guard);
+      expect(newModuleTargets).toContain(guard);
+      expect(testOnlyTargets).not.toContain(guard);
     }
+    expect(isPolicyTestOwnedPath(newModule)).toBe(false);
     expect(isPolicyTestOwnedPath(manifest)).toBe(true);
     const shards = expectDefined(createChangedNodeTestShards([manifest]), "manifest test plan");
     for (const guard of guards) {

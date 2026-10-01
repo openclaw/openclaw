@@ -759,7 +759,31 @@ function createBundledControlUiE2eConfig(
   };
 }
 
-export async function buildProductionControlUiE2e(outDir: string, buildId: string): Promise<void> {
+type ControlUiE2eBuildOptions = { includeBootGroups?: boolean };
+
+async function controlUiE2eBootGroupPlugins(options: ControlUiE2eBuildOptions): Promise<Plugin[]> {
+  if (options.includeBootGroups !== false) {
+    return [];
+  }
+  const { createControlUiCodeSplitting } = await import("../../config/control-ui-chunking.ts");
+  return [
+    {
+      name: "control-ui-e2e-individual-boot-modules",
+      outputOptions(output) {
+        return {
+          ...output,
+          codeSplitting: createControlUiCodeSplitting({ includeBootGroups: false }),
+        };
+      },
+    },
+  ];
+}
+
+export async function buildProductionControlUiE2e(
+  outDir: string,
+  buildId: string,
+  options: ControlUiE2eBuildOptions = {},
+): Promise<void> {
   // Keep the production config outside Vitest, but write directly to the
   // caller-owned output so concurrent E2E builds cannot replace its worker.
   const repoRoot = resolveRepoRoot();
@@ -776,7 +800,14 @@ export async function buildProductionControlUiE2e(outDir: string, buildId: strin
   }
   const result = spawnSync(
     process.execPath,
-    ["--import", "tsx", fileURLToPath(import.meta.url), "--production-build", outDir],
+    [
+      "--import",
+      "tsx",
+      fileURLToPath(import.meta.url),
+      "--production-build",
+      outDir,
+      ...(options.includeBootGroups === false ? ["--individual-boot-modules"] : []),
+    ],
     {
       cwd: uiRoot,
       encoding: "utf8",
@@ -793,13 +824,18 @@ export async function buildProductionControlUiE2e(outDir: string, buildId: strin
   }
 }
 
-async function runProductionControlUiBuild(outDir: string): Promise<void> {
+async function runProductionControlUiBuild(
+  outDir: string,
+  options: ControlUiE2eBuildOptions = {},
+): Promise<void> {
   const [{ build }, { default: controlUiViteConfig }] = await Promise.all([
     import("vite"),
     import("../../vite.config.ts"),
   ]);
+  const config = controlUiViteConfig({ outDir });
   await build({
-    ...controlUiViteConfig({ outDir }),
+    ...config,
+    plugins: [config.plugins, ...(await controlUiE2eBootGroupPlugins(options))],
     configFile: false,
     logLevel: "info",
     root: path.join(resolveRepoRoot(), "ui"),
@@ -859,8 +895,9 @@ export async function startProductionControlUiE2eServer(
   outDir: string,
   buildId: string,
   bootstrapConfig?: Record<string, unknown>,
+  options: ControlUiE2eBuildOptions = {},
 ): Promise<ControlUiE2eProductionServer> {
-  await buildProductionControlUiE2e(outDir, buildId);
+  await buildProductionControlUiE2e(outDir, buildId, options);
   return startBuiltControlUiE2eServer(outDir, bootstrapConfig);
 }
 
@@ -2921,10 +2958,17 @@ export async function installMockGateway(
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [command, outDir] = process.argv.slice(2);
-  if (command !== "--production-build" || !outDir) {
-    throw new Error("Usage: control-ui-e2e.ts --production-build <out-dir>");
+  const [command, outDir, moduleMode, ...extra] = process.argv.slice(2);
+  if (
+    command !== "--production-build" ||
+    !outDir ||
+    extra.length > 0 ||
+    (moduleMode !== undefined && moduleMode !== "--individual-boot-modules")
+  ) {
+    throw new Error(
+      "Usage: control-ui-e2e.ts --production-build <out-dir> [--individual-boot-modules]",
+    );
   }
-  await runProductionControlUiBuild(outDir);
+  await runProductionControlUiBuild(outDir, { includeBootGroups: moduleMode === undefined });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
