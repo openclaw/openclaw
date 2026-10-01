@@ -598,6 +598,17 @@ function workspacePackage(packageDir: string, extraEntries: readonly string[] = 
   } as const;
 }
 
+function compileNativeProtocolConsumer(source: string, filePath: string): string {
+  if (path.resolve(filePath) !== path.resolve("scripts/prepare-native-protocol.mjs")) {
+    return source;
+  }
+  // The temporary esbuild bundle exports this source module's unchanged API.
+  return source.replace(
+    "import(pathToFileURL(bundlePath).href)",
+    'import("../packages/gateway-protocol/scripts/native-codegen.ts")',
+  );
+}
+
 function bundledPluginWorkspace(extraEntries: readonly string[] = []) {
   return {
     entry: [...bundledPluginEntries, ...extraEntries],
@@ -664,7 +675,11 @@ const ignoredTestSupportFiles = [
 ] as const;
 
 const config = {
-  compilers: { yml: compileFrvWorkflowConsumers, sh: compileShellConsumers },
+  compilers: {
+    yml: compileFrvWorkflowConsumers,
+    sh: compileShellConsumers,
+    mjs: compileNativeProtocolConsumer,
+  },
   ignoreFiles: [
     // Production mode excludes dev/maintainer executables. The full-tree
     // companion config removes this exclusion and audits them as script roots.
@@ -836,7 +851,9 @@ const config = {
       project: ["src/**/*.ts!"],
     },
     "packages/gateway-client": workspacePackage("gateway-client"),
-    "packages/gateway-protocol": workspacePackage("gateway-protocol"),
+    "packages/gateway-protocol": workspacePackage("gateway-protocol", [
+      "scripts/native-codegen.ts!",
+    ]),
     "packages/model-catalog-core": workspacePackage("model-catalog-core"),
     "packages/normalization-core": workspacePackage("normalization-core", [
       // extensions/qa-lab/web/vite.config.ts aliases error-runtime to this private browser implementation.

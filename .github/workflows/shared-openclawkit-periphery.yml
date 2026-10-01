@@ -228,10 +228,12 @@ jobs:
           output_dir="$RUNNER_TEMP/shared-periphery-macos"
           mkdir -p "$output_dir"
           cd apps/macos
+          swift package --scratch-path ../../.cache/periphery-swift clean
+          swift build --build-system native --scratch-path ../../.cache/periphery-swift --build-tests --enable-index-store
           set +e
           periphery scan \
             --config .periphery.yml \
-            --clean-build \
+            --skip-build \
             --format json \
             --report-include '../shared/OpenClawKit/Sources/**' \
             --retain-files '**/GenerateGatewayProtocol/GatewayModels.swift' \

@@ -8,7 +8,7 @@ import {
   PROTOCOL_VERSION,
 } from "../src/version.js";
 
-export type NativeProtocolLanguage = "swift" | "kotlin";
+type NativeProtocolLanguage = "swift" | "kotlin";
 
 export async function generateNativeProtocol(
   root: string,
