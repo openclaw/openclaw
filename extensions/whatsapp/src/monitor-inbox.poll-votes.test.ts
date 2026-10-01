@@ -334,6 +334,30 @@ describe("web monitor inbox poll vote hook", () => {
     const voteMessageId = "VOTE-HOOK-THROWS";
     const durableQueue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
     const enqueueSpy = vi.spyOn(durableQueue, "enqueue");
+    enqueueSpy.mockImplementation(async (id, payload, options) => {
+      const receivedAt = options?.receivedAt ?? Date.now();
+      return {
+        kind: "accepted",
+        duplicate: false,
+        record: {
+          channelId: "whatsapp",
+          accountId: "test",
+          queueName: "test",
+          id,
+          payload,
+          receivedAt,
+          updatedAt: receivedAt,
+          ...(options?.laneKey ? { laneKey: options.laneKey } : {}),
+          attempts: 0,
+        },
+      };
+    });
+    // This thread-pool unit test has no host broker. Keep the real batch and
+    // admission path, while the durable queue's SQLite contract is tested separately.
+    vi.spyOn(durableQueue, "prune").mockResolvedValue(0);
+    vi.spyOn(durableQueue, "recoverStaleClaims").mockResolvedValue(0);
+    vi.spyOn(durableQueue, "claimNext").mockResolvedValue(null);
+    durableQueue.listUnsettled = async () => ({ pending: [], claims: [] });
     const { pollEncKey } = buildPollCreationMessageForTests({
       section: "pollCreationMessage",
       options: ["Pizza", "Sushi"],
