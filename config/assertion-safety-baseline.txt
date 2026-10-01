@@ -2196,6 +2196,7 @@ src/gateway/server-methods/config.ts	4
 src/gateway/server-methods/cron.ts	3
 src/gateway/server-methods/devices.ts	4
 src/gateway/server-methods/doctor.ts	3
+src/gateway/server-methods/exec-approvals.ts	2
 src/gateway/server-methods/mcp-app.ts	1
 src/gateway/server-methods/memory-search.ts	3
 src/gateway/server-methods/migrations.ts	1
