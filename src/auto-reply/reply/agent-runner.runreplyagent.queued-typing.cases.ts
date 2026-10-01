@@ -16,6 +16,7 @@ type QueuedTypingFixture = {
     isRunActive?: () => boolean;
     shouldFollowup?: boolean;
     resolvedQueueMode?: "collect";
+    typingMode?: "message";
   }) => {
     run: () => Promise<ReplyPayload | ReplyPayload[] | undefined>;
     typing: TypingController;
@@ -71,6 +72,9 @@ export function registerQueuedTypingCases({
       shouldFollowup: true,
       resolvedQueueMode: "collect",
     });
+    vi.mocked(typing.startTypingLoop).mockImplementation(async () => {
+      vi.mocked(typing.isActive).mockReturnValue(true);
+    });
 
     expect(await run()).toBeUndefined();
     expect(onTypingHandoff).toHaveBeenCalledTimes(1);
@@ -83,6 +87,32 @@ export function registerQueuedTypingCases({
     }
     completeFollowupRunLifecycle(queued);
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
+    active.complete();
+  });
+
+  it("keeps idle ownership with the dispatch when queued typing never starts", async () => {
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    const onTypingHandoff = vi.fn();
+    const { run, typing } = createMinimalRun({
+      opts: {
+        isHeartbeat: false,
+        onTypingHandoff,
+        turnAdoptionLifecycle: { admission: "exclusive", onAdopted: () => undefined },
+      },
+      isActive: true,
+      isRunActive: () => true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+      typingMode: "message",
+    });
+
+    expect(await run()).toBeUndefined();
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+    expect(onTypingHandoff).not.toHaveBeenCalled();
     active.complete();
   });
 }
