@@ -50,7 +50,7 @@ describe("website installer sync workflow", () => {
   });
 
   it("treats all website installer scripts as OpenClaw-owned inputs", () => {
-    for (const path of [
+    for (const input of [
       "scripts/install.sh",
       "scripts/install-cli.sh",
       "scripts/install.ps1",
@@ -58,8 +58,8 @@ describe("website installer sync workflow", () => {
       "scripts/build-installers.mjs",
       "scripts/lib/standalone-installers.mjs",
     ]) {
-      expect(workflow).toContain(path);
-      expect(detectInstallSmokeScope([path]).runFullInstallSmoke).toBe(true);
+      expect(workflow).toContain(input);
+      expect(detectInstallSmokeScope([input]).runFullInstallSmoke).toBe(true);
     }
   });
 
@@ -105,7 +105,7 @@ describe("website installer sync workflow", () => {
   });
 
   it("syncs verified scripts to openclaw.ai only after all installer checks pass", () => {
-    const syncNeeds = workflow.match(/  sync-website:\n    needs:\n((?:      - [^\n]+\n)+)/u);
+    const syncNeeds = workflow.match(/ {2}sync-website:\n {4}needs:\n((?: {6}- [^\n]+\n)+)/u);
     expect(syncNeeds?.[1]).toBe(
       [
         "static",
