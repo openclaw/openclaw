@@ -504,6 +504,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
         const runCommand = createPnpmRunner(globalRoot, globalBinDir);
         const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
           expect(name).toBe("package-install");
+        expect(input).toBe("");
           const stage = stagedPnpmPaths(argv, globalRoot);
           expect(cwd).toBe(stage.projectRoot);
           const stagedOwner = path.join(stage.globalRoot, "new");
