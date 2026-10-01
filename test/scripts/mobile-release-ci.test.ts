@@ -489,6 +489,17 @@ describe("mobile release CI tools", () => {
         expect(
           releaseArtifactFiles(workflow, `${platform}-release-artifacts-`, runnerTemp),
         ).toEqual(expected);
+        if (platform === "android") {
+          const receipts = ["android-plan.json", "release-notes.json", "firebase-result.json"]
+            .map((file) => `${recovery}/${file}`)
+            .toSorted();
+          for (const file of [...receipts, `${recovery}/credentials.json`]) {
+            writeFile(runnerTemp, file, "synthetic recovery data");
+          }
+          expect(releaseArtifactFiles(workflow, "android-release-recovery-", runnerTemp)).toEqual(
+            receipts,
+          );
+        }
       },
     );
   });
