@@ -16,12 +16,24 @@ import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section
 import { icons } from "./icons.ts";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 
+const onlineFaces = new WeakMap<AppSidebarRenderHost, readonly PresenceViewer[]>();
+
 export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
   const sectionId = "online";
   const team = host.sidebarAgentsMode === "roster";
   const collapsed = team ? !host.teamOnlineExpanded : host.collapsedSessionSections.has(sectionId);
   const label = t("presence.rosterTitle");
-  const onlineUsers = projectOnlinePresenceViewers(host.sessionData.presencePayload);
+  let onlineUsers = projectOnlinePresenceViewers(host.sessionData.presencePayload);
+  const previousFaces = onlineFaces.get(host);
+  // Recheck activity ordering on each render, but retain equal facepile inputs.
+  if (
+    previousFaces?.length === onlineUsers.length &&
+    onlineUsers.every((user, index) => user === previousFaces[index])
+  ) {
+    onlineUsers = previousFaces;
+  } else {
+    onlineFaces.set(host, onlineUsers);
+  }
   if (onlineUsers.length === 0) {
     return nothing;
   }

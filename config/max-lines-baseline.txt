@@ -274,7 +274,6 @@ src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test
 src/agents/embedded-agent-runner/run/attempt.test.ts
 src/agents/embedded-agent-runner/runs.ts
 src/agents/embedded-agent-runner/thinking.test.ts
-src/agents/embedded-agent-runner/tool-result-context-guard.test.ts
 src/agents/embedded-agent-runner/tool-result-truncation.test.ts
 src/agents/embedded-agent-runner/tool-result-truncation.ts
 src/agents/embedded-agent-runner/transcript-file-state.test.ts
@@ -363,7 +362,6 @@ src/cli/command-secret-gateway.ts
 src/cli/config-cli.test.ts
 src/cli/daemon-cli/status.gather.test.ts
 src/cli/devices-cli.runtime.ts
-src/cli/devices-cli.test.ts
 src/cli/exec-approvals-cli.ts
 src/cli/gateway-cli/register.ts
 src/cli/gateway-cli/run-loop.test.ts
@@ -428,7 +426,6 @@ src/config/sessions/session-accessor.test.ts
 src/config/sessions/transcript.test.ts
 src/context-engine/context-engine.test.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
-src/cron/isolated-agent/delivery-target.test.ts
 src/cron/isolated-agent/run-executor.ts
 src/cron/isolated-agent/run.test-harness.ts
 src/cron/service/ops.test.ts
@@ -522,7 +519,6 @@ src/infra/backup-create.test.ts
 src/infra/command-explainer/extract.ts
 src/infra/device-pairing.test.ts
 src/infra/diagnostic-events.ts
-src/infra/exec-approvals-allow-always.test.ts
 src/infra/exec-approvals-allowlist.ts
 src/infra/exec-authorization-plan.ts
 src/infra/host-env-security.test.ts
@@ -565,7 +561,6 @@ src/node-host/invoke-system-run.ts
 src/node-host/invoke.ts
 src/plugin-sdk/core.ts
 src/plugin-sdk/provider-auth.test.ts
-src/plugin-sdk/provider-stream-shared.test.ts
 src/plugin-sdk/test-helpers/plugin-runtime-mock.ts
 src/plugin-sdk/test-helpers/provider-discovery-contract.ts
 src/plugin-sdk/test-helpers/provider-runtime-contract.ts

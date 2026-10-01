@@ -332,6 +332,7 @@ src/commands/doctor/shared/legacy-config-migrations.channels.ts
 src/commands/doctor/shared/legacy-config-migrations.qqbot-account.ts
 src/commands/doctor/shared/legacy-config-migrations.qqbot.ts
 src/commands/doctor/shared/legacy-config-migrations.queue.ts
+src/commands/doctor/shared/legacy-config-migrations.runtime.agent-policy.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.cli-backends.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.code-mode.ts
@@ -363,12 +364,15 @@ src/commands/doctor/shared/legacy-config-migrations.runtime.tts.ts
 src/commands/doctor/shared/legacy-config-migrations.ts
 src/commands/doctor/shared/legacy-config-migrations.web-search.ts
 src/commands/doctor/shared/legacy-config-record-shared.ts
+src/commands/doctor/shared/legacy-context-budget.ts
+src/commands/doctor/shared/legacy-copilot-discovery.ts
 src/commands/doctor/shared/legacy-model-ref-normalization.ts
 src/commands/doctor/shared/legacy-models-add-metadata.ts
 src/commands/doctor/shared/legacy-runtime-model-policy.ts
 src/commands/doctor/shared/legacy-runtime-model-providers.ts
 src/commands/doctor/shared/legacy-tool-name-migration.ts
 src/commands/doctor/shared/legacy-tool-policy-scopes.ts
+src/commands/doctor/shared/legacy-tools-by-sender.ts
 src/commands/doctor/shared/legacy-web-tools-migrate.ts
 src/compat/legacy-names.ts
 src/config/agent-dirs.ts
@@ -446,11 +450,9 @@ src/config/io.write-values.ts
 src/config/issue-format.ts
 src/config/json5-comments.ts
 src/config/legacy-codex-provider.ts
-src/config/legacy.context-budget.ts
 src/config/legacy.default-agent-owner-state.ts
 src/config/legacy.default-agent-owner.ts
 src/config/legacy.default-agent-roles.ts
-src/config/legacy.github-copilot.ts
 src/config/legacy.roster.ts
 src/config/legacy.shared.ts
 src/config/legacy.ts
@@ -480,6 +482,7 @@ src/config/plugin-auto-enable.prefer-over.ts
 src/config/plugin-install-record-map.ts
 src/config/plugins-allowlist.ts
 src/config/provider-policy.ts
+src/config/provider-settings.ts
 src/config/recovery-policy.ts
 src/config/redact-argv.ts
 src/config/redact-sentinel.ts
@@ -488,6 +491,7 @@ src/config/redact-snapshot.secret-ref.ts
 src/config/redact-snapshot.ts
 src/config/resolution-facts.ts
 src/config/runtime-config-capture-state.ts
+src/config/runtime-config-snapshot-match.ts
 src/config/runtime-overrides.ts
 src/config/runtime-session-changes.ts
 src/config/runtime-snapshot.ts
@@ -560,6 +564,7 @@ src/config/zod-schema.secret-input.ts
 src/config/zod-schema.sensitive.ts
 src/config/zod-schema.session-config.ts
 src/config/zod-schema.session.ts
+src/config/zod-schema.storage.ts
 src/config/zod-schema.telemetry.ts
 src/config/zod-schema.ts
 src/cron/completion-status.ts
@@ -1112,6 +1117,7 @@ src/plugins/plugin-instance-invocation.ts
 src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-instance-owned-values.ts
 src/plugins/plugin-instance-scope.ts
+src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-value-views.ts
 src/plugins/plugin-instance.ts
 src/plugins/plugin-lifecycle-trace.ts

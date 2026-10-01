@@ -79,6 +79,7 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     modal.append(tooltip);
     await tooltip.updateComplete;
     notes.focus();
+    await tooltip.updateComplete;
     const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
     await expect.poll(() => popup.open).toBe(true);
 

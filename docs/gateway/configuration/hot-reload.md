@@ -28,6 +28,13 @@ No additional config edit is needed. The previous runtime stays active until the
 change applies, and shutdown cancels pending retries. Other reload failures remain
 visible in the Gateway log.
 
+If an automatic plugin reload cannot drain active work, the Gateway records the
+failure and keeps the last-good runtime. Later config edits do not repeat that
+drain while its plugin generation is still active. Run `openclaw plugins reload
+<id> --wait` to finish the replacement, or revert the pending plugin settings.
+Edits that still include the unapplied plugin settings remain pending until
+recovery; they cannot publish those settings through an unrelated hot update.
+
 Direct file edits are treated as untrusted until they validate. The source's file adapter waits
 for editor temp-write/rename churn to settle, reads the final file, and rejects
 invalid external edits without rewriting `openclaw.json`. OpenClaw-owned config
@@ -105,6 +112,9 @@ Model runtime selection keeps your authored settings separate from catalog defau
 Hot reload and secrets reload preserve that distinction: catalog compatibility
 metadata does not become a custom request override that switches a native runtime
 back to OpenClaw.
+Changes to `agents.defaults.models`, agent model selection and fallbacks, and
+`models.providers` hot-apply without draining the Codex plugin. Changing Codex's
+own plugin settings still follows its plugin reload policy.
 
 Channel transport edits, such as `channels.slack.streaming.mode`, retain prepared
 session rows and model catalogs. Agent rosters, session policy, store topology,

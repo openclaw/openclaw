@@ -96,6 +96,7 @@ type VideoGenerationProviderPlugin = import("./types.js").VideoGenerationProvide
 type WebFetchProviderPlugin = import("./types.js").WebFetchProviderPlugin;
 type WebSearchProviderPlugin = import("./types.js").WebSearchProviderPlugin;
 type WorkerProvider = import("./types.js").WorkerProvider;
+type StorageProvider = import("../storage/types.js").StorageProvider;
 type UnifiedModelCatalogProviderPlugin = import("./types.js").UnifiedModelCatalogProviderPlugin;
 
 /** Registration provenance; this shape carries no execution or resource authority. */
@@ -431,6 +432,7 @@ export type PluginRegistry = {
   webFetchProviders: PluginOwnedProviderRegistration<WebFetchProviderPlugin>[];
   webSearchProviders: PluginOwnedProviderRegistration<WebSearchProviderPlugin>[];
   workerProviders: Map<string, PluginOwnedProviderRegistration<WorkerProvider>>;
+  storageProviders: Map<string, PluginOwnedProviderRegistration<StorageProvider>>;
   migrationProviders: PluginOwnedProviderRegistration<MigrationProviderPlugin>[];
   codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
   agentToolResultMiddlewareOwners: PluginAgentToolResultMiddlewareOwner[];

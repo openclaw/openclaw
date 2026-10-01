@@ -57,6 +57,13 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
     hasSubcommands: true,
   },
   {
+    name: "storage",
+    description: "List, initialize, and test configured storage locations",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
+    machineOutput: ({ argv }) => hasMachineOutputOption(argv, "--json"),
+  },
+  {
     name: "doctor",
     description: "Health checks + quick fixes for the gateway and channels",
     hasSubcommands: false,

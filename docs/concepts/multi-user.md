@@ -186,11 +186,11 @@ Reactions on channel-origin prompts are also mirrored to that channel as the
 bot's reaction when the channel supports them. A skipped or failed channel
 mirror does not remove the Control UI reaction. On channels where the bot holds
 one reaction per message, such as Telegram bots and WhatsApp, the channel shows
-the most recently mirrored emoji, and removing it clears the channel reaction
-even when other emoji remain in the Control UI. Reactions on assistant replies
-are not mirrored because the transcript does not retain their delivered channel
-message IDs. See [Chat reactions](/web/control-ui/chat#reactions) for the palette
-and toggle controls.
+the most recently mirrored emoji. Removing an emoji keeps the newest remaining
+Control UI emoji on the channel; removing the last emoji clears the channel
+reaction. Reactions on assistant replies are not mirrored because the transcript
+does not retain their delivered channel message IDs. See
+[Chat reactions](/web/control-ui/chat#reactions) for the palette and toggle controls.
 
 ## Mentioning people
 

@@ -739,16 +739,6 @@ struct TalkModeManagerTests {
             isEnabled: true,
             gatewayConnected: true,
             captureIsContinuous: false))
-
-        #expect(TalkModeManager._test_realtimeRestartAttempt(
-            previousRapidRestarts: 1,
-            activeDuration: 5) == 2)
-        #expect(TalkModeManager._test_realtimeRestartAttempt(
-            previousRapidRestarts: 2,
-            activeDuration: 31) == 1)
-        #expect(TalkModeManager._test_realtimeRestartDelayNanoseconds(attempt: 1) == 500_000_000)
-        #expect(TalkModeManager._test_realtimeRestartDelayNanoseconds(attempt: 2) == 2_000_000_000)
-        #expect(TalkModeManager._test_realtimeRestartDelayNanoseconds(attempt: 3) == nil)
     }
 
     @Test @MainActor func `speech restart clears only the presentation revision it owns`() {

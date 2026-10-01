@@ -1,3 +1,4 @@
+import { parseLocalSchemaRefPointer } from "@openclaw/normalization-core/json-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
 import { evaluateSchemaWalk, type SchemaWalk } from "./schema-walk.js";
@@ -164,20 +165,13 @@ function extendSchemaDefs(
   return next;
 }
 
-function decodeJsonPointerSegment(segment: string): string {
-  return segment.replaceAll("~1", "/").replaceAll("~0", "~");
-}
-
 function tryResolveLocalRef(ref: string, defs: SchemaDefs | undefined): unknown {
   if (!defs) {
     return undefined;
   }
-  const match = ref.match(/^#\/(?:\$defs|definitions)\/(.+)$/);
-  if (!match) {
-    return undefined;
-  }
-  const name = decodeJsonPointerSegment(match[1] ?? "");
-  if (!name) {
+  const tokens = parseLocalSchemaRefPointer(ref);
+  const [table, name] = tokens ?? [];
+  if (tokens?.length !== 2 || (table !== "$defs" && table !== "definitions") || !name) {
     return undefined;
   }
   return defs.get(name);

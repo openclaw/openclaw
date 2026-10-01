@@ -59,7 +59,7 @@ import {
   stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "./chat-attachments.js";
-import { sanitizeChatHistoryMessages } from "./chat-display-projection.js";
+import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 
 const PNG_1x1 =

@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  COMMAND_PALETTE_SHORTCUT,
+  createKeyboardShortcutMatcher,
+} from "../shared/keyboard-shortcuts.js";
 import { WIDGET_THEME_MESSAGE_TYPE } from "../shared/widget-theme.js";
 
 export type SandboxHostCsp = {
@@ -17,6 +21,57 @@ const SANDBOX_HOST_CSP_QUERY = "csp";
 const SANDBOX_HOST_CSP_MAX_JSON_BYTES = 5 * 1024;
 const SANDBOX_HOST_CSP_MAX_HEADER_BYTES = 6 * 1024;
 const SANDBOX_HOST_CSP_MAX_ENCODED_BYTES = Math.ceil(SANDBOX_HOST_CSP_MAX_JSON_BYTES / 3) * 4 + 4;
+
+function buildSandboxShortcutBridgeHtml(): string {
+  return `<script>(()=>{
+  const parent=window.parent;
+  const post=parent.postMessage.bind(parent);
+  const listen=window.addEventListener.bind(window);
+  const apply=Reflect.apply;
+  const create=Object.create;
+  const descriptor=Object.getOwnPropertyDescriptor;
+  const prevent=Event.prototype.preventDefault;
+  const stop=Event.prototype.stopImmediatePropagation;
+  const dataGetter=descriptor(MessageEvent.prototype,"data").get;
+  const sourceGetter=descriptor(MessageEvent.prototype,"source").get;
+  const preventedGetter=descriptor(Event.prototype,"defaultPrevented").get;
+  const repeatGetter=descriptor(KeyboardEvent.prototype,"repeat").get;
+  const connectedGetter=descriptor(Node.prototype,"isConnected").get;
+  const path=Event.prototype.composedPath;
+  const focus=HTMLElement.prototype.focus;
+  const HTMLElementType=HTMLElement;
+  const fields=["key","code","keyCode","isComposing","metaKey","ctrlKey","altKey","shiftKey"];
+  const getters=fields.map(name=>descriptor(KeyboardEvent.prototype,name).get);
+  const combo=${JSON.stringify(COMMAND_PALETTE_SHORTCUT)};
+  const matcher=(${createKeyboardShortcutMatcher.toString()})();
+  const applePlatform=matcher.isApplePlatform();
+  let nonce="";
+  let returnFocus=null;
+  listen("message",event=>{
+    if(!event.isTrusted||apply(sourceGetter,event,[])!==parent)return;
+    const data=apply(dataGetter,event,[]);
+    if(data?.type==="openclaw:widget-shortcut-host"&&typeof data.nonce==="string"){
+      nonce=data.nonce;
+      apply(stop,event,[]);
+    }else if(nonce&&data?.type==="openclaw:widget-shortcut-focus"&&data.nonce===nonce){
+      apply(stop,event,[]);
+      const target=returnFocus;
+      returnFocus=null;
+      if(target&&apply(connectedGetter,target,[]))apply(focus,target,[{preventScroll:true}]);
+    }
+  },true);
+  listen("keydown",event=>{
+    if(!nonce||!event.isTrusted||apply(preventedGetter,event,[])||apply(repeatGetter,event,[]))return;
+    const snapshot=create(null);
+    for(let index=0;index<fields.length;index++)snapshot[fields[index]]=apply(getters[index],event,[]);
+    if(!matcher.matchesKeyboardShortcut(combo,snapshot,applePlatform,matcher.resolveAsciiShortcutKey(snapshot)))return;
+    const target=apply(path,event,[])[0];
+    returnFocus=target instanceof HTMLElementType?target:null;
+    apply(prevent,event,[]);
+    post({type:"openclaw:widget-command-palette",nonce},"*");
+  },true);
+})();</script>`;
+}
 
 // Best-effort mitigation of the documented WebRTC residual, not a security
 // boundary. Board widgets remove same-realm constructors and the common APIs
@@ -235,8 +290,11 @@ export function decodeSandboxHostCsp(value: string | null): SandboxHostCsp | und
 /** Trusted outer document. Untrusted content is written only into its inner iframe. */
 function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   const blockDescendantFrames = csp?.blockDescendantFrames === true;
+  // Runtime insertion reaches existing saved widgets without changing their
+  // approved bytes. Its first capture listener consumes private shortcut state
+  // before stored scripts; other sandbox documents never receive that nonce.
   const serializedDocumentGuard = JSON.stringify(
-    buildSandboxDocumentGuardHtml(blockDescendantFrames),
+    buildSandboxDocumentGuardHtml(blockDescendantFrames) + buildSandboxShortcutBridgeHtml(),
   ).replaceAll("<", "\\u003c");
   return `<!doctype html>
 <meta charset="utf-8" />
@@ -277,8 +335,7 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   const documentGuard = ${serializedDocumentGuard};
   const resolveLeadingDoctypeEnd = ${RESOLVE_LEADING_DOCTYPE_END_SOURCE};
   const guardDocument = html => {
-    if (!blockDescendantFrames) return html;
-    if (hasBlockedDescendant(new DOMParser().parseFromString(html, "text/html"))) {
+    if (blockDescendantFrames && hasBlockedDescendant(new DOMParser().parseFromString(html, "text/html"))) {
       throw new Error("sandbox descendant browsing contexts are disabled");
     }
     const doctypeEnd = resolveLeadingDoctypeEnd(html);

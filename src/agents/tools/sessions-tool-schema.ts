@@ -6,7 +6,7 @@ import {
   SESSION_COLOR_IDS,
   SESSION_ICON_GLYPH_IDS,
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
-import { stringEnum } from "../schema/typebox.js";
+import { requesterProfileSchema, stringEnum } from "../schema/typebox.js";
 
 const ACTIONS = [
   "cloud_profiles",
@@ -24,12 +24,7 @@ const SESSION_ICON_GLYPH_DESCRIPTION = SESSION_ICON_GLYPH_IDS.join(", ");
 
 const SessionsToolSchema = Type.Object(
   {
-    user: Type.Optional(
-      Type.String({
-        description:
-          "The person's requester_profile.id, required when several people have steered this turn.",
-      }),
-    ),
+    user: requesterProfileSchema(),
     action: stringEnum(ACTIONS, { description: "Action" }),
     profileId: Type.Optional({
       ...SessionMoveProfileTargetSchema.properties.profileId,

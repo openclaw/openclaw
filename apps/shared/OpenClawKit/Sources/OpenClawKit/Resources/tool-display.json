@@ -57,6 +57,8 @@
     "agents_list": {"emoji":"🧭","title":"Agents","detailKeys":[]},
     "memory_search": {"emoji":"🧠","title":"Memory Search","detailKeys":["query"]},
     "memory_get": {"emoji":"📓","title":"Memory Get","detailKeys":["path","from","lines"]},
+    "skills_search": {"emoji":"🔍","title":"Skill Search","detailKeys":["query"]},
+    "skills_read": {"emoji":"📖","title":"Skill Read","detailKeys":["name"]},
     "web_search": {"emoji":"🔎","title":"Web Search","detailKeys":["query","count"]},
     "web_fetch": {"emoji":"📄","title":"Web Fetch","detailKeys":["url","extractMode","maxChars"]},
     "code_execution": {"emoji":"🧮","title":"Code Execution","detailKeys":["task"]},
