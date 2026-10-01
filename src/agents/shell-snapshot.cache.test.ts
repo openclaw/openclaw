@@ -1,4 +1,3 @@
-import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +16,7 @@ vi.mock("../process/spawn-utils.js", () => ({
   spawnProcess: vi.fn(() => {
     const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
     queueMicrotask(() => child.emit("close", 0));
-    return child as ChildProcess;
+    return child;
   }),
 }));
 
