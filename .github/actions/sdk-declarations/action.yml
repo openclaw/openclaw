@@ -103,7 +103,7 @@ runs:
 
     - name: Pack main SDK declarations
       id: main-pack
-      if: &main_sdk_publication >-
+      if: >-
         success() && inputs.mode == 'save-main' && steps.identity.outputs.enabled == 'true' &&
         github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' &&
         contains(fromJSON('["push","schedule","workflow_dispatch","repository_dispatch"]'), github.event_name) &&
@@ -114,7 +114,13 @@ runs:
       run: node scripts/ci-sdk-declarations.mts pack
 
     - name: Save main SDK declarations
-      if: *main_sdk_publication
+      if: >-
+        success() && inputs.mode == 'save-main' && steps.identity.outputs.enabled == 'true' &&
+        github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' &&
+        contains(fromJSON('["push","schedule","workflow_dispatch","repository_dispatch"]'), github.event_name) &&
+        inputs.candidate-trust == 'main' && inputs.cache-write-allowed == 'true' &&
+        inputs.cache-mode != 'off' && inputs.cache-hit != 'true' &&
+        inputs.frozen-target != 'true' && inputs.compatibility-target != 'true' && inputs.release-gate != 'true'
       continue-on-error: true
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:

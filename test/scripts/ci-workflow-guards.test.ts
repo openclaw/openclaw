@@ -22,7 +22,7 @@ import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { minimatch } from "minimatch";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { parse } from "yaml";
+import { isAlias, parse, parseDocument, visit } from "yaml";
 import {
   buildChildEnv,
   resolveShardPlans,
@@ -2630,6 +2630,24 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(output, "utf8").trim()).toBe(`sha=${base}`);
     expect(git(selected, "diff", "--name-only", base, "HEAD")).toBe("change.txt");
+  });
+
+  it("keeps action manifests within the runner's anchor-free YAML grammar", () => {
+    const files = globSync([".github/actions/**/action.yml", ".github/actions/**/action.yaml"]);
+    expect(files.length).toBeGreaterThan(0);
+    const unsupported: string[] = [];
+    for (const file of files) {
+      const document = parseDocument(readFileSync(file, "utf8"));
+      expect(document.errors, file).toEqual([]);
+      visit(document, {
+        Node(_key, node) {
+          if (isAlias(node) || node.anchor) {
+            unsupported.push(file);
+          }
+        },
+      });
+    }
+    expect(unsupported).toEqual([]);
   });
 
   it("keeps setup cache access explicit and isolates every cache write", () => {
