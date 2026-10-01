@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "@openclaw/fs-safe/path";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import { BUNDLED_PLUGIN_BUILD_ENV_NAMES } from "./lib/bundled-plugin-build-entries.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -29,7 +30,7 @@ import {
   waitForManagedProcessGroupExit,
 } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
-import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
+import { assertRealOutputRoot, controlUiBuildSiblingPid } from "./lib/output-root-guard.mjs";
 import { readProcessMemoryCapacity, type MemoryLimitParams } from "./lib/process-memory.mts";
 import { sanitizeBundlerHelperDtsExportTree } from "./lib/sanitize-bundler-helper-dts-exports.mts";
 import {
@@ -282,7 +283,8 @@ function cleanOutputRootExcept(rootPath: string, protectedPaths: Set<string>, fs
   for (const entry of entries) {
     const entryPath = path.join(rootPath, entry.name);
     const resolvedEntryPath = path.resolve(entryPath);
-    if (protectedPaths.has(resolvedEntryPath)) {
+    // scripts/ui.mts owns in-flight Control UI staging trees.
+    if (protectedPaths.has(resolvedEntryPath) || controlUiBuildSiblingPid(entry.name) !== null) {
       continue;
     }
     try {
@@ -837,6 +839,7 @@ export function createTsdownOutputScanner(params: { maxCaptureBytes?: number } =
 
   function scanLines(text: string) {
     const combined = pendingLine + text;
+    hasIneffectiveDynamicImport ||= combined.includes(INEFFECTIVE_DYNAMIC_IMPORT_MARKER);
     const lines = combined.split(/\r?\n/u);
     pendingLine = lines.pop() ?? "";
     for (const line of lines) {
@@ -847,9 +850,6 @@ export function createTsdownOutputScanner(params: { maxCaptureBytes?: number } =
   return {
     append(chunk: unknown) {
       const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
-      if (text.includes(INEFFECTIVE_DYNAMIC_IMPORT_MARKER)) {
-        hasIneffectiveDynamicImport = true;
-      }
       scanLines(text);
       captured += text;
       if (captured.length > maxCaptureBytes) {
@@ -1474,6 +1474,7 @@ export async function runTsdownBuild(
     console.error(fence.message);
     return 1;
   }
+  await ensureKyselyTypes(options.cwd ?? process.cwd());
   let code: number;
   if (options.executeBuild) {
     code = await options.executeBuild(args.forwardedArgs);

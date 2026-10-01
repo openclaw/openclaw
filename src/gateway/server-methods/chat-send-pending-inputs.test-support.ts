@@ -30,6 +30,7 @@ export function useBrowserFollowupFixture() {
     options: {
       active?: boolean;
       createdActor?: SessionCreatedActor;
+      sandbox?: "required";
       preserveContent?: boolean;
       transientProjectionFailures?: number;
       persistDuringDispatch?: boolean;
@@ -51,6 +52,7 @@ export function useBrowserFollowupFixture() {
           updatedAt: Date.now(),
           status: active ? "running" : "done",
           ...(options.createdActor ? { createdActor: options.createdActor } : {}),
+          ...(options.sandbox ? { sandbox: options.sandbox } : {}),
         },
         unrelated: {
           sessionId: "unrelated-browser-session",

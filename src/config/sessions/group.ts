@@ -1,4 +1,3 @@
-// Group session keys convert channel-specific group metadata into stable store ids.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

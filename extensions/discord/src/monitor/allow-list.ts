@@ -5,6 +5,7 @@ import {
 import type { InboundMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
 import {
   buildChannelKeyCandidates,
+  normalizeChannelSlug,
   resolveChannelEntryMatchWithFallback,
   resolveChannelMatchConfig,
   type ChannelMatchSource,
@@ -80,10 +81,7 @@ export function normalizeDiscordAllowList(raw: string[] | undefined, prefixes: s
 }
 
 export function normalizeDiscordSlug(value: string) {
-  return normalizeLowercaseStringOrEmpty(value)
-    .replace(/^#/, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  return normalizeChannelSlug(value);
 }
 
 export function normalizeDiscordDisplaySlug(value: string) {
@@ -374,7 +372,7 @@ function resolveDiscordChannelEntryMatch(
   });
 }
 
-function hasConfiguredDiscordChannels(
+export function hasConfiguredDiscordChannels(
   channels: DiscordGuildEntryResolved["channels"] | undefined,
 ): channels is NonNullable<DiscordGuildEntryResolved["channels"]> {
   return Boolean(channels && Object.keys(channels).length > 0);

@@ -6,7 +6,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listDefaultAgentDatabasePaths } from "../state/agent-database-path-discovery.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
@@ -25,13 +25,18 @@ import {
 import {
   inspectSqliteSchemaHeaderInProcess,
   prepareSqliteReadOnlyLocationInProcess,
+  prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import {
+  StateDatabaseDiscoverySchema,
   UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME,
+  queueStateDatabaseSpelling,
   resolveUpdateCandidateStateIdentity,
   resolveUpdateCandidateStatePath,
+  type StateDatabaseDiscovery,
+  type UpdateStateDatabaseOwner,
 } from "./update-candidate-paths.js";
 import {
   UpdateCandidatePluginCodeLinkReceiptSchema,
@@ -123,11 +128,6 @@ async function fileExists(file: string): Promise<boolean> {
   }
 }
 
-/** Every raw spelling discovered for one database, grouped by projection identity. */
-const StateDatabaseDiscoverySchema = z.object({
-  spellings: z.tuple([z.string()], z.string()),
-});
-type StateDatabaseDiscovery = z.infer<typeof StateDatabaseDiscoverySchema>;
 const UpdateCandidateStateInventorySchema = z
   .array(z.tuple([z.string(), StateDatabaseDiscoverySchema]))
   .transform((entries) => new Map(entries));
@@ -135,6 +135,8 @@ export const UpdateCandidateSnapshotInventorySchema = z.object({
   databases: UpdateCandidateStateInventorySchema,
   pluginBytes: z.number().nonnegative(),
   pluginPlan: z.literal(UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME),
+  // Published candidate workers before named snapshot warnings omit this field.
+  warnings: z.array(z.string()).default([]),
 });
 export const UpdateStateSchemaInspectionPlanSchema = z.object({
   files: z.array(z.tuple([z.string(), StateDatabaseDiscoverySchema])),
@@ -142,36 +144,27 @@ export const UpdateStateSchemaInspectionPlanSchema = z.object({
 });
 type UpdateStateSchemaInspectionPlan = z.infer<typeof UpdateStateSchemaInspectionPlanSchema>;
 
-function queueStateDatabaseSpelling(
-  files: Map<string, StateDatabaseDiscovery>,
-  identity: string,
-  file: string,
-): void {
-  const discovery = files.get(identity);
-  if (discovery) {
-    if (!discovery.spellings.includes(file)) {
-      discovery.spellings.push(file);
-    }
-    return;
-  }
-  files.set(identity, { spellings: [file] });
-}
-
 function collectRegisteredPaths(
   db: DatabaseSync,
   shared: string,
   files: Map<string, StateDatabaseDiscovery>,
 ) {
+  // Raw registries can predate agent IDs; keep their paths without inventing ownership.
   const rows = tableExists(db, "agent_databases")
     ? executeSqliteQuerySync(
         db,
         getNodeSqliteKysely<CandidateStateDatabase>(db)
           .selectFrom("agent_databases")
           .select("path")
+          .select((eb) =>
+            tableHasColumn(db, "agent_databases", "agent_id")
+              ? eb.ref("agent_id").as("agent_id")
+              : eb.val(null).as("agent_id"),
+          )
           .orderBy("path"),
       ).rows
     : [];
-  return rows.map(({ path: stored }) => {
+  return rows.map(({ path: stored, agent_id: agentId }) => {
     const source = resolveOpenClawRegisteredAgentDatabasePath(shared, stored);
     // Discover registrations from the exact private generation being inspected.
     // Spellings dedupe on one projection identity per database, but every raw
@@ -179,8 +172,9 @@ function collectRegisteredPaths(
     // rollback baselines compare exact paths against the versions response.
     queueStateDatabaseSpelling(
       files,
-      resolveUpdateCandidateStateIdentity(resolveOpenClawStateDirForDatabasePath(shared), source),
+      resolveOpenClawStateDirForDatabasePath(shared),
       source,
+      typeof agentId === "string" && agentId.length > 0 ? { role: "agent", agentId } : undefined,
     );
     return { stored, source };
   });
@@ -191,14 +185,17 @@ async function withStateDatabaseSnapshot<T>(
   read: (location: string) => T | Promise<T>,
   stagingRoot?: string,
   onProgress?: (progress: UpdateStateInspectionProgress) => void,
+  preserveSourceArtifacts = false,
 ): Promise<T> {
   const progress = createUpdateStateSnapshotReporter(file, "shared database snapshot", onProgress);
-  const snapshot = await prepareSqliteReadOnlyLocationInProcess(
-    file,
-    stagingRoot,
-    undefined,
-    progress.onProgress,
-  );
+  const snapshot = preserveSourceArtifacts
+    ? prepareSqliteReadOnlyLocationSyncInProcess(file, stagingRoot)
+    : await prepareSqliteReadOnlyLocationInProcess(
+        file,
+        stagingRoot,
+        undefined,
+        progress.onProgress,
+      );
   return withPreparedSqliteSnapshot(snapshot, async (location) => {
     progress.complete((await fs.stat(location)).size);
     return read(location);
@@ -218,10 +215,10 @@ export async function collectStateDatabasePaths(
   // alias baselines released updaters captured.
   const stateRoot = path.resolve(input.stateDir);
   const files = new Map<string, StateDatabaseDiscovery>();
-  const queue = (file: string) => {
-    queueStateDatabaseSpelling(files, resolveUpdateCandidateStateIdentity(stateRoot, file), file);
+  const queue = (file: string, owner?: UpdateStateDatabaseOwner) => {
+    queueStateDatabaseSpelling(files, stateRoot, file, owner);
   };
-  queue(shared);
+  queue(shared, { role: "global" });
   let directories: string[] = [];
   if (options.includeUnconfiguredAgents !== false) {
     directories = (await listDefaultAgentDatabasePaths(input.stateDir)).map(
@@ -238,11 +235,17 @@ export async function collectStateDatabasePaths(
   for (const [id, agent] of [...configured, ...projected]) {
     directories.push(id);
     if (agent.agentDir) {
-      queue(path.join(resolveUserPath(agent.agentDir, input.env), "openclaw-agent.sqlite"));
+      queue(path.join(resolveUserPath(agent.agentDir, input.env), "openclaw-agent.sqlite"), {
+        role: "agent",
+        agentId: id,
+      });
     }
   }
   for (const id of new Set(["main", ...directories])) {
-    queue(path.resolve(input.stateDir, "agents", id, "agent", "openclaw-agent.sqlite"));
+    queue(path.resolve(input.stateDir, "agents", id, "agent", "openclaw-agent.sqlite"), {
+      role: "agent",
+      agentId: id,
+    });
   }
   return new Map(
     [...files.entries()].toSorted(([, a], [, b]) =>
@@ -295,6 +298,8 @@ export async function readUpdateCandidateStateInventoryInProcess(
   const measure = async (
     sharedStateDatabasePath?: string,
   ): Promise<z.infer<typeof UpdateCandidateSnapshotInventorySchema>> => {
+    // Database discovery is complete; plugin failures must retain their own phase.
+    input.onProgress?.({ phase: "plugin inventory", path: input.stateDir });
     const plugins = await prepareUpdateCandidatePlugins({
       ...input,
       sharedStateDatabasePath,
@@ -305,6 +310,7 @@ export async function readUpdateCandidateStateInventoryInProcess(
       databases: files,
       pluginBytes: plugins.bytes,
       pluginPlan: UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME,
+      warnings: plugins.warnings,
     };
   };
   if (await fileExists(shared)) {
@@ -351,6 +357,7 @@ export async function discoverUpdateStateSchemaInspectionInProcess(
   input: StateInput & {
     stagingRoot: string;
     onProgress?: (progress: UpdateStateInspectionProgress) => void;
+    preserveSourceArtifacts?: boolean;
   },
 ): Promise<UpdateStateSchemaInspectionPlan> {
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
@@ -367,6 +374,7 @@ export async function discoverUpdateStateSchemaInspectionInProcess(
     }),
     input.stagingRoot,
     input.onProgress,
+    input.preserveSourceArtifacts,
   );
   return { files: [...files], sharedVersion };
 }
@@ -725,9 +733,11 @@ export async function snapshotUpdateCandidateState(
       ...(contentVersion === undefined ? {} : { contentVersion }),
     });
   }
+  input.onProgress?.({ phase: "execution approvals snapshot", path: sourceRoot });
   await execApprovals.copySources();
   const versions = publishStateDatabaseVersions(files, inspected);
   const pluginCodeLinks: UpdateCandidatePluginCodeLink[] = [];
+  input.onProgress?.({ phase: "plugin snapshot", path: sourceRoot });
   const pluginPaths = await copyUpdateCandidatePlugins(plugins, {
     ...input,
     onCodeLink: (fact) => {

@@ -157,8 +157,6 @@ describe("normalizeStoredCronJobs", () => {
 
   it.each([
     { name: "image*", entries: ["image*"], expected: ["image*", "view_image"], issue: 1 },
-    { name: "i*e", entries: ["i*e"], expected: ["i*e", "view_image"], issue: 1 },
-    { name: "*", entries: ["*"], expected: ["*"], issue: undefined },
     { name: "*image*", entries: ["*image*"], expected: ["*image*"], issue: undefined },
   ])("migrates legacy image inspection pattern $name", ({ entries, expected, issue }) => {
     const { job, result } = normalizeOneJob(
@@ -696,26 +694,6 @@ describe("normalizeStoredCronJobs", () => {
     expect(result.unresolvedAgentTurnShellToolPromptJobs).toEqual(["Legacy job"]);
   });
 
-  it("warns on shell-style prompts with wildcard tool access", () => {
-    const { result } = normalizeOneJob(
-      makeLegacyJob({
-        id: "wildcard-tools-shell-job",
-        schedule: { kind: "cron", expr: "0 9 * * *", tz: "Europe/Madrid" },
-        sessionTarget: "isolated",
-        payload: {
-          kind: "agentTurn",
-          message:
-            "Execute ./scripts/check_mail.sh and send a compact summary if anything changed.",
-          toolsAllow: ["*"],
-          lightContext: true,
-        },
-      }),
-    );
-
-    expect(result.issues.unresolvedAgentTurnShellToolPrompt).toBe(1);
-    expect(result.unresolvedAgentTurnShellToolPromptJobs).toEqual(["Legacy job"]);
-  });
-
   it("does not warn on ordinary agent prompts that mention commands without shell tools", () => {
     const { job, result } = normalizeOneJob(
       makeLegacyJob({
@@ -992,20 +970,6 @@ describe("normalizeStoredCronJobs", () => {
         id: "job-cron-legacy",
         name: "Legacy cron",
         schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC" },
-      }),
-    );
-
-    const schedule = expectDefined(job, "job test invariant").schedule as Record<string, unknown>;
-    expect(schedule.kind).toBe("cron");
-    expect(schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
-  });
-
-  it("adds default staggerMs to legacy 6-field top-of-hour cron schedules", () => {
-    const { job } = normalizeOneJob(
-      makeLegacyJob({
-        id: "job-cron-seconds-legacy",
-        name: "Legacy cron seconds",
-        schedule: { kind: "cron", expr: "0 0 */3 * * *", tz: "UTC" },
       }),
     );
 

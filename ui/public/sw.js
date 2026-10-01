@@ -131,6 +131,7 @@ self.addEventListener("fetch", (event) => {
   // Dynamic reads must reach their authority owner, including after an edge
   // login expires. Never replay previously cached metadata or media tickets.
   const cacheable = !(
+    event.request.cache === "no-store" ||
     pathname.startsWith("/__openclaw__/") ||
     pathname.startsWith("/api/") ||
     pathname.startsWith("/rpc") ||

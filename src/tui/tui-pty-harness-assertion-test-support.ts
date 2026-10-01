@@ -18,7 +18,7 @@ export {
 } from "./tui-pty-terminal-evidence-test-support.js";
 
 export type FixtureLogEntry = { method: string; payload?: unknown };
-type FixtureLogPredicate = (entry: FixtureLogEntry) => boolean;
+type FixtureLogPredicate = (entry: FixtureLogEntry, index: number) => boolean;
 
 export const COMPACT_TERMINAL_SIZES = [
   [64, 18],
@@ -82,6 +82,24 @@ type StartedTuiPtyFixture = {
   releaseReconnect: () => Promise<void>;
   cleanup: () => Promise<void>;
 };
+export async function selectTuiFixtureSession(fixture: StartedTuiPtyFixture, sessionKey: string) {
+  const logOffset = (await readFixtureLog(fixture.logPath)).length;
+  await fixture.run.write(`/session ${sessionKey}\r`, { delay: false });
+  await fixture.waitForLogEntry(
+    (entry, index) =>
+      index >= logOffset &&
+      entry.method === "loadHistory" &&
+      objectFieldEquals(entry, "sessionKey", sessionKey),
+  );
+  await waitForSynchronizedFrameRows(
+    fixture.run,
+    (rows) =>
+      rows.some((row) => row.trim() === `session ${sessionKey}`) &&
+      rows.some((row) => row.includes("fixture-provider/fixture-model")),
+    2_000,
+  );
+}
+
 type TuiPtyFixtureOptions = { env?: NodeJS.ProcessEnv; holdReconnect?: boolean };
 export type StartTuiPtyFixture = (opts?: TuiPtyFixtureOptions) => Promise<StartedTuiPtyFixture>;
 type TerminalAttackPayload = {

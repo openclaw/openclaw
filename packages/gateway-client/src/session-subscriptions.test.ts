@@ -3,67 +3,15 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
-  type GatewayProtocolRequestOptions,
 } from "./protocol-request.js";
 import {
   GatewaySessionMessageSubscriptionCoordinator,
   getGatewaySessionMessageSubscriptionCoordinator,
   releaseGatewaySessionMessageSubscription,
   resetGatewaySessionMessageSubscriptionCoordinator,
-  type GatewaySessionMessageRequestClient,
 } from "./session-subscriptions.js";
+import { createClient, createStalledRequestClient } from "./session-subscriptions.test-support.js";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "./timeouts.js";
-
-type SessionRequestHandler = (method: string, params: Record<string, unknown>) => Promise<unknown>;
-
-function createClient(
-  handler: SessionRequestHandler = async (method, params) =>
-    method === "sessions.messages.subscribe" ? { key: params.key } : {},
-) {
-  const request = vi.fn(handler);
-  return {
-    client: {
-      request: (method: string, params: Record<string, unknown>) => request(method, params),
-    } as unknown as GatewaySessionMessageRequestClient,
-    request,
-  };
-}
-
-function createStalledRequestClient(stalledMethod: string, stalledKey: string) {
-  let shouldStall = true;
-  const request = vi.fn(
-    (
-      method: string,
-      params: Record<string, unknown>,
-      options?: GatewayProtocolRequestOptions,
-    ): Promise<unknown> => {
-      if (shouldStall && method === stalledMethod && params.key === stalledKey) {
-        shouldStall = false;
-        return new Promise((_, reject) => {
-          const timeoutMs = options?.timeoutMs;
-          if (typeof timeoutMs === "number") {
-            setTimeout(
-              () =>
-                reject(
-                  new GatewayProtocolRequestTimeoutError({
-                    method,
-                    timeoutMs,
-                    requestSent: true,
-                  }),
-                ),
-              timeoutMs,
-            );
-          }
-        });
-      }
-      return Promise.resolve(method === "sessions.messages.subscribe" ? { key: params.key } : {});
-    },
-  );
-  return {
-    client: { request } as unknown as GatewaySessionMessageRequestClient,
-    request,
-  };
-}
 
 afterEach(() => {
   vi.useRealTimers();
@@ -90,7 +38,10 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     await coordinator.release(first);
     expect(request).toHaveBeenCalledOnce();
     await coordinator.release(second);
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.unsubscribe", { key: "main" });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.unsubscribe", {
+      subscriptionId: expect.any(String),
+      key: "main",
+    });
   });
 
   it("retains the requested alias after the Gateway returns a canonical key", async () => {
@@ -106,6 +57,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     expect(first).toEqual({ key: "agent:main:main", agentId: null });
     expect(second).toEqual({ key: "agent:main:main", agentId: null });
     expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
+      subscriptionId: expect.any(String),
       key: "main",
     });
 
@@ -114,6 +66,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     await coordinator.release(second);
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
+      subscriptionId: expect.any(String),
       key: "agent:main:main",
     });
   });
@@ -128,6 +81,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     const canonical = await coordinator.acquire("agent:main:main");
 
     expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
+      subscriptionId: expect.any(String),
       key: "main",
     });
     expect(requested.key).toBe("agent:main:main");
@@ -138,6 +92,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     await coordinator.release(canonical);
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
+      subscriptionId: expect.any(String),
       key: "agent:main:main",
     });
   });
@@ -149,7 +104,6 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
       requestedKey: "agent:ops:main",
       canonicalKey: "agent:ops:work",
     },
-    { name: "global main", requestedKey: "agent:ops:main", canonicalKey: "global" },
   ])(
     "coalesces $name aliases before the first canonical acknowledgment",
     async ({ requestedKey, canonicalKey }) => {
@@ -163,6 +117,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
       const canonical = coordinator.acquire(canonicalKey);
 
       expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
+        subscriptionId: expect.any(String),
         key: requestedKey,
       });
 
@@ -172,13 +127,20 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
       expect(first).not.toBe(second);
       expect(first).toEqual({ key: canonicalKey, agentId: null });
       expect(second).toEqual({ key: canonicalKey, agentId: null });
-      expect(request).toHaveBeenCalledOnce();
+      expect(
+        request.mock.calls.filter(([method]) => method === "sessions.messages.subscribe"),
+      ).toHaveLength(1);
 
       await coordinator.release(first);
-      expect(request).toHaveBeenCalledOnce();
+      expect(
+        request.mock.calls.filter(([method]) => method === "sessions.messages.unsubscribe"),
+      ).toHaveLength(0);
       await coordinator.release(second);
-      expect(request).toHaveBeenCalledTimes(2);
+      expect(
+        request.mock.calls.filter(([method]) => method === "sessions.messages.unsubscribe"),
+      ).toHaveLength(1);
       expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
+        subscriptionId: expect.any(String),
         key: canonicalKey,
       });
     },
@@ -213,6 +175,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     });
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", {
+      subscriptionId: expect.any(String),
       key: "agent:main:main",
       includeApprovals: true,
     });
@@ -222,6 +185,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     await coordinator.release(upgraded);
     expect(request).toHaveBeenCalledTimes(3);
     expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
+      subscriptionId: expect.any(String),
       key: "agent:main:main",
     });
   });
@@ -239,10 +203,12 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     expect(research).toEqual({ key: "global", agentId: "research" });
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(1, "sessions.messages.subscribe", {
+      subscriptionId: expect.any(String),
       key: "global",
       agentId: "main",
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", {
+      subscriptionId: expect.any(String),
       key: "global",
       agentId: "research",
     });
@@ -267,7 +233,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     expect(request).toHaveBeenNthCalledWith(
       2,
       "sessions.messages.subscribe",
-      { key: "healthy" },
+      { subscriptionId: expect.any(String), key: "healthy" },
       { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
     );
     await expect(recovered).resolves.toEqual({ key: "healthy", agentId: null });
@@ -280,7 +246,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     expect(request).toHaveBeenNthCalledWith(
       3,
       "sessions.messages.unsubscribe",
-      { key: "stalled" },
+      { subscriptionId: expect.any(String), key: "stalled" },
       { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
     );
   });
@@ -477,7 +443,10 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
     await expect(replacement).resolves.toEqual({ key: "main", agentId: null });
     expect(request).toHaveBeenCalledTimes(3);
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.messages.subscribe", { key: "main" });
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.messages.subscribe", {
+      subscriptionId: expect.any(String),
+      key: "main",
+    });
   });
 
   it("keeps approval observers upgraded when plain owners arrive later", async () => {
@@ -500,6 +469,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     });
     expect(plain).toEqual({ key: "main", agentId: null });
     expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
+      subscriptionId: expect.any(String),
       key: "main",
       includeApprovals: true,
     });
@@ -527,8 +497,12 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     const laterPlain = await coordinator.acquire("main");
 
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.messages.subscribe", { key: "main" });
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.messages.subscribe", {
+      subscriptionId: expect.any(String),
+      key: "main",
+    });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", {
+      subscriptionId: expect.any(String),
       key: "main",
       includeApprovals: true,
     });
@@ -699,10 +673,14 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     ]);
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(1, "sessions.messages.subscribe", {
+      subscriptionId: expect.any(String),
       key: "main",
       includeApprovals: true,
     });
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", { key: "main" });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", {
+      subscriptionId: expect.any(String),
+      key: "main",
+    });
   });
 
   it("releases the last plain owner after its provisional approval upgrade fails", async () => {
@@ -727,7 +705,10 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     approval.reject(new Error("approval replay unavailable"));
     await expect(pendingApproval).rejects.toThrow("approval replay unavailable");
     await expect(release).resolves.toBeUndefined();
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", { key: "main" });
+    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
+      subscriptionId: expect.any(String),
+      key: "main",
+    });
     expect(request).toHaveBeenCalledTimes(3);
   });
 
@@ -762,7 +743,10 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
     await releaseGatewaySessionMessageSubscription(replacement);
     expect(request).toHaveBeenCalledTimes(3);
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", { key: "main" });
+    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
+      subscriptionId: expect.any(String),
+      key: "main",
+    });
   });
 
   it("rejects a subscribe acknowledgment from a retired connection", async () => {
@@ -796,6 +780,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     }).acquire("main");
 
     expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
+      subscriptionId: expect.any(String),
       key: "MAIN",
     });
     expect(first.key).toBe("agent:main:main");
@@ -811,6 +796,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     await releaseGatewaySessionMessageSubscription(second);
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
+      subscriptionId: expect.any(String),
       key: "agent:main:main",
     });
   });

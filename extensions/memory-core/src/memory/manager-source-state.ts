@@ -62,18 +62,6 @@ export async function resolveMemorySourceFileEntries(params: {
   ).filter((entry): entry is MemoryFileEntry => entry !== null);
 }
 
-/** Compare a resolved source snapshot with the persisted index without writing either side. */
-function hasMemorySourceDrift(params: {
-  entries: readonly MemoryFileEntry[];
-  indexedRows: readonly MemorySourceFileStateRow[];
-}): boolean {
-  const indexedByPath = new Map(params.indexedRows.map((row) => [row.path, row]));
-  if (indexedByPath.size !== params.entries.length) {
-    return true;
-  }
-  return params.entries.some((entry) => indexedByPath.get(entry.path)?.hash !== entry.hash);
-}
-
 export async function inspectMemorySourceState(params: {
   db: DatabaseSync;
   workspaceDir: string;
@@ -86,10 +74,17 @@ export async function inspectMemorySourceState(params: {
     ...params,
     onSkippedSymlinkRoot: (root) => skippedRoots.add(root),
   });
-  const indexedRows = loadMemorySourceFileState({ db: params.db, source: "memory" });
+  const indexedByPath = new Map(
+    loadMemorySourceFileState({ db: params.db, source: "memory" }).map((row) => [
+      row.path,
+      row.hash,
+    ]),
+  );
   return {
     source: "memory",
-    dirty: hasMemorySourceDrift({ entries, indexedRows }),
+    dirty:
+      indexedByPath.size !== entries.length ||
+      entries.some((entry) => indexedByPath.get(entry.path) !== entry.hash),
     eligible: entries.length,
     issues: [
       ...(entries.length === 0 ? ["no eligible memory files found"] : []),

@@ -57,7 +57,6 @@ describe("release tooling identity", () => {
   it.each([
     ["1", "main", "refs/heads/main"],
     ["2", "release/2026.8.1", "refs/heads/release/2026.8.1"],
-    ["2", "tideclaw/alpha/2026-08-21-1200Z", "refs/heads/tideclaw/alpha/2026-08-21-1200Z"],
   ])("derives contract %s identity for safe direct workflow ref %s", (contract, ref, fullRef) => {
     expect(
       resolveReleaseToolingIdentity({
@@ -67,6 +66,21 @@ describe("release tooling identity", () => {
         workflowSha: SHA,
       }),
     ).toEqual({ fullRef, ref, sha: SHA });
+  });
+
+  it("rejects retired Tideclaw tooling even when prevalidated", () => {
+    const workflowRef = "tideclaw/alpha/2026-08-21-1200Z";
+    const identity = {
+      workflowRef,
+      workflowFullRef: `refs/heads/${workflowRef}`,
+      workflowSha: SHA,
+    };
+    expect(() => resolveReleaseToolingIdentity({ ...identity, workflowContract: "2" })).toThrow(
+      "Alpha releases are retired;",
+    );
+    expect(() =>
+      validateReleaseToolingIdentity({ ...identity, allowPrevalidatedRef: true }),
+    ).toThrow("Alpha releases are retired;");
   });
 
   it("rejects unsupported contract 3 even with explicit identity", () => {

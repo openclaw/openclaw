@@ -48,6 +48,7 @@ export function renderSessionLeadingState(
   ownerViewing?: boolean,
   avatarAuth?: SessionAvatarAuth,
   trailingState = false,
+  icon?: TemplateResult,
 ): {
   running: boolean;
   leadingIndicator: TemplateResult | typeof nothing;
@@ -70,9 +71,7 @@ export function renderSessionLeadingState(
   const iconContent =
     session.attention.kind !== "none" && !trailingState
       ? renderSessionAttentionIcon(session.attention, true)
-      : session.icon
-        ? renderPersistentSessionIcon(session.icon)
-        : nothing;
+      : (icon ?? (session.icon ? renderPersistentSessionIcon(session.icon) : nothing));
   if (iconContent !== nothing) {
     return {
       running,

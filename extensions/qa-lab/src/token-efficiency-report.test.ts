@@ -1,8 +1,9 @@
 // Qa Lab tests cover token efficiency report plugin behavior.
 import { describe, expect, it } from "vitest";
+import type { QaParitySuiteSummary } from "./agentic-parity-report.js";
+import type { RuntimeId } from "./runtime-id.js";
 import { buildRuntimeParityCacheDiagnostics } from "./runtime-parity-cache-diagnostics.js";
 import type {
-  RuntimeId,
   RuntimeParityCell,
   RuntimeParityResult,
   RuntimeParityToolCall,
@@ -11,7 +12,6 @@ import type {
 import {
   buildTokenEfficiencyReport,
   renderTokenEfficiencyMarkdownReport,
-  type TokenEfficiencySuiteSummary,
 } from "./token-efficiency-report.js";
 
 function makeToolCall(tool: string): RuntimeParityToolCall {
@@ -55,7 +55,7 @@ function makeRuntimeParity(
   };
 }
 
-function makeLiveSummary(runtimeParity: RuntimeParityResult[]): TokenEfficiencySuiteSummary {
+function makeLiveSummary(runtimeParity: RuntimeParityResult[]): QaParitySuiteSummary {
   return {
     scenarios: runtimeParity.map((result) => ({
       name: result.scenarioId,

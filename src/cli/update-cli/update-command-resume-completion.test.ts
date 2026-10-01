@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import {
+  formatDeferredPluginMigration,
+  readDeferredPluginMigrationCompletionsAsync,
+  readDeferredPluginMigrationsAsync,
+} from "../../infra/deferred-plugin-migrations.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import {
@@ -9,6 +14,9 @@ import {
   seedInstalledPluginIndex,
 } from "../../plugins/test-helpers/installed-plugin-index.js";
 import { runExec } from "../../process/exec.js";
+import { defaultRuntime } from "../../runtime.js";
+import { runRegisteredCli } from "../../test-utils/command-runner.js";
+import { registerUpdateCli } from "../update-cli.js";
 // Register shared mocks before the tested runtime modules are imported.
 import {
   entrypoint,
@@ -26,7 +34,93 @@ import {
 
 installUpdateLeaseHarness();
 
-describe("update resume completion ownership", () => {
+describe("update completion ownership", () => {
+  it("repair completes deferred migrations after unchanged plugin convergence", async () => {
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    const pluginId = "repair-convergence";
+    const pluginDir = state.statePath("extensions", pluginId);
+    await state.writeJson(`extensions/${pluginId}/package.json`, {
+      name: pluginId,
+      version: "1.0.0",
+      type: "module",
+      openclaw: { extensions: ["./index.js"] },
+    });
+    await state.writeJson(`extensions/${pluginId}/openclaw.plugin.json`, {
+      id: pluginId,
+      activation: { onStartup: true },
+      doctorContract: { stateMigrations: [] },
+      configSchema: { type: "object", additionalProperties: false },
+    });
+    await state.writeText(
+      `extensions/${pluginId}/doctor-contract-api.js`,
+      "export const stateMigrations = [];\n",
+    );
+    await state.writeText(
+      `extensions/${pluginId}/index.js`,
+      `export default { id: "${pluginId}", register() {} };\n`,
+    );
+    await state.writeConfig({
+      gateway: { mode: "local", auth: { mode: "none" } },
+      agents: { entries: { main: {} } },
+      plugins: {
+        allow: [pluginId],
+        load: { paths: [pluginDir] },
+        entries: { [pluginId]: { enabled: true } },
+      },
+    });
+    await writeScenario("repair", {
+      runDoctorConfigFlow: true,
+      verifyRepairOwner: true,
+      doctorWarningsByInvocation: [
+        [
+          formatDeferredPluginMigration({
+            pluginId,
+            reason:
+              "Package convergence must wait until the updating parent releases its install records.",
+            command: "openclaw update repair",
+          }),
+        ],
+        [],
+      ],
+    });
+    mocks.plugins.mockImplementationOnce(async () => {
+      expect(await readDeferredPluginMigrationsAsync()).toEqual([
+        expect.objectContaining({
+          pluginId,
+          reason:
+            "Package convergence must wait until the updating parent releases its install records.",
+        }),
+      ]);
+      return { ...pluginResult, changed: false };
+    });
+
+    await runRegisteredCli({
+      register: registerUpdateCli,
+      argv: ["update", "repair", "--yes", "--no-restart", "--json"],
+    });
+
+    expect(
+      mocks.plugins,
+      vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n"),
+    ).toHaveBeenCalledOnce();
+    expect(await readDeferredPluginMigrationsAsync()).toEqual([]);
+    expect(await readDeferredPluginMigrationCompletionsAsync()).toEqual([
+      expect.objectContaining({ pluginId }),
+    ]);
+    expect(JSON.stringify(reportedResult("repair"))).not.toContain(
+      "data/settings upgrade is unfinished",
+    );
+    expectSuccess("repair");
+    expect(await events()).toEqual([
+      "pre-attempt",
+      "pre-acquired",
+      "post-attempt",
+      "post-acquired",
+      "validate",
+      "readiness",
+    ]);
+  });
+
   it.each([false, true])(
     "resume honors completion ownership before its changed result (parent=%s)",
     async (parentOwnsCompletion) => {

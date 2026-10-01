@@ -15,22 +15,48 @@ public enum OpenClawChatSessionKey {
 
 /// Canonical gateway payload mapping shared by the native Apple chat transports.
 public enum OpenClawChatGatewayPayloadCodec {
-    public static func decodeSessionsList(_ data: Data, agentID: String?) throws -> OpenClawChatSessionsListResponse {
-        let decoded = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
-        return OpenClawChatSessionsListResponse(
-            ts: decoded.ts,
-            path: decoded.path,
-            count: decoded.count,
-            totalCount: decoded.totalCount,
-            offset: decoded.offset,
-            nextOffset: decoded.nextOffset,
-            hasMore: decoded.hasMore,
-            defaults: decoded.defaults,
-            sessions: decoded.sessions.map { row in
-                var row = row
-                row.agentId = OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId ?? agentID
-                return row
+    public static func decodeReactionsList(_ data: Data) throws -> OpenClawChatReactionsListResult {
+        let result = try JSONDecoder().decode(SessionReactionsListResult.self, from: data)
+        return try OpenClawChatReactionsListResult(
+            sessionID: result.sessionid,
+            reactions: result.reactions.mapValues {
+                try GatewayPayloadDecoding.decode($0, as: [OpenClawChatReactionSummary].self)
             })
+    }
+
+    public static func decodeReactionsSet(_ data: Data) throws -> OpenClawChatReactionsSetResult {
+        let result = try JSONDecoder().decode(SessionReactionsSetResult.self, from: data)
+        return try OpenClawChatReactionsSetResult(
+            messageID: result.messageid,
+            reactions: result.reactions.map(self.reactionSummary))
+    }
+
+    private static func reactionSummary(_ summary: MessageReactionSummary) throws -> OpenClawChatReactionSummary {
+        try OpenClawChatReactionSummary(
+            emoji: summary.emoji,
+            count: summary.count,
+            identities: summary.identities.map {
+                try GatewayPayloadDecoding.decode(AnyCodable($0), as: OpenClawChatReactionIdentity.self)
+            })
+    }
+
+    private static func reactionEvent(_ event: SessionReactionEvent) throws -> OpenClawChatReactionEvent {
+        try OpenClawChatReactionEvent(
+            sessionKey: event.sessionkey,
+            agentID: event.agentid,
+            sessionID: event.sessionid,
+            messageID: event.messageid,
+            reactions: event.reactions.map(self.reactionSummary))
+    }
+
+    public static func decodeSessionsList(_ data: Data, agentID: String?) throws -> OpenClawChatSessionsListResponse {
+        var decoded = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+        decoded.sessions = decoded.sessions.map { row in
+            var row = row
+            row.agentId = OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId ?? agentID
+            return row
+        }
+        return decoded
     }
 
     public static func decodeAgentsList(_ data: Data) throws -> OpenClawChatAgentsListResponse {
@@ -199,6 +225,14 @@ public enum OpenClawChatGatewayPayloadCodec {
             return .modelSelectionChanged
         case "sessions.changed":
             return decode(OpenClawChatSessionsChangedEvent.self).map(OpenClawChatTransportEvent.sessionsChanged)
+        case "session.reaction":
+            guard let event = decode(SessionReactionEvent.self),
+                  let reaction = try? self.reactionEvent(event) else { return nil }
+            return .sessionReaction(reaction)
+        case "session.narration":
+            // Native foreground subscriptions use full streams; bounded narration
+            // tails cannot replace transcript messages.
+            return nil
         case "session.observer":
             return decode(SessionObserverDigest.self).map(OpenClawChatTransportEvent.sessionObserver)
         case "seqGap":

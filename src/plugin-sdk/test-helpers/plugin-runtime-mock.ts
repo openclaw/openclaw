@@ -27,6 +27,7 @@ import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "../channel-mention-gating.js";
+import { createPluginGatewayRuntimeMock } from "./plugin-runtime-gateway-mock.js";
 import {
   mergePluginRuntimeMockOverrides,
   type PluginRuntimeMockOverrides,
@@ -480,10 +481,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
   const base: PluginRuntime = {
     version: "1.0.0-test",
     ...createPluginModelRuntimeMock({ provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL }),
-    gateway: {
-      isAvailable: vi.fn(async () => false),
-      request: vi.fn(),
-    },
+    gateway: createPluginGatewayRuntimeMock(),
     config: {
       current: vi.fn<PluginRuntime["config"]["current"]>(() => ({})),
       mutateConfigFile: createGenericMock<PluginRuntime["config"]["mutateConfigFile"]>(

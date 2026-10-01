@@ -76,6 +76,17 @@ type SessionStoreTargetReadOptions = {
   readPaths?: CapturedSessionStorePaths;
 };
 
+export function resolveConfiguredSessionStoreTargets(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  readPaths?: CapturedSessionStorePaths,
+): SessionStoreTarget[] {
+  return listConfiguredSessionStoreAgentIds(cfg).map((agentId) => ({
+    agentId,
+    storePath: resolveCapturedSessionStorePath(cfg.session?.store, agentId, env, readPaths),
+  }));
+}
+
 /** Lists configured owners plus persisted owners whose registered DB still matches this store. */
 export function listKnownSessionStoreAgentIds(
   cfg: OpenClawConfig,
@@ -350,17 +361,7 @@ function resolveExistingAgentSessionStoreTargets(
       if (isConfiguredTarget && isConfiguredSessionStoreAgentId(cfg, requested)) {
         return isConfiguredTarget(requested);
       }
-      const configuredTargets = listConfiguredSessionStoreAgentIds(cfg).map(
-        (configuredAgentId) => ({
-          agentId: configuredAgentId,
-          storePath: resolveCapturedSessionStorePath(
-            storeConfig,
-            configuredAgentId,
-            env,
-            params.readPaths,
-          ),
-        }),
-      );
+      const configuredTargets = resolveConfiguredSessionStoreTargets(cfg, env, params.readPaths);
       if (!configuredTargets.some((target) => normalizeAgentId(target.agentId) === requested)) {
         configuredTargets.push(fixedTarget);
       }
@@ -668,15 +669,7 @@ export function resolveSessionStoreTargets(
 
   if (allAgents) {
     const defaultAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
-    const targets = listConfiguredSessionStoreAgentIds(cfg).map((agentId) => ({
-      agentId,
-      storePath: resolveCapturedSessionStorePath(
-        cfg.session?.store,
-        agentId,
-        env,
-        params.readPaths,
-      ),
-    }));
+    const targets = resolveConfiguredSessionStoreTargets(cfg, env, params.readPaths);
     return dedupeSessionStoreTargetsBySqliteTarget(targets, {
       defaultAgentId,
       env,

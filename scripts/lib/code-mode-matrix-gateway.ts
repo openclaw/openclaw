@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord as record } from "@openclaw/normalization-core/record-coerce";
 import { parse } from "acorn";
@@ -99,32 +100,28 @@ export function parseGatewayMatrixActivationDiagnostic(
   if (start < 0) {
     return undefined;
   }
-  try {
-    const value: unknown = JSON.parse(line.slice(start + marker.length, line.lastIndexOf("}") + 1));
-    if (
-      !record(value) ||
-      value.boundary !== "activation" ||
-      typeof value.runId !== "string" ||
-      typeof value.active !== "boolean" ||
-      typeof value.toolsEnabled !== "boolean" ||
-      typeof value.toolsDisabled !== "boolean" ||
-      typeof value.rawRun !== "boolean" ||
-      typeof value.fallbackActive !== "boolean"
-    ) {
-      return undefined;
-    }
-    return {
-      runId: value.runId,
-      active: value.active,
-      toolsEnabled: value.toolsEnabled,
-      toolsDisabled: value.toolsDisabled,
-      rawRun: value.rawRun,
-      fallbackActive: value.fallbackActive,
-      ...(typeof value.allowlist === "string" ? { allowlist: value.allowlist } : {}),
-    };
-  } catch {
+  const value = safeParseJson(line.slice(start + marker.length, line.lastIndexOf("}") + 1));
+  if (
+    !record(value) ||
+    value.boundary !== "activation" ||
+    typeof value.runId !== "string" ||
+    typeof value.active !== "boolean" ||
+    typeof value.toolsEnabled !== "boolean" ||
+    typeof value.toolsDisabled !== "boolean" ||
+    typeof value.rawRun !== "boolean" ||
+    typeof value.fallbackActive !== "boolean"
+  ) {
     return undefined;
   }
+  return {
+    runId: value.runId,
+    active: value.active,
+    toolsEnabled: value.toolsEnabled,
+    toolsDisabled: value.toolsDisabled,
+    rawRun: value.rawRun,
+    fallbackActive: value.fallbackActive,
+    ...(typeof value.allowlist === "string" ? { allowlist: value.allowlist } : {}),
+  };
 }
 
 export function evaluateGatewayMatrixActivation(params: {
@@ -338,16 +335,17 @@ function outputDetails(message: RecordValue): RecordValue {
     if (!record(item) || typeof item.text !== "string") {
       continue;
     }
-    try {
-      const decoded: unknown = JSON.parse(item.text);
-      if (record(decoded)) {
-        return decoded;
-      }
-    } catch {
-      /* A truncated display is evidence of truncation, not a complete result. */
+    const decoded = safeParseJson(item.text);
+    if (record(decoded)) {
+      return decoded;
     }
   }
   return record(message.details) ? message.details : {};
+}
+
+function addObservedNumber(total: number | undefined, value: unknown): number | undefined {
+  const number = asFiniteNumber(value);
+  return total !== undefined && number !== undefined ? total + number : undefined;
 }
 
 /** Only actual assistant calls and persisted terminal activity count as execution. */
@@ -358,16 +356,12 @@ export function collectGatewayMatrixTrace(events: readonly unknown[]): GatewayMa
   const models = new Set<string>();
   let assistantTurns = 0;
   let usageSamples = 0;
-  let costSamples = 0;
-  let totalSamples = 0;
-  let cacheReadSamples = 0;
-  let cacheWriteSamples = 0;
   let input = 0;
   let output = 0;
-  let total = 0;
-  let costUsd = 0;
-  let cacheRead = 0;
-  let cacheWrite = 0;
+  let total: number | undefined = 0;
+  let costUsd: number | undefined = 0;
+  let cacheRead: number | undefined = 0;
+  let cacheWrite: number | undefined = 0;
   for (const [eventIndex, event] of events.entries()) {
     if (!record(event)) {
       continue;
@@ -387,26 +381,10 @@ export function collectGatewayMatrixTrace(events: readonly unknown[]): GatewayMa
         usageSamples += 1;
         input += inputTokens;
         output += outputTokens;
-        const totalTokens = asFiniteNumber(usage.totalTokens);
-        if (totalTokens !== undefined) {
-          totalSamples += 1;
-          total += totalTokens;
-        }
-        const readTokens = asFiniteNumber(usage.cacheRead);
-        if (readTokens !== undefined) {
-          cacheReadSamples += 1;
-          cacheRead += readTokens;
-        }
-        const writeTokens = asFiniteNumber(usage.cacheWrite);
-        if (writeTokens !== undefined) {
-          cacheWriteSamples += 1;
-          cacheWrite += writeTokens;
-        }
-        const cost = record(usage.cost) ? asFiniteNumber(usage.cost.total) : undefined;
-        if (cost !== undefined) {
-          costSamples += 1;
-          costUsd += cost;
-        }
+        total = addObservedNumber(total, usage.totalTokens);
+        cacheRead = addObservedNumber(cacheRead, usage.cacheRead);
+        cacheWrite = addObservedNumber(cacheWrite, usage.cacheWrite);
+        costUsd = addObservedNumber(costUsd, record(usage.cost) ? usage.cost.total : undefined);
       }
       for (const block of Array.isArray(message.content) ? message.content : []) {
         if (
@@ -488,22 +466,16 @@ export function collectGatewayMatrixTrace(events: readonly unknown[]): GatewayMa
           usage: {
             input,
             output,
-            ...(totalSamples === assistantTurns ? { total } : {}),
-            ...(cacheReadSamples === assistantTurns ? { cacheRead } : {}),
-            ...(cacheWriteSamples === assistantTurns ? { cacheWrite } : {}),
+            ...(total !== undefined ? { total } : {}),
+            ...(cacheRead !== undefined ? { cacheRead } : {}),
+            ...(cacheWrite !== undefined ? { cacheWrite } : {}),
           },
         }
       : {}),
-    ...(costSamples === assistantTurns && assistantTurns > 0 ? { costUsd } : {}),
+    ...(usageSamples === assistantTurns && assistantTurns > 0 && costUsd !== undefined
+      ? { costUsd }
+      : {}),
   };
-}
-
-function jsonAnswer(text: string): unknown {
-  try {
-    return JSON.parse(text.trim());
-  } catch {
-    return undefined;
-  }
 }
 
 function callOutcomes(trace: GatewayMatrixTrace, call: ToolCall): ToolOutcome[] {
@@ -633,10 +605,6 @@ function observedReferences(
   );
 }
 
-function referenceIds(trace: GatewayMatrixTrace): string[] {
-  return [...new Set(observedReferences(trace).map((reference) => reference.id))];
-}
-
 export function evaluateGatewayMatrixTask(params: {
   task: GatewayMatrixContractTask;
   expected: RecordValue;
@@ -652,7 +620,7 @@ export function evaluateGatewayMatrixTask(params: {
     trace.calls.some((call) => call.id === item.parentId && call.name === "exec");
   const activity = trace.activities.filter((item) => !item.isError);
   const checks: BehaviorChecks = {
-    answer: isDeepStrictEqual(jsonAnswer(params.final), expected),
+    answer: isDeepStrictEqual(safeParseJson(params.final.trim()), expected),
     actualCodeMode:
       trace.calls.some((call) => call.name === "exec") &&
       trace.outcomes.some((outcome) =>
@@ -738,7 +706,9 @@ export function evaluateGatewayMatrixTask(params: {
       record(fetched.details.value.reference)
         ? fetched
         : undefined;
-    const refs = automatic ? referenceIds({ ...trace, outcomes: [automatic] }) : [];
+    const refs = automatic
+      ? [...new Set(observedReferences({ ...trace, outcomes: [automatic] }).map(({ id }) => id))]
+      : [];
     const load = trace.calls.find(
       (call) =>
         refs.some((id) => source(call).includes(id)) && source(call).includes("results.load"),
@@ -762,7 +732,8 @@ export function evaluateGatewayMatrixTask(params: {
       (name) => receiptCalls.some((row) => row.tool === name),
     );
   } else if (task === "automation-contracts") {
-    const automations = activity.filter((item) => item.name === "automations");
+    const allAutomations = trace.activities.filter((item) => item.name === "automations");
+    const automations = allAutomations.filter((item) => !item.isError);
     const completeInventory = (item: ToolActivity) =>
       item.input.action === "list" &&
       item.input.includeDisabled === true &&
@@ -803,36 +774,30 @@ export function evaluateGatewayMatrixTask(params: {
           item.input.job.enabled === false &&
           (record(item.result.job) ? item.result.job.enabled : item.result.enabled) === false,
       );
-    checks.remainedDisabled = trace.activities
-      .filter((item) => item.name === "automations")
-      .every((item) => {
-        if (["run", "wake"].includes(String(item.input.action))) {
-          return false;
-        }
-        if (item.input.action !== "update") {
-          return true;
-        }
-        if (
-          item.input.enabled === true ||
-          (record(item.input.job) && item.input.job.enabled === true) ||
-          (record(item.input.patch) && item.input.patch.enabled === true)
-        ) {
-          return false;
-        }
-        const job = record(item.result.job) ? item.result.job : item.result;
-        return item.isError || job.enabled === false;
-      });
+    checks.remainedDisabled = allAutomations.every((item) => {
+      if (["run", "wake"].includes(String(item.input.action))) {
+        return false;
+      }
+      if (item.input.action !== "update") {
+        return true;
+      }
+      if (
+        item.input.enabled === true ||
+        (record(item.input.job) && item.input.job.enabled === true) ||
+        (record(item.input.patch) && item.input.patch.enabled === true)
+      ) {
+        return false;
+      }
+      const job = record(item.result.job) ? item.result.job : item.result;
+      return item.isError || job.enabled === false;
+    });
     const createdIds = new Set(created.map(jobId));
-    checks.onlyOwnedMutations = trace.activities
-      .filter(
-        (item) =>
-          item.name === "automations" && ["update", "remove"].includes(String(item.input.action)),
-      )
+    checks.onlyOwnedMutations = allAutomations
+      .filter((item) => ["update", "remove"].includes(String(item.input.action)))
       .every((item) => createdIds.has(item.input.jobId ?? item.input.id));
     checks.createdFacts =
       created.length === 1 &&
-      trace.activities.filter((item) => item.name === "automations" && item.input.action === "add")
-        .length === 1 &&
+      allAutomations.filter((item) => item.input.action === "add").length === 1 &&
       created.every((item) => {
         const job = record(item.result.job) ? item.result.job : item.result;
         const scheduledAt =
@@ -1097,7 +1062,7 @@ export function evaluateGatewayMatrixInterview(
       .map((reference) => reference.previewComplete),
   );
   const previewComplete = previewCoverage.size === 1 ? [...previewCoverage][0] : null;
-  const answer = jsonAnswer(final);
+  const answer = safeParseJson(final.trim());
   const facts = record(answer) && record(answer.facts) ? answer.facts : {};
   return {
     answered:
@@ -1362,6 +1327,8 @@ export async function runGatewayMatrixCell(
   const pluginDir = path.join(root, "fixture");
   const receiptsPath = path.join(root, "receipts.jsonl");
   const artifactDir = path.join(params.outputDir, "cells", params.cell.id);
+  const artifactPath = (name: string) =>
+    path.relative(params.outputDir, path.join(artifactDir, name));
   const rootSessionKey = `agent:qa:matrix:${randomUUID()}`;
   const token = `synthetic-matrix-${randomUUID()}`;
   const redact = (value: string) =>
@@ -1893,32 +1860,19 @@ export async function runGatewayMatrixCell(
       traceAvailable: ledger !== undefined && interviewStartedAt !== undefined,
       ...(interviewElapsedMs !== undefined ? { elapsedMs: interviewElapsedMs } : {}),
       ...(interviewAccounting ? { accounting: interviewAccounting } : {}),
-      answer: jsonAnswer(interview.final) ?? interview.final,
+      answer: safeParseJson(interview.final.trim()) ?? interview.final,
       rationaleReview: "required",
       checks: interviewChecks,
       ...(interviewStartedAt !== undefined ? { trace: interviewTrace } : {}),
     },
     artifacts: {
-      taskTrace: path.relative(params.outputDir, path.join(artifactDir, "task-transcript.json")),
-      interviewTrace: path.relative(
-        params.outputDir,
-        path.join(artifactDir, "interview-transcript.json"),
-      ),
-      receipts: path.relative(params.outputDir, path.join(artifactDir, "receipts.json")),
-      taskReceipts: path.relative(params.outputDir, path.join(artifactDir, "task-receipts.json")),
-      interviewReceipts: path.relative(
-        params.outputDir,
-        path.join(artifactDir, "interview-receipts.json"),
-      ),
-      log: path.relative(params.outputDir, path.join(artifactDir, "gateway.log")),
-      ...(deliveredFiles
-        ? {
-            deliveredFiles: path.relative(
-              params.outputDir,
-              path.join(artifactDir, "delivered-files.json"),
-            ),
-          }
-        : {}),
+      taskTrace: artifactPath("task-transcript.json"),
+      interviewTrace: artifactPath("interview-transcript.json"),
+      receipts: artifactPath("receipts.json"),
+      taskReceipts: artifactPath("task-receipts.json"),
+      interviewReceipts: artifactPath("interview-receipts.json"),
+      log: artifactPath("gateway.log"),
+      ...(deliveredFiles ? { deliveredFiles: artifactPath("delivered-files.json") } : {}),
     },
   };
   await write("evidence.json", {

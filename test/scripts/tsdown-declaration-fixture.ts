@@ -179,6 +179,7 @@ export function createFixture(groups: readonly string[], root: string) {
   fs.mkdirSync(path.join(root, "scripts/lib"));
   for (const script of [
     "build-all.mts",
+    "generate-kysely-types.mts",
     "tsdown-build.mts",
     "pnpm-runner.mts",
     "windows-cmd-helpers.mjs",
@@ -200,12 +201,14 @@ export function createFixture(groups: readonly string[], root: string) {
     ...Object.values(runtimeProcessDeclarationEntries),
     "scripts/lib/managed-windows-job-launcher.mts",
     "src/process/supervisor/service-child-windows-job-native.ts",
+    "src/process/exec-result.ts",
     "src/infra/update-managed-service-handoff-runtime-assets.ts",
     "src/infra/update-managed-service-handoff-native-loader.ts",
     "src/shared/deferred.ts",
     "src/shared/freebsd-process-identity.ts",
     "src/shared/freebsd-process-identity-native.ts",
     "src/shared/pid-alive.ts",
+    "src/infra/errno.ts",
     "src/infra/process-env.ts",
     "src/infra/windows-process-start.ts",
     "src/infra/format-time/duration-units.ts",
@@ -215,6 +218,7 @@ export function createFixture(groups: readonly string[], root: string) {
     "src/infra/runtime-dependency-ownership.ts",
     "src/shared/non-packaged-plugin-dirs.ts",
     "src/infra/package-update-activation-runtime-assets.ts",
+    "packages/normalization-core/src/error-coercion.ts",
     "packages/normalization-core/src/mountinfo-path.ts",
     "packages/normalization-core/src/record-coerce.ts",
   ]);

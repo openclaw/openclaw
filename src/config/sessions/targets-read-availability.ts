@@ -22,7 +22,7 @@ import {
 } from "./targets-collision.js";
 import {
   isPerAgentSessionStoreConfig,
-  listConfiguredSessionStoreAgentIds,
+  resolveConfiguredSessionStoreTargets,
   resolveExistingAgentSessionStoreTargetsSync,
 } from "./targets.js";
 
@@ -130,15 +130,7 @@ function resolveFixedSessionStoreTargetsReadOnly(
     storePath: resolveCapturedSessionStorePath(storeConfig, requested, env, params.readPaths),
   };
   try {
-    const configuredTargets = listConfiguredSessionStoreAgentIds(cfg).map((configuredAgentId) => ({
-      agentId: configuredAgentId,
-      storePath: resolveCapturedSessionStorePath(
-        storeConfig,
-        configuredAgentId,
-        env,
-        params.readPaths,
-      ),
-    }));
+    const configuredTargets = resolveConfiguredSessionStoreTargets(cfg, env, params.readPaths);
     if (!configuredTargets.some((target) => normalizeAgentId(target.agentId) === requested)) {
       configuredTargets.push(fixedTarget);
     }

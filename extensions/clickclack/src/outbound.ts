@@ -1,7 +1,3 @@
-/**
- * Outbound ClickClack delivery helpers for channel messages, thread replies,
- * and direct messages.
- */
 import { createHash } from "node:crypto";
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
@@ -226,7 +222,6 @@ export async function sendClickClackText(params: {
   return message.id;
 }
 
-/** Resolves, uploads, sends, then attaches one file to a ClickClack message. */
 export async function sendClickClackMedia(params: {
   cfg: CoreConfig;
   accountId?: string | null;

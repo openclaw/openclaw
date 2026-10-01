@@ -492,7 +492,7 @@ process.exitCode = child.status ?? 1;
 
   it("runs the checked-out Crabbox wrapper through its managed child", async () => {
     await withShimFixture("scripts/crabbox-wrapper.mjs", async ({ fixtureRoot, runNode }) => {
-      const fixtureVersion = "0.56.0";
+      const fixtureVersion = "999.0.0";
       const binDir = path.join(fixtureRoot, "fake bin");
       const home = path.join(fixtureRoot, "home");
       const state = path.join(fixtureRoot, "state");

@@ -79,9 +79,23 @@ it
       expect(exit, output).toEqual([0, null]);
       expect(elapsed, output).toBeLessThan(stopTimeoutMs);
       expect(output).toContain("process proof: acquisition-cancelled");
+      // The fixture's launchd label is synthetic, so the per-stop re-inspection cannot
+      // find a job to read and the startup budget is retained instead. Both
+      // attributions prove the same thing this case is guarding: the shutdown budget
+      // came from the 20 second native stop timeout and not from the platform-neutral
+      // policy, which would report a 330000ms source and a far longer deadline.
       expect(output).toMatch(
-        new RegExp(`shutdown budget at shutdown:.*source=.*=${stopTimeoutMs}ms`),
+        new RegExp(
+          `shutdown budget at shutdown:.*source=(?:.*=${stopTimeoutMs}ms|startup shutdown budget=${shutdownTimeoutMs}ms)`,
+        ),
       );
+      if (process.platform === "darwin") {
+        // The label resolves to no real job, so this cannot assert a successful read.
+        // What it does assert is that the darwin probe ran inside a real spawned
+        // Gateway on a real stop: only the launchd reader emits this, and reverting the
+        // darwin dispatch removes it.
+        expect(output).toContain("Unable to inspect the launchd job");
+      }
       if (mode === "cooperative") {
         expect(output).toContain("process proof: acquisition-joined");
         expect(output).not.toContain("shutdown deadline reached");

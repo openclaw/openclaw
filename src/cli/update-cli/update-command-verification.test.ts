@@ -91,28 +91,49 @@ afterEach(async () => {
 });
 
 describe("update readiness generation", () => {
-  it.each([
+  it.each<{
+    readyzStatus: number;
+    replaced: boolean;
+    slowInspection?: "command" | "runtime" | "listener";
+  }>([
     { readyzStatus: 200, replaced: false },
     { readyzStatus: 503, replaced: false },
     { readyzStatus: 200, replaced: true },
+    { readyzStatus: 200, replaced: false, slowInspection: "command" },
+    { readyzStatus: 200, replaced: false, slowInspection: "runtime" },
+    { readyzStatus: 200, replaced: false, slowInspection: "listener" },
   ])(
-    "observes foreground identity and HTTP once (HTTP $readyzStatus, replaced=$replaced)",
-    async ({ readyzStatus, replaced }) => {
+    "observes foreground identity and HTTP once (HTTP $readyzStatus, replaced=$replaced, slow=$slowInspection)",
+    async ({ readyzStatus, replaced, slowInspection }) => {
       const service = makeGatewayService({ status: "stopped" });
-      vi.mocked(service.readRuntime).mockResolvedValue({ status: "unknown" });
+      const inspect = (phase: typeof slowInspection) => {
+        if (slowInspection === phase) {
+          monotonicClock.nowMs += 3_300;
+        }
+      };
+      vi.mocked(service.readCommand).mockImplementation(async () => {
+        inspect("command");
+        return null;
+      });
+      vi.mocked(service.readRuntime).mockImplementation(async () => {
+        inspect("runtime");
+        return { status: "unknown" };
+      });
       vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
-      inspectPortUsage.mockImplementation(async (port) => ({
-        port,
-        status: "busy",
-        listeners: [{ pid: 8000 }],
-        hints: [],
-      }));
+      inspectPortUsage.mockImplementation(async (port) => {
+        inspect("listener");
+        return { port, status: "busy", listeners: [{ pid: 8000 }], hints: [] };
+      });
       let bootId = "foreground-boot";
-      callGateway.mockImplementation((opts) =>
-        gatewayHealthResponse({
+      callGateway.mockImplementation((opts) => {
+        const responseMs = 5;
+        if ((opts.timeoutMs ?? responseMs) < responseMs) {
+          throw new Error("Gateway health response exceeded its remaining allowance");
+        }
+        return gatewayHealthResponse({
           server: { version: "2026.9.5", buildId: "installed-build", bootId },
-        })(opts),
-      );
+        })(opts);
+      });
       const requests: string[] = [];
       const gatewayPort = await listen((req, res) => {
         requests.push(req.url ?? "");
@@ -137,6 +158,7 @@ describe("update readiness generation", () => {
         expectedVersion: "2026.9.5",
         expectedBuildId: "installed-build",
         waitForStartup: false,
+        timeoutMs: 30_000,
         signal: controller.signal,
       });
       pendingVerification = verification;
@@ -144,7 +166,10 @@ describe("update readiness generation", () => {
       expect(requests.toSorted()).toEqual(["/healthz", "/readyz"]);
       expect(callGateway).toHaveBeenCalledTimes(3);
       expect(sleep).not.toHaveBeenCalled();
-      expect(monotonicClock.nowMs).toBe(0);
+      expect(monotonicClock.nowMs).toBe(slowInspection ? 9_900 : 0);
+      for (const [params] of callGateway.mock.calls) {
+        expect(params.timeoutMs).toBe(3_000);
+      }
       expect(result).toMatchObject({ status: "error", reason: "doctor-failed" });
       expect(result.verification?.serviceRunning).toBeUndefined();
       expect(result.verification?.readyz).toBe(readyzStatus === 200);

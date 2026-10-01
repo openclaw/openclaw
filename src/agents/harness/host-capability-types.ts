@@ -36,6 +36,8 @@ export type AgentHarnessHostCapabilities = Readonly<{
   version: 1;
   /** Fails closed unless this exact admitted run capability remains active. */
   assertActive: () => void;
+  /** Native delegation without person selection must remain unambiguous at admission. */
+  assertNativeSubagentSpawnAllowed?: () => void;
   /** Binds the actual native model; returns undefined only for runs without an operator source. */
   bindModelExecution?: AgentHarnessModelExecutionBinder;
   /** Retains the original source for already-admitted work beyond foreground completion. */

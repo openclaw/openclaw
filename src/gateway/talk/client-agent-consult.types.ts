@@ -10,11 +10,6 @@ export type TalkAgentConsultRequest = Parameters<RealtimeVoiceAgentConsultRunner
 
 export type TalkAgentConsultSource = "tool-call" | "native-delegation";
 
-export type TalkRequesterFinalRegistration = {
-  releaseProvisional: () => void;
-  revoke: () => void;
-};
-
 export type TalkAgentConsultLifecycleMethods = {
   adoptCompletionClaims?: () => void;
   claimAppend?: () => boolean;

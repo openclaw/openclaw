@@ -614,7 +614,12 @@ prepare_gates() {
     echo "Crabbox AWS proof is deferred until prepare-push verifies the exact remote head."
   else
     prepare_local_gate_workspace
-    run_quiet_logged "pnpm build" ".local/gates-build.log" pnpm build
+    local build_command=(pnpm build)
+    if [ "$gates_remote_mode" = local ] && [ "$docs_only" != true ]; then
+      # Prepare the full suite's artifacts without changing check/test runtime inputs.
+      build_command=(env OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build)
+    fi
+    run_quiet_logged "pnpm build" ".local/gates-build.log" "${build_command[@]}" || return $?
     run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check --base "$check_base"
 
     if [ "$docs_only" = "true" ]; then

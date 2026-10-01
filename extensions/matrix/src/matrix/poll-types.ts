@@ -176,30 +176,12 @@ export function parsePollStart(content: PollStartContent): ParsedPollStart | nul
   };
 }
 
-export function parsePollStartContent(content: PollStartContent): PollSummary | null {
-  const parsed = parsePollStart(content);
-  if (!parsed) {
-    return null;
-  }
-
-  return {
-    eventId: "",
-    roomId: "",
-    sender: "",
-    senderName: "",
-    question: parsed.question,
-    answers: parsed.answers.map((answer) => answer.text),
-    kind: parsed.kind,
-    maxSelections: parsed.maxSelections,
-  };
-}
-
-export function formatPollAsText(summary: PollSummary): string {
+export function formatPollAsText(summary: ParsedPollStart): string {
   const lines = [
     "[Poll]",
     summary.question,
     "",
-    ...summary.answers.map((answer, idx) => `${idx + 1}. ${answer}`),
+    ...summary.answers.map((answer, idx) => `${idx + 1}. ${answer.text}`),
   ];
   return lines.join("\n");
 }

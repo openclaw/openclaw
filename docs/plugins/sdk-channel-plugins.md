@@ -371,6 +371,14 @@ raw callback string. Actor and source-message checks remain channel-owned.
       Channel turn adapters can forward the same plan through
       `deliverPreparedWithProviderMessageSending`, and durable inbound delivery uses
       `deliverStructuredInboundReplyWithMessageSendContext({ ...context, plan })`.
+      Both durable inbound helpers accept an optional synchronous
+      `prepareRuntimeHandoff(cfg)` callback for final replies after an unrelated
+      plugin reload. The channel must reject a changed admitted sender and return
+      a config that pins the verified credential for all parts of that delivery.
+      Core requires the exact retained channel registration and unchanged channel,
+      shared-default, and owning-plugin settings; channels without this callback
+      cannot transfer a final reply to a successor registry. The callback must not
+      persist credentials or change unrelated settings.
       Existing raw callbacks remain supported. An older adapter receives the
       payload through its original callback; it must adopt the prepared operation
       to avoid reparsing literal text in its own normalization code.

@@ -19,7 +19,9 @@ import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-opt
 import {
   bindsClaudeThinkingPrefix,
   requiresClaudeAdaptiveThinking,
+  requiresClaudeBetweenToolsThinking,
   resolveAnthropicThinkingEffort,
+  resolveClaudeSonnet55ModelIdentity,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
 } from "../providers/anthropic-model-contract.js";
@@ -250,27 +252,14 @@ export async function convertAnthropicMessages(
               type: "text",
               text: sanitizeTransportPayloadText(block.thinking),
             });
-          } else {
-            const thinking =
-              thinkingSignature === "reasoning_content"
-                ? sanitizeTransportPayloadText(block.thinking)
-                : block.thinking;
-            if (thinkingSignature === "reasoning_content") {
-              if (allowReasoningContentReplay) {
-                blocks.push({
-                  type: "thinking",
-                  thinking,
-                  signature: thinkingSignature ?? "",
-                });
-                reasoningContent.push(thinking);
-              }
-              continue;
+          } else if (!isReasoningContent || allowReasoningContentReplay) {
+            const thinking = isReasoningContent
+              ? sanitizeTransportPayloadText(block.thinking)
+              : block.thinking;
+            blocks.push({ type: "thinking", thinking, signature: thinkingSignature ?? "" });
+            if (isReasoningContent) {
+              reasoningContent.push(thinking);
             }
-            blocks.push({
-              type: "thinking",
-              thinking,
-              signature: thinkingSignature ?? "",
-            });
           }
           continue;
         }
@@ -351,14 +340,11 @@ export function buildAnthropicGenerationParams({
 }) {
   const params: Pick<
     MessageCreateParamsStreaming,
-    | "temperature"
-    | "stop_sequences"
-    | "tools"
-    | "thinking"
-    | "output_config"
-    | "metadata"
-    | "tool_choice"
-  > = {};
+    "temperature" | "stop_sequences" | "tools" | "output_config" | "metadata" | "tool_choice"
+  > & {
+    // SDK 0.127.0 does not yet include Sonnet 5.5's between_tools setting.
+    thinking?: MessageCreateParamsStreaming["thinking"] | { type: "between_tools" };
+  } = {};
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
   // Thinking and post-4.6 Claude models reject custom temperature values.
   if (
@@ -386,7 +372,6 @@ export function buildAnthropicGenerationParams({
       // older Claude 4 models (whose API default is also "summarized").
       const display: AnthropicThinkingDisplay = options?.thinkingDisplay ?? "summarized";
       if (supportsClaudeAdaptiveThinking(model)) {
-        // Adaptive thinking: Claude decides when and how much to think.
         params.thinking = { type: "adaptive", display };
         const effort =
           options?.effort ??
@@ -397,7 +382,6 @@ export function buildAnthropicGenerationParams({
           params.output_config = { effort };
         }
       } else {
-        // Budget-based thinking for older models.
         params.thinking = {
           type: "enabled",
           budget_tokens: options?.thinkingBudgetTokens ?? 1024,
@@ -405,7 +389,9 @@ export function buildAnthropicGenerationParams({
         };
       }
     } else if (options?.thinkingEnabled === false) {
-      params.thinking = { type: "disabled" };
+      params.thinking = requiresClaudeBetweenToolsThinking(model)
+        ? { type: "between_tools" }
+        : { type: "disabled" };
     }
   }
 
@@ -418,7 +404,9 @@ export function buildAnthropicGenerationParams({
 
   if (options?.toolChoice) {
     const normalizedToolChoice = normalizeAnthropicToolChoice(
-      mandatoryAdaptiveThinking || options?.thinkingEnabled === true,
+      mandatoryAdaptiveThinking ||
+        options?.thinkingEnabled === true ||
+        resolveClaudeSonnet55ModelIdentity(model) !== undefined,
       options.toolChoice,
     );
     const projectedToolChoice = toolProjection

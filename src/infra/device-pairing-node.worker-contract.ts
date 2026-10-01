@@ -1,8 +1,8 @@
 import type { NodeHostStats } from "../shared/node-host-stats.js";
+import type { NodePairingPendingSnapshot } from "./device-pairing-admission.types.js";
 import type { NodePairingGeneration } from "./device-pairing-identity.js";
 import type {
   ApproveNodePairingResult,
-  NodePairingPendingSnapshot,
   NodePairingRequestInput,
   NodePairingSupersededRequest,
   PairedDeviceNode,
@@ -55,7 +55,3 @@ export type DevicePairingNodeWorkerOperations = {
 };
 
 export type DevicePairingNodeMutation = SqliteWorkerCommand<DevicePairingNodeWorkerOperations>;
-
-export type DevicePairingNodeAdmissionFacts =
-  | ({ kind: "node-pending" } & NodePairingPendingSnapshot)
-  | { kind: "node-surface"; nodeId: string; pairingGeneration?: string };

@@ -7,12 +7,11 @@ struct ChatSessionUnreadPatchGuard {
     private var requested = false
     private var activeExplicitUnread: Bool?
     private var confirmedUnreadByKey: [String: Bool] = [:]
-    private var pendingExplicitUnreadByKey: [String: Bool] = [:]
-    private var pendingExplicitRevisions: [String: Int] = [:]
+    private var pendingExplicitPatches: [String: (revision: Int, unread: Bool)] = [:]
     private var revisions: [String: Int] = [:]
 
     mutating func observe(key: String, unread: Bool?) {
-        guard self.pendingExplicitRevisions[key] == nil,
+        guard self.pendingExplicitPatches[key] == nil,
               !(key == self.activeSessionKey && self.activeExplicitUnread != nil)
         else { return }
         if let unread {
@@ -54,8 +53,7 @@ struct ChatSessionUnreadPatchGuard {
 
     mutating func beginExplicitPatch(key: String, unread: Bool, isActive: Bool) -> Int {
         let revision = self.advanceRevision(key: key)
-        self.pendingExplicitRevisions[key] = revision
-        self.pendingExplicitUnreadByKey[key] = unread
+        self.pendingExplicitPatches[key] = (revision, unread)
         if isActive {
             self.activeSessionKey = key
             // The explicit action owns this activation. Only navigation opens
@@ -68,9 +66,8 @@ struct ChatSessionUnreadPatchGuard {
 
     mutating func patchSucceeded(key: String, unread: Bool, revision: Int) -> Bool {
         guard self.revisions[key] == revision else { return false }
-        if self.pendingExplicitRevisions[key] == revision {
-            self.pendingExplicitRevisions.removeValue(forKey: key)
-            self.pendingExplicitUnreadByKey.removeValue(forKey: key)
+        if self.pendingExplicitPatches[key]?.revision == revision {
+            self.pendingExplicitPatches.removeValue(forKey: key)
         }
         self.confirmedUnreadByKey[key] = unread
         return true
@@ -78,9 +75,8 @@ struct ChatSessionUnreadPatchGuard {
 
     mutating func patchFailed(key: String, revision: Int) -> Bool {
         guard self.revisions[key] == revision else { return false }
-        if self.pendingExplicitRevisions[key] == revision {
-            self.pendingExplicitRevisions.removeValue(forKey: key)
-            self.pendingExplicitUnreadByKey.removeValue(forKey: key)
+        if self.pendingExplicitPatches[key]?.revision == revision {
+            self.pendingExplicitPatches.removeValue(forKey: key)
         }
         if key == self.activeSessionKey {
             self.requested = false
@@ -89,12 +85,17 @@ struct ChatSessionUnreadPatchGuard {
         return true
     }
 
+    mutating func confirmReceipt(key: String, unread: Bool) {
+        self.confirmedUnreadByKey[key] = unread
+        if key == self.activeSessionKey, self.activeExplicitUnread != nil { self.activeExplicitUnread = unread }
+    }
+
     func confirmedUnread(key: String) -> Bool? {
         self.confirmedUnreadByKey[key]
     }
 
     func localUnreadOverride(key: String) -> Bool? {
-        if let unread = self.pendingExplicitUnreadByKey[key] {
+        if let unread = self.pendingExplicitPatches[key]?.unread {
             return unread
         }
         guard key == self.activeSessionKey else { return nil }
@@ -124,7 +125,8 @@ final class ChatSessionUnreadMutationQueue {
         routeKey: String,
         agentID: String? = nil,
         expectedMarkedUnreadAt: Double?? = nil,
-        unread: Bool) -> Task<Void, Error>
+        expectedSessionID: String? = nil,
+        unread: Bool) -> Task<OpenClawChatSessionPatchReceipt?, Error>
     {
         let previous = self.tails[queueKey]?.task
         self.nextID += 1
@@ -135,9 +137,10 @@ final class ChatSessionUnreadMutationQueue {
             guard let resolvedRouteLease else {
                 throw OpenClawChatTransportSendError.notDispatched
             }
-            try await resolvedRouteLease.patchSession(
+            return try await resolvedRouteLease.patchSession(
                 key: routeKey,
                 agentID: agentID,
+                expectedSessionID: expectedSessionID,
                 expectedMarkedUnreadAt: expectedMarkedUnreadAt,
                 label: nil,
                 category: nil,

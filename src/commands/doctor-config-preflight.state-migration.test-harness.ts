@@ -71,6 +71,7 @@ const beginDoctorMaintenance = vi.hoisted(() =>
     signal: new AbortController().signal,
     run: <T>(operation: () => T): T => operation(),
     releaseState: vi.fn(async () => {}),
+    repairSqliteNoCow: vi.fn(async () => {}),
     release: doctorMaintenanceRelease,
     finish: vi.fn(async () => {}),
   })),

@@ -263,7 +263,7 @@ export function stripCompactionReplayCheckpointInPlace(message: {
   }
 }
 
-/** Reindex a prefix-bound checkpoint after known content removals. */
+/** Preserve the covered prefix and reindex checkpoints after known content removals. */
 export function replaceCompactionReplayOwnerContent(
   message: AssistantMessage,
   content: AssistantMessage["content"],
@@ -283,6 +283,14 @@ export function replaceCompactionReplayOwnerContent(
     replayIndex > message.content.length
   ) {
     return stripCompactionReplayCheckpoint(next);
+  }
+  // Same-position rewrites after the checkpoint (such as tool-call id repair)
+  // change only the replayed suffix, not the prefix covered by its opaque state.
+  if (
+    content.length === message.content.length &&
+    content.slice(0, replayIndex).every((block, index) => block === message.content[index])
+  ) {
+    return next;
   }
   let sourceIndex = 0;
   let nextReplayIndex = 0;

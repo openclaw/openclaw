@@ -182,44 +182,26 @@ function assertNoUnimportedAgentCodexAuthFile(params: {
   ) {
     return;
   }
-  const message = resolveUnimportedAgentCodexAuthMessage(params);
-  if (message) {
-    throw new AgentHarnessPreflightError(message);
-  }
-}
-
-function resolveUnimportedAgentCodexAuthMessage(params: {
-  startOptions: CodexAppServerStartOptions;
-  agentId?: string;
-  agentDir?: string;
-}): string | undefined {
   if (params.startOptions.transport !== "stdio" || params.startOptions.homeScope === "user") {
-    return undefined;
+    return;
   }
   const codexHome = resolveCodexAppServerHomeDir(params.agentDir);
   const authPath = path.join(codexHome, CODEX_AUTH_JSON_FILENAME);
   // OpenClaw-owned starts force ephemeral Codex auth, so this file would otherwise be
   // ignored and the operator would receive only the downstream authentication error.
   if (!fsSync.existsSync(authPath)) {
-    return undefined;
+    return;
   }
   const targetAgentId = params.agentId?.trim() || "<agent-id>";
-  return `A Codex auth file exists at ${authPath}, but agent-scoped Codex runs use OpenClaw's auth store and do not read that file. Preview only that credential import with \`openclaw migrate plan codex --from <codex-home> --agent ${targetAgentId} --include-secrets --item auth:openai\`, then run \`openclaw migrate apply codex --from <codex-home> --agent ${targetAgentId} --include-secrets --item auth:openai --yes\`. If the plan finds no credentials, remove the stale auth file.`;
+  throw new AgentHarnessPreflightError(
+    `A Codex auth file exists at ${authPath}, but agent-scoped Codex runs use OpenClaw's auth store and do not read that file. Preview only that credential import with \`openclaw migrate plan codex --from <codex-home> --agent ${targetAgentId} --include-secrets --item auth:openai\`, then run \`openclaw migrate apply codex --from <codex-home> --agent ${targetAgentId} --include-secrets --item auth:openai --yes\`. If the plan finds no credentials, remove the stale auth file.`,
+  );
 }
 
 function resolveCodexAppServerAuthProfile(params: CodexAppServerAuthProfileLookup) {
   const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
-  const store = resolveCodexAppServerAuthProfileStore({
-    agentDir,
-    authProfileId: params.authProfileId,
-    authProfileStore: params.authProfileStore,
-    config: params.config,
-  });
-  const profileId = resolveCodexAppServerAuthProfileId({
-    authProfileId: params.authProfileId,
-    store,
-    config: params.config,
-  });
+  const store = resolveCodexAppServerAuthProfileStore({ ...params, agentDir });
+  const profileId = resolveCodexAppServerAuthProfileId({ ...params, store });
   if (!profileId) {
     return undefined;
   }
@@ -375,10 +357,8 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
   }
 
   const snapshot = await resolveCodexAppServerPreparedAuthProfileSnapshot({
+    ...params,
     authProfileId,
-    authProfileStore: params.authProfileStore,
-    agentDir: params.agentDir,
-    config: params.config,
   });
   if (!snapshot) {
     throw createCodexAppServerAuthError(
@@ -527,17 +507,13 @@ export async function reconcileCodexComputerUseStartArtifacts(params: {
   }
 }
 
-async function reconcileCodexComputerUseStartArtifactsOnce(params: {
-  startOptions: CodexAppServerStartOptions;
-  agentDir?: string;
-  pluginConfig?: unknown;
-  ownsIsolatedCodexHome?: boolean;
-  codexHome: string;
-  assertCurrent: () => void;
-  desktopGeneration?: CodexDesktopGeneration;
-  forceCacheRefresh?: boolean;
-  previousCacheBinding?: string;
-}): Promise<string | undefined> {
+async function reconcileCodexComputerUseStartArtifactsOnce(
+  params: Parameters<typeof reconcileCodexComputerUseStartArtifacts>[0] & {
+    codexHome: string;
+    assertCurrent: () => void;
+    previousCacheBinding?: string;
+  },
+): Promise<string | undefined> {
   const codexHome = params.codexHome;
   const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig: params.pluginConfig });
   const ownsIsolatedCodexHome =
@@ -800,9 +776,8 @@ async function assertNativeCodexAccountMatchesRoute(
   }
 }
 
-function createCodexAppServerAuthError(message: string, cause?: unknown): Error & { status: 401 } {
-  const error = cause === undefined ? new Error(message) : new Error(message, { cause });
-  return Object.assign(error, { status: 401 as const });
+function createCodexAppServerAuthError(message: string): Error & { status: 401 } {
+  return Object.assign(new Error(message), { status: 401 as const });
 }
 
 export async function refreshCodexAppServerAuthTokens(params: {
@@ -822,11 +797,7 @@ export async function refreshCodexAppServerAuthTokens(params: {
   }
   if (previousAccountId) {
     const store = resolveCodexAppServerAuthProfileStore(params);
-    const profileId = resolveCodexAppServerAuthProfileId({
-      authProfileId: params.authProfileId,
-      store,
-      config: params.config,
-    });
+    const profileId = resolveCodexAppServerAuthProfileId({ ...params, store });
     const credential = profileId ? store.profiles[profileId] : undefined;
     const selectedAccountId = credential
       ? (resolveExplicitChatgptAccountId(credential) ??
@@ -873,17 +844,8 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
   forceOAuthRefresh?: boolean;
   config?: AuthProfileOrderConfig;
 }): Promise<CodexLoginAccountParams | undefined> {
-  const store = resolveCodexAppServerAuthProfileStore({
-    agentDir: params.agentDir,
-    authProfileId: params.authProfileId,
-    authProfileStore: params.authProfileStore,
-    config: params.config,
-  });
-  const profileId = resolveCodexAppServerAuthProfileId({
-    authProfileId: params.authProfileId,
-    store,
-    config: params.config,
-  });
+  const store = resolveCodexAppServerAuthProfileStore(params);
+  const profileId = resolveCodexAppServerAuthProfileId({ ...params, store });
   if (!profileId) {
     return undefined;
   }
@@ -974,9 +936,6 @@ async function resolveLoginParamsForCredential(
     return credential.type === "api_key"
       ? { type: "apiKey", apiKey: value }
       : buildChatgptAuthTokensParams(profileId, credential, value);
-  }
-  if (credential.type !== "oauth") {
-    return undefined;
   }
   const resolvedCredential = await resolveOAuthCredentialForCodexAppServer(profileId, credential, {
     agentDir: params.agentDir,
@@ -1271,10 +1230,6 @@ function shouldClearOpenAiApiKeyForCodexAuthProfile(params: {
   const credential = profileId
     ? params.store.profiles[profileId]
     : params.store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID];
-  return isCodexSubscriptionCredential(credential);
-}
-
-function isCodexSubscriptionCredential(credential: AuthProfileCredential | undefined): boolean {
   if (!credential || !isCodexAppServerAuthProvider(credential.provider)) {
     return false;
   }

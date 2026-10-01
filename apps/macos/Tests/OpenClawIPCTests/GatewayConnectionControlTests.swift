@@ -1508,7 +1508,7 @@ extension GatewayConnectionControlTests {
             .appendingPathComponent("openclaw-gateway-recovery-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: isolatedState, withIntermediateDirectories: true)
         let configURL = isolatedState.appendingPathComponent("openclaw.json")
-        let port = Int.random(in: 30000...59999)
+        let port = AppProfile.current.isActive ? GatewayEnvironment.gatewayPort() : Int.random(in: 30000...59999)
         try Data(
             (#"{"gateway":{"mode":"\#(mode.rawValue)","port":\#(port),"remote":{"transport":"direct","# +
                 #""url":"ws://127.0.0.1:\#(port)"}}}"#)
@@ -1538,19 +1538,29 @@ extension GatewayConnectionControlTests {
                     clientShutdown: clientShutdown)
                 let manager = GatewayProcessManager.shared
                 let priorMode = AppStateStore.shared.connectionMode
+                let priorPause = AppStateStore.shared.isPaused
+                let priorPausePreference = AppDefaults.standard.object(forKey: pauseDefaultsKey)
                 AppStateStore.shared.connectionMode = mode
+                AppStateStore.shared.isPaused = false
                 manager._testResetGatewayStartTask()
+                manager.setTestingDesiredActive(true)
                 manager.setTestingStatus(.stopped)
                 manager.setTestingConnection(connection)
                 manager.setTestingSkipControlChannelRefresh(true)
                 GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(
                     isolatedState.appendingPathComponent("disable-launch-agent"))
                 GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+                let gatewayPID: Int32 = 424_242
+                await PortGuardian.shared.setTestingDescriptor(
+                    PortGuardian.Descriptor(
+                        pid: gatewayPID,
+                        command: "openclaw-gateway",
+                        executablePath: "/fixture/node"),
+                    forPort: port)
                 GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
-                    #"{"ok":true,"service":{"loaded":false}}"#)
+                    #"{"ok":true,"service":{"loaded":true,"runtime":{"status":"running","pid":\#(gatewayPID)}}}"#)
                 GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
                 defer {
-                    manager._testResetGatewayStartTask()
                     manager.setTestingStatus(.stopped)
                     manager.setTestingConnection(nil)
                     manager.setTestingSkipControlChannelRefresh(false)
@@ -1560,14 +1570,20 @@ extension GatewayConnectionControlTests {
                     GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
                     GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
                     AppStateStore.shared.connectionMode = priorMode
+                    AppStateStore.shared.isPaused = priorPause
+                    AppDefaults.standard.set(priorPausePreference, forKey: pauseDefaultsKey)
                 }
 
                 do {
                     let result = try await operation(connection, session)
+                    manager._testResetGatewayStartTask()
                     await connection.shutdown()
+                    await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
                     return result
                 } catch {
+                    manager._testResetGatewayStartTask()
                     await connection.shutdown()
+                    await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
                     throw error
                 }
             }
@@ -1593,7 +1609,9 @@ extension GatewayConnectionControlTests {
         } operation: { connection, session in
             _ = try await connection.request(method: "status", params: nil)
 
-            #expect(GatewayProcessManager.shared.status != .stopped)
+            #expect(
+                GatewayProcessManager.shared.status != .stopped,
+                "Recovery result: \(GatewayProcessManager.shared.lastFailureReason ?? "none")")
             #expect(requests.snapshot().count == 2)
             #expect(session.snapshotMakeCount() >= 1)
         }

@@ -187,10 +187,7 @@ export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {
   if (!match) {
     return { hasFrontmatter: false, frontmatter: {}, body: content };
   }
-  const frontmatter = match[1];
-  if (frontmatter === undefined) {
-    return { hasFrontmatter: false, frontmatter: {}, body: content };
-  }
+  const frontmatter = match[1]!;
   const parsed = asNullableRecord(YAML.parse(frontmatter) as unknown);
   if (!parsed) {
     // Every writer spreads this value back into YAML. Reject non-mapping roots

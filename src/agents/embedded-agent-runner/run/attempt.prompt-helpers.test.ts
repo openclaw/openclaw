@@ -16,7 +16,6 @@ import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
 it("keeps structured media and JSON summaries on UTF-16 boundaries", () => {
   const result = mergeOrphanedTrailingUserPrompt({
     prompt: "Continue.",
-    trigger: "user",
     leafMessage: {
       content: [
         { type: "image_url", image_url: { url: `${"u".repeat(299)}😀tail` } },

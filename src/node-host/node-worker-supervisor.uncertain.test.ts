@@ -2,19 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type {
   SqliteWorkerCommand,
   SqliteWorkerReply,
   SqliteWorkerRequest,
 } from "../infra/sqlite-worker-contract.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { createNodeWorkerSupervisorFixture } from "./node-worker-supervisor.fixture.test-support.js";
 import {
@@ -23,17 +19,7 @@ import {
   testWorkerLaunchInput,
 } from "./node-worker-supervisor.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+const tempDirs = useStateDatabaseTempDirs();
 
 it.skipIf(process.platform === "win32")(
   "keeps physical capacity reserved after a committed turn reply becomes unknown",

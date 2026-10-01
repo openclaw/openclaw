@@ -51,24 +51,15 @@ extension WatchInboxStore {
             commandId: attempt.uuidString,
             submittedAtMs: WatchVoiceTurnState.nowMs(),
             body: .chat(text: text.trimmingCharacters(in: .whitespacesAndNewlines)))
-        self.chatDeliveryReloadID = nil
-        var accepted = false
-        do {
-            try await self.maintainChatDeliveryJournal()
-            try await self.chatDeliveryJournal.enqueue(command, nowMs: WatchVoiceTurnState.nowMs())
-            if self.chatDeliveryContext == context {
-                let isCurrent = self.markAppCommandResult(
-                    Self.persistedDeliveryResult, command: .sendChat, attemptID: attempt)
-                if isCurrent, spokenReply { self.beginVoiceTurn(commandId: command.commandId) }
-            }
-            accepted = true
-        } catch {
-            if self.chatDeliveryContext == context {
-                self.markAppCommandResult(Self.failedDeliveryResult(error), command: .sendChat, attemptID: attempt)
+        let result = await self.enqueueChatDeliveryCommand(command)
+        if self.chatDeliveryContext == context {
+            let isCurrent = self.markAppCommandResult(result, command: .sendChat, attemptID: attempt)
+            if isCurrent, result.queuedForDelivery, spokenReply {
+                self.beginVoiceTurn(commandId: command.commandId)
             }
         }
         await self.refreshChatDeliveryAfterAttempt()
-        return accepted ? command.commandId : nil
+        return result.queuedForDelivery ? command.commandId : nil
     }
 
     func enqueueQuickReply(_ command: OpenClawWatchChatDeliveryCommand) async -> Bool {
@@ -78,28 +69,23 @@ extension WatchInboxStore {
         let attempt = isCurrent ? self.markReplySending(
             actionLabel: actionLabel ?? actionId, commandId: command.commandId) : nil
         if isCurrent, attempt == nil { return false }
+        let result = await self.enqueueChatDeliveryCommand(command)
+        if let attempt {
+            self.markReplyResult(result, actionLabel: actionLabel ?? actionId, attemptID: attempt)
+        }
+        await self.refreshChatDeliveryAfterAttempt()
+        return result.queuedForDelivery
+    }
+
+    private func enqueueChatDeliveryCommand(_ command: OpenClawWatchChatDeliveryCommand) async -> WatchReplySendResult {
         self.chatDeliveryReloadID = nil
-        var accepted = false
         do {
             try await self.maintainChatDeliveryJournal()
             try await self.chatDeliveryJournal.enqueue(command, nowMs: WatchVoiceTurnState.nowMs())
-            if let attempt {
-                self.markReplyResult(
-                    Self.persistedDeliveryResult,
-                    actionLabel: actionLabel ?? actionId,
-                    attemptID: attempt)
-            }
-            accepted = true
+            return Self.persistedDeliveryResult
         } catch {
-            if let attempt {
-                self.markReplyResult(
-                    Self.failedDeliveryResult(error),
-                    actionLabel: actionLabel ?? actionId,
-                    attemptID: attempt)
-            }
+            return Self.failedDeliveryResult(error)
         }
-        await self.refreshChatDeliveryAfterAttempt()
-        return accepted
     }
 
     func maintainChatDeliveryJournal(nowMs: Int64 = WatchVoiceTurnState.nowMs()) async throws {
@@ -285,9 +271,7 @@ extension WatchInboxStore {
                let outcome = current.outcome
             {
                 switch outcome {
-                case .failed, .uncertain:
-                    self.voiceTurnState.cancel()
-                case .forwarded:
+                case .failed, .uncertain, .forwarded:
                     self.voiceTurnState.cancel()
                 case .reply:
                     break
@@ -313,7 +297,6 @@ extension WatchInboxStore {
     private static var persistedDeliveryResult: WatchReplySendResult {
         WatchReplySendResult(
             delivery: .queued,
-            transport: "journal",
             errorMessage: nil,
             requiresCanonicalReadback: false)
     }
@@ -322,6 +305,6 @@ extension WatchInboxStore {
         let message = (error as? OpenClawWatchChatDeliveryError)?.message
             ?? String(localized: "Couldn't save this Watch message. Try again when storage is available.")
         return WatchReplySendResult(
-            delivery: .notSent, transport: "none", errorMessage: message, requiresCanonicalReadback: false)
+            delivery: .notSent, errorMessage: message, requiresCanonicalReadback: false)
     }
 }

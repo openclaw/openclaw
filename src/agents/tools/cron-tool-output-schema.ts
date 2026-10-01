@@ -151,6 +151,7 @@ export const CronToolOutputSchema = defineToolOutputSchema({
         {
           ok: Type.Literal(true),
           removed: Type.Boolean(),
+          activeRunCancellationRequested: Type.Optional(Type.Literal(true)),
           sessionCleanup: Type.Optional(Type.Literal("pending")),
         },
         { additionalProperties: false },

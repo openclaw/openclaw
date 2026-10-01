@@ -228,9 +228,12 @@ export async function mergeCanonicalUserProfiles(
 }
 export async function ensureCanonicalUserProfileForEmail(
   email: string,
-  options: ProfileWriteOptions = {},
+  options: ProfileWriteOptions & { expectedGitHubAccountId?: number } = {},
 ) {
-  return unwrap(await write("userProfiles.ensureEmail", { email }, options));
+  const { expectedGitHubAccountId, ...writeOptions } = options;
+  return unwrap(
+    await write("userProfiles.ensureEmail", { email, expectedGitHubAccountId }, writeOptions),
+  );
 }
 export async function ensureCanonicalUserProfileForTailscaleIdentity(
   identity: UserProfileWriteOperations["userProfiles.ensureTailscale"]["input"],

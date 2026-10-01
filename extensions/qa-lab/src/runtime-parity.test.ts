@@ -14,12 +14,12 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stableHash } from "./parity-shared.js";
+import type { RuntimeId } from "./runtime-id.js";
 import {
   captureRuntimeParityCell,
   isRuntimeParityResultPass,
   resolveRuntimeParityUsagePolicy,
   runRuntimeParityScenario,
-  type RuntimeId,
   type RuntimeParityCell,
   type RuntimeParityToolCall,
 } from "./runtime-parity.js";
@@ -667,8 +667,13 @@ describe("runtime parity", () => {
     });
 
     expect(cell.toolCalls).toEqual([]);
-    expect(cell.providerPlanToolCalls).toHaveLength(1);
-    expect(cell.providerPlanToolCalls?.[0]?.errorClass).toBeUndefined();
+    expect(cell.providerPlanToolCalls).toEqual([
+      {
+        tool: "read_file",
+        argsHash: stableHash({ path: "README.md" }),
+        resultHash: stableHash({ ok: true }),
+      },
+    ]);
 
     const result = await runRuntimeParityScenario({
       scenarioId: "resolved-tool",

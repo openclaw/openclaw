@@ -15,10 +15,10 @@ import {
   readSessionEntryCache,
 } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
+import { runSqliteSessionReclamation } from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
 import {
   createLifecycleArtifactReclamationPlan,
   createSessionMaintenanceFinalizationOperation,
-  runSqliteSessionReclamation,
 } from "../config/sessions/session-accessor.sqlite-reclamation.js";
 import * as transcriptWorker from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";

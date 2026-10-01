@@ -545,6 +545,19 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   const inheritedEnv = options.env ?? process.env;
   const jobEnv = mergePlanEnv({}, parseJsonEnv(inheritedEnv, "OPENCLAW_NODE_TEST_ENV_JSON"));
   const baseEnv = mergePlanEnv(inheritedEnv, jobEnv);
+  if (
+    baseEnv.OPENCLAW_E2E_USE_PREBUILT_DIST === "1" &&
+    fileURLToPath(import.meta.url) === join(process.cwd(), "scripts/ci-run-node-test-shard.mts")
+  ) {
+    const { preparePrebuiltAiPackage } = await import("./lib/vitest-build-prerequisites.mts");
+    for (const entry of plans) {
+      const selection = entry.kind === "target" ? { includePatterns: [entry.target] } : entry.plan;
+      const code = await preparePrebuiltAiPackage([selection], prepareChildEnv(entry, baseEnv));
+      if (code !== 0) {
+        return code;
+      }
+    }
+  }
   // Historical targets use a workflow-owned adapter. Their Node
   // contract must not import current target discovery or runtime policy code.
   const runtimePolicy = baseEnv.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim() || "node";

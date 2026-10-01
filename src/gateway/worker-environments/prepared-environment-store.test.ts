@@ -1,13 +1,11 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { hashWorkerCredential } from "./credential.js";
 import type {
   PreparedEnvironmentSelection,
@@ -24,6 +22,7 @@ const assertCurrent = () => undefined;
 // These exercise the shared database, since process-local exclusion cannot protect
 // a consumed machine after placement retirement or a second store opens the file.
 describe("prepared environment ownership", () => {
+  const tempDirs = useStateDatabaseTempDirs();
   let root: string;
   let database: OpenClawStateDatabase;
   let environments: Awaited<ReturnType<typeof createWorkerEnvironmentStore>>;
@@ -36,14 +35,9 @@ describe("prepared environment ownership", () => {
     placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
   };
   beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-prepared-"));
+    root = tempDirs.make("openclaw-prepared-");
     nowMs = 1_000;
     await openStores();
-  });
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
   });
 
   function intent(environmentId = "prepared-1", key = PREPARATION_KEY) {

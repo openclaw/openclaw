@@ -190,7 +190,6 @@ describe("SQLite exclusion survivor semantics", () => {
             updatedAt: 1,
             previousSessionId: "historical",
             label: rawLabel ? "RAW_LABEL" : "escaped\u0000日本語🦞",
-            skillsSnapshot: { prompt, skills: [] },
           }) + suffix;
         let stored: string | Buffer = json;
         if (rawLabel) {
@@ -214,6 +213,11 @@ describe("SQLite exclusion survivor semantics", () => {
           ]);
         }
         insertEntry(database, key, "raw", stored);
+        database.db
+          .prepare(
+            "INSERT INTO session_entry_snapshots (session_key, field, value_json) VALUES (?, 'skillsSnapshot', ?)",
+          )
+          .run(key, JSON.stringify({ prompt, skills: [] }));
         const storedBytes = database.db.prepare(
           "SELECT hex(entry_json) AS bytes FROM session_nodes",
         );
@@ -224,10 +228,6 @@ describe("SQLite exclusion survivor semantics", () => {
         const metadata = fullEntry ? { ...fullEntry } : undefined;
         if (metadata) {
           delete metadata.skillsSnapshot;
-          // SQLite's JSON projection normalizes raw UTF-16 noncharacters; full TEXT reads retain them.
-          if (rawLabel === "noncharacters" && encoding !== "UTF-8" && !suffix) {
-            metadata.label = "\uFFFD\uFFFD";
-          }
         }
         expect(capCandidates(database, new Set())).toEqual(metadata ? { [key]: metadata } : {});
         expect([...readReferencedSessionIds(database)].toSorted()).toEqual(

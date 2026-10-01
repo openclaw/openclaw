@@ -110,13 +110,14 @@ export async function syncSessionRepositoryWorkspace(params: {
     throw new Error("Repository preparation changed its attested prepared workspace");
   }
   if (!repository.baseCommit || !repository.baseManifestHash) {
-    repository = store.bindBase({
+    repository = await store.bindBase({
       workspaceId: repository.workspaceId,
       expectedRevision: repository.revision,
       baseCommit: synced.baseCommit,
       baseManifestHash: synced.baseManifestRef,
       assertCurrent: params.assertCurrent,
     });
+    params.assertCurrent();
   } else if (
     repository.baseCommit !== synced.baseCommit ||
     repository.baseManifestHash !== synced.baseManifestRef
@@ -153,15 +154,12 @@ export async function syncSessionRepositoryWorkspace(params: {
     await reconciliation.verifyStable();
     await reconciliation.verifyLocalStable();
     params.assertCurrent();
-    if (!reconciliation.publishStagedResult) {
-      throw new Error("Repository preparation did not stage a durable checkpoint");
-    }
     await reconciliation.publishStagedResult();
     params.assertCurrent();
     return { ...synced, manifestRef: reconciliation.manifestRef };
   } finally {
     try {
-      await reconciliation?.discardPreparedStagedResult?.();
+      await reconciliation?.discardPreparedStagedResult();
     } finally {
       await quiescence.resume();
     }

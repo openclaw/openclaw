@@ -97,6 +97,7 @@ async function releaseDetachedSessionMessageSubscription(
 export function disposeSelectedSessionMessageSubscription(state: ChatState): void {
   const requests = chatHistoryRequests(state);
   requests.subscriptionGeneration += 1;
+  requests.subscriptionReady = Promise.resolve(false);
   const subscriptions = new Set(requests.pendingSubscriptionReleases);
   requests.pendingSubscriptionReleases.clear();
   if (state.chatSessionMessageSubscription) {
@@ -117,18 +118,47 @@ export function disposeSelectedSessionMessageSubscription(state: ChatState): voi
   }
 }
 
-export async function syncSelectedSessionMessageSubscription(
+export function syncSelectedSessionMessageSubscription(
   state: ChatSessionMessageSubscriptionState,
   opts?: { force?: boolean },
-) {
+): Promise<boolean> {
+  const requests = chatHistoryRequests(state);
+  const client = state.client;
+  const connectionEpoch = state.connectionEpoch;
+  const requestedKey = state.sessionKey.trim();
+  const requestedAgentId = resolveSelectedSessionMessageSubscriptionAgentId(state, requestedKey);
+  const pending = synchronizeSelectedSessionMessageSubscription(state, opts);
+  const generation = requests.subscriptionGeneration;
+  const ready = pending.then(
+    (admitted) =>
+      admitted &&
+      client !== null &&
+      isCurrentSelectedSessionMessageSubscriptionSync(state, {
+        generation,
+        client,
+        connectionEpoch,
+        requestedKey,
+        requestedAgentId,
+      }) &&
+      state.chatSessionMessageSubscriptionRequestedKey === requestedKey &&
+      state.chatSessionMessageSubscription != null,
+  );
+  requests.subscriptionReady = ready;
+  return ready;
+}
+
+async function synchronizeSelectedSessionMessageSubscription(
+  state: ChatSessionMessageSubscriptionState,
+  opts?: { force?: boolean },
+): Promise<boolean> {
   if (!state.client || !state.connected) {
-    return;
+    return false;
   }
   const client = state.client;
   const connectionEpoch = state.connectionEpoch;
   const nextKey = state.sessionKey.trim();
   if (!nextKey) {
-    return;
+    return false;
   }
   const previousRequestedKey = normalizeNullableString(
     state.chatSessionMessageSubscriptionRequestedKey,
@@ -195,7 +225,7 @@ export async function syncSelectedSessionMessageSubscription(
     ) {
       clearRecoveredError();
     }
-    return;
+    return isCurrent() && previousSubscription !== null;
   }
   try {
     let unsubscribePromise: Promise<void> = Promise.resolve();
@@ -237,16 +267,16 @@ export async function syncSelectedSessionMessageSubscription(
             publishError(
               `${formatUiError(unsubscribeResult.reason)}; replacement release failed: ${formatUiError(replacementReleaseError)}`,
             );
-          } else {
-            paneRequests.pendingSubscriptionReleases.add(subscribeResult.value);
+            return true;
           }
-          return;
+          paneRequests.pendingSubscriptionReleases.add(subscribeResult.value);
+          return false;
         }
       }
       if (isCurrent()) {
         publishError(unsubscribeResult.reason);
       }
-      return;
+      return false;
     }
     const subscribed = subscribeResult.status === "fulfilled" ? subscribeResult.value : null;
     if (!subscribed) {
@@ -257,7 +287,7 @@ export async function syncSelectedSessionMessageSubscription(
       if (subscribeResult.status === "rejected") {
         throw subscribeResult.reason;
       }
-      return;
+      return false;
     }
     if (!isCurrent()) {
       // Generation advances before awaiting, so only the newest lease can reach assignment below.
@@ -271,7 +301,7 @@ export async function syncSelectedSessionMessageSubscription(
         // exact handle so the next sync can complete the original unsubscribe.
         paneRequests.pendingSubscriptionReleases.add(subscribed);
       }
-      return;
+      return false;
     }
     state.chatSessionMessageSubscriptionRequestedKey = nextKey;
     state.chatSessionMessageSubscription = subscribed;
@@ -285,9 +315,11 @@ export async function syncSelectedSessionMessageSubscription(
       state.chatSessionApprovalQueue = [];
     }
     clearRecoveredError();
+    return true;
   } catch (err) {
     if (isCurrent()) {
       publishError(err);
     }
+    return false;
   }
 }

@@ -79,7 +79,11 @@ DatabaseSync.prototype.prepare = function(sql) {
   const location = this.location();
   const index = /integrity_check/.test(sql) && location ? paths.indexOf(fs.realpathSync.native(location)) : -1;
   if (index >= 0) {
-    fs.writeFileSync(markers[index], String(process.pid));
+    // Existence is the shutdown gate; never expose a truncated PID.
+    const marker = markers[index];
+    const pendingMarker = marker + '.' + process.pid + '.tmp';
+    fs.writeFileSync(pendingMarker, String(process.pid));
+    fs.renameSync(pendingMarker, marker);
     const pause = new Int32Array(new SharedArrayBuffer(4));
     const deadline = Date.now() + 60000;
     while (paused[index] && !fs.existsSync(release) && !fs.existsSync(releases[index])) {

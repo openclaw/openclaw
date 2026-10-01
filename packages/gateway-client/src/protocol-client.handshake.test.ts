@@ -18,6 +18,7 @@ function createHandshakeClient(
   const onConnectHello = vi.fn(() => ({ ignored: true }));
   const onClose = vi.fn();
   const onTiming = vi.fn();
+  const onReconnectScheduled = vi.fn<(delayMs: number, signal: AbortSignal) => void>();
   let nextRequestId = 0;
   const client = new GatewayProtocolClient<Record<string, never>>({
     createSocket: (handlers) => {
@@ -40,10 +41,11 @@ function createHandshakeClient(
     onConnectHello,
     onClose,
     onTiming,
+    onReconnectScheduled,
     handshake: { mode: "require-challenge", timeoutMs: 100 },
     reconnect: { initialMs: 10, multiplier: 2, maxMs: 100 },
   });
-  return { client, connections, onHello, onConnectHello, onClose, onTiming };
+  return { client, connections, onHello, onConnectHello, onClose, onTiming, onReconnectScheduled };
 }
 
 function receiveConnectChallenge(connection: HandshakeConnection, ts = 1_800_000_000_000): void {
@@ -96,7 +98,7 @@ describe("GatewayProtocolClient connect handshake", () => {
     async ({ retryable, retryAfterMs, delayMs, draw, nextDelayMs }) => {
       vi.useFakeTimers();
       vi.mocked(Math.random).mockReturnValue(draw);
-      const { client, connections } = createHandshakeClient();
+      const { client, connections, onReconnectScheduled } = createHandshakeClient();
       try {
         client.start();
         const first = connections[0];
@@ -119,6 +121,13 @@ describe("GatewayProtocolClient connect handshake", () => {
           }),
         );
         await vi.advanceTimersByTimeAsync(0);
+        expect(onReconnectScheduled).toHaveBeenCalledExactlyOnceWith(
+          delayMs,
+          expect.any(AbortSignal),
+        );
+        const signal = onReconnectScheduled.mock.calls[0]?.[1];
+        assert(signal);
+        expect(signal.aborted).toBe(false);
         await vi.advanceTimersByTimeAsync(delayMs - 1);
         expect(connections).toHaveLength(1);
         await vi.advanceTimersByTimeAsync(1);
@@ -127,10 +136,42 @@ describe("GatewayProtocolClient connect handshake", () => {
         const second = connections[1];
         assert(second);
         second.close(1006, "transport unavailable");
+        expect(signal.aborted).toBe(true);
+        expect(onReconnectScheduled).toHaveBeenLastCalledWith(nextDelayMs, expect.any(AbortSignal));
         await vi.advanceTimersByTimeAsync(nextDelayMs - 1);
         expect(connections).toHaveLength(2);
         await vi.advanceTimersByTimeAsync(1);
         expect(connections).toHaveLength(3);
+      } finally {
+        client.stop();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "cancels a scheduled retry when its observer stops the client (restart=%s)",
+    async (restart) => {
+      vi.useFakeTimers();
+      const { client, connections, onReconnectScheduled } = createHandshakeClient();
+      let timersAtNotification = 0;
+      onReconnectScheduled.mockImplementation(() => {
+        timersAtNotification = vi.getTimerCount();
+        client.stop();
+        if (restart) {
+          client.start();
+        }
+      });
+      try {
+        client.start();
+        const first = connections[0];
+        assert(first);
+        first.close(1006, "transport unavailable");
+        expect(onReconnectScheduled).toHaveBeenCalledOnce();
+        expect(timersAtNotification).toBe(1);
+        expect(onReconnectScheduled.mock.calls[0]?.[1].aborted).toBe(true);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(connections).toHaveLength(restart ? 2 : 1);
+        expect(vi.getTimerCount()).toBe(0);
       } finally {
         client.stop();
       }

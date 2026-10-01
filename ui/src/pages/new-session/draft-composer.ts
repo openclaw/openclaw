@@ -9,6 +9,7 @@ import {
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { refreshSlashCommands } from "../chat/chat-commands.ts";
+import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import type { NewSessionComposerOptions } from "./composer-types.ts";
 import { renderNewSessionComposer } from "./composer.ts";
@@ -118,7 +119,7 @@ export function renderNewSessionDraftComposer(
       .floorEnabled=${floorEnabled}
     ></openclaw-lobster-pet>`,
     uploadConfig: options.context?.config,
-    attachmentLimits: options.context?.gateway.snapshot.hello?.policy?.attachments,
+    attachmentLimits: resolveChatAttachmentLimits(options.context?.gateway.snapshot.hello?.policy),
     attachments: options.attachmentDraft.attachments,
     getAttachments: () => options.attachmentDraft.attachments,
     get message() {

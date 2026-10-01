@@ -385,7 +385,15 @@ suite.define(() => {
             .evaluateAll((elements) =>
               elements.map((element) => new URL((element as HTMLScriptElement).src).pathname),
             );
-          expect(scripts.some((script) => /\/assets\/index-[^/]+\.js$/u.test(script))).toBe(true);
+          const builtIndex = await readFile(
+            path.join(process.cwd(), "dist/control-ui/index.html"),
+            "utf8",
+          );
+          const builtScripts = [
+            ...builtIndex.matchAll(/<script[^>]+src="(?:\.\/|\/)?(assets\/[^"]+\.js)"/gu),
+          ].map((match) => `/${match[1]}`);
+          expect(builtScripts.length).toBeGreaterThan(0);
+          expect(scripts).toEqual(builtScripts);
           for (const script of scripts) {
             expect(script).toMatch(/^\/assets\/[^/]+\.js$/u);
             const served = await page.request.get(new URL(script, suite.server.baseUrl).href);

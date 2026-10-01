@@ -15,7 +15,6 @@ import {
   type McpOAuthPrincipalStatus,
 } from "./mcp-oauth-status.js";
 import type { McpOAuthStore, McpOAuthMutation } from "./mcp-oauth-store.types.js";
-export { parseMcpOAuthStoreJson } from "./mcp-oauth-store.kernel.js";
 export type { McpOAuthStore } from "./mcp-oauth-store.types.js";
 
 export type McpOAuthStoreWriteOptions = {

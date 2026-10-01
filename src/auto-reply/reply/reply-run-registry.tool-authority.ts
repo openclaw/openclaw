@@ -1,5 +1,127 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { ReplyOperation, ReplyToolAuthoritySnapshot } from "./reply-run-registry.contracts.js";
+import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import type {
+  ReplyOperation,
+  ReplyToolAuthoritySnapshot,
+  ReplyTurnParticipant,
+  ReplyTurnParticipants,
+} from "./reply-run-registry.contracts.js";
+
+/** Personal targets belong to the admitted turn, independently of its concrete backend attempts. */
+export function createReplyTurnParticipants(
+  owner: ReplyToolAuthoritySnapshot["personalToolOwner"],
+): ReplyTurnParticipants {
+  const participants = new Map<string, ReplyTurnParticipant>();
+  const releases = new Map<string, () => void>();
+  let closed = false;
+  const add = (input: NonNullable<typeof owner>) => {
+    const authority = input.operatorAuthority;
+    if (!authority) {
+      return;
+    }
+    assertAdmittedRunOperatorAuthority(authority);
+    const senderId = input.senderId ?? authority.profileId;
+    const name = input.senderName ?? senderId;
+    let retentionFailed = false;
+    try {
+      const release = authority.retain?.();
+      releases.get(authority.profileId)?.();
+      releases.delete(authority.profileId);
+      if (release) {
+        releases.set(authority.profileId, release);
+      }
+    } catch {
+      // Accepted input stays ambiguous even if its source was revoked at acceptance.
+      retentionFailed = true;
+    }
+    participants.set(
+      authority.profileId,
+      Object.freeze({
+        profileId: authority.profileId,
+        senderId,
+        name,
+        operatorAuthority: authority,
+        gatewayUiCommandTarget: input.gatewayUiCommandTarget
+          ? Object.freeze({ ...input.gatewayUiCommandTarget })
+          : undefined,
+        assertCurrent: () => {
+          if (closed) {
+            throw new Error("This turn has ended; ask again in a new turn.");
+          }
+          try {
+            if (retentionFailed) {
+              throw new Error("Participant authority could not be retained");
+            }
+            authority.assertCurrent();
+          } catch {
+            throw new Error(`${name}'s access changed; ask them again`);
+          }
+        },
+      }),
+    );
+  };
+  if (owner) {
+    add(owner);
+  }
+  function resolve(
+    user?: string,
+    options?: { allowTurnOwner?: () => boolean },
+  ): ReplyTurnParticipant | undefined {
+    if (closed) {
+      throw new Error("This turn has ended; ask again in a new turn.");
+    }
+    const people = [...participants.values()];
+    const choices = people.map((person) => `${person.name} (user: ${person.profileId})`).join(", ");
+    if (user === undefined && people.length > 1 && !options?.allowTurnOwner?.()) {
+      throw new Error(
+        `Several people have steered this turn: ${choices}. Pass the requester's requester_profile.id as user, or ask them if unclear.`,
+      );
+    }
+    const person =
+      user === undefined ? people[0] : people.find((candidate) => candidate.profileId === user);
+    if (user !== undefined && !person) {
+      throw new Error(
+        `User is not a participant of this turn.${choices ? ` Choose ${choices}.` : " Ask again from your signed-in Control UI."}`,
+      );
+    }
+    person?.assertCurrent();
+    return person
+      ? {
+          ...person,
+          assertCurrent: () => {
+            // A steer can be accepted while a personal read or write awaits preparation.
+            if (user === undefined && participants.size > 1) {
+              resolve(user, options);
+            }
+            person.assertCurrent();
+          },
+        }
+      : undefined;
+  }
+  return {
+    accept(overlay) {
+      if (
+        !closed &&
+        owner?.operatorAuthority &&
+        overlay.operatorAuthority?.profileId !== owner.operatorAuthority.profileId
+      ) {
+        add(overlay);
+      }
+    },
+    resolve,
+    close() {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      participants.clear();
+      for (const release of releases.values()) {
+        release();
+      }
+      releases.clear();
+    },
+  };
+}
 
 type OperationToolAuthority = Pick<
   ReplyOperation,
@@ -11,7 +133,8 @@ type OperationToolAuthority = Pick<
   | "projectToolAuthorityFingerprint"
   | "bindToolAuthorityRoute"
   | "setAutomaticFallbackRoute"
-> & { bindBackendFingerprint(fingerprint: string | undefined): void };
+  | "personalToolParticipants"
+> & { bindBackendFingerprint(fingerprint: string | undefined): void; close(): void };
 
 /** Owns frozen policy, concrete attempt routing, and backend authority for one operation. */
 export function createReplyOperationToolAuthority(lifecycle: {
@@ -22,8 +145,15 @@ export function createReplyOperationToolAuthority(lifecycle: {
   let snapshot: ReplyToolAuthoritySnapshot | undefined;
   let route: ReplyOperation["toolAuthorityRoute"];
   let automaticFallbackRoute: ReplyOperation["automaticFallbackRoute"];
+  let participants: ReplyTurnParticipants | undefined;
 
   return {
+    get personalToolParticipants() {
+      return participants;
+    },
+    close() {
+      participants?.close();
+    },
     get toolAuthorityFingerprint() {
       return fingerprint;
     },
@@ -60,6 +190,7 @@ export function createReplyOperationToolAuthority(lifecycle: {
       }
       snapshot = value;
       fingerprint = initialFingerprint;
+      participants = createReplyTurnParticipants(value.personalToolOwner);
     },
     projectToolAuthorityFingerprint(overlay) {
       if (!lifecycle.isOpen() || !snapshot || !route) {

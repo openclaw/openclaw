@@ -129,6 +129,7 @@ it("the config watcher restarts a channel that can save provider settings after 
     };
     let assertReloadOwned: (() => void) | undefined;
     const reloader = startGatewayConfigReloader({
+      scheduler: createTestGatewayScheduler("fake-timers"),
       initialConfig,
       initialSnapshotRawHash: initial.hash,
       initialAuthoredConfig: initial.parsed,

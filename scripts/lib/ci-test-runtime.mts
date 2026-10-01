@@ -56,8 +56,9 @@ const bunCompatibleAgentSupportFiles = ["src/agents/worktrees/service.removal-re
 const nativeCompilerTestFiles = [
   "src/agents/agent-bundle-mcp-requester-connect.import-boundary.test.ts",
   "src/agents/agent-model-discovery.imports.test.ts",
-  "src/agents/code-mode.action-output.test.ts",
+  "src/agents/code-mode.auto-results.test.ts",
   "src/agents/harness/native-hook-relay.imports.test.ts",
+  "src/auto-reply/reply/get-reply.imports.test.ts",
   "src/cli/program/register.database.import-boundary.test.ts",
   "src/plugin-sdk/provider-tools.test.ts",
   "test/scripts/audit-control-ui-dead-css.test.ts",
@@ -104,6 +105,7 @@ const runtimePartitions = new Map<
         "src/cli/cli-process-diagnostics.test.ts",
         // Native heap accounting, GC, and Worker limits require V8.
         "src/infra/worker-task-pool.memory.test.ts",
+        "src/plugins/runtime.retention.test.ts",
         "src/process/spawn-broker/callback-context.test.ts",
         "src/process/spawn-broker/cleanup.test.ts",
         "src/process/spawn-broker/handoff.test.ts",

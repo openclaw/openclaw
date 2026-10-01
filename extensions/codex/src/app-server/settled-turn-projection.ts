@@ -1,6 +1,8 @@
 import { Buffer } from "node:buffer";
+import { convertToLlm } from "openclaw/plugin-sdk/agent-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isCodexDurableCustomMessage } from "./context-engine-projection.js";
 import { CodexHistoryRejection } from "./history-rejection.js";
 import type { JsonValue } from "./protocol.js";
 import { readUpstreamUserText } from "./upstream-prompt-provenance.js";
@@ -286,6 +288,20 @@ class HistoryProjection {
       projectAssistantMessage(message, this);
     } else if (message.role === "toolResult") {
       projectToolResult(message, this);
+    } else if (
+      message.role === "custom" ||
+      message.role === "bashExecution" ||
+      message.role === "branchSummary" ||
+      message.role === "compactionSummary"
+    ) {
+      if (message.role === "custom" && !isCodexDurableCustomMessage(message)) {
+        return;
+      }
+      // Evidence is verified before projection. Use the shared context conversion
+      // for durable history, then enforce the same content and budget checks.
+      for (const converted of convertToLlm([message])) {
+        this.append(converted);
+      }
     } else {
       throw new CodexHistoryRejection("unsupported_content");
     }

@@ -7,6 +7,10 @@ import {
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runSynchronousWork } from "../shared/synchronous-work.js";
+import {
+  requestContext,
+  sessionReadHandlers,
+} from "./server-methods/sessions-read-cache.test-support.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import * as sessionIdentity from "./session-identity-projection.js";
 import { filterSessionEntries } from "./session-list-filters.js";
@@ -14,6 +18,7 @@ import { listSessionFixture } from "./session-list.test-support.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
 import { prepareSessionRowSelection } from "./session-utils-list.js";
+import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 
 vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
@@ -34,6 +39,78 @@ function entry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return { sessionId: "inventory-session", updatedAt: 1, ...overrides };
 }
 
+it("reuses involvement facts until session replacement or profile publication", () => {
+  const identityProjection = sessionIdentity.createSessionIdentityProjection();
+  const rowContext = { ...buildSessionListRowMetadataContext({ now: 1 }), identityProjection };
+  const profiles = rowContext.userProfileIdentityById;
+  const key = "agent:main:involved";
+  const state = { profiles: { "profile-merged-ada": { hidden: false, updatedAt: 1 } } };
+  const readInvolvement = vi.fn(() => state);
+  const original = entry();
+  Object.defineProperty(original, "profileInvolvement", { get: readInvolvement, enumerable: true });
+  const projection = createSessionRowProjectionFixture({
+    cfg,
+    storePath,
+    store: { [key]: original },
+    rowContext,
+  });
+  onTestFinished(() => projection.dispose());
+  const select = (id = "profile-ada") =>
+    runSynchronousWork(
+      filterSessionEntries({
+        ...prepareSessionRowSelection(projection, {}),
+        involvingActorId: id,
+      }),
+    ).entries.map(([sessionKey]) => sessionKey);
+  expect(select()).toEqual([key]);
+  readInvolvement.mockClear();
+  for (let i = 0; i < 3; i++) {
+    expect(select()).toEqual([key]);
+    expect(select("profile-bob")).toEqual([]);
+  }
+  expect(readInvolvement).not.toHaveBeenCalled();
+
+  // Profile publications can move an alias without replacing session metadata.
+  profiles.set("profile-merged-ada", undefined);
+  identityProjection.invalidate();
+  expect(select()).toEqual([]);
+  expect(select("profile-merged-ada")).toEqual([key]);
+  projection.setEntry(key, {
+    ...entry(),
+    profileInvolvement: {
+      key: "inventory-session",
+      profiles: {
+        "profile-merged-ada": { hidden: true, updatedAt: 2 },
+      },
+    },
+  });
+  expect(select("profile-merged-ada")).toEqual([]);
+});
+
+it("expires cached child owners without a session or registry publication", () => {
+  const now = Date.UTC(2026, 8, 27);
+  const key = "agent:main:subagent:child";
+  const parent = "agent:main:dashboard:parent";
+  const projection = createSessionRowProjectionFixture({
+    cfg,
+    storePath,
+    store: {
+      [key]: entry({ updatedAt: now, spawnedBy: parent }),
+    },
+  });
+  onTestFinished(() => projection.dispose());
+  const select = (clock: number) =>
+    runSynchronousWork(
+      filterSessionEntries({
+        ...prepareSessionRowSelection(projection, { spawnedBy: parent }, { now: clock }),
+      }),
+    ).entries.map(([sessionKey]) => sessionKey);
+  expect(select(now)).toEqual([key]);
+  expect(select(now + 3_600_000)).toEqual([key]);
+  expect(select(now + 3_600_001)).toEqual([]);
+  expect(select(now)).toEqual([key]);
+});
+
 it("accepts the metadata query contract and rejects mistyped selectors", () => {
   expect(
     Value.Check(SessionsListParamsSchema, {
@@ -41,8 +118,7 @@ it("accepts the metadata query contract and rejects mistyped selectors", () => {
       workspaceDir: "/workspace/task",
       group: "",
       pinned: false,
-      activityPulseSince: 0,
-      activityPulseUntil: 86_400_000,
+      activityPulseBoundaries: [0, 86_400_000],
       profileRelation: { profileId: "profile-ada", relationship: "involving" },
     }),
   ).toBe(true);
@@ -51,18 +127,49 @@ it("accepts the metadata query contract and rejects mistyped selectors", () => {
     { workspaceDir: "" },
     { group: false },
     { pinned: "false" },
-    { activityPulseSince: -1 },
-    { activityPulseSince: "0" },
-    { activityPulseUntil: -1 },
-    { activityPulseUntil: "0" },
+    { activityPulseBoundaries: [] },
+    { activityPulseBoundaries: [0] },
+    { activityPulseBoundaries: Array.from({ length: 65 }, (_, index) => index) },
+    { activityPulseBoundaries: [-1, 0] },
+    { activityPulseBoundaries: [0, "1"] },
     { profileRelation: { profileId: "", relationship: "involving" } },
   ]) {
     expect(Value.Check(SessionsListParamsSchema, invalid), JSON.stringify(invalid)).toBe(false);
   }
 });
 
-it("aggregates activity after person filtering and before pagination using the activity clock", async () => {
+it.each([
+  [0, 0],
+  [1, 0],
+  [0, 2, 1],
+])(
+  "rejects non-ascending activity boundaries before reading session rows: %j",
+  async (...activityPulseBoundaries) => {
+    const respond = vi.fn();
+    await sessionReadHandlers["sessions.list"]!({
+      req: { type: "req", id: "pulse-boundaries", method: "sessions.list" },
+      params: { activityPulseBoundaries },
+      context: requestContext(cfg),
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("activityPulseBoundaries: must be strictly ascending"),
+      }),
+    );
+  },
+);
+
+it("aggregates the selected time window after person filtering and before pagination", async () => {
   const since = Date.UTC(2026, 8, 27);
+  const now = since + 12 * 3_600_000;
+  const activeMinutes = 7 * 24 * 60;
+  vi.spyOn(Date, "now").mockReturnValue(now);
   const person = (id: string) => ({ identity: { type: "profile" as const, id } });
   const result = await listSessionFixture({
     cfg,
@@ -70,7 +177,7 @@ it("aggregates activity after person filtering and before pagination using the a
     store: {
       "agent:main:midnight": entry({
         lastActivityAt: since,
-        createdAt: since - 1,
+        createdAt: now - activeMinutes * 60_000 - 1,
         participants: [person("profile-ada")],
       }),
       "agent:main:morning": entry({
@@ -84,10 +191,15 @@ it("aggregates activity after person filtering and before pagination using the a
         createdAt: since + 24 * 3_600_000,
         participants: [person("profile-ada")],
       }),
-      "agent:main:yesterday": entry({
-        lastActivityAt: since - 1,
+      "agent:main:three-days-ago": entry({
+        lastActivityAt: since - 3 * 86_400_000,
         updatedAt: since + 30 * 3_600_000,
-        participants: [person("profile-ada"), person("profile-yesterday")],
+        createdAt: now - activeMinutes * 60_000,
+        participants: [person("profile-ada"), person("profile-earlier")],
+      }),
+      "agent:main:outside-window": entry({
+        lastActivityAt: now - activeMinutes * 60_000 - 1,
+        participants: [person("profile-ada"), person("profile-excluded")],
       }),
       "agent:main:other-person": entry({
         lastActivityAt: since + 5 * 3_600_000,
@@ -96,7 +208,8 @@ it("aggregates activity after person filtering and before pagination using the a
       }),
     },
     opts: {
-      activityPulseSince: since,
+      activityPulseBoundaries: Array.from({ length: 25 }, (_, index) => since + index * 3_600_000),
+      activeMinutes,
       includePeople: true,
       involvingProfileId: "profile-ada",
       sortBy: "activity",
@@ -108,105 +221,62 @@ it("aggregates activity after person filtering and before pagination using the a
   expect(result.activityPulse).toEqual({
     since,
     until: since + 24 * 3_600_000,
-    hours: [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    sessions: 2,
-    started: 1,
+    buckets: [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    sessions: 4,
+    started: 3,
     running: 0,
-    people: 2,
+    people: 3,
   });
 });
 
-it.each([23, 25])("bounds the activity pulse to a %s-hour civil day", (hours) => {
-  const since = Date.UTC(2026, 8, 27);
-  const until = since + hours * 3_600_000;
+it("buckets nonuniform intervals half-open while counting every filtered running session", () => {
   const projection = createSessionRowProjectionFixture({
     cfg,
     store: {
-      "agent:main:last-hour": entry({ lastActivityAt: until - 1, createdAt: since }),
-      "agent:main:tomorrow": entry({ lastActivityAt: until, createdAt: until }),
+      "agent:main:before": entry({ lastActivityAt: 99 }),
+      "agent:main:first": entry({ lastActivityAt: 100 }),
+      "agent:main:second": entry({ lastActivityAt: 200, createdAt: 0 }),
+      "agent:main:last": entry({ lastActivityAt: 499 }),
+      "agent:main:after": entry({ lastActivityAt: 500 }),
     },
   });
   onTestFinished(projection.dispose);
   const result = runSynchronousWork(
     filterSessionEntries({
-      ...prepareSessionRowSelection(projection, {
-        activityPulseSince: since,
-        activityPulseUntil: until,
-      }),
+      ...prepareSessionRowSelection(projection, { activityPulseBoundaries: [100, 200, 500] }),
       projectActiveRun: () => ({ active: true }),
     }),
   );
   expect(result.activityPulse).toEqual({
-    since,
-    until,
-    hours: [...Array.from({ length: hours - 1 }, () => 0), 1],
-    sessions: 1,
-    started: 1,
-    running: 2,
+    since: 100,
+    until: 500,
+    buckets: [1, 2],
+    sessions: 5,
+    running: 5,
   });
-});
-
-it.each([
-  { label: "missing", until: undefined },
-  { label: "not after since", until: Date.UTC(2026, 8, 27) },
-  { label: "longer than a civil day", until: Date.UTC(2026, 8, 27) + 26 * 3_600_000 },
-  { label: "absurd", until: Number.MAX_SAFE_INTEGER },
-])("falls back to a 24-hour window when the requested end is $label", ({ until }) => {
-  const since = Date.UTC(2026, 8, 27);
-  const projection = createSessionRowProjectionFixture({
-    cfg,
-    store: { "agent:main:late": entry({ lastActivityAt: since + 24 * 3_600_000 - 1 }) },
-  });
-  onTestFinished(projection.dispose);
-  const result = runSynchronousWork(
-    filterSessionEntries(
-      prepareSessionRowSelection(projection, {
-        activityPulseSince: since,
-        ...(until === undefined ? {} : { activityPulseUntil: until }),
-      }),
-    ),
-  );
-  expect(result.activityPulse).toMatchObject({ until: since + 24 * 3_600_000, sessions: 1 });
-  expect(result.activityPulse?.hours).toHaveLength(24);
-});
-
-it("counts every live session as running now and only today's sessions in the buckets", () => {
-  const since = 100;
-  const projection = createSessionRowProjectionFixture({
-    cfg: { agents: { entries: { worker: {} } } },
-    store: {
-      "agent:worker:live": entry({ sessionId: "running", lastActivityAt: since }),
-      "agent:worker:old": entry({ sessionId: "running", lastActivityAt: since - 1 }),
-      "agent:worker:idle": entry({ sessionId: "idle", lastActivityAt: since + 1 }),
-    },
-  });
-  onTestFinished(projection.dispose);
-  const result = runSynchronousWork(
+  const recent = runSynchronousWork(
     filterSessionEntries({
-      ...prepareSessionRowSelection(projection, { activityPulseSince: since }),
-      projectActiveRun: (key, row, agentId) => ({
-        active:
-          key.startsWith("agent:worker:") && row.sessionId === "running" && agentId === "worker",
-      }),
+      ...prepareSessionRowSelection(
+        projection,
+        { activityPulseBoundaries: [100, 200, 500], activeMinutes: 1 },
+        { now: 500 },
+      ),
     }),
   );
-  expect(result.activityPulse).toMatchObject({ sessions: 2, running: 2 });
+  expect(recent.activityPulse?.started).toBe(1);
 });
 
-it.each([undefined, -1, Number.NaN, Number.POSITIVE_INFINITY])(
-  "omits the activity pulse for an absent or invalid start: %s",
-  async (activityPulseSince) => {
-    const result = await listSessionFixture({
-      cfg,
-      storePath,
-      store: { "agent:main:one": entry() },
-      opts: { activityPulseSince },
-    });
-    expect(result).not.toHaveProperty("activityPulse");
-  },
-);
+it("omits the activity pulse when boundaries are absent", async () => {
+  const result = await listSessionFixture({
+    cfg,
+    storePath,
+    store: { "agent:main:one": entry() },
+    opts: {},
+  });
+  expect(result).not.toHaveProperty("activityPulse");
+});
 
-it("accepts epoch zero and omits pulse people unless requested", async () => {
+it("accepts epoch zero and omits unrequested people and all-time started counts", async () => {
   const result = await listSessionFixture({
     cfg,
     storePath,
@@ -216,10 +286,15 @@ it("accepts epoch zero and omits pulse people unless requested", async () => {
         participants: [{ identity: { type: "profile", id: "profile-ada" } }],
       }),
     },
-    opts: { activityPulseSince: 0 },
+    opts: { activityPulseBoundaries: [0, 100] },
   });
-  expect(result.activityPulse).toMatchObject({ since: 0, sessions: 1, started: 1, running: 0 });
-  expect(result.activityPulse).not.toHaveProperty("people");
+  expect(result.activityPulse).toEqual({
+    since: 0,
+    until: 100,
+    buckets: [1],
+    sessions: 1,
+    running: 0,
+  });
 });
 
 it("keeps system provenance and named conversations distinct in projected lists", async () => {
@@ -255,6 +330,18 @@ it("keeps system provenance and named conversations distinct in projected lists"
       visible: false,
     },
     { key: "agent:main:legacy", fields: {}, visible: true },
+    { key: "agent:main:main", fields: {}, visible: true },
+    {
+      key: "agent:main:main:heartbeat",
+      fields: { heartbeatIsolatedBaseSessionKey: "agent:main:main" },
+      visible: false,
+    },
+    {
+      key: "agent:main:ops:heartbeat",
+      fields: { heartbeatIsolatedBaseSessionKey: "agent:main:ops", label: "Named lane" },
+      visible: true,
+    },
+    { key: "agent:main:alerts:heartbeat", fields: { label: "My heartbeat" }, visible: true },
     {
       key: "agent:main:cron:nightly",
       fields: { createdVia: "internal", createdActor: { type: "system" } },

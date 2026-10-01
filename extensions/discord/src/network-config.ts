@@ -24,12 +24,6 @@ function reorderLookupAddresses(addresses: dns.LookupAddress[]): dns.LookupAddre
   }
   const ipv4 = addresses.filter((entry) => entry.family === 4);
   const ipv6 = addresses.filter((entry) => entry.family === 6);
-  if (ipv4.length === 0) {
-    return ipv6;
-  }
-  if (ipv6.length === 0) {
-    return ipv4;
-  }
   return [...ipv4, ...ipv6];
 }
 

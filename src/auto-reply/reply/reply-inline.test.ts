@@ -32,13 +32,19 @@ describe("extractInlineSimpleCommand", () => {
     expect(result?.cleaned).toBe("first line\nsecond line");
   });
 
-  it.each(["/help", "/commands", "/whoami", "/id"])(
-    "preserves code bytes when extracting %s",
-    (command) => {
-      const code = "    if ready:\r\n\t\trun('a  b')  \r\n";
-      expect(extractInlineSimpleCommand(`${command}\r\n${code}`)?.cleaned).toBe(code);
-    },
-  );
+  it.each([
+    ["/help", "/help"],
+    ["/commands", "/commands"],
+    ["/whoami", "/whoami"],
+    ["/id", "/whoami"],
+    ["/ID", "/whoami"],
+  ])("preserves code bytes when extracting %s", (command, expectedCommand) => {
+    const code = "    if ready:\r\n\t\trun('a  b')  \r\n";
+    expect(extractInlineSimpleCommand(`${command}\r\n${code}`)).toEqual({
+      command: expectedCommand,
+      cleaned: code,
+    });
+  });
 
   it("returns null for empty body", () => {
     expect(extractInlineSimpleCommand("")).toBeNull();

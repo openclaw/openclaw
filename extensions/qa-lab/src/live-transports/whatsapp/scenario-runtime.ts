@@ -6,7 +6,6 @@ import {
   buildWhatsAppQaScenarioResultBase,
   resolveWhatsAppQaMessageTargets,
   resolveWhatsAppQaScenarioTarget,
-  type WhatsAppObservedMessage,
   type WhatsAppQaMessageScenarioContext,
   type WhatsAppQaScenarioImplementation,
   type WhatsAppQaScenarioMetadata,
@@ -15,14 +14,16 @@ import {
 } from "./whatsapp-live.contracts.js";
 import {
   WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS,
-  assertWhatsAppScenarioMessageBatch,
   isTransientWhatsAppQaDriverError,
-  messageMatches,
   resolveWhatsAppQaNoReplyTarget,
   restartWhatsAppQaDriverSession,
   waitForNoWhatsAppReply,
+} from "./whatsapp-live.driver.js";
+import {
+  assertWhatsAppScenarioMessageBatch,
+  messageMatches,
   waitForScenarioObservedMessage,
-} from "./whatsapp-live.operations.js";
+} from "./whatsapp-live.observations.js";
 import { waitForWhatsAppChannelStable } from "./whatsapp-live.setup.js";
 
 async function runWhatsAppScenarioAttempt(params: {
@@ -89,7 +90,7 @@ async function runWhatsAppScenarioAttempt(params: {
       ...(scenarioRun.quietMatchText
         ? {
             allowQuietWindowMessage: (message: WhatsAppQaDriverObservedMessage) =>
-              !messageMatches(message as WhatsAppObservedMessage, scenarioRun.quietMatchText!),
+              !messageMatches(message, scenarioRun.quietMatchText!),
           }
         : {}),
       driver,
@@ -139,11 +140,6 @@ async function runWhatsAppScenarioAttempt(params: {
     sutPhoneE164: runtimeEnv.sutPhoneE164,
     target,
     targetKind: scenarioRun.target,
-    waitForReady: async () =>
-      await waitForWhatsAppChannelStable(
-        params.environment.gateway as never,
-        params.environment.sutAccountId,
-      ),
   };
   const afterSendDetails = await scenarioRun.afterSend?.(scenarioContext);
   if (!scenarioRun.expectReply) {
@@ -168,7 +164,7 @@ async function runWhatsAppScenarioAttempt(params: {
   const reply = await waitForScenarioObservedMessage(scenarioContext, {
     observedAfter: requestStartedAt,
     timeoutMs: params.scenario.timeoutMs,
-    match: (message) => messageMatches(message as WhatsAppObservedMessage, scenarioRun.matchText),
+    match: (message) => messageMatches(message, scenarioRun.matchText),
   });
   scenarioRun.verify?.(reply, scenarioContext);
   const afterReplyDetails = await scenarioRun.afterReply?.(reply, scenarioContext);

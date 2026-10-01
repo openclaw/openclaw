@@ -26,6 +26,7 @@ type ProgressCardToolOptions = {
   agentSessionKey?: string;
   agentId?: string;
   callGateway?: InProcessGatewayCaller;
+  onPlanSaved?: (unfinished: boolean) => void;
 };
 
 export function createProgressCardTool(options: ProgressCardToolOptions = {}): AnyAgentTool {
@@ -60,6 +61,9 @@ export function createProgressCardTool(options: ProgressCardToolOptions = {}): A
         ...(input.markdown ? { markdown: input.markdown } : {}),
         ...(input.steps ? { plan: input.steps } : {}),
       });
+      options.onPlanSaved?.(
+        result.card?.steps?.some((step) => step.status !== "completed") === true,
+      );
       const completed =
         result.card?.steps?.filter((step) => step.status === "completed").length ?? 0;
       const total = result.card?.steps?.length ?? 0;

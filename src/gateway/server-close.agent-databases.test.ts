@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
@@ -9,20 +12,32 @@ import {
   type ReplyOperation,
 } from "../auto-reply/reply/reply-run-registry.js";
 import { runGatewayLoop } from "../cli/gateway-cli/run-loop.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { runSqliteSessionReclamation } from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
+import { SqliteReclamationWorker } from "../config/sessions/session-accessor.sqlite-reclamation-worker-lifetime.js";
+import { createSessionMaintenanceStatisticsOperation } from "../config/sessions/session-accessor.sqlite-reclamation.js";
 import { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
+import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import * as systemdTimeout from "../infra/systemd-stop-timeout.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import {
+  beginAgentDeletionJournal,
+  completeAgentDeletionJournalInDatabase,
+} from "../state/agent-deletion-journal.js";
+import {
   assertNoOpenClawAgentDatabaseLeasesReadOnly,
   OpenClawAgentDatabaseLeaseActiveError,
 } from "../state/openclaw-agent-db-lease.js";
-import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import * as schema from "../state/openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -30,10 +45,77 @@ import {
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { readOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import type { GatewayServer } from "./server-public.js";
+
+it("closes a Gateway with an active plugin while retaining a deleted agent store", async () => {
+  const fixture = await createGatewayMetadataCloseFixture("gateway-retained-deleted-agent-close");
+  try {
+    const pluginId = fixture.pluginId;
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: pluginId });
+    const registered = new PluginInstance(record.id, { record, registry });
+    let disposed = false;
+    registered.lifecycle.onDispose(() => {
+      disposed = true;
+    });
+    registry.plugins.push(record);
+    setActivePluginRegistry(registry);
+    const port = await fixture.reservePort();
+    const server = await fixture.start(port);
+    expect(fixture.kernels.get(port)?.pluginRuntime.registry.plugins).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: pluginId })]),
+    );
+    const activeStore = path.join(fixture.state.sessionsDir("main"), "sessions.json");
+    const retainedStore = path.join(fixture.state.sessionsDir("retired"), "sessions.json");
+    for (const [agentId, storePath] of [
+      ["main", activeStore],
+      ["retired", retainedStore],
+    ] as const) {
+      await replaceSessionEntry(
+        { agentId, storePath, sessionKey: `agent:${agentId}:main` },
+        {
+          sessionId: `${agentId}-session`,
+          updatedAt: 1,
+          pluginExtensions: { [pluginId]: { active: true } },
+        },
+      );
+    }
+    const retainedDatabase = path.join(fixture.state.agentDir("retired"), "openclaw-agent.sqlite");
+    const operationId = randomUUID();
+    beginAgentDeletionJournal(
+      {
+        agentId: "retired",
+        operationId,
+        agentDir: fixture.state.agentDir("retired"),
+        sessionsDir: fixture.state.sessionsDir("retired"),
+        workspaceDir: path.join(fixture.state.root, "workspace-retired"),
+        databasePaths: [retainedDatabase],
+        deleteFiles: false,
+      },
+      { env: fixture.state.env },
+    );
+    runOpenClawStateWriteTransaction(
+      (database) => completeAgentDeletionJournalInDatabase(database, "retired", operationId),
+      { env: fixture.state.env },
+    );
+    await expect(server.close({ reason: "gateway stopping" })).resolves.toBeUndefined();
+    expect(disposed).toBe(true);
+    expect((await fs.stat(retainedDatabase)).isFile()).toBe(true);
+    expect(
+      loadSessionEntry({ agentId: "main", storePath: activeStore, sessionKey: "agent:main:main" })
+        ?.pluginExtensions,
+    ).toBeUndefined();
+  } finally {
+    await fixture.cleanup();
+  }
+}, 300_000);
 
 it.each(["stop", "restart"] as const)(
   "releases agent leases for Doctor after the final Gateway %s while its process stays alive",
@@ -99,6 +181,8 @@ it.skipIf(process.platform !== "linux")(
     let unregister: (() => void) | undefined;
     let stop: ((signal: "SIGTERM") => void) | undefined;
     let operation: ReplyOperation | undefined;
+    let execution: ReturnType<typeof captureOpenClawAgentDatabaseExecution> | undefined;
+    const writerReleased = createDeferredCore();
     try {
       for (const name of SUPERVISOR_HINT_ENV_VARS) {
         vi.stubEnv(name, undefined);
@@ -135,20 +219,69 @@ it.skipIf(process.platform !== "linux")(
       });
       operation.setPhase("running");
       bindGatewayContextResolver(operation, kernel.resolvePluginGatewayContext);
-      operation.abortSignal.addEventListener("abort", () => operation?.complete(), { once: true });
+      operation.abortSignal.addEventListener(
+        "abort",
+        () => {
+          void execution?.release().then(() => {
+            operation?.complete();
+            writerReleased.resolve();
+          }, writerReleased.reject);
+        },
+        { once: true },
+      );
       const options = { agentId: "main", env: fixture.state.env };
       const agent = openOpenClawAgentDatabase(options);
       agent.db.exec("INSERT INTO auth_profile_state VALUES ('restart-proof', '{}', 1)");
       const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
-      unregister = registerOpenClawAgentDatabaseAsyncResource({
-        agentId: "main",
-        path: agent.path,
-        revoke() {},
-        async close() {
+      execution = captureOpenClawAgentDatabaseExecution(options);
+      const writer = execution;
+      await writer.runExisting(
+        {
+          assertCurrent: () => writer.assertCurrent(),
+          createAdmission: (binding) => () => ({
+            nativeLocations: binding.nativeLocations,
+            admission: createSqliteWorkerOperationAdmission((request, grant) => {
+              binding.authorize(request);
+              writer.assertCurrent();
+              assert(grant());
+            }, binding.attachment),
+          }),
+        },
+        (scope) =>
+          scope.execute({
+            type: "session.entries.replace",
+            input: {
+              expectedRows: new Map(),
+              validationKeys: ["agent:main:managed-restart"],
+              labelOwnerKeys: [],
+              replacements: [
+                {
+                  sessionKey: "agent:main:managed-restart",
+                  entry: { sessionId: "managed-restart", updatedAt: 1 },
+                },
+              ],
+            },
+          }),
+      );
+      const reclamationClose = vi.spyOn(SqliteReclamationWorker.prototype, "close");
+      await runSqliteSessionReclamation({
+        forceInProcess: false,
+        plan: createSessionMaintenanceStatisticsOperation({ ...options, path: agent.path }),
+      });
+      const hostLeaseCount = shared
+        .prepare("SELECT count(*) AS n FROM agent_database_leases WHERE path = ?")
+        .get(agent.path)?.n;
+      expect(hostLeaseCount).toBe(3);
+      // External cleanup can outlive the stop budget; idle writers must not wait for it.
+      const removeSidecar = kernel.registerConnectionDependentSidecars({
+        async stop() {
           entered.resolve();
           await release.promise;
         },
       });
+      unregister = () => {
+        removeSidecar();
+      };
       expect(
         writeGatewayRestartIntentSync({
           env: fixture.state.env,
@@ -178,6 +311,14 @@ it.skipIf(process.platform !== "linux")(
         }),
       ]);
       expect(isAgentRunRestartAbortReason(operation.abortSignal.reason)).toBe(true);
+      await writerReleased.promise;
+      expect(reclamationClose).toHaveBeenCalledOnce();
+      await reclamationClose.mock.results[0]?.value;
+      expect(
+        shared
+          .prepare("SELECT count(*) AS n FROM agent_database_leases WHERE path = ?")
+          .get(agent.path)?.n,
+      ).toBe(1);
       await vi.advanceTimersByTimeAsync(10_001);
       expect(exit).not.toHaveBeenCalled();
       expect(agent.db.isOpen).toBe(true);
@@ -222,6 +363,7 @@ it.skipIf(process.platform !== "linux")(
     } finally {
       release.resolve();
       operation?.complete();
+      await execution?.release();
       await Promise.allSettled([closing]);
       vi.useRealTimers();
       if (!exit.mock.calls.length && stop) {

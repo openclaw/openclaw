@@ -178,14 +178,10 @@ struct OnboardingProviderArtwork: View {
 
     @ViewBuilder
     private var glyph: some View {
-        if let image = OnboardingProviderIcon.image(brandCandidates: self.brandCandidates) {
+        let templateImage = OnboardingProviderIcon.image(brandCandidates: self.brandCandidates) ??
+            self.remoteIcon.flatMap { $0.isVector ? $0.nsImage : nil }
+        if let image = templateImage {
             Image(nsImage: image)
-                .renderingMode(.template)
-                .resizable()
-                .scaledToFit()
-                .foregroundStyle(.primary)
-        } else if let remoteIcon, remoteIcon.isVector {
-            Image(nsImage: remoteIcon.nsImage)
                 .renderingMode(.template)
                 .resizable()
                 .scaledToFit()

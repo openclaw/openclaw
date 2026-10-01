@@ -29,7 +29,6 @@ type SubagentAnnounceSteerOutcome =
   | { status: "steered"; deliveredAt?: number; enqueuedAt?: number }
   | { status: "none" | "dropped" | "source_owner_changed" };
 
-/** Result of trying to deliver a subagent announcement. */
 export type SubagentAnnounceDeliveryResult = {
   delivered: boolean;
   path: SubagentDeliveryPath;
@@ -73,7 +72,6 @@ export function sourceOwnerChangedResult(): SubagentAnnounceDeliveryResult {
   };
 }
 
-/** Converts a steer outcome into the shared delivery result shape. */
 function mapSteerOutcomeToDeliveryResult(
   outcome: SubagentAnnounceSteerOutcome,
 ): SubagentAnnounceDeliveryResult {

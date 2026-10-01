@@ -129,6 +129,28 @@ const events = [
   "openclaw.approval.resolved",
   "tick",
 ];
+const staticReplies = {
+  "config.get": {
+    config: { agents: { defaults: {} }, gateway: { mode: "local" } },
+    hash: "synthetic",
+    valid: true,
+  },
+  "agents.list": {
+    defaultId: "main",
+    mainKey: "main",
+    scope: "per-sender",
+    agents: [{ id: "main", name: "Research assistant" }],
+  },
+  "voicewake.get": { triggers: [] },
+  "cron.list": { jobs: [] },
+  "cron.status": { enabled: true, jobs: 0 },
+  "system-presence": [],
+  "node.list": { nodes: [] },
+  "sessions.subscribe": { ok: true },
+  "sessions.unsubscribe": { ok: true },
+  "models.list": { models: [] },
+  "sessions.groups.list": { groups: [{ name: "Research", position: 0 }] },
+};
 function broadcast(event, payload) {
   for (const ws of wss.clients) {
     if (ws.readyState === WebSocket.OPEN && ws.proofRole === "operator") {
@@ -275,6 +297,10 @@ wss.on("connection", (ws) => {
       );
       return;
     }
+    if (Object.hasOwn(staticReplies, req.method)) {
+      reply(staticReplies[req.method]);
+      return;
+    }
     switch (req.method) {
       case "connect":
         ws.proofRole = params.role;
@@ -311,21 +337,6 @@ wss.on("connection", (ws) => {
           channels: {},
           agents: [],
           sessions: { count: 3 },
-        });
-        break;
-      case "config.get":
-        reply({
-          config: { agents: { defaults: {} }, gateway: { mode: "local" } },
-          hash: "synthetic",
-          valid: true,
-        });
-        break;
-      case "agents.list":
-        reply({
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [{ id: "main", name: "Research assistant" }],
         });
         break;
       case "sessions.list":
@@ -411,31 +422,6 @@ wss.on("connection", (ws) => {
         break;
       case "approval.resolve":
         fail("Use the fixture lifecycle endpoints; no approval actions execute");
-        break;
-      case "voicewake.get":
-        reply({ triggers: [] });
-        break;
-      case "cron.list":
-        reply({ jobs: [] });
-        break;
-      case "cron.status":
-        reply({ enabled: true, jobs: 0 });
-        break;
-      case "system-presence":
-        reply([]);
-        break;
-      case "node.list":
-        reply({ nodes: [] });
-        break;
-      case "sessions.subscribe":
-      case "sessions.unsubscribe":
-        reply({ ok: true });
-        break;
-      case "models.list":
-        reply({ models: [] });
-        break;
-      case "sessions.groups.list":
-        reply({ groups: [{ name: "Research", position: 0 }] });
         break;
       case "sessions.preview":
         reply({ ts: Date.now(), previews: [] });

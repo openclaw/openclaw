@@ -53,9 +53,7 @@ export type TelnyxConfig = z.infer<typeof TelnyxConfigSchema>;
 
 const TwilioConfigSchema = z
   .object({
-    /** Twilio Account SID */
     accountSid: z.string().min(1).optional(),
-    /** Twilio Auth Token */
     authToken: SecretInputSchema.optional(),
     /** Twilio processing Region (for example, ie1) */
     region: z.enum(TWILIO_REGIONS).optional(),
@@ -66,7 +64,6 @@ const PlivoConfigSchema = z
   .object({
     /** Plivo Auth ID (starts with MA/SA) */
     authId: z.string().min(1).optional(),
-    /** Plivo Auth Token */
     authToken: z.string().min(1).optional(),
   })
   .strict();
@@ -76,17 +73,12 @@ export type VoiceCallTtsConfig = z.infer<typeof TtsConfigSchema>;
 
 const VoiceCallNumberRouteConfigSchema = z
   .object({
-    /** Greeting message for inbound calls to this number. */
     inboundGreeting: z.string().optional(),
     /** TTS override for inbound calls to this number. Deep-merges with global voice-call TTS. */
     tts: TtsConfigSchema,
-    /** Agent ID to use for voice response generation for this number. */
     agentId: z.string().min(1).optional(),
-    /** Optional model override for voice responses for this number. */
     responseModel: z.string().optional(),
-    /** System prompt for voice responses for this number. */
     responseSystemPrompt: z.string().optional(),
-    /** Timeout for response generation in ms for this number. */
     responseTimeoutMs: z.number().int().positive().optional(),
   })
   .strict();
@@ -94,11 +86,8 @@ type VoiceCallNumberRouteConfig = z.infer<typeof VoiceCallNumberRouteConfigSchem
 
 const VoiceCallServeConfigSchema = z
   .object({
-    /** Port to listen on */
     port: z.number().int().positive().default(3334),
-    /** Bind address */
     bind: z.string().default("127.0.0.1"),
-    /** Webhook path */
     path: z.string().min(1).default("/voice/webhook"),
   })
   .strict()
@@ -164,7 +153,6 @@ const VoiceCallSessionScopeSchema = z.enum(["per-phone", "per-call", "main"]);
 
 const OutboundConfigSchema = z
   .object({
-    /** Default call mode for outbound calls */
     defaultMode: CallModeSchema.default("notify"),
     /** Seconds to wait after TTS before auto-hangup in notify mode */
     notifyHangupDelaySec: z.number().int().nonnegative().default(3),
@@ -186,7 +174,7 @@ const RealtimeToolSchema = z
   .strict();
 type RealtimeToolConfig = z.infer<typeof RealtimeToolSchema>;
 
-const VoiceCallRealtimeProvidersConfigSchema = z
+const VoiceCallProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
   .default({});
 
@@ -225,7 +213,6 @@ const VoiceCallRealtimeAgentContextConfigSchema = z
     enabled: z.boolean().default(false),
     /** Maximum number of characters in the generated profile-file block. */
     maxChars: z.number().int().positive().default(6000),
-    /** Include configured agent identity fields. */
     includeIdentity: z.boolean().default(true),
     /** Include selected workspace files such as SOUL.md and IDENTITY.md. */
     includeWorkspaceFiles: z.boolean().default(true),
@@ -253,13 +240,8 @@ const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "ultra",
 ]);
 
-const VoiceCallStreamingProvidersConfigSchema = z
-  .record(z.string(), z.record(z.string(), z.unknown()))
-  .default({});
-
 const VoiceCallRealtimeConfigSchema = z
   .object({
-    /** Enable realtime voice-to-voice mode. */
     enabled: z.boolean().default(false),
     /** Provider id from registered realtime voice providers. */
     provider: z.string().min(1).optional(),
@@ -275,14 +257,13 @@ const VoiceCallRealtimeConfigSchema = z
     consultThinkingLevel: VoiceCallRealtimeConsultThinkingLevelSchema.optional(),
     /** Optional fast mode override for the regular agent behind realtime consults. */
     consultFastMode: z.boolean().optional(),
-    /** Tool definitions exposed to the realtime provider. */
     tools: z.array(RealtimeToolSchema).default([]),
     /** Low-latency memory/session context for the consult tool. */
     fastContext: VoiceCallRealtimeFastContextConfigSchema,
     /** Bounded agent persona/context injection for the fast realtime voice path. */
     agentContext: VoiceCallRealtimeAgentContextConfigSchema,
     /** Provider-owned raw config blobs keyed by provider id. */
-    providers: VoiceCallRealtimeProvidersConfigSchema,
+    providers: VoiceCallProvidersConfigSchema,
   })
   .strict()
   .default({
@@ -315,10 +296,9 @@ const VoiceCallStreamingConfigSchema = z
     enabled: z.boolean().default(false),
     /** Provider id from registered realtime transcription providers. */
     provider: z.string().min(1).optional(),
-    /** WebSocket path for media stream connections */
     streamPath: z.string().min(1).default("/voice/stream"),
     /** Provider-owned raw config blobs keyed by provider id. */
-    providers: VoiceCallStreamingProvidersConfigSchema,
+    providers: VoiceCallProvidersConfigSchema,
     /**
      * Close unauthenticated media stream sockets if no valid `start` frame arrives in time.
      * Protects against pre-auth idle connection hold attacks.
@@ -344,19 +324,14 @@ const VoiceCallStreamingConfigSchema = z
 
 export const VoiceCallConfigSchema = z
   .object({
-    /** Enable voice call functionality */
     enabled: z.boolean().default(false),
 
-    /** Active provider (telnyx, twilio, plivo, or mock) */
     provider: z.enum(["telnyx", "twilio", "plivo", "mock"]).optional(),
 
-    /** Telnyx-specific configuration */
     telnyx: TelnyxConfigSchema.optional(),
 
-    /** Twilio-specific configuration */
     twilio: TwilioConfigSchema.optional(),
 
-    /** Plivo-specific configuration */
     plivo: PlivoConfigSchema.optional(),
 
     /** Phone number to call from (E.164) */
@@ -365,22 +340,18 @@ export const VoiceCallConfigSchema = z
     /** Default phone number to call (E.164) */
     toNumber: E164Schema.optional(),
 
-    /** Inbound call policy */
     inboundPolicy: InboundPolicySchema.default("disabled"),
 
     /** Allowlist of phone numbers for inbound calls (E.164) */
     allowFrom: z.array(E164Schema).default([]),
 
-    /** Greeting message for inbound calls */
     inboundGreeting: z.string().optional(),
 
     /** Per-dialed-number overrides for inbound calls. Keys are E.164 numbers. */
     numbers: z.record(E164Schema, VoiceCallNumberRouteConfigSchema).default({}),
 
-    /** Outbound call configuration */
     outbound: OutboundConfigSchema,
 
-    /** Maximum call duration in seconds */
     maxDurationSeconds: z.number().int().positive().default(300),
 
     /**
@@ -393,16 +364,12 @@ export const VoiceCallConfigSchema = z
     /** Silence timeout for end-of-speech detection (ms) */
     silenceTimeoutMs: z.number().int().positive().default(800),
 
-    /** Timeout for user transcript (ms) */
     transcriptTimeoutMs: z.number().int().positive().default(180000),
 
-    /** Ring timeout for outbound calls (ms) */
     ringTimeoutMs: z.number().int().positive().default(30000),
 
-    /** Maximum concurrent calls */
     maxConcurrentCalls: z.number().int().positive().default(1),
 
-    /** Webhook server configuration */
     serve: VoiceCallServeConfigSchema,
 
     /** @deprecated Prefer tunnel config. */
@@ -414,10 +381,8 @@ export const VoiceCallConfigSchema = z
     /** Webhook signature reconstruction and proxy trust configuration */
     webhookSecurity: VoiceCallWebhookSecurityConfigSchema,
 
-    /** Real-time audio streaming configuration */
     streaming: VoiceCallStreamingConfigSchema,
 
-    /** Realtime voice-to-voice configuration */
     realtime: VoiceCallRealtimeConfigSchema,
 
     /** Session memory scope for voice conversations. */
@@ -438,13 +403,10 @@ export const VoiceCallConfigSchema = z
     /** Response/session owner. Required when multiple agents have no legacy owner. */
     agentId: z.string().min(1).optional(),
 
-    /** Optional model override for generating voice responses. */
     responseModel: z.string().optional(),
 
-    /** System prompt for voice responses */
     responseSystemPrompt: z.string().optional(),
 
-    /** Timeout for response generation in ms (default 30s) */
     responseTimeoutMs: z.number().int().positive().default(30000),
   })
   .strict()
@@ -808,11 +770,6 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
       resolved.plivo.authToken ?? resolveSpeechProviderApiKey(process.env.PLIVO_AUTH_TOKEN);
   }
 
-  // Tunnel Config
-  resolved.tunnel = resolved.tunnel ?? {
-    provider: "none",
-    allowNgrokFreeTierLoopbackBypass: false,
-  };
   resolved.tunnel.allowNgrokFreeTierLoopbackBypass =
     resolved.tunnel.allowNgrokFreeTierLoopbackBypass ?? false;
   resolved.tunnel.ngrokAuthToken =
@@ -820,12 +777,6 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
   resolved.tunnel.ngrokDomain =
     resolved.tunnel.ngrokDomain ?? resolveSpeechProviderApiKey(process.env.NGROK_DOMAIN);
 
-  // Webhook Security Config
-  resolved.webhookSecurity = resolved.webhookSecurity ?? {
-    allowedHosts: [],
-    trustForwardingHeaders: false,
-    trustedProxyIPs: [],
-  };
   resolved.webhookSecurity.allowedHosts = resolved.webhookSecurity.allowedHosts ?? [];
   resolved.webhookSecurity.trustForwardingHeaders =
     resolved.webhookSecurity.trustForwardingHeaders ?? false;

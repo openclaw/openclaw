@@ -41,7 +41,8 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function createRelay(platform: "linux" | "darwin" | "win32", retainLineage = false) {
+// These fixtures model POSIX process-group receipts, not Linux subreaper certificates.
+async function createRelay(platform: "darwin" | "win32", retainLineage = false) {
   platformMock = mockProcessPlatform(platform);
   return createRelayFixture(
     platform,
@@ -54,7 +55,7 @@ async function createRelay(platform: "linux" | "darwin" | "win32", retainLineage
 it.each(["before", "after"] as const)(
   "checks launch policy %s relay start dispatch",
   async (timing) => {
-    platformMock = mockProcessPlatform("linux");
+    platformMock = mockProcessPlatform("darwin");
     const stub = createWritableRelayChild();
     mocks.spawn.mockReturnValue(stub.child);
     let allowed = true;
@@ -111,7 +112,7 @@ it.each([
   { name: "construction aborts before ready", deferredStart: false },
   { name: "deferred start delivery fails after abort", deferredStart: true },
 ])("reports cleanup uncertainty when $name", async ({ deferredStart }) => {
-  platformMock = mockProcessPlatform("linux");
+  platformMock = mockProcessPlatform("darwin");
   const stub = createWritableRelayChild();
   mocks.spawn.mockReturnValue(stub.child);
   const startCallbacks: Array<(error: Error | null) => void> = [];
@@ -153,7 +154,7 @@ it.each([
   stub.emitExit(null, "SIGKILL");
 });
 
-it.each(["linux", "win32"] as const)(
+it.each(["darwin", "win32"] as const)(
   "keeps rejected construction ownership failures visible to supervisor joins (%s)",
   async (platform) => {
     platformMock = mockProcessPlatform(platform);
@@ -227,7 +228,7 @@ it.each([
   { label: "ASCII", chunk: "x".repeat(64 * 1024), overflow: "x" },
   { label: "multibyte UTF-8", chunk: "é".repeat(32 * 1024), overflow: "é" },
 ])("caps an accumulated $label control line by wire bytes", async ({ chunk, overflow }) => {
-  const { adapter, floodControl, killSpy, close } = await createRelay("linux");
+  const { adapter, floodControl, killSpy, close } = await createRelay("darwin");
   const rejectedWait = expect(adapter.wait()).rejects.toThrow(
     "control pipe pending line exceeded cap",
   );
@@ -249,7 +250,7 @@ it.each([
   { label: "ASCII", chunk: "x".repeat(64 * 1024), overflow: "x" },
   { label: "multibyte UTF-8", chunk: "é".repeat(32 * 1024), overflow: "é" },
 ])("caps a completed $label control line before decoding", async ({ chunk, overflow }) => {
-  const { adapter, floodControl, controlEncoding, killSpy, close } = await createRelay("linux");
+  const { adapter, floodControl, controlEncoding, killSpy, close } = await createRelay("darwin");
   const parseSpy = vi.spyOn(JSON, "parse");
   expect(controlEncoding()).toBeNull();
   floodControl(`${chunk.repeat(4)}${overflow}\n`);
@@ -263,7 +264,7 @@ it.each([
 });
 
 it("bounds the newline search before inspecting an oversized control frame", async () => {
-  const { adapter, floodControl, killSpy, close } = await createRelay("linux");
+  const { adapter, floodControl, killSpy, close } = await createRelay("darwin");
   const frame = Buffer.alloc(256 * 1024 + 2, 0x78);
   frame[frame.length - 1] = 0x0a;
   const fullFrameSearch = vi.spyOn(frame, "indexOf");
@@ -279,11 +280,11 @@ it("bounds the newline search before inspecting an oversized control frame", asy
   close();
 });
 
-describe.each(["linux", "win32"] as const)("service closing authority (%s)", (platform) => {
+describe.each(["darwin", "win32"] as const)("service closing authority (%s)", (platform) => {
   it("acknowledges the exact POSIX receipt without certifying extinction", async () => {
     const { adapter, start, acknowledgements, emit, completeRoot, close } =
       await createRelay(platform);
-    expect(start.acknowledgeClosing).toBe(platform === "linux" ? true : undefined);
+    expect(start.acknowledgeClosing).toBe(platform === "darwin" ? true : undefined);
     completeRoot();
     await adapter.wait();
     const closing = emit({ type: "closing", reason: "lineage-closed" });
@@ -292,7 +293,7 @@ describe.each(["linux", "win32"] as const)("service closing authority (%s)", (pl
     void extinction.then(settled, settled);
     await nextTurn();
     expect(acknowledgements).toEqual(
-      platform === "linux"
+      platform === "darwin"
         ? [
             {
               type: "closing-ack",
@@ -334,7 +335,7 @@ describe.each(["linux", "win32"] as const)("service closing authority (%s)", (pl
     emit({ type: "root-result", code: 0, signal: null });
     // POSIX stream delivery is asynchronous; the observer itself runs within
     // the root-result handler, independently of output completion.
-    if (platform === "linux") {
+    if (platform === "darwin") {
       await nextTurn();
     }
     expect(onExit).toHaveBeenCalledExactlyOnceWith(0, null);
@@ -401,7 +402,7 @@ describe.each(["linux", "win32"] as const)("service closing authority (%s)", (pl
 });
 
 it("drains output after losing cleanup authority without erasing the observed root", async () => {
-  const { adapter, emit, endOutput, close } = await createRelay("linux");
+  const { adapter, emit, endOutput, close } = await createRelay("darwin");
   adapter.kill("SIGTERM");
   emit({ type: "root-result", code: 23, signal: null });
   await nextTurn();
@@ -416,7 +417,7 @@ it("drains output after losing cleanup authority without erasing the observed ro
 });
 
 it("keeps extinction pending after group retirement until lineage EOF", async () => {
-  const { adapter, completeRoot, emit, close, lineage } = await createRelay("linux", true);
+  const { adapter, completeRoot, emit, close, lineage } = await createRelay("darwin", true);
   completeRoot();
   await adapter.wait();
   emit({ type: "closing", reason: "cancel" });
@@ -433,7 +434,7 @@ it("keeps extinction pending after group retirement until lineage EOF", async ()
 it.each(["error", "close", "timeout"])(
   "rejects extinction when the outside-group lineage reader ends with %s",
   async (failure) => {
-    const { adapter, completeRoot, emit, close, lineage } = await createRelay("linux", true);
+    const { adapter, completeRoot, emit, close, lineage } = await createRelay("darwin", true);
     completeRoot();
     await adapter.wait();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -536,7 +537,7 @@ it.each(["before", "after"])(
   "joins a closing relay beyond cancellation grace when shutdown starts %s its receipt",
   async (order) => {
     const { adapter, completeRoot, emit, closeControl, exitRelay, lineage } =
-      await createRelay("linux");
+      await createRelay("darwin");
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const now = vi.spyOn(performance, "now").mockReturnValue(10_000);
     const warn = vi.fn();
@@ -575,7 +576,7 @@ it.each(["before", "after"])(
 
 it("escalates a stuck relay and retains failure within a shorter shutdown deadline", async () => {
   const { adapter, completeRoot, emit, closeControl, lineage, killSpy } =
-    await createRelay("linux");
+    await createRelay("darwin");
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const now = vi.spyOn(performance, "now").mockReturnValue(10_000);
   const warn = vi.fn();
@@ -603,7 +604,7 @@ it("escalates a stuck relay and retains failure within a shorter shutdown deadli
 
 it("retires a queued ordinary expiry when shutdown adopts the pending cleanup", async () => {
   const { adapter, completeRoot, emit, closeControl, exitRelay, lineage } =
-    await createRelay("linux");
+    await createRelay("darwin");
   const now = vi.spyOn(performance, "now").mockReturnValue(10_000);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setImmediate", "clearImmediate"] });
   try {
@@ -631,7 +632,7 @@ it("retires a queued ordinary expiry when shutdown adopts the pending cleanup", 
 it.each(["EPERM", "EIO", "still present"])(
   "keeps graceful cleanup uncertain when the kernel group is %s",
   async (failure) => {
-    const { adapter, completeRoot, emit, close, groupProbe, lineage } = await createRelay("linux");
+    const { adapter, completeRoot, emit, close, groupProbe, lineage } = await createRelay("darwin");
     const cause =
       failure === "still present"
         ? undefined
@@ -673,7 +674,7 @@ it.each(["EPERM", "EIO", "still present"])(
 it.each(["success", "EPERM"])(
   "retains extinction ownership after %s until ESRCH",
   async (probe) => {
-    const { adapter, completeRoot, emit, close, groupProbe } = await createRelay("linux");
+    const { adapter, completeRoot, emit, close, groupProbe } = await createRelay("darwin");
     groupProbe.mockImplementationOnce(() => {
       if (probe === "EPERM") {
         throw Object.assign(new Error("synthetic unsignalable group"), { code: "EPERM" });
@@ -714,7 +715,7 @@ it.each(["before", "after"])(
       cancellations,
       killSpy,
       acknowledgeRetirement,
-    } = await createRelay("linux");
+    } = await createRelay("darwin");
     completeRoot();
     await adapter.wait();
     lineage.end();
@@ -825,7 +826,7 @@ it.each([
 ])(
   "settles every pending owner join at the hard deadline while waiting for $leg",
   async ({ leg, pending }) => {
-    const relay = await createRelay("linux", leg === "lineage EOF");
+    const relay = await createRelay("darwin", leg === "lineage EOF");
     const { adapter, emit, stdout, stderr } = relay;
     emit({ type: "root-result", code: 23, signal: null });
     if (leg !== "output EOF") {
@@ -888,7 +889,7 @@ it.each([
 );
 
 it("bounds hard cancellation without any closing receipt or root result", async () => {
-  const { adapter, cancellations, stdout, stderr } = await createRelay("linux");
+  const { adapter, cancellations, stdout, stderr } = await createRelay("darwin");
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
     const outcomes = Promise.allSettled([adapter.wait(), adapter.waitForExtinction()]);
@@ -914,7 +915,7 @@ it.each(
 )(
   "does not renew hard cleanup for repeated KILL, receipt, EOF or a $clockJump ms wall-clock jump (shutdown=$shutdown)",
   async ({ clockJump, shutdown }) => {
-    const { adapter, emit, closeControl, cancellations, groupProbe } = await createRelay("linux");
+    const { adapter, emit, closeControl, cancellations, groupProbe } = await createRelay("darwin");
     vi.spyOn(performance, "now").mockReturnValue(3192.0055);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     try {
@@ -948,7 +949,7 @@ it.each(
 
 it("cannot revive lost authority with a late closing receipt while output remains open", async () => {
   const { adapter, emit, cancellations, acknowledgements, endOutput, lineage } =
-    await createRelay("linux");
+    await createRelay("darwin");
   emit({ type: "root-result", code: 23, signal: null });
   await nextTurn();
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });

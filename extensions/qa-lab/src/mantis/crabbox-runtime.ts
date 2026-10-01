@@ -108,13 +108,12 @@ export async function defaultCommandRunner(
 
 export async function resolveCrabboxBin(params: {
   env: NodeJS.ProcessEnv;
-  envName: string;
   explicit?: string;
   repoRoot: string;
 }) {
   const candidate = resolveCrabboxBinary({
     cwd: params.repoRoot,
-    explicit: trimToValue(params.explicit) ?? trimToValue(params.env[params.envName]),
+    explicit: trimToValue(params.explicit) ?? trimToValue(params.env.OPENCLAW_MANTIS_CRABBOX_BIN),
     openclawRoot: params.repoRoot,
     pathEnv: params.env.PATH,
   });

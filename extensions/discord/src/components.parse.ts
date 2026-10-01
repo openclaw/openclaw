@@ -21,8 +21,6 @@ import type {
 
 export const DISCORD_COMPONENT_ATTACHMENT_PREFIX = "attachment://";
 
-type DiscordComponentSeparatorSpacing = "small" | "large" | 1 | 2;
-
 const BLOCK_ALIASES = new Map<string, DiscordComponentBlock["type"]>([
   ["row", "actions"],
   ["action-row", "actions"],
@@ -82,7 +80,7 @@ function readOptionalInteger(
   if (value == null) {
     return undefined;
   }
-  if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value)) {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
     throw new Error(`${label} must be an integer`);
   }
   if (bounds?.min !== undefined && value < bounds.min) {
@@ -317,18 +315,19 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
     }
     case "separator": {
       const spacingRaw = obj.spacing;
-      let spacing: DiscordComponentSeparatorSpacing | undefined;
-      if (spacingRaw === "small" || spacingRaw === "large") {
-        spacing = spacingRaw;
-      } else if (spacingRaw === 1 || spacingRaw === 2) {
-        spacing = spacingRaw;
-      } else if (spacingRaw !== undefined) {
+      if (
+        spacingRaw !== undefined &&
+        spacingRaw !== "small" &&
+        spacingRaw !== "large" &&
+        spacingRaw !== 1 &&
+        spacingRaw !== 2
+      ) {
         throw new Error(`${label}.spacing must be "small", "large", 1, or 2`);
       }
       const divider = typeof obj.divider === "boolean" ? obj.divider : undefined;
       return {
         type: "separator",
-        spacing,
+        spacing: spacingRaw,
         divider,
       };
     }

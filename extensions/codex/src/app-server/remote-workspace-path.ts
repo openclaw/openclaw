@@ -22,7 +22,7 @@ export function mapCodexAppServerRemoteWorkspacePath(
   if (normalizedValue === localRoot) {
     return remoteRoot;
   }
-  const prefix = `${localRoot}/`;
+  const prefix = localRoot.endsWith("/") ? localRoot : `${localRoot}/`;
   if (!normalizedValue.startsWith(prefix)) {
     throw new Error(
       `Codex remoteWorkspaceRoot is configured but cwd ${params.value} is outside OpenClaw workspace root ${params.localWorkspaceRoot}; refusing to send a gateway-local cwd to the remote Codex app-server.`,

@@ -27,10 +27,11 @@ const { createSession } = vi.hoisted(() => ({
 vi.mock("./agentsapi-session.js", () => ({ createAgentsApiSession: createSession }));
 vi.mock("./agentsapi-prompt.js", () => ({
   buildAgentsApiInstructions: async () => "Fixture instructions",
-  buildAgentsApiTurnContext: () => "",
+  buildAgentsApiTurnInput: (_params: unknown, _tools: unknown, prompt: string) => prompt,
 }));
 vi.mock("./agentsapi-files.js", () => ({
   prepareInputs: async () => ({ files: [], mappingText: "" }),
+  prepareSelfHostedInputs: async () => ({ files: [], mappingText: "" }),
   uploadInputs: async () => {},
   collectOutputs: async () => [],
 }));
@@ -140,7 +141,7 @@ it("reopens an existing hosted binding and requires reset before persisting a fr
           kind: "failed",
           error: expect.objectContaining({
             message:
-              "Agents API model, credential, or environment changed; reset the OpenClaw session before continuing",
+              "Agents API model, credential, environment, or MCP configuration changed; reset the OpenClaw session before continuing",
           }),
         },
       });

@@ -12,7 +12,7 @@ import { printResult } from "./progress.js";
 import { formatSchemaRefusalLines, hasSchemaRefusal } from "./schema-preflight.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import type { RefuseUpdate } from "./update-command-result.js";
-import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
+import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
 
 export async function handleDryRunPreflightError(
   error: unknown,

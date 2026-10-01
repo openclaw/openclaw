@@ -489,5 +489,14 @@ workspace** in the sign-in prompt.
   agent home. Automatic context summarization is supported; manual `/compact`,
   remote execution, and supervised sessions are unavailable with this credential.
 
+OpenClaw discovers SIWC model choices from the selected account through
+`GET https://api.openai.com/v1/models`, using the same profile's access token as
+inference. Only models marked for display are offered, with their account-specific
+names and order. Switching profiles uses that profile's catalog. A successful
+empty list stays empty; a rejected credential does not fall back to static model
+access. If discovery is temporarily unavailable, OpenClaw retains static hints
+and marks discovery unavailable. Codex app-server's bundled or cached model list
+is not proof of current SIWC account access.
+
 Model and allowance eligibility are enforced by OpenAI. SIWC does not import
 ChatGPT conversations or Codex history.

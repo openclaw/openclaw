@@ -2,17 +2,9 @@ import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-p
 import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import type { CronDeliveryPlan } from "../delivery-plan.js";
 
-type CronSourceDeliveryResolvedTarget = {
-  channel?: string;
-  accountId?: string;
-  to?: string;
-  threadId?: string | number;
-  ok?: boolean;
-};
-
 export function resolveCronSourceDeliveryPlan(params: {
   deliveryPlan: CronDeliveryPlan;
-  resolvedDelivery: CronSourceDeliveryResolvedTarget;
+  resolvedDelivery: SourceDeliveryPlan["target"] & { ok?: boolean };
 }): SourceDeliveryPlan {
   const target = {
     channel: params.resolvedDelivery.channel,

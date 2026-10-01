@@ -4,6 +4,7 @@ import {
   parseFiniteNumber,
   resolveOptionalIntegerOption,
 } from "openclaw/plugin-sdk/number-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type MemoryConfig = {
   embedding: {
@@ -102,10 +103,10 @@ function resolveEmbeddingDimensions(embedding: Record<string, unknown>): number 
 
 export const memoryConfigSchema = {
   parse(value: unknown): MemoryConfig {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
+    if (!isRecord(value)) {
       throw new Error("memory config required");
     }
-    const cfg = value as Record<string, unknown>;
+    const cfg = value;
     assertAllowedKeys(
       cfg,
       [
@@ -122,8 +123,8 @@ export const memoryConfigSchema = {
       "memory config",
     );
 
-    const embedding = cfg.embedding as Record<string, unknown> | undefined;
-    if (!embedding || typeof embedding !== "object" || Array.isArray(embedding)) {
+    const embedding = cfg.embedding;
+    if (!isRecord(embedding)) {
       throw new Error("embedding config required");
     }
     assertAllowedKeys(embedding, [...EMBEDDING_CONFIG_KEYS], "embedding config");
@@ -175,19 +176,15 @@ export const memoryConfigSchema = {
       }
     }
 
-    const dreaming =
-      cfg.dreaming === undefined
-        ? undefined
-        : cfg.dreaming && typeof cfg.dreaming === "object" && !Array.isArray(cfg.dreaming)
-          ? (cfg.dreaming as Record<string, unknown>)
-          : (() => {
-              throw new Error("dreaming config must be an object");
-            })();
+    const dreaming = cfg.dreaming;
+    if (dreaming !== undefined && !isRecord(dreaming)) {
+      throw new Error("dreaming config must be an object");
+    }
 
     let storageOptions: Record<string, string> | undefined;
-    const storageOpts = cfg.storageOptions as Record<string, unknown> | undefined;
+    const storageOpts = cfg.storageOptions;
     if (storageOpts !== undefined && storageOpts !== null) {
-      if (!storageOpts || typeof storageOpts !== "object" || Array.isArray(storageOpts)) {
+      if (!isRecord(storageOpts)) {
         throw new Error("storageOptions must be an object");
       }
       storageOptions = {};

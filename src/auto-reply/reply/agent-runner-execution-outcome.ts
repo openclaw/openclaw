@@ -2,6 +2,7 @@ import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-a
 import { formatErrorMessage } from "../../infra/errors.js";
 import { recordMessageToolRunOutcome } from "../../infra/message-tool-run-outcome-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { VisibleWorkSession } from "../get-reply-options.types.js";
 import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
 import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 
@@ -11,6 +12,21 @@ export function recordAgentTurnExecutionOutcome(
   params: AgentTurnParams,
   result: AgentTurnExecutionResult | undefined,
 ): void {
+  if (result?.outcome.kind === "settled" && params.opts?.onVisibleWorkSessions) {
+    const sessions = new Map<string, VisibleWorkSession>();
+    for (const spawn of result.outcome.result.acceptedSessionSpawns ?? []) {
+      if (spawn.sessionUrl && !sessions.has(spawn.childSessionKey)) {
+        sessions.set(spawn.childSessionKey, {
+          sessionKey: spawn.childSessionKey,
+          url: spawn.sessionUrl,
+          ...(spawn.label ? { label: spawn.label } : {}),
+        });
+      }
+    }
+    if (sessions.size > 0) {
+      params.opts.onVisibleWorkSessions([...sessions.values()]);
+    }
+  }
   const executionStatus = resolveAgentTurnExecutionStatus(result?.outcome);
   if (executionStatus !== "cancelled") {
     params.opts?.onAgentRunTerminalOutcome?.(executionStatus === "ok" ? "completed" : "failed");

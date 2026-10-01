@@ -859,7 +859,7 @@ test.each(["worker-turn", "remote-exec"] as const)(
 );
 
 test.each(["worker-turn", "remote-exec"] as const)(
-  "sessions.delete preserves unsynced %s work when final reconciliation fails",
+  "sessions.delete preserves %s recovery when the post-apply fence fails",
   async (executionMode) => {
     await createSessionStoreDir();
     await writeSessionStore({
@@ -867,7 +867,9 @@ test.each(["worker-turn", "remote-exec"] as const)(
     });
     const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
     const harness = createHarness(openOpenClawStateDatabase(), placementStore, {
-      verifyFails: true,
+      reconcileCommitsManifest: false,
+      reconcileCommitsManifestOnApply: true,
+      verifyFailureCall: 3,
     });
     await harness.service.dispatch({ ...REQUEST, executionMode });
     const forceDestroyEnvironment = vi.spyOn(harness.service, "forceDestroyEnvironment");
@@ -887,13 +889,15 @@ test.each(["worker-turn", "remote-exec"] as const)(
       },
     );
     expect(deleted).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
-    expect(harness.log).toContain("workspace:reconcile");
+    expect(harness.log).toContain("workspace:apply-prepared");
     expect(harness.environments.destroy).not.toHaveBeenCalled();
     expect(forceDestroyEnvironment).not.toHaveBeenCalled();
     expect(loadSessionEntry(REQUEST.sessionKey).entry?.sessionId).toBe(REQUEST.sessionId);
     expect(placementStore.get(REQUEST.sessionId)).toMatchObject({
       state: "draining",
       executionMode,
+      workspaceBaseManifestRef: harness.reconciledManifestRef,
+      turnClaim: { owner: executionMode === "remote-exec" ? "local" : "worker" },
     });
     expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
       { workspaceAcceptedAtMs: null },

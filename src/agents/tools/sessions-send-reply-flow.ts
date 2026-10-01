@@ -35,24 +35,43 @@ export function startSessionsSendReplyFlow(
     const settledReply = params.reply ?? (await completion?.take());
     const callGateway: AgentToolGatewayRequestCaller | undefined =
       completion && params.callGateway
-        ? (request) => {
+        ? <T>(request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
             if (request.method === "agent" && !isRecord(request.params)) {
               throw new Error("Missing completion turn parameters.");
             }
-            return params.callGateway!({
-              ...request,
-              assertDispatchCurrent: () => {
-                completion.assertCurrent();
-                request.assertDispatchCurrent?.();
-              },
-              params:
-                request.method === "agent" && isRecord(request.params)
-                  ? {
-                      ...request.params,
-                      expectedExistingSessionId: completion.request.requesterSessionId,
-                    }
-                  : request.params,
-            });
+            const dispatch = () =>
+              params.callGateway!<T>({
+                ...request,
+                assertDispatchCurrent: () => {
+                  completion.assertCurrent();
+                  request.assertDispatchCurrent?.();
+                },
+                params:
+                  request.method === "agent" && isRecord(request.params)
+                    ? {
+                        ...request.params,
+                        expectedExistingSessionId: completion.request.requesterSessionId,
+                      }
+                    : request.params,
+              });
+            const authority = completion.request.requesterAuthority;
+            if (request.method !== "agent" || !authority) {
+              return dispatch();
+            }
+            const input = request.params;
+            if (
+              !isRecord(input) ||
+              input.sessionKey !== completion.request.requesterSessionKey ||
+              input.agentId !== completion.request.requesterAgentId ||
+              typeof input.idempotencyKey !== "string" ||
+              !isRecord(input.inputProvenance) ||
+              input.inputProvenance.kind !== "inter_session" ||
+              input.inputProvenance.sourceTool !== "subagent_announce" ||
+              input.inputProvenance.sourceSessionKey !== completion.request.targetSessionKey
+            ) {
+              throw new Error("Followup authority cannot leave its original requester.");
+            }
+            return authority.run(input.idempotencyKey, dispatch);
           }
         : params.callGateway;
     try {

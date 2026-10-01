@@ -1,8 +1,3 @@
-/**
- * Channel configuration presence detection.
- *
- * Finds channels made available by config, env, persisted auth, or plugin discovery signals.
- */
 import fs from "node:fs";
 import os from "node:os";
 import {

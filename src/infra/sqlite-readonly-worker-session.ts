@@ -4,6 +4,7 @@ import { BrokerChild } from "../process/spawn-broker/child.js";
 import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { recordChildProcessSpawn } from "../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import { createSqliteAuthTransferReceiver } from "./sqlite-readonly-auth-transfer.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import {
@@ -19,6 +20,7 @@ import {
 } from "./sqlite-readonly-worker-protocol.js";
 
 export type SqliteReadOnlyWorkerLaunch = {
+  runtimeGeneration?: RuntimeWorkerGeneration;
   env: NodeJS.ProcessEnv;
   cwd: string;
   transport: { kind: "native" } | { kind: "broker"; owner: SpawnBrokerHost };
@@ -30,6 +32,7 @@ export function isSameSqliteReadOnlyWorkerLaunch(
 ): boolean {
   const keys = Object.keys(requested.env);
   return (
+    captured.runtimeGeneration === requested.runtimeGeneration &&
     captured.transport.kind === requested.transport.kind &&
     (captured.transport.kind === "native" ||
       (requested.transport.kind === "broker" &&
@@ -41,6 +44,7 @@ export function isSameSqliteReadOnlyWorkerLaunch(
 }
 
 type SqliteReadOnlyWorkerSession = {
+  readonly closed: Promise<void>;
   readonly notStarted: boolean;
   createNativeReplacement: () => SqliteReadOnlyWorkerSession;
   isRetired: () => boolean;
@@ -70,7 +74,7 @@ export function createSqliteReadOnlyWorkerSession(
     host.transport.kind === "broker"
       ? { kind: "broker", owner: host.transport.owner }
       : { kind: "native" };
-  const capturedLaunch = { env, cwd, transport };
+  const capturedLaunch = { env, cwd, transport, runtimeGeneration: host.runtimeGeneration };
   const argv = [...host.argv];
   const spawnOptions: SpawnOptions = {
     env,
@@ -84,6 +88,7 @@ export function createSqliteReadOnlyWorkerSession(
   recordChildProcessSpawn(process.execPath, child);
   let retired = false;
   let sequence = 0;
+  let pendingOperation: Promise<SqliteReadOnlyWorkerValue> | undefined;
   let stderr = "";
   let outputBytes = 0;
   let pending:
@@ -122,6 +127,7 @@ export function createSqliteReadOnlyWorkerSession(
     void retainSnapshotWork(closed, () => retire(new Error("SQLite snapshot owner stopped")));
   }
   let spawned = false;
+  let nativeClosed = false;
   child.once("spawn", () => {
     spawned = true;
   });
@@ -139,6 +145,7 @@ export function createSqliteReadOnlyWorkerSession(
     ),
   );
   child.once("close", (code, signal) => {
+    nativeClosed = true;
     retired = true;
     if (pending) {
       const request = pending;
@@ -239,12 +246,13 @@ export function createSqliteReadOnlyWorkerSession(
       retire(error);
     }
   });
-  return {
+  const session: SqliteReadOnlyWorkerSession = {
+    closed,
     isRetired() {
       return retired;
     },
     get notStarted() {
-      return child instanceof BrokerChild && child.notStarted;
+      return child instanceof BrokerChild ? child.notStarted : nativeClosed && !spawned;
     },
     createNativeReplacement() {
       return createSqliteReadOnlyWorkerSession({
@@ -262,7 +270,7 @@ export function createSqliteReadOnlyWorkerSession(
       if (retired) {
         return Promise.reject(new Error("SQLite read-only worker is closed"));
       }
-      return new Promise<SqliteReadOnlyWorkerValue>((resolve, reject) => {
+      return (pendingOperation = new Promise<SqliteReadOnlyWorkerValue>((resolve, reject) => {
         const { timeoutMs, size } = host.readBudget(pathname);
         stderr = "";
         outputBytes = 0;
@@ -321,7 +329,7 @@ export function createSqliteReadOnlyWorkerSession(
         } else {
           send();
         }
-      });
+      }));
     },
     async close() {
       if (retired) {
@@ -349,4 +357,9 @@ export function createSqliteReadOnlyWorkerSession(
       }
     },
   };
+  host.runtimeGeneration?.retain(session, async () => {
+    await pendingOperation?.catch(() => undefined);
+    return () => session.close();
+  });
+  return session;
 }

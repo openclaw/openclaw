@@ -149,12 +149,8 @@ export function resolveMissingOfficialExternalChannelPluginRepairHint(
 ): MissingOfficialExternalChannelPluginRepairHint | null {
   return (
     resolveMissingOfficialExternalChannelPluginRepairHints({
-      config: params.config,
-      activationSourceConfig: params.activationSourceConfig,
+      ...params,
       channelIds: [params.channelId],
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      manifestRecords: params.manifestRecords,
     })[0] ?? null
   );
 }

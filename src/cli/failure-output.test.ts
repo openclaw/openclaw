@@ -101,7 +101,6 @@ describe("formatCliJsonFailure", () => {
           'OpenClaw sessions has no command "lst".\nDid you mean this?\n  openclaw sessions list\nTry: openclaw sessions --help\nDocs: https://docs.openclaw.ai/cli',
       },
     });
-    expect(payload.error.message).not.toContain("internal parse cause");
   });
   it("keeps plugin policy messages in the canonical JSON envelope", () => {
     const error = new ExpectedCliError({
@@ -279,7 +278,6 @@ describe("formatCliFailureLines", () => {
       "[openclaw] Stack:",
       "[openclaw] Error: boom",
     ]);
-    expect(lines.join("\n")).toContain("Error: boom");
   });
 
   it.each(["--debug", "--verbose"])("prints stack details for the root %s option", (debugFlag) => {

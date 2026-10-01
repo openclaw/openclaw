@@ -73,7 +73,6 @@ const TranscriptEntrySchema = z.object({
   text: z.string(),
   isFinal: z.boolean().default(true),
 });
-export type TranscriptEntry = z.infer<typeof TranscriptEntrySchema>;
 
 export const CallRecordSchema = z.object({
   callId: z.string(),

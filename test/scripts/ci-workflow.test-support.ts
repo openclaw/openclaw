@@ -288,6 +288,10 @@ export function runWorkflowShellScript(
           return `${quoteShell(testNodeExecPath)} ${loader}--input-type=module < ${quoteShell(modulePath)}`;
         },
       )
+      .replace(
+        'node "${manifest_node_args[@]}" .ci-harness/scripts/ci-build-manifest.mjs',
+        `${quoteShell(testNodeExecPath)} "\${manifest_node_args[@]}" .ci-harness/scripts/ci-build-manifest.mjs`,
+      )
       .replaceAll(
         "manifest_node_args+=(--import tsx)",
         `manifest_node_args+=(--import ${quoteShell(TSX_IMPORT)})`,

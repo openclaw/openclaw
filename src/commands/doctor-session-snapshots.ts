@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { decodeXml } from "../shared/xml.js";
 import { resolveBundledSkillsDir } from "../skills/loading/bundled-dir.js";
 import { resolveConfigDir, shortenHomePath } from "../utils.js";
 
@@ -65,15 +66,6 @@ function resolveSessionSnapshotBundledSkillsDir(params?: {
   return packageRoot ? path.join(packageRoot, "skills") : undefined;
 }
 
-function decodeXmlText(value: string): string {
-  return value
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
-}
-
 function extractSkillLocations(prompt: unknown): string[] {
   if (typeof prompt !== "string" || !prompt.trim()) {
     return [];
@@ -83,7 +75,7 @@ function extractSkillLocations(prompt: unknown): string[] {
   for (const match of prompt.matchAll(locationPattern)) {
     const raw = match[1]?.trim();
     if (raw) {
-      locations.push(decodeXmlText(raw));
+      locations.push(decodeXml(raw));
     }
   }
   return locations;
@@ -98,18 +90,16 @@ function collectResolvedSkillPaths(value: unknown): string[] {
     if (!isRecord(skill)) {
       continue;
     }
-    if (typeof skill.filePath === "string" && skill.filePath.trim()) {
-      paths.push(skill.filePath.trim());
-    }
-    if (typeof skill.baseDir === "string" && skill.baseDir.trim()) {
-      paths.push(path.join(skill.baseDir.trim(), "SKILL.md"));
-    }
-    if (isRecord(skill.sourceInfo)) {
-      if (typeof skill.sourceInfo.path === "string" && skill.sourceInfo.path.trim()) {
-        paths.push(skill.sourceInfo.path.trim());
+    const sourceInfo = isRecord(skill.sourceInfo) ? skill.sourceInfo : undefined;
+    for (const [filePath, baseDir] of [
+      [skill.filePath, skill.baseDir],
+      [sourceInfo?.path, sourceInfo?.baseDir],
+    ]) {
+      if (typeof filePath === "string" && filePath.trim()) {
+        paths.push(filePath.trim());
       }
-      if (typeof skill.sourceInfo.baseDir === "string" && skill.sourceInfo.baseDir.trim()) {
-        paths.push(path.join(skill.sourceInfo.baseDir.trim(), "SKILL.md"));
+      if (typeof baseDir === "string" && baseDir.trim()) {
+        paths.push(path.join(baseDir.trim(), "SKILL.md"));
       }
     }
   }
@@ -198,10 +188,7 @@ function isInsidePath(baseDir: string, candidatePath: string): boolean {
   }
   const pathApi = baseIsWindows ? path.win32 : path;
   const relative = pathApi.relative(pathApi.resolve(baseDir), pathApi.resolve(candidatePath));
-  return (
-    relative === "" ||
-    (relative !== "" && !relative.startsWith("..") && !pathApi.isAbsolute(relative))
-  );
+  return relative === "" || (!relative.startsWith("..") && !pathApi.isAbsolute(relative));
 }
 function joinPathForRoot(root: string, ...segments: string[]): string {
   return isWindowsAbsolutePath(root)

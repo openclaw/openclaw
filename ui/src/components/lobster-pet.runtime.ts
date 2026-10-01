@@ -66,11 +66,9 @@ class LobsterPet extends LitElement {
   private movingDayChecked = false;
   @state() private anniversary = false;
   private sailorDay = false;
-  // Rare-load identity resolved once per seed (Elder, old-friend returns,
-  // Lobsterdex completion) - a load-start snapshot, like familiarity.
+  // Identity and familiarity remain load-start snapshots.
   private identity: plans.LobsterLoadIdentity | null = null;
   private entranceRng: () => number = lobsterLook.mulberry32(0);
-  // Passers and the bottle run on their own clocks beside the resident.
   private readonly traffic = new LobsterLedgeTraffic(this, {
     visitsEnabled: () => this.visitsEnabled && !this.dismissed,
     passerOptions: () => ({
@@ -202,7 +200,6 @@ class LobsterPet extends LitElement {
         window.clearTimeout(this.shellTimer);
         this.shellTimer = null;
       }
-      // The Elder never molts: it is already every size it will ever need.
       this.moltPlanned = plans.isLobsterMoltLoad(this.seed) && !this.identity.elder;
       this.twinPlanned = plans.isLobsterTwinLoad(this.seed);
       this.geometry.scheduleMeasure();
@@ -281,9 +278,7 @@ class LobsterPet extends LitElement {
     this.reconcilePresence();
   }
 
-  // Presence follows the visit schedule, offline summons, the setting, and
-  // dismissals. Runs inside the update pass so arrivals/departures never
-  // chain a post-update state change.
+  // Reconcile in the update pass to avoid chaining post-update state changes.
   private reconcilePresence() {
     const visible = this.wantsVisible();
     if (visible && this.presence !== "in") {
@@ -303,9 +298,6 @@ class LobsterPet extends LitElement {
             dex.getLobsterdexEntries().get(this.look.palette.id)?.firstSeenAt ?? null,
             new Date(),
           );
-          // Every genuine arrival (visit or offline summon) logs the palette
-          // with the first visitor's name (the Elder signs as itself) and
-          // any shiny sighting, and bumps the familiarity count.
           dex.recordLobsterVisit(this.look.palette.id, {
             name: this.identity
               ? plans.lobsterLoadDisplayName(this.identity, this.seed)
@@ -342,8 +334,6 @@ class LobsterPet extends LitElement {
     this.enterTimer = window.setTimeout(() => {
       this.enterTimer = null;
       this.entering = false;
-      // Familiar humans and returning old friends get a hello on the first
-      // arrival of the load.
       if (
         !this.greetedThisLoad &&
         (this.familiarity.tier === "friend" || this.identity?.oldFriend === true) &&
@@ -367,8 +357,6 @@ class LobsterPet extends LitElement {
     }
   };
 
-  // Long runs earn solidarity: after 10 minutes of busy the pet settles
-  // into a quiet waiting pose until the run ends.
   private trackVigil() {
     if (this.vigilTimer !== null) {
       window.clearTimeout(this.vigilTimer);
@@ -499,9 +487,7 @@ class LobsterPet extends LitElement {
     }, stayMs);
   }
 
-  // The resident notices traffic: it turns toward a passer's entry side,
-  // then follows it out with a mid-crossing flip. Scuttle owns facing while
-  // it walks; anything else can turn its head.
+  // Scuttle owns facing while walking; other acts can watch passing traffic.
   private watchTraffic(facing: 1 | -1) {
     if (this.presence === "in" && this.act !== "scuttle" && !this.vigil) {
       this.facing = facing;
@@ -600,7 +586,6 @@ class LobsterPet extends LitElement {
           this.completeMolt();
         }
         if (act === "droop") {
-          // Bad news gets processed lobster-style: tidy the ledge, then move on.
           this.performAct("sweep", presenceOwner);
           return;
         }

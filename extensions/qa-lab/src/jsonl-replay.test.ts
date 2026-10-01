@@ -7,7 +7,8 @@ import {
   renderJsonlReplayMarkdownReport,
   runJsonlReplay,
 } from "./jsonl-replay.js";
-import type { RuntimeId, RuntimeParityCell, RuntimeParityToolCall } from "./runtime-parity.js";
+import type { RuntimeId } from "./runtime-id.js";
+import type { RuntimeParityCell, RuntimeParityToolCall } from "./runtime-parity.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 type JsonlReplayCellRunner = NonNullable<

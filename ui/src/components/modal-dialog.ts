@@ -290,15 +290,15 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     }
     dialog.setAttribute("role", "dialog");
     dialog.setAttribute("aria-modal", "true");
-    if (this.label) {
-      dialog.setAttribute("aria-label", this.label);
-    } else {
-      dialog.removeAttribute("aria-label");
-    }
-    if (this.description) {
-      dialog.setAttribute("aria-description", this.description);
-    } else {
-      dialog.removeAttribute("aria-description");
+    for (const [attribute, value] of Object.entries({
+      "aria-label": this.label,
+      "aria-description": this.description,
+    })) {
+      if (value) {
+        dialog.setAttribute(attribute, value);
+      } else {
+        dialog.removeAttribute(attribute);
+      }
     }
     if (this.open) {
       if (!dialog?.open) {

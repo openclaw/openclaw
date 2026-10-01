@@ -13,6 +13,12 @@ import {
 } from "./inspect.js";
 
 const nativePlistHost = vi.hoisted(() => process.platform === "darwin");
+const loadedSystemdUnits = vi.hoisted(() =>
+  vi.fn<typeof import("./systemd-loaded-unit-inventory.js").listLoadedSystemdUnits>(),
+);
+vi.mock("./systemd-loaded-unit-inventory.js", () => ({
+  listLoadedSystemdUnits: loadedSystemdUnits,
+}));
 vi.mock("../process/exec.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../process/exec.js")>();
   const { decodeLaunchAgentPlistFixture } = await import("./launchd-plist.test-support.js");
@@ -516,6 +522,10 @@ describe("findExtraGatewayServices (darwin / scanLaunchdDir) — real filesystem
 describe("managed Gateway inventory projections", () => {
   const originalPlatform = process.platform;
 
+  beforeEach(() => {
+    loadedSystemdUnits.mockReset().mockResolvedValue([]);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
@@ -523,9 +533,15 @@ describe("managed Gateway inventory projections", () => {
 
   function isolateNativeRoots(home: string) {
     const roots = [
-      "/etc/systemd/system",
-      "/usr/lib/systemd/system",
-      "/lib/systemd/system",
+      "/etc/systemd",
+      "/etc/xdg/systemd",
+      "/run/systemd",
+      "/run/user",
+      "/usr/local/lib/systemd",
+      "/usr/local/share/systemd",
+      "/usr/lib/systemd",
+      "/usr/share/systemd",
+      "/lib/systemd",
       "/Library/LaunchAgents",
       "/Library/LaunchDaemons",
     ].map((root) => path.normalize(root));
@@ -743,6 +759,61 @@ describe("managed Gateway inventory projections", () => {
       expect(service).not.toHaveProperty("extra");
       expect(service).not.toHaveProperty("managedGateway");
     }
+  });
+
+  it("finds Gateways in XDG, runtime, and systemd control load paths before build admission", async () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+    const home = tempDirs.make("managed-systemd-load-paths-", os.tmpdir());
+    const write = isolateNativeRoots(home);
+    const configHome = path.join(home, "xdg-config");
+    const dataHome = path.join(home, "xdg-data");
+    const runtimeDir = path.join(home, "xdg-runtime");
+    await write(
+      path.join(configHome, "systemd/user/config-gateway.service"),
+      CUSTOM_OPENCLAW_GATEWAY_CONTENTS,
+    );
+    await write(
+      path.join(dataHome, "systemd/user/data-gateway.service"),
+      CUSTOM_OPENCLAW_GATEWAY_CONTENTS,
+    );
+    await write(
+      "/etc/systemd/system.control/system-gateway.service",
+      CUSTOM_OPENCLAW_GATEWAY_CONTENTS,
+    );
+    await write(
+      path.join(runtimeDir, "systemd/generator/generated-gateway.service"),
+      CUSTOM_OPENCLAW_GATEWAY_CONTENTS,
+    );
+    await write(
+      path.join(runtimeDir, "systemd/transient/transient-gateway.service"),
+      CUSTOM_OPENCLAW_GATEWAY_CONTENTS,
+    );
+    await write("/run/systemd/user/run-gateway.service", CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
+    await write(
+      "/run/systemd/generator/system-generated-gateway.service",
+      CUSTOM_OPENCLAW_GATEWAY_CONTENTS,
+    );
+
+    const result = await listManagedOpenClawGatewayServices(
+      {
+        HOME: home,
+        XDG_CONFIG_HOME: configHome,
+        XDG_DATA_HOME: dataHome,
+        XDG_RUNTIME_DIR: runtimeDir,
+      },
+      { requireComplete: true },
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.services.map((service) => service.label).toSorted()).toEqual([
+      "config-gateway.service",
+      "data-gateway.service",
+      "generated-gateway.service",
+      "run-gateway.service",
+      "system-gateway.service",
+      "system-generated-gateway.service",
+      "transient-gateway.service",
+    ]);
   });
 
   it.each([

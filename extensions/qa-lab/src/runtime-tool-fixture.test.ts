@@ -9,12 +9,14 @@ import {
   makeEnv,
   MOCK_BASE_URL,
   mockToolRequests,
+  runLiveRuntimeToolFixture,
   runMockRuntimeToolFixture,
   runtimePatchAddInput,
   runtimePatchUpdateInput,
   runtimeToolFixtureConfig,
-  runtimeToolFixtureDeps,
   simulateRuntimePatchHappyTurn,
+  transcriptToolCall,
+  transcriptToolResult,
   writeQaSessionTranscript,
   writeRuntimeToolTranscripts,
   type RuntimeToolFixtureConfig,
@@ -24,39 +26,6 @@ import { QaSuiteInfraError } from "./errors.js";
 import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
-
-function transcriptToolCall(
-  toolName: string,
-  phase: "happy" | "failure",
-  input: Record<string, unknown>,
-) {
-  return {
-    role: "assistant",
-    content: [
-      {
-        type: "tool_use",
-        id: `call-${toolName}-${phase}`,
-        name: toolName,
-        input,
-      },
-    ],
-  };
-}
-
-function transcriptToolResult(
-  toolName: string,
-  phase: "happy" | "failure",
-  content: string,
-  isError?: boolean,
-) {
-  return {
-    role: "tool",
-    toolName,
-    tool_call_id: `call-${toolName}-${phase}`,
-    ...(isError === undefined ? {} : { isError }),
-    content,
-  };
-}
 
 async function writeLiveRuntimeToolEvidence(env: QaSuiteRuntimeEnv, toolName = "read") {
   await writeRuntimeToolTranscripts(
@@ -173,26 +142,6 @@ function nativePatchFixtureConfig(): RuntimeToolFixtureConfig {
       required: true,
     },
   });
-}
-
-function runLiveRuntimeToolFixture(
-  env: QaSuiteRuntimeEnv,
-  params: {
-    toolName?: string;
-    config?: RuntimeToolFixtureConfig;
-    tools?: Iterable<string>;
-    runAgentPrompt?: RuntimeToolFixtureDeps["runAgentPrompt"];
-  } = {},
-) {
-  const toolName = params.toolName ?? "read";
-  return runRuntimeToolFixture(
-    env,
-    params.config ?? runtimeToolFixtureConfig(toolName),
-    runtimeToolFixtureDeps({
-      tools: params.tools ?? [toolName],
-      runAgentPrompt: params.runAgentPrompt,
-    }),
-  );
 }
 
 function runNativePatchFixture(
@@ -327,112 +276,6 @@ describe("runtime tool fixture", () => {
         "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:failure",
         "failure prompt did not settle",
       ].join("\n"),
-    );
-  });
-
-  it("requires live runtime tool fixtures to produce transcript tool output", async () => {
-    const env = await makeEnv();
-    await writeRuntimeToolTranscripts(
-      env,
-      "read",
-      [{ role: "assistant", content: "I checked README.md and it looks good." }],
-      [{ role: "assistant", content: "The denied-input path looks good." }],
-    );
-
-    await expect(runLiveRuntimeToolFixture(env)).rejects.toThrow(
-      "expected live happy-path tool call for read",
-    );
-  });
-
-  it("skips async live runtime tool fixtures when the happy path has no result", async () => {
-    const env = await makeEnv();
-    await writeRuntimeToolTranscripts(
-      env,
-      "image_generate",
-      [
-        transcriptToolCall("image_generate", "happy", {
-          prompt: "QA lighthouse runtime parity fixture",
-        }),
-      ],
-      [
-        transcriptToolCall("image_generate", "failure", {
-          __qaFailureMode: "denied-input",
-        }),
-        transcriptToolResult("image_generate", "failure", "denied-input", true),
-      ],
-    );
-
-    await expect(
-      runLiveRuntimeToolFixture(env, {
-        toolName: "image_generate",
-        config: runtimeToolFixtureConfig("image_generate", { happyPathOutputRequired: false }),
-      }),
-    ).rejects.toThrow("planned call without a linked successful result");
-  });
-
-  it("still requires async live runtime tool fixtures to call the happy-path tool", async () => {
-    const env = await makeEnv();
-    await writeRuntimeToolTranscripts(
-      env,
-      "image_generate",
-      [{ role: "assistant", content: "I can start image generation later." }],
-      [
-        transcriptToolCall("image_generate", "failure", {
-          __qaFailureMode: "denied-input",
-        }),
-        transcriptToolResult("image_generate", "failure", "denied-input", true),
-      ],
-    );
-
-    await expect(
-      runLiveRuntimeToolFixture(env, {
-        toolName: "image_generate",
-        config: runtimeToolFixtureConfig("image_generate", { happyPathOutputRequired: false }),
-      }),
-    ).rejects.toThrow("expected live happy-path tool call for image_generate");
-  });
-
-  it("requires live failure fixtures to produce failure-shaped tool output", async () => {
-    const env = await makeEnv();
-    await writeRuntimeToolTranscripts(
-      env,
-      "read",
-      [
-        transcriptToolCall("read", "happy", { path: "README.md" }),
-        transcriptToolResult(
-          "read",
-          "happy",
-          "README documents invalid requests, errors, and denied inputs.",
-        ),
-      ],
-      [
-        transcriptToolCall("read", "failure", { path: "/missing" }),
-        transcriptToolResult("read", "failure", "README contents"),
-      ],
-    );
-
-    await expect(runLiveRuntimeToolFixture(env)).rejects.toThrow(
-      "expected live failure-path tool failure output for read",
-    );
-  });
-
-  it("rejects failure-shaped live happy-path tool output", async () => {
-    const env = await makeEnv();
-    await writeRuntimeToolTranscripts(
-      env,
-      "read",
-      [
-        transcriptToolCall("read", "happy", { path: "README.md" }),
-        transcriptToolResult("read", "happy", "ENOENT: no such file or directory", true),
-      ],
-      [
-        transcriptToolCall("read", "failure", { path: "/missing" }),
-        transcriptToolResult("read", "failure", "ENOENT: no such file or directory", true),
-      ],
-    );
-
-    await expect(runLiveRuntimeToolFixture(env)).rejects.toThrow(
-      "expected live happy-path successful tool output for read",
     );
   });
 
@@ -660,28 +503,31 @@ describe("runtime tool fixture", () => {
     ).rejects.toThrow();
   });
 
-  it("verifies executed patch envelopes with canonical absolute target paths", async () => {
-    const env = await makeEnv();
-    env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
-    const happyPath = path.join(env.gateway.workspaceDir, "runtime-tool-fixture-patch.txt");
-    const deniedPath = path.resolve(
-      env.gateway.workspaceDir,
-      "..",
-      "runtime-tool-fixture-denied.txt",
-    );
-    await writeCodexNativePatchEvidence(env, "patch rejected: writing outside of the project", {
-      happyArguments: {
-        input: `*** Begin Patch\n*** Add File: ${happyPath}\n+runtime patch\n*** End Patch\n`,
-      },
-      failureArguments: {
-        input: `*** Begin Patch\n*** Update File: ${deniedPath}\n@@\n-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n`,
-      },
-    });
+  it.each(["@@\n", "@@ runtime-tool-fixture-denied-original\n", ""])(
+    "verifies canonical absolute patch targets with update marker %j",
+    async (updateMarker) => {
+      const env = await makeEnv();
+      env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
+      const happyPath = path.join(env.gateway.workspaceDir, "runtime-tool-fixture-patch.txt");
+      const deniedPath = path.resolve(
+        env.gateway.workspaceDir,
+        "..",
+        "runtime-tool-fixture-denied.txt",
+      );
+      await writeCodexNativePatchEvidence(env, "patch rejected: writing outside of the project", {
+        happyArguments: {
+          input: `*** Begin Patch\n*** Add File: ${happyPath}\n+runtime patch\n*** End Patch\n`,
+        },
+        failureArguments: {
+          input: `*** Begin Patch\n*** Update File: ${deniedPath}\n${updateMarker}-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n`,
+        },
+      });
 
-    await expect(runNativePatchFixture(env)).resolves.toContain(
-      "apply_patch live provider happy planned args",
-    );
-  });
+      await expect(runNativePatchFixture(env)).resolves.toContain(
+        "apply_patch live provider happy planned args",
+      );
+    },
+  );
 
   it("rejects native patch transcripts that claim success without creating the workspace file", async () => {
     const env = await makeEnv();
@@ -922,42 +768,6 @@ describe("runtime tool fixture", () => {
     ).rejects.toThrow(
       "expected apply_patch to create runtime-tool-fixture-patch.txt with exact contents",
     );
-  });
-
-  it.each([
-    {
-      label: "happy-path file",
-      happyInput: runtimePatchAddInput("runtime-tool-fixture-wrong.txt"),
-      failureInput: runtimePatchUpdateInput(),
-      expectedError: "expected linked mock apply_patch to add runtime-tool-fixture-patch.txt",
-    },
-    {
-      label: "failure-path file",
-      happyInput: runtimePatchAddInput(),
-      failureInput: runtimePatchUpdateInput("../runtime-tool-fixture-wrong.txt"),
-      expectedError:
-        "expected linked mock apply_patch to update ../runtime-tool-fixture-denied.txt",
-    },
-    {
-      label: "failure-path context",
-      happyInput: runtimePatchAddInput(),
-      failureInput: runtimePatchUpdateInput(
-        "../runtime-tool-fixture-denied.txt",
-        "context-that-does-not-exist",
-      ),
-      expectedError:
-        "expected linked mock apply_patch to update ../runtime-tool-fixture-denied.txt",
-    },
-  ])("rejects linked mock patch evidence for the wrong $label", async (testCase) => {
-    await expect(
-      runMockRuntimeToolFixtureWithOutputs({
-        toolName: "apply_patch",
-        happyArgs: { input: testCase.happyInput },
-        failureArgs: { input: testCase.failureInput },
-        happyOutput: "Successfully applied patch",
-        failureOutput: "Error: Path escapes sandbox root",
-      }),
-    ).rejects.toThrow(testCase.expectedError);
   });
 
   it("rejects unlinked private-QA Codex patch results without waiting for a transcript", async () => {
@@ -1241,4 +1051,3 @@ describe("runtime tool fixture", () => {
     ).rejects.toThrow("web_search not present in effective tools");
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

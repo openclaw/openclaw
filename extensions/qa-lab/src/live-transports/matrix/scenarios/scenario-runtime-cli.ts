@@ -246,34 +246,47 @@ export async function createMatrixQaOpenClawCliRuntime(params: {
   artifactLabel: string;
   initialConfig: Record<string, unknown>;
   outputDir: string;
-  runtimeEnv: NodeJS.ProcessEnv;
+  runtimeEnv: NodeJS.ProcessEnv | (() => NodeJS.ProcessEnv);
+  kind?: "e2ee-setup";
 }) {
+  const isE2eeSetup = params.kind === "e2ee-setup";
   const rootDir = await mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-matrix-cli-qa-"),
+    path.join(
+      resolvePreferredOpenClawTmpDir(),
+      isE2eeSetup ? "openclaw-matrix-e2ee-setup-qa-" : "openclaw-matrix-cli-qa-",
+    ),
   );
   try {
     const artifactDir = path.join(
       params.outputDir,
-      params.artifactLabel.replace(/[^A-Za-z0-9_-]/g, "-"),
+      isE2eeSetup ? params.artifactLabel : params.artifactLabel.replace(/[^A-Za-z0-9_-]/g, "-"),
       randomUUID().replaceAll("-", "").slice(0, 12),
     );
     const stateDir = path.join(rootDir, "state");
     const configPath = path.join(rootDir, "config.json");
-    await chmod(rootDir, 0o700).catch(() => undefined);
-    await assertMatrixQaPrivatePathMode(rootDir, "Matrix QA CLI temp directory");
-    await mkdir(artifactDir, { mode: 0o700, recursive: true });
-    await chmod(artifactDir, 0o700).catch(() => undefined);
-    await assertMatrixQaPrivatePathMode(artifactDir, "Matrix QA CLI artifact directory");
-    await mkdir(stateDir, { mode: 0o700, recursive: true });
-    await chmod(stateDir, 0o700).catch(() => undefined);
-    await assertMatrixQaPrivatePathMode(stateDir, "Matrix QA CLI state directory");
+    for (const [directory, label] of [
+      [rootDir, "temp"],
+      [artifactDir, "artifact"],
+      [stateDir, "state"],
+    ] as const) {
+      if (label !== "temp") {
+        await mkdir(directory, { mode: 0o700, recursive: true });
+      }
+      const permission = chmod(directory, 0o700);
+      if (isE2eeSetup) {
+        await permission;
+      } else {
+        await permission.catch(() => undefined);
+      }
+      await assertMatrixQaPrivatePathMode(directory, `Matrix QA CLI ${label} directory`);
+    }
     await writeFile(configPath, `${JSON.stringify(params.initialConfig, null, 2)}\n`, {
       flag: "wx",
       mode: 0o600,
     });
     await assertMatrixQaPrivatePathMode(configPath, "Matrix QA CLI config file");
     const env = {
-      ...params.runtimeEnv,
+      ...(typeof params.runtimeEnv === "function" ? params.runtimeEnv() : params.runtimeEnv),
       FORCE_COLOR: "0",
       NO_COLOR: "1",
       OPENCLAW_CONFIG_PATH: configPath,

@@ -19,6 +19,8 @@ import {
   resolveTaskLauncherScriptPath,
 } from "./schtasks-layout.js";
 import { buildScheduledTaskXml } from "./schtasks-xml.js";
+import { auditGatewayInstallPreservation } from "./service-audit-preservation.js";
+import type { ServiceDefinitionDrift } from "./service-audit-types.js";
 import { auditGatewayServiceConfig } from "./service-audit.js";
 import type { GatewayServiceCommandConfig } from "./service-types.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
@@ -378,6 +380,38 @@ it("reports failed native task inspection independently from legacy issues", asy
   expect(result.definitionDriftError).toContain("inspection could not be completed");
   expect(JSON.stringify(result)).not.toContain("operator-secret");
 });
+
+it.each(["legacy", "edited-file", "edited-inline", "canonical"])(
+  "preserves operator PATH edits while admitting released Darwin defaults: %s",
+  async (kind) => {
+    const home = dirs.make("definition-facts-legacy-path-");
+    await fs.mkdir(path.join(home, ".bun/bin"), { recursive: true });
+    await fs.mkdir(path.join(home, "Library/pnpm"), { recursive: true });
+    const canonical = `${home}/.n/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`;
+    // Captured from the published 2026.4.29 installer with a synthetic HOME.
+    const legacy = `${home}/.n/bin:${home}/.local/bin:${home}/.npm-global/bin:${home}/bin:${home}/.bun/bin:${home}/.nix-profile/bin:${home}/Library/pnpm:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`;
+    const edited = kind.startsWith("edited");
+    const command: GatewayServiceCommandConfig = {
+      programArguments: [`${home}/.n/bin/node`, "/opt/openclaw/index.js", "gateway"],
+      environment: {
+        HOME: home,
+        PATH: kind === "canonical" ? canonical : `${legacy}${edited ? ":/operator-private" : ""}`,
+      },
+      environmentValueSources: { PATH: kind === "edited-inline" ? "inline" : "file" },
+    };
+    const findings: ServiceDefinitionDrift[] = [];
+    auditGatewayInstallPreservation(
+      command,
+      { ...command, environment: { HOME: home, PATH: canonical } },
+      "darwin",
+      findings,
+    );
+    expect(findings).toEqual(
+      edited ? [expect.objectContaining({ kind: "unknown-edit", key: "Environment.PATH" })] : [],
+    );
+    expect(JSON.stringify(findings)).not.toContain("operator-private");
+  },
+);
 
 const discardedSettings: Array<{
   key: string;

@@ -11,7 +11,7 @@ import {
   readExactSessionEntryRow,
   type ResolvedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
-import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 
 export type SessionEntryReplacementSelection = {
@@ -98,7 +98,7 @@ export function readSessionEntryReplacementState(
       return [];
     }
     expectedRows.set(sessionKey, row);
-    return [{ entry: cloneSessionEntry(row.entry), sessionKey }];
+    return [{ entry: structuredClone(row.entry), sessionKey }];
   });
   return { entries, expectedRows, labelOwnerKeys };
 }

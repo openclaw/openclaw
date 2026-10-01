@@ -521,7 +521,7 @@ describe("Codex auth product proof", () => {
             expect(
               events.find(
                 (event) =>
-                  event.event === "session.message" &&
+                  event.event === "sessions.changed" &&
                   event.payload !== null &&
                   typeof event.payload === "object" &&
                   (event.payload as { sessionKey?: unknown }).sessionKey === sessionKey &&
@@ -555,7 +555,7 @@ describe("Codex auth product proof", () => {
       );
       const lifecycleEvent = events.find(
         (event) =>
-          event.event === "session.message" &&
+          event.event === "sessions.changed" &&
           event.payload !== null &&
           typeof event.payload === "object" &&
           (event.payload as { sessionKey?: unknown }).sessionKey === sessionKey &&
@@ -563,7 +563,7 @@ describe("Codex auth product proof", () => {
           (event.payload as { session?: { status?: unknown } }).session?.status === "failed",
       );
       expectBoundedMissingProfileRecovery(finalEvent?.payload);
-      // Native lifecycle publishes the failed session snapshot before broadcasting chat.error.
+      // Lifecycle metadata belongs to sessions.changed; transcript delivery has independent timing.
       expectBoundedMissingProfileRecovery(
         (lifecycleEvent?.payload as { session?: { lastRunError?: unknown } } | undefined)?.session
           ?.lastRunError,

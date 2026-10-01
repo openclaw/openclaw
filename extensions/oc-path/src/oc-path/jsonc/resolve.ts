@@ -31,5 +31,6 @@ export function resolveJsoncOcPath(ast: JsoncAst, path: OcPath): JsoncOcPathMatc
     return { kind: "root", node: ast };
   }
 
-  return resolveJsoncValueOcPath(ast.root, segments);
+  const match = resolveJsoncValueOcPath(ast.root, segments);
+  return match && { ...match, path: match.path.map(String) };
 }

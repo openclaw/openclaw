@@ -1,6 +1,3 @@
-/**
- * Collects configured native harness runtime ids from model provider config.
- */
 import {
   listModelRefsFromConfigValue,
   type ConfiguredModelRef,
@@ -28,16 +25,6 @@ function isSelectablePluginRuntime(runtime: string | undefined): runtime is stri
   );
 }
 
-// Parse provider/model identity without interpreting a selector's auth profile.
-function parseConfiguredModelRef(
-  value: unknown,
-): { provider: string; modelId: string } | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  return parseModelCatalogRef(value) ?? undefined;
-}
-
 export function resolveConfiguredModelHarnessRuntime(params: {
   config: OpenClawConfig;
   includeImplicitRuntimePreferences: boolean;
@@ -45,13 +32,13 @@ export function resolveConfiguredModelHarnessRuntime(params: {
   modelRefKind: ConfiguredModelRef["kind"];
   agentId?: string;
 }): string | undefined {
-  const parsed = parseConfiguredModelRef(params.modelRef);
+  const parsed = parseModelCatalogRef(params.modelRef);
   if (!parsed) {
     return undefined;
   }
   const selection =
     params.modelRefKind === "selector" ? splitTrailingAuthProfile(params.modelRef) : undefined;
-  const policyModel = selection?.profile ? parseConfiguredModelRef(selection.model) : parsed;
+  const policyModel = selection?.profile ? parseModelCatalogRef(selection.model) : parsed;
   if (!policyModel) {
     return undefined;
   }

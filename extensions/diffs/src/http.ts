@@ -1,9 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createAuthRateLimiter, type AuthRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
-import type { PluginLogger } from "../api.js";
-import { resolveRequestClientIp } from "../runtime-api.js";
+import {
+  createAuthRateLimiter,
+  resolveRequestClientIp,
+  type AuthRateLimiter,
+} from "openclaw/plugin-sdk/webhook-ingress";
 import type { DiffArtifactStore } from "./store.js";
 import { DIFF_ARTIFACT_ID_PATTERN, DIFF_ARTIFACT_TOKEN_PATTERN } from "./types.js";
 import { VIEWER_ASSET_PREFIX, VIEWER_RUNTIME_PATH, getServedViewerAsset } from "./viewer-assets.js";

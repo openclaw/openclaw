@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import chokidar, { FSWatcher } from "chokidar";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { startGatewayConfigReloader } from "../gateway/config-reload.js";
+import { createWatcherMock } from "../gateway/config-reload.watcher.test-support.js";
 import * as tmpDirOwner from "../infra/tmp-openclaw-dir.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -10,6 +10,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { readLatestConfigSnapshotAuditRecord } from "./config-journal-snapshot.js";
 import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import {
@@ -19,6 +20,7 @@ import {
 } from "./io.js";
 import { createConfigIoWorkerFixture } from "./io.worker.test-support.js";
 import { createConfigWriteHomeFixture } from "./io.write-config.test-support.js";
+import * as configFileSource from "./source-file.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.openclaw.js";
 
 describe("config write and startup journal", () => {
@@ -33,7 +35,9 @@ describe("config write and startup journal", () => {
       await suiteRootTracker.make("coordinator"),
     );
     // Startup reconciliation does not need external file events.
-    vi.spyOn(chokidar, "watch").mockImplementation((_paths, options) => new FSWatcher(options));
+    vi.spyOn(configFileSource, "createConfigFileAdapter").mockImplementation((options) =>
+      createWatcherMock().attach(options),
+    );
     await workers.setup(await suiteRootTracker.make("workers"));
   });
 
@@ -83,6 +87,7 @@ describe("config write and startup journal", () => {
 
   async function reconcileStartup(snapshot: ConfigFileSnapshot) {
     const reloader = startGatewayConfigReloader({
+      scheduler: createTestGatewayScheduler(),
       initialConfig: snapshot.config,
       initialCompareConfig: snapshot.sourceConfig,
       initialSnapshotRawHash: snapshot.hash ?? null,

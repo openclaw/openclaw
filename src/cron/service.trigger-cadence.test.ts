@@ -3,6 +3,7 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { CronService } from "./service.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
+import { loadCronStore } from "./store.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-trigger-cadence-" });
 
@@ -58,12 +59,13 @@ describe("cron trigger cadence", () => {
   });
 
   it.each([
-    { name: "quiet", result: { kind: "evaluated", fire: false } },
-    { name: "fired", result: { kind: "evaluated", fire: true } },
-    { name: "busy", result: { kind: "busy" } },
+    { name: "quiet", wakeMode: "next-heartbeat", result: { kind: "evaluated", fire: false } },
+    { name: "quiet immediate-wake", wakeMode: "now", result: { kind: "evaluated", fire: false } },
+    { name: "fired", wakeMode: "next-heartbeat", result: { kind: "evaluated", fire: true } },
+    { name: "busy", wakeMode: "next-heartbeat", result: { kind: "busy" } },
   ] as const)(
     "preserves the $name interval through maintenance and restart",
-    async ({ result }) => {
+    async ({ result, wakeMode }) => {
       const { storePath } = await makeStorePath();
       const evaluateCronTrigger = vi.fn(async () => {
         vi.setSystemTime(Date.now() + 123);
@@ -89,7 +91,7 @@ describe("cron trigger cadence", () => {
           schedule: { kind: "cron", expr: "* * * * * *", tz: "UTC", staggerMs: 0 },
           trigger: { script: "json({ fire: false })" },
           sessionTarget: "main",
-          wakeMode: "next-heartbeat",
+          wakeMode,
           payload: { kind: "systemEvent", text: "cadence probe" },
         });
         vi.setSystemTime(job.state.nextRunAtMs!);
@@ -117,6 +119,69 @@ describe("cron trigger cadence", () => {
       }
     },
   );
+
+  it("defers an expired quiet immediate-wake occurrence without reevaluating it at startup", async () => {
+    const { storePath } = await makeStorePath();
+    const evaluateCronTrigger = vi.fn(async () => {
+      vi.setSystemTime(Date.now() + 123);
+      return { kind: "evaluated" as const, fire: false, state: { count: 1 } };
+    });
+    const deps: CronServiceDeps = {
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      evaluateCronTrigger,
+    };
+    let cron = new CronService(deps);
+    await cron.start();
+    try {
+      const job = await cron.add({
+        name: "expired quiet occurrence",
+        enabled: true,
+        schedule: { kind: "cron", expr: "* * * * * *", tz: "UTC", staggerMs: 0 },
+        trigger: { script: "json({ fire: false })" },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "must remain quiet" },
+      });
+      vi.setSystemTime(job.state.nextRunAtMs!);
+      expect(await cron.run(job.id, "due")).toEqual({ ok: true, ran: true });
+      const evaluated = structuredClone(cron.getJob(job.id)!.state);
+      const nextAt = Date.now() + 30_000;
+      expect(evaluated).toMatchObject({
+        nextRunAtMs: nextAt,
+        triggerEvalCount: 1,
+        triggerState: { count: 1 },
+      });
+      cron.stop();
+      const restartAt = nextAt + 9_586;
+      vi.setSystemTime(restartAt);
+      cron = new CronService(deps);
+      await cron.start();
+
+      const expected = {
+        nextRunAtMs: restartAt + 120_000,
+        startupCatchupAtMs: restartAt + 120_000,
+        triggerEvalCount: 1,
+        triggerState: evaluated.triggerState,
+        lastTriggerEvalAtMs: evaluated.lastTriggerEvalAtMs,
+      };
+      const persisted = (await loadCronStore(storePath)).jobs.find((row) => row.id === job.id);
+      expect(cron.getJob(job.id)?.state).toMatchObject(expected);
+      expect(persisted?.state).toMatchObject(expected);
+      expect(persisted?.state.lastRunAtMs).toBeUndefined();
+      expect(evaluateCronTrigger).toHaveBeenCalledOnce();
+      expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(deps.requestHeartbeat).not.toHaveBeenCalled();
+    } finally {
+      cron.stop();
+    }
+  });
 
   it("catches up an old occurrence whose future slot has no recent evaluation", async () => {
     const { storePath } = await makeStorePath();

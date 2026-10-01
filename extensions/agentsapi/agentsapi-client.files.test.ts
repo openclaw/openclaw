@@ -1,10 +1,10 @@
-import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AgentsApiClient,
   type AgentsApiArtifact,
   type AgentsApiInputFile,
 } from "./agentsapi-client.js";
+import { createTurn } from "./agentsapi.test-support.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock:
@@ -136,12 +136,11 @@ describe("Agents API immutable artifact metadata", () => {
   });
 
   it.each([
-    { name: "requested root turn", patch: {}, accepted: true },
-    { name: "different turn", patch: { id: "turn-other" }, accepted: false },
-    { name: "different session", patch: { session_id: "session-other" }, accepted: false },
-    { name: "subagent turn", patch: { subagent_id: "subagent-fixture" }, accepted: false },
-  ])("checks a $name before accepting its output metadata", async ({ patch, accepted }) => {
-    const savedTurn = turn(patch);
+    { name: "different turn", patch: { id: "turn-other" } },
+    { name: "different session", patch: { session_id: "session-other" } },
+    { name: "subagent turn", patch: { subagent_id: "subagent-fixture" } },
+  ])("rejects a $name before accepting its output metadata", async ({ patch }) => {
+    const savedTurn = createTurn(patch);
     queueResponse(Response.json(savedTurn));
     const result = createClient().turn(
       "session-fixture",
@@ -149,14 +148,7 @@ describe("Agents API immutable artifact metadata", () => {
       new AbortController().signal,
     );
 
-    if (accepted) {
-      await expect(result).resolves.toEqual(savedTurn);
-      expect(new URL(requestAt(0).url).pathname).toBe(
-        "/v1/agents/sessions/session-fixture/turns/turn-fixture",
-      );
-    } else {
-      await expect(result).rejects.toThrow("turn outside the requested root session");
-    }
+    await expect(result).rejects.toThrow("turn outside the requested root session");
   });
 });
 
@@ -338,23 +330,6 @@ function artifact(overrides: Partial<AgentsApiArtifact> = {}): AgentsApiArtifact
     turn_id: "turn-fixture",
     path: "/workspace/outputs/fixture.bin",
     size_bytes: 4,
-    ...overrides,
-  };
-}
-
-function turn(overrides: Partial<Turn> = {}): Turn {
-  return {
-    id: "turn-fixture",
-    object: "agent.session.turn",
-    session_id: "session-fixture",
-    agent_id: "agent-fixture",
-    subagent_id: null,
-    created_at: 1,
-    started_at: 1,
-    completed_at: 2,
-    status: "completed",
-    error: null,
-    usage: null,
     ...overrides,
   };
 }

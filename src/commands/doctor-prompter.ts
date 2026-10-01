@@ -1,4 +1,3 @@
-/** Doctor prompt adapter that centralizes repair, force, update, and noninteractive behavior. */
 import { confirm, select } from "@clack/prompts";
 import { styleSelectParams } from "../../packages/terminal-core/src/prompt-select-styled-params.js";
 import { stylePromptMessage } from "../../packages/terminal-core/src/prompt-style.js";
@@ -29,7 +28,6 @@ export type DoctorPrompter = {
   repairMode: DoctorRepairMode;
 };
 
-/** Creates a doctor prompter honoring --fix, --yes, --force, noninteractive, and update modes. */
 export function createDoctorPrompter(params: {
   runtime: RuntimeEnv;
   options: DoctorOptions;

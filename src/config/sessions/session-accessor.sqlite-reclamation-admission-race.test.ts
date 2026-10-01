@@ -27,8 +27,9 @@ const archiveMaterializationHook = vi.hoisted(() => ({
   afterCommitRequest: undefined as (() => void) | undefined,
 }));
 
-vi.mock("./session-accessor.sqlite-reclamation.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session-accessor.sqlite-reclamation.js")>();
+vi.mock("./session-accessor.sqlite-reclamation-run.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./session-accessor.sqlite-reclamation-run.js")>();
   return {
     ...actual,
     runSqliteSessionReclamation: async (

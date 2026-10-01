@@ -20,7 +20,7 @@ type SessionRegistryMaintenanceStoreSummary = {
 };
 
 type SessionRegistryMaintenanceStoreOptions = SessionStoreTarget & {
-  /** Apply pruning to the backing store; false previews against a clone. */
+  /** Whether to commit the selected removals to the backing store. */
   apply: boolean;
   /** Retention window for cron-run session entries. */
   retentionMs: number;
@@ -97,8 +97,8 @@ function pruneSessionRegistryStore(params: {
 
 /**
  * Runs session-registry maintenance for one resolved agent store.
- * Preview prunes a clone; apply uses one store-sized write transaction and
- * skips generic session maintenance so non-cron rows stay outside this sweep.
+ * Preview and apply select removals from one owned worker snapshot.
+ * The lifecycle owner commits removals without running generic session maintenance.
  */
 export async function runSessionRegistryMaintenanceForStore(
   params: SessionRegistryMaintenanceStoreOptions,
@@ -122,31 +122,16 @@ export async function runSessionRegistryMaintenanceForStore(
         assertReaderCurrent();
       };
       assertCurrent();
-      const beforeStore = Object.fromEntries(
-        entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-      );
-      const beforeCount = Object.keys(beforeStore).length;
-      if (!params.apply) {
-        const previewStore = structuredClone(beforeStore);
-        return {
-          beforeCount,
-          ...pruneSessionRegistryStore({
-            retentionMs: params.retentionMs,
-            runningCronJobIds: params.runningCronJobIds,
-            storePath,
-            store: previewStore,
-          }),
-        };
-      }
-
-      const applyStore = structuredClone(beforeStore);
+      const store = Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
+      const beforeCount = Object.keys(store).length;
       const removals: SessionEntryLifecycleRemoval[] = [];
-      const applied = pruneSessionRegistryStore({
+      // Preserved ordinary entries never reach pruning's in-place archive branch.
+      const planned = pruneSessionRegistryStore({
         retentionMs: params.retentionMs,
-        removals,
+        removals: params.apply ? removals : undefined,
         runningCronJobIds: params.runningCronJobIds,
         storePath,
-        store: applyStore,
+        store,
       });
       if (removals.length > 0) {
         const mutation = await applySessionEntryLifecycleMutation({
@@ -160,13 +145,13 @@ export async function runSessionRegistryMaintenanceForStore(
         return {
           afterCount: mutation.afterCount,
           beforeCount,
-          preservedRunning: applied.preservedRunning,
+          preservedRunning: planned.preservedRunning,
           pruned: mutation.removedEntries,
         };
       }
       return {
         beforeCount,
-        ...applied,
+        ...planned,
       };
     },
   );

@@ -1,8 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.js";
 import {
   getAgentRunContext,
@@ -10,9 +12,10 @@ import {
   clearAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { setUserProfileRole } from "../../state/user-profiles.js";
+import { ensureGatewayOwnerProfile, setUserProfileRole } from "../../state/user-profiles.js";
 import { projectChatDisplayMessages } from "../chat-display-projection.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { progressCardStore } from "../progress-card-store.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
@@ -387,6 +390,32 @@ describe("registered progress refresh admission", () => {
     async (unconfirmed) => {
       const f = await createFixture({ active: true, preserveContent: true });
       const operation = f.activeRun!;
+      const profile = ensureGatewayOwnerProfile("Gateway Owner");
+      f.client.internal = { authenticatedOperator: true, operatorRoleActor: { kind: "system" } };
+      f.client.authenticatedUserProfile = {
+        profileId: profile.id,
+        displayName: profile.displayName,
+        hasAvatar: false,
+        updatedAt: profile.updatedAt,
+      };
+      const captured = await captureGatewayOperatorRunAuthority({
+        client: { ...f.client, connId: "original-owner-connection" },
+        context: f.context,
+      });
+      const run = createQueueTestRun({ prompt: "Continue the original work" });
+      run.operatorAuthority = captured?.authority;
+      run.run = {
+        ...run.run,
+        config: f.context.getRuntimeConfig(),
+        agentId: f.scope.agentId,
+        sessionId: f.scope.sessionId,
+        sessionKey: f.scope.sessionKey,
+        messageProvider: "webchat",
+        chatType: "direct",
+        gatewayUiCommandTarget: { connId: "original-owner-connection", profileId: profile.id },
+        traceAuthorized: true,
+        senderIsOwner: true,
+      };
       const cancel = vi.fn();
       const claim = vi.fn(async () => true);
       const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
@@ -406,16 +435,13 @@ describe("registered progress refresh admission", () => {
           return undefined;
         },
       );
-      operation.bindToolAuthoritySnapshot({
-        fingerprint: () => "same-authority",
-        project: () => "same-authority",
-      });
-      operation.bindToolAuthorityRoute({ provider: "test-provider", model: "test-model" });
+      operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
+      const fingerprint = operation.bindToolAuthorityRoute(run.run);
       operation.setPhase("running");
       operation.attachBackend({
         kind: "embedded",
         runId: "original-work",
-        toolAuthorityFingerprint: "same-authority",
+        toolAuthorityFingerprint: fingerprint,
         cancel,
         messageInjectionV2: {
           version: 2,
@@ -430,6 +456,7 @@ describe("registered progress refresh admission", () => {
         projectSessionMessages: true,
       });
       try {
+        expect(captured).toBeDefined();
         await progressCardStore.put(f.scope.sessionKey, { markdown: "Working" }, f.scope.agentId);
         const respond = vi.fn<RespondFn>();
         await Promise.all(
@@ -495,6 +522,7 @@ describe("registered progress refresh admission", () => {
       } finally {
         clearAgentRunContext("original-work");
         await f.cleanup();
+        captured?.release();
       }
     },
   );

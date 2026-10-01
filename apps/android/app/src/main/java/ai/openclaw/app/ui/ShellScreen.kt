@@ -585,7 +585,7 @@ private fun OverviewScreen(
 
         if (secondaryAttentionRows.isNotEmpty()) {
           item {
-            HomeAttentionPanel(rows = secondaryAttentionRows, onSelectTab = onSelectTab, onOpenSettingsRoute = onOpenSettingsRoute)
+            HomeAttentionPanel(rows = secondaryAttentionRows, onOpenSettingsRoute = onOpenSettingsRoute)
           }
         }
       }
@@ -858,7 +858,7 @@ internal fun overviewHeaderState(
     else -> OverviewHeaderState("Online", ClawStatus.Success)
   }
 
-internal fun overviewHeaderRoute(attentionRows: List<HomeAttentionRow>): SettingsRoute = attentionRows.firstNotNullOfOrNull { it.settingsRoute } ?: SettingsRoute.Gateway
+internal fun overviewHeaderRoute(attentionRows: List<HomeAttentionRow>): SettingsRoute = attentionRows.firstOrNull()?.settingsRoute ?: SettingsRoute.Gateway
 
 internal fun overviewRecentSessions(sessions: List<ChatSessionEntry>): List<ChatSessionEntry> =
   sessions
@@ -1064,9 +1064,7 @@ internal fun sessionSourceLabel(
 internal data class HomeAttentionRow(
   val title: String,
   val subtitle: String,
-  val icon: ImageVector,
-  val tab: Tab,
-  val settingsRoute: SettingsRoute? = null,
+  val settingsRoute: SettingsRoute,
 )
 
 internal fun homeAttentionRows(
@@ -1083,30 +1081,27 @@ internal fun homeAttentionRows(
         HomeAttentionRow(
           nativeString("Gateway"),
           nativeString("Connect before chat, voice, and live status."),
-          SettingsRoute.Gateway.icon,
-          Tab.Settings,
           SettingsRoute.Gateway,
         ),
       )
     }
     if (pendingApprovals > 0) {
-      add(HomeAttentionRow(nativeString("Approvals"), approvalsSummary(pendingApprovals), SettingsRoute.Approvals.icon, Tab.Settings, SettingsRoute.Approvals))
+      add(HomeAttentionRow(nativeString("Approvals"), approvalsSummary(pendingApprovals), SettingsRoute.Approvals))
     }
     if (channelsSummary?.channels?.any { it.error != null } == true) {
-      add(HomeAttentionRow(nativeString("Channels"), channelsSummaryText(channelsSummary), SettingsRoute.Channels.icon, Tab.Settings, SettingsRoute.Channels))
+      add(HomeAttentionRow(nativeString("Channels"), channelsSummaryText(channelsSummary), SettingsRoute.Channels))
     }
     if (nodesDevicesSummary.pendingDevices.isNotEmpty() || nodesDevicesSummary.hasNodeCapabilityApprovalPending()) {
-      add(HomeAttentionRow(nativeString("Nodes & Devices"), nodesDevicesSummaryText(nodesDevicesSummary), SettingsRoute.NodesDevices.icon, Tab.Settings, SettingsRoute.NodesDevices))
+      add(HomeAttentionRow(nativeString("Nodes & Devices"), nodesDevicesSummaryText(nodesDevicesSummary), SettingsRoute.NodesDevices))
     }
     if (isConnected && readyProviderCount == 0 && unknownProviderCount == 0) {
-      add(HomeAttentionRow(nativeString("Providers"), nativeString("No ready providers"), SettingsRoute.ProvidersModels.icon, Tab.Settings, SettingsRoute.ProvidersModels))
+      add(HomeAttentionRow(nativeString("Providers"), nativeString("No ready providers"), SettingsRoute.ProvidersModels))
     }
   }
 
 @Composable
 private fun HomeAttentionPanel(
   rows: List<HomeAttentionRow>,
-  onSelectTab: (Tab) -> Unit,
   onOpenSettingsRoute: (SettingsRoute) -> Unit,
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) {
@@ -1115,14 +1110,7 @@ private fun HomeAttentionPanel(
       rows.forEach { row ->
         HomeAttentionListRow(
           row = row,
-          onClick = {
-            val route = row.settingsRoute
-            if (route == null) {
-              onSelectTab(row.tab)
-            } else {
-              onOpenSettingsRoute(route)
-            }
-          },
+          onClick = { onOpenSettingsRoute(row.settingsRoute) },
         )
       }
     }
@@ -1167,7 +1155,7 @@ private fun HomeAttentionListRow(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-      Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
+      Icon(imageVector = row.settingsRoute.icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
         Text(
           text = localizedTitle,

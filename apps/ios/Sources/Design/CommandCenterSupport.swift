@@ -157,16 +157,7 @@ struct CommandSessionActionsModifier: ViewModifier {
         content
             .contextMenu {
                 OpenClawSessionColorMenu(color: self.session.color, onSelect: self.actions.setColor)
-                if self.isArchived {
-                    if self.canArchive {
-                        self.actionButton("Unarchive", systemImage: "archivebox") {
-                            self.actions.toggleArchived()
-                        }
-                    }
-                    if self.canDelete {
-                        self.deleteButton
-                    }
-                } else {
+                if !self.isArchived {
                     self.actionButton(
                         self.session.pinned == true
                             ? OpenClawTextValue.localized("Unpin")
@@ -195,14 +186,17 @@ struct CommandSessionActionsModifier: ViewModifier {
                         self.actions.fork()
                     }
                     self.groupMenu
-                    if self.canArchive {
-                        self.actionButton("Archive", systemImage: "archivebox") {
-                            self.actions.toggleArchived()
-                        }
+                }
+                if self.canArchive {
+                    self.actionButton(
+                        self.isArchived ? .localized("Unarchive") : .localized("Archive"),
+                        systemImage: "archivebox")
+                    {
+                        self.actions.toggleArchived()
                     }
-                    if self.canDelete {
-                        self.deleteButton
-                    }
+                }
+                if self.canDelete {
+                    self.deleteButton
                 }
             }
             .alert(self.editorTitle, isPresented: self.editorBinding) {

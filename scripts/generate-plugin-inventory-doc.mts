@@ -148,6 +148,9 @@ function pluginReferenceLabel(record: PluginRecord) {
 }
 
 function humanizeId(value: string) {
+  if (value === "slack-huddles") {
+    return "Slack huddles";
+  }
   if (value === "teams-meetings") {
     return "Microsoft Teams meetings";
   }

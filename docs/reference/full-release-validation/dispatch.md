@@ -192,9 +192,8 @@ package version or a matching beta prerelease. For a correction, use
 `--target-ref release/YYYY.M.PATCH-N` to preserve the intended final tag before
 tagging. Its base package version is also accepted when `vYYYY.M.PATCH` resolves
 to the exact Code SHA; preparation retains the package version and seals both
-npm and Docker artifacts for `vYYYY.M.PATCH-N`. Tideclaw alpha validation uses
-its exact alpha tag and matching alpha branch. The helper maps beta releases and
-exact alpha tags to the `beta` profile and final versions to `stable`. Pass
+npm and Docker artifacts for `vYYYY.M.PATCH-N`. The helper maps beta releases
+to the `beta` profile and final versions to `stable`. Pass
 alternate workflow inputs with `-f key=value`; use `-f release_profile=full`
 only for the broad provider sweep.
 `fail_fast` defaults to `false`, so dispatched child workflows finish and expose

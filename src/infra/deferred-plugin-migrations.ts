@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
@@ -42,6 +43,83 @@ const deferredPluginMigrationSchema = z.object({
 });
 
 export type DeferredPluginMigration = z.infer<typeof deferredPluginMigrationSchema>;
+
+type ConfigMigrationCompletion = {
+  configPath: string;
+  expectedPending: readonly DeferredPluginMigration[];
+  resolvedPluginIds: readonly string[];
+  assertCurrent: () => void;
+  published: boolean;
+};
+const configMigrationCompletion = new AsyncLocalStorage<ConfigMigrationCompletion>();
+
+/** The package owner may finish inspected config-only work through the normal file publisher. */
+export async function withDeferredPluginConfigCompletion<T>(
+  params: Omit<ConfigMigrationCompletion, "published">,
+  run: () => Promise<T>,
+): Promise<T> {
+  return await configMigrationCompletion.run({ ...params, published: false }, run);
+}
+
+/** The file rollback's live owner also restores its completed migration obligations. */
+export function withDeferredPluginConfigRollback(
+  params: { configPath: string; env?: NodeJS.ProcessEnv; assertCurrent: () => void },
+  publish: () => void,
+  didMutate: () => boolean,
+): void {
+  const completion = configMigrationCompletion.getStore();
+  if (!completion?.published || completion.configPath !== params.configPath) {
+    publish();
+    return;
+  }
+  let failure: { error: unknown } | undefined;
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      params.assertCurrent();
+      recordDeferredPluginMigrationsInTransaction(db, {
+        pending: completion.expectedPending,
+        expectedPending: completion.expectedPending.filter(
+          (entry) => !completion.resolvedPluginIds.includes(entry.pluginId),
+        ),
+      });
+      try {
+        publish();
+      } catch (error) {
+        if (!didMutate()) {
+          throw error;
+        }
+        failure = { error };
+      }
+      if (!didMutate()) {
+        throw new Error("Config rollback did not publish its restoration.");
+      }
+      // Each mutation checked its live owner. No await remains; settle the observed file effect
+      // even when post-publication verification has since refused that file guard.
+    },
+    { env: params.env },
+    { operationLabel: "state.plugin-migration-input-rollback" },
+  );
+  completion.published = false;
+  // A post-rename verification error must not undo already-restored obligations.
+  if (failure) {
+    throw failure.error;
+  }
+}
+
+/** Exclude only this write's admitted repairs; persisted rows remain pending until publication. */
+export function readConfigWritePendingMigrations(
+  configPath: string,
+  env?: NodeJS.ProcessEnv,
+): readonly DeferredPluginMigration[] {
+  const pending = readDeferredPluginMigrations({ env });
+  const completion = configMigrationCompletion.getStore();
+  if (!completion || completion.configPath !== configPath || completion.published) {
+    return pending;
+  }
+  completion.assertCurrent();
+  assertPendingGeneration(pending, completion.expectedPending);
+  return pending.filter((entry) => !completion.resolvedPluginIds.includes(entry.pluginId));
+}
 
 export class DeferredPluginMigrationConflictError extends Error {
   readonly pending: readonly DeferredPluginMigration[];
@@ -130,6 +208,17 @@ export function readDeferredPluginMigrations(
   return read(({ db }) => readPendingMigrationRecords(db), options) ?? [];
 }
 
+/** Prime resolution in this module before the updater replaces its package. */
+export async function prepareDeferredPluginMigrationRuntime(): Promise<void> {
+  const { prepareOpenClawStateLeaseWorkerRuntime } =
+    await import("../state/openclaw-state-lease-worker-storage.js");
+  await Promise.all([
+    import("../state/openclaw-state-worker-store.js"),
+    import("../plugins/plugin-lifecycle-lease.js"),
+    prepareOpenClawStateLeaseWorkerRuntime(),
+  ]);
+}
+
 /** Keep asynchronous config inspection off the main thread without creating state. */
 export async function readDeferredPluginMigrationsAsync(
   options: Parameters<typeof readDeferredPluginMigrations>[0] = {},
@@ -208,14 +297,19 @@ export function assertDeferredPluginMigrationsCurrent(params: {
 export function withDeferredPluginMigrationsCurrent<T>(
   params: {
     env?: NodeJS.ProcessEnv;
+    configPath?: string;
     expectedPending: readonly DeferredPluginMigration[];
     onConflict?: (pending: readonly DeferredPluginMigration[]) => T;
   },
   publish: () => T,
 ): T {
+  const scope = configMigrationCompletion.getStore();
+  const completion =
+    scope && scope.configPath === params.configPath && !scope.published ? scope : undefined;
+  const expectedPending = completion?.expectedPending ?? params.expectedPending;
   const databasePath = resolveOpenClawStateSqlitePath(params.env);
   const existing = openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(databasePath);
-  if (params.expectedPending.length === 0 && !existing) {
+  if (expectedPending.length === 0 && !existing) {
     if (!existsSync(databasePath)) {
       return withStateDatabaseSchemaMaintenance({ databasePath }, () =>
         existsSync(databasePath) ? withDeferredPluginMigrationsCurrent(params, publish) : publish(),
@@ -266,19 +360,35 @@ export function withDeferredPluginMigrationsCurrent<T>(
       return publication.value;
     }
   }
-  return runOpenClawStateWriteTransaction(
+  const result = runOpenClawStateWriteTransaction(
     ({ db }) => {
       const pending = pendingMigrationRecords(readPendingMigrationRows(db));
-      if (!isDeepStrictEqual(pending, params.expectedPending) && params.onConflict) {
+      if (!isDeepStrictEqual(pending, expectedPending) && params.onConflict) {
         // Commit preservation facts against these rows; callers refuse publication after return.
         return params.onConflict(pending);
       }
-      assertPendingGeneration(pending, params.expectedPending);
-      return publish();
+      assertPendingGeneration(pending, expectedPending);
+      completion?.assertCurrent();
+      const published = publish();
+      if (completion) {
+        completion.assertCurrent();
+        recordDeferredPluginMigrationsInTransaction(db, {
+          pending: pending.filter(
+            (entry) => !completion.resolvedPluginIds.includes(entry.pluginId),
+          ),
+          resolvedPluginIds: completion.resolvedPluginIds,
+          expectedPending,
+        });
+      }
+      return published;
     },
     { env: params.env },
     { operationLabel: "state.plugin-migration-input-publication" },
   );
+  if (completion) {
+    completion.published = true;
+  }
+  return result;
 }
 
 export function formatDeferredPluginMigration(

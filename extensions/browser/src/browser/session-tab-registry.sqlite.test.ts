@@ -532,6 +532,103 @@ describe("durable session tab registry", () => {
     expect(openStore().entries()).toEqual([]);
   });
 
+  it("warns once per deferred durable tab and keeps repeated deferrals at debug level", async () => {
+    const registry = await freshRegistry("deferred-warning-bound");
+    const tracked = 1_000;
+    await registry.trackSessionBrowserTab({
+      sessionKey: "agent:main:main",
+      targetId: "gone",
+      profile: "remote",
+      ownership: ownership("NATIVE-gone"),
+      now: tracked,
+    });
+    const warnings: string[] = [];
+    const debugDiagnostics: string[] = [];
+    let reason: "browser-identity-lookup-failed" | "browser-identity-unavailable" =
+      "browser-identity-lookup-failed";
+    const closeDurableTab = async (): Promise<CloseTrackedCdpTargetResult> => ({
+      status: "unavailable",
+      reason,
+    });
+    const deferred = (value: string) => `deferred tracked browser tab NATIVE-gone: ${value}`;
+    const sweepAt = (now: number) =>
+      registry.sweepTrackedBrowserTabs({
+        now,
+        idleMs: 1,
+        closeDurableTab,
+        onWarn: (message) => warnings.push(message),
+        onDebug: (message) => debugDiagnostics.push(message),
+      });
+
+    // A stopped managed browser stays unreachable across many five-minute sweeps.
+    await sweepAt(tracked + 1);
+    await sweepAt(tracked + 2);
+    await sweepAt(tracked + 3);
+    expect(warnings).toEqual([deferred("browser-identity-lookup-failed")]);
+    expect(debugDiagnostics).toEqual([
+      deferred("browser-identity-lookup-failed"),
+      deferred("browser-identity-lookup-failed"),
+    ]);
+    // The reminder is demoted, not dropped: retries and the pending row survive.
+    expect(openStore().entries()).toHaveLength(1);
+
+    // A different unreachable reason is a new condition and warns again.
+    reason = "browser-identity-unavailable";
+    await sweepAt(tracked + 4);
+    expect(warnings).toEqual([
+      deferred("browser-identity-lookup-failed"),
+      deferred("browser-identity-unavailable"),
+    ]);
+
+    // The documented retire window still ends the deferral with a single warning.
+    await sweepAt(tracked + BROWSER_TAB_UNREACHABLE_RETIRE_MS);
+    expect(warnings).toEqual([
+      deferred("browser-identity-lookup-failed"),
+      deferred("browser-identity-unavailable"),
+      "retired unreachable tracked browser tab NATIVE-gone: browser-identity-unavailable",
+    ]);
+    expect(openStore().entries()).toEqual([]);
+  });
+
+  it("warns again when a settled durable tab is retracked and deferred anew", async () => {
+    const registry = await freshRegistry("deferred-warning-recurrence");
+    const tracked = 1_000;
+    const track = (now: number) =>
+      registry.trackSessionBrowserTab({
+        sessionKey: "agent:main:main",
+        targetId: "gone",
+        profile: "remote",
+        ownership: ownership("NATIVE-recur"),
+        now,
+      });
+    const warnings: string[] = [];
+    const deferred = "deferred tracked browser tab NATIVE-recur: browser-identity-lookup-failed";
+    const sweepAt = (now: number, closeDurableTab: () => Promise<CloseTrackedCdpTargetResult>) =>
+      registry.sweepTrackedBrowserTabs({
+        now,
+        idleMs: 1,
+        closeDurableTab,
+        onWarn: (message) => warnings.push(message),
+      });
+    const unreachable = async (): Promise<CloseTrackedCdpTargetResult> => ({
+      status: "unavailable",
+      reason: "browser-identity-lookup-failed",
+    });
+
+    await track(tracked);
+    await sweepAt(tracked + 1, unreachable);
+    await sweepAt(tracked + 2, unreachable);
+    expect(warnings).toEqual([deferred]);
+
+    // The browser recovered and the deferred row settled, so its bound must reset.
+    await sweepAt(tracked + 3, async () => ({ status: "closed" }));
+    expect(openStore().entries()).toEqual([]);
+
+    await track(tracked + 4);
+    await sweepAt(tracked + 5, unreachable);
+    expect(warnings).toEqual([deferred, deferred]);
+  });
+
   it("keeps an old unreachable row when activity revokes its retirement claim", async () => {
     const registry = await freshRegistry("unreachable-touch-race");
     const tracked = 1_000;

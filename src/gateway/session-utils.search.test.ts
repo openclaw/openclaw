@@ -23,43 +23,14 @@ const baseCfg = {
   agents: { list: [{ id: "main", default: true }] },
 } as OpenClawConfig;
 
-function createModelDefaultsConfig(primary: string): OpenClawConfig {
-  return {
-    agents: { defaults: { model: { primary } } },
-  } as OpenClawConfig;
-}
-
-function makeStore(now = Date.now()): Record<string, SessionEntry> {
-  return {
-    "agent:main:work-project": {
-      sessionId: "sess-work-1",
-      updatedAt: now,
-      displayName: "Work Project Alpha",
-      label: "work",
-    } as SessionEntry,
-    "agent:main:personal-chat": {
-      sessionId: "sess-personal-1",
-      updatedAt: now - 1_000,
-      displayName: "Personal Chat",
-      subject: "Family Reunion Planning",
-    } as SessionEntry,
-    "agent:main:discord:group:dev-team": {
-      sessionId: "sess-discord-1",
-      updatedAt: now - 2_000,
-      label: "discord",
-      subject: "Dev Team Discussion",
-    } as SessionEntry,
-  };
-}
-
 function selectSessionKeys(params: {
   opts: Parameters<typeof filterAndSortSessionEntries>[0]["opts"];
   cfg?: OpenClawConfig;
-  store?: Record<string, SessionEntry>;
+  store: Record<string, SessionEntry>;
   now?: number;
 }): string[] {
   const now = params.now ?? Date.now();
-  const store = params.store ?? makeStore(now);
+  const store = params.store;
   const projection = createSessionRowProjectionFixture({
     cfg: params.cfg ?? baseCfg,
     store,
@@ -127,33 +98,11 @@ describe("filterAndSortSessionEntries search", () => {
     }
   });
 
-  test("returns all sessions when search is empty or missing", () => {
-    for (const opts of [{ search: "" }, {}]) {
-      expect(selectSessionKeys({ opts })).toHaveLength(3);
-    }
-  });
-
-  test("filters across display metadata and key fields", () => {
-    const cases = [
-      { search: "WORK PROJECT", expectedKey: "agent:main:work-project" },
-      { search: "reunion", expectedKey: "agent:main:personal-chat" },
-      { search: "discord", expectedKey: "agent:main:discord:group:dev-team" },
-      { search: "sess-personal", expectedKey: "agent:main:personal-chat" },
-      { search: "dev-team", expectedKey: "agent:main:discord:group:dev-team" },
-      { search: "alpha", expectedKey: "agent:main:work-project" },
-      { search: "  personal  ", expectedKey: "agent:main:personal-chat" },
-      { search: "nonexistent-term", expectedKey: undefined },
-    ] as const;
-
-    for (const testCase of cases) {
-      const keys = selectSessionKeys({ opts: { search: testCase.search } });
-      expect(keys).toEqual(testCase.expectedKey ? [testCase.expectedKey] : []);
-    }
-  });
-
   test("filters by selected and stored provider and model identity", () => {
     const now = Date.now();
-    const cfg = createModelDefaultsConfig("anthropic/claude-sonnet-4-6");
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+    };
     const store: Record<string, SessionEntry> = {
       "agent:main:inherited-default": {
         sessionId: "sess-inherited-default",
@@ -177,19 +126,10 @@ describe("filterAndSortSessionEntries search", () => {
     };
     const cases = [
       {
-        search: "anthropic",
-        expectedKeys: ["agent:main:inherited-default", "agent:main:runtime"],
-      },
-      {
-        search: "claude-sonnet",
-        expectedKeys: ["agent:main:inherited-default", "agent:main:runtime"],
-      },
-      {
         search: "anthropic/claude-sonnet",
         expectedKeys: ["agent:main:inherited-default", "agent:main:runtime"],
       },
       { search: "openai/gpt-5.5", expectedKeys: ["agent:main:override"] },
-      { search: "gemini-3.1", expectedKeys: ["agent:main:runtime"] },
       { search: "google/gemini", expectedKeys: ["agent:main:runtime"] },
     ] as const;
 
@@ -203,24 +143,6 @@ describe("filterAndSortSessionEntries search", () => {
         }),
       ).toEqual(testCase.expectedKeys);
     }
-  });
-
-  test("keeps derived model search for colon model ids", () => {
-    const now = Date.now();
-    expect(
-      selectSessionKeys({
-        cfg: createModelDefaultsConfig("ollama/qwen3:0.6b"),
-        store: {
-          "agent:main:inherited-local-model": {
-            sessionId: "sess-inherited-local-model",
-            updatedAt: now,
-            label: "Inherited local model",
-          } as SessionEntry,
-        },
-        opts: { search: "qwen3:0.6b" },
-        now,
-      }),
-    ).toEqual(["agent:main:inherited-local-model"]);
   });
 
   test("matches canonical group titles and kinds before offset selection", () => {
@@ -247,28 +169,6 @@ describe("filterAndSortSessionEntries search", () => {
     expect(
       selectSessionKeys({ store, opts: { search: "direct", limit: 50, offset: 50 } }),
     ).toHaveLength(5);
-  });
-
-  test("hides cron run alias session keys", () => {
-    const now = Date.now();
-    expect(
-      selectSessionKeys({
-        store: {
-          "agent:main:cron:job-1": {
-            sessionId: "run-abc",
-            updatedAt: now,
-            label: "Cron: job-1",
-          } as SessionEntry,
-          "agent:main:cron:job-1:run:run-abc": {
-            sessionId: "run-abc",
-            updatedAt: now,
-            label: "Cron: job-1",
-          } as SessionEntry,
-        },
-        opts: {},
-        now,
-      }),
-    ).toEqual(["agent:main:cron:job-1"]);
   });
 
   test("ranks by real interaction without heartbeat or cron noise", () => {

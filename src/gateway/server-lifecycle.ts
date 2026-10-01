@@ -10,7 +10,7 @@ import {
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
 import { markGatewaySuspendExiting } from "../infra/gateway-suspend-coordinator.js";
-import { upsertPresence } from "../infra/system-presence.js";
+import { commitPresence, upsertPresence } from "../infra/system-presence.js";
 import {
   startGatewayDiagnosticHeartbeat,
   stopGatewayDiagnosticHeartbeat,
@@ -127,6 +127,7 @@ export async function prepareGatewayLifecycle(params: {
     onPairingInvalidated: ({ nodeId, connId }) => {
       void nodeDesktopServiceRef.current?.stopNode(nodeId);
       upsertPresence(nodeId, { reason: "disconnect" });
+      commitPresence(nodeId, connId);
       runtime.publishPresence();
       removeRemoteNodeInfoForConnection(nodeId, connId);
     },
@@ -166,21 +167,26 @@ export async function prepareGatewayLifecycle(params: {
       retireDeviceTokenClients(context, deviceId, roles, "device-token-rotated");
     },
     onNodeConnected: (session) => {
-      upsertPresence(session.nodeId, {
-        host: session.displayName ?? session.clientId ?? session.nodeId,
-        clientId: session.clientId,
-        ip: session.remoteIp,
-        version: session.version,
-        platform: session.platform,
-        deviceFamily: session.deviceFamily,
-        modelIdentifier: session.modelIdentifier,
-        mode: session.clientMode,
-        deviceId: session.nodeId,
-        roles: ["node"],
-        scopes: [],
-        instanceId: session.nodeId,
-        reason: "connect",
-      });
+      upsertPresence(
+        session.nodeId,
+        {
+          connectionId: session.connId,
+          host: session.displayName ?? session.clientId ?? session.nodeId,
+          clientId: session.clientId,
+          ip: session.remoteIp,
+          version: session.version,
+          platform: session.platform,
+          deviceFamily: session.deviceFamily,
+          modelIdentifier: session.modelIdentifier,
+          mode: session.clientMode,
+          deviceId: session.nodeId,
+          roles: ["node"],
+          scopes: [],
+          instanceId: session.nodeId,
+          reason: "connect",
+        },
+        { pending: false },
+      );
       runtime.publishPresence();
       recordRemoteNodeInfo({
         nodeId: session.nodeId,

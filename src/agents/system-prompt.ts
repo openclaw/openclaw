@@ -47,7 +47,7 @@ import {
 import { buildCredentialSafetyPrompt } from "./credential-safety-prompt.js";
 import { buildTemporalContextSection } from "./date-time.js";
 import { buildDelegationGuidanceSection } from "./delegation-guidance.js";
-import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
 import type {
   EmbeddedFullAccessBlockedReason,
   EmbeddedSandboxInfo,
@@ -951,15 +951,13 @@ export function buildAgentSystemPrompt(params: {
       ...skillsSection,
       ...skillWorkshopSection,
       ...memorySection,
-      params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-        ? "## Model Aliases"
-        : "",
-      params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-        ? "Model override: aliases are shortcuts for unqualified model requests. Use explicit provider/model references verbatim; do not substitute an alias or another provider."
-        : "",
-      params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-        ? params.modelAliasLines.join("\n")
-        : "",
+      ...(params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
+        ? [
+            "## Model Aliases",
+            "Model override: aliases are shortcuts for unqualified model requests. Use explicit provider/model references verbatim; do not substitute an alias or another provider.",
+            params.modelAliasLines.join("\n"),
+          ]
+        : []),
       ...directorySection,
       workspaceOnlyGuidance,
       ...workspaceNotes,
@@ -997,17 +995,11 @@ export function buildAgentSystemPrompt(params: {
               : elevated
                 ? "Elevated exec is unavailable for this session."
                 : "",
-            elevated?.allowed && elevated.fullAccessAvailable
-              ? "User can toggle with /elevated on|off|ask|full."
+            elevated?.allowed
+              ? `User can toggle with /elevated on|off|ask${elevated.fullAccessAvailable ? "|full" : ""}.`
               : "",
-            elevated?.allowed && !elevated.fullAccessAvailable
-              ? "User can toggle with /elevated on|off|ask."
-              : "",
-            elevated?.allowed && elevated.fullAccessAvailable
-              ? "You may also send /elevated on|off|ask|full when needed."
-              : "",
-            elevated?.allowed && !elevated.fullAccessAvailable
-              ? "You may also send /elevated on|off|ask when needed."
+            elevated?.allowed
+              ? `You may also send /elevated on|off|ask${elevated.fullAccessAvailable ? "|full" : ""} when needed.`
               : "",
             elevated?.fullAccessAvailable === false
               ? `Auto-approved /elevated full is unavailable here (${fullAccessBlockedReasonLabel}).`

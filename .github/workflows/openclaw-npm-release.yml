@@ -79,7 +79,6 @@ on:
         default: beta
         type: choice
         options:
-          - alpha
           - beta
           - latest
           - extended-stable
@@ -96,7 +95,7 @@ on:
 
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && format('openclaw-npm-release-{0}-{1}-preflight', inputs.tag, inputs.npm_dist_tag) || github.event_name == 'workflow_dispatch' && format('openclaw-npm-release-{0}-{1}-publish-{2}', inputs.tag, inputs.npm_dist_tag, github.run_id) || format('openclaw-npm-release-{0}', github.ref) }}
-  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && inputs.npm_dist_tag == 'alpha' }}
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -168,6 +167,10 @@ jobs:
         run: |
           set -euo pipefail
           release_candidate_branch="${RELEASE_CANDIDATE_BRANCH:-}"
+          if [[ "${RELEASE_TAG}" == *-alpha.* || "${RELEASE_NPM_DIST_TAG}" == alpha || "${WORKFLOW_REF}" == *tideclaw/alpha/* ]]; then
+            echo "Alpha releases are retired; use a beta prerelease." >&2
+            exit 1
+          fi
           if [[ ! "${WORKFLOW_REF}" =~ ^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$ ]]; then
             echo "Real npm publish requires a protected release-publish/<sha12>-<n> tooling tag. Mint one with pnpm release:publish-preflight / ensureReleasePublishToolingTag, then dispatch with --ref release-publish/.... Use preflight_only=true for branch validation." >&2
             exit 1
@@ -372,12 +375,12 @@ jobs:
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
-            echo "Invalid release tag format: ${RELEASE_TAG}"
+          if [[ "${RELEASE_TAG}" == *-alpha.* || "${RELEASE_NPM_DIST_TAG}" == alpha || "${GITHUB_REF:-}" == *tideclaw/alpha/* ]]; then
+            echo "Alpha releases are retired; use a beta prerelease." >&2
             exit 1
           fi
-          if [[ "${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" != "alpha" ]]; then
-            echo "Alpha prerelease tags must publish to npm dist-tag alpha."
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
+            echo "Invalid release tag format: ${RELEASE_TAG}"
             exit 1
           fi
           if [[ "${RELEASE_TAG}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" != "beta" ]]; then

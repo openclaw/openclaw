@@ -1,8 +1,10 @@
-// Lobster plugin module implements lobster runner behavior.
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
-import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import {
+  extractErrorCode,
+  toErrorObject as toLintErrorObject,
+} from "openclaw/plugin-sdk/error-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 
 type LobsterEnvelope =
@@ -146,15 +148,6 @@ function normalizeEnvelope(
   return normalized;
 }
 
-function isMissingPathError(error: unknown) {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "ENOENT"
-  );
-}
-
 async function detectWorkflowFile(candidate: string, cwd: string) {
   const trimmed = candidate.trim();
   if (!trimmed || trimmed.includes("|") || !workflowExts.has(path.extname(trimmed).toLowerCase())) {
@@ -167,27 +160,11 @@ async function detectWorkflowFile(candidate: string, cwd: string) {
     }
     return resolved;
   } catch (error) {
-    if (/\s/.test(trimmed) && isMissingPathError(error)) {
+    if (/\s/.test(trimmed) && extractErrorCode(error) === "ENOENT") {
       return null;
     }
     throw error;
   }
-}
-
-function createEmbeddedToolContext(
-  params: LobsterRunnerParams,
-  signal?: AbortSignal,
-): EmbeddedToolContext {
-  const env = { ...process.env } as Record<string, string | undefined>;
-  return {
-    cwd: params.cwd,
-    env,
-    mode: "tool",
-    stdin: Readable.from([]),
-    stdout: createLimitedSink(Math.max(1024, params.maxStdoutBytes), "stdout"),
-    stderr: createLimitedSink(Math.max(1024, params.maxStdoutBytes), "stderr"),
-    signal,
-  };
 }
 
 async function withTimeout<T>(
@@ -235,7 +212,16 @@ export function createEmbeddedLobsterRunner(options?: {
       runtimePromise ??= loadRuntime();
       const runtime = await runtimePromise;
       return await withTimeout(params.timeoutMs, async (signal) => {
-        const ctx = createEmbeddedToolContext(params, signal);
+        const maxStdoutBytes = Math.max(1024, params.maxStdoutBytes);
+        const ctx: EmbeddedToolContext = {
+          cwd: params.cwd,
+          env: { ...process.env },
+          mode: "tool",
+          stdin: Readable.from([]),
+          stdout: createLimitedSink(maxStdoutBytes, "stdout"),
+          stderr: createLimitedSink(maxStdoutBytes, "stderr"),
+          signal,
+        };
         let envelope: EmbeddedToolEnvelope;
 
         if (params.action === "run") {
@@ -275,7 +261,7 @@ export function createEmbeddedLobsterRunner(options?: {
             ctx,
           });
         }
-        return normalizeEnvelope(envelope, Math.max(1024, params.maxStdoutBytes));
+        return normalizeEnvelope(envelope, maxStdoutBytes);
       });
     },
   };

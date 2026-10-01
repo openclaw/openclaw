@@ -10,7 +10,10 @@ import {
   sameEntry,
   type WorkspaceNode,
 } from "./workspace-manifest-comparison.js";
-import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
+import type {
+  WorkspaceManifestValueInputs,
+  WorkspaceManifestValueOutputs,
+} from "./workspace-manifest-computation.js";
 import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 import {
   directoryContainsOnlyDerivedWorkspaceEntries,
@@ -67,15 +70,9 @@ async function localWorkspaceDescendantPaths(
   return paths;
 }
 
-export async function preflightWorkspaceApplyImpl(params: {
-  root: string;
-  base: WorkerWorkspaceManifest;
-  current: WorkerWorkspaceManifest;
-}): Promise<{
-  applyPaths: Set<string>;
-  conflictPaths: string[];
-  blockingConflictPaths: string[];
-}> {
+export async function preflightWorkspaceApplyImpl(
+  params: Omit<WorkspaceManifestValueInputs["workspace.reconcile.preflight"], "hashes">,
+): Promise<WorkspaceManifestValueOutputs["workspace.reconcile.preflight"]["value"]> {
   const isRetainedInput = createStagedInputPathMatcher(await openFsSafeRoot(params.root));
   const baseNodes = manifestNodes(params.base);
   const currentNodes = manifestNodes(params.current);
@@ -218,10 +215,9 @@ export async function preflightWorkspaceApplyImpl(params: {
       }
     }
   }
-  // Replacing a directory with a file/symlink would erase every descendant in
-  // one filesystem operation. Lift a descendant conflict to that replacement.
-  const initialConflictPaths = Array.from(conflicts);
-  for (const conflictPath of initialConflictPaths) {
+  // Lift descendant conflicts before a file/symlink replacement can erase them.
+  const conflictsBeforeLifting = [...conflicts];
+  for (const conflictPath of conflictsBeforeLifting) {
     const segments = conflictPath.split("/");
     for (let index = 1; index < segments.length; index += 1) {
       const ancestor = segments.slice(0, index).join("/");

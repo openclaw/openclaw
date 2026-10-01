@@ -1,4 +1,3 @@
-// Applies immutable path removals to config-like objects.
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";

@@ -54,6 +54,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     baseDeveloperInstructions,
     buildOpenClawPromptContext,
     skillsInstructions,
+    refreshableInstructions,
     promptState,
     codexContextProjectionMaxChars,
     codexContinuityProjectionMaxChars,
@@ -442,20 +443,19 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   };
   let parentLocalEgress = false;
   const parentLocalContext = {
-    turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
-    memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
+    personaInstructions: workspaceBootstrapContext.personaInstructions,
+    memoryInstructions: workspaceBootstrapContext.memoryInstructions,
   };
   // Observability view of the whole developer surface the model sees (reports,
   // trajectory, size estimates). The lifecycle receives the generic policy and the
-  // skill catalog separately; joining them here must never feed thread requests.
+  // refreshable instructions separately; joining them here must never feed thread requests.
   const buildRenderedCodexDeveloperInstructions = () =>
     joinPresentSections(
       turnState.promptBuild.developerInstructions,
-      parentLocalEgress ? undefined : skillsInstructions,
+      parentLocalEgress ? undefined : refreshableInstructions,
       (parentLocalEgress
         ? buildCodexParentLocalInstructions(params, { ...parentLocalContext, skillsInstructions })
-        : buildTurnCollaborationMode(params, parentLocalContext).settings.developer_instructions) ??
-        undefined,
+        : buildTurnCollaborationMode(params).settings.developer_instructions) ?? undefined,
     );
   const rebuildCodexPromptBuildFromCurrentProjection = async () => {
     turnState.promptBuild = await buildPromptFromCurrentInputs();
@@ -624,6 +624,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       developerInstructions: buildRenderedCodexDeveloperInstructions(),
       workspaceBootstrapContext,
       omitWorkspaceReferences,
+      parentLocalEgress,
       skillsPrompt: skillsInstructions ? (params.skillsSnapshot?.prompt ?? "") : "",
       tools: toolBridge.availableSpecs,
     });

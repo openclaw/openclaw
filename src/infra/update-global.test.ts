@@ -300,6 +300,20 @@ describe("update global helpers", () => {
     expect(explicitEnv?.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("1");
   });
 
+  it.each([undefined, "1.4.3"])("sets the package launcher only under Bun (%s)", async (bun) => {
+    vi.stubGlobal("process", { ...process, versions: { ...process.versions, bun } });
+    try {
+      const env = await createGlobalInstallEnv({});
+      if (bun) {
+        expect(env?.OPENCLAW_PACKAGE_BUN_LAUNCHER).toBe(process.execPath);
+      } else {
+        expect(env).not.toHaveProperty("OPENCLAW_PACKAGE_BUN_LAUNCHER");
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("uses an absolute POSIX script shell for npm lifecycle scripts during global installs", async () => {
     await withMockedPlatform("linux", async () => {
       const existsSyncSpy = vi

@@ -4,6 +4,7 @@ import {
   asNullableRecord,
   asOptionalObjectRecord,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { canonicalizeVoiceCallMediaBase64 } from "../media-base64.js";
 
 /** Normalized inbound media stream frame. */
@@ -41,17 +42,6 @@ function parseTimestampMs(value: unknown): number | undefined {
   return undefined;
 }
 
-/** Parse a JSON object frame, returning null for invalid or non-object payloads. */
-function tryParseJson(rawMessage: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(rawMessage) as unknown;
-    return asNullableRecord(parsed);
-  } catch {
-    /* fall through */
-  }
-  return null;
-}
-
 /** Parse a common provider media frame. */
 function parseMediaFrame(msg: Record<string, unknown>): StreamFrame {
   const mediaData = asOptionalObjectRecord(msg.media);
@@ -87,7 +77,7 @@ function parseProviderInboundFrame(
   parseStartFrame: ProviderStartFrameParser,
   parseExtraFrame?: ProviderExtraFrameParser,
 ): StreamFrame {
-  const msg = tryParseJson(rawMessage);
+  const msg = asNullableRecord(safeParseJson<unknown>(rawMessage));
   if (!msg) {
     return { kind: "ignored" };
   }

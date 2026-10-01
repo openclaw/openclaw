@@ -153,10 +153,6 @@ function normalizeXaiRealtimeVoice(value: unknown): string | undefined {
     : normalized;
 }
 
-function asXaiVadThreshold(value: unknown): number | undefined {
-  return asFiniteNumberInRange(value, { min: 0.1, max: 0.9 });
-}
-
 function asXaiDurationMs(value: unknown): number | undefined {
   return asSafeIntegerInRange(value, { min: 0, max: 10_000 });
 }
@@ -184,7 +180,7 @@ export function normalizeXaiRealtimeProviderConfig(
     baseUrl: normalizeOptionalString(raw.baseUrl),
     model: normalizeOptionalString(raw.model),
     voice: normalizeXaiRealtimeVoice(raw.speakerVoice ?? raw.voice),
-    vadThreshold: asXaiVadThreshold(raw.vadThreshold),
+    vadThreshold: asFiniteNumberInRange(raw.vadThreshold, { min: 0.1, max: 0.9 }),
     silenceDurationMs: asXaiDurationMs(raw.silenceDurationMs),
     prefixPaddingMs: asXaiDurationMs(raw.prefixPaddingMs),
     interruptResponseOnInputAudio: parseBooleanValue(raw.interruptResponseOnInputAudio),

@@ -1,3 +1,4 @@
+import { deepStrictEqual } from "node:assert/strict";
 import { execFile, fork, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -327,7 +328,7 @@ it.each([
         expect(fs.existsSync(path.dirname(location))).toBe(false);
       }
       for (const [index, databasePath] of paths.entries()) {
-        expect(fs.readFileSync(databasePath)).toEqual(originalBytes[index]);
+        deepStrictEqual(fs.readFileSync(databasePath), originalBytes[index], databasePath);
         for (const suffix of ["-wal", "-shm", "-journal"]) {
           expect(fs.existsSync(databasePath + suffix)).toBe(false);
         }
@@ -436,7 +437,7 @@ it.each(["header", "shape", "startup"])(
       expect(fs.existsSync(path.dirname(location))).toBe(false);
     }
     for (const [index, pathname] of paths.entries()) {
-      expect(fs.readFileSync(pathname)).toEqual(originalBytes[index]);
+      deepStrictEqual(fs.readFileSync(pathname), originalBytes[index], pathname);
       for (const suffix of ["-wal", "-shm", "-journal"]) {
         expect(fs.existsSync(pathname + suffix)).toBe(false);
       }

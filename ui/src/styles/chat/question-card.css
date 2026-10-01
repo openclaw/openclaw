@@ -410,11 +410,7 @@ openclaw-chat-question-panel {
   color: var(--muted);
 }
 
-.chat-question-panel__back:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--panel-hover);
-}
-
+.chat-question-panel__back:hover:not(:disabled),
 .chat-question-panel__skip:hover:not(:disabled) {
   color: var(--text);
   background: var(--panel-hover);

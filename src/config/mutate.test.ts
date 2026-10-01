@@ -9,6 +9,7 @@ import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   applyConfigEnvVars,
+  captureConfigReadEnvMutation,
   initializePublishedConfigRuntimeEnv,
   prepareConfigRuntimeEnv,
 } from "./config-env-vars.js";
@@ -1135,6 +1136,88 @@ describe("config mutate helpers", () => {
     },
   );
 
+  it.each(["success", "foreign-write", "foreign-delete"] as const)(
+    "retains reader-owned environment through an include reread: %s",
+    async (outcome) => {
+      const home = await suiteRootTracker.make("include-env-owner");
+      const configPath = path.join(home, "openclaw.json");
+      const envPath = path.join(home, "env.json");
+      const rootRaw = JSON.stringify({ env: { $include: "./env.json" } });
+      const includeRaw = '{"vars":{}}\n';
+      await fs.writeFile(configPath, rootRaw);
+      await fs.writeFile(envPath, includeRaw);
+      const env: NodeJS.ProcessEnv = {
+        HOME: home,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_STATE_DIR: path.join(home, "state"),
+        REMOVED: "external",
+      };
+      let reads = 0;
+      let observed: string | undefined;
+      const io = createActualConfigIO({
+        env,
+        observe: false,
+        pluginValidation: "skip",
+        measure: async (name, run) => {
+          if (name === "config.snapshot.read.file") {
+            reads += 1;
+          }
+          const result = await run();
+          if (reads === 2 && name === "config.snapshot.read.env") {
+            observed = env.OWNED;
+            if (outcome !== "success") {
+              env.ADDED = "external";
+              delete env.REMOVED;
+              if (outcome === "foreign-write") {
+                env.REPLACED = "external";
+              } else {
+                delete env.REPLACED;
+              }
+              env.OPENCLAW_CONFIG_PATH = path.join(home, "other.json");
+            }
+          }
+          return result;
+        },
+      });
+      const prepared = await io.readConfigFileSnapshotForWrite();
+      const write = replaceConfigFile({
+        io,
+        snapshot: prepared.snapshot,
+        baseHash: prepared.snapshot.hash,
+        sourceConfig: {
+          ...prepared.snapshot.sourceConfig,
+          env: {
+            ...prepared.snapshot.sourceConfig.env,
+            vars: { OWNED: "candidate", REPLACED: "candidate" },
+          },
+        },
+        writeOptions: {
+          ...prepared.writeOptions,
+          skipPluginValidation: true,
+          assertCurrent: () => {},
+        },
+      });
+      if (outcome === "success") {
+        await expect(write).resolves.toBeDefined();
+        expect(env.OWNED).toBe("candidate");
+      } else {
+        await expect(write).rejects.toMatchObject({
+          name: "ConfigWritePostCommitError",
+          rollbackStatus: "restored",
+        });
+        expect(env.OWNED).toBeUndefined();
+        expect(env.REPLACED).toBe(outcome === "foreign-write" ? "external" : undefined);
+        expect(env.ADDED).toBe("external");
+        expect(env.REMOVED).toBeUndefined();
+        expect(await fs.readFile(envPath, "utf8")).toBe(includeRaw);
+        expect(await fs.readFile(`${envPath}.bak`, "utf8")).toBe(includeRaw);
+      }
+      expect(observed).toBe("candidate");
+      expect(reads).toBe(2);
+      expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);
+    },
+  );
+
   it.each([false, true])(
     "forwards custom-IO authority to its own root destination (revoked: %s)",
     async (revoke) => {
@@ -1865,6 +1948,7 @@ describe("config mutate helpers", () => {
     expect(ioMocks.createConfigIO).toHaveBeenCalledWith({
       configPath,
       pluginValidation: "skip",
+      observe: false,
     });
     expect(ioMocks.readConfigFileSnapshotForWrite).toHaveBeenCalledWith();
     await expect(fs.readFile(configPath, "utf-8")).resolves.toContain(
@@ -2829,7 +2913,9 @@ describe("config mutate helpers", () => {
         },
       };
       ioMocks.readConfigFileSnapshotForWrite.mockImplementation(async () => {
-        applyConfigEnvVars({ env: { [envKey]: "written-env-value" } }, env);
+        captureConfigReadEnvMutation(env, () =>
+          applyConfigEnvVars({ env: { [envKey]: "written-env-value" } }, env),
+        );
         return {
           snapshot: createSnapshot({
             hash: "hash-include-refresh-written",

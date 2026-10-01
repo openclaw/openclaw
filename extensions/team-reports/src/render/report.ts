@@ -20,7 +20,7 @@ import {
   shell,
   sourceBanners,
 } from "./page.js";
-import { ITEM_LABELS, memberSummary, renderAvatar } from "./shared.js";
+import { ITEM_LABELS, memberSummary, metric, renderAvatar } from "./shared.js";
 import { renderPersonWorkSessions } from "./work-sessions.js";
 
 function activitySegments(github: GithubCounts, discord: number) {
@@ -43,10 +43,6 @@ function activitySegments(github: GithubCounts, discord: number) {
     },
     { label: "Discord", value: discord, tone: "muted" },
   ].filter((segment) => segment.value > 0);
-}
-
-function metric(label: string, value: string | number, detail = "", trend = ""): string {
-  return `<div class="oc-summary-metric"><span class="oc-summary-metric-copy"><small>${escapeHtml(label)}</small><strong>${escapeHtml(String(value))}</strong>${detail ? `<small>${escapeHtml(detail)}</small>` : ""}${trend}</span></div>`;
 }
 
 function distribution(ctx: PageContext, members: PersonReport[]): string {

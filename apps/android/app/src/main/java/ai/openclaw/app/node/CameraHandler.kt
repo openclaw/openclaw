@@ -85,13 +85,10 @@ class CameraHandler(
       clipLogFile?.appendText("[CLIP $ts] $msg\n")
       android.util.Log.w("openclaw", "camera.clip: $msg")
     }
-    val includeAudio = parseIncludeAudio(paramsJson) ?: true
+    val includeAudio = parseJsonBooleanFlag(parseJsonParamsObject(paramsJson), "includeAudio") ?: true
     val ownsAudioCapture = includeAudio && setCameraAudioCaptureActive(true)
     if (includeAudio && !ownsAudioCapture) {
-      return GatewaySession.InvokeResult.error(
-        code = "MIC_BUSY",
-        message = "MIC_BUSY: another audio capture is active",
-      )
+      return nodeInvokeError("MIC_BUSY", "another audio capture is active")
     }
     val ownedClipFile = AtomicReference<java.io.File?>()
     try {
@@ -117,10 +114,9 @@ class CameraHandler(
       val rawBytes = filePayload.file.length()
       if (!isCameraClipWithinPayloadLimit(rawBytes)) {
         clipLog("payload too large: bytes=$rawBytes max=$CAMERA_CLIP_MAX_RAW_BYTES")
-        return GatewaySession.InvokeResult.error(
-          code = "PAYLOAD_TOO_LARGE",
-          message =
-            "PAYLOAD_TOO_LARGE: camera clip is $rawBytes bytes; max is $CAMERA_CLIP_MAX_RAW_BYTES bytes. Reduce durationMs and retry.",
+        return nodeInvokeError(
+          "PAYLOAD_TOO_LARGE",
+          "camera clip is $rawBytes bytes; max is $CAMERA_CLIP_MAX_RAW_BYTES bytes. Reduce durationMs and retry.",
         )
       }
 
@@ -150,6 +146,4 @@ class CameraHandler(
       }
     }
   }
-
-  private fun parseIncludeAudio(paramsJson: String?): Boolean? = parseJsonBooleanFlag(parseJsonParamsObject(paramsJson), "includeAudio")
 }

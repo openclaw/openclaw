@@ -442,6 +442,15 @@ suite.define(() => {
               inline.locator("html").evaluate((root) => getComputedStyle(root).colorScheme),
             )
             .toBe("dark");
+          // A light proxy between dark documents paints an opaque UA canvas.
+          await expect
+            .poll(() =>
+              outer
+                .contentFrame()
+                .locator("html")
+                .evaluate((root) => getComputedStyle(root).colorScheme),
+            )
+            .toBe("dark");
           await expect
             .poll(() =>
               board.locator("html").evaluate((root) => getComputedStyle(root).colorScheme),

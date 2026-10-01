@@ -253,9 +253,6 @@ function extractInheritedCodexRuntimeConfig(configToml: string): string {
     inheritedLines.push(rawLine.trimEnd());
   }
 
-  while (inheritedLines.length > 0 && inheritedLines[inheritedLines.length - 1] === "") {
-    inheritedLines.pop();
-  }
   return inheritedLines.join("\n");
 }
 

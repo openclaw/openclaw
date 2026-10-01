@@ -160,28 +160,16 @@ async function readPixVerseJson<T>(response: Response, label: string): Promise<T
   return readPixVerseSuccess(payload, label);
 }
 
-function readPixVerseVideoId(payload: PixVerseVideoCreateResponse): number {
-  const videoId = asSafeIntegerInRange(payload.video_id, { min: 0 });
-  if (videoId == null) {
-    throw new Error("PixVerse video generation response missing video_id");
+function readPixVerseInteger(value: unknown, label: string): number {
+  const integer = asSafeIntegerInRange(value, { min: 0 });
+  if (integer === undefined) {
+    throw new Error(label);
   }
-  return videoId;
-}
-
-function readPixVerseImageId(payload: PixVerseUploadImageResponse): number {
-  const imageId = asSafeIntegerInRange(payload.img_id, { min: 0 });
-  if (imageId == null) {
-    throw new Error("PixVerse image upload response missing img_id");
-  }
-  return imageId;
+  return integer;
 }
 
 function readPixVerseStatus(payload: PixVerseVideoResultResponse): number {
-  const status = asSafeIntegerInRange(payload.status, { min: 0 });
-  if (status == null) {
-    throw new Error("PixVerse video status response missing status");
-  }
-  return status;
+  return readPixVerseInteger(payload.status, "PixVerse video status response missing status");
 }
 
 function buildUploadImageForm(asset: VideoGenerationSourceAsset): FormData {
@@ -424,11 +412,13 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
         });
         try {
           await assertOkOrThrowHttpError(upload.response, "PixVerse image upload failed");
-          imageId = readPixVerseImageId(
-            await readPixVerseJson<PixVerseUploadImageResponse>(
-              upload.response,
-              "PixVerse image upload failed",
-            ),
+          const uploaded = await readPixVerseJson<PixVerseUploadImageResponse>(
+            upload.response,
+            "PixVerse image upload failed",
+          );
+          imageId = readPixVerseInteger(
+            uploaded.img_id,
+            "PixVerse image upload response missing img_id",
           );
         } finally {
           await upload.release();
@@ -450,11 +440,13 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
       });
       try {
         await assertOkOrThrowHttpError(create.response, "PixVerse video generation failed");
-        const videoId = readPixVerseVideoId(
-          await readPixVerseJson<PixVerseVideoCreateResponse>(
-            create.response,
-            "PixVerse video generation failed",
-          ),
+        const submitted = await readPixVerseJson<PixVerseVideoCreateResponse>(
+          create.response,
+          "PixVerse video generation failed",
+        );
+        const videoId = readPixVerseInteger(
+          submitted.video_id,
+          "PixVerse video generation response missing video_id",
         );
         const completed = await pollPixVerseVideo({
           videoId,

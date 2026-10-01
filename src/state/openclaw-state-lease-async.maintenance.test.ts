@@ -63,10 +63,6 @@ vi.mock("../infra/sqlite-worker-identity.js", () => ({
   inspectDatabasePathIdentitySync: mocks.forbidden,
   readDatabasePathIdentitySync: mocks.forbidden,
 }));
-vi.mock("../infra/sqlite-lifecycle-errors.js", () => ({
-  createSqliteLifecycleAggregateError: (errors: unknown[], message: string, cause: unknown) =>
-    new AggregateError(errors, message, { cause }),
-}));
 
 beforeEach(() => {
   vi.clearAllMocks();

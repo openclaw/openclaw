@@ -98,6 +98,7 @@ it
         stdinMode: "pipe-open",
         oomScoreWrapperSelected: false,
         ownedWorker: true,
+        nativeProcessOwnerSupported: true,
         cleanupBinding,
         onWorkerMessage,
         onSpawnCleanup: (pending) => {
@@ -122,12 +123,12 @@ it
         ...claim,
         supervisor,
         worker: requireNodeWorkerProcessIdentity(ownerPid!),
-        cleanupMode: "owned-anchor",
+        cleanupMode: adapter.treeOwnership ?? "owned-anchor",
       });
       if (action === "journal-write-failed") {
         openOpenClawStateDatabase({ env }).db.exec(`
           CREATE TRIGGER abort_lineage_settlement
-          BEFORE UPDATE OF lineage_settled ON node_worker_launch_cleanup
+          BEFORE UPDATE OF ${adapter.treeOwnership ? "descendants_reaped ON node_worker_launch_process_scopes" : "lineage_settled ON node_worker_launch_cleanup"}
           BEGIN SELECT RAISE(ABORT, 'synthetic journal write failure'); END;
         `);
       }
@@ -166,7 +167,13 @@ it
         await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
         expect(onWorkerMessage).toHaveBeenCalledWith({
           phase: "started",
-          message: { type: "openclaw-worker-start-v1", lineageFds: expect.any(Array) },
+          message: {
+            type: "openclaw-worker-start-v1",
+            lineageFds: expect.any(Array),
+            ...(adapter.treeOwnership
+              ? { nativeProcessOwner: expect.stringMatching(/^file:/u) }
+              : {}),
+          },
         });
         expect(onWorkerMessage).toHaveBeenCalledTimes(2);
         expect(await readFile(marker, "utf8")).toBe("started\n");
@@ -182,12 +189,17 @@ it
       }
       await adapter.waitForExtinction();
       expect(await store.get(claim.launchId)).toMatchObject({
-        workerCleanupMode: "owned-anchor",
-        workerLineageSettled: action !== "journal-write-failed",
+        workerCleanupMode: adapter.treeOwnership ?? "owned-anchor",
+        workerLineageSettled: !adapter.treeOwnership && action !== "journal-write-failed",
+        ...(adapter.treeOwnership
+          ? { workerDescendantsReaped: action !== "journal-write-failed" }
+          : {}),
       });
       if (action === "journal-write-failed") {
         expect(stderr).toContain(
-          "node worker lineage completion was not recorded; restart recovery will retain capacity until cleanup can be verified\n",
+          adapter.treeOwnership
+            ? "node worker descendant extinction was not recorded; restart recovery retains capacity\n"
+            : "node worker lineage completion was not recorded; restart recovery will retain capacity until cleanup can be verified\n",
         );
       }
     } finally {

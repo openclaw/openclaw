@@ -40,11 +40,7 @@ type MemoryOverviewProps = {
 };
 
 type DreamingStatus = NonNullable<DoctorMemoryStatusPayload["dreaming"]>;
-type DreamingPhase = {
-  enabled: boolean;
-  cron: string;
-  managedCronPresent: boolean;
-  nextRunAtMs?: number;
+type DreamingPhase = DreamingStatus["phases"][keyof DreamingStatus["phases"]] & {
   lastRunAtMs?: number;
 };
 

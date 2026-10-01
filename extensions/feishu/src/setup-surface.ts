@@ -258,7 +258,6 @@ async function runNewAppFlow(params: {
     scanDomain = scanResult.domain;
     scanOpenId = scanResult.openId;
   } else {
-    // Fallback to manual input: collect domain, appId, appSecret.
     await noteFeishuCredentialHelp(prompter);
 
     appId = (
@@ -288,7 +287,6 @@ async function runNewAppFlow(params: {
       appSecretProbeValue = appSecretResult.resolvedValue;
     }
 
-    // Fetch openId via API for manual flow.
     if (appId && appSecretProbeValue) {
       const { getAppOwnerOpenId } = await loadAppRegistrationModule();
       scanOpenId = await getAppOwnerOpenId({
@@ -341,9 +339,8 @@ async function runEditFlow(params: {
   prompter: WizardPrompter;
   options: Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["options"];
 }): Promise<{ cfg: OpenClawConfig }> {
-  const { prompter, options } = params;
-  const next = params.cfg;
-  const feishuCfg = next.channels?.feishu as FeishuConfig | undefined;
+  const { cfg, prompter, options } = params;
+  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
 
   // Check existing appId (top-level or first configured account).
   // Supports both plain string and SecretRef (env-backed) appId values.
@@ -382,12 +379,12 @@ async function runEditFlow(params: {
       initialValue: true,
     }))
   ) {
-    return runNewAppFlow({ cfg: next, prompter, options });
+    return runNewAppFlow({ cfg, prompter, options });
   }
 
   await prompter.note(t("wizard.feishu.botConfigured"), "");
 
-  return { cfg: next };
+  return { cfg };
 }
 
 export async function runFeishuLogin(params: {

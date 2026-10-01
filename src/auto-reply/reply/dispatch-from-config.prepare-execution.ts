@@ -87,7 +87,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     markInboundDedupeReplayUnsafe();
     turnLedger.sendQueued("tool", replyPayload);
   };
-  // Track accumulated block text for TTS generation after streaming completes.
   // When block streaming succeeds, there's no final reply, so we need to generate
   // TTS audio separately from the accumulated block content.
   const progressState = {

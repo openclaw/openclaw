@@ -1,4 +1,7 @@
+import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { removeTempDirectoryAsync } from "../infra/sqlite-readonly-location-cleanup.js";
+import { createSqliteSnapshotStagingDirectory } from "../infra/sqlite-snapshot-staging.js";
 import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
@@ -15,6 +18,7 @@ import {
   SESSION_KEY,
   commands,
   installGitHubPublicationTestHarness,
+  root,
 } from "./github-publication.test-support.js";
 import { insertSharedWorktreeReceipt } from "./github-shared-publication.test-support.js";
 import { preparePersonalGitHubSessionAction } from "./server-methods/github-personal-authorization.js";
@@ -27,6 +31,23 @@ beforeEach(async () => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("publication options after a retained-state upgrade", () => {
+  it("reads current receipts while another snapshot retains an earlier launch environment", async () => {
+    const directory = await createSqliteSnapshotStagingDirectory(root, false, undefined, true);
+    vi.stubEnv("OPENCLAW_GITHUB_OPTIONS_FIXTURE", "changed-after-staging-allocation");
+    try {
+      const row = insertSharedWorktreeReceipt("current-shared");
+      const options = await callPersonalPublicationRpc(fixture, "sessions.github.options");
+      expect(options[0], JSON.stringify(options[2])).toBe(true);
+      expect(fs.existsSync(directory)).toBe(true);
+      expect(options[1]).toMatchObject({
+        personal: { state: "connected", generation: fixture.generation, account },
+        latestShared: { result: { requestId: row.request_id, status: "requested" } },
+      });
+    } finally {
+      expect(await removeTempDirectoryAsync(directory)).toBe(true);
+    }
+  });
+
   it.each(["table", "row"])(
     "keeps account choices and personal recovery with no legacy lifecycle %s",
     async (missing) => {

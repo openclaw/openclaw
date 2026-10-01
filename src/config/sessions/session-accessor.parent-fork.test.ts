@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  isSessionNodePayloadSelect,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
@@ -859,7 +862,7 @@ describe("forkSessionFromParentTranscript", () => {
       toDatabaseOptions(resolveSqliteStoreScope(storePath)),
     );
     const reads = trackSqliteStatementExecutions(database.db, ["sessionNodeHydrations"], (sql) =>
-      sql.startsWith('select * from "session_nodes"') ? "sessionNodeHydrations" : null,
+      isSessionNodePayloadSelect(sql) ? "sessionNodeHydrations" : null,
     );
     let result: Awaited<ReturnType<typeof forkSessionEntryFromParentTarget>>;
     try {

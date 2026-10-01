@@ -1,4 +1,3 @@
-/** Doctor repair for legacy OAuth sidecar files and inline auth profile stores. */
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";

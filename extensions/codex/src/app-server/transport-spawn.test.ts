@@ -11,7 +11,7 @@ import { resolveManagedCodexNativeCommand } from "./managed-binary.js";
 import { findCodexAppServerSpawnError } from "./spawn-error.js";
 import { createStdioTransport } from "./transport-stdio.js";
 
-const registration = vi.hoisted(() => ({ rejectOnExit: false }));
+const registration = vi.hoisted(() => ({ rejectOnExit: false, holdStderrUntilExit: false }));
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -20,6 +20,10 @@ vi.mock("node:child_process", async (importOriginal) => ({
 vi.mock("./transport-process-registration.js", () => ({
   prepareCodexAppServerProcessRegistration:
     async () => async (child: import("node:child_process").ChildProcess) => {
+      if (registration.holdStderrUntilExit) {
+        child.stderr?.pause();
+        child.once("exit", () => child.stderr?.resume());
+      }
       await once(child, "spawn");
       if (registration.rejectOnExit) {
         await once(child, "exit");
@@ -48,9 +52,14 @@ describe("Codex app-server OS launch failure", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32").each(["initialize", "registration"])(
-    "retains native EACCES ahead of large spawn arguments during %s",
-    async (phase) => {
+  it.runIf(process.platform !== "win32").each([
+    ["initialize", false],
+    ["registration", false],
+    ["initialize", true],
+    ["registration", true],
+  ] as const)(
+    "retains native EACCES ahead of large spawn arguments during %s (stderr after exit: %s)",
+    async (phase, holdStderrUntilExit) => {
       const root = tempDirs.make("codex-launcher-failure-");
       const installedLauncher = createRequire(import.meta.url).resolve(
         "@openai/codex/bin/codex.js",
@@ -83,6 +92,7 @@ describe("Codex app-server OS launch failure", () => {
       const spawn = vi.spyOn(childProcess, "spawn");
       try {
         registration.rejectOnExit = phase === "registration";
+        registration.holdStderrUntilExit = holdStderrUntilExit;
         const failure = await (async () => {
           if (phase === "registration") {
             await createStdioTransport(options);
@@ -104,6 +114,7 @@ describe("Codex app-server OS launch failure", () => {
         expect(spawn).toHaveBeenCalledOnce();
       } finally {
         registration.rejectOnExit = false;
+        registration.holdStderrUntilExit = false;
         await client?.closeAndWait();
         spawn.mockRestore();
       }

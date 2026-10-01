@@ -97,6 +97,7 @@ type ApprovalInvocationParams = {
     | "exec.approval.get"
     | "exec.approval.list"
     | "exec.approval.resolve"
+    | "exec.approval.waitDecision"
     | "plugin.approval.list"
     | "plugin.approval.resolve";
   body: Record<string, unknown>;

@@ -21,10 +21,6 @@ function assertSafeQaBundledPluginId(pluginId: string) {
   }
 }
 
-function parseStableSemverFloor(value: string | undefined) {
-  return value ? coerceSemver(value) : null;
-}
-
 function isQaOpenAiResponsesProviderConfig(config: ModelProviderConfig) {
   return (
     config.api === "openai-responses" ||
@@ -34,24 +30,21 @@ function isQaOpenAiResponsesProviderConfig(config: ModelProviderConfig) {
 
 function resolveQaBundledPluginSourceDir(params: { repoRoot: string; pluginId: string }) {
   assertSafeQaBundledPluginId(params.pluginId);
-  const candidates = [
-    path.join(params.repoRoot, "dist", "extensions", params.pluginId),
-    path.join(params.repoRoot, "dist-runtime", "extensions", params.pluginId),
-    path.join(params.repoRoot, "extensions", params.pluginId),
-  ];
+  const candidates = resolveQaBundledPluginScanRoots(params.repoRoot).map((root) =>
+    path.join(root, params.pluginId),
+  );
   const existingCandidates = candidates.filter((candidate) => existsSync(candidate));
   const manifestCandidates = findQaBundledPluginDirsByManifestId(params);
   const allCandidates = uniqueStrings([...existingCandidates, ...manifestCandidates]);
-  if (allCandidates.length === 0) {
-    return null;
-  }
-  const cliMetadataCandidate = allCandidates.find((candidate) =>
-    QA_CLI_METADATA_ENTRY_BASENAMES.some((basename) => existsSync(path.join(candidate, basename))),
+  return (
+    allCandidates.find((candidate) =>
+      QA_CLI_METADATA_ENTRY_BASENAMES.some((basename) =>
+        existsSync(path.join(candidate, basename)),
+      ),
+    ) ??
+    allCandidates[0] ??
+    null
   );
-  if (cliMetadataCandidate) {
-    return cliMetadataCandidate;
-  }
-  return allCandidates[0] ?? null;
 }
 
 function resolveQaBundledPluginScanRoots(repoRoot: string) {
@@ -269,7 +262,7 @@ export async function resolveQaRuntimeHostVersion(params: {
 }) {
   const rootPackageRaw = await fs.readFile(path.join(params.repoRoot, "package.json"), "utf8");
   const rootPackage = JSON.parse(rootPackageRaw) as { version?: string };
-  let selected = parseStableSemverFloor(rootPackage.version);
+  let selected = coerceSemver(rootPackage.version);
   for (const sourceDir of collectQaBundledPluginSources(params).values()) {
     const packagePath = path.join(sourceDir, "package.json");
     if (!existsSync(packagePath)) {
@@ -283,7 +276,7 @@ export async function resolveQaRuntimeHostVersion(params: {
         };
       };
     };
-    const candidate = parseStableSemverFloor(packageJson.openclaw?.install?.minHostVersion);
+    const candidate = coerceSemver(packageJson.openclaw?.install?.minHostVersion);
     if (candidate && (!selected || candidate.compare(selected) > 0)) {
       selected = candidate;
     }

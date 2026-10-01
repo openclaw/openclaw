@@ -13,7 +13,7 @@ const retainedCustodyKey = Symbol.for("openclaw.sqliteTestRetainedCustody");
 // Keep their native custody intact through drainage, then retire the whole generation.
 export const sqliteTestSingletonPublications: ReadonlyMap<string, symbol> = new Map([
   [
-    source("src/state/openclaw-state-worker-store.ts"),
+    source("src/state/openclaw-state-worker-owner.ts"),
     Symbol.for("openclaw.sharedStateWorkerOwner"),
   ],
   [source("src/infra/sqlite-worker-store.ts"), brokerKey],

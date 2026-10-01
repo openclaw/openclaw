@@ -60,6 +60,10 @@ it("compares real UI builds with canonical compression and keeps artifacts after
     ]) {
       fs.copyFileSync(path.join(repoRoot, "scripts", script), path.join(root, "scripts", script));
     }
+    write(
+      "src/gateway/control-ui-route-preloads.ts",
+      fs.readFileSync(path.join(repoRoot, "src/gateway/control-ui-route-preloads.ts"), "utf8"),
+    );
     write("scripts/tsx.mjs", `await import(${JSON.stringify(tsxImport)});\n`);
     write(".gitignore", "node_modules\ndist/\n");
     write(

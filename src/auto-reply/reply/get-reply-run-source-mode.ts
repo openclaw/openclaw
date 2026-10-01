@@ -1,5 +1,5 @@
 import type { TemplateContext } from "../templating.js";
-import type { InternalGetReplyOptions } from "./get-reply-run.types.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { isInternalSourceReplyChannel } from "./source-reply-delivery-mode.js";
 
 /**

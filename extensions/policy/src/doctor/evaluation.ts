@@ -1,3 +1,4 @@
+import { resolveExecApprovalsDisplayPath } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import type { HealthCheckContext, HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { policyRoutingRules } from "../policy-routing.js";
@@ -20,7 +21,6 @@ import { createOrderedPolicyShape } from "./ordered-shape.js";
 import { SUPPORTED_TOOL_METADATA } from "./policy-constants.js";
 import { policyEvidenceFinding } from "./policy-evidence-finding.js";
 import {
-  execApprovalsDisplayName,
   parsePolicyFile,
   policyChecksEnabled,
   policyDisplayName,
@@ -222,7 +222,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
           "Run `openclaw doctor --fix` to migrate TOOLS.md into the AGENTS.md `## Tools` section.",
       };
     }
-    evidence = await collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
+    evidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
       toolsRaw: toolsFile?.raw ?? "",
       ...evidenceOptions,
     });
@@ -249,7 +249,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
       policyFile.ocDocName,
       evidence,
       execApprovalsFile,
-      execApprovalsDisplayName(),
+      resolveExecApprovalsDisplayPath(),
     ),
     ...authMetadataRequirementFindings,
     ...metadataRequirementFindings,

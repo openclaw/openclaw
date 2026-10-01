@@ -39,6 +39,7 @@ import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { resolveLocalCheckEnv } from "./lib/local-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { readNativeTypeScriptConfig } from "./lib/native-typescript-config.mts";
+import { createChangedOxlintEnv, isOxlintCommand } from "./lib/oxlint-changed-scope.mts";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mts";
 import type { createChangedCoreTestCheck } from "./run-tsgo-core-test-shards.mts";
@@ -146,7 +147,7 @@ const LINTABLE_SCRIPT_PATH_RE = /^scripts\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_UI_STYLE_PATH_RE = /^ui\/(?:src\/.+\.(?:css|ts)|public\/themes\/[^/]+\.css)$/u;
 // These baselines are checked by their ratchets, not consumed by Oxlint.
 const LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
-  /^(?:docs\/|README\.md$|.*\.mdx?$|config\/(?:assertion-safety-baseline|env-var-count-budget)\.txt$)/u;
+  /^(?:docs\/|README\.md$|.*\.mdx?$|config\/(?:assertion-safety-baseline|env-var-count-budget|max-lines-baseline|test-timeout-race-baseline)\.txt$)/u;
 const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$|^ui\/(?:src\/.+|public\/themes\/[^/]+)\.css$/u;
 const TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
@@ -176,10 +177,6 @@ async function ensureChangedCheckRuntimeDependencies(paths: string[]) {
 // delays package-backed imports until after lane and remote-routing selection.
 if (!isDirectRun()) {
   await ensureChangedCheckRuntimeDependencies(["package.json"]);
-}
-
-function createChangedCheckChildEnv(baseEnv: NodeJS.ProcessEnv = process.env) {
-  return resolveLocalCheckEnv(baseEnv);
 }
 
 function hasAndroidVersionSyncPath(paths: string[]) {
@@ -339,7 +336,7 @@ function shouldRunPromptSnapshotOwnerTest(paths: string[]) {
   return paths.some((changedPath) => PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE.test(changedPath));
 }
 
-export function shouldRunControlUiI18nVerify(paths: string[]) {
+function shouldRunControlUiI18nVerify(paths: string[]) {
   return paths.some((changedPath) => CONTROL_UI_I18N_VERIFY_PATH_RE.test(changedPath));
 }
 
@@ -358,21 +355,21 @@ function shouldRunSqliteSessionSchemaBaselineCheck(paths: string[]) {
 }
 
 /** Returns whether changed files can alter Plugin SDK exports or surface budgets. */
-export function shouldRunPluginSdkSurfaceChecks(paths: string[]) {
+function shouldRunPluginSdkSurfaceChecks(paths: string[]) {
   return paths.some((changedPath) => PLUGIN_SDK_SURFACE_PATH_RE.test(changedPath));
 }
 
 /** Returns whether changed files can alter deprecated API or plugin-boundary results. */
-export function shouldRunDeprecationHygieneChecks(paths: string[]) {
+function shouldRunDeprecationHygieneChecks(paths: string[]) {
   return paths.some((changedPath) => DEPRECATION_HYGIENE_PATH_RE.test(changedPath));
 }
 
 /** Returns whether changed files can alter wrapper-shadowing results. */
-export function shouldRunWrapperShadowingCheck(paths: string[]) {
+function shouldRunWrapperShadowingCheck(paths: string[]) {
   return paths.some((changedPath) => WRAPPER_SHADOWING_PATH_RE.test(changedPath));
 }
 
-export function shouldRunAppcastOwnerTest(paths: string[]) {
+function shouldRunAppcastOwnerTest(paths: string[]) {
   return paths.some((changedPath) => /^appcast(?:-(?:arm64|x86_64))?\.xml$/u.test(changedPath));
 }
 
@@ -483,7 +480,8 @@ export function createChangedCheckPlan(
   const broadAudits = new Set<ChangedCheckCommand>();
   const typechecks = new Set<ChangedCheckCommand>();
   const lintChecks = new Set<ChangedCheckCommand>();
-  const baseEnv: NodeJS.ProcessEnv = createChangedCheckChildEnv(options.env ?? process.env);
+  const baseEnv = { ...resolveLocalCheckEnv(options.env ?? process.env) };
+  delete baseEnv.OPENCLAW_OXLINT_CHANGED_PATHS;
   const cwd = process.cwd();
   if (
     result.paths.some((changedPath) => LINTABLE_EXTENSION_PATH_RE.test(changedPath)) &&
@@ -549,7 +547,11 @@ export function createChangedCheckPlan(
         baseEnv,
       );
     }
+    for (const command of [...lintChecks].filter(isOxlintCommand)) {
+      command.env = createChangedOxlintEnv(result.paths, command.env ?? baseEnv);
+    }
     if (options.lintOnly) {
+      const lintEnv = createChangedOxlintEnv(result.paths, baseEnv);
       const lintCommands = commands.filter((command) => lintChecks.has(command));
       const selection = options.lintSelection;
       return {
@@ -568,7 +570,7 @@ export function createChangedCheckPlan(
                         : command,
                     )
                 : []),
-              ...createCiLintCommands(selection, options.lintThreads ?? 1, baseEnv),
+              ...createCiLintCommands(selection, options.lintThreads ?? 1, lintEnv),
             ]
           : lintCommands,
         summary,
@@ -693,6 +695,29 @@ export function createChangedCheckPlan(
   ) {
     add("assertion SAFETY comment ratchet", [
       "check:assertion-safety",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.base ?? (options.staged ? "HEAD" : "origin/main"),
+    ]);
+  }
+  if (result.paths.some((file) => /^(?:src|extensions|packages|scripts)\//u.test(file))) {
+    add("SQLite worker ratchet", [
+      "check:database-worker-ratchet",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.base ?? (options.staged ? "HEAD" : "origin/main"),
+    ]);
+  }
+  if (
+    result.paths.some(
+      (filePath) =>
+        filePath === SHRINK_RATCHET_OWNER_PATH ||
+        filePath === "config/test-timeout-race-baseline.txt" ||
+        (/\.(?:[cm]?[jt]s|[jt]sx)$/u.test(filePath) && !/\.d\.[cm]?ts$/u.test(filePath)),
+    )
+  ) {
+    add("test timeout race ratchet", [
+      "check:test-timeout-race-ratchet",
       ...(options.staged ? ["--staged"] : []),
       "--base",
       options.base ?? (options.staged ? "HEAD" : "origin/main"),
@@ -1321,7 +1346,7 @@ export function createTargetedCoreLintCommands(
   options: TargetedLintOptions & { platform?: NodeJS.Platform } = {},
 ) {
   const command = createTargetedOxlintCommand({
-    env: createChangedCheckChildEnv(env),
+    env: resolveLocalCheckEnv(env),
     label: "core",
     lintablePathRe: LINTABLE_CORE_PATH_RE,
     neutralPathRe: CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
@@ -1453,8 +1478,7 @@ export async function runChangedCheck(
     return 0;
   }
   await ensureChangedCheckRuntimeDependencies(result.paths);
-  const baseEnv = resolveLocalCheckEnv(options.env ?? process.env);
-  const childEnv = createChangedCheckChildEnv(baseEnv);
+  const childEnv = resolveLocalCheckEnv(options.env ?? process.env);
   const plan = createChangedCheckPlan(result, {
     ...options,
     env: childEnv,

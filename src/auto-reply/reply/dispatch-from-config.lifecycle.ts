@@ -365,7 +365,6 @@ export function createDispatchReplyOperationCoordinator(params: {
     const admitCurrentReplyTurn = async () => {
       try {
         return await admitReplyTurn({
-          runId: params.replyOptions?.runId,
           assertRequestCurrent: () => params.replyOptions?.operatorAuthority?.assertCurrent(),
           providerReviewAcknowledgment: params.replyOptions?.providerReviewAcknowledgment,
           agentId: params.agentId,
@@ -436,7 +435,9 @@ export function createDispatchReplyOperationCoordinator(params: {
         ? admission.operation.sessionId
         : admission.sessionEntry?.sessionId;
     const runState = resolveReplyOperationRunState(params.replyOptions);
-    if (runState) {
+    // A turn already accepted into the queue or active run keeps that custody when
+    // dispatch later finds the session idle; the queued turn owns its answer.
+    if (runState && runState.admission?.status !== "accepted") {
       runState.admission =
         admission.status === "owned"
           ? { status: "owned" }
@@ -545,23 +546,6 @@ export function createDispatchReplyOperationCoordinator(params: {
     const expectedExistingSessionId = params.replyOptions?.expectedExistingSessionId
       ? (dispatchReplyOperation?.sessionId ?? admittedExpectedSessionId)
       : undefined;
-    const onAgentRunStart: NonNullable<
-      NonNullable<DispatchFromConfigParams["replyOptions"]>["onAgentRunStart"]
-    > = (...args) => {
-      agentRunTerminalOutcome = "completed";
-      // Execution may generate its ID in copied options; finalization needs the observed run.
-      agentRunId = args[0];
-      params.messageAuditTerminal?.observeRunId(args[0]);
-      return params.replyOptions?.onAgentRunStart?.(...args);
-    };
-    const onAgentRunTerminalOutcome: NonNullable<
-      NonNullable<DispatchFromConfigParams["replyOptions"]>["onAgentRunTerminalOutcome"]
-    > = (outcome) => {
-      if (outcome === "failed" || agentRunTerminalOutcome === undefined) {
-        agentRunTerminalOutcome = outcome;
-      }
-      params.replyOptions?.onAgentRunTerminalOutcome?.(outcome);
-    };
     return {
       ...params.replyOptions,
       ...(expectedExistingSessionId ? { expectedExistingSessionId } : {}),
@@ -571,8 +555,19 @@ export function createDispatchReplyOperationCoordinator(params: {
             queuedFollowupAbortSignal: getQueuedFollowupAbortSignal(),
           }
         : {}),
-      onAgentRunStart,
-      onAgentRunTerminalOutcome,
+      onAgentRunStart: (...args) => {
+        agentRunTerminalOutcome = "completed";
+        // Execution may generate its ID in copied options; finalization needs the observed run.
+        agentRunId = args[0];
+        params.messageAuditTerminal?.observeRunId(args[0]);
+        return params.replyOptions?.onAgentRunStart?.(...args);
+      },
+      onAgentRunTerminalOutcome: (outcome) => {
+        if (outcome === "failed" || agentRunTerminalOutcome === undefined) {
+          agentRunTerminalOutcome = outcome;
+        }
+        params.replyOptions?.onAgentRunTerminalOutcome?.(outcome);
+      },
       ...(dispatchReplyOperation ? { replyOperation: dispatchReplyOperation } : {}),
     };
   };

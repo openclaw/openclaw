@@ -83,10 +83,7 @@ const controlUiSurfaces = new Set<PluginControlUiDescriptor["surface"]>([
 ]);
 export function createControlUiRegistrar(state: PluginRegistryState) {
   const { registry, createRegistration, pushDiagnostic, reportRegistrationError } = state;
-  const registerControlUiDescriptor = (
-    record: PluginRecord,
-    descriptor: PluginControlUiDescriptor,
-  ) => {
+  return (record: PluginRecord, descriptor: PluginControlUiDescriptor) => {
     // SAFETY: Shipped flat JS descriptors may supply name; it is read as unknown and normalized below.
     const legacyDescriptor = descriptor as PluginControlUiDescriptor & { name?: unknown };
     const id = normalizeHostHookString(descriptor.id);
@@ -230,6 +227,4 @@ export function createControlUiRegistrar(state: PluginRegistryState) {
       }),
     );
   };
-
-  return registerControlUiDescriptor;
 }

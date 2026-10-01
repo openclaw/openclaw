@@ -23,7 +23,7 @@ import {
   patchSessionEntryTarget,
 } from "./session-accessor.sqlite-entry.js";
 import {
-  resolveSessionEntry,
+  resolveSessionEntry as resolveSessionEntrySelection,
   retainSessionEntryKeyAbsence,
 } from "./session-accessor.sqlite-exact-read.js";
 import "./session-accessor.sqlite-summary.js";
@@ -34,7 +34,6 @@ import type {
   ResolvedSessionEntryAccessTarget,
   ResolvedSessionEntryStoreTarget,
   QualifiedSessionEntryAccessTarget,
-  CapturedSessionEntryReadSource,
   SessionEntryCandidateAccessScope,
   ResolvedSessionEntryCandidateTarget,
   ResolvedSessionEntryUpdateContext,
@@ -46,7 +45,7 @@ import type {
   SessionEntryPatchResult,
 } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
-import { resolveSessionStorePathForScope } from "./session-store-path.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import {
   normalizeStoreSessionKey,
   resolveSessionStoreEntryCore as resolveSessionEntryFromStore,
@@ -87,19 +86,7 @@ export {
 } from "./session-accessor.sqlite-entry.js";
 export { readSessionStoreSummaryReadOnly } from "./session-accessor.sqlite-summary.js";
 
-export { resolveSessionEntryFromStore };
-
-/** Resolves a session directly through canonical SQLite row and alias ownership. */
-export function resolveSessionEntrySelection(
-  scope: SessionAccessScope,
-  options: Parameters<typeof resolveSessionEntry>[1] = {},
-): ReturnType<typeof resolveSessionEntryFromStore> {
-  return resolveSessionEntry(scope, options);
-}
-
-export function resolveAccessStorePath(scope: SessionAccessScope): string {
-  return resolveSessionStorePathForScope(scope);
-}
+export { resolveSessionEntryFromStore, resolveSessionEntrySelection };
 
 function resolveLogicalSessionStoreCandidates(params: {
   agentId: string;

@@ -10,6 +10,7 @@
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type {
   RealtimeTranscriptionProviderConfig,
@@ -24,13 +25,11 @@ import {
   type TalkSessionController,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import type { RawData } from "ws";
 import { canonicalizeVoiceCallMediaBase64 } from "./media-base64.js";
 import { WebSocket, WebSocketServer } from "./websocket.js";
 
-/**
- * Configuration for the media stream handler.
- */
 export interface MediaStreamConfig {
   /** Realtime transcription provider for streaming STT. */
   transcriptionProvider: RealtimeTranscriptionProviderPlugin;
@@ -66,9 +65,6 @@ export interface MediaStreamConfig {
   onTalkEvent?: (callId: string, streamSid: string, event: TalkEvent) => void;
 }
 
-/**
- * Active media stream session.
- */
 interface StreamSession {
   callId: string;
   streamSid: string;
@@ -115,28 +111,15 @@ function sanitizeLogText(value: string, maxChars: number): string {
   return `${truncateUtf16Safe(sanitized, maxChars)}...`;
 }
 
-function normalizeWsMessageData(data: RawData): Buffer {
-  if (Buffer.isBuffer(data)) {
-    return data;
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data);
-  }
-  return Buffer.from(data);
-}
-
 function parseTwilioMediaMessage(data: RawData): TwilioMediaMessage {
-  const raw = normalizeWsMessageData(data);
+  const raw = rawDataToString(data);
   try {
-    return JSON.parse(raw.toString("utf8")) as TwilioMediaMessage;
+    return JSON.parse(raw) as TwilioMediaMessage;
   } catch (cause) {
     throw new Error("Twilio media stream message was malformed JSON", { cause });
   }
 }
 
-/**
- * Manages WebSocket connections for Twilio media streams.
- */
 export class MediaStreamHandler {
   private wss: WebSocketServer | null = null;
   private closePromise: Promise<void> | null = null;
@@ -154,9 +137,7 @@ export class MediaStreamHandler {
   private inflightUpgrades = 0;
   /** TTS playback queues per stream (serialize audio to prevent overlap) */
   private ttsQueues = new Map<string, TtsQueueEntry[]>();
-  /** Whether TTS is currently playing per stream */
   private ttsPlaying = new Map<string, boolean>();
-  /** Active TTS playback controllers per stream */
   private ttsActiveControllers = new Map<string, AbortController>();
   private pendingPlaybackMarks = new Map<string, Map<string, PendingPlaybackMark>>();
   private ignoredPlaybackMarks = new Map<string, Set<string>>();
@@ -173,12 +154,9 @@ export class MediaStreamHandler {
     this.maxConnections = config.maxConnections ?? DEFAULT_MAX_CONNECTIONS;
   }
 
-  /**
-   * Handle WebSocket upgrade for media stream connections.
-   */
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
     if (this.closing) {
-      this.rejectUpgrade(socket, 503, "Media stream handler is shutting down");
+      this.rejectUpgrade(socket, "Media stream handler is shutting down");
       return;
     }
 
@@ -193,9 +171,9 @@ export class MediaStreamHandler {
       });
     }
 
-    const currentConnections = this.getCurrentConnectionCount();
+    const currentConnections = this.wss.clients.size + this.inflightUpgrades;
     if (currentConnections >= this.maxConnections) {
-      this.rejectUpgrade(socket, 503, "Too many media stream connections");
+      this.rejectUpgrade(socket, "Too many media stream connections");
       return;
     }
 
@@ -218,15 +196,11 @@ export class MediaStreamHandler {
 
     try {
       this.wss.handleUpgrade(request, socket, head, (ws) => {
-        socket.removeListener("error", handleUpgradeAbort);
-        socket.removeListener("close", handleUpgradeAbort);
-        releaseUpgradeReservation();
+        handleUpgradeAbort();
         this.wss?.emit("connection", ws, request);
       });
     } catch (error) {
-      socket.removeListener("error", handleUpgradeAbort);
-      socket.removeListener("close", handleUpgradeAbort);
-      releaseUpgradeReservation();
+      handleUpgradeAbort();
       throw error;
     }
   }
@@ -256,9 +230,6 @@ export class MediaStreamHandler {
     return this.closePromise;
   }
 
-  /**
-   * Handle new WebSocket connection from Twilio.
-   */
   private async handleConnection(ws: WebSocket, _request: IncomingMessage): Promise<void> {
     let session: StreamSession | null = null;
     const streamToken = this.getStreamToken(_request);
@@ -349,9 +320,6 @@ export class MediaStreamHandler {
     });
   }
 
-  /**
-   * Handle stream start event.
-   */
   private handleStart(
     ws: WebSocket,
     message: TwilioMediaMessage,
@@ -498,9 +466,6 @@ export class MediaStreamHandler {
     this.config.onTranscriptionReady?.(session.callId, session.streamSid);
   }
 
-  /**
-   * Handle stream stop event.
-   */
   private handleStop(session: StreamSession): void {
     console.log(`[MediaStream] Stream stopped: ${session.streamSid}`);
 
@@ -533,10 +498,6 @@ export class MediaStreamHandler {
       return resolvedIp;
     }
     return request.socket.remoteAddress || "unknown";
-  }
-
-  private getCurrentConnectionCount(): number {
-    return this.wss ? this.wss.clients.size + this.inflightUpgrades : this.inflightUpgrades;
   }
 
   private registerPendingConnection(ws: WebSocket, ip: string): boolean {
@@ -584,11 +545,10 @@ export class MediaStreamHandler {
     this.pendingByIp.set(pending.ip, current - 1);
   }
 
-  private rejectUpgrade(socket: Duplex, statusCode: 429 | 503, message: string): void {
-    const statusText = statusCode === 429 ? "Too Many Requests" : "Service Unavailable";
+  private rejectUpgrade(socket: Duplex, message: string): void {
     const body = `${message}\n`;
     socket.write(
-      `HTTP/1.1 ${statusCode} ${statusText}\r\n` +
+      "HTTP/1.1 503 Service Unavailable\r\n" +
         "Connection: close\r\n" +
         "Content-Type: text/plain; charset=utf-8\r\n" +
         `Content-Length: ${Buffer.byteLength(body)}\r\n` +
@@ -598,17 +558,11 @@ export class MediaStreamHandler {
     socket.destroy();
   }
 
-  /**
-   * Get an active session with an open WebSocket, or undefined if unavailable.
-   */
   private getOpenSession(streamSid: string): StreamSession | undefined {
     const session = this.sessions.get(streamSid);
     return session?.ws.readyState === WebSocket.OPEN ? session : undefined;
   }
 
-  /**
-   * Send a message to a stream's WebSocket if available.
-   */
   private sendToStream(streamSid: string, message: unknown): boolean {
     const session = this.getOpenSession(streamSid);
     if (!session) {
@@ -670,7 +624,9 @@ export class MediaStreamHandler {
     signal: AbortSignal,
   ): Promise<void> {
     signal.throwIfAborted();
-    const marks = this.getPendingPlaybackMarks(streamSid);
+    const marks =
+      this.pendingPlaybackMarks.get(streamSid) ?? new Map<string, PendingPlaybackMark>();
+    this.pendingPlaybackMarks.set(streamSid, marks);
     if (marks.has(name)) {
       throw new Error(`Telephony playback mark is already pending: ${name}`);
     }
@@ -737,25 +693,21 @@ export class MediaStreamHandler {
    * Only one TTS operation plays at a time per stream to prevent overlap.
    */
   async queueTts(streamSid: string, playFn: (signal: AbortSignal) => Promise<void>): Promise<void> {
-    const queue = this.getTtsQueue(streamSid);
+    const queue: TtsQueueEntry[] = this.ttsQueues.get(streamSid) ?? [];
+    this.ttsQueues.set(streamSid, queue);
     if (queue.length >= MAX_PENDING_TTS_OPERATIONS_PER_STREAM) {
       throw new Error(
         `Telephony TTS queue is full for stream; maxPending=${MAX_PENDING_TTS_OPERATIONS_PER_STREAM}`,
       );
     }
 
-    let resolveEntry: () => void;
-    let rejectEntry: (error: unknown) => void;
-    const promise = new Promise<void>((resolve, reject) => {
-      resolveEntry = resolve;
-      rejectEntry = reject;
-    });
+    const { promise, resolve, reject } = createDeferred<void>();
 
     queue.push({
       playFn,
       controller: new AbortController(),
-      resolve: resolveEntry!,
-      reject: rejectEntry!,
+      resolve,
+      reject,
     });
 
     if (!this.ttsPlaying.get(streamSid)) {
@@ -784,26 +736,6 @@ export class MediaStreamHandler {
       }
     }
     this.clearAudio(streamSid);
-  }
-
-  private getTtsQueue(streamSid: string): TtsQueueEntry[] {
-    const existing = this.ttsQueues.get(streamSid);
-    if (existing) {
-      return existing;
-    }
-    const queue: TtsQueueEntry[] = [];
-    this.ttsQueues.set(streamSid, queue);
-    return queue;
-  }
-
-  private getPendingPlaybackMarks(streamSid: string): Map<string, PendingPlaybackMark> {
-    const existing = this.pendingPlaybackMarks.get(streamSid);
-    if (existing) {
-      return existing;
-    }
-    const marks = new Map<string, PendingPlaybackMark>();
-    this.pendingPlaybackMarks.set(streamSid, marks);
-    return marks;
   }
 
   private acknowledgePlaybackMark(streamSid: string, name: string): void {
@@ -960,29 +892,14 @@ export class MediaStreamHandler {
   }
 }
 
-/**
- * Twilio Media Stream message format.
- */
 interface TwilioMediaMessage {
   event: "connected" | "start" | "media" | "stop" | "mark" | "clear";
-  sequenceNumber?: string;
   streamSid?: string;
   start?: {
-    streamSid: string;
-    accountSid: string;
     callSid: string;
-    tracks: string[];
     customParameters?: Record<string, string>;
-    mediaFormat: {
-      encoding: string;
-      sampleRate: number;
-      channels: number;
-    };
   };
   media?: {
-    track?: string;
-    chunk?: string;
-    timestamp?: string;
     payload?: string;
   };
   mark?: {

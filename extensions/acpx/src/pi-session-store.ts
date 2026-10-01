@@ -9,6 +9,7 @@ import {
   isRecord,
   normalizeBoundedOptionalString as readBoundedString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { PI_SESSION_ID_PATTERN } from "./pi-session-catalog-shared.js";
 import { piAcpSessionStoreRoot, piSessionStore } from "./pi-session-paths.js";
 
@@ -209,12 +210,8 @@ function parsePiJsonLines(content: string): Record<string, unknown>[] {
     if (!line.trim()) {
       return [];
     }
-    try {
-      const value = JSON.parse(line) as unknown;
-      return isRecord(value) ? [value] : [];
-    } catch {
-      return [];
-    }
+    const value = safeParseJson<unknown>(line);
+    return isRecord(value) ? [value] : [];
   });
 }
 

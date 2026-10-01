@@ -150,6 +150,8 @@ Running a paused future one-shot leaves it paused and keeps its saved occurrence
 
 Run history keeps payload execution in `status` (`ok`, `error`, or `skipped`) and whole-run completion in `completionStatus` (`succeeded`, `failed`, or `unknown`). Requested delivery is required unless the admitted job explicitly sets `delivery.bestEffort: true`; delivery-only failure leaves execution `status: "ok"`, does not increment execution error counters or enter retry backoff, and records `completionStatus: "failed"`. An adapter send without a delivery identity stays `unknown`, without an automatic resend that could duplicate the message.
 
+Once a successful one-shot consumes its scheduled occurrence, its finished event and run history omit `nextRunAtMs`, including when the job auto-deletes. An early manual run that preserves a future occurrence still reports that occurrence.
+
 Control UI run history shows `OK · Error` or `OK · Unknown` when execution succeeded but whole-run completion failed or remains unknown. Its status filter still selects the execution status.
 
 Run history shows a loading indicator while the selected history is unavailable. A failed request shows an error and a **Retry** button; previously loaded runs for the same selection remain visible. Empty-history guidance appears only after a successful request confirms there are no runs for the current selection and filters.

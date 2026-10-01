@@ -87,11 +87,10 @@ export function createHeadlessDeadlineScope(
 function headlessAbortError(
   signal: AbortSignal,
 ): CodeModeHeadlessAbortError | CodeModeHeadlessTimeoutError {
-  return signal.reason instanceof CodeModeHeadlessTimeoutError
+  return signal.reason instanceof CodeModeHeadlessTimeoutError ||
+    signal.reason instanceof CodeModeHeadlessAbortError
     ? signal.reason
-    : signal.reason instanceof CodeModeHeadlessAbortError
-      ? signal.reason
-      : new CodeModeHeadlessAbortError();
+    : new CodeModeHeadlessAbortError();
 }
 
 function headlessFailure(params: {
@@ -173,12 +172,6 @@ function normalizeHeadlessNamespaceValue(
   return { kind: "value", value: toCodeModeJsonSafe(descriptor.value) };
 }
 
-function normalizeHeadlessNamespace(
-  descriptor: CodeModeNamespaceDescriptor,
-): CodeModeNamespaceDescriptor {
-  return { ...descriptor, scope: normalizeHeadlessNamespaceValue(descriptor.scope) };
-}
-
 function mergeHeadlessNamespaces(
   registered: CodeModeNamespaceDescriptor[],
   extra: CodeModeNamespaceDescriptor[],
@@ -194,7 +187,7 @@ function mergeHeadlessNamespaces(
     }
     ids.add(descriptor.id);
     globalNames.add(descriptor.globalName);
-    merged.push(normalizeHeadlessNamespace(descriptor));
+    merged.push({ ...descriptor, scope: normalizeHeadlessNamespaceValue(descriptor.scope) });
   }
   return merged;
 }
@@ -217,16 +210,7 @@ function headlessNamespaceFreezePrelude(descriptors: CodeModeNamespaceDescriptor
 export async function runCodeModeScriptHeadless(params: {
   ctx: ToolSearchToolContext;
   code: string;
-  overrides?: Partial<
-    Pick<
-      CodeModeConfig,
-      | "timeoutMs"
-      | "memoryLimitBytes"
-      | "maxOutputBytes"
-      | "maxSnapshotBytes"
-      | "maxPendingToolCalls"
-    >
-  >;
+  overrides?: Parameters<typeof resolveCodeModeHeadlessConfig>[1];
   wallClockMs?: number;
   maxToolCalls?: number;
   extraNamespaces?: CodeModeNamespaceDescriptor[];

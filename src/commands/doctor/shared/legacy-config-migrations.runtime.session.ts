@@ -7,6 +7,7 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import { moveLegacyConfigKey } from "./legacy-config-record-shared.js";
 
 /** Match only parser-valid values that resolve to an unsafe zero-duration cutoff. */
 function isZeroDuration(val: unknown): boolean {
@@ -85,16 +86,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
         ["resetByType", "dm", "direct"],
       ] as const) {
         const owner = getRecord(session?.[section]);
-        if (!owner || !Object.hasOwn(owner, legacy)) {
-          continue;
-        }
-        if (owner[canonical] === undefined) {
-          owner[canonical] = owner[legacy];
-          changes.push(`Moved session.${section}.${legacy} → session.${section}.${canonical}.`);
-        } else {
-          changes.push(`Removed session.${section}.${legacy} (${canonical} already set).`);
-        }
-        delete owner[legacy];
+        moveLegacyConfigKey(owner, legacy, canonical, `session.${section}`, changes);
       }
     },
   }),

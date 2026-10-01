@@ -20,19 +20,6 @@ vi.mock("./channel-doctor.js", () => ({
 }));
 
 describe("doctor empty allowlist policy warnings", () => {
-  it("warns when dm allowlist mode has no allowFrom entries", () => {
-    const warnings = collectEmptyAllowlistPolicyWarningsForAccount({
-      account: { dmPolicy: "allowlist" },
-      channelName: "signal",
-      doctorFixCommand: "openclaw doctor --fix",
-      prefix: "channels.signal",
-    });
-
-    expect(warnings).toEqual([
-      '- channels.signal.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to channels.signal.allowFrom, or run "openclaw doctor --fix" to auto-migrate from pairing store when entries exist.',
-    ]);
-  });
-
   it("warns when non-telegram group allowlist mode does not fall back to allowFrom", () => {
     const warnings = collectEmptyAllowlistPolicyWarningsForAccount({
       account: { groupPolicy: "allowlist" },

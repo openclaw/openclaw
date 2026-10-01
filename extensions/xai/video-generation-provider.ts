@@ -194,7 +194,7 @@ function resolveXaiVideoMode(
     : "edit";
 }
 
-function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
+function prepareCreateRequest(req: VideoGenerationRequest) {
   validateXaiVideo15Request(req);
   const inputImages = req.inputImages ?? [];
   const hasReferenceImages = inputImages.some(isReferenceImage);
@@ -247,7 +247,7 @@ function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
     }
     body.resolution =
       resolveResolution(req.resolution, { allow1080p: isVideo15 }) ?? XAI_VIDEO_DEFAULT_RESOLUTION;
-    return body;
+    return { body, mode, endpoint: "/videos/generations" };
   }
 
   body.video = { url: resolveInputVideoUrl(req.inputVideos?.[0]) };
@@ -261,18 +261,7 @@ function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
       body.duration = duration;
     }
   }
-  return body;
-}
-
-function resolveCreateEndpoint(req: VideoGenerationRequest): string {
-  switch (resolveXaiVideoMode(req)) {
-    case "edit":
-      return "/videos/edits";
-    case "extend":
-      return "/videos/extensions";
-    default:
-      return "/videos/generations";
-  }
+  return { body, mode, endpoint: mode === "edit" ? "/videos/edits" : "/videos/extensions" };
 }
 
 export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
@@ -281,8 +270,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
     async generateVideo(req) {
       // Validate provider/model mode constraints before auth or HTTP setup so
       // unsupported 1.5 requests cannot be submitted and billed accidentally.
-      const createBody = buildCreateBody(req);
-      const createEndpoint = resolveCreateEndpoint(req);
+      const { body, endpoint, mode } = prepareCreateRequest(req);
       const auth = await resolveApiKeyForProvider({
         provider: "xai",
         cfg: req.cfg,
@@ -318,9 +306,9 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
       const submitHeaders = new Headers(headers);
       submitHeaders.set("x-idempotency-key", crypto.randomUUID());
       const { response, release } = await postJsonRequest({
-        url: `${baseUrl}${createEndpoint}`,
+        url: `${baseUrl}${endpoint}`,
         headers: submitHeaders,
-        body: createBody,
+        body,
         timeoutMs: resolveProviderOperationTimeoutMs({
           deadline,
           defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
@@ -408,7 +396,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
             requestId,
             status: completed.status,
             videoUrl,
-            mode: resolveXaiVideoMode(req),
+            mode,
           },
         };
       } finally {

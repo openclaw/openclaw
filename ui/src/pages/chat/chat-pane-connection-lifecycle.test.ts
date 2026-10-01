@@ -10,6 +10,7 @@ import { sessionsResult } from "../../lib/sessions/session-capability.test-suppo
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { chatHistoryRequests } from "./chat-history-state.ts";
 import { applyChatAgentsList } from "./chat-history.ts";
 import { makeRequestMock } from "./chat-host.test-support.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
@@ -164,7 +165,7 @@ describe("chat pane connection lifecycle", () => {
     state.realtimeTalkStatus = "listening";
     state.realtimeTalkDetail = "live";
     state.realtimeTalkInputLevel.set(0.7);
-    state.realtimeTalkConversation = [
+    state.realtimeTalkConversationState.entries = [
       { id: "utterance", role: "user", text: "stale", isStreaming: true },
     ];
     state.realtimeTalkVideoStream = {} as MediaStream;
@@ -184,7 +185,7 @@ describe("chat pane connection lifecycle", () => {
     expect(state.realtimeTalkStatus).toBe("idle");
     expect(state.realtimeTalkDetail).toBeNull();
     expect(state.realtimeTalkInputLevel.value).toBe(0);
-    expect(state.realtimeTalkConversation).toEqual([]);
+    expect(state.realtimeTalkConversationState.entries).toEqual([]);
     expect(state.realtimeTalkVideoStream).toBeNull();
     expect(state.realtimeTalkCameraDevices).toEqual([]);
     expect(state.realtimeTalkVideoCapable).toBe(false);
@@ -383,6 +384,7 @@ describe("chat pane connection lifecycle", () => {
     pane.applyGatewaySnapshot({ ...snapshot, phase: "connected" });
     pane.applyGatewaySnapshot({ ...snapshot, phase: "connected" });
 
+    await expect(chatHistoryRequests(state).subscriptionReady).resolves.toBe(true);
     expect(request.mock.calls.filter(([method]) => method === "chat.startup")).toHaveLength(1);
     expect(request).toHaveBeenCalledWith(
       "chat.startup",

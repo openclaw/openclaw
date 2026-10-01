@@ -45,7 +45,6 @@ type MantisDesktopBrowserSmokeSummary = MantisCrabboxReportSummary & {
 };
 
 const DEFAULT_BROWSER_URL = "https://openclaw.ai";
-const CRABBOX_BIN_ENV = "OPENCLAW_MANTIS_CRABBOX_BIN";
 const BROWSER_PROFILE_ARCHIVE_ENV = "OPENCLAW_MANTIS_BROWSER_PROFILE_TGZ_B64";
 const BROWSER_PROFILE_DIR_ENV = "OPENCLAW_MANTIS_BROWSER_PROFILE_DIR";
 const DEFAULT_VIDEO_DURATION_SECONDS = 10;
@@ -214,7 +213,6 @@ export async function runMantisDesktopBrowserSmoke(
   const reportPath = path.join(outputDir, "mantis-desktop-browser-smoke-report.md");
   const crabboxBin = await resolveCrabboxBin({
     env,
-    envName: CRABBOX_BIN_ENV,
     explicit: opts.crabboxBin,
     repoRoot,
   });

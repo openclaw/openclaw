@@ -631,6 +631,99 @@ describe("plugin management Gateway handlers", () => {
     expect(item?.catalog).not.toHaveProperty("publishedToClawHub");
   });
 
+  it("keeps enabled Media membership through browse pages and registry failure", async () => {
+    const provider = {
+      id: "novita",
+      name: "Novita",
+      packageName: "@openclaw/novita",
+      clawhubPackage: "@openclaw/novita",
+      origin: "bundled",
+      installed: true,
+      enabled: true,
+      state: "enabled",
+      categories: ["models"],
+      capabilityCategories: ["media"],
+    };
+    managementMocks.list.mockResolvedValue({
+      plugins: [provider],
+      diagnostics: [],
+      mutationAllowed: true,
+    });
+    catalogMocks.browse.mockResolvedValueOnce({ items: [], nextCursor: "media-next" });
+    const first = await callHandler("plugins.catalog.browse", { category: "media" });
+    const expectedItem = {
+      catalog: { categories: ["models", "media"] },
+      local: { pluginId: "novita", enabled: true, action: "manage" },
+    };
+    expect(first).toMatchObject({
+      ok: true,
+      response: { items: [expectedItem], nextCursor: "media-next" },
+    });
+    catalogMocks.browse.mockResolvedValueOnce({
+      items: [
+        {
+          packageName: provider.packageName,
+          displayName: provider.name,
+          family: "code-plugin",
+          isOfficial: true,
+          categories: ["models"],
+          downloads: 123,
+        },
+      ],
+    });
+    const second = await callHandler("plugins.catalog.browse", {
+      category: "media",
+      cursor: "media-next",
+    });
+    expect(second).toMatchObject({
+      ok: true,
+      response: {
+        items: [
+          {
+            ...expectedItem,
+            catalog: { ...expectedItem.catalog, downloads: 123 },
+          },
+        ],
+      },
+    });
+    expect(catalogMocks.browse).toHaveBeenNthCalledWith(2, {
+      query: undefined,
+      intent: "all",
+      category: "media",
+      cursor: "media-next",
+      limit: 20,
+    });
+    catalogMocks.browse.mockRejectedValueOnce(new Error("service unavailable"));
+    const offline = await callHandler("plugins.catalog.browse", { category: "media" });
+    expect(offline).toMatchObject({
+      ok: true,
+      response: {
+        items: [expectedItem],
+        remoteError:
+          "ClawHub is unavailable: service unavailable. Installed plugins remain available.",
+      },
+    });
+    managementMocks.list.mockResolvedValue({
+      plugins: [
+        { ...provider, enabled: false, state: "disabled", capabilityCategories: undefined },
+      ],
+      diagnostics: [],
+      mutationAllowed: true,
+    });
+    catalogMocks.browse.mockResolvedValueOnce({ items: [] });
+    const disabledMedia = await callHandler("plugins.catalog.browse", { category: "media" });
+    expect(disabledMedia).toMatchObject({ ok: true, response: { items: [] } });
+    catalogMocks.browse.mockResolvedValueOnce({ items: [] });
+    const disabledModels = await callHandler("plugins.catalog.browse", { category: "models" });
+    expect(disabledModels).toMatchObject({
+      ok: true,
+      response: {
+        items: [{ catalog: { categories: ["models"] }, local: { enabled: false } }],
+      },
+    });
+    expect(managementMocks.inspect).not.toHaveBeenCalled();
+  });
+
   it("preserves a failed browse cursor so the same page remains retryable", async () => {
     catalogMocks.browse.mockRejectedValue(new Error("service unavailable"));
     managementMocks.list.mockResolvedValue({

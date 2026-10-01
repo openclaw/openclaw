@@ -9,6 +9,11 @@ import type { WorkerSessionPlacementIdentity, WorkerSessionTurnClaim } from "./p
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
+export type WorkerPlacementRecoveryAdmission = (
+  sessionIds: readonly string[],
+  run: (mode?: "results-only") => Promise<void>,
+) => Promise<boolean>;
+
 export type PlacementRecoveryDeps = {
   placements: WorkerDispatchPlacementStore;
   environments: Pick<

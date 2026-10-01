@@ -83,17 +83,11 @@ function canonicalInventory(
     );
 }
 
-function hashOnboardingRecommendationInventory(
-  inventory: readonly OnboardingRecommendationInventoryItem[],
-): string {
-  return sha256Hex(JSON.stringify(canonicalInventory(inventory)));
-}
-
 export function prepareOnboardingRecommendationOffer(
   params: WriteOnboardingRecommendationsOfferParams,
 ): PreparedOnboardingRecommendationOffer {
   const nowMs = params.nowMs ?? Date.now();
-  const inventoryHash = hashOnboardingRecommendationInventory(params.inventory);
+  const inventoryHash = sha256Hex(JSON.stringify(canonicalInventory(params.inventory)));
   const matches = OnboardingRecommendationMatchesSchema.parse(params.matches);
   return { inventoryHash, matches, answered: params.answered, nowMs };
 }

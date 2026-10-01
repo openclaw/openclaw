@@ -11,6 +11,7 @@ import { MODEL_SELECTION_LOCKED_RESET_MESSAGE } from "../sessions/model-override
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { createSessionMutationTestClient } from "./server-methods/sessions-mutations.owner.test-support.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsHandlerTestHarness,
@@ -33,9 +34,7 @@ test("sessions.reset stamps provenance when it materializes a missing row", asyn
     "sessions.reset",
     { key: "agent:main:subagent:missing" },
     {
-      client: {
-        authenticatedUserProfile: { profileId: "profile-reset-creator" },
-      } as never,
+      client: createSessionMutationTestClient("profile-reset-creator"),
     },
   );
 
@@ -84,9 +83,7 @@ test("sessions.reset stamps the creator's required sandbox only when materializi
       "sessions.reset",
       { key },
       {
-        client: {
-          authenticatedUserProfile: { profileId: profile.id },
-        } as never,
+        client: createSessionMutationTestClient(profile.id),
       },
     );
 

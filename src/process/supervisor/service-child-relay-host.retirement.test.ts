@@ -11,6 +11,7 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
+import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
 import type {
   ServiceChildAnchorMessage,
@@ -35,11 +36,15 @@ vi.mock("node:child_process", async (importOriginal) => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   hooks.spawned = undefined;
+  vi.restoreAllMocks();
 });
 
 it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
-  "confirms native retirement completed before the deadline while the Node host was blocked",
+  "confirms process-group retirement completed before the deadline while the Node host was blocked",
   async () => {
+    // The two-process group relay reaps its anchor independently of the blocked host.
+    // Native custody has no such relay.
+    mockProcessPlatform("darwin");
     const root = tempDirs.make("openclaw-retirement-dispatch-");
     const input = path.join(root, "observe.json");
     const receipt = path.join(root, "retired.json");

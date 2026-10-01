@@ -119,22 +119,14 @@ function normalizeJobSchedule(
   return normalizeStreamScheduleBounds(input);
 }
 
-type JobValidationContext =
-  | { kind: "create"; cronConfig?: CronConfig; defaultAgentId?: string; nowMs: number }
-  | {
-      kind: "patch";
-      patch: CronJobPatch;
-      defaultAgentId?: string;
-      nowMs?: number;
-      cronConfig?: CronConfig;
-    }
-  | {
-      kind: "declarative";
-      input: CronJobCreate;
-      defaultAgentId?: string;
-      nowMs: number;
-      cronConfig?: CronConfig;
-    };
+type JobValidationContext = {
+  cronConfig?: CronConfig;
+  defaultAgentId?: string;
+} & (
+  | { kind: "create"; nowMs: number }
+  | { kind: "patch"; patch: CronJobPatch; nowMs?: number }
+  | { kind: "declarative"; input: CronJobCreate; nowMs: number }
+);
 
 function validateFullJob(
   job: CronStoredJob,
@@ -195,7 +187,7 @@ function validateFullJob(
     context.patch.schedule !== undefined ||
     context.patch.enabled === true;
   if (context.nowMs !== undefined && scheduleTouched) {
-    assertTimeScheduleSatisfiable(job, context.nowMs, computeJobNextRunAtMs);
+    assertTimeScheduleSatisfiable(job, context.nowMs);
   }
 }
 /** Creates a normalized cron job row from public add input and computes its initial schedule. */
@@ -428,10 +420,10 @@ export function applyJobPatch(
     resetJobFailureState(job);
   }
   if ("agentId" in patch) {
-    job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);
+    job.agentId = normalizeOptionalAgentId(patch.agentId);
   }
   if ("sessionKey" in patch) {
-    job.sessionKey = normalizeOptionalString((patch as { sessionKey?: unknown }).sessionKey);
+    job.sessionKey = normalizeOptionalString(patch.sessionKey);
   }
   if (previousScheduleKind === "stream" && job.schedule.kind !== "stream") {
     job.state.streamStatus = undefined;
@@ -624,34 +616,23 @@ function mergeCronDelivery(
       const patchFd = patch.failureDestination;
       const nextFd: typeof next.failureDestination = {};
       if (existingFd) {
-        if (Object.hasOwn(existingFd, "channel")) {
-          nextFd.channel = existingFd.channel;
-        }
-        if (Object.hasOwn(existingFd, "to")) {
-          nextFd.to = existingFd.to;
-        }
-        if (Object.hasOwn(existingFd, "accountId")) {
-          nextFd.accountId = existingFd.accountId;
+        for (const field of ["channel", "to", "accountId"] as const) {
+          if (Object.hasOwn(existingFd, field)) {
+            nextFd[field] = existingFd[field];
+          }
         }
         if (Object.hasOwn(existingFd, "mode")) {
           nextFd.mode = existingFd.mode;
         }
       }
       if (patchFd) {
-        if ("channel" in patchFd) {
-          const channel = normalizeOptionalString(patchFd.channel) ?? "";
-          nextFd.channel = channel ? channel : undefined;
-        }
-        if ("to" in patchFd) {
-          const to = normalizeOptionalString(patchFd.to) ?? "";
-          nextFd.to = to ? to : undefined;
-        }
-        if ("accountId" in patchFd) {
-          const accountId = normalizeOptionalString(patchFd.accountId) ?? "";
-          nextFd.accountId = accountId ? accountId : undefined;
+        for (const field of ["channel", "to", "accountId"] as const) {
+          if (field in patchFd) {
+            nextFd[field] = normalizeOptionalString(patchFd[field]);
+          }
         }
         if ("mode" in patchFd) {
-          const mode = normalizeOptionalString(patchFd.mode) ?? "";
+          const mode = normalizeOptionalString(patchFd.mode);
           nextFd.mode = mode === "announce" || mode === "webhook" ? mode : undefined;
         }
       }
@@ -720,18 +701,12 @@ function mergeCronFailureAlert(
       typeof patch.includeSkipped === "boolean" ? patch.includeSkipped : undefined;
   }
   if ("mode" in patch) {
-    const mode = normalizeOptionalString(patch.mode) ?? "";
+    const mode = normalizeOptionalString(patch.mode);
     next.mode = mode === "announce" || mode === "webhook" ? mode : undefined;
   }
   if ("accountId" in patch) {
-    const accountId = normalizeOptionalString(patch.accountId) ?? "";
-    next.accountId = accountId ? accountId : undefined;
+    next.accountId = normalizeOptionalString(patch.accountId);
   }
 
   return next;
 }
-
-/**
- * Covers both durable reservations and the process marker that survives mutable job state.
- * Every timer/manual admission path must use this or disable/re-enable can duplicate a run.
- */

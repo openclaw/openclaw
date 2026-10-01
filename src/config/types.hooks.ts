@@ -1,4 +1,3 @@
-// Defines hook configuration matching and command types.
 import type { z } from "zod";
 import type { InstallRecordBase } from "./types.installs.js";
 import type {

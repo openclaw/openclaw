@@ -1,28 +1,60 @@
-/** Map installed managed Gateway services to profile-scoped inspection bindings. */
-import fs from "node:fs/promises";
+/** Bind discovered native service selectors without granting lifecycle authority. */
 import path from "node:path";
-import { isRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { resolveGatewayLaunchAgentLabel } from "./constants.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { listManagedOpenClawGatewayServices, type ExtraGatewayService } from "./inspect.js";
-import { decodeLaunchdPlistMetadata } from "./launchd-plist.js";
+import type { LoadedLaunchAgentState } from "./launchd-runtime.js";
+import { resolveTaskName } from "./schtasks-layout.js";
 import type { GatewayServiceEnv, SystemdServiceReadTarget } from "./service-types.js";
 import { resolveSystemdTemplateInstanceName } from "./systemd-scope.js";
-import { parseSystemdInlineEnvironment } from "./systemd-unit.js";
+import { resolveSystemdServiceName } from "./systemd-service-files.js";
 
 export type ManagedGatewayBinding = {
-  readonly profile: string;
   readonly env: GatewayServiceEnv;
   readonly scope?: "user" | "system";
   readonly systemdReadTarget?: SystemdServiceReadTarget;
   readonly windowsStartupEntry?: string;
+  readonly launchAgentPlistPath?: string;
 };
+
+/** Inspect the exact discovered owner; Startup definitions must never borrow Task state. */
+export async function readManagedGatewayBindingState(
+  binding: ManagedGatewayBinding,
+  options: { timeoutMs?: number } = {},
+): Promise<LoadedLaunchAgentState> {
+  if (process.platform === "darwin") {
+    const { readLoadedLaunchAgentState } = await import("./launchd-runtime.js");
+    return readLoadedLaunchAgentState(binding.env, {
+      ...options,
+      plistPath: binding.launchAgentPlistPath,
+    });
+  }
+  const { readGatewayServiceState, resolveGatewayService } = await import("./service.js");
+  let timeoutMs = options.timeoutMs;
+  if (binding.windowsStartupEntry) {
+    const { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } =
+      await import("../infra/windows-powershell-spawn.js");
+    timeoutMs = Math.min(
+      timeoutMs ?? WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+      WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+    );
+  }
+  return readGatewayServiceState(resolveGatewayService(), {
+    env: binding.env,
+    requireEffective: true,
+    requireLoadedCommand: true,
+    ...(binding.systemdReadTarget ? { systemdReadTarget: binding.systemdReadTarget } : {}),
+    ...(binding.windowsStartupEntry ? { windowsStartupEntry: binding.windowsStartupEntry } : {}),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  });
+}
 
 function bindingSelectorKey(binding: ManagedGatewayBinding): string {
   return [
-    binding.profile,
+    normalizeDiscoveredProfile(binding.env.OPENCLAW_PROFILE),
     binding.scope ?? binding.systemdReadTarget?.scope ?? "",
     binding.systemdReadTarget?.unitPath ?? "",
+    binding.launchAgentPlistPath ?? "",
     binding.windowsStartupEntry
       ? path.win32.normalize(binding.windowsStartupEntry).toLowerCase()
       : "",
@@ -66,32 +98,6 @@ function profileEnvFields(profile: string): GatewayServiceEnv {
   return profile === "default" ? {} : { OPENCLAW_PROFILE: profile };
 }
 
-function inferProfileFromSystemdUnitName(label: string): string | undefined {
-  const name = label.endsWith(".service") ? label.slice(0, -".service".length) : label;
-  if (name === "openclaw-gateway") {
-    return "default";
-  }
-  const prefix = "openclaw-gateway-";
-  if (name.startsWith(prefix) && name.length > prefix.length) {
-    return name.slice(prefix.length);
-  }
-  return undefined;
-}
-
-function inferProfileFromLaunchdLabel(label: string): string | undefined {
-  if (label === resolveGatewayLaunchAgentLabel()) {
-    return "default";
-  }
-  const prefix = "ai.openclaw.";
-  if (label.startsWith(prefix)) {
-    const rest = label.slice(prefix.length);
-    if (rest && rest !== "node") {
-      return rest;
-    }
-  }
-  return undefined;
-}
-
 function detailPath(prefix: string, detail: string): string | undefined {
   if (!detail.startsWith(prefix)) {
     return undefined;
@@ -99,74 +105,31 @@ function detailPath(prefix: string, detail: string): string | undefined {
   return detail.slice(prefix.length).trim();
 }
 
-async function readServiceFile(filePath: string): Promise<Buffer | null> {
-  try {
-    return await fs.readFile(filePath);
-  } catch {
-    return null;
-  }
-}
-
-async function bindingFromSystemdService(
+function bindingFromSystemdService(
   svc: ExtraGatewayService,
   env: Record<string, string | undefined>,
-): Promise<ManagedGatewayBinding> {
+): ManagedGatewayBinding {
   const unitPath = detailPath("unit:", svc.detail);
-  let envProfile: string | undefined;
-  if (unitPath) {
-    const bytes = await readServiceFile(unitPath);
-    if (bytes) {
-      envProfile =
-        parseSystemdInlineEnvironment(bytes.toString("utf8")).OPENCLAW_PROFILE?.trim() || undefined;
-    }
-  }
-  const profile = normalizeDiscoveredProfile(
-    envProfile ?? inferProfileFromSystemdUnitName(svc.label) ?? "default",
-  );
   const unitName = resolveSystemdTemplateInstanceName(svc.label, {
-    ...profileEnvFields(profile),
     OPENCLAW_SYSTEMD_UNIT: svc.label,
   });
   const systemdReadTarget = unitPath ? { scope: svc.scope, unitName, unitPath } : undefined;
   return {
-    profile,
     scope: svc.scope,
     ...(systemdReadTarget ? { systemdReadTarget } : {}),
-    env: hostBindingEnv(env, {
-      ...profileEnvFields(profile),
-      OPENCLAW_SYSTEMD_UNIT: unitName,
-    }),
+    env: hostBindingEnv(env, { OPENCLAW_SYSTEMD_UNIT: unitName }),
   };
 }
 
-async function bindingFromLaunchdService(
+function bindingFromLaunchdService(
   svc: ExtraGatewayService,
   env: Record<string, string | undefined>,
-): Promise<ManagedGatewayBinding> {
+): ManagedGatewayBinding {
   const plistPath = detailPath("plist:", svc.detail);
-  let envProfile: string | undefined;
-  if (plistPath) {
-    const bytes = await readServiceFile(plistPath);
-    if (bytes) {
-      const plist = await decodeLaunchdPlistMetadata(bytes).catch(() => undefined);
-      const vars = plist?.EnvironmentVariables;
-      if (isRecord(vars)) {
-        const profileValue = readStringField(vars, "OPENCLAW_PROFILE");
-        if (profileValue?.trim()) {
-          envProfile = profileValue.trim();
-        }
-      }
-    }
-  }
-  const inferred = inferProfileFromLaunchdLabel(svc.label);
-  const profile = normalizeDiscoveredProfile(envProfile ?? inferred ?? "default");
   return {
-    profile,
     scope: svc.scope,
-    env: hostBindingEnv(env, {
-      ...profileEnvFields(profile),
-      OPENCLAW_LAUNCHD_LABEL: svc.label,
-    }),
+    ...(plistPath ? { launchAgentPlistPath: plistPath } : {}),
+    env: hostBindingEnv(env, { OPENCLAW_LAUNCHD_LABEL: svc.label }),
   };
 }
 
@@ -176,7 +139,6 @@ function bindingFromWindowsTask(
   env: Record<string, string | undefined>,
 ): ManagedGatewayBinding {
   return {
-    profile,
     scope: "system",
     env: hostBindingEnv(env, {
       ...profileEnvFields(profile),
@@ -186,10 +148,11 @@ function bindingFromWindowsTask(
 }
 
 /**
- * Enumerate installed managed Gateway selectors for the live-dist fence.
+ * Enumerate installed managed Gateway selectors for runtime mutation checks.
  */
 export async function discoverManagedGatewayBindings(
   env: Record<string, string | undefined>,
+  options: { requireComplete?: boolean; includeInvoking?: boolean } = {},
 ): Promise<ManagedGatewayBinding[]> {
   const results: ManagedGatewayBinding[] = [];
   const seen = new Set<string>();
@@ -202,16 +165,24 @@ export async function discoverManagedGatewayBindings(
     results.push(binding);
   };
 
+  if (options.includeInvoking) {
+    push({ env });
+  }
   try {
-    const { services } = await listManagedOpenClawGatewayServices(env);
-    // Discovery warnings cannot establish a live process holding this checkout's dist.
+    const { services, errors } = await listManagedOpenClawGatewayServices(env, {
+      requireComplete: true,
+    });
+    if (options.requireComplete && errors.length > 0) {
+      throw new Error("Managed Gateway inventory could not be completely inspected.");
+    }
+    // Best-effort callers retain known bindings; automatic writers require complete discovery.
     for (const svc of services) {
       if (svc.platform === "linux") {
-        push(await bindingFromSystemdService(svc, env));
+        push(bindingFromSystemdService(svc, env));
         continue;
       }
       if (svc.platform === "darwin") {
-        push(await bindingFromLaunchdService(svc, env));
+        push(bindingFromLaunchdService(svc, env));
         continue;
       }
       if (svc.windowsProfile === undefined) {
@@ -219,7 +190,6 @@ export async function discoverManagedGatewayBindings(
       }
       if (svc.windowsStartupEntry !== undefined) {
         push({
-          profile: svc.windowsProfile,
           scope: "user",
           windowsStartupEntry: svc.windowsStartupEntry,
           env: hostBindingEnv(env, profileEnvFields(svc.windowsProfile)),
@@ -228,9 +198,33 @@ export async function discoverManagedGatewayBindings(
       }
       push(bindingFromWindowsTask(svc.label, svc.windowsProfile, env));
     }
-  } catch {
-    return results;
+  } catch (error) {
+    if (options.requireComplete || hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
   }
 
   return results;
+}
+
+/** Name an observed owner; these diagnostics confer no control authority. */
+export function describeManagedGatewayBinding(
+  binding: ManagedGatewayBinding,
+  state: LoadedLaunchAgentState,
+): string {
+  if (state.launchAgent) {
+    return `launchd job ${JSON.stringify(state.launchAgent.target)} loaded from ${JSON.stringify(state.launchAgent.sourcePath)}`;
+  }
+  if (binding.windowsStartupEntry) {
+    return `Startup entry ${JSON.stringify(binding.windowsStartupEntry)}`;
+  }
+  if (process.platform === "win32") {
+    return `Scheduled Task ${JSON.stringify(resolveTaskName(binding.env))}`;
+  }
+  const target = binding.systemdReadTarget;
+  const unit =
+    state.runtime?.systemd?.unit ??
+    target?.unitName ??
+    `${resolveSystemdServiceName(binding.env)}.service`;
+  return `systemd ${state.runtime?.systemd?.scope ?? target?.scope ?? "user"} unit ${JSON.stringify(unit)}`;
 }

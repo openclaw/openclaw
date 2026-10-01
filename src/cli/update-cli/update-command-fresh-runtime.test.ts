@@ -71,7 +71,7 @@ describe("update command admission with fresh state", () => {
       expect(runtimePreflight).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           nodeRunner: discovered ? "/service/node" : undefined,
-          fallbackNodeRunner: expectedFallback,
+          fallbackNodeRunner: process.versions.bun ? undefined : expectedFallback,
           runtimeRecovery: expectedRecovery ? expect.any(Object) : undefined,
         }),
       );

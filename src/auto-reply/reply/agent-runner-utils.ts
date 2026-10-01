@@ -391,21 +391,11 @@ export async function buildEmbeddedRunExecutionParams(params: {
   allowTransientCooldownProbe?: boolean;
 }) {
   const authProfile = resolveRunAuthProfile(params.run, params.provider);
-  const embeddedContext = buildEmbeddedContextFromTemplate({
-    run: params.run,
-    replyRoute: params.replyRoute,
-    sessionCtx: params.sessionCtx,
-    hasRepliedRef: params.hasRepliedRef,
-  });
+  const embeddedContext = buildEmbeddedContextFromTemplate(params);
   const senderContext = buildTemplateSenderContext(params.sessionCtx);
   const runBaseParams = await buildEmbeddedRunBaseParams({
-    run: params.run,
-    provider: params.provider,
-    model: params.model,
-    runId: params.runId,
-    promptCacheKey: params.promptCacheKey,
+    ...params,
     authProfile,
-    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
   });
   return {
     embeddedContext,

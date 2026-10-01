@@ -1,6 +1,7 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { sanitizeInlineImageDataUrl } from "openclaw/plugin-sdk/inline-image-data-url-runtime";
 import type { CodexProjectedImageGroup } from "./context-engine-projection.js";
-import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
+import { invalidInlineImageText } from "./image-payload-sanitizer.js";
 import type { CodexUserInput } from "./protocol.js";
 
 function prependHistoryProvenance(

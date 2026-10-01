@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { hostname as readHostName } from "node:os";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isLoopbackHost } from "openclaw/plugin-sdk/request-url";
@@ -15,7 +14,7 @@ import type {
 } from "./config-contracts.js";
 import { selectGuardianSandbox } from "./config-exec-policy.js";
 import { DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX } from "./config-parsing.js";
-import { stringifyCodexPolicy } from "./config-policy-json.js";
+import { fingerprintCodexPolicy } from "./config-policy-json.js";
 import {
   parseAllowedApprovalPoliciesFromCodexRequirements,
   parseAllowedApprovalsReviewersFromCodexRequirements,
@@ -83,9 +82,7 @@ export function resolveCodexAppServerNetworkProxy(
   return {
     networkProxy: {
       profileName,
-      configFingerprint: createHash("sha256")
-        .update(stringifyCodexPolicy(configPatch))
-        .digest("hex"),
+      configFingerprint: fingerprintCodexPolicy(configPatch),
       configPatch,
     },
   };
@@ -99,10 +96,7 @@ function resolveNetworkProxyPermissionProfileName(
   if (explicitProfileName) {
     return explicitProfileName;
   }
-  const suffix = createHash("sha256")
-    .update(stringifyCodexPolicy({ version: 1, profile }))
-    .digest("hex")
-    .slice(0, 16);
+  const suffix = fingerprintCodexPolicy({ version: 1, profile }).slice(0, 16);
   return `${DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX}-${suffix}`;
 }
 

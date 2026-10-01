@@ -659,6 +659,12 @@ describe("buildChildCompletionFindings", () => {
       resultText: null,
       expected: undefined,
     },
+    {
+      name: "announce skip",
+      terminalReply: { disposition: "visible", text: "ANNOUNCE_SKIP" } as const,
+      resultText: "ANNOUNCE_SKIP",
+      expected: undefined,
+    },
   ])(
     "keeps producer-owned $name terminal evidence authoritative over older fallback",
     ({ terminalReply, resultText, expected }) => {

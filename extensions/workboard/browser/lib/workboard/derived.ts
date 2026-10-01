@@ -12,39 +12,16 @@ function hasWorkboardProofEvidence(card: WorkboardCard): boolean {
   );
 }
 
-function countCardFailedAttempts(card: WorkboardCard): number {
-  if (card.metadata?.failureCount !== undefined) {
-    return card.metadata.failureCount;
-  }
-  return (
-    card.metadata?.attempts?.filter(
-      (attempt) =>
-        attempt.status === "failed" || attempt.status === "blocked" || attempt.status === "stopped",
-    ).length ?? 0
-  );
-}
-
 export function workboardCardMatchesHealthKey(
   card: WorkboardCard,
   key: WorkboardHealthKey,
   sessions: readonly GatewaySessionRow[],
 ): boolean {
   switch (key) {
-    case "running":
-      return card.status === key || getWorkboardLifecycle(card, sessions).state === key;
-    case "blocked":
-      return card.status === "blocked";
     case "stale":
       return Boolean(card.metadata?.stale || getWorkboardLifecycle(card, sessions).state === key);
-    case "readyUnassigned":
-      return card.status === "ready" && !card.agentId?.trim() && !card.metadata?.claim;
     case "missingProof":
       return card.status === "done" && !hasWorkboardProofEvidence(card);
-    case "failedAttempts":
-      return (
-        countCardFailedAttempts(card) > 0 ||
-        getWorkboardLifecycle(card, sessions).state === "failed"
-      );
   }
   return false;
 }

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { webhookCallback, type Bot } from "grammy";
+import type { Bot } from "grammy";
 import type { Message, Update } from "grammy/types";
 import type { OpenClawConfig, TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -12,6 +12,7 @@ import {
   apiResponses,
   commandMessage,
   createBot,
+  deliverTelegramUpdate,
   from,
   groupChat,
   harness,
@@ -63,17 +64,7 @@ function topicMessage(text: string, threadId = 99) {
 }
 
 async function receive(bot: Bot, message: NonNullable<Update["message"]>) {
-  const response = await webhookCallback(
-    bot,
-    "std/http",
-  )(
-    new Request("http://localhost/telegram", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ update_id: ++updateId, message }),
-    }),
-  );
-  expect(response.status).toBe(200);
+  await deliverTelegramUpdate(bot, { update_id: ++updateId, message });
   expect(runtimeError).not.toHaveBeenCalled();
 }
 

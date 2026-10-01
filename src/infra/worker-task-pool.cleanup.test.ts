@@ -53,6 +53,13 @@ describe("worker task artifact lifetime", () => {
         ...(await importOriginal<typeof import("node:worker_threads")>()),
         Worker: MockWorker,
       }));
+      let retiring = false;
+      vi.doMock("./temp-artifact-cleanup.js", () => {
+        if (retiring) {
+          throw new Error("cleanup module loaded during retirement");
+        }
+        return { removeTemporaryArtifacts: cleanup };
+      });
       vi.resetModules();
       cleanup.mockReset();
       let artifactsCleaned = false;
@@ -106,6 +113,7 @@ describe("worker task artifact lifetime", () => {
           },
         );
         await delivered.promise;
+        retiring = true;
         if (phase === "idle") {
           await expect(task).resolves.toBe(42);
           expect(await Promise.allSettled([pool.close(), pool.close()])).toEqual([
@@ -153,6 +161,7 @@ describe("worker task artifact lifetime", () => {
         await pool.close().catch(() => undefined);
         cleanup.mockReset();
         vi.doUnmock("node:worker_threads");
+        vi.doMock("./temp-artifact-cleanup.js", () => ({ removeTemporaryArtifacts: cleanup }));
         vi.resetModules();
       }
     },

@@ -6,6 +6,7 @@ import {
 } from "./metadata-normalization.ts";
 import {
   isValidWorkboardBoardId,
+  normalizeWorkboardSessionsBoardSpec,
   WORKBOARD_PRIORITIES,
   WORKBOARD_STATUSES,
   type WorkboardBoardSummary,
@@ -38,6 +39,9 @@ function normalizeBoardSummary(value: unknown): WorkboardBoardSummary | null {
     typeof value.automationJobId === "string" ? value.automationJobId.trim() : "";
   return {
     id,
+    ...(value.kind === "sessions"
+      ? { kind: "sessions" as const, sessions: normalizeWorkboardSessionsBoardSpec(value.sessions) }
+      : {}),
     total: normalizeCount(value.total),
     active: normalizeCount(value.active),
     archived: normalizeCount(value.archived),

@@ -40,6 +40,7 @@ import {
   rewriteRootRuntimeImportsToStableAliases,
   writeStableRootRuntimeAliases,
 } from "../scripts/runtime-postbuild.mts";
+import { packageActivationRuntimeEntrypoint } from "../src/infra/package-update-activation-runtime-assets.js";
 import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../src/infra/runtime-dependency-ownership.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -2020,6 +2021,11 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       expected: [],
       name: "accepts the oversized worker rsync receiver",
       relativePath: `worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
+    },
+    {
+      expected: [],
+      name: "accepts the oversized sealed package-update recovery helper",
+      relativePath: packageActivationRuntimeEntrypoint.distWorkerPath,
     },
     {
       expected: [

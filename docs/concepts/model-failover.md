@@ -409,6 +409,9 @@ and approval settings; a changed review requires another decision. The precautio
 clears only after the provider accepts the continuation. Previously queued
 messages remain held for individual review and retry.
 
+Continuation sends the acknowledged message exactly once as the next user turn.
+Runtime context stays separate, and existing transcript messages remain unchanged.
+
 Ordinary API-key Responses and incognito conversations do not offer continuation.
 Missing or incomplete findings also cannot authorize one. A stopped conversation
 does not undo actions already completed. See [OpenAI's misalignment monitoring

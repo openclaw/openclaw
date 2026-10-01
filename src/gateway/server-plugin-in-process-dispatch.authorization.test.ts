@@ -22,6 +22,7 @@ import {
   runWithOperatorToolGatewayCleanupContext,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
+import { registerInProcessGatewayDispatchPreparationTests } from "./server-plugin-in-process-dispatch.preparation.test-support.js";
 import {
   createContext,
   createOperatorClient,
@@ -149,6 +150,8 @@ describe("typed in-process agent authorization", () => {
       expect(waitForTurn).not.toHaveBeenCalled();
     },
   );
+
+  registerInProcessGatewayDispatchPreparationTests({ startTurn, waitForTurn });
 
   it.each([
     { actorKind: "operator", callerScope: "operator.read", requestedScope: "operator.read" },

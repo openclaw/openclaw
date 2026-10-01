@@ -22,6 +22,7 @@ import {
 } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+export { normalizeOptionalString as normalizeQaTarget } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export { buildQaTarget, parseQaTarget };
 
@@ -140,14 +141,6 @@ async function postJson<T>(
     request.on("error", reject);
     request.end(payload);
   });
-}
-
-export function normalizeQaTarget(raw: string): string | undefined {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed;
 }
 
 export function resolveQaTargetThread(params: {

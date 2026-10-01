@@ -196,6 +196,28 @@ function resolveFileToolPathParamKeys(groups: readonly RequiredParamGroup[] | un
   return [...keys];
 }
 
+export function missingRequiredParamLabels(
+  record: Record<string, unknown> | undefined,
+  groups: readonly RequiredParamGroup[],
+): string[] {
+  return groups
+    .filter(
+      (group) =>
+        !record ||
+        !(
+          group.validator?.(record) ??
+          group.keys.some((key) => {
+            if (!(key in record)) {
+              return false;
+            }
+            const value = record[key];
+            return typeof value === "string" && (group.allowEmpty || value.trim().length > 0);
+          })
+        ),
+    )
+    .map((group) => group.label ?? group.keys.join(" or "));
+}
+
 /** Throw actionable retry guidance when required tool params are missing. */
 export function assertRequiredParams(
   record: Record<string, unknown> | undefined,
@@ -206,29 +228,7 @@ export function assertRequiredParams(
     throw parameterValidationError(`Missing parameters for ${toolName}`);
   }
 
-  const missingLabels: string[] = [];
-  for (const group of groups) {
-    const satisfied =
-      group.validator?.(record) ??
-      group.keys.some((key) => {
-        if (!(key in record)) {
-          return false;
-        }
-        const value = record[key];
-        if (typeof value !== "string") {
-          return false;
-        }
-        if (group.allowEmpty) {
-          return true;
-        }
-        return value.trim().length > 0;
-      });
-
-    if (!satisfied) {
-      const label = group.label ?? group.keys.join(" or ");
-      missingLabels.push(label);
-    }
-  }
+  const missingLabels = missingRequiredParamLabels(record, groups);
 
   if (missingLabels.length > 0) {
     const joined = missingLabels.join(", ");

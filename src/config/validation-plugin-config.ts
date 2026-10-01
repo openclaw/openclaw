@@ -26,7 +26,6 @@ import { isRecord, resolveUserPath } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
-import { formatRawChannelConfigIssueMessage } from "./validation-channel-rules.js";
 import {
   validatePreparedPluginSchemaValue,
   type PreparedPluginSchemaValidations,
@@ -38,7 +37,7 @@ export function formatChannelConfigIssueMessage(message: string, pluginId?: stri
   const safePluginId = pluginId ? sanitizeForLog(pluginId).trim() : "";
   return safePluginId
     ? `invalid config for plugin ${safePluginId}: ${message}`
-    : formatRawChannelConfigIssueMessage(message);
+    : `invalid config: ${message}`;
 }
 
 /** Deferred channel settings remain authored inputs until their owning plugin can validate them. */
@@ -371,9 +370,7 @@ export function validateExplicitPluginConfig(params: {
         selectedMemoryPluginId = pluginId;
       }
     }
-    const shouldReplacePluginConfig = entryHasConfig || (applyDefaults && enabled);
-    const shouldValidate = enabled || entryHasConfig;
-    if (shouldValidate) {
+    if (enabled || entryHasConfig) {
       if (record.configSchema) {
         const result = validatePreparedPluginSchemaValue(
           {
@@ -396,7 +393,7 @@ export function validateExplicitPluginConfig(params: {
               allowedValuesHiddenCount: error.allowedValuesHiddenCount,
             });
           }
-        } else if (shouldReplacePluginConfig) {
+        } else if (entryHasConfig || (applyDefaults && enabled)) {
           let nextValue = result.value as Record<string, unknown>;
           const nativeCatalog =
             record.setup?.nativeSessionCatalog ??
@@ -419,10 +416,7 @@ export function validateExplicitPluginConfig(params: {
           }
           params.replacePluginEntryConfig(pluginId, nextValue);
         }
-      } else if (record.format === "bundle") {
-        // Compatible bundles currently expose no native OpenClaw config schema.
-        // Treat them as schema-less capability packs rather than failing validation.
-      } else {
+      } else if (record.format !== "bundle") {
         issues.push({
           path: `plugins.entries.${pluginId}`,
           message: `plugin schema missing for ${pluginId}`,

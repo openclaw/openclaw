@@ -13,6 +13,8 @@ import {
   extractReplyText,
   FeishuReplyCommentError,
   formatFeishuApiError,
+  type FeishuDriveCommentCard,
+  type FeishuDriveCommentReply,
 } from "./comment-shared.js";
 import { parseFeishuCommentTarget, type CommentFileType } from "./comment-target.js";
 import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
@@ -20,8 +22,6 @@ import { withFeishuMessageDispatch } from "./send-context.js";
 import { createFeishuToolClient } from "./tool-account.js";
 import { registerFeishuTool } from "./tool-registration.js";
 import { feishuExternalToolResult as jsonResult, unknownToolActionResult } from "./tool-result.js";
-
-// ============ Actions ============
 
 type FeishuExplorerRootFolderMetaResponse = {
   code: number;
@@ -48,31 +48,6 @@ type FeishuDriveApiResponse<T> = {
   log_id?: string;
   msg?: string;
   data?: T;
-};
-
-type FeishuDriveCommentReply = {
-  reply_id?: string;
-  user_id?: string;
-  create_time?: number;
-  update_time?: number;
-  content?: {
-    elements?: unknown[];
-  };
-};
-
-type FeishuDriveCommentCard = {
-  comment_id?: string;
-  user_id?: string;
-  create_time?: number;
-  update_time?: number;
-  is_solved?: boolean;
-  is_whole?: boolean;
-  has_more?: boolean;
-  page_token?: string;
-  quote?: string;
-  reply_list?: {
-    replies?: FeishuDriveCommentReply[];
-  };
 };
 
 type FeishuDriveListCommentsResponse = FeishuDriveApiResponse<{
@@ -654,8 +629,6 @@ export async function deliverCommentThreadText(
     throw error;
   }
 }
-
-// ============ Tool Registration ============
 
 export function registerFeishuDriveTools(api: OpenClawPluginApi) {
   registerFeishuTool(api, {

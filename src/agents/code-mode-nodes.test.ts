@@ -295,7 +295,7 @@ describe("Code Mode nodes", () => {
 
     expect(details).toMatchObject({
       status: "failed",
-      failurePhase: "bridge",
+      failurePhase: "guest",
       bridgeDispatchStarted: true,
     });
   });
@@ -312,7 +312,7 @@ describe("Code Mode nodes", () => {
 
     expect(details).toMatchObject({
       status: "failed",
-      failurePhase: "bridge",
+      failurePhase: "guest",
       bridgeDispatchStarted: true,
     });
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(

@@ -97,7 +97,7 @@ extension OpenClawChatViewModel {
         guard let runIDs else { return }
         var seen = Set<String>()
         let normalized = runIDs.compactMap { runID -> String? in
-            guard let runID = Self.normalizedRunID(runID),
+            guard let runID = ChatPayloadDecoding.trimmedNonEmptyString(runID),
                   seen.insert(runID).inserted
             else {
                 return nil
@@ -132,7 +132,7 @@ extension OpenClawChatViewModel {
     func applyLiveRunUsage(runID: String, sequence: Int, outputTokens: Int) -> Bool {
         guard sequence > 0, outputTokens > 0, self.ownsLiveTelemetryRun(runID) else { return false }
         var state = self.liveRunStateByRunID[runID] ?? ChatLiveRunState()
-        guard sequence > state.sequence, !state.terminal else { return false }
+        guard sequence > state.sequence else { return false }
         state.sequence = sequence
         state.outputTokens = max(outputTokens, state.outputTokens ?? 0)
         self.liveRunStateByRunID[runID] = state
@@ -143,14 +143,14 @@ extension OpenClawChatViewModel {
     func acceptLiveRunSequence(runID: String, sequence: Int) -> Bool {
         guard sequence > 0, self.ownsLiveTelemetryRun(runID) else { return false }
         var state = self.liveRunStateByRunID[runID] ?? ChatLiveRunState()
-        guard sequence > state.sequence, !state.terminal else { return false }
+        guard sequence > state.sequence else { return false }
         state.sequence = sequence
         self.liveRunStateByRunID[runID] = state
         return true
     }
 
     func retireTerminalRun(_ runID: String?) {
-        guard let runID = Self.normalizedRunID(runID) else { return }
+        guard let runID = ChatPayloadDecoding.trimmedNonEmptyString(runID) else { return }
         // Advertised-only runs must fence earlier history even after a later
         // session snapshot releases their terminal tombstone.
         self.invalidateRunSnapshots()
@@ -221,16 +221,8 @@ extension OpenClawChatViewModel {
         sessionRoutingContract: String?) -> ModelPatchTarget
     {
         let presentationKey = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let listedKey = canonicalSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let candidate = if let listedKey, !listedKey.isEmpty {
-            listedKey
-        } else {
-            presentationKey
-        }
-        let normalizedAgentID = agentID?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        let routeAgentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
+        let candidate = ChatPayloadDecoding.trimmedNonEmptyString(canonicalSessionKey) ?? presentationKey
+        let routeAgentID = Self.normalizedAgentId(agentID)
         let normalizedCandidate = candidate.lowercased()
         let targetKey: String
         let targetAgentID: String?
@@ -294,10 +286,11 @@ extension OpenClawChatViewModel {
         guard let session,
               let result = self.lastSuccessfulSettingsPatchResultsByTarget[target]
         else { return nil }
-        let sessionModel = Self.normalizedModelIdentityComponent(session.model ?? self.sessionDefaults?.model)
-        let sessionProvider = Self.normalizedProvider(session.modelProvider ?? self.sessionDefaults?.modelProvider)
-        let resultModel = Self.normalizedModelIdentityComponent(result.model)
-        let resultProvider = Self.normalizedProvider(result.modelProvider)
+        let sessionModel = ChatPayloadDecoding.trimmedNonEmptyString(session.model ?? self.sessionDefaults?.model)
+        let sessionProvider = ChatPayloadDecoding
+            .trimmedNonEmptyString(session.modelProvider ?? self.sessionDefaults?.modelProvider)
+        let resultModel = ChatPayloadDecoding.trimmedNonEmptyString(result.model)
+        let resultProvider = ChatPayloadDecoding.trimmedNonEmptyString(result.modelProvider)
         guard resultModel == nil || resultModel == sessionModel else { return nil }
         guard resultProvider == nil || resultProvider == sessionProvider else { return nil }
         return result
@@ -319,13 +312,15 @@ extension OpenClawChatViewModel {
         syncSelection: Bool)
     {
         let existingIndex = self.sessionIndexForModelState(sessionKey: sessionKey)
-        var updated = existingIndex.map { self.sessions[$0] } ?? OpenClawChatSessionEntry.placeholder(key: sessionKey)
+        var updated = existingIndex.map { self.sessions[$0] }
+            ?? self.sidebarData?.row(key: sessionKey, agentID: self.currentSessionSnapshot().deliveryAgentID)
+            ?? OpenClawChatSessionEntry.placeholder(key: sessionKey)
         // Thinking metadata follows model identity; stale options must not survive a model change.
         let preservesThinkingMetadata =
-            Self.normalizedModelIdentityComponent(updated.model) ==
-            Self.normalizedModelIdentityComponent(modelID) &&
-            Self.normalizedModelIdentityComponent(updated.modelProvider) ==
-            Self.normalizedModelIdentityComponent(modelProvider)
+            ChatPayloadDecoding.trimmedNonEmptyString(updated.model) ==
+            ChatPayloadDecoding.trimmedNonEmptyString(modelID) &&
+            ChatPayloadDecoding.trimmedNonEmptyString(updated.modelProvider) ==
+            ChatPayloadDecoding.trimmedNonEmptyString(modelProvider)
         updated.modelProvider = modelProvider
         updated.model = modelID
         if !preservesThinkingMetadata {
@@ -343,16 +338,6 @@ extension OpenClawChatViewModel {
         if syncSelection {
             self.syncSelectedModel()
         }
-    }
-
-    static func normalizedProvider(_ provider: String?) -> String? {
-        self.normalizedModelIdentityComponent(provider)
-    }
-
-    static func normalizedModelIdentityComponent(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let trimmed, !trimmed.isEmpty else { return nil }
-        return trimmed
     }
 
     static func providerQualifiedModelSelectionID(modelID: String, provider: String) -> String {
@@ -469,8 +454,7 @@ extension OpenClawChatViewModel {
     }
 
     private static func normalizedAgentId(_ agentId: String?) -> String? {
-        let normalized = agentId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized?.isEmpty == false ? normalized : nil
+        ChatPayloadDecoding.trimmedNonEmptyString(agentId)?.lowercased()
     }
 
     private static func matchesAliasAgent(

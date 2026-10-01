@@ -1,4 +1,3 @@
-// Nostr plugin module implements channel behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   createScopedDmSecurityResolver,
@@ -138,8 +137,8 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
       order: 100,
     },
     capabilities: {
-      chatTypes: ["direct"], // DMs only for MVP
-      media: false, // No media for MVP
+      chatTypes: ["direct"],
+      media: false,
     },
     reload: { configPrefixes: ["channels.nostr"] },
     configSchema: buildChannelConfigSchema(NostrConfigSchema),
@@ -175,27 +174,25 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
       resolveOutboundSessionRoute: resolveNostrOutboundSessionRoute,
     },
     message: nostrMessageAdapter,
-    status: {
-      ...createComputedAccountStatusAdapter<ResolvedNostrAccount>({
-        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
-        collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("nostr", accounts),
-        buildChannelSummary: ({ snapshot }) =>
-          buildPassiveChannelStatusSummary(snapshot, {
-            publicKey: snapshot.publicKey ?? null,
-          }),
-        resolveAccountSnapshot: ({ account, runtime }) => ({
-          accountId: account.accountId,
-          name: account.name,
-          enabled: account.enabled,
-          configured: account.configured,
-          extra: {
-            publicKey: account.publicKey,
-            profile: account.profile,
-            ...buildTrafficStatusSummary(runtime),
-          },
+    status: createComputedAccountStatusAdapter<ResolvedNostrAccount>({
+      defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+      collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("nostr", accounts),
+      buildChannelSummary: ({ snapshot }) =>
+        buildPassiveChannelStatusSummary(snapshot, {
+          publicKey: snapshot.publicKey ?? null,
         }),
+      resolveAccountSnapshot: ({ account, runtime }) => ({
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: account.configured,
+        extra: {
+          publicKey: account.publicKey,
+          profile: account.profile,
+          ...buildTrafficStatusSummary(runtime),
+        },
       }),
-    },
+    }),
     gateway: {
       startAccount: startNostrGatewayAccount,
     },
@@ -209,13 +206,6 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
   outbound: nostrPluginOutboundAdapter,
 });
 
-/**
- * Publish a profile (kind:0) for a Nostr account.
- * @param accountId - Account ID (defaults to "default")
- * @param profile - Profile data to publish
- * @returns Publish results with successes and failures
- * @throws Error if account is not running
- */
 export async function publishNostrProfile(
   accountId: string | undefined,
   profile: NostrProfile,
@@ -228,11 +218,6 @@ export async function publishNostrProfile(
   return bus.publishProfile(profile);
 }
 
-/**
- * Get profile publish state for a Nostr account.
- * @param accountId - Account ID (defaults to "default")
- * @returns Profile publish state or null if account not running
- */
 export async function getNostrProfileState(accountId: string = DEFAULT_ACCOUNT_ID): Promise<{
   lastPublishedAt: number | null;
   lastPublishedEventId: string | null;

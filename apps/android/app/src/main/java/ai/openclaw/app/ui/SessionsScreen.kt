@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.SessionSnooze
 import ai.openclaw.app.chat.isSessionRunActive
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawEmptyState
@@ -84,6 +85,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 
 @Composable
 internal fun SessionsScreen(
@@ -131,8 +136,9 @@ internal fun SessionsScreen(
       currentSessionKey = chatSessionKey,
       filter = filter,
       recentFirst = recentFirst,
+      nowMs = sessionStatusNowMs,
     )
-  val nextAttentionExpiry = nextSessionStatusExpiry(visibleSessions, sessionStatusNowMs)
+  val nextAttentionExpiry = nextSessionStatusExpiry(searchState.entries, sessionStatusNowMs)
   val storedGroups by viewModel.sessionCustomGroups.collectAsState()
   val sections =
     buildSessionTreeSections(
@@ -214,6 +220,7 @@ internal fun SessionsScreen(
         ) {
           FilterPill(text = nativeString("Recent"), icon = Icons.Outlined.AccessTime, active = filter == SessionFilter.Recent, onClick = { filter = SessionFilter.Recent })
           FilterPill(text = nativeString("Current"), icon = Icons.Outlined.MicNone, active = filter == SessionFilter.Current, showDot = sessions.any { it.key == chatSessionKey }, onClick = { filter = SessionFilter.Current })
+          FilterPill(text = nativeString("Snoozed"), icon = Icons.Outlined.AccessTime, active = filter == SessionFilter.Snoozed, onClick = { filter = SessionFilter.Snoozed })
           FilterPill(text = nativeString("Archived"), icon = Icons.Outlined.Archive, active = filter == SessionFilter.Archived, onClick = { filter = SessionFilter.Archived })
           FilterPill(text = nativeString("Automations"), icon = Icons.Outlined.Schedule, active = filter == SessionFilter.Automations, onClick = { filter = SessionFilter.Automations })
         }
@@ -373,7 +380,14 @@ internal fun SessionsScreen(
                     fallback = if (active) nativeString("Current thread") else nativeString("OpenClaw thread"),
                     nowMs = sessionStatusNowMs,
                   ),
-              metadata = (session.lastActivityAt ?: session.updatedAtMs)?.let(::relativeSessionTime) ?: nativeString("now"),
+              metadata =
+                if (filter == SessionFilter.Snoozed && session.isSnoozed(sessionStatusNowMs)) {
+                  nativeString("Wakes \$wakeLabel", SessionSnooze.wakeLabel(requireNotNull(session.snoozedUntil), sessionStatusNowMs))
+                } else {
+                  (session.lastActivityAt ?: session.updatedAtMs)?.let { relativeSessionTime(it, sessionStatusNowMs) } ?: nativeString("now")
+                },
+              nowMs = sessionStatusNowMs,
+              showWakeTime = filter == SessionFilter.Snoozed,
               active = active,
               compact = compactLayout,
               archived = session.archived == true,
@@ -397,6 +411,17 @@ internal fun SessionsScreen(
               onSetPinned = { pinned ->
                 coroutineScope.launch {
                   viewModel.patchChatSession(key = session.key, ownerAgentId = session.ownerAgentId, pinned = pinned)
+                }
+              },
+              onSetSnooze = { wakeAtMs ->
+                coroutineScope.launch {
+                  viewModel.patchChatSession(
+                    key = session.key,
+                    ownerAgentId = session.ownerAgentId,
+                    snoozedUntil = wakeAtMs,
+                    clearSnooze = wakeAtMs == null,
+                    expectedSessionId = session.sessionId,
+                  )
                 }
               },
               onSetUnread = { unread ->
@@ -620,6 +645,8 @@ private fun SessionRow(
   title: String,
   subtitle: String,
   metadata: String,
+  nowMs: Long,
+  showWakeTime: Boolean,
   active: Boolean,
   compact: Boolean,
   archived: Boolean,
@@ -631,6 +658,7 @@ private fun SessionRow(
   onToggleExpanded: () -> Unit,
   onClick: () -> Unit,
   onSetPinned: (Boolean) -> Unit,
+  onSetSnooze: (Long?) -> Unit,
   onSetUnread: (Boolean) -> Unit,
   onRename: () -> Unit,
   onSetColor: (String?) -> Unit,
@@ -645,6 +673,7 @@ private fun SessionRow(
   var submenu by remember { mutableStateOf<SessionRowSubmenu?>(null) }
   val selectedColor = session.color.takeIf { it in sessionColorNames }
   val canChangeArchived = !session.sessionId.isNullOrBlank()
+  val snoozePresets = remember(menuExpanded, submenu) { SessionSnooze.presets(System.currentTimeMillis()) }
 
   Surface(color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Box {
@@ -734,6 +763,9 @@ private fun SessionRow(
               }
               SessionDescendantSignals(collapsedDescendantState, visible = compact)
             }
+            if (showWakeTime) {
+              Text(text = metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 2)
+            }
             if (!compact) {
               Text(text = subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
               Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -745,7 +777,9 @@ private fun SessionRow(
 
           Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs)) {
             Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textMuted)
-            Text(text = metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
+            if (!showWakeTime) {
+              Text(text = metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
+            }
           }
         }
         HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
@@ -779,6 +813,16 @@ private fun SessionRow(
                 onSetColor(name)
               },
             )
+          }
+        } else if (submenu == SessionRowSubmenu.Snooze) {
+          SessionMenuItem(nativeString("← Back")) { submenu = null }
+          snoozePresets.forEach { preset ->
+            val time = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).format(Instant.ofEpochMilli(preset.wakeAtMs).atZone(ZoneId.systemDefault()))
+            SessionMenuItem(nativeString("\$title · \$time", preset.title, time)) {
+              menuExpanded = false
+              submenu = null
+              onSetSnooze(preset.wakeAtMs)
+            }
           }
         } else if (archived) {
           if (canChangeArchived) {
@@ -817,6 +861,16 @@ private fun SessionRow(
             menuExpanded = false
             onSetPinned(session.pinned != true)
           }
+          if (canSnoozeSession(session)) {
+            if (session.isSnoozed(nowMs)) {
+              SessionMenuItem(nativeString("Wake session · \$wakeLabel", SessionSnooze.wakeLabel(requireNotNull(session.snoozedUntil), nowMs))) {
+                menuExpanded = false
+                onSetSnooze(null)
+              }
+            } else {
+              SessionMenuItem(nativeString("Snooze")) { submenu = SessionRowSubmenu.Snooze }
+            }
+          }
           SessionMenuItem(if (session.unread == true) nativeString("Mark as read") else nativeString("Mark as unread")) {
             menuExpanded = false
             onSetUnread(session.unread != true)
@@ -851,7 +905,7 @@ private fun SessionRow(
   }
 }
 
-private enum class SessionRowSubmenu { Color, Group }
+private enum class SessionRowSubmenu { Color, Group, Snooze }
 
 private fun sessionColorLabel(name: String?): String =
   when (name) {
@@ -985,6 +1039,7 @@ private fun SessionMiniTag(text: String) {
 internal enum class SessionFilter {
   Recent,
   Current,
+  Snoozed,
   Archived,
   Automations,
 }
@@ -1041,12 +1096,15 @@ internal fun resolveSessionBrowserEntries(
   currentSessionKey: String,
   filter: SessionFilter,
   recentFirst: Boolean,
+  nowMs: Long = System.currentTimeMillis(),
 ): List<ChatSessionEntry> {
   val filtered =
     when (filter) {
-      SessionFilter.Recent -> entries.filter { isSessionVisibleInNavigation(it, currentSessionKey) }
+      SessionFilter.Recent -> entries.filter { isSessionVisibleInNavigation(it, currentSessionKey, nowMs) }
 
-      SessionFilter.Current -> entries.filter { it.key == currentSessionKey }
+      SessionFilter.Current -> entries.filter { it.key == currentSessionKey && !it.isSnoozed(nowMs) }
+
+      SessionFilter.Snoozed -> entries.filter { it.archived != true && it.isSnoozed(nowMs) }
 
       SessionFilter.Automations -> entries.filter { it.archived != true && isAutomationSession(it) }
 
@@ -1068,7 +1126,25 @@ private val cronSessionDisplayKey = Regex("^(?:cron:|agent::*[^:]+:+cron:+[^:])"
 internal fun isSessionVisibleInNavigation(
   session: ChatSessionEntry,
   currentSessionKey: String,
-): Boolean = session.key == currentSessionKey || (session.archived != true && !isAutomationSession(session))
+  nowMs: Long = System.currentTimeMillis(),
+): Boolean = !session.isSnoozed(nowMs) && (session.key == currentSessionKey || (session.archived != true && !isAutomationSession(session)))
+
+internal fun canSnoozeSession(session: ChatSessionEntry): Boolean {
+  val key = session.key.trim().lowercase()
+  val agentKey = key.split(':', limit = 3).takeIf { it.size == 3 && it[0] == "agent" }
+  val agentRest = agentKey?.get(2)
+  val parentKey = session.parentSessionKey?.trim()?.takeIf(String::isNotEmpty)
+  // Dashboard rows can auto-parent to their agent's main root and remain pinnable.
+  val rootParent = agentKey?.let { "agent:${it[1]}:main" }
+  return !session.sessionId.isNullOrBlank() &&
+    session.archived != true &&
+    session.isMain != true &&
+    key !in setOf("main", "global", "unknown") &&
+    agentRest != "main" &&
+    !(agentRest ?: key).startsWith("subagent:") &&
+    (parentKey == null || parentKey == rootParent) &&
+    session.spawnedBy.isNullOrBlank()
+}
 
 private fun isAutomationSession(session: ChatSessionEntry): Boolean {
   if (cronSessionDisplayKey.containsMatchIn(session.key.trim().lowercase()) || session.createdActorType == "system") return true
@@ -1184,7 +1260,11 @@ internal data class SessionDescendantSignal(
 internal fun nextSessionStatusExpiry(
   entries: List<ChatSessionEntry>,
   nowMs: Long,
-): Long? = entries.mapNotNull { it.agentStatus?.expiresAt }.filter { it > nowMs }.minOrNull()
+): Long? =
+  listOfNotNull(
+    entries.mapNotNull { it.agentStatus?.expiresAt }.filter { it > nowMs }.minOrNull(),
+    SessionSnooze.nextWakeMs(entries, nowMs),
+  ).minOrNull()
 
 internal suspend fun awaitSessionStatusExpiry(
   expiry: Long,
@@ -1392,8 +1472,7 @@ internal fun groupSessionEntries(
   knownGroups: List<String> = emptyList(),
 ): List<SessionSection> {
   if (entries.isEmpty()) return emptyList()
-  val pinned = entries.filter { it.pinned == true }
-  val remaining = entries.filterNot { it.pinned == true }
+  val (pinned, remaining) = entries.partition { it.pinned == true }
   val populated = remaining.filter { !it.category.isNullOrBlank() }.groupBy { it.category.orEmpty().trim() }
   // Stored-but-empty groups still render so they stay visible as move targets.
   val emptyKnown =
@@ -1434,6 +1513,7 @@ private fun emptySessionTitle(filter: SessionFilter): String =
   when (filter) {
     SessionFilter.Recent -> nativeString("No threads yet")
     SessionFilter.Current -> nativeString("No current thread")
+    SessionFilter.Snoozed -> nativeString("No snoozed threads")
     SessionFilter.Archived -> nativeString("No archived threads")
     SessionFilter.Automations -> nativeString("No automation threads")
   }
@@ -1442,6 +1522,7 @@ private fun emptySessionBody(filter: SessionFilter): String =
   when (filter) {
     SessionFilter.Recent -> nativeString("Start a new conversation and it will show up here.")
     SessionFilter.Current -> nativeString("Open Chat to start or resume the current thread.")
+    SessionFilter.Snoozed -> nativeString("Snoozed threads will show up here.")
     SessionFilter.Archived -> nativeString("Archived threads will show up here.")
     SessionFilter.Automations -> nativeString("Automation and system conversations will show up here.")
   }

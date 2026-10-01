@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { z } from "zod";
+import { hasErrnoCode } from "./errno.js";
 import { executeSqliteQuerySync, prepareSqliteQueryTakeFirstSync } from "./kysely-sync.js";
 import {
   leaseQueries,
@@ -9,17 +10,23 @@ import {
   type LeaseTable,
   type ManagedUpdateLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
-import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease-types.js";
+import type {
+  BorrowedLegacyHandoffParent,
+  ManagedHandoffLease,
+} from "./update-managed-service-handoff-lease-types.js";
 import {
   readBorrowedLegacyHandoffParent,
   isBorrowedLegacyHandoffParentCurrent,
-  type BorrowedLegacyHandoffParent,
 } from "./update-managed-service-handoff-legacy-parent.js";
 import {
+  isRetiredManagedHandoffLeasePayload,
   parseManagedHandoffLeasePayload,
   type HandoffProcessIdentity,
 } from "./update-managed-service-handoff-schema.js";
-import { isManagedHandoffSchemaEmpty } from "./update-managed-service-handoff-source-inspection.js";
+import {
+  hasManagedHandoffSchemaObject,
+  isManagedHandoffSchemaEmpty,
+} from "./update-managed-service-handoff-source-inspection.js";
 
 export const managedHandoffLeaseText = z.string().min(1).max(4096);
 export const triageFailureSchema = z.strictObject({
@@ -102,7 +109,7 @@ export function createManagedHandoffLeaseRows(
     db: HandoffDatabase,
     lease: ManagedHandoffLease,
     values: Pick<LeaseTable, "payload_json" | "updated_at"> &
-      Partial<Pick<LeaseTable, "install_root">>,
+      Partial<Pick<LeaseTable, "install_root" | "owner" | "recovery_json">>,
   ) {
     return (
       executeSqliteQuerySync(
@@ -133,6 +140,38 @@ export function createManagedHandoffLeaseRows(
       return { kind: "unreadable" };
     }
   }
+  function readRetainedSources(): ManagedHandoffLease[] {
+    try {
+      fs.lstatSync(databasePath);
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOENT")) {
+        return [];
+      }
+      throw error;
+    }
+    return withDatabase(false, (db) => {
+      // Only ordinary inspection may accept an uninitialized store.
+      if (!options.existingIdentity && !hasManagedHandoffSchemaObject(db)) {
+        return [];
+      }
+      return executeSqliteQuerySync(
+        db,
+        leaseQueries(db)
+          .selectFrom("managed_update_handoffs")
+          .select(["install_root", "owner", "payload_json", "updated_at"]),
+      ).rows.flatMap((entry) =>
+        // A retired record decodes exactly, so unlike unreadable data it proves
+        // the row predates native custody and cannot borrow any source. A record
+        // this build cannot decode may still name a source it holds, so it is
+        // never discarded here: releasing that source is the hazard this refusal
+        // exists for. Store-level damage recovers in the database owner instead.
+        isRetiredManagedHandoffLeasePayload(entry.payload_json)
+          ? []
+          : [handle(entry.install_root, entry)],
+      );
+    });
+  }
+
   function readLegacyParent(
     root: string,
     executor?: HandoffProcessIdentity,
@@ -153,6 +192,7 @@ export function createManagedHandoffLeaseRows(
     updateRow,
     read,
     readLegacyParent,
+    readRetainedSources,
     currentLegacyParent,
     sameRow,
   };

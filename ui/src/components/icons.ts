@@ -14,6 +14,9 @@ export const icons = {
     svg`<path d="m12 3 10 5-10 5L2 8Z"/><path d="m2 12 10 5 10-5M2 16l10 5 10-5"/>`,
   ),
   // Navigation icons
+  messageCircle: strokeIcon(svg`<path
+    d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"
+  />`),
   messageSquare: strokeIcon(svg` <path
     d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
   />`),
@@ -335,6 +338,8 @@ export const icons = {
   arrowRight: strokeIcon(keyboardIconShapes["→"]),
   arrowLeft: strokeIcon(keyboardIconShapes["←"]),
   cornerDownLeft: strokeIcon(keyboardIconShapes["⏎"]),
+  cornerUpLeft: strokeIcon(svg` <polyline points="9 14 4 9 9 4" />
+    <path d="M20 20v-7a4 4 0 0 0-4-4H4" />`),
   cornerDownRight: strokeIcon(svg` <polyline points="15 10 20 15 15 20" />
     <path d="M4 4v7a4 4 0 0 0 4 4h12" />`),
   copy: strokeIcon(svg` <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />

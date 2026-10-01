@@ -113,7 +113,7 @@ describe("narrow session read owners", () => {
             } else if (row.visible) {
               expect(respond).toHaveBeenCalledExactlyOnceWith(
                 true,
-                { subscribed: true, key: sessionKey },
+                { subscribed: true, key: sessionKey, agentId: "main" },
                 undefined,
               );
             } else {
@@ -227,7 +227,7 @@ describe("narrow session read owners", () => {
           if (change === "current") {
             expect(respond).toHaveBeenCalledExactlyOnceWith(
               true,
-              { subscribed: true, key },
+              { subscribed: true, key, agentId: "main" },
               undefined,
             );
           } else {

@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import {
   asOptionalObjectRecord,
+  filterStringEntries,
   isRecord,
   normalizeBoundedOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -194,11 +195,9 @@ function mapParallelResults(response: ParallelSearchResponse, count: number) {
     const url = typeof entry.url === "string" ? entry.url : "";
     const published =
       typeof entry.publish_date === "string" && entry.publish_date ? entry.publish_date : undefined;
-    const excerpts = Array.isArray(entry.excerpts)
-      ? entry.excerpts
-          .filter((e): e is string => typeof e === "string")
-          .map((e) => wrapWebContent(e, "web_search"))
-      : [];
+    const excerpts = filterStringEntries(entry.excerpts).map((e) =>
+      wrapWebContent(e, "web_search"),
+    );
     const description = excerpts.join("\n\n");
     return Object.assign(
       {

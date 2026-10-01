@@ -2,12 +2,19 @@
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import nodeModule from "node:module";
+import { availableParallelism } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
 import { resolveNodeRuntimeExecutable } from "../../src/infra/node-runtime-executable.ts";
 import { createSourceTermMatcher } from "./test-source-term-matcher.mts";
 
 type SourceFile = { file: string; parseImports: boolean };
+type SourceScan = { files: SourceFile[]; terms: string[]; matchingOnly: boolean };
+const SCAN_WORKER_MARKER = "openclawTestSelectorSourceScan";
+const MAX_SCAN_WORKERS = 8;
+// Worker startup costs tens of milliseconds; small scans stay on one thread.
+const MIN_FILES_PER_SCAN_WORKER = 256;
 type SourceToken = { value: string; literal?: boolean; statementEnd?: boolean };
 const CONSERVATIVE_IMPORT_PATTERN =
   /\b(?:import|export)\s+(?:type\s+)?(?:[^'"`]*?\s+from\s+)?["'`]([^"'`]+)["'`]|\b(?:import(?:\.meta\.resolve)?|require(?:\.resolve)?)\s*\(\s*["'`]([^"'`]+)["'`]\s*\)|\bnew\s+URL\s*\(\s*["'`]([^"'`]+)["'`]\s*,\s*import\.meta\.url\s*,?\s*\)/gu;
@@ -88,7 +95,9 @@ function sourceTokens(source: string): {
     let functionBody: boolean | undefined;
     while (offset < source.length) {
       const char = source[offset]!;
-      if (/\s/u.test(char)) {
+      const code = source.charCodeAt(offset);
+      // Keep Unicode whitespace while avoiding a regexp for the common ASCII tokens.
+      if (code === 32 || (code >= 9 && code <= 13) || (code > 127 && /\s/u.test(char))) {
         whitespace.lastIndex = offset;
         whitespace.exec(source);
         offset = whitespace.lastIndex;
@@ -140,12 +149,13 @@ function sourceTokens(source: string): {
       // skip escaped characters and character classes through the closing slash.
       const previous = tokens.at(-1);
       const startsExpression =
-        !previous ||
-        (!previous.literal &&
-          (previous.statementEnd ||
-            /^(?:[=(:,;!&|?{[+*%<>^~/-]|=>|return|throw|case|yield|await|typeof|void|delete|in|instanceof|of|else|do)$/u.test(
-              previous.value,
-            )));
+        (char === "/" || char === "<") &&
+        (!previous ||
+          (!previous.literal &&
+            (previous.statementEnd ||
+              /^(?:[=(:,;!&|?{[+*%<>^~/-]|=>|return|throw|case|yield|await|typeof|void|delete|in|instanceof|of|else|do)$/u.test(
+                previous.value,
+              ))));
       if (char === "<" && (startsExpression || previous?.value === "default")) {
         // JSX text and closing tags can hide imports behind apparent comments or regexps.
         jsxStart.lastIndex = offset;
@@ -231,7 +241,13 @@ function sourceTokens(source: string): {
           classes.pop();
         }
       }
-      if (/[\w$]/u.test(char)) {
+      if (
+        (code >= 65 && code <= 90) ||
+        (code >= 97 && code <= 122) ||
+        (code >= 48 && code <= 57) ||
+        code === 95 ||
+        code === 36
+      ) {
         const start = offset;
         word.lastIndex = offset;
         word.exec(source);
@@ -504,12 +520,13 @@ function parseFacts(value: unknown) {
   };
 }
 
-/** Acquires complete JS-parsed facts with bounded asynchronous reads, joining one native child. */
+/** Acquires complete JS-parsed facts with bounded asynchronous reads, joining one native child and its scan workers. */
 export function readTestSelectorSourceFacts(
   cwd: string,
   files: SourceFile[],
   terms: string[],
   maxBuffer: number,
+  options: { matchingOnly?: boolean } = {},
 ) {
   if (files.length === 0) {
     return [];
@@ -525,7 +542,7 @@ export function readTestSelectorSourceFacts(
   const result = spawnSync(executable, [fileURLToPath(import.meta.url)], {
     cwd,
     env,
-    input: JSON.stringify({ files, terms }),
+    input: JSON.stringify({ files, terms, matchingOnly: options.matchingOnly === true }),
     encoding: "utf8",
     maxBuffer,
     stdio: ["pipe", "pipe", "pipe"],
@@ -536,7 +553,7 @@ export function readTestSelectorSourceFacts(
       { cause: result.error },
     );
   }
-  // Position is the file identity: require every requested row, including unreadable files.
+  // Position is the file identity, including unreadable and filtered rows.
   const rows: unknown = JSON.parse(result.stdout);
   if (!Array.isArray(rows) || rows.length !== files.length) {
     throw new Error("Invalid test selector source scan row count");
@@ -575,7 +592,63 @@ async function readSourceFacts() {
     }
     return { file: value.file, parseImports: value.parseImports };
   });
-  const matchTerms = createSourceTermMatcher(parseStrings(request.terms));
+  const scan = {
+    files,
+    terms: parseStrings(request.terms),
+    matchingOnly: "matchingOnly" in request && request.matchingOnly === true,
+  };
+  // Tokenizing the full inventory is CPU-bound; stripe large scans across
+  // worker threads and reassemble rows in request order.
+  const workerCount = Math.min(
+    availableParallelism(),
+    MAX_SCAN_WORKERS,
+    Math.floor(files.length / MIN_FILES_PER_SCAN_WORKER),
+  );
+  const facts =
+    workerCount > 1
+      ? await scanSourceFactsInWorkers(scan, workerCount)
+      : await scanSourceFacts(scan);
+  process.stdout.write(JSON.stringify(facts));
+}
+
+async function scanSourceFactsInWorkers(scan: SourceScan, count: number) {
+  const stripes = Array.from({ length: count }, (_, stripe) =>
+    scan.files.filter((_file, index) => index % count === stripe),
+  );
+  const results = await Promise.allSettled(
+    stripes.map(
+      (files) =>
+        new Promise<unknown>((resolve, reject) => {
+          const worker = new Worker(new URL(import.meta.url), {
+            workerData: { [SCAN_WORKER_MARKER]: true, scan: { ...scan, files } },
+          });
+          worker.once("message", resolve);
+          worker.once("error", reject);
+          worker.once("exit", (code) => {
+            reject(new Error(`Test selector source scan worker exited (${code})`));
+          });
+        }),
+    ),
+  );
+  // Join every worker, including after a failure, before publishing or failing.
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "Test selector source scan failed");
+  }
+  const rows = results.map((result, stripe) => {
+    const value = result.status === "fulfilled" ? result.value : undefined;
+    if (!Array.isArray(value) || value.length !== stripes[stripe]!.length) {
+      throw new Error("Invalid test selector source scan worker row count");
+    }
+    return value;
+  });
+  return scan.files.map((_file, index) => rows[index % count]![Math.floor(index / count)]);
+}
+
+async function scanSourceFacts({ files, terms, matchingOnly }: SourceScan) {
+  const matchTerms = createSourceTermMatcher(terms);
   const readFacts = async ({ file, parseImports }: SourceFile) => {
     let source: string;
     try {
@@ -585,6 +658,11 @@ async function readSourceFacts() {
       return null;
     }
     const { matches, references } = matchTerms(source);
+    // Targeted scans only need candidate edges. Omit nonmatches rather than
+    // publishing empty imports that could poison a later complete graph read.
+    if (matchingOnly && matches.length === 0) {
+      return null;
+    }
     const facts = parseImports ? importFacts(source) : { imports: [], typeOnlyImports: [] };
     if (parseImports) {
       // Vitest loads these modules from config values instead of JavaScript imports.
@@ -619,10 +697,14 @@ async function readSourceFacts() {
   if (failures.length > 0) {
     throw new AggregateError(failures, "Test selector source scan failed");
   }
-  process.stdout.write(JSON.stringify(facts));
+  return facts;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+// Importers may themselves run in worker threads; only the marked scan worker answers.
+if (!isMainThread && workerData?.[SCAN_WORKER_MARKER] === true) {
+  const { scan }: { scan: SourceScan } = workerData;
+  parentPort?.postMessage(await scanSourceFacts(scan), []);
+} else if (isMainThread && import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
     await readSourceFacts();
   } catch (error) {

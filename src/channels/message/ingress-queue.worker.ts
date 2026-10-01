@@ -13,26 +13,34 @@ import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.
 import * as kernel from "./ingress-queue.kernel.js";
 import type { ChannelIngressWorkerOperations } from "./ingress-queue.worker-contract.js";
 
+const kernels: {
+  [Kind in keyof ChannelIngressWorkerOperations]: (
+    db: OpenClawStateDatabase["db"],
+    input: ChannelIngressWorkerOperations[Kind]["input"],
+    now: () => number,
+  ) => ChannelIngressWorkerOperations[Kind]["output"];
+} = {
+  "channelIngress.list": kernel.listChannelIngressRowsInDatabase,
+  "channelIngress.claimSnapshot": kernel.readChannelIngressClaimSnapshotInDatabase,
+  "channelIngress.staleClaims": kernel.listStaleChannelIngressClaimsInDatabase,
+  "channelIngress.enqueue": kernel.enqueueChannelIngressInDatabase,
+  "channelIngress.claim": kernel.claimChannelIngressInDatabase,
+  "channelIngress.claimNext": kernel.claimNextChannelIngressInDatabase,
+  "channelIngress.recover": kernel.recoverChannelIngressClaimInDatabase,
+  "channelIngress.refresh": kernel.refreshChannelIngressClaimInDatabase,
+  "channelIngress.complete": kernel.completeChannelIngressInDatabase,
+  "channelIngress.release": kernel.releaseChannelIngressInDatabase,
+  "channelIngress.fail": kernel.failChannelIngressInDatabase,
+  "channelIngress.delete": kernel.deleteChannelIngressInDatabase,
+  "channelIngress.resubmit": kernel.resubmitChannelIngressInDatabase,
+  "channelIngress.prune": kernel.pruneChannelIngressInDatabase,
+  "channelIngress.purge": kernel.purgeChannelIngressInDatabase,
+};
+
 export function isChannelIngressCommand(command: {
   type: string;
 }): command is { type: keyof ChannelIngressWorkerOperations } {
-  return (
-    command.type === "channelIngress.list" ||
-    command.type === "channelIngress.claimSnapshot" ||
-    command.type === "channelIngress.staleClaims" ||
-    command.type === "channelIngress.enqueue" ||
-    command.type === "channelIngress.claim" ||
-    command.type === "channelIngress.claimNext" ||
-    command.type === "channelIngress.recover" ||
-    command.type === "channelIngress.refresh" ||
-    command.type === "channelIngress.complete" ||
-    command.type === "channelIngress.release" ||
-    command.type === "channelIngress.fail" ||
-    command.type === "channelIngress.delete" ||
-    command.type === "channelIngress.resubmit" ||
-    command.type === "channelIngress.prune" ||
-    command.type === "channelIngress.purge"
-  );
+  return Object.hasOwn(kernels, command.type);
 }
 
 export function executeChannelIngressCommand(
@@ -98,39 +106,17 @@ export function executeChannelIngressCommand(
   );
 }
 
-function executeInTransaction(
-  db: OpenClawStateDatabase["db"],
-  command: Exclude<
-    SqliteWorkerCommand<ChannelIngressWorkerOperations>,
-    { type: "channelIngress.list" | "channelIngress.claimSnapshot" | "channelIngress.staleClaims" }
+function executeInTransaction<
+  Kind extends Exclude<
+    keyof ChannelIngressWorkerOperations,
+    "channelIngress.list" | "channelIngress.claimSnapshot" | "channelIngress.staleClaims"
   >,
+>(
+  db: OpenClawStateDatabase["db"],
+  command: {
+    [Key in Kind]: { type: Key; input: ChannelIngressWorkerOperations[Key]["input"] };
+  }[Kind],
   now: () => number,
 ) {
-  switch (command.type) {
-    case "channelIngress.enqueue":
-      return kernel.enqueueChannelIngressInDatabase(db, command.input);
-    case "channelIngress.claim":
-      return kernel.claimChannelIngressInDatabase(db, command.input, now);
-    case "channelIngress.claimNext":
-      return kernel.claimNextChannelIngressInDatabase(db, command.input, now);
-    case "channelIngress.recover":
-      return kernel.recoverChannelIngressClaimInDatabase(db, command.input);
-    case "channelIngress.refresh":
-      return kernel.refreshChannelIngressClaimInDatabase(db, command.input);
-    case "channelIngress.complete":
-      return kernel.completeChannelIngressInDatabase(db, command.input);
-    case "channelIngress.release":
-      return kernel.releaseChannelIngressInDatabase(db, command.input);
-    case "channelIngress.fail":
-      return kernel.failChannelIngressInDatabase(db, command.input);
-    case "channelIngress.delete":
-      return kernel.deleteChannelIngressInDatabase(db, command.input);
-    case "channelIngress.resubmit":
-      return kernel.resubmitChannelIngressInDatabase(db, command.input);
-    case "channelIngress.prune":
-      return kernel.pruneChannelIngressInDatabase(db, command.input);
-    case "channelIngress.purge":
-      return kernel.purgeChannelIngressInDatabase(db, command.input);
-  }
-  return command satisfies never;
+  return kernels[command.type](db, command.input, now);
 }

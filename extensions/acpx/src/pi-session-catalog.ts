@@ -1,5 +1,8 @@
 import process from "node:process";
-import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseDateFirstTimestampMs,
+  timestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 import type {
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
@@ -74,19 +77,6 @@ export async function listLocalPiSessionPage(value?: unknown): Promise<PiSession
   };
 }
 
-function isoTimestamp(
-  message: Record<string, unknown>,
-  entry: Record<string, unknown>,
-): string | undefined {
-  const value =
-    parseDateFirstTimestampMs(message.timestamp) ?? parseDateFirstTimestampMs(entry.timestamp);
-  if (value === undefined) {
-    return undefined;
-  }
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
-}
-
 function jsonText(value: unknown, maxLength = 20_000): string | undefined {
   try {
     const text = JSON.stringify(value);
@@ -130,7 +120,9 @@ function piMessageItems(entry: Record<string, unknown>): SessionCatalogTranscrip
   const message = entry.message;
   const role = message.role;
   const id = optionalPiString(entry.id, 256);
-  const timestamp = isoTimestamp(message, entry);
+  const timestamp = timestampMsToIsoString(
+    parseDateFirstTimestampMs(message.timestamp) ?? parseDateFirstTimestampMs(entry.timestamp),
+  );
   const model = optionalPiString(message.model, 256);
   const provider = optionalPiString(message.provider, 256);
   const modelRef = provider && model ? `${provider}/${model}` : model;

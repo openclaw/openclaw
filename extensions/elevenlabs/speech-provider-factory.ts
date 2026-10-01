@@ -75,10 +75,6 @@ type ElevenLabsProviderConfig = {
   };
 };
 
-function normalizeVoiceSetting(value: unknown, min: number, max: number): number | undefined {
-  return asFiniteNumberInRange(value, { min, max });
-}
-
 function normalizeElevenLabsSeed(value: unknown): number | undefined {
   return asSafeIntegerInRange(value, { min: 0, max: 4_294_967_295 });
 }
@@ -119,11 +115,11 @@ function normalizeVoiceSettings(
   raw: Record<string, unknown> | undefined,
 ): Partial<ElevenLabsProviderConfig["voiceSettings"]> {
   return definedSettings({
-    stability: normalizeVoiceSetting(raw?.stability, 0, 1),
-    similarityBoost: normalizeVoiceSetting(raw?.similarityBoost, 0, 1),
-    style: normalizeVoiceSetting(raw?.style, 0, 1),
+    stability: asFiniteNumberInRange(raw?.stability, { min: 0, max: 1 }),
+    similarityBoost: asFiniteNumberInRange(raw?.similarityBoost, { min: 0, max: 1 }),
+    style: asFiniteNumberInRange(raw?.style, { min: 0, max: 1 }),
     useSpeakerBoost: asBoolean(raw?.useSpeakerBoost),
-    speed: normalizeVoiceSetting(raw?.speed, 0.5, 2),
+    speed: asFiniteNumberInRange(raw?.speed, { min: 0.5, max: 2 }),
   });
 }
 
@@ -443,7 +439,7 @@ export function buildElevenLabsSpeechProvider({
         ...(normalize == null
           ? {}
           : { applyTextNormalization: normalizeApplyTextNormalization(normalize) }),
-        ...(language == null ? {} : { languageCode: normalizeLanguageCode(language) }),
+        languageCode: normalizeLanguageCode(language),
         ...(latencyTier == null ? {} : { latencyTier }),
         ...(Object.keys(voiceSettings).length === 0 ? {} : { voiceSettings }),
       };
@@ -452,9 +448,7 @@ export function buildElevenLabsSpeechProvider({
       const config = req.providerConfig
         ? readElevenLabsProviderConfig(req.providerConfig)
         : undefined;
-      const requestValue = req.apiKey;
-      const configValue = config?.apiKey;
-      const apiKey = resolveElevenLabsApiKey(requestValue, configValue);
+      const apiKey = resolveElevenLabsApiKey(req.apiKey, config?.apiKey);
       if (!apiKey) {
         throw new Error("ElevenLabs API key missing");
       }

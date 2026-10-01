@@ -1,4 +1,3 @@
-/** Close/reset path for ACP runtime sessions and persisted manager metadata. */
 import {
   identityHasStableSessionId,
   resolveSessionIdentityFromMeta,
@@ -8,10 +7,6 @@ import { logVerbose } from "../../globals.js";
 import { toAcpRuntimeError } from "../runtime/errors.js";
 import { matchesAcpSessionControlBinding } from "../runtime/session-control-owner.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
-import {
-  createSupersededActorError,
-  isSupersededActorError,
-} from "./manager.runtime-handle-ensure.js";
 import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
 import {
   discardPersistedManagerRuntimeState,
@@ -26,9 +21,14 @@ import type {
   ResolveManagerSessionAsync,
   WriteManagerSessionMeta,
 } from "./manager.types.js";
-import { requireReadySessionMeta, resolveAcpSessionResolutionError } from "./manager.utils.js";
+import {
+  assertCurrentAcpActor,
+  createSupersededActorError,
+  isSupersededActorError,
+  requireReadySessionMeta,
+  resolveAcpSessionResolutionError,
+} from "./manager.utils.js";
 
-/** Closes an ACP session runtime handle and optionally discards persistent state/meta. */
 export async function runManagerCloseSession(params: {
   input: AcpCloseSessionInput;
   sessionKey: string;
@@ -43,9 +43,7 @@ export async function runManagerCloseSession(params: {
   const { input, sessionKey, agentId } = params;
   const expectedControlBinding = input.expectedControlBinding;
   const assertCurrent = () => {
-    if (!params.isCurrentActor()) {
-      throw createSupersededActorError(sessionKey);
-    }
+    assertCurrentAcpActor(params.isCurrentActor(), sessionKey);
     input.assertActive?.();
   };
   assertCurrent();
@@ -123,9 +121,7 @@ export async function runManagerCloseSession(params: {
         meta,
         isCurrentActor: params.isCurrentActor,
       });
-      if (!params.isCurrentActor()) {
-        throw createSupersededActorError(sessionKey);
-      }
+      assertCurrentAcpActor(params.isCurrentActor(), sessionKey);
       input.assertActive?.();
       if (expectedControlBinding) {
         await refreshControlBinding();
@@ -192,9 +188,7 @@ export async function runManagerCloseSession(params: {
         }
         // Treat unavailable backends as terminal for this cached handle so a
         // later operation cannot reuse an unusable runtime.
-        if (!params.isCurrentActor()) {
-          throw createSupersededActorError(sessionKey);
-        }
+        assertCurrentAcpActor(params.isCurrentActor(), sessionKey);
         params.runtimeHandles.clear(params);
         runtimeNotice = acpError.message;
       } else {
@@ -216,9 +210,7 @@ export async function runManagerCloseSession(params: {
     });
   }
 
-  if (!params.isCurrentActor()) {
-    throw createSupersededActorError(sessionKey);
-  }
+  assertCurrentAcpActor(params.isCurrentActor(), sessionKey);
   assertCurrent();
   const metaCleared = Boolean(input.clearMeta);
   if (metaCleared) {

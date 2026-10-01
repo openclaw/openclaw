@@ -64,7 +64,11 @@ import {
   resolveAgentQuestionAnswerAuthority,
   withAgentQuestionAnswerAuthority,
 } from "./host-private-capabilities.js";
-import { bindHarnessModelExecution, retainHarnessSource } from "./host-source-authority.js";
+import {
+  bindHarnessModelExecution,
+  bindHarnessNativeSpawnAuthority,
+  retainHarnessSource,
+} from "./host-source-authority.js";
 import { bindHarnessTrajectory } from "./host-trajectory.js";
 import { formatHarnessApprovalPresentation } from "./native-hook-relay-approval-presentation.js";
 import { createSessionNodeAuthorities } from "./node-execution-authority.js";
@@ -203,6 +207,7 @@ export function createAgentHarnessHostCapabilities(params: {
     inheritedCaller?.operationalRunInstance === operationalRunInstance
       ? inheritedCaller
       : undefined;
+  let personalToolParticipants = sourceCaller?.personalToolParticipants;
   const callerIdentity = createAdmittedGatewayToolCallerIdentity({
     admittedRunContext: attempt.admittedRunContext,
     receiptAuthority: assertActive,
@@ -469,6 +474,9 @@ export function createAgentHarnessHostCapabilities(params: {
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
     assertActive,
+    get assertNativeSubagentSpawnAllowed() {
+      return bindHarnessNativeSpawnAuthority(personalToolParticipants, assertActive);
+    },
     ...(bindModelExecution ? { bindModelExecution } : {}),
     retainSourceAuthority: () =>
       retainHarnessSource(attempt.admittedRunContext, assertActive, nativeModelPolicySupported),
@@ -684,6 +692,13 @@ export function createAgentHarnessHostCapabilities(params: {
     capabilities,
     setInputAttachmentReadAllowed: media.setInputAttachmentReadAllowed,
     runWithScope: (run) => {
+      const preparedCaller = getGatewayToolCallerIdentity();
+      if (preparedCaller?.operationalRunInstance === operationalRunInstance) {
+        personalToolParticipants ??= preparedCaller.personalToolParticipants;
+        if (callerIdentity && personalToolParticipants) {
+          callerIdentity.personalToolParticipants = personalToolParticipants;
+        }
+      }
       const nodeAuthorities = createSessionNodeAuthorities(
         attempt,
         params.pluginId,

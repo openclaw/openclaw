@@ -64,6 +64,14 @@ export function createCloseMock() {
   return vi.fn<CloseGatewayConnection>();
 }
 
+export function createBackendClient() {
+  return { id: "gateway-client", version: "dev", platform: "test", mode: "backend" };
+}
+
+export function waitForFast(assertion: () => void | Promise<void>) {
+  return vi.waitFor(assertion, { interval: 1 });
+}
+
 export async function createTestAgentRuntimeIdentityLease() {
   const prepared = prepareSystemAgentRunAdmission(
     {},

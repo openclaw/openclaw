@@ -250,20 +250,10 @@ function storeQuestionRecord(
     clearSecretQuestionDrafts(record.questions, drafts);
   }
   const prompt: QuestionPrompt = {
-    id: record.id,
-    questions: record.questions,
-    ...(record.agentId ? { agentId: record.agentId } : {}),
-    ...(record.sessionKey ? { sessionKey: record.sessionKey } : {}),
-    ...(record.runId ? { runId: record.runId } : {}),
-    createdAtMs: record.createdAtMs,
-    expiresAtMs: record.expiresAtMs,
-    status: record.status,
-    ...(record.status === "answered" ? { answers: record.answers } : {}),
+    ...record,
     ...(previous?.submittedAnswers ? { submittedAnswers: previous.submittedAnswers } : {}),
     answeredElsewhere:
-      record.status === "answered"
-        ? !(previous?.localResolutionConfirmed ?? false) && !(previous?.submitting ?? false)
-        : false,
+      record.status === "answered" && !previous?.localResolutionConfirmed && !previous?.submitting,
     localResolutionConfirmed: previous?.localResolutionConfirmed ?? false,
     locallyExpired: false,
     submitting:

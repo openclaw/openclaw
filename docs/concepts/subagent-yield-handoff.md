@@ -139,6 +139,16 @@ The native subagent registry retains the completion obligation and wakes the
 requester through its accepted completion path; progress text is not proof that
 a child finished or that its result was delivered.
 
+When settlement resumes a top-level parent with automatic channel delivery,
+OpenClaw keeps the channel's typing indicator active while that continuation
+executes. The indicator starts after execution begins, not while admission is
+queued, and stops when the call settles, is cancelled, or loses its owner.
+It respects `typingMode: "never"`, uses the `agents.defaults.typingIntervalSeconds`
+refresh cadence, and requires channel typing support. Private and nested
+continuations do not send activity to an external channel. This
+activity signal does not change the configured message queue mode or restore
+individual tool-progress messages.
+
 The former Tasks-backed detached presenter and its notification policies are no
 longer available. A yielded turn does not start a separate task or flow projection
 to keep editing a channel progress message. Ordinary channel streaming still

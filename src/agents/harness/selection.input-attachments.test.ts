@@ -81,8 +81,6 @@ describe("registered harness input attachment preparation", () => {
 
   it.each([
     "projected",
-    "bounded-inline",
-    "metadata-sigils",
     "steering-sigils",
     "no-tools",
     "read-denied",
@@ -121,7 +119,7 @@ describe("registered harness input attachment preparation", () => {
         ...(mode === "workspace-only" ? { fs: { workspaceOnly: true } } : {}),
         ...(mode === "read-denied" ? { deny: ["read"] } : {}),
       },
-      ...(mode === "bounded-inline"
+      ...(mode === "projected"
         ? { gateway: { http: { endpoints: { responses: { files: { maxChars: 1 } } } } } }
         : {}),
       ...(mode === "mime-denied"
@@ -178,7 +176,7 @@ describe("registered harness input attachment preparation", () => {
         ]);
         expect(metadata).not.toMatch(/[$@]/);
         expect(await fs.readFile(filePath, "utf8")).toBe(csv);
-      } else if (mode === "projected" || mode === "bounded-inline") {
+      } else if (mode === "projected") {
         expect(note).toContain(filePath);
         expect(await fs.readFile(filePath, "utf8")).toBe(csv);
       } else {

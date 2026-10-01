@@ -365,7 +365,7 @@ posixIt(
 );
 
 posixIt(
-  "clawhub-trust accepts only the matching Tideclaw alpha branch after main and release misses",
+  "clawhub-trust rejects a retired Tideclaw alpha branch before ancestry admission",
   async () => {
     const report = await pluginRun("clawhub-trust", {
       env: { TRUSTED_PUBLISH_BRANCH: alphaBranch },
@@ -375,13 +375,9 @@ posixIt(
         [`merge-base --is-ancestor HEAD refs/remotes/origin/${alphaBranch}`]: { code: 0 },
       },
     });
-    expect(report.code, report.output).toBe(0);
-    expect(report.fetches.at(-1)?.args).toEqual([
-      "fetch",
-      "--no-tags",
-      "origin",
-      `+refs/heads/${alphaBranch}:refs/remotes/origin/${alphaBranch}`,
-    ]);
+    expect(report.code, report.output).toBe(1);
+    expect(report.output).toContain("Alpha releases are retired;");
+    expect(report.fetches).toEqual([]);
   },
   55_000,
 );

@@ -21,6 +21,7 @@ import {
   openExistingOpenClawStateDatabaseReadOnly,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { captureAcpSessionEntryBinding } from "./session-meta-entry.kernel.js";
 import {
   acpSessionRowMatchesEntry,
   buildAcpDatabaseSessionKey,
@@ -104,12 +105,7 @@ export async function repairAcpSessionMetaKeysForDoctor(params: {
       if (!stored.found || !stored.value) {
         throw new Error(`ACP session binding is ${stored.found ? "absent" : stored.reason}`);
       }
-      const entry = stored.value.entry;
-      const binding = {
-        sessionId: entry.sessionId,
-        lifecycleRevision: entry.lifecycleRevision,
-        sessionStartedAt: entry.sessionStartedAt,
-      };
+      const binding = captureAcpSessionEntryBinding(stored.value.entry);
       const aliases = rows
         .filter((row) => resolveLegacyFreeAcpSessionKey(row.session_key) === sessionKey)
         .toSorted(
@@ -157,11 +153,7 @@ export async function repairAcpSessionMetaKeysForDoctor(params: {
               agentDatabase,
               resolved.sessionKey,
             )?.entry;
-            const currentBinding = currentEntry && {
-              sessionId: currentEntry.sessionId,
-              lifecycleRevision: currentEntry.lifecycleRevision,
-              sessionStartedAt: currentEntry.sessionStartedAt,
-            };
+            const currentBinding = currentEntry && captureAcpSessionEntryBinding(currentEntry);
             const currentAliases =
               selectLegacyFreeAcpSessionRows(shared.db, [sessionKey]).get(sessionKey) ?? [];
             if (
@@ -237,8 +229,7 @@ function readClaimBinding(
   if (!result.found || !result.value) {
     throw new Error(`ACP session binding is ${result.found ? "absent" : result.reason}`);
   }
-  const { sessionId, lifecycleRevision, sessionStartedAt } = result.value.entry;
-  return { sessionId, lifecycleRevision, sessionStartedAt };
+  return captureAcpSessionEntryBinding(result.value.entry);
 }
 
 export async function inspectAcpSessionClaimsForDoctor(
@@ -318,11 +309,7 @@ export function updateAcpSessionIdentityForDoctor(
         authority.assertOwnedInTransaction(database.db);
         const row = selectAcpSessionRow(database.db, key);
         const entry = readExactSessionEntryRowValidated(agentDatabase, resolved.sessionKey)?.entry;
-        const binding = entry && {
-          sessionId: entry.sessionId,
-          lifecycleRevision: entry.lifecycleRevision,
-          sessionStartedAt: entry.sessionStartedAt,
-        };
+        const binding = entry && captureAcpSessionEntryBinding(entry);
         if (
           isRetiredClaimOwner(scope.config, claim) ||
           !row ||

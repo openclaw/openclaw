@@ -114,6 +114,12 @@
           - "extensions/teams-meetings/**"
           - "docs/plugins/teams-meetings.md"
           - "docs/plugins/reference/teams-meetings.md"
+"plugin: slack-huddles":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/slack-huddles/**"
+          - "docs/plugins/slack-huddles.md"
+          - "docs/plugins/reference/slack-huddles.md"
 "plugin: zoom":
   - changed-files:
       - any-glob-to-any-file:

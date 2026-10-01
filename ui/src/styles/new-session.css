@@ -485,13 +485,15 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 @media (hover: hover) {
-  .session-group-defaults__folder:hover:not(:disabled) {
+  .session-group-defaults__folder:hover:not(:disabled),
+  .session-group-defaults__mode-trigger:hover:not(:disabled) {
     border-color: color-mix(in srgb, var(--accent) 35%, var(--input));
     background: color-mix(in srgb, var(--bg-hover) 65%, var(--card));
   }
 }
 
-.session-group-defaults__folder:focus-visible {
+.session-group-defaults__folder:focus-visible,
+.session-group-defaults__mode-trigger:focus-visible {
   outline: none;
   border-color: var(--ring);
   box-shadow: var(--focus-ring);
@@ -578,19 +580,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   text-align: left;
   cursor: var(--cursor-action);
   box-shadow: inset 0 1px 0 var(--card-highlight);
-}
-
-@media (hover: hover) {
-  .session-group-defaults__mode-trigger:hover:not(:disabled) {
-    border-color: color-mix(in srgb, var(--accent) 35%, var(--input));
-    background: color-mix(in srgb, var(--bg-hover) 65%, var(--card));
-  }
-}
-
-.session-group-defaults__mode-trigger:focus-visible {
-  outline: none;
-  border-color: var(--ring);
-  box-shadow: var(--focus-ring);
 }
 
 .session-group-defaults__mode-trigger:disabled {
@@ -833,10 +822,6 @@ wa-popover.new-session-page__where-popover::part(body) {
   padding: 5px 8px;
   color: var(--muted);
   border-radius: var(--menu-item-radius);
-}
-
-.new-session-page__environment-search:focus-within {
-  background: var(--bg-hover);
 }
 
 .new-session-page__environment-search svg {
@@ -1129,10 +1114,7 @@ wa-popover.new-session-page__where-popover::part(body) {
   cursor: var(--cursor-action);
 }
 
-.new-session-page__browser-entry:hover {
-  background: var(--bg-hover);
-}
-
+.new-session-page__browser-entry:hover,
 .new-session-page__browser-entry--active {
   background: var(--bg-hover);
 }
@@ -1213,36 +1195,31 @@ wa-popover.new-session-page__where-popover::part(body) {
   overflow-wrap: anywhere;
 }
 
-.new-session-page__browser-use {
+.new-session-page__browser-use,
+.new-session-page__browser-register {
   padding: 6px 14px;
-  border: 1px solid transparent;
   border-radius: var(--radius-md);
-  background: var(--primary);
-  color: var(--primary-foreground);
   font-size: 13px;
   font-weight: 600;
   cursor: var(--cursor-action);
 }
 
-.new-session-page__browser-use:disabled {
+.new-session-page__browser-use {
+  border: 1px solid transparent;
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.new-session-page__browser-use:disabled,
+.new-session-page__browser-register:disabled {
   opacity: 0.5;
   cursor: default;
 }
 
 .new-session-page__browser-register {
-  padding: 6px 14px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: var(--cursor-action);
-}
-
-.new-session-page__browser-register:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
 
 /* Phones (and short landscape): match the chat thread's mobile inset, and
@@ -1251,7 +1228,41 @@ wa-popover.new-session-page__where-popover::part(body) {
    the right edge. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .new-session-page__scroll {
-    padding: 52px 8px 12px;
+    /* The shared composer owns the chat edge and bottom insets. */
+    padding: 52px 0 0;
+  }
+
+  .new-session-page .agent-chat__welcome {
+    min-height: 100%;
+    padding: 0;
+  }
+
+  .new-session-page__scroll > .new-session-page__draft {
+    max-width: none;
+  }
+
+  .new-session-page .agent-chat__welcome-identity {
+    margin-block: auto;
+    padding-inline: var(--chat-mobile-edge-inset);
+  }
+
+  .new-session-page .agent-chat__welcome-secondary {
+    display: none;
+  }
+
+  .new-session-page__draft {
+    flex: 0 0 auto;
+    min-height: 0;
+    margin-top: 8px;
+  }
+
+  .new-session-page__composer {
+    /* Keep privacy context above the writing surface, never below it. */
+    order: 1;
+  }
+
+  .new-session-page__incognito-notice:not(.new-session-page__incognito-notice--visible) {
+    display: none;
   }
 
   .new-session-page__triggers {
@@ -1261,6 +1272,18 @@ wa-popover.new-session-page__where-popover::part(body) {
 
   .new-session-page__select {
     position: static;
+  }
+}
+
+/* Narrow phones need the same compact hero as landscape to leave room for setup. */
+@media (max-width: 400px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .new-session-page .agent-chat__welcome-identity {
+    flex-direction: row;
+    text-align: start;
+  }
+
+  .new-session-page .agent-chat__welcome-identity-copy {
+    justify-items: start;
   }
 }
 
@@ -1278,10 +1301,6 @@ wa-popover.new-session-page__where-popover::part(body) {
 }
 
 @media (max-width: 560px) {
-  .new-session-page .agent-chat__welcome-secondary:has(.agent-chat__suggestions) {
-    display: none;
-  }
-
   .agent-chat__input--mobile-toolbar .new-session-page__start-submit {
     width: var(--chat-composer-send-size);
     min-width: var(--chat-composer-send-size);
@@ -1295,23 +1314,12 @@ wa-popover.new-session-page__where-popover::part(body) {
     color: var(--primary-foreground);
   }
 
-  .new-session-page .agent-chat__welcome {
-    min-height: 100%;
-  }
-
   .new-session-page .agent-chat__welcome-identity {
     gap: 6px;
-    margin-block: auto;
   }
 
   .new-session-page .agent-chat__welcome-clawd {
     margin-bottom: 0;
-  }
-
-  .new-session-page__draft {
-    flex: 0 0 auto;
-    justify-content: flex-end;
-    min-height: 0;
   }
 
   .new-session-page__triggers {
@@ -1320,8 +1328,8 @@ wa-popover.new-session-page__where-popover::part(body) {
     grid-template-columns: minmax(0, 1fr);
     align-items: center;
     gap: 2px 4px;
-    width: calc(100% - 8px);
-    margin-inline: 4px;
+    width: calc(100% - 2 * var(--chat-mobile-edge-inset));
+    margin-inline: auto;
     margin-block-end: 8px;
     padding: 0 calc(var(--chat-composer-editor-inset-inline, 12px) - 6px);
     border: 0;
@@ -1462,10 +1470,10 @@ wa-popover.new-session-page__where-popover::part(body) {
 
   .new-session-page__incognito-notice {
     align-items: flex-start;
-    width: calc(100% - 8px);
+    width: calc(100% - 2 * var(--chat-mobile-edge-inset));
     max-height: 0;
     max-width: var(--chat-thread-max-width, 48rem);
-    margin-inline: 4px;
+    margin-inline: auto;
     padding-inline: 0;
     white-space: normal;
     text-align: left;

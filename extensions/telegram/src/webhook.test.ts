@@ -245,7 +245,7 @@ async function runNearLimitPayloadTestAndExpectUpdate(
       secret: TELEGRAM_SECRET,
       path: TELEGRAM_WEBHOOK_PATH,
     },
-    async ({ port }) => {
+    async ({ port, ingress }) => {
       const response = await postWebhookPayloadWithChunkPlan({
         port,
         path: TELEGRAM_WEBHOOK_PATH,
@@ -256,7 +256,10 @@ async function runNearLimitPayloadTestAndExpectUpdate(
       });
 
       expect(response.statusCode).toBe(200);
-      await waitForWebhookState(() => expectSingleNearLimitUpdate({ seenUpdates, expected }));
+      // The 200 means durable admission; dispatch reads the ~1 MB row back from
+      // SQLite afterward, so join the drain instead of polling a wall-clock budget.
+      await ingress.waitForIdle();
+      expectSingleNearLimitUpdate({ seenUpdates, expected });
     },
   );
 }

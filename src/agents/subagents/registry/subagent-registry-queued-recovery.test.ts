@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { callGateway } from "../../../gateway/call.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
@@ -19,10 +19,32 @@ const fixture = vi.hoisted(() => ({
 }));
 vi.mock("../../../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../../../config/sessions/session-accessor.js", () => ({
-  patchSessionEntryCore: vi.fn(async () => null),
   findTranscriptEvent: () => {
     throw new Error("Unexpected transcript lookup in queued registration recovery");
   },
+}));
+vi.mock("../../../config/sessions/session-accessor.sqlite-replacement-projection.js", () => ({
+  applySessionEntryExactReplacements: vi.fn(async () => undefined),
+}));
+vi.mock("./subagent-control-session.js", () => ({
+  prepareSubagentKillSession: async (
+    _config: unknown,
+    _sessionKey: string,
+    assertOwner: () => void,
+  ) => ({
+    storePath: "/synthetic-retained-session/sessions.json",
+    entry: {
+      sessionId: fixture.sessionId,
+      lifecycleRevision: fixture.lifecycleRevision,
+      updatedAt: 1,
+    },
+    assertCurrent: assertOwner,
+    withPublication: async <T>(run: () => Promise<T>) => {
+      assertOwner();
+      return await run();
+    },
+    release: () => {},
+  }),
 }));
 vi.mock("../../../gateway/call.js", () => ({ callGateway: vi.fn() }));
 vi.mock("./subagent-registry-state.js", { spy: true });
@@ -34,7 +56,7 @@ vi.mock("./subagent-session-reconciliation.js", () => ({
 }));
 
 beforeEach(() => {
-  vi.mocked(patchSessionEntryCore).mockClear();
+  vi.mocked(applySessionEntryExactReplacements).mockClear();
   subagentRuns.clear();
 });
 afterEach(() => {
@@ -55,6 +77,7 @@ function createRegistrationFixture() {
     }
   };
   const options: SubagentManagerOptions = {
+    acquireTerminalCompletionLock: async () => () => {},
     runs: subagentRuns,
     getRunsForChildSession: (key) =>
       [...subagentRuns.values()].filter((run) => run.childSessionKey === key),
@@ -63,7 +86,7 @@ function createRegistrationFixture() {
     persistOrThrow: persist,
     persistAsyncOrThrow: async (_context, publication, ...runIds) => {
       publication.assertCurrent();
-      if (stored.size > 0) {
+      if (runIds.some((runId) => subagentRuns.get(runId)?.queuedLaunch !== undefined)) {
         throw new SubagentRegistryWriteError("not-committed", new Error("descriptor refused"));
       }
       persist(...runIds);
@@ -106,7 +129,7 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
     const cleaned = vi.fn();
     const resume = vi.fn();
     const startQueued = vi.fn(() => true);
-    vi.mocked(restoreSubagentRunsFromDisk).mockImplementation(({ runs }) => {
+    vi.mocked(restoreSubagentRunsFromDisk).mockImplementation(async ({ runs }) => {
       for (const [id, entry] of stored) {
         runs.set(id, structuredClone(entry));
       }
@@ -116,9 +139,14 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
       runs: subagentRuns,
       getGatewayContextResolver: () => undefined,
       bindGatewayOwners: () => true,
-      persist,
       persistOrThrow: persist,
-      settleRequesterTurn: () => false,
+      persistAsyncOrThrow: async (_context, publication, ...runIds) => {
+        publication.assertCurrent();
+        persist(...runIds);
+        await Promise.resolve();
+        publication.onCommitted?.();
+      },
+      settleRequesterTurn: async () => false,
       ensureListener: () => {},
       startSweeper: () => {},
       scheduleSweep: () => {},
@@ -166,7 +194,7 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
       expect(cleanupResources).not.toHaveBeenCalled();
 
       if (recovery === "confirmed Stop") {
-        expect(manager.markSubagentRunTerminated({ runId })).toBe(1);
+        expect(await manager.markSubagentRunTerminated({ runId })).toBe(1);
         const stopped = expectDefined(subagentRuns.get(runId), "stopped original run");
         const stoppedExecution = stopped.execution;
         expect(stored.get(runId)?.killReconciliation).toBeDefined();
@@ -175,7 +203,7 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
         ).resolves.toBeUndefined();
         expect(stopped.execution).toBe(stoppedExecution);
         expect(expectDefined(ownership, "registration scope").canCleanupSession()).toBe(false);
-        expect(patchSessionEntryCore).toHaveBeenCalled();
+        expect(applySessionEntryExactReplacements).toHaveBeenCalled();
         return;
       }
       if (newerSibling) {
@@ -194,8 +222,8 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
         subagentRuns.set(successor.runId, successor);
       }
       subagentRuns.clear();
-      restorer.restoreOnce();
-      restorer.activate();
+      await restorer.restoreOnce();
+      await restorer.activate();
       await vi.waitFor(() => expect(stored.get(runId)?.execution.status).toBe("terminal"));
       expect(stored.get(runId)).toMatchObject({
         execution: { status: "terminal", lifecycleGeneration: getAgentEventLifecycleGeneration() },

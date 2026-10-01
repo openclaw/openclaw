@@ -459,20 +459,6 @@ export async function sendMattermostTyping(
   });
 }
 
-async function createMattermostDirectChannel(
-  client: MattermostClient,
-  userIds: string[],
-  signal?: AbortSignal,
-  timeoutMs?: number,
-): Promise<MattermostChannel> {
-  return await client.request<MattermostChannel>("/channels/direct", {
-    method: "POST",
-    body: JSON.stringify(userIds),
-    signal,
-    timeoutMs,
-  });
-}
-
 export type CreateDmChannelRetryOptions = {
   /** Maximum number of retry attempts (default: 3) */
   maxRetries?: number;
@@ -551,7 +537,12 @@ export async function createMattermostDirectChannelWithRetry(
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        return await createMattermostDirectChannel(client, userIds, controller.signal, timeoutMs);
+        return await client.request<MattermostChannel>("/channels/direct", {
+          method: "POST",
+          body: JSON.stringify(userIds),
+          signal: controller.signal,
+          timeoutMs,
+        });
       } catch (err) {
         // Normalize before rethrowing so shouldRetry/onRetry below always see Errors.
         throw err instanceof Error ? err : new Error(String(err));
@@ -568,7 +559,7 @@ export async function createMattermostDirectChannelWithRetry(
       minDelayMs: Math.min(initialDelayMs, maxDelayMs),
       maxDelayMs,
       // Full jitter (uniform [delay, 2*delay) with maxDelayMs applied after
-      // the draw) preserves the schedule pinned by client.retry.test.ts.
+      // the draw) preserves the schedule pinned by client.test.ts.
       jitter: "full",
       shouldRetry: (err) => isRetryableError(err as Error),
       onRetry: (info) => onRetry?.(info.attempt, info.delayMs, info.err as Error),

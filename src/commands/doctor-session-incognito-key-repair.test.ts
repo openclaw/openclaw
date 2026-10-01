@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
+import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.sqlite-exact-read.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
@@ -39,7 +40,9 @@ describe("doctor reserved incognito session key repair", () => {
     const stateDatabase = openOpenClawStateDatabase({ env });
     const oldKey = "agent:main:dashboard:incognito-collision";
     const baseLegacyKey = "agent:main:dashboard:legacy-incognito-collision";
-    const newKey = `${baseLegacyKey}-1`;
+    const coldOccupiedKey = `${baseLegacyKey}-1`;
+    const newKey = `${baseLegacyKey}-2`;
+    const skillsSnapshot = { prompt: "Retained skill prompt", skills: [{ name: "demo" }] };
     try {
       const entryJson = JSON.stringify({
         sessionId: "session-old",
@@ -57,6 +60,11 @@ describe("doctor reserved incognito session key repair", () => {
           "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, parent_session_key, spawned_by, fork_source_session_key) VALUES (?, ?, ?, 1, ?, ?, ?)",
         )
         .run(oldKey, "session-old", entryJson, oldKey, oldKey, oldKey);
+      database.db
+        .prepare(
+          "INSERT INTO session_entry_snapshots (session_key, field, value_json) VALUES (?, 'skillsSnapshot', ?)",
+        )
+        .run(oldKey, JSON.stringify(skillsSnapshot));
       database.db
         .prepare(
           "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at, parent_session_key, spawned_by) VALUES (?, ?, 'conversation', 1, 1, ?, ?)",
@@ -100,6 +108,11 @@ describe("doctor reserved incognito session key repair", () => {
       database.db
         .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
         .run(oldKey);
+      secondaryDatabase.db
+        .prepare(
+          "INSERT INTO session_entry_snapshots (session_key, field, value_json) VALUES ('agent:work:dashboard:regular', 'systemPromptReport', ?)",
+        )
+        .run(JSON.stringify({ source: "run", generatedAt: 1, sessionKey: coldOccupiedKey }));
       secondaryDatabase.db
         .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
         .run("agent:work:dashboard:regular");
@@ -218,14 +231,26 @@ describe("doctor reserved incognito session key repair", () => {
         .prepare("SELECT session_key, entry_json FROM session_nodes")
         .get() as { session_key: string; entry_json: string };
       expect(entry.session_key).toBe(newKey);
-      expect(JSON.parse(entry.entry_json)).toMatchObject({
+      expect(
+        loadExactSessionEntryReadOnly({ agentId: "main", env, sessionKey: newKey })?.entry,
+      ).toMatchObject({
         parentSessionKey: newKey,
         completionOwnerSessionKey: newKey,
         forkSource: { sessionKey: newKey },
         compactionCheckpoints: [{ sessionKey: newKey }],
         systemPromptReport: { sessionKey: newKey },
+        skillsSnapshot,
         pluginExtensions: { test: { label: oldKey } },
       });
+      expect(JSON.parse(entry.entry_json)).not.toHaveProperty("systemPromptReport");
+      expect(JSON.parse(entry.entry_json)).not.toHaveProperty("skillsSnapshot");
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "work",
+          env,
+          sessionKey: "agent:work:dashboard:regular",
+        })?.entry.systemPromptReport?.sessionKey,
+      ).toBe(coldOccupiedKey);
       expect(
         database.db
           .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")

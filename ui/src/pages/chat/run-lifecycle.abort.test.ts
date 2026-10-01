@@ -22,6 +22,32 @@ function makeSessionsResult(rows: (Pick<GatewaySessionRow, "key"> & Partial<Gate
 }
 
 describe("hasAbortableSessionRun", () => {
+  it("reads the target once and visits each row once per abortability check", () => {
+    const target = vi.fn(() => "Agent:Main:Target");
+    const keys = ["agent:main:other", "agent:main:target"].map((key) => vi.fn(() => key));
+    const host = {
+      get sessionKey() {
+        return target();
+      },
+      sessionsResult: sessionsResult(
+        keys.map((key, index) => ({
+          get key() {
+            return key();
+          },
+          kind: "direct" as const,
+          updatedAt: 1,
+          hasActiveSubagentRun: index === 1,
+        })),
+        1,
+      ),
+    };
+    for (let i = 0; i < 3; i++) {
+      expect(hasAbortableSessionRun(host)).toBe(true);
+    }
+    expect(target).toHaveBeenCalledTimes(3);
+    keys.forEach((key) => expect(key).toHaveBeenCalledTimes(3));
+  });
+
   it("recognizes the canonical main row while chat uses its main alias", () => {
     expect(
       hasAbortableSessionRun({

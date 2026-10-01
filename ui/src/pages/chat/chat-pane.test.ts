@@ -594,13 +594,25 @@ describe("chat pane initialization", () => {
     }
   });
 
-  it("starts the connected client when a route alias is already selected canonically", () => {
-    const request = vi.fn(() => new Promise<never>(() => {}));
+  it("starts the connected client when a route alias is already selected canonically", async () => {
+    const canonicalSessionKey = "agent:main:main";
+    const subscriptionRequested = createDeferred();
+    const subscriptionAdmitted = createDeferred<{ key: string }>();
+    const startupRequested = createDeferred();
+    const request = createGatewayRequestMock((method) => {
+      if (method === "sessions.messages.subscribe") {
+        subscriptionRequested.resolve();
+        return subscriptionAdmitted.promise;
+      }
+      if (method === "chat.startup") {
+        startupRequested.resolve();
+      }
+      return new Promise<never>(() => {});
+    });
     const client = createGatewayBrowserClientFixture({
       request,
     });
     const { pane, state } = createTestChatPane({ client });
-    const canonicalSessionKey = "agent:main:main";
     const hello = {
       features: { methods: ["chat.startup"] },
       snapshot: {
@@ -653,6 +665,10 @@ describe("chat pane initialization", () => {
 
     expect(navigate).toHaveBeenCalledWith("single", canonicalSessionKey, { replace: true });
     expect(pane.connectedClient).toBe(client);
+    await subscriptionRequested.promise;
+    expect(request.mock.calls.filter(([method]) => method === "chat.startup")).toHaveLength(0);
+    subscriptionAdmitted.resolve({ key: canonicalSessionKey });
+    await startupRequested.promise;
     expect(request).toHaveBeenCalledWith(
       "chat.startup",
       expect.objectContaining({ sessionKey: canonicalSessionKey }),

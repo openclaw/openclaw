@@ -1,4 +1,3 @@
-// Resolves command executables and wrapper policy paths for exec approvals.
 import crypto from "node:crypto";
 import path from "node:path";
 import { safeRealpathSync } from "@openclaw/fs-safe/path";
@@ -89,7 +88,7 @@ function buildCommandResolution(params: {
   const policy = params.policyRawExecutable
     ? buildExecutableResolution(params.policyRawExecutable, params)
     : execution;
-  const resolution: CommandResolution = {
+  return {
     kind: "command",
     execution,
     policy,
@@ -98,7 +97,6 @@ function buildCommandResolution(params: {
     policyBlocked: params.policyBlocked,
     blockedWrapper: params.blockedWrapper,
   };
-  return resolution;
 }
 
 export function resolveCommandResolution(
@@ -251,19 +249,9 @@ export function resolveApprovalAuditTrustPath(
 }
 
 /** @deprecated Use resolveExecutionTargetCandidatePath. */
-export function resolveAllowlistCandidatePath(
-  resolution: CommandResolution | ExecutableResolution | null,
-  cwd?: string,
-): string | undefined {
-  return resolveExecutionTargetCandidatePath(resolution, cwd);
-}
+export const resolveAllowlistCandidatePath = resolveExecutionTargetCandidatePath;
 
-export function resolvePolicyAllowlistCandidatePath(
-  resolution: CommandResolution | ExecutableResolution | null,
-  cwd?: string,
-): string | undefined {
-  return resolvePolicyTargetCandidatePath(resolution, cwd);
-}
+export const resolvePolicyAllowlistCandidatePath = resolvePolicyTargetCandidatePath;
 
 const LEGACY_HASHED_ARG_PATTERN_PREFIX = "sha256:argv:";
 const CWD_BOUND_HASHED_ARG_PATTERN_PREFIX = "sha256:cwd-argv:v1:";

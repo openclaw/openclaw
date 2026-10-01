@@ -359,12 +359,9 @@ unix.each(["update", "foreground", "retarget"] as const)(
     const db = new DatabaseSync(options.databasePath);
     try {
       const payload = JSON.stringify({ version: 1, pid, startIdentity: "0" });
-      db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, ?, ?)").run(
-        to,
-        "legacy-owner",
-        payload,
-        1,
-      );
+      db.prepare(
+        "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
+      ).run(to, "legacy-owner", payload, 1);
       const rows = () =>
         db.prepare("SELECT * FROM managed_update_handoffs ORDER BY install_root").all();
       const before = rows();
@@ -407,7 +404,9 @@ unix("reclaims a legacy reused PID without granting authority to its live proces
   const { to, store, options } = fixture();
   const db = new DatabaseSync(options.databasePath);
   try {
-    db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, ?, ?)").run(
+    db.prepare(
+      "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
+    ).run(
       to,
       "legacy-owner",
       JSON.stringify({ version: 1, pid: process.pid, startIdentity: "0" }),
@@ -443,12 +442,9 @@ unix.each([
   const { to, store, source, options } = fixture();
   const db = new DatabaseSync(options.databasePath);
   try {
-    db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, ?, ?)").run(
-      to,
-      "legacy-owner",
-      JSON.stringify(value(store.processIdentity())),
-      1,
-    );
+    db.prepare(
+      "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
+    ).run(to, "legacy-owner", JSON.stringify(value(store.processIdentity())), 1);
     const rows = () =>
       db.prepare("SELECT * FROM managed_update_handoffs ORDER BY install_root").all();
     const before = rows();
@@ -471,12 +467,9 @@ unix.each(["owner", "payload_json", "updated_at"] as const)(
       const rows = () =>
         db.prepare("SELECT * FROM managed_update_handoffs ORDER BY install_root").all();
       for (const admission of ["acquire", "retarget"]) {
-        db.prepare("INSERT OR REPLACE INTO managed_update_handoffs VALUES (?, ?, ?, ?)").run(
-          to,
-          "legacy-owner",
-          payload,
-          1,
-        );
+        db.prepare(
+          "INSERT OR REPLACE INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
+        ).run(to, "legacy-owner", payload, 1);
         let winner: ReturnType<typeof rows> = [];
         const other = racing(() => {
           db.prepare(`UPDATE managed_update_handoffs SET ${column} = ? WHERE install_root = ?`).run(
@@ -502,7 +495,9 @@ unix("keeps the dead legacy destination when its retarget source changes", () =>
   const { to, store, source, options, racing } = fixture();
   const db = new DatabaseSync(options.databasePath);
   try {
-    db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, ?, ?)").run(
+    db.prepare(
+      "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
+    ).run(
       to,
       "legacy-owner",
       JSON.stringify({ version: 1, pid: process.pid, startIdentity: "0" }),
@@ -533,12 +528,9 @@ unix("does not reclaim a legacy process when its creation identity is unknown", 
   const readStart = pidIdentity.getFileLockProcessStartTime;
   try {
     const identity = store.processIdentity(child.pid);
-    db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, ?, ?)").run(
-      to,
-      "legacy-owner",
-      JSON.stringify({ version: 1, ...identity, startIdentity: "0" }),
-      1,
-    );
+    db.prepare(
+      "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
+    ).run(to, "legacy-owner", JSON.stringify({ version: 1, ...identity, startIdentity: "0" }), 1);
     const rows = () =>
       db.prepare("SELECT * FROM managed_update_handoffs ORDER BY install_root").all();
     const before = rows();

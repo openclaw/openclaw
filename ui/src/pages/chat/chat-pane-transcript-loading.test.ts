@@ -60,8 +60,8 @@ describe("chat pane transcript loading", () => {
     await vi.waitFor(() => expect(state.chatMessages).toEqual(messages));
     expect(observing).toBe(true);
     expect(subscriptions).toEqual([
-      { key: sessionKey, includeApprovals: true },
-      { key: sessionKey, includeApprovals: true },
+      { subscriptionId: expect.any(String), key: sessionKey, includeApprovals: true },
+      { subscriptionId: expect.any(String), key: sessionKey, includeApprovals: true },
     ]);
     expect(state.chatError).toBeNull();
   });

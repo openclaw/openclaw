@@ -9,6 +9,7 @@ import {
   runtimeProcessEntrypoints,
   SQLITE_READONLY_CHILD_ARG,
 } from "./runtime-process-entrypoints.js";
+import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "./sqlite-readonly-worker.js";
 import { withUpdateCandidateIoBudget } from "./update-candidate-io.js";
@@ -30,12 +31,18 @@ export async function runUpdateStateInspectionWorker(params: {
   timeoutMs?: number;
   readOnlySource?: string;
 }) {
-  const workerUrl = resolveRuntimeWorkerUrl({
+  const selectedUrl = resolveRuntimeWorkerUrl({
     ...(params.readOnlySource
       ? runtimeProcessEntrypoints.sqliteReadOnly
       : runtimeProcessEntrypoints.updateCandidateState),
     root: params.root,
   });
+  // Default inspection belongs to this updater; explicit roots select the target's runtime.
+  const source =
+    params.root === undefined
+      ? captureRuntimeWorkerSource(selectedUrl)
+      : { moduleUrl: selectedUrl };
+  const workerUrl = source.moduleUrl;
   const sourceTsconfigPath = /\.[cm]?ts$/.test(fileURLToPath(workerUrl))
     ? fileURLToPath(new URL("../../tsconfig.json", workerUrl))
     : undefined;
@@ -50,7 +57,7 @@ export async function runUpdateStateInspectionWorker(params: {
         : [path.resolve(params.input.stateDir, "state", "openclaw.sqlite")],
   });
   try {
-    const result = await withUpdateStateInspectionWork(
+    const work = withUpdateStateInspectionWork(
       () =>
         withUpdateCandidateIoBudget(
           {
@@ -110,6 +117,14 @@ export async function runUpdateStateInspectionWorker(params: {
         ),
       params.signal,
     );
+    source.runtimeGeneration?.retain(work, async () => {
+      await work.catch((error: unknown) => {
+        if (hasCommandProcessCleanupError(error)) {
+          throw error;
+        }
+      });
+    });
+    const result = await work;
     return { ...result, stderr: inspection.stderr(), inspection };
   } catch (error) {
     if (hasCommandProcessCleanupError(error)) {

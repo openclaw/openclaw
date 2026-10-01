@@ -88,8 +88,8 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     private var backgroundWakeAttempt: BackgroundWakeRefreshAttempt?
     private var pendingAPNsDeviceToken: Data?
     private var pendingExecApprovalPrompts: [ApprovalNotificationPrompt] = []
-    private var pendingExecApprovalRequestedPushes: [ExecApprovalNotificationPrompt] = []
-    private var pendingExecApprovalResolvedPushes: [ExecApprovalNotificationPrompt] = []
+    private var pendingExecApprovalRequestedPushes: [ApprovalNotificationPrompt] = []
+    private var pendingExecApprovalResolvedPushes: [ApprovalNotificationPrompt] = []
     private var pendingOpenURLs: [URL] = []
 
     weak var appModel: NodeAppModel? {
@@ -417,8 +417,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     {
         let userInfo = notification.request.content.userInfo
         if Self.isWatchPromptNotification(userInfo)
-            || ExecApprovalNotificationBridge.shouldPresentNotification(userInfo: userInfo)
-            || PluginApprovalNotificationBridge.shouldPresentNotification(userInfo: userInfo)
+            || ApprovalNotificationBridge.parseRequestedPush(userInfo: userInfo) != nil
         {
             completionHandler([.banner, .list, .sound])
             return

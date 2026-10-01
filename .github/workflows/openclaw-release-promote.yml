@@ -176,7 +176,7 @@ jobs:
           fi
           expected_prerelease=false
           expected_latest=false
-          if [[ "$RELEASE_TAG" == *-alpha.* || "$RELEASE_TAG" == *-beta.* ]]; then
+          if [[ "$RELEASE_TAG" == *-beta.* ]]; then
             expected_prerelease=true
           elif [[ "$RELEASE_NPM_DIST_TAG" == latest ]]; then
             expected_latest=true
@@ -234,7 +234,7 @@ jobs:
   dispatch_linux_mirror:
     name: Dispatch legacy Linux mirror after activation
     needs: [publish, finalize]
-    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.finalize.result == 'success' && fromJSON(needs.publish.outputs.request).inputs.npm_dist_tag == 'latest' && !contains(fromJSON(needs.publish.outputs.request).inputs.tag, '-alpha.') && !contains(fromJSON(needs.publish.outputs.request).inputs.tag, '-beta.') }}
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.finalize.result == 'success' && fromJSON(needs.publish.outputs.request).inputs.npm_dist_tag == 'latest' && !contains(fromJSON(needs.publish.outputs.request).inputs.tag, '-beta.') }}
     continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -286,7 +286,7 @@ jobs:
   publish_linux:
     name: Request Linux assets after activation
     needs: [publish, finalize]
-    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.finalize.result == 'success' && needs.publish.outputs.npm_dist_tag != 'extended-stable' && !contains(needs.publish.outputs.release_tag, '-alpha.') && !contains(needs.publish.outputs.release_tag, '-beta.') }}
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.finalize.result == 'success' && needs.publish.outputs.npm_dist_tag != 'extended-stable' && !contains(needs.publish.outputs.release_tag, '-beta.') }}
     continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -334,7 +334,7 @@ jobs:
   publish_windows:
     name: Dispatch Windows assets after activation
     needs: [publish, finalize]
-    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.finalize.result == 'success' && ((fromJSON(needs.publish.outputs.request).inputs.windows_node_tag || '') != '' || (fromJSON(needs.publish.outputs.request).inputs.windows_node_installer_digests || '') != '') && !contains(fromJSON(needs.publish.outputs.request).inputs.tag, '-alpha.') && !contains(fromJSON(needs.publish.outputs.request).inputs.tag, '-beta.') }}
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.finalize.result == 'success' && ((fromJSON(needs.publish.outputs.request).inputs.windows_node_tag || '') != '' || (fromJSON(needs.publish.outputs.request).inputs.windows_node_installer_digests || '') != '') && !contains(fromJSON(needs.publish.outputs.request).inputs.tag, '-beta.') }}
     continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 10

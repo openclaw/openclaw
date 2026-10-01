@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { resolveSessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
-import type { resolveContextEngine } from "../../../context-engine/registry.js";
+import type { ContextEngine } from "../../../context-engine/types.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
@@ -47,7 +47,6 @@ import { MAX_BEFORE_AGENT_FINALIZE_REVISIONS } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
-type ContextEngine = Awaited<ReturnType<typeof resolveContextEngine>>;
 type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
 type TerminalRetryState = ReturnType<typeof createEmbeddedRunTerminalRetryState>;
 
@@ -98,10 +97,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     fastModeAutoProgressState,
     fastModeStartedAtMs,
     maybeAnnounceFastModeAutoOff,
-    notifyAgentEvent,
     notifyExecutionPhase,
     notifyRunProgress,
-    notifyToolResult,
     resolveAttemptFastModeParam,
   } = runInput.progressController;
   const { createAttemptControls } = runInput.laneController;
@@ -600,9 +597,13 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     onReasoningStream: params.onReasoningStream,
     streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,
     onReasoningEnd: params.onReasoningEnd,
-    onToolResult: notifyToolResult,
+    onToolResult: async (payload) => {
+      await params.onToolResult?.(payload);
+    },
     onAgentToolResult: params.onAgentToolResult,
-    onAgentEvent: notifyAgentEvent,
+    onAgentEvent: async (event) => {
+      await params.onAgentEvent?.(event);
+    },
     // Normalize the shipped harness alias once; attempt internals consume only the canonical flag.
     deferTerminalLifecycle: params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
     onDeferredLifecycleOwner: params.onDeferredLifecycleOwner,
@@ -673,6 +674,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       ],
     suppressNextUserMessagePersistence,
     beforeAgentFinalizeRevisionAttempts,
+    completionCheck: terminalRetryState.completionCheck,
     maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
     suppressTranscriptOnlyAssistantPersistence: params.suppressTranscriptOnlyAssistantPersistence,
     assistantErrorTranscript: params.assistantErrorTranscript,

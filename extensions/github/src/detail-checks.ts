@@ -8,6 +8,31 @@ type CheckPage = { items: Check[]; total: number; truncated: boolean };
 const CHECK_LIMIT = 100;
 const LABEL_MAX_CHARS = 256;
 const STATE_ORDER = { failure: 0, pending: 1, success: 2, neutral: 3 };
+type CheckState = Pick<Check, "state" | "detail">;
+const RUN_STATES = new Map<unknown, CheckState>([
+  ["queued", { state: "pending", detail: "Queued" }],
+  ["in_progress", { state: "pending", detail: "In progress" }],
+  ["waiting", { state: "pending", detail: "Waiting" }],
+  ["requested", { state: "pending", detail: "Waiting" }],
+  ["pending", { state: "pending", detail: "Waiting" }],
+]);
+const RUN_CONCLUSIONS = new Map<unknown, CheckState>([
+  ["success", { state: "success", detail: "Passed" }],
+  ["neutral", { state: "neutral", detail: "Neutral" }],
+  ["skipped", { state: "neutral", detail: "Skipped" }],
+  ["failure", { state: "failure", detail: "Failed" }],
+  ["cancelled", { state: "failure", detail: "Canceled" }],
+  ["timed_out", { state: "failure", detail: "Timed out" }],
+  ["action_required", { state: "failure", detail: "Action required" }],
+  ["stale", { state: "failure", detail: "Stale" }],
+  ["startup_failure", { state: "failure", detail: "Could not start" }],
+]);
+const STATUS_STATES = new Map<unknown, CheckState>([
+  ["success", { state: "success", detail: "Passed" }],
+  ["pending", { state: "pending", detail: "Pending" }],
+  ["failure", { state: "failure", detail: "Failed" }],
+  ["error", { state: "failure", detail: "Error" }],
+]);
 
 function count(value: unknown): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
@@ -28,53 +53,22 @@ function checkUrl(value: unknown): string | undefined {
   }
 }
 
-function runState(run: Record<string, unknown>): Pick<Check, "state" | "detail"> {
-  switch (run.status) {
-    case "queued":
-      return { state: "pending", detail: "Queued" };
-    case "in_progress":
-      return { state: "pending", detail: "In progress" };
-    case "waiting":
-    case "requested":
-    case "pending":
-      return { state: "pending", detail: "Waiting" };
-    case "completed":
-      switch (run.conclusion) {
-        case "success":
-          return { state: "success", detail: "Passed" };
-        case "neutral":
-          return { state: "neutral", detail: "Neutral" };
-        case "skipped":
-          return { state: "neutral", detail: "Skipped" };
-        case "failure":
-          return { state: "failure", detail: "Failed" };
-        case "cancelled":
-          return { state: "failure", detail: "Canceled" };
-        case "timed_out":
-          return { state: "failure", detail: "Timed out" };
-        case "action_required":
-          return { state: "failure", detail: "Action required" };
-        case "stale":
-          return { state: "failure", detail: "Stale" };
-        case "startup_failure":
-          return { state: "failure", detail: "Could not start" };
-      }
+function checkState(entry: Record<string, unknown>, kind: "runs" | "statuses"): CheckState {
+  const state =
+    kind === "statuses"
+      ? STATUS_STATES.get(entry.state)
+      : entry.status === "completed"
+        ? RUN_CONCLUSIONS.get(entry.conclusion)
+        : RUN_STATES.get(entry.status);
+  if (!state) {
+    throw new ControlUiGitHubError(
+      502,
+      kind === "runs"
+        ? "GitHub check returned an unknown state"
+        : "GitHub commit status returned an unknown state",
+    );
   }
-  throw new ControlUiGitHubError(502, "GitHub check returned an unknown state");
-}
-
-function statusState(status: Record<string, unknown>): Pick<Check, "state" | "detail"> {
-  switch (status.state) {
-    case "success":
-      return { state: "success", detail: "Passed" };
-    case "pending":
-      return { state: "pending", detail: "Pending" };
-    case "failure":
-      return { state: "failure", detail: "Failed" };
-    case "error":
-      return { state: "failure", detail: "Error" };
-  }
-  throw new ControlUiGitHubError(502, "GitHub commit status returned an unknown state");
+  return state;
 }
 
 function parsePage(page: JsonPage, commit: string, kind: "runs" | "statuses"): CheckPage {
@@ -107,12 +101,11 @@ function parsePage(page: JsonPage, commit: string, kind: "runs" | "statuses"): C
     if ((latest.get(key)?.id ?? -1) >= id) {
       continue;
     }
-    const state = kind === "runs" ? runState(entry) : statusState(entry);
     latest.set(key, {
       id,
       item: {
         name: name.slice(0, LABEL_MAX_CHARS),
-        ...state,
+        ...checkState(entry, kind),
         url: checkUrl(kind === "runs" ? entry.html_url : entry.target_url),
       },
     });

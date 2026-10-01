@@ -152,6 +152,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
     return {
       completeBatch,
       result: maybeWakeRequesterAfterAllChildrenSettled({
+        isSourceCurrent: () => true,
         requesterSessionKey,
         settledEntry,
         transitionBatch: (batch, state) => {
@@ -314,6 +315,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
         const revoked = vi.fn();
         expect(
           await maybeWakeRequesterAfterAllChildrenSettled({
+            isSourceCurrent: () => true,
             requesterSessionKey,
             settledEntry: child,
             transitionBatch: vi.fn(),
@@ -452,6 +454,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
       });
     const dispatch = (settledEntry: SubagentRunRecord) =>
       maybeWakeRequesterAfterAllChildrenSettled({
+        isSourceCurrent: () => true,
         requesterSessionKey,
         settledEntry,
         transitionBatch: (members, state) => {

@@ -4,23 +4,13 @@ import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
 // E2E tests for run-reply-agent execution and generated session artifacts.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import {
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-  type MockInstance,
-} from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import {
   emptySqliteCounts,
   observeParentSqlite,
   sqliteMethods,
 } from "../../../test/helpers/sqlite-parent-observer.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../../agents/agent-command-restart-recovery.js";
 import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
@@ -53,6 +43,7 @@ import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
 } from "../../plugins/before-agent-reply.js";
+import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -64,6 +55,7 @@ import { createReplyAgentRestartRecoveryController } from "./agent-runner-execut
 import { registerReasoningFallbackTests } from "./agent-runner.reasoning-fallback.test-support.js";
 import { registerReplyAdmissionCases } from "./agent-runner.runreplyagent.admission.cases.js";
 import { registerImmediateFailurePolicyCases } from "./agent-runner.runreplyagent.failure-policy.cases.js";
+import { createReplyAgentSessionFixture } from "./agent-runner.runreplyagent.fixture.test-support.js";
 import { registerRequiredReplyCompletionCases } from "./agent-runner.runreplyagent.required-reply.cases.js";
 import { registerSteeringReceiptCases } from "./agent-runner.runreplyagent.steering-receipts.cases.js";
 import { registerWaitingStatusCases } from "./agent-runner.runreplyagent.waiting-status.cases.js";
@@ -143,17 +135,7 @@ const parkedSteer = vi.hoisted(() => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
-  let count = 0;
-  for (const item of items) {
-    if (predicate(item)) {
-      count += 1;
-    }
-  }
-  return count;
-}
+const { tempDirs, sessionKeys, createSessionStoreFile } = createReplyAgentSessionFixture();
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
 
@@ -171,13 +153,6 @@ function requireStoredSessionEntry(storePath: string, sessionKey = "main"): Sess
     throw new Error(`expected stored session entry for ${sessionKey}`);
   }
   return entry;
-}
-
-async function createSessionStoreFile(entry: SessionEntry, sessionKey = "main"): Promise<string> {
-  const dir = tempDirs.make("openclaw-agent-runner-");
-  const storePath = join(dir, "sessions.json");
-  await replaceSessionEntry({ storePath, sessionKey }, entry);
-  return storePath;
 }
 
 function makeSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
@@ -432,6 +407,7 @@ function createMinimalRun(params?: {
     mode: params?.resolvedQueueMode ?? "interrupt",
   } as unknown as QueueSettings;
   const sessionKey = params?.sessionKey ?? "main";
+  sessionKeys.add(sessionKey);
   const followupRun = {
     prompt: "hello",
     summaryLine: "hello",
@@ -3238,17 +3214,22 @@ describe("runReplyAgent pending final delivery capture", () => {
       storePath,
     });
 
-    await expect(run()).rejects.toThrow("restart recovery claim changed before agent adoption");
+    try {
+      await expect(run()).rejects.toThrow("restart recovery claim changed before agent adoption");
 
-    expect(onAdopted).not.toHaveBeenCalled();
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(await readStoredMainSession(storePath)).toMatchObject({
-      abortedLastRun: true,
-      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
-      restartRecoveryDeliveryRunId: "msg",
-      restartRecoveryDeliverySourceRunId: "control-ui-run",
-      status: "running",
-    });
+      expect(onAdopted).not.toHaveBeenCalled();
+      expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(await readStoredMainSession(storePath)).toMatchObject({
+        abortedLastRun: true,
+        restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+        restartRecoveryDeliveryRunId: "msg",
+        restartRecoveryDeliverySourceRunId: "control-ui-run",
+        status: "running",
+      });
+    } finally {
+      // The rejected turn releases its durable recovery owner after run() settles.
+      await getSessionWorkAdmissionRelease({ scope: storePath, identities: ["main"] });
+    }
   });
 
   it("clears an adopted transcript-only claim after user cancellation", async () => {
@@ -5426,8 +5407,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
           expect(firstText).toBe("final");
           expect(secondText).toBe("final");
         }
-        expect(countMatching(phases, (phase) => phase === "fallback")).toBe(1);
-        expect(countMatching(phases, (phase) => phase === "fallback_cleared")).toBe(1);
+        expect(phases.filter((phase) => phase === "fallback").length).toBe(1);
+        expect(phases.filter((phase) => phase === "fallback_cleared").length).toBe(1);
         expect(sessionEntry.fallbackNotice).toBeUndefined();
         expect(requireStoredSessionEntry(storePath).fallbackNotice).toBeUndefined();
       } finally {
@@ -5717,8 +5698,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
       expect(firstText).toContain("Model Fallback:");
       expect(secondText).toContain("Model Fallback cleared:");
-      expect(countMatching(phases, (phase) => phase === "fallback")).toBe(1);
-      expect(countMatching(phases, (phase) => phase === "fallback_cleared")).toBe(1);
+      expect(phases.filter((phase) => phase === "fallback").length).toBe(1);
+      expect(phases.filter((phase) => phase === "fallback_cleared").length).toBe(1);
     } finally {
       fallbackSpy.mockRestore();
     }

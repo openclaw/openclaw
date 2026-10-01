@@ -229,6 +229,27 @@ describe("model auth checker", () => {
     expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledOnce();
   });
 
+  it("retries a rejected route evaluation while sharing concurrent callers", async () => {
+    const failure = new Error("catalog unavailable");
+    modelAuthAvailabilityMocks.evaluateModelAuth.mockImplementationOnce(() => {
+      throw failure;
+    });
+    const hasAuth = createProviderAuthChecker({ cfg: {} });
+    const ref = { modelId: "fixture-model" };
+    const first = hasAuth.evaluateModelAuth("fixture", ref);
+    const concurrent = hasAuth.evaluateModelAuth("fixture", { ...ref });
+    await expect(first).rejects.toBe(failure);
+    await expect(concurrent).rejects.toBe(failure);
+    expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledOnce();
+
+    modelAuthAvailabilityMocks.evaluateModelAuth.mockReturnValue({
+      availability: true,
+      routeResolution: null,
+    });
+    await expect(hasAuth("fixture", ref)).resolves.toBe(true);
+    expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledTimes(2);
+  });
+
   it("uses shared model auth evaluation for a non-OpenAI AWS SDK model", async () => {
     const evaluation = {
       availability: true,

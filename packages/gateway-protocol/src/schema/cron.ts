@@ -60,9 +60,7 @@ const CronJobsScheduleKindFilterSchema = Type.Union([
 ]);
 const CronJobsLastRunStatusFilterSchema = Type.Union([
   Type.Literal("all"),
-  Type.Literal("ok"),
-  Type.Literal("error"),
-  Type.Literal("skipped"),
+  ...CronRunStatusSchema.anyOf,
   Type.Literal("unknown"),
 ]);
 const CronJobsTriggerFilterSchema = Type.Union([
@@ -75,17 +73,7 @@ const CronJobsSortBySchema = Type.Union([
   Type.Literal("updatedAtMs"),
   Type.Literal("name"),
 ]);
-const CronRunsStatusFilterSchema = Type.Union([
-  Type.Literal("all"),
-  Type.Literal("ok"),
-  Type.Literal("error"),
-  Type.Literal("skipped"),
-]);
-const CronRunsStatusValueSchema = Type.Union([
-  Type.Literal("ok"),
-  Type.Literal("error"),
-  Type.Literal("skipped"),
-]);
+const CronRunsStatusFilterSchema = Type.Union([Type.Literal("all"), ...CronRunStatusSchema.anyOf]);
 const CronDeliveryStatusSchema = Type.Union([
   Type.Literal("delivered"),
   Type.Literal("not-delivered"),
@@ -695,7 +683,7 @@ export const CronRunsParamsSchema = closedObject({
   runId: Type.Optional(NonEmptyString),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
-  statuses: Type.Optional(Type.Array(CronRunsStatusValueSchema, { minItems: 1, maxItems: 3 })),
+  statuses: Type.Optional(Type.Array(CronRunStatusSchema, { minItems: 1, maxItems: 3 })),
   status: Type.Optional(CronRunsStatusFilterSchema),
   deliveryStatuses: Type.Optional(
     Type.Array(CronDeliveryStatusSchema, { minItems: 1, maxItems: 4 }),

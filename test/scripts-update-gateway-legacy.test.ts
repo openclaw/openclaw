@@ -149,7 +149,7 @@ exec "$LEGACY_FIXTURE_NODE" --import "$LEGACY_FIXTURE_SOURCE/scripts/tsx.mjs" --
         : [];
       expect(events.filter((event) => event === "stop")).toHaveLength(owns ? 1 : 0);
       if (["manual", "whitespace", "sibling", "unavailable", "explicit-profile"].includes(mode)) {
-        expect(result.stderr).toContain("Refusing to rebuild dist");
+        expect(result.stderr).toContain("Refusing to rebuild artifacts");
         expect(events).toEqual([]);
       } else if (mode.startsWith("build-throw-")) {
         expect(result.stderr).toContain("fixture compiler rejected");

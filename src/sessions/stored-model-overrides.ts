@@ -110,32 +110,16 @@ export function resolveStoredModelOverride(params: {
 
 /** Resolves the persisted model override visible to the current session. */
 export function resolveStoredModelOverrideCore(
-  params: {
-    loadSessionEntry?: (sessionKey: string) => SessionEntry | undefined;
-    sessionEntry?: SessionEntry;
-    sessionStore?: Record<string, SessionEntry>;
-    sessionKey?: string;
-    parentSessionKey?: string;
-    defaultProvider: string;
-    allowPluginNormalization?: boolean;
-  } & ModelManifestNormalizationContext,
+  params: Parameters<typeof resolveStoredModelOverride>[0] & ModelManifestNormalizationContext,
 ): StoredModelOverride | null {
   if (params.sessionEntry?.modelOverrideSource === "default") {
     return null;
   }
-  const direct = resolveDirectStoredModelOverride({
-    sessionEntry: params.sessionEntry,
-    defaultProvider: params.defaultProvider,
-    allowPluginNormalization: params.allowPluginNormalization,
-    manifestPlugins: params.manifestPlugins,
-  });
+  const direct = resolveDirectStoredModelOverride(params);
   if (direct) {
     return direct;
   }
-  const parentKey = resolveParentSessionKeyCandidate({
-    sessionKey: params.sessionKey,
-    parentSessionKey: params.parentSessionKey,
-  });
+  const parentKey = resolveParentSessionKeyCandidate(params);
   if (!parentKey) {
     return null;
   }

@@ -92,10 +92,10 @@ export function readTranscriptStatsFromDatabase(
       const row = query(sessionId).rows[0];
       return {
         eventCount: row?.cold_event_count ?? row?.event_count ?? 0,
-        ...(row?.transcript_updated_at !== null && row?.transcript_updated_at !== undefined
+        ...(row?.transcript_updated_at != null
           ? { lastMutationAtMs: row.transcript_updated_at }
           : {}),
-        ...(row?.transcript_observed_at !== null && row?.transcript_observed_at !== undefined
+        ...(row?.transcript_observed_at != null
           ? { lastObservedMutationAtMs: row.transcript_observed_at }
           : {}),
         maxSeq: row?.cold_last_seq ?? row?.max_seq ?? 0,

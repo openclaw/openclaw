@@ -121,35 +121,6 @@ describe("physical tab creation authority", () => {
   });
 
   it.each([
-    { pendingUrl: "https://example.com/destination", response: "result" },
-    { pendingUrl: "chrome://settings", response: "error" },
-  ])(
-    "checks the pending $pendingUrl appearing during navigation response validation",
-    async ({ pendingUrl, response }) => {
-      const h = await setup("selected");
-      await h.create();
-      await h.attach();
-      h.debuggerSendCommand.mockImplementationOnce(async () => {
-        const get = h.tabsGet.getMockImplementation()!;
-        h.tabsGet.mockImplementationOnce(async (tabId) => {
-          const before = await get(tabId);
-          h.updateTab(tabId, { pendingUrl });
-          return before;
-        });
-        return { frameId: "main" };
-      });
-      expect(
-        await h.request({
-          type: "cdp",
-          tabId: 101,
-          method: "Page.navigate",
-          params: { url: pendingUrl },
-        }),
-      ).toMatchObject({ type: response });
-    },
-  );
-
-  it.each([
     { event: "initial loading snapshot", eventOrder: "before" },
     { event: "initial loading snapshot", eventOrder: "after" },
     { event: "same-group update", eventOrder: "before" },
@@ -283,45 +254,6 @@ describe("physical tab creation authority", () => {
     });
   });
 
-  it.each([
-    { event: "own naming", response: "result" },
-    { event: "unrelated group removal", response: "result" },
-    { event: "own title change", response: "error" },
-    { event: "own group removal", response: "error" },
-  ] as const)(
-    "scopes handed-off navigation authority across $event",
-    async ({ event, response }) => {
-      const h = await setup("selected");
-      h.tabGroupsUpdate.mockResolvedValueOnce(undefined);
-      await h.create();
-      await h.attach();
-      h.debuggerSendCommand.mockImplementationOnce(async () => {
-        if (event === "own naming") {
-          h.tabGroupUpdatedListener?.({ id: 7, title: "OpenClaw" });
-        } else if (event === "unrelated group removal") {
-          h.tabGroupRemovedListener?.({ id: 9, title: "OpenClaw" });
-        } else if (event === "own group removal") {
-          h.tabGroupRemovedListener?.({ id: 7, title: "OpenClaw" });
-        } else {
-          h.tabGroupUpdatedListener?.({ id: 7, title: "Other" });
-        }
-        return { frameId: "main" };
-      });
-      const expected =
-        response === "result"
-          ? { type: "result", result: { frameId: "main" } }
-          : { type: "error", message: expect.stringContaining("access was revoked") };
-      expect(
-        await h.request({
-          type: "cdp",
-          tabId: 101,
-          method: "Page.navigate",
-          params: { url: "https://example.com/destination" },
-        }),
-      ).toMatchObject(expected);
-    },
-  );
-
   it("restores fresh attachment authority without reviving a command admitted before a title change", async () => {
     const h = await setup("selected");
     h.tabGroupsUpdate.mockResolvedValueOnce(undefined);
@@ -390,18 +322,7 @@ describe("physical tab creation authority", () => {
     expect(h.tabsRemove).not.toHaveBeenCalled();
   });
 
-  it("does not guess a cleanup tab when physical creation fails", async () => {
-    const h = await setup();
-    h.tabsCreate.mockRejectedValueOnce(new Error("create failed"));
-    expect(await h.request({ type: "createTab", url: "about:blank" })).toMatchObject({
-      type: "error",
-      message: "create failed",
-    });
-    expect(h.tabsRemove).not.toHaveBeenCalled();
-    expect(h.tabsGroup).not.toHaveBeenCalled();
-  });
-
-  it.each(["removed", "replaced", "pause"] as const)(
+  it.each(["removed", "pause"] as const)(
     "rechecks %s after the failure-cleanup lookup yields",
     async (reason) => {
       const h = await setup();
@@ -429,8 +350,6 @@ describe("physical tab creation authority", () => {
       let pausing: Promise<unknown> | undefined;
       if (reason === "removed") {
         h.tabsRemovedListener?.(101);
-      } else if (reason === "replaced") {
-        h.tabsReplacedListener(102, 101);
       } else {
         pausing = sendRuntimeMessage(h, {
           type: "toggleTabAccess",

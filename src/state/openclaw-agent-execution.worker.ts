@@ -16,6 +16,7 @@ import {
 } from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
+  normalizeDatabasePath,
   readDatabasePathIdentitySync,
 } from "../infra/sqlite-worker-identity.js";
 import {
@@ -23,6 +24,7 @@ import {
   takeSqliteWorkerOperationAdmissionAttachment,
   deferSqliteWorkerCommitReceipt,
   SqliteWorkerOpenRefusedError,
+  type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
 import type {
@@ -48,7 +50,11 @@ import type {
   AgentDatabaseExecutionOpen,
   AgentDatabaseOperations,
 } from "./openclaw-agent-execution-contract.js";
-import { createAgentDatabaseDomainOwner } from "./openclaw-agent-execution-domain.js";
+import {
+  createAgentDatabaseDomainOwner,
+  requestRestrictedAgentDatabaseAdmission,
+  type AgentDatabaseAdmissionRestriction,
+} from "./openclaw-agent-execution-domain.js";
 import {
   requireOpenClawStateDatabaseIdentity,
   retainOpenClawStateDatabase,
@@ -297,16 +303,21 @@ function openAgentDatabaseBackend(
     });
     return database;
   };
-  const admit = (stage: "transaction" | "commit", publication?: unknown) => {
+  const admit = (
+    stage: "transaction" | "commit",
+    publication?: unknown,
+    requestAdmission?: AgentDatabaseAdmissionRestriction,
+  ) => {
     assertFileIdentity();
-    requestSqliteWorkerOperationAdmission({
+    const request: SqliteWorkerAdmissionRequest = {
       stage,
       facts: {
         identity,
         ...(startupJournalRequested ? { agentDeletionJournalPresent: readDeletionJournal() } : {}),
         ...(publication ? { publication } : {}),
       },
-    });
+    };
+    requestRestrictedAgentDatabaseAdmission(request, requestAdmission);
     if (stage === "commit") {
       ensureOpenClawAgentDatabasePermissions(input.databasePath, options);
     }
@@ -368,14 +379,14 @@ function openAgentDatabaseBackend(
         !database ||
         !identity ||
         !database.db.isOpen ||
-        database.db.location() !== identity.nativeLocation ||
+        normalizeDatabasePath(database.db.location() ?? "") !== identity.nativeLocation ||
         getOpenClawAgentDatabaseIfOpen(options) !== database
       ) {
         throw new Error("Agent cleanup lost its retained native database");
       }
       assertFileIdentity();
     },
-    admit,
+    admit: (stage, requestAdmission) => admit(stage, undefined, requestAdmission),
   });
   let closed = false;
   let closeReceipt: SqliteWorkerCloseReceipt | undefined;

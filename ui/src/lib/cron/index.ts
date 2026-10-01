@@ -4,7 +4,11 @@ import {
   asNullableRecord,
   isRecord,
 } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  readNonEmptyStringPreservingWhitespace,
+} from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveCronTriggerMinIntervalMs } from "../../../../src/config/cron-limits.js";
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
@@ -369,10 +373,7 @@ export async function loadCronStatus(
 }
 
 function addModelId(target: Set<string>, value: unknown) {
-  if (typeof value !== "string") {
-    return;
-  }
-  const trimmed = value.trim();
+  const trimmed = normalizeOptionalString(value);
   if (trimmed) {
     target.add(trimmed);
   }
@@ -728,15 +729,9 @@ type CronSaveResult = { saved: false } | { saved: true; jobId: string | null };
 
 // cron.add responds with either { created, job } or the bare job read view.
 function extractSavedCronJobId(response: unknown): string | null {
-  if (!response || typeof response !== "object") {
-    return null;
-  }
-  const container = "job" in response ? (response as { job?: unknown }).job : response;
-  if (!container || typeof container !== "object") {
-    return null;
-  }
-  const id = (container as { id?: unknown }).id;
-  return typeof id === "string" && id.length > 0 ? id : null;
+  const record = asNullableObjectRecord(response);
+  const container = record && "job" in record ? asNullableObjectRecord(record.job) : record;
+  return readNonEmptyStringPreservingWhitespace(container?.id) ?? null;
 }
 
 export async function addCronJob(state: CronState): Promise<CronSaveResult> {
@@ -856,9 +851,6 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
     }
     if (payload) {
       job.payload = payload;
-    }
-    if (!job.name) {
-      throw new Error(t("cron.errors.nameRequiredShort"));
     }
     if (editingJob) {
       const editedJobId = editingJob.id;

@@ -88,7 +88,7 @@ export async function monitorPrFailure(options) {
     throw new Error("Invalid PR cancellation context");
   }
   // Partial reruns reuse successful jobs; their attempt inventory is not the
-  // complete manifest. Native matrix fail-fast remains active on those runs.
+  // complete manifest. Canonical PR reruns let every matrix leg finish.
   if (runAttempt !== 1) {
     return "retry";
   }

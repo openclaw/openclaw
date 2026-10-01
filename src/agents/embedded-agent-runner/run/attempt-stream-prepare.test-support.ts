@@ -42,6 +42,7 @@ export function prepareCatalogExecutor(
     toolProgressDetail?: "explain" | "raw";
     onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void;
     trustedLocalMediaToolNames?: ReadonlySet<string>;
+    streamReplies?: boolean;
   },
 ) {
   const runAbortController = options?.runAbortController ?? new AbortController();
@@ -95,8 +96,8 @@ export function prepareCatalogExecutor(
         timedOut: false,
         yieldDetected: false,
       })),
-    onBlockReply: vi.fn(),
-    onBlockReplyFlush: vi.fn(),
+    onBlockReply: options?.streamReplies === false ? undefined : vi.fn(),
+    onBlockReplyFlush: options?.streamReplies === false ? undefined : vi.fn(),
   });
 }
 
@@ -115,6 +116,7 @@ export function createBeforeFinalizeEvent() {
     isError: false,
     incompleteTerminalAssistant: false,
     hadDeterministicSideEffect: false,
+    hasPendingContinuation: false,
   };
 }
 

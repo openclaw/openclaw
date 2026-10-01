@@ -776,23 +776,24 @@ describe("ollama embedding provider", () => {
 
   it("keys custom endpoints by non-secret headers while excluding credentials", async () => {
     const fetchMock = mockEmbeddingFetch([1, 0]);
-
-    const result = await createMemoryEmbeddingProvider({
-      config: createProviderConfig(
-        {
-          api: "ollama",
-          baseUrl: "https://ollama-cpu.home.lab",
-          headers: {
-            "X-Ollama-Tenant": "tenant-a",
-            "X-Api-Key": "super-secret", // pragma: allowlist secret
+    const createCustomProvider = (tenant: string, apiKey: string) =>
+      createMemoryEmbeddingProvider({
+        config: createProviderConfig(
+          {
+            api: "ollama",
+            baseUrl: "https://ollama-cpu.home.lab",
+            headers: {
+              "X-Ollama-Tenant": tenant,
+              "X-Api-Key": apiKey,
+            },
+            models: [],
           },
-          models: [],
-        },
-        "ollama-cpu",
-      ),
-      provider: "ollama-cpu",
-      model: "qwen3-embedding:4b",
-    });
+          "ollama-cpu",
+        ),
+        provider: "ollama-cpu",
+        model: "qwen3-embedding:4b",
+      });
+    const result = await createCustomProvider("tenant-a", "super-secret"); // pragma: allowlist secret
 
     await result.provider!.embed("hello", { inputType: "query" });
     expectEmbeddingFetch(fetchMock, "https://ollama-cpu.home.lab/api/embed", {
@@ -814,19 +815,10 @@ describe("ollama embedding provider", () => {
     expect(JSON.stringify(result.runtime?.cacheKeyData)).not.toContain("tenant-a");
     expect(JSON.stringify(result.runtime?.cacheKeyData)).not.toContain("super-secret");
 
-    const otherTenant = await createMemoryEmbeddingProvider({
-      config: createProviderConfig(
-        {
-          api: "ollama",
-          baseUrl: "https://ollama-cpu.home.lab",
-          headers: { "X-Ollama-Tenant": "tenant-b" },
-          models: [],
-        },
-        "ollama-cpu",
-      ),
-      provider: "ollama-cpu",
-      model: "qwen3-embedding:4b",
-    });
+    const rotatedCredential = await createCustomProvider("tenant-a", "rotated-fixture-key");
+    expect(rotatedCredential.runtime?.cacheKeyData).toEqual(result.runtime?.cacheKeyData);
+
+    const otherTenant = await createCustomProvider("tenant-b", "super-secret"); // pragma: allowlist secret
     expect(otherTenant.runtime?.cacheKeyData).not.toEqual(result.runtime?.cacheKeyData);
   });
 

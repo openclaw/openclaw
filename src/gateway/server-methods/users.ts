@@ -13,6 +13,7 @@ import {
   validateUsersSetDisplayNameParams,
   validateUsersSetRoleParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveGatewayPersonalToolParticipant } from "../../agents/tools/gateway-caller-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   getCanonicalUserPreferences,
@@ -47,9 +48,9 @@ import { usersChannelIdentityHandlers } from "./users-channel-identities.js";
 import { usersGitHubHandlers } from "./users-github.js";
 import { usersPersonalFileHandlers } from "./users-personal-file.js";
 import {
+  prepareAuthenticatedProfile,
+  prepareProfileMutationAccess,
   prepareUserProfileAdministration,
-  requireProfileMutationAccess,
-  resolveAuthenticatedProfileId,
 } from "./users-profile-access.js";
 import { assertValidParams } from "./validation.js";
 
@@ -76,6 +77,26 @@ function profileError(error: unknown) {
   return errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
 }
 
+function preparePersonalPreferences(client: GatewayRequestHandlerOptions["client"]) {
+  const unavailable =
+    "Personal settings are unavailable in this turn. Ask in your own Control UI turn with a new message.";
+  try {
+    const participant = resolveGatewayPersonalToolParticipant(
+      client?.internal?.agentRuntimeIdentity,
+      { requireSingleParticipant: true },
+    );
+    return () => {
+      try {
+        participant?.assertCurrent();
+      } catch {
+        throw new Error(unavailable);
+      }
+    };
+  } catch {
+    throw new Error(unavailable);
+  }
+}
+
 export const usersHandlers: GatewayRequestHandlers = {
   ...usersAuthConnectHandlers,
   ...usersChannelIdentityHandlers,
@@ -87,7 +108,8 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     respond(true, { profiles: await listProfiles() });
   },
-  "users.self": async ({ client, params, respond }) => {
+  "users.self": async (options) => {
+    const { client, params, respond } = options;
     if (!assertValidParams(params, validateUsersSelfParams, "users.self", respond)) {
       return;
     }
@@ -107,7 +129,9 @@ export const usersHandlers: GatewayRequestHandlers = {
           // A previously attached immutable profile stays usable; unresolved aliases stay hidden.
         }
       }
-      const profileId = resolveAuthenticatedProfileId(client);
+      const profile = await prepareAuthenticatedProfile(options);
+      profile.assertCurrent();
+      const profileId = profile.profileId;
       if (!profileId) {
         respond(false, undefined, authenticatedProfileUnavailableError());
         return;
@@ -131,7 +155,9 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const assertCurrent = preparePersonalPreferences(client);
       const preferences = await getCanonicalUserPreferences(profileId, params.keys);
+      assertCurrent();
       sessionMutationAuthorization?.assertCurrent();
       if (!preferences) {
         respond(false, undefined, authenticatedProfileUnavailableError());
@@ -159,8 +185,10 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const assertCurrent = preparePersonalPreferences(client);
       const result = await setCanonicalUserPreferences(profileId, params.entries, {
         expectedEntries: params.expectedEntries,
+        assertCurrent,
       });
       if (!result) {
         respond(false, undefined, authenticatedProfileUnavailableError());
@@ -257,16 +285,19 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.setDisplayName": ({ client, context, params, respond }) => {
+  "users.setDisplayName": async (options) => {
+    const { context, params, respond } = options;
     if (
       !assertValidParams(params, validateUsersSetDisplayNameParams, "users.setDisplayName", respond)
     ) {
       return;
     }
     try {
-      if (!requireProfileMutationAccess(client, params.profileId, respond)) {
+      const assertCurrent = await prepareProfileMutationAccess(options, params.profileId);
+      if (!assertCurrent) {
         return;
       }
+      assertCurrent();
       const profile = setDisplayName(params.profileId, params.displayName);
       refreshConnectedProfile(context, profile);
       respond(true, { profile });
@@ -309,7 +340,8 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.setAvatar": ({ client, context, params, respond }) => {
+  "users.setAvatar": async (options) => {
+    const { context, params, respond } = options;
     if (!assertValidParams(params, validateUsersSetAvatarParams, "users.setAvatar", respond)) {
       return;
     }
@@ -324,9 +356,11 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     const bytes = Buffer.from(avatarBase64, "base64");
     try {
-      if (!requireProfileMutationAccess(client, params.profileId, respond)) {
+      const assertCurrent = await prepareProfileMutationAccess(options, params.profileId);
+      if (!assertCurrent) {
         return;
       }
+      assertCurrent();
       const result = setAvatar(params.profileId, bytes, params.mime);
       if (!result.ok) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error.code));

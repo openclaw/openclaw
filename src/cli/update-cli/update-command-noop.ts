@@ -16,11 +16,11 @@ import { createPackageRuntimeRecovery } from "./update-command-node-runtime.js";
 import { preflightConfiguredNpmPluginTargets } from "./update-command-plugin-preflight.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import type { RefuseUpdate } from "./update-command-result.js";
+import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import {
   GatewayServiceUpdateOwnershipError,
   resolvePackageRuntimePreflight,
-  type ManagedServiceRootRedirect,
 } from "./update-command-service-plan.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,
@@ -48,6 +48,7 @@ export async function finishAlreadyCurrentUpdate(
     managedServiceRootRedirect: ManagedServiceRootRedirect | null;
     managedServiceRoot?: string;
     legacyConfigPlan?: LegacyConfigUpdatePlan;
+    callerLegacyConfigPlan?: LegacyConfigUpdatePlan;
     runtimeTarget?: { version: string; nodeEngine: string | null };
     stop: () => void;
     refuseUpdate: RefuseUpdate;
@@ -74,7 +75,7 @@ export async function finishAlreadyCurrentUpdate(
     };
     const admission = await inspectUpdateDatabaseContexts(inspection);
     const service = admission.service;
-    const context = admission.foreground ? admission.contexts[0]! : admission.contexts.at(-1)!;
+    let context = admission.foreground ? admission.contexts[0]! : admission.contexts.at(-1)!;
     const membership = await mutableUpdateGatewayServiceBlock({
       preManagedServiceStop:
         service ?? admission.services.get(params.managedServiceRoot ?? params.root),
@@ -149,18 +150,15 @@ export async function finishAlreadyCurrentUpdate(
       timeoutMs: params.updateStepTimeoutMs,
     });
     for (const warning of pluginWarnings) {
-      if (params.opts.json) {
-        defaultRuntime.error(warning.message);
-      } else {
-        defaultRuntime.log(warning.message);
-      }
+      defaultRuntime[params.opts.json ? "error" : "log"](warning.message);
     }
     await inspectUpdateDatabaseContexts({
       ...inspection,
       expectedServices: admission.services,
       expectedForeground: admission.foreground,
     });
-    await Promise.all(admission.contexts.map(revalidateUpdateDatabaseContext));
+    admission.contexts = await Promise.all(admission.contexts.map(revalidateUpdateDatabaseContext));
+    context = admission.foreground ? admission.contexts[0]! : admission.contexts.at(-1)!;
     let stopState = admission.foreground
       ? undefined
       : admission.services.get(params.managedServiceRoot ?? params.root);
@@ -189,8 +187,8 @@ export async function finishAlreadyCurrentUpdate(
     const env = owned?.env ?? context.env;
     let configSnapshot = owned?.configSnapshot ?? context.configSnapshot;
     const plan =
-      params.legacyConfigPlan?.snapshot.path === configSnapshot.path
-        ? params.legacyConfigPlan
+      context.legacyConfigPlan?.snapshot.path === configSnapshot.path
+        ? context.legacyConfigPlan
         : undefined;
     const storedChannel = normalizeUpdateChannel(
       (plan?.config ?? configSnapshot.config).update?.channel,

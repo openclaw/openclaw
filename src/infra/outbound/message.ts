@@ -17,7 +17,6 @@ import type { ChannelPlugin, ChannelPollResult } from "../../channels/plugins/ty
 import { createChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
-import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
@@ -222,33 +221,6 @@ function normalizeMessagePollDeliveryResult(
   };
 }
 
-function buildMessagePollResult(params: {
-  channel: string;
-  to: string;
-  normalized: {
-    question: string;
-    options: string[];
-    maxSelections: number;
-    durationSeconds?: number | null;
-    durationHours?: number | null;
-  };
-  via: MessagePollResult["via"];
-  result?: MessagePollResult["result"];
-  dryRun?: boolean;
-}): MessagePollResult {
-  return {
-    channel: params.channel,
-    to: params.to,
-    question: params.normalized.question,
-    options: params.normalized.options,
-    maxSelections: params.normalized.maxSelections,
-    durationSeconds: params.normalized.durationSeconds ?? null,
-    durationHours: params.normalized.durationHours ?? null,
-    via: params.via,
-    ...(params.dryRun ? { dryRun: true } : { result: params.result }),
-  };
-}
-
 function assertPollOptionSupport(params: {
   channel: string;
   outbound: NonNullable<ChannelPlugin["outbound"]>;
@@ -377,16 +349,16 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   const mirrorText = mirrorProjection.text;
   const mirrorMediaUrls = mirrorProjection.mediaUrls;
   const primaryMediaUrl = mirrorMediaUrls[0] ?? mediaUrl ?? null;
+  const baseResult: MessageSendResult = {
+    channel,
+    to: params.to,
+    via: deliveryMode === "gateway" ? "gateway" : "direct",
+    mediaUrl: primaryMediaUrl,
+    mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
+  };
 
   if (params.dryRun) {
-    return {
-      channel,
-      to: params.to,
-      via: deliveryMode === "gateway" ? "gateway" : "direct",
-      mediaUrl: primaryMediaUrl,
-      mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
-      dryRun: true,
-    };
+    return { ...baseResult, dryRun: true };
   }
 
   if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
@@ -512,11 +484,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     const sentBeforeError = send.status !== "sent" && sendMayHaveReachedRecipient;
 
     return {
-      channel,
-      to: params.to,
-      via: deliveryMode === "gateway" ? "gateway" : "direct",
-      mediaUrl: primaryMediaUrl,
-      mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
+      ...baseResult,
       result: results.at(-1),
       deliveryStatus: send.status,
       ...(send.status === "suppressed" ? { suppressionReason: send.reason } : {}),
@@ -556,14 +524,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     },
   });
 
-  return {
-    channel,
-    to: params.to,
-    via: "gateway",
-    mediaUrl: primaryMediaUrl,
-    mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
-    result,
-  };
+  return { ...baseResult, result };
 }
 
 export async function sendPoll(params: MessagePollParams): Promise<MessagePollResult> {
@@ -573,30 +534,31 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     : await resolveMessageChannelSelection({ cfg, channel: params.channel });
   const { channel, plugin } = prepared;
 
-  const pollInput: PollInput = {
-    question: params.question,
-    options: params.options,
-    maxSelections: params.maxSelections,
-    durationSeconds: params.durationSeconds,
-    durationHours: params.durationHours,
-  };
   const outbound = plugin.outbound;
   if (!outbound?.sendPoll) {
     throw new Error(`Unsupported poll channel: ${channel}`);
   }
   const deliveryMode = outbound.deliveryMode ?? "direct";
-  const normalized = outbound.pollMaxOptions
-    ? normalizePollInput(pollInput, { maxOptions: outbound.pollMaxOptions })
-    : normalizePollInput(pollInput);
+  const normalized = normalizePollInput(
+    params,
+    outbound.pollMaxOptions ? { maxOptions: outbound.pollMaxOptions } : undefined,
+  );
+  const buildResult = (
+    delivery: Pick<MessagePollResult, "result" | "dryRun">,
+  ): MessagePollResult => ({
+    channel,
+    to: params.to,
+    question: normalized.question,
+    options: normalized.options,
+    maxSelections: normalized.maxSelections,
+    durationSeconds: normalized.durationSeconds ?? null,
+    durationHours: normalized.durationHours ?? null,
+    via: deliveryMode === "gateway" ? "gateway" : "direct",
+    ...delivery,
+  });
 
   if (params.dryRun) {
-    return buildMessagePollResult({
-      channel,
-      to: params.to,
-      normalized,
-      via: deliveryMode === "gateway" ? "gateway" : "direct",
-      dryRun: true,
-    });
+    return buildResult({ dryRun: true });
   }
 
   assertPollOptionSupport({
@@ -635,13 +597,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
       assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     });
 
-    return buildMessagePollResult({
-      channel,
-      to: params.to,
-      normalized,
-      via: deliveryMode === "gateway" ? "gateway" : "direct",
-      result: normalizeMessagePollDeliveryResult(result),
-    });
+    return buildResult({ result: normalizeMessagePollDeliveryResult(result) });
   }
 
   const result = await callMessageGateway<ChannelPollResult>({
@@ -650,12 +606,8 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     onPlatformSendDispatch: params.onPlatformSendDispatch,
     assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     params: {
+      ...normalized,
       to: params.to,
-      question: normalized.question,
-      options: normalized.options,
-      maxSelections: normalized.maxSelections,
-      durationSeconds: normalized.durationSeconds,
-      durationHours: normalized.durationHours,
       threadId: params.threadId,
       silent: params.silent,
       isAnonymous: params.isAnonymous,
@@ -665,11 +617,5 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     },
   });
 
-  return buildMessagePollResult({
-    channel,
-    to: params.to,
-    normalized,
-    via: "gateway",
-    result: normalizeMessagePollDeliveryResult(result),
-  });
+  return buildResult({ result: normalizeMessagePollDeliveryResult(result) });
 }

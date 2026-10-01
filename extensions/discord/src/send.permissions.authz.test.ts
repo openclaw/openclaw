@@ -1,473 +1,234 @@
-// Discord tests cover send.permissions.authz plugin behavior.
-import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10";
+import { ChannelType, PermissionFlagsBits as P, Routes } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RequestClient } from "./internal/discord.js";
-import { EMPTY_DISCORD_TEST_OPTS } from "./test-support/config.js";
+import { EMPTY_DISCORD_TEST_OPTS as opts } from "./test-support/config.js";
 
-const mockRest = vi.hoisted(() => ({
-  get: vi.fn(),
-}));
-
-vi.mock("./client.js", () => ({
-  resolveDiscordRest: () => mockRest as unknown as RequestClient,
-}));
-
-let fetchMemberGuildPermissionsDiscord: typeof import("./send.permissions.js").fetchMemberGuildPermissionsDiscord;
-let canManageGuildRoleDiscord: typeof import("./send.permissions.js").canManageGuildRoleDiscord;
-let canManageGuildMemberRoleDiscord: typeof import("./send.permissions.js").canManageGuildMemberRoleDiscord;
-let hasAllGuildPermissionsDiscord: typeof import("./send.permissions.js").hasAllGuildPermissionsDiscord;
-let hasAnyChannelPermissionDiscord: typeof import("./send.permissions.js").hasAnyChannelPermissionDiscord;
-let hasAnyGuildPermissionDiscord: typeof import("./send.permissions.js").hasAnyGuildPermissionDiscord;
-
-type RouteMockParams = {
-  guildId?: string;
-  channelId?: string;
-  channelGuildId?: string;
-  channelType?: number;
-  ownerId?: string;
-  parentChannelId?: string;
-  userId?: string;
-  targetUserId?: string;
-  roles: Array<{ id: string; permissions: string | bigint; position?: number }>;
-  memberRoles: string[];
-  targetMemberRoles?: string[];
-  channelPermissionOverwrites?: Array<{
-    id: string;
-    type: number;
-    allow?: string | bigint;
-    deny?: string | bigint;
+const mockRest = vi.hoisted(() => ({ get: vi.fn() }));
+vi.mock("./client.js", () => ({ resolveDiscordRest: () => mockRest }));
+let api: typeof import("./send.permissions.js");
+type Role = [id: string, permissions: bigint, position?: number];
+type Fixture = {
+  owner?: string;
+  roles?: Role[];
+  everyone?: bigint;
+  member?: bigint;
+  memberRoles?: string[];
+  target?: string;
+  targetRoles?: string[];
+  channel?: Partial<{
+    guild_id: string;
+    type: ChannelType;
+    parent_id: string;
+    permission_overwrites: ReturnType<typeof deny>;
   }>;
-  parentPermissionOverwrites?: Array<{
-    id: string;
-    type: number;
-    allow?: string | bigint;
-    deny?: string | bigint;
-  }>;
+  parentOverwrites?: ReturnType<typeof deny>;
 };
+const deny = (permission: bigint) => [{ id: "user-1", type: 1, deny: permission.toString() }];
+const roleHierarchy = (
+  senderPosition: number,
+  targetPosition: number,
+  targetPermissions = 0n,
+): Role[] => [
+  ["guild-1", 0n, 0],
+  ["role-mod", P.ManageRoles, senderPosition],
+  ["role-target", targetPermissions, targetPosition],
+];
 
-function permissionString(value?: string | bigint) {
-  if (typeof value === "bigint") {
-    return value.toString();
+function mockGuild({
+  owner = "owner-1",
+  everyone = 0n,
+  member,
+  roles = member === undefined
+    ? [["guild-1", everyone]]
+    : [
+        ["guild-1", everyone],
+        ["role-mod", member],
+      ],
+  memberRoles = member === undefined ? [] : ["role-mod"],
+  target,
+  targetRoles = [],
+  channel = {},
+  parentOverwrites,
+}: Fixture = {}) {
+  const routes = new Map<string, unknown>([
+    [
+      Routes.guild("guild-1"),
+      {
+        id: "guild-1",
+        owner_id: owner,
+        roles: roles.map(([id, bits, position = 0]) => ({
+          id,
+          permissions: bits.toString(),
+          position,
+        })),
+      },
+    ],
+    [Routes.guildMember("guild-1", "user-1"), { id: "user-1", roles: memberRoles }],
+    [Routes.channel("channel-1"), { id: "channel-1", type: 0, guild_id: "guild-1", ...channel }],
+  ]);
+  if (target) {
+    routes.set(Routes.guildMember("guild-1", target), { id: target, roles: targetRoles });
   }
-  return value;
-}
-
-function mockGuildMemberRoutes(params: RouteMockParams): void {
-  const guildId = params.guildId ?? "guild-1";
-  const channelId = params.channelId ?? "channel-1";
-  const userId = params.userId ?? "user-1";
+  if (channel.parent_id) {
+    routes.set(Routes.channel(channel.parent_id), {
+      id: channel.parent_id,
+      type: 0,
+      guild_id: "guild-1",
+      permission_overwrites: parentOverwrites,
+    });
+  }
   mockRest.get.mockImplementation(async (route: string) => {
-    if (route === Routes.channel(channelId)) {
-      return {
-        id: channelId,
-        type: params.channelType ?? 0,
-        guild_id: params.channelGuildId ?? guildId,
-        parent_id: params.parentChannelId,
-        permission_overwrites: params.channelPermissionOverwrites?.map((overwrite) => ({
-          ...overwrite,
-          allow: permissionString(overwrite.allow),
-          deny: permissionString(overwrite.deny),
-        })),
-      };
+    if (!routes.has(route)) {
+      throw new Error(`Unexpected route: ${route}`);
     }
-    if (params.parentChannelId && route === Routes.channel(params.parentChannelId)) {
-      return {
-        id: params.parentChannelId,
-        type: 0,
-        guild_id: params.channelGuildId ?? guildId,
-        permission_overwrites: params.parentPermissionOverwrites?.map((overwrite) => ({
-          ...overwrite,
-          allow: permissionString(overwrite.allow),
-          deny: permissionString(overwrite.deny),
-        })),
-      };
-    }
-    if (route === Routes.guild(guildId)) {
-      return {
-        id: guildId,
-        owner_id: params.ownerId ?? "owner-1",
-        roles: params.roles.map((role) => ({
-          id: role.id,
-          permissions:
-            typeof role.permissions === "bigint" ? role.permissions.toString() : role.permissions,
-          position: role.position ?? 0,
-        })),
-      };
-    }
-    if (route === Routes.guildMember(guildId, userId)) {
-      return { id: userId, roles: params.memberRoles };
-    }
-    if (params.targetUserId && route === Routes.guildMember(guildId, params.targetUserId)) {
-      return { id: params.targetUserId, roles: params.targetMemberRoles ?? [] };
-    }
-    throw new Error(`Unexpected route: ${route}`);
+    return routes.get(route);
   });
 }
 
 describe("discord guild permission authorization", () => {
   beforeAll(async () => {
-    ({
-      fetchMemberGuildPermissionsDiscord,
-      canManageGuildRoleDiscord,
-      canManageGuildMemberRoleDiscord,
-      hasAllGuildPermissionsDiscord,
-      hasAnyChannelPermissionDiscord,
-      hasAnyGuildPermissionDiscord,
-    } = await import("./send.permissions.js"));
+    api = await import("./send.permissions.js");
   });
-
   beforeEach(() => {
     mockRest.get.mockReset();
   });
 
-  describe("canManageGuildRoleDiscord", () => {
-    it("rejects a sender below the target role", async () => {
-      mockGuildMemberRoutes({
-        roles: [
-          { id: "guild-1", permissions: "0", position: 0 },
-          { id: "role-mod", permissions: PermissionFlagsBits.ManageRoles, position: 5 },
-          { id: "role-admin", permissions: "0", position: 10 },
-        ],
-        memberRoles: ["role-mod"],
-      });
-
-      const result = await canManageGuildRoleDiscord(
-        "guild-1",
-        "user-1",
-        "role-admin",
-        EMPTY_DISCORD_TEST_OPTS,
-      );
-      expect(result).toBe(false);
-    });
+  it("rejects managing a role above the sender", async () => {
+    mockGuild({ roles: roleHierarchy(5, 10), memberRoles: ["role-mod"] });
+    expect(await api.canManageGuildRoleDiscord("guild-1", "user-1", "role-target", opts)).toBe(
+      false,
+    );
   });
 
-  describe("canManageGuildMemberRoleDiscord", () => {
-    it("allows a sender above both the changed role and target member", async () => {
-      mockGuildMemberRoutes({
-        targetUserId: "target-1",
+  it.each<[string, Fixture, string, boolean, boolean]>([
+    [
+      "allows a sender above the changed role and target member",
+      { roles: roleHierarchy(10, 4), targetRoles: ["role-target"] },
+      "role-target",
+      false,
+      true,
+    ],
+    [
+      "rejects a sender below the changed role",
+      { roles: roleHierarchy(5, 10) },
+      "role-target",
+      false,
+      false,
+    ],
+    [
+      "rejects changing the guild owner",
+      {
         roles: [
-          { id: "guild-1", permissions: "0", position: 0 },
-          { id: "role-mod", permissions: PermissionFlagsBits.ManageRoles, position: 10 },
-          { id: "role-low", permissions: "0", position: 4 },
+          ["guild-1", 0n],
+          ["role-mod", P.ManageRoles, 10],
         ],
-        memberRoles: ["role-mod"],
-        targetMemberRoles: ["role-low"],
-      });
-
-      const result = await canManageGuildMemberRoleDiscord(
+        target: "owner-1",
+      },
+      "role-mod",
+      false,
+      false,
+    ],
+    [
+      "rejects assigning permission bits the sender lacks",
+      { roles: roleHierarchy(10, 4, P.BanMembers) },
+      "role-target",
+      true,
+      false,
+    ],
+  ])("%s", async (_name, fixture, role, ceiling, allowed) => {
+    const target = fixture.target ?? "target-1";
+    mockGuild({ memberRoles: ["role-mod"], target, ...fixture });
+    expect(
+      await api.canManageGuildMemberRoleDiscord(
         "guild-1",
         "user-1",
-        "target-1",
-        "role-low",
-        EMPTY_DISCORD_TEST_OPTS,
-      );
-      expect(result).toBe(true);
-    });
-
-    it("rejects a sender below the changed role", async () => {
-      mockGuildMemberRoutes({
-        targetUserId: "target-1",
-        roles: [
-          { id: "guild-1", permissions: "0", position: 0 },
-          { id: "role-mod", permissions: PermissionFlagsBits.ManageRoles, position: 5 },
-          { id: "role-admin", permissions: "0", position: 10 },
-        ],
-        memberRoles: ["role-mod"],
-        targetMemberRoles: [],
-      });
-
-      const result = await canManageGuildMemberRoleDiscord(
-        "guild-1",
-        "user-1",
-        "target-1",
-        "role-admin",
-        EMPTY_DISCORD_TEST_OPTS,
-      );
-      expect(result).toBe(false);
-    });
-
-    it("rejects a non-owner sender changing the guild owner", async () => {
-      mockGuildMemberRoutes({
-        ownerId: "owner-1",
-        targetUserId: "owner-1",
-        roles: [
-          { id: "guild-1", permissions: "0", position: 0 },
-          { id: "role-mod", permissions: PermissionFlagsBits.ManageRoles, position: 10 },
-        ],
-        memberRoles: ["role-mod"],
-        targetMemberRoles: [],
-      });
-
-      const result = await canManageGuildMemberRoleDiscord(
-        "guild-1",
-        "user-1",
-        "owner-1",
-        "role-mod",
-        EMPTY_DISCORD_TEST_OPTS,
-      );
-      expect(result).toBe(false);
-    });
-
-    it("rejects role assignment above the sender's permission bits", async () => {
-      mockGuildMemberRoutes({
-        targetUserId: "target-1",
-        roles: [
-          { id: "guild-1", permissions: "0", position: 0 },
-          { id: "role-mod", permissions: PermissionFlagsBits.ManageRoles, position: 10 },
-          { id: "role-ban", permissions: PermissionFlagsBits.BanMembers, position: 4 },
-        ],
-        memberRoles: ["role-mod"],
-        targetMemberRoles: [],
-      });
-
-      const result = await canManageGuildMemberRoleDiscord(
-        "guild-1",
-        "user-1",
-        "target-1",
-        "role-ban",
-        EMPTY_DISCORD_TEST_OPTS,
-        { assignablePermissionCeiling: true },
-      );
-      expect(result).toBe(false);
-    });
+        target,
+        role,
+        opts,
+        ceiling ? { assignablePermissionCeiling: true } : undefined,
+      ),
+    ).toBe(allowed);
   });
 
-  describe("fetchMemberGuildPermissionsDiscord", () => {
-    it("returns null when user is not a guild member", async () => {
-      mockRest.get.mockRejectedValueOnce(new Error("404 Member not found"));
-
-      const result = await fetchMemberGuildPermissionsDiscord(
-        "guild-1",
-        "user-1",
-        EMPTY_DISCORD_TEST_OPTS,
-      );
-      expect(result).toBeNull();
-    });
-
-    it("includes @everyone and member roles in computed permissions", async () => {
-      mockGuildMemberRoutes({
-        roles: [
-          { id: "guild-1", permissions: PermissionFlagsBits.ViewChannel },
-          { id: "role-mod", permissions: PermissionFlagsBits.KickMembers },
-        ],
-        memberRoles: ["role-mod"],
-      });
-
-      const result = await fetchMemberGuildPermissionsDiscord(
-        "guild-1",
-        "user-1",
-        EMPTY_DISCORD_TEST_OPTS,
-      );
-      if (result === null) {
-        throw new Error("Expected guild permissions bitfield");
-      }
-      expect((result & PermissionFlagsBits.ViewChannel) === PermissionFlagsBits.ViewChannel).toBe(
-        true,
-      );
-      expect((result & PermissionFlagsBits.KickMembers) === PermissionFlagsBits.KickMembers).toBe(
-        true,
-      );
-    });
+  it("returns null when the guild member lookup fails", async () => {
+    mockRest.get.mockRejectedValueOnce(new Error("404 Member not found"));
+    expect(await api.fetchMemberGuildPermissionsDiscord("guild-1", "user-1", opts)).toBeNull();
   });
 
-  describe("hasAnyGuildPermissionDiscord", () => {
-    it("returns true for the guild owner without explicit role bits", async () => {
-      mockGuildMemberRoutes({
-        ownerId: "user-1",
-        roles: [{ id: "guild-1", permissions: "0" }],
-        memberRoles: [],
-      });
-
-      const result = await hasAnyGuildPermissionDiscord(
-        "guild-1",
-        "user-1",
-        [PermissionFlagsBits.ManageChannels],
-        EMPTY_DISCORD_TEST_OPTS,
-      );
-      expect(result).toBe(true);
-    });
-
-    it("returns true when user has required permission", async () => {
-      mockGuildMemberRoutes({
-        roles: [
-          { id: "guild-1", permissions: "0" },
-          { id: "role-mod", permissions: PermissionFlagsBits.KickMembers },
-        ],
-        memberRoles: ["role-mod"],
-      });
-
-      const result = await hasAnyGuildPermissionDiscord(
-        "guild-1",
-        "user-1",
-        [PermissionFlagsBits.KickMembers],
-        EMPTY_DISCORD_TEST_OPTS,
-      );
-      expect(result).toBe(true);
-    });
-
-    it("returns true when user has ADMINISTRATOR", async () => {
-      mockGuildMemberRoutes({
-        roles: [
-          { id: "guild-1", permissions: "0" },
-          {
-            id: "role-admin",
-            permissions: PermissionFlagsBits.Administrator,
-          },
-        ],
-        memberRoles: ["role-admin"],
-      });
-
-      const result = await hasAnyGuildPermissionDiscord(
-        "guild-1",
-        "user-1",
-        [PermissionFlagsBits.KickMembers],
-        EMPTY_DISCORD_TEST_OPTS,
-      );
-      expect(result).toBe(true);
-    });
-
-    it("returns false when user lacks all required permissions", async () => {
-      mockGuildMemberRoutes({
-        roles: [{ id: "guild-1", permissions: PermissionFlagsBits.ViewChannel }],
-        memberRoles: [],
-      });
-
-      const result = await hasAnyGuildPermissionDiscord(
-        "guild-1",
-        "user-1",
-        [PermissionFlagsBits.BanMembers, PermissionFlagsBits.KickMembers],
-        EMPTY_DISCORD_TEST_OPTS,
-      );
-      expect(result).toBe(false);
-    });
+  it("combines everyone and member-role permissions", async () => {
+    mockGuild({ everyone: P.ViewChannel, member: P.KickMembers });
+    expect(await api.fetchMemberGuildPermissionsDiscord("guild-1", "user-1", opts)).toBe(
+      P.ViewChannel | P.KickMembers,
+    );
   });
 
-  describe("hasAnyChannelPermissionDiscord", () => {
-    it("returns true for the guild owner despite channel overwrites", async () => {
-      mockGuildMemberRoutes({
-        ownerId: "user-1",
-        roles: [{ id: "guild-1", permissions: "0" }],
-        memberRoles: [],
-        channelPermissionOverwrites: [
-          {
-            id: "user-1",
-            type: 1,
-            deny: PermissionFlagsBits.ManageChannels,
-          },
-        ],
-      });
-
-      const result = await hasAnyChannelPermissionDiscord(
-        "guild-1",
-        "channel-1",
-        "user-1",
-        [PermissionFlagsBits.ManageChannels],
-        EMPTY_DISCORD_TEST_OPTS,
-      );
-      expect(result).toBe(true);
-    });
-
-    it("applies channel permission overwrites", async () => {
-      mockGuildMemberRoutes({
-        roles: [{ id: "guild-1", permissions: PermissionFlagsBits.ManageChannels }],
-        memberRoles: [],
-        channelPermissionOverwrites: [
-          {
-            id: "user-1",
-            type: 1,
-            deny: PermissionFlagsBits.ManageChannels,
-          },
-        ],
-      });
-
-      const result = await hasAnyChannelPermissionDiscord(
-        "guild-1",
-        "channel-1",
-        "user-1",
-        [PermissionFlagsBits.ManageChannels],
-        EMPTY_DISCORD_TEST_OPTS,
-      );
-      expect(result).toBe(false);
-    });
-
-    it("applies parent channel overwrites for thread permissions", async () => {
-      mockGuildMemberRoutes({
-        channelType: ChannelType.GuildPublicThread,
-        parentChannelId: "parent-1",
-        roles: [{ id: "guild-1", permissions: PermissionFlagsBits.ManageThreads }],
-        memberRoles: [],
-        parentPermissionOverwrites: [
-          {
-            id: "user-1",
-            type: 1,
-            deny: PermissionFlagsBits.ManageThreads,
-          },
-        ],
-      });
-
-      const result = await hasAnyChannelPermissionDiscord(
-        "guild-1",
-        "channel-1",
-        "user-1",
-        [PermissionFlagsBits.ManageThreads],
-        EMPTY_DISCORD_TEST_OPTS,
-      );
-      expect(result).toBe(false);
-    });
-
-    it("returns false when channel belongs to a different guild", async () => {
-      mockGuildMemberRoutes({
-        channelGuildId: "guild-2",
-        roles: [{ id: "guild-1", permissions: PermissionFlagsBits.ManageChannels }],
-        memberRoles: [],
-      });
-
-      const result = await hasAnyChannelPermissionDiscord(
-        "guild-1",
-        "channel-1",
-        "user-1",
-        [PermissionFlagsBits.ManageChannels],
-        EMPTY_DISCORD_TEST_OPTS,
-      );
-      expect(result).toBe(false);
-    });
+  it.each<[string, Fixture, bigint[], boolean]>([
+    ["authorizes the guild owner without role bits", { owner: "user-1" }, [P.ManageChannels], true],
+    ["authorizes a matching permission", { member: P.KickMembers }, [P.KickMembers], true],
+    ["authorizes an administrator", { member: P.Administrator }, [P.KickMembers], true],
+    [
+      "rejects when no required permission matches",
+      { everyone: P.ViewChannel },
+      [P.BanMembers, P.KickMembers],
+      false,
+    ],
+  ])("hasAnyGuildPermissionDiscord %s", async (_name, fixture, required, allowed) => {
+    mockGuild(fixture);
+    expect(await api.hasAnyGuildPermissionDiscord("guild-1", "user-1", required, opts)).toBe(
+      allowed,
+    );
   });
 
-  describe("hasAllGuildPermissionsDiscord", () => {
-    it("returns false when user has only one of multiple required permissions", async () => {
-      mockGuildMemberRoutes({
-        roles: [
-          { id: "guild-1", permissions: "0" },
-          { id: "role-mod", permissions: PermissionFlagsBits.KickMembers },
-        ],
-        memberRoles: ["role-mod"],
-      });
-
-      const result = await hasAllGuildPermissionsDiscord(
+  it.each<[string, bigint, boolean]>([
+    ["rejects a member with only one required permission", P.KickMembers, false],
+    ["authorizes an administrator", P.Administrator, true],
+  ])("hasAllGuildPermissionsDiscord %s", async (_name, bits, allowed) => {
+    mockGuild({ member: bits });
+    expect(
+      await api.hasAllGuildPermissionsDiscord(
         "guild-1",
         "user-1",
-        [PermissionFlagsBits.KickMembers, PermissionFlagsBits.BanMembers],
-        EMPTY_DISCORD_TEST_OPTS,
-      );
-      expect(result).toBe(false);
-    });
+        [P.KickMembers, P.BanMembers],
+        opts,
+      ),
+    ).toBe(allowed);
+  });
 
-    it("returns true for hasAll checks when user has ADMINISTRATOR", async () => {
-      mockGuildMemberRoutes({
-        roles: [
-          { id: "guild-1", permissions: "0" },
-          { id: "role-admin", permissions: PermissionFlagsBits.Administrator },
-        ],
-        memberRoles: ["role-admin"],
-      });
-
-      const result = await hasAllGuildPermissionsDiscord(
-        "guild-1",
-        "user-1",
-        [PermissionFlagsBits.KickMembers, PermissionFlagsBits.BanMembers],
-        EMPTY_DISCORD_TEST_OPTS,
-      );
-      expect(result).toBe(true);
-    });
+  it.each<[string, Fixture, bigint, boolean]>([
+    [
+      "authorizes the owner despite a channel deny",
+      { owner: "user-1", channel: { permission_overwrites: deny(P.ManageChannels) } },
+      P.ManageChannels,
+      true,
+    ],
+    [
+      "applies channel overwrites",
+      {
+        everyone: P.ManageChannels,
+        channel: { permission_overwrites: deny(P.ManageChannels) },
+      },
+      P.ManageChannels,
+      false,
+    ],
+    [
+      "applies parent overwrites for a thread",
+      {
+        everyone: P.ManageThreads,
+        channel: { type: ChannelType.GuildPublicThread, parent_id: "parent-1" },
+        parentOverwrites: deny(P.ManageThreads),
+      },
+      P.ManageThreads,
+      false,
+    ],
+    [
+      "rejects a channel from another guild",
+      { everyone: P.ManageChannels, channel: { guild_id: "guild-2" } },
+      P.ManageChannels,
+      false,
+    ],
+  ])("hasAnyChannelPermissionDiscord %s", async (_name, fixture, required, allowed) => {
+    mockGuild(fixture);
+    expect(
+      await api.hasAnyChannelPermissionDiscord("guild-1", "channel-1", "user-1", [required], opts),
+    ).toBe(allowed);
   });
 });

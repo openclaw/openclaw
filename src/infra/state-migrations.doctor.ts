@@ -2166,7 +2166,7 @@ export async function planLegacyStateMigrationsReadOnly(params: {
     migrationDetectionStep,
     ...remainingMainSteps,
   ];
-  const steps = executionSteps.map(migrationStepPlan);
+  let steps = executionSteps.map(migrationStepPlan);
   if (detected.stateSchema.hasLegacy) {
     const sharedAuthStep = steps.find((step) => step.id === "shared-auth-store");
     if (sharedAuthStep) {
@@ -2193,15 +2193,9 @@ export async function planLegacyStateMigrationsReadOnly(params: {
       message: "Channel pairing accounts will be checked with the updated plugins.",
     };
   }
-  const firstRefusalIndex = steps.findIndex((step) => step.refusal !== undefined);
-  const firstRefusal = steps[firstRefusalIndex];
+  const firstRefusal = steps.find((step) => step.refusal !== undefined);
   if (firstRefusal) {
-    for (const step of steps.slice(firstRefusalIndex + 1)) {
-      step.refusal = {
-        code: "blocked-by-prior-refusal",
-        message: `Migration step "${step.id}" is blocked by prior refusal at "${firstRefusal.id}".`,
-      };
-    }
+    steps = closeMigrationPlanTail(steps, firstRefusal);
   }
   const stateDirRefusal = pendingStateDirMigration
     ? {

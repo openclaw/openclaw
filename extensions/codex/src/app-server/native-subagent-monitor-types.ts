@@ -26,7 +26,7 @@ export type NativeSubagentMonitorRuntime = {
 
 export type NativeSubagentMonitorClient = Pick<
   CodexAppServerClient,
-  "request" | "addNotificationHandler" | "addCloseHandler" | "getTransportPid"
+  "request" | "addNotificationHandler" | "addCloseHandler"
 >;
 
 export type NativeModelSource = NonNullable<
@@ -95,6 +95,7 @@ export type ParentOwner = {
   interruptModelExecution?: (threadId: string, turnId: string) => void;
   modelExecutionCancelled?: true;
   modelExecutionSettled?: true;
+  isTurnYielded?: () => boolean;
   nativeReviewRequirement?: { required: boolean };
   claimDirectChild?: (threadId: string) => (() => void) | undefined;
   rejectPendingDirectChild?: (threadId: string, reason: string) => void;
@@ -166,7 +167,6 @@ export type NativeTurnState = "active" | NativeTurnEnd;
 export type NativeTurnObservation = {
   turnId: string;
   state: NativeTurnState | undefined;
-  startObserved?: true;
 };
 
 export type ChildState = NativeSubagentAssignment & {
@@ -226,7 +226,6 @@ export type RecoveredCompletion = CodexNativeSubagentCompletion & {
 export type ThreadRecovery = {
   parentThreadId?: string;
   agentPath?: string;
-  assignmentTurnId?: string;
   nativeTurnId?: string;
   nativeTurnState?: NativeTurnState;
   observedPendingTurns: Array<{ turnId: string; state: NativeTurnState | undefined }>;

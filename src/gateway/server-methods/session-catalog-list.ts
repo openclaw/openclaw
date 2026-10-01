@@ -50,13 +50,6 @@ import { assertValidParams } from "./validation.js";
 
 const SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS = 500;
 
-function normalizeSessionCatalogSearch(search: string | undefined): string | undefined {
-  const normalized = normalizeOptionalString(search);
-  return normalized
-    ? truncateUtf16Safe(normalized, SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS)
-    : undefined;
-}
-
 type CatalogListResult = { catalogs: SessionCatalog[] };
 
 export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog.list"] = async ({
@@ -152,7 +145,10 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
   if (!resolvedAgent) {
     return;
   }
-  const search = normalizeSessionCatalogSearch(request.search);
+  const searchInput = normalizeOptionalString(request.search);
+  const search = searchInput
+    ? truncateUtf16Safe(searchInput, SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS)
+    : undefined;
   const allowHomeFallback = allowProcessHomeFallback(context.logGateway);
   // Shared provider enumeration is not permission. Each synchronous delivery gets current
   // caller facts and one canonical index, never the provider's pre-await planning snapshot.

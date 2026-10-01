@@ -24,6 +24,7 @@ import {
   outboxChatUrl as chatUrl,
 } from "./chat-outbox-payloads.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const plainHttpHost = "plain-http.test";
 const suite = createChatFlowE2eSuite({
   args: [`--host-resolver-rules=MAP ${plainHttpHost} 127.0.0.1`],
@@ -36,7 +37,9 @@ suite.define(() => {
         serviceWorkers: "block",
         locale: "en-US",
         viewport: { width: 1280, height: 900 },
-        recordVideo: { dir: path.join(suite.artifactDir, "plain-http-video") },
+        recordVideo: captureUiProof
+          ? { dir: path.join(suite.artifactDir, "plain-http-video") }
+          : undefined,
       },
       async ({ context, page }) => {
         const url = await chatUrl(context, suite.server.baseUrl, "plain HTTP");
@@ -138,7 +141,9 @@ suite.define(() => {
       {
         serviceWorkers: "block",
         viewport: { width: 1280, height: 900 },
-        recordVideo: { dir: path.join(suite.artifactDir, "lifecycle-video") },
+        recordVideo: captureUiProof
+          ? { dir: path.join(suite.artifactDir, "lifecycle-video") }
+          : undefined,
       },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {

@@ -2,14 +2,13 @@ import type { WhatsAppQaDriverObservedMessage } from "@openclaw/whatsapp/api.js"
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import type {
-  WhatsAppObservedMessage,
   WhatsAppQaDriverQuotedMessageKey,
   WhatsAppQaMessageScenarioContext,
   WhatsAppQaMessageScenarioRun,
   WhatsAppQaObservedMessagesContext,
 } from "./whatsapp-live.contracts.js";
 
-export function messageMatches(message: WhatsAppObservedMessage, matchText: string | RegExp) {
+export function messageMatches(message: { text: string }, matchText: string | RegExp) {
   return typeof matchText === "string"
     ? message.text.includes(matchText)
     : matchText.test(message.text);
@@ -144,9 +143,9 @@ export async function waitForScenarioObservedMessage(
     timeoutMs?: number;
   },
 ) {
-  let message: WhatsAppQaDriverObservedMessage;
-  try {
-    message = await context.driver.waitForMessage({
+  const message = await waitForWhatsAppObservedMessage(
+    context.driver,
+    {
       observedAfter: params.observedAfter,
       timeoutMs: params.timeoutMs ?? 45_000,
       match: (candidate) =>
@@ -156,21 +155,26 @@ export async function waitForScenarioObservedMessage(
           target: context.target,
           targetKind: context.targetKind,
         }) && params.match(candidate),
-    });
+    },
+    () => formatWhatsAppScenarioWaitDiagnostics(context, params),
+  );
+  context.recordObservedMessage(message);
+  return message;
+}
+
+export async function waitForWhatsAppObservedMessage(
+  driver: Pick<WhatsAppQaMessageScenarioContext["driver"], "waitForMessage">,
+  params: Parameters<typeof driver.waitForMessage>[0],
+  describeTimeout: () => string,
+) {
+  try {
+    return await driver.waitForMessage(params);
   } catch (error) {
     if (/\btimed out waiting for WhatsApp QA driver message\b/iu.test(formatErrorMessage(error))) {
-      throw new Error(
-        `${formatErrorMessage(error)}; ${formatWhatsAppScenarioWaitDiagnostics(context, {
-          diagnosticChecks: params.diagnosticChecks,
-          observedAfter: params.observedAfter,
-        })}`,
-        { cause: error },
-      );
+      throw new Error(`${formatErrorMessage(error)}; ${describeTimeout()}`, { cause: error });
     }
     throw error;
   }
-  context.recordObservedMessage(message);
-  return message;
 }
 
 export function formatDiagnosticId(value: string | undefined | null) {
@@ -261,27 +265,6 @@ export function isWhatsAppScenarioSutMessage(
     return message.fromJid === params.target && message.fromPhoneE164 === params.sutPhoneE164;
   }
   return message.fromPhoneE164 === params.sutPhoneE164;
-}
-
-export function assertWhatsAppMessageFromSutPhone(
-  message: WhatsAppQaDriverObservedMessage,
-  context: Pick<WhatsAppQaMessageScenarioContext, "sutPhoneE164">,
-) {
-  if (message.fromPhoneE164 === context.sutPhoneE164) {
-    return;
-  }
-  throw new Error(
-    `expected WhatsApp group reply from configured SUT phone; ${formatWhatsAppMessageShape(message, 0)}`,
-  );
-}
-
-export function assertWhatsAppMessagesFromSutPhone(
-  messages: readonly WhatsAppQaDriverObservedMessage[],
-  context: Pick<WhatsAppQaMessageScenarioContext, "sutPhoneE164">,
-) {
-  for (const message of messages) {
-    assertWhatsAppMessageFromSutPhone(message, context);
-  }
 }
 
 export async function assertWhatsAppScenarioMessageBatch(params: {

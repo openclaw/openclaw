@@ -7,7 +7,6 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
-  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -813,17 +812,6 @@ function getSwiftCompatibilityBlock(): string {
 
 function getSwiftPMResourceBundleBlock(): string {
   return scriptBlock('echo "📦 Copying SwiftPM resource bundles"', "running_packaged_app_pids()");
-}
-
-function getControlUiOmissionBlock(): string {
-  const script = readFileSync(scriptPath, "utf8");
-  const start = script.indexOf("# The native dashboard loads the Gateway-served HTTP UI.");
-  const end = script.indexOf('echo "📦 Copying SwiftPM resource bundles"', start);
-
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-
-  return script.slice(start, end);
 }
 
 function getSwiftPMResourcePatchBlock(): string {
@@ -1910,8 +1898,8 @@ describe("package-mac-app plist stamping", () => {
     );
   });
 
-  it.skipIf(process.platform === "win32").each(["configured", "unset"] as const)(
-    "passes an explicit signing identity and honors %s TMPDIR during worker verification",
+  it.runIf(process.platform === "darwin").each(["configured", "unset"] as const)(
+    "passes an explicit signing identity and honors %s TMPDIR during runtime verification",
     (tempMode) => {
       const script = readFileSync(scriptPath, "utf8");
       const start = script.indexOf('if [[ -n "${SIGN_IDENTITY:-}" ]]');
@@ -1936,8 +1924,8 @@ describe("package-mac-app plist stamping", () => {
         '#!/bin/bash\nset -euo pipefail\n[[ -d "$1" ]]\nprintf "identity=%s\\n" "${SIGN_IDENTITY-<unset>}"\nprintf "sign\\n" >> "${0%/*}/../events"\n',
       );
       chmodSync(signerPath, 0o755);
-      for (const arch of ["arm64", "x86_64"]) {
-        const node = path.join(appRoot, "Contents/Resources/node-worker", arch, "bin/node");
+      {
+        const node = path.join(appRoot, "Contents/Resources/runtime/bin/bun");
         mkdirSync(path.dirname(node), { recursive: true });
         writeFileSync(
           node,
@@ -1946,7 +1934,7 @@ describe("package-mac-app plist stamping", () => {
         chmodSync(node, 0o755);
       }
       writeFileSync(
-        path.join(scriptsDir, "verify-mac-node-worker.mjs"),
+        path.join(scriptsDir, "verify-mac-runtime.mjs"),
         `import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -1971,7 +1959,7 @@ try {
       APP_STAGE_DIR="$ROOT_DIR/stage"
       APP_ROOT="$APP_STAGE_DIR/OpenClaw.app"
       APP_DESTINATION="$ROOT_DIR/OpenClaw.app"
-      BUILD_ARCHS=(arm64 x86_64)
+      BUILD_ARCHS=(${process.arch === "arm64" ? "arm64" : "x86_64"})
       source "$3"
       stop_packaged_app_if_running() { printf 'stop\\n' >> "$ROOT_DIR/events"; }
       codesign() {
@@ -2006,8 +1994,7 @@ try {
       expect(readFileSync(eventsPath, "utf8").trim().split("\n")).toEqual([
         "sign",
         "verify",
-        "worker:arm64",
-        "worker:x86_64",
+        "worker:runtime",
         "verify",
         "stop",
         "published",
@@ -2019,7 +2006,7 @@ try {
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line) as { home: string; scratch: string; callerCanary: null });
-      expect(observations).toHaveLength(2);
+      expect(observations).toHaveLength(1);
       for (const observation of observations) {
         expect(observation.home).toBe(appStage);
         expect(observation.callerCanary).toBeNull();
@@ -2177,6 +2164,77 @@ try {
     expect(worker.indexOf("verify_snapshot_swift_lock", build)).toBeGreaterThan(build);
     expect(worker).toContain(
       'cp "$ROOT_DIR/apps/macos-mlx-tts/Package.resolved" "$MLX_TTS_HELPER_ROOT/Package.resolved"',
+    );
+  });
+
+  it("runs no SwiftPM operation before the locked lock-file resolve", () => {
+    // Any earlier resolve on a reused scratch path can float pins before the lock guard snapshots.
+    const root = tempDirs.make("openclaw-swift-first-resolve-");
+    for (const app of ["macos", "macos-mlx-tts"]) {
+      mkdirSync(path.join(root, "apps", app), { recursive: true });
+      writeFileSync(path.join(root, "apps", app, "Package.swift"), "// fixture\n");
+      writeFileSync(path.join(root, "apps", app, "Package.resolved"), "locked\n");
+    }
+    const invocations = path.join(root, "swift-invocations");
+    const result = runHelper(`
+      set -euo pipefail
+      source ${JSON.stringify(swiftScriptPath)}
+      ROOT_DIR=${JSON.stringify(root)}
+      BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
+      SWIFT_WORK_ROOT="$ROOT_DIR/work"
+      PEEKABOO_LOCKED_SOURCE_COMMIT=${JSON.stringify("b".repeat(40))}
+      swift() { printf '%s\\n' "$*" >> ${JSON.stringify(invocations)}; }
+      create_verified_peekaboo_snapshot() { exit 0; }
+      build_swift_architecture arm64
+    `);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(invocations, "utf8")).toBe(
+      `package --scratch-path ${root}/apps/macos/.build/arm64 resolve --force-resolved-versions\n`,
+    );
+  });
+
+  it("names every pin the edited Peekaboo resolution moved away from the committed lock", () => {
+    const root = tempDirs.make("openclaw-snapshot-swift-lock-");
+    const packageRoot = path.join(root, "package");
+    const baseline = path.join(root, "Package.resolved.committed");
+    mkdirSync(packageRoot);
+    const pin = (identity: string, version: string, revision: string) => ({
+      identity,
+      kind: "remoteSourceControl",
+      location: `https://github.com/example/${identity}.git`,
+      state: { revision, version },
+    });
+    const cmark = pin("swift-cmark", "0.8.0", "c".repeat(40));
+    const markdown = pin("swift-markdown", "0.8.0", "d".repeat(40));
+    writeFileSync(
+      baseline,
+      JSON.stringify({
+        version: 3,
+        pins: [pin("peekaboo", "4.6.0", "b".repeat(40)), cmark, markdown],
+      }),
+    );
+    const verify = (pins: unknown[]) => {
+      writeFileSync(
+        path.join(packageRoot, "Package.resolved"),
+        JSON.stringify({ version: 3, pins }),
+      );
+      return runHelper(`
+        set -euo pipefail
+        SWIFT_PACKAGE_LOCK_BASELINE=${JSON.stringify(baseline)}
+        SWIFT_PACKAGE_ROOT=${JSON.stringify(packageRoot)}
+        ${scriptBlock("verify_snapshot_swift_lock() {", "create_verified_peekaboo_snapshot() {", swiftScriptPath)}
+        verify_snapshot_swift_lock
+      `);
+    };
+
+    const unchanged = verify([cmark, markdown]);
+    expect(unchanged.status, unchanged.stderr).toBe(0);
+
+    const drifted = verify([pin("swift-cmark", "0.9.0", "e".repeat(40)), markdown]);
+    expect(drifted.status).toBe(1);
+    expect(drifted.stderr).toBe(
+      `ERROR: Peekaboo snapshot resolution does not match the committed Package.resolved: swift-cmark: 0.8.0 ${"c".repeat(40)} from https://github.com/example/swift-cmark.git -> 0.9.0 ${"e".repeat(40)} from https://github.com/example/swift-cmark.git\n`,
     );
   });
 
@@ -2394,44 +2452,6 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
       script.indexOf('echo "🔏 Signing bundle'),
     );
   });
-
-  it.skipIf(process.platform === "win32")(
-    "rejects standalone and private-worker Control UI copies before signing",
-    () => {
-      const root = tempDirs.make("openclaw-package-no-control-ui-");
-      const appRoot = path.join(root, "OpenClaw.app");
-      const block = getControlUiOmissionBlock();
-      mkdirSync(path.join(appRoot, "Contents/Resources/node-worker/arm64"), { recursive: true });
-
-      const run = () =>
-        runHelper(`
-          set -euo pipefail
-          APP_ROOT=${JSON.stringify(appRoot)}
-          BUILD_ARCHS=(arm64)
-          ${block}
-        `);
-
-      expect(run().status).toBe(0);
-
-      mkdirSync(path.join(appRoot, "Contents/Resources/control-ui"), { recursive: true });
-      const standalone = run();
-      expect(standalone.status).toBe(1);
-      expect(standalone.stderr).toContain("Standalone Control UI assets must not be embedded");
-
-      const standalonePath = path.join(appRoot, "Contents/Resources/control-ui");
-      rmSync(standalonePath, { recursive: true });
-      mkdirSync(
-        path.join(
-          appRoot,
-          "Contents/Resources/node-worker/arm64/lib/node_modules/openclaw/dist/control-ui",
-        ),
-        { recursive: true },
-      );
-      const worker = run();
-      expect(worker.status).toBe(1);
-      expect(worker.stderr).toContain("Private node worker must not embed Control UI assets");
-    },
-  );
 
   it("embeds provider vectors as signed app resources", () => {
     const script = readFileSync(scriptPath, "utf8");

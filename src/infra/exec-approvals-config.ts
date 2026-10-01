@@ -4,8 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
+  normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
@@ -167,6 +166,14 @@ const diagnosticFields = new Set([
   "lastResolvedPath",
 ]);
 
+const diagnosticTypeReasons = new Map([
+  ["string", "expected a string"],
+  ["number", "expected a finite number"],
+  ["boolean", "expected a boolean"],
+  ["array", "expected an array"],
+  ["object", "expected an object"],
+]);
+
 function formatPersistedExecApprovalsIssue(issue: z.core.$ZodIssue, parsed: unknown): string {
   // Only the object arm has field issues. The string arm's root error would
   // misdiagnose object metadata; Zod's union child paths are relative.
@@ -204,25 +211,7 @@ function formatPersistedExecApprovalsIssue(issue: z.core.$ZodIssue, parsed: unkn
   let reason = "invalid value";
   switch (detail.code) {
     case "invalid_type":
-      switch (detail.expected) {
-        case "string":
-          reason = "expected a string";
-          break;
-        case "number":
-          reason = "expected a finite number";
-          break;
-        case "boolean":
-          reason = "expected a boolean";
-          break;
-        case "array":
-          reason = "expected an array";
-          break;
-        case "object":
-          reason = "expected an object";
-          break;
-        default:
-          break;
-      }
+      reason = diagnosticTypeReasons.get(detail.expected) ?? reason;
       break;
     case "invalid_value":
       reason = "expected a supported value";
@@ -273,11 +262,6 @@ export function tryParsePersistedExecApprovals(raw: string): ExecApprovalsFile |
   return result.ok ? result.value : null;
 }
 
-function normalizeAllowlistPattern(value: string | undefined): string | null {
-  const trimmed = normalizeOptionalString(value) ?? "";
-  return trimmed ? normalizeLowercaseStringOrEmpty(trimmed) : null;
-}
-
 function mergeLegacyAgent(
   current: ExecApprovalsAgent,
   legacy: ExecApprovalsAgent,
@@ -285,7 +269,7 @@ function mergeLegacyAgent(
   const allowlist: ExecAllowlistEntry[] = [];
   const seen = new Set<string>();
   const pushEntry = (entry: ExecAllowlistEntry) => {
-    const patternKey = normalizeAllowlistPattern(entry.pattern);
+    const patternKey = normalizeOptionalLowercaseString(entry.pattern);
     if (!patternKey) {
       return;
     }

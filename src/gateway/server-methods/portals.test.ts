@@ -22,6 +22,27 @@ const portal = {
   createdAtMs: 1,
 } satisfies PortalOpenResult;
 
+const publicPortal = {
+  id: portal.id,
+  title: portal.title,
+  port: portal.port,
+  listenPort: portal.listenPort,
+  publicUrl: portal.publicUrl,
+  createdAtMs: portal.createdAtMs,
+};
+
+function createService(overrides: Partial<GatewayPortalService> = {}): GatewayPortalService {
+  return {
+    list: () => [],
+    listWorkerPortals: () => [],
+    open: vi.fn(),
+    close: vi.fn(),
+    closeWorkerPortals: vi.fn(),
+    closeAll: vi.fn(),
+    ...overrides,
+  };
+}
+
 function harness(service?: GatewayPortalService, scopes = ["operator.write"]) {
   const broadcast = vi.fn();
   const invoke = async (method: keyof typeof portalHandlers, params: Record<string, unknown>) => {
@@ -46,9 +67,8 @@ describe("portal gateway methods", () => {
 
   it("round-trips list, open, and idempotent close with replace-set broadcasts", async () => {
     let portals: PortalSummary[] = [];
-    const service: GatewayPortalService = {
+    const service = createService({
       list: () => portals,
-      listWorkerPortals: () => [],
       open: vi.fn(async () => {
         portals = [portal];
         return portal;
@@ -58,7 +78,7 @@ describe("portal gateway methods", () => {
       }),
       closeWorkerPortals: vi.fn(async () => {}),
       closeAll: vi.fn(async () => {}),
-    };
+    });
     const { invoke, broadcast } = harness(service);
 
     expect((await invoke("portal.list", {})).mock.calls[0]).toEqual([
@@ -74,18 +94,7 @@ describe("portal gateway methods", () => {
     expect(service.open).toHaveBeenCalledWith({ targetPort: 3000, title: "App" });
     expect(broadcast).toHaveBeenLastCalledWith(
       "portal.changed",
-      {
-        portals: [
-          {
-            id: portal.id,
-            title: portal.title,
-            port: portal.port,
-            listenPort: portal.listenPort,
-            publicUrl: portal.publicUrl,
-            createdAtMs: portal.createdAtMs,
-          },
-        ],
-      },
+      { portals: [publicPortal] },
       { dropIfSlow: true },
     );
     expect((await invoke("portal.close", { id: "missing" })).mock.calls[0]).toEqual([
@@ -101,28 +110,10 @@ describe("portal gateway methods", () => {
   });
 
   it("returns portal credentials only to write-capable operators", async () => {
-    const service: GatewayPortalService = {
-      list: () => [portal],
-      listWorkerPortals: () => [],
-      open: vi.fn(),
-      close: vi.fn(),
-      closeWorkerPortals: vi.fn(),
-      closeAll: vi.fn(),
-    };
+    const service = createService({ list: () => [portal] });
 
     const readResponse = await harness(service, ["operator.read"]).invoke("portal.list", {});
-    expect(readResponse.mock.calls[0]?.[1]).toEqual({
-      portals: [
-        {
-          id: portal.id,
-          title: portal.title,
-          port: portal.port,
-          listenPort: portal.listenPort,
-          publicUrl: portal.publicUrl,
-          createdAtMs: portal.createdAtMs,
-        },
-      ],
-    });
+    expect(readResponse.mock.calls[0]?.[1]).toEqual({ portals: [publicPortal] });
 
     const writeResponse = await harness(service, ["operator.write"]).invoke("portal.list", {});
     expect(writeResponse.mock.calls[0]?.[1]).toEqual({ portals: [portal] });
@@ -132,14 +123,7 @@ describe("portal gateway methods", () => {
   });
 
   it("rejects malformed requests before service access and reports absent transports", async () => {
-    const service: GatewayPortalService = {
-      list: vi.fn(() => []),
-      listWorkerPortals: vi.fn(() => []),
-      open: vi.fn(),
-      close: vi.fn(),
-      closeWorkerPortals: vi.fn(),
-      closeAll: vi.fn(),
-    };
+    const service = createService({ list: vi.fn(() => []), listWorkerPortals: vi.fn(() => []) });
     const invalid = await harness(service).invoke("portal.open", { port: 0 });
     expect(invalid).toHaveBeenCalledWith(
       false,
@@ -157,16 +141,14 @@ describe("portal gateway methods", () => {
   });
 
   it("returns Error messages without the Error prefix", async () => {
-    const service: GatewayPortalService = {
-      list: () => [],
-      listWorkerPortals: () => [],
+    const service = createService({
       open: vi.fn(async () => {
         throw new Error("portal bind failed");
       }),
       close: vi.fn(async () => {}),
       closeWorkerPortals: vi.fn(async () => {}),
       closeAll: vi.fn(async () => {}),
-    };
+    });
 
     const response = await harness(service).invoke("portal.open", { port: 3000 });
     expect(response).toHaveBeenCalledWith(

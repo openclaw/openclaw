@@ -152,12 +152,7 @@ function buildLargePluginModelAgentEntries() {
     primary: `${LARGE_PLUGIN_MODEL_PROVIDER_IDS[0]}/model-01`,
     fallbacks: Array.from({ length: LARGE_PLUGIN_MODEL_COUNT - 1 }, (_, offset) => {
       const index = offset + 1;
-      const provider =
-        index % 3 === 0
-          ? LARGE_PLUGIN_MODEL_PROVIDER_IDS[0]
-          : index % 3 === 1
-            ? LARGE_PLUGIN_MODEL_PROVIDER_IDS[1]
-            : LARGE_PLUGIN_MODEL_PROVIDER_IDS[2];
+      const provider = LARGE_PLUGIN_MODEL_PROVIDER_IDS[index % 3];
       return `${provider}/model-${String(index + 1).padStart(2, "0")}`;
     }),
   };
@@ -486,25 +481,18 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
     if (result.id !== "incidentCombined") {
       continue;
     }
-    const healthzP95 = result.summary.healthzMs?.p95;
-    if (healthzP95 == null || healthzP95 >= INCIDENT_COMBINED_HEALTHZ_P95_MAX_MS) {
-      failures.push({
-        id: result.id,
-        reason:
-          `/healthz p95 ${healthzP95 == null ? "missing" : formatMs(healthzP95)} ` +
-          `must be under ${formatMs(INCIDENT_COMBINED_HEALTHZ_P95_MAX_MS)}`,
-        sampleIndex: 0,
-      });
-    }
-    const readyzP95 = result.summary.readyzMs?.p95;
-    if (readyzP95 == null || readyzP95 >= INCIDENT_COMBINED_READYZ_P95_MAX_MS) {
-      failures.push({
-        id: result.id,
-        reason:
-          `/readyz p95 ${readyzP95 == null ? "missing" : formatMs(readyzP95)} ` +
-          `must be under ${formatMs(INCIDENT_COMBINED_READYZ_P95_MAX_MS)}`,
-        sampleIndex: 0,
-      });
+    for (const [probe, stats, limit] of [
+      ["/healthz", result.summary.healthzMs, INCIDENT_COMBINED_HEALTHZ_P95_MAX_MS],
+      ["/readyz", result.summary.readyzMs, INCIDENT_COMBINED_READYZ_P95_MAX_MS],
+    ] as const) {
+      const p95 = stats?.p95;
+      if (p95 == null || p95 >= limit) {
+        failures.push({
+          id: result.id,
+          reason: `${probe} p95 ${p95 == null ? "missing" : formatMs(p95)} must be under ${formatMs(limit)}`,
+          sampleIndex: 0,
+        });
+      }
     }
   }
   return failures;
@@ -879,22 +867,15 @@ async function runGatewaySample(options: {
       startedChild.stdout.on("data", (chunk: Buffer) => onChunk("stdout", chunk));
       startedChild.stderr.on("data", (chunk: Buffer) => onChunk("stderr", chunk));
 
-      const [healthz, readyz] = await Promise.all([
+      const probe = (probePath: string) =>
         waitForProbe({
           deadlineAt,
           isDone: () => childExited,
-          path: "/healthz",
+          path: probePath,
           port,
           startAt,
-        }),
-        waitForProbe({
-          deadlineAt,
-          isDone: () => childExited,
-          path: "/readyz",
-          port,
-          startAt,
-        }),
-      ]);
+        });
+      const [healthz, readyz] = await Promise.all([probe("/healthz"), probe("/readyz")]);
       const completionMs = options.benchCase.completionTracePhase
         ? await waitForStartupTracePhase({
             deadlineAt,

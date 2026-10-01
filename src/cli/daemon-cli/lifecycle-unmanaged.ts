@@ -9,10 +9,8 @@ import {
   isSameGatewayLockIdentity,
   readActiveGatewayLockIdentity,
 } from "../../infra/gateway-lock.js";
-import {
-  readGatewayOwnerLease,
-  type GatewayOwnerLeaseIdentity,
-} from "../../infra/gateway-owner-lease.js";
+import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
+import type { GatewayOwnerLeaseIdentity } from "../../infra/gateway-owner-lease.types.js";
 import {
   findVerifiedGatewayListenerPidsOnPortSync,
   formatGatewayPidList,
@@ -50,15 +48,6 @@ async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void>
   }
 }
 
-export function resolveVerifiedGatewayListenerPids(
-  port: number,
-  env?: NodeJS.ProcessEnv,
-): number[] {
-  return findVerifiedGatewayListenerPidsOnPortSync(port, { env }).filter(
-    (pid): pid is number => Number.isFinite(pid) && pid > 0,
-  );
-}
-
 export async function signalGatewayRestart(
   port: number,
   params: {
@@ -73,7 +62,7 @@ export async function signalGatewayRestart(
   const restartIntent = params.restartIntent?.force
     ? { force: true, drainBudgetMs: params.restartIntent.waitMs }
     : params.restartIntent;
-  const pids = resolveVerifiedGatewayListenerPids(port, params.env);
+  const pids = findVerifiedGatewayListenerPidsOnPortSync(port, { env: params.env });
   if (pids.length === 0) {
     return null;
   }
@@ -101,7 +90,7 @@ export async function signalGatewayRestart(
   }
   const assertTargetCurrent = async () => {
     const currentLockIdentity = await readActiveGatewayLockIdentity({ env: params.env });
-    const currentPids = resolveVerifiedGatewayListenerPids(port, params.env);
+    const currentPids = findVerifiedGatewayListenerPidsOnPortSync(port, { env: params.env });
     if (currentPids.length !== 1 || currentPids[0] !== pid) {
       throw new Error(`Gateway listener changed before restart on port ${port}`);
     }

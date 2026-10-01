@@ -358,7 +358,7 @@ public final class RealtimeTalkRelaySession {
         self.startEventPump(stream: eventStream, lifecycleGeneration: lifecycleGeneration)
         do {
             let result = try await self.createRelaySession()
-            let createdRelaySessionId = Self.trimmed(result.relaysessionid)
+            let createdRelaySessionId = result.relaysessionid?.trimmedNonEmpty
             let statusAfterCreate = await self.lifecycleStatus(lifecycleGeneration)
             if statusAfterCreate != .current {
                 if let relaySessionId = createdRelaySessionId {
@@ -521,19 +521,19 @@ public final class RealtimeTalkRelaySession {
             "transport": AnyCodable("gateway-relay"),
             "brain": AnyCodable("agent-consult"),
         ]
-        if let provider = Self.trimmed(self.options.provider) {
+        if let provider = self.options.provider?.trimmedNonEmpty {
             payload["provider"] = AnyCodable(provider)
         }
-        if let model = Self.trimmed(self.options.model) {
+        if let model = self.options.model?.trimmedNonEmpty {
             payload["model"] = AnyCodable(model)
         }
-        if let voice = Self.trimmed(self.options.voice) {
+        if let voice = self.options.voice?.trimmedNonEmpty {
             payload["voice"] = AnyCodable(voice)
         }
         if self.options.supportsVoiceSelection {
             payload["capabilities"] = AnyCodable(["voice-selection"])
         }
-        if let voiceChangeId = Self.trimmed(self.options.voiceChangeId) {
+        if let voiceChangeId = self.options.voiceChangeId?.trimmedNonEmpty {
             payload["voiceChangeId"] = AnyCodable(voiceChangeId)
         }
         let response = try await self.transport.request("talk.session.create", payload, 20000)
@@ -556,10 +556,10 @@ public final class RealtimeTalkRelaySession {
 
     private func resolveSupportsBargeIn(_ session: TalkSessionCreateResult) async -> Bool? {
         var payload: [String: AnyCodable] = [:]
-        if let provider = Self.trimmed(session.provider ?? self.options.provider) {
+        if let provider = (session.provider ?? self.options.provider)?.trimmedNonEmpty {
             payload["provider"] = AnyCodable(provider)
         }
-        if let model = Self.trimmed(session.model ?? self.options.model) {
+        if let model = (session.model ?? self.options.model)?.trimmedNonEmpty {
             payload["model"] = AnyCodable(model)
         }
         // A talk-only client may create sessions without permission to read the catalog.
@@ -657,7 +657,7 @@ extension RealtimeTalkRelaySession {
             self.logger.debug("talk realtime: close")
             if self.hasReceivedReady {
                 self.onStatus("Ready")
-                let reason = Self.trimmed(payload["reason"]?.stringValue)
+                let reason = payload["reason"]?.stringValue?.trimmedNonEmpty
                 let talkEvent = payload["talkEvent"]?.dictionaryValue
                 let termination: RealtimeTalkRelayTermination = if talkEvent?["type"]?.stringValue == "session.closed",
                                                                    talkEvent?["payload"]?.dictionaryValue?["reason"]?
@@ -902,7 +902,7 @@ extension RealtimeTalkRelaySession {
             "text": AnyCodable(
                 controlArgs["text"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "status"),
         ]
-        if let mode = Self.trimmed(controlArgs["mode"]?.stringValue) {
+        if let mode = controlArgs["mode"]?.stringValue?.trimmedNonEmpty {
             payload["mode"] = AnyCodable(mode)
         }
         let response = try await self.requestJSON(
@@ -1067,7 +1067,7 @@ extension RealtimeTalkRelaySession {
     }
 
     private func handlePlaybackMark(_ payload: [String: AnyCodable]) {
-        guard let markName = Self.trimmed(payload["markName"]?.stringValue) else { return }
+        guard let markName = payload["markName"]?.stringValue?.trimmedNonEmpty else { return }
         if self.isOutputPlaying {
             self.pendingPlaybackMarks.append(markName)
         } else {
@@ -1124,26 +1124,21 @@ extension RealtimeTalkRelaySession {
     private nonisolated static func assistantText(from message: AnyCodable?) -> String? {
         guard let message else { return nil }
         if let text = message.stringValue {
-            return self.trimmed(text)
+            return text.trimmedNonEmpty
         }
         guard let object = message.dictionaryValue else { return nil }
-        if let role = self.trimmed(object["role"]?.stringValue), role.lowercased() != "assistant" {
+        if let role = object["role"]?.stringValue?.trimmedNonEmpty, role.lowercased() != "assistant" {
             return nil
         }
         guard let content = object["content"] else { return nil }
         if let text = content.stringValue {
-            return self.trimmed(text)
+            return text.trimmedNonEmpty
         }
         let parts = content.arrayValue?.compactMap { part -> String? in
-            if let text = part.stringValue { return self.trimmed(text) }
-            return self.trimmed(part.dictionaryValue?["text"]?.stringValue)
+            if let text = part.stringValue { return text.trimmedNonEmpty }
+            return part.dictionaryValue?["text"]?.stringValue?.trimmedNonEmpty
         } ?? []
-        return self.trimmed(parts.joined(separator: "\n"))
-    }
-
-    private nonisolated static func trimmed(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
+        return parts.joined(separator: "\n").trimmedNonEmpty
     }
 }
 
@@ -1152,8 +1147,7 @@ extension RealtimeTalkRelaySession {
         let turnId: String?
 
         init(_ payload: [String: AnyCodable]) {
-            self.turnId = RealtimeTalkRelaySession
-                .trimmed(payload["talkEvent"]?.dictionaryValue?["turnId"]?.stringValue)
+            self.turnId = payload["talkEvent"]?.dictionaryValue?["turnId"]?.stringValue?.trimmedNonEmpty
         }
     }
 

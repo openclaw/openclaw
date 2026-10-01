@@ -95,7 +95,7 @@ export function scopeCdpPolicyToConfiguredEndpoint(
 type CdpEndpointSource =
   | { source?: "configured" }
   | { source: "discovered"; configuredUrl: string };
-type CdpEndpointPin = Awaited<ReturnType<typeof resolvePinnedHostnameWithPolicy>>;
+export type CdpEndpointPin = Awaited<ReturnType<typeof resolvePinnedHostnameWithPolicy>>;
 
 function cdpEndpointAuthority(url: string): string {
   const parsed = new URL(url);

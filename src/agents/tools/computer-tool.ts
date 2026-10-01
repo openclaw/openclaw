@@ -39,6 +39,7 @@ import {
   MAX_WAIT_SECONDS,
 } from "./computer-tool-shared.js";
 import { readGatewayCallOptions } from "./gateway.js";
+import { textResult } from "./tool-results.js";
 
 export type { ComputerContextEpoch, ComputerToolTransport } from "./computer-tool-shared.js";
 export { invalidateComputerFrameIfMissing } from "./computer-tool-result.js";
@@ -162,16 +163,13 @@ export function createComputerTool(options?: {
         ...params.noteLines,
         `screen unchanged since previous frame (frameId ${previousFrame.id}); screenshot omitted — keep using this frameId for coordinates`,
       ].join("\n");
-      return {
-        content: [{ type: "text" as const, text }],
-        details: {
-          ...computerTargetDetails(params.resolved.target),
-          action: params.action,
-          screenIndex: params.resolved.target.screenIndex,
-          frameId: previousFrame.id,
-          refWidth: referenceWidth,
-        },
-      };
+      return textResult(text, {
+        ...computerTargetDetails(params.resolved.target),
+        action: params.action,
+        screenIndex: params.resolved.target.screenIndex,
+        frameId: previousFrame.id,
+        refWidth: referenceWidth,
+      });
     }
     session.bindDeliveredFrame({
       resolved: params.resolved,
@@ -228,8 +226,14 @@ export function createComputerTool(options?: {
             : projected.result;
         };
 
-        if (action === "screenshot" || action === "wait") {
+        if (action === "screenshot" || action === "wait" || action === "take_control") {
           const noteLines: string[] = [];
+          if (action === "take_control") {
+            await session.takeControl(resolved, toolCallId, signal);
+            noteLines.push(
+              "Agent took control of this desktop; the operator can take control again.",
+            );
+          }
           if (action === "wait") {
             const seconds =
               readFiniteNumberParam(params, "duration", {
@@ -304,20 +308,15 @@ export function createComputerTool(options?: {
           session.setTarget(resolved.target);
           signal?.throwIfAborted();
           // Input landed; a failed follow-up observation should not fail the action.
-          return {
-            content: [
-              {
-                type: "text",
-                text: `${computerActResultText(action, actResult)}\nfollow-up ${observeWindow ? "observation" : "screenshot"} failed: ${formatErrorMessage(err)}`,
-              },
-            ],
-            details: {
+          return textResult(
+            `${computerActResultText(action, actResult)}\nfollow-up ${observeWindow ? "observation" : "screenshot"} failed: ${formatErrorMessage(err)}`,
+            {
               ...computerTargetDetails(resolved.target),
               action,
               screenIndex: resolved.target.screenIndex,
               result: actResult,
             },
-          };
+          );
         }
       }),
   };

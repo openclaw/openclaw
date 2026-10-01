@@ -187,7 +187,7 @@ export function createDoctorPluginMigrationPreparation(params: {
 
   return {
     deferred: () => deferred,
-    hasPending: () => previousById.size > 0,
+    retainedPluginIds: () => [...previousById.keys()],
     prepare,
     snapshotOptions: async () => {
       // Existing pending inputs must reach the first config read before backup selection.

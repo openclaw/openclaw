@@ -1,4 +1,3 @@
-// Defines the top-level OpenClaw configuration type.
 import type { z } from "zod";
 import type { TranscriptsConfig } from "../transcripts/config.js";
 import type { ConfigIncludeOwnership } from "./includes.js";
@@ -38,19 +37,13 @@ export type SecurityAuditSuppression = NonNullable<
 
 export type SurfaceConfigEntry = NonNullable<z.input<typeof OpenClawSchemaShape.surfaces>>[string];
 
-type RootMetaConfig = NonNullable<z.input<typeof OpenClawSchemaShape.meta>>;
-type RootWizardConfig = NonNullable<z.input<typeof OpenClawSchemaShape.wizard>>;
-type RootUpdateConfig = NonNullable<z.input<typeof OpenClawSchemaShape.update>>;
-type RootUiConfig = NonNullable<z.input<typeof OpenClawSchemaShape.ui>>;
-type RootAttachmentsConfig = NonNullable<z.input<typeof OpenClawSchemaShape.attachments>>;
-
 /** Top-level OpenClaw config as read from user/project config files. */
 export type OpenClawConfig = {
   /** @deprecated Doctor-only legacy input. */
   audit?: AuditConfig;
   /** JSON schema URL used by editors and generated config files. */
   $schema?: string;
-  meta?: RootMetaConfig;
+  meta?: NonNullable<z.input<typeof OpenClawSchemaShape.meta>>;
   /** Authentication provider/profile configuration. */
   auth?: AuthConfig;
   /** Named access groups used by channel/provider policy allowlists. */
@@ -73,19 +66,19 @@ export type OpenClawConfig = {
       | { enabled?: boolean; timeoutMs?: number }
       | undefined;
   };
-  wizard?: RootWizardConfig;
+  wizard?: NonNullable<z.input<typeof OpenClawSchemaShape.wizard>>;
   /** Diagnostics, tracing, and stability debugging settings. */
   diagnostics?: DiagnosticsConfig;
   /** Log sink, level, rotation, and redaction settings. */
   logging?: LoggingConfig;
   /** Security audit suppressions and security policy settings. */
   security?: SecurityConfig;
-  update?: RootUpdateConfig;
+  update?: NonNullable<z.input<typeof OpenClawSchemaShape.update>>;
   /** Explicit operator consent for anonymous feature statistics in the daily update check. */
   telemetry?: TelemetryConfig;
   /** Browser automation and browser plugin integration settings. */
   browser?: BrowserConfig;
-  ui?: RootUiConfig;
+  ui?: NonNullable<z.input<typeof OpenClawSchemaShape.ui>>;
   /** Secret providers, defaults, and ref-resolution settings. */
   secrets?: SecretsConfig;
   /** Skill loading and bundled skill configuration. */
@@ -110,7 +103,7 @@ export type OpenClawConfig = {
   bindings?: AgentBinding[];
   /** Broadcast command and delivery settings. */
   broadcast?: BroadcastConfig;
-  attachments?: RootAttachmentsConfig;
+  attachments?: NonNullable<z.input<typeof OpenClawSchemaShape.attachments>>;
   /** Message formatting, delivery, and action settings. */
   messages?: MessagesConfig;
   /** Shared text-to-speech defaults. Agent and channel overrides layer over this config. */

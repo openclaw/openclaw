@@ -4,7 +4,8 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 export type RuntimeWorkerGeneration = {
   resolve(url: URL): URL;
-  retain(owner: object, close: () => Promise<void>): void;
+  /** Only the returned native termination may be bounded; settlement must finish. */
+  retain(owner: object, settle: () => Promise<void | (() => Promise<void>)>): void;
 };
 
 type GenerationScope = { generation?: RuntimeWorkerGeneration };
@@ -30,7 +31,7 @@ export async function withRuntimeWorkerGeneration<T>(
   retainedDirectory?: (reason: string) => string | undefined,
 ): Promise<T> {
   const current: GenerationScope = {};
-  const resources = new Map<object, () => Promise<void>>();
+  const resources = new Map<object, Parameters<RuntimeWorkerGeneration["retain"]>[1]>();
   let closing = false;
   return await scope.run(current, async () => {
     let outcome: { value: T } | { error: unknown };
@@ -39,7 +40,7 @@ export async function withRuntimeWorkerGeneration<T>(
       closing = true;
       return (settlement ??= (async () => {
         const settled = await Promise.allSettled(
-          [...resources.values()].map((close) => Promise.resolve().then(close)),
+          [...resources.values()].map((settle) => Promise.resolve().then(settle)),
         );
         const failures = settled.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
@@ -53,7 +54,27 @@ export async function withRuntimeWorkerGeneration<T>(
               (directory ? `. Runtime retained at ${directory}: ${reason}.` : ""),
           );
         }
-        await release();
+        const terminate = settled.flatMap((result) =>
+          result.status === "fulfilled" && result.value ? [result.value] : [],
+        );
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const terminated = await Promise.race([
+            Promise.allSettled(terminate.map((close) => Promise.resolve().then(close))),
+            new Promise<undefined>((resolve) => {
+              timer = setTimeout(() => resolve(undefined), 10_000);
+            }),
+          ]);
+          if (!terminated || terminated.some((result) => result.status === "rejected")) {
+            retainedDirectory?.(
+              `retained updater worker termination ${terminated ? "failed" : "timed out"} after settlement; retry openclaw update cleanup after this process exits`,
+            );
+            return;
+          }
+          await release();
+        } finally {
+          clearTimeout(timer);
+        }
       })());
     };
     // Signal owners drain mutation/recovery barriers before retiring worker code.
@@ -71,11 +92,11 @@ export async function withRuntimeWorkerGeneration<T>(
               }
               return resolve(url);
             },
-            retain(owner: object, close: () => Promise<void>) {
+            retain(owner: object, settle: Parameters<RuntimeWorkerGeneration["retain"]>[1]) {
               if (closing) {
                 throw new Error("The updater's retained worker generation is closing");
               }
-              resources.set(owner, close);
+              resources.set(owner, settle);
             },
           });
         }),

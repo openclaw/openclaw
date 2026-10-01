@@ -19,6 +19,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeStringEntries,
+  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { sendGoogleChatMessage } from "./api.js";
@@ -66,7 +67,6 @@ function resolveGoogleChatGroupConfig(params: {
   return {
     entry: deprecatedNameMatch ? undefined : (entry ?? fallback),
     allowlistConfigured: true,
-    fallback,
     deprecatedNameMatch,
   };
 }
@@ -74,7 +74,7 @@ function resolveGoogleChatGroupConfig(params: {
 function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?: string | null) {
   const mentionAnnotations = annotations.filter((entry) => entry.type === "USER_MENTION");
   const hasAnyMention = mentionAnnotations.length > 0;
-  const botTargets = new Set(["users/app", botUser?.trim()].filter(Boolean) as string[]);
+  const botTargets = new Set(normalizeTrimmedStringList(["users/app", botUser]));
   const wasMentioned = mentionAnnotations.some((entry) => {
     const userName = entry.userMention?.user?.name;
     if (!userName) {
@@ -92,10 +92,7 @@ const warnedDeprecatedUsersEmailAllowFrom = new Set<string>();
 const warnedMutableGroupKeys = new Set<string>();
 
 function warnDeprecatedUsersEmailEntries(logVerbose: (message: string) => void, entries: string[]) {
-  const deprecated = entries
-    .map((v) => normalizeOptionalString(v))
-    .filter((v): v is string => Boolean(v))
-    .filter((v) => /^users\/.+@.+/i.test(v));
+  const deprecated = normalizeTrimmedStringList(entries).filter((v) => /^users\/.+@.+/i.test(v));
   if (deprecated.length === 0) {
     return;
   }

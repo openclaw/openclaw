@@ -34,7 +34,6 @@ import {
 } from "../../projects/project-registry.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import { readCurrentUserProfileAliases } from "../../state/user-profile-list.js";
-import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import {
   CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE,
@@ -53,7 +52,7 @@ import { assertValidParams } from "./validation.js";
 
 type ProjectWorktreeService = Pick<
   ManagedWorktreeService,
-  "listRegistryRecords" | "resolveRepositoryIdentity"
+  "listRegistryRecords" | "resolveRepositoryIdentities"
 >;
 
 type ProjectCandidate = {
@@ -255,18 +254,16 @@ async function listObservedProjects(
     });
   }
 
-  // Admit the same newest-first distinct paths before overlapping Git work. Keep facts
-  // request-local: session/registry revisions cannot detect external Git metadata edits.
+  // Admit newest-first paths before canonicalizing the shared discovery pass's key.
   diagnostics?.mark("identityProbes");
   const probePaths = [
     ...new Set(
       rawCandidates.map((raw) => (raw.kind === "worktree" ? raw.repoRoot : raw.checkoutPath)),
     ),
-  ].slice(0, PROJECTS_LIST_MAX_IDENTITY_PROBES);
-  const { results } = await runTasksWithConcurrency({
-    tasks: probePaths.map((checkoutPath) => () => service.resolveRepositoryIdentity(checkoutPath)),
-    limit: 4,
-  });
+  ]
+    .slice(0, PROJECTS_LIST_MAX_IDENTITY_PROBES)
+    .toSorted();
+  const results = probePaths.length ? await service.resolveRepositoryIdentities(probePaths) : [];
   const identities = new Map(
     probePaths.map((checkoutPath, index) => [checkoutPath, results[index]]),
   );
@@ -429,8 +426,9 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         const profileId = client?.authenticatedUserProfile?.profileId;
         const recentProfileIds = profileId ? readCurrentUserProfileAliases(profileId) : undefined;
         const recents = recentProfileIds
-          ? listProjectRecents(store, recentProfileIds, registryProjects)
+          ? await listProjectRecents(store, recentProfileIds, registryProjects)
           : undefined;
+        assertCurrent();
         diagnostics?.mark("response");
         if (canWrite()) {
           respond(
