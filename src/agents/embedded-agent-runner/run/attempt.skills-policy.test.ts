@@ -121,6 +121,59 @@ function run(
 }
 
 describe("runEmbeddedAttempt skill policy projections", () => {
+  it("rebuilds skill prompt inputs from the sandbox workspace for non-rw sandbox runs", async () => {
+    const sandboxWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-"));
+    tempPaths.push(sandboxWorkspace);
+    hoisted.resolveSandboxContextMock.mockResolvedValue({
+      enabled: true,
+      workspaceAccess: "ro",
+      workspaceDir: sandboxWorkspace,
+    });
+
+    await run({
+      sessionKey: "agent:main:guildchat:channel:test-ctx-engine",
+      attemptOverrides: {
+        skillsSnapshot: {
+          prompt:
+            "<available_skills><skill><location>~/.openclaw/skills/smaug/SKILL.md</location></skill></available_skills>",
+          skills: [{ name: "smaug" }],
+          resolvedSkills: [
+            {
+              name: "smaug",
+              description: "Host copy",
+              disableModelInvocation: false,
+              filePath: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
+              baseDir: "/Users/alice/.openclaw/skills/smaug",
+              source: "openclaw-workspace",
+              sourceInfo: {
+                path: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
+                source: "openclaw-workspace",
+                scope: "project",
+                origin: "top-level",
+                baseDir: "/Users/alice/.openclaw/skills/smaug",
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(hoisted.resolveEmbeddedRunSkillEntriesMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ workspaceDir: sandboxWorkspace, skillsSnapshot: undefined }),
+    );
+    expect(hoisted.resolveSkillsPromptForRunMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        workspaceDir: sandboxWorkspace,
+        skillsSnapshot: expect.objectContaining({
+          prompt: "",
+          skills: [],
+          resolvedSkills: [],
+          discoverySkills: [],
+        }),
+      }),
+    );
+  });
+
   it("preserves local operator tool schemas in the detached experience review", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-review-parity-"));
     tempPaths.push(workspaceDir);
