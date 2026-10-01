@@ -285,7 +285,7 @@ function summarizeStoredChatOutboxes(
     storedChatOutboxScopeKey(resolveUiConversationIdentity(state, sessionKey));
   return {
     draftSignature: JSON.stringify(
-      [...drafts].flatMap(([scopeKey, draft]) => (draft.active ? [scopeKey] : [])).sort(),
+      [...drafts].flatMap(([scopeKey, draft]) => (draft.active ? [scopeKey] : [])).toSorted(),
     ),
     summary: {
       total,

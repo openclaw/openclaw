@@ -85,9 +85,7 @@ const durableComposerDraftChangeListeners = new Set<() => void>();
 
 export function subscribeDurableComposerDraftChanges(listener: () => void): () => void {
   durableComposerDraftChangeListeners.add(listener);
-  return () => {
-    durableComposerDraftChangeListeners.delete(listener);
-  };
+  return () => void durableComposerDraftChangeListeners.delete(listener);
 }
 
 function notifyDurableComposerDraftChanges(): void {
@@ -263,7 +261,6 @@ export async function listDurableChatDraftPresence(
     const store = transaction.objectStore(STORE_NAME);
     const values: unknown[] = await requestResult(store.index(OWNER_INDEX).getAll(ownerKey(owner)));
     const presence = new Map<string, DurableChatDraftPresence>();
-    const now = Date.now();
     for (const value of values) {
       const record = parseStoredDraft(value);
       if (
@@ -276,7 +273,7 @@ export async function listDurableChatDraftPresence(
       }
       presence.set(
         record.scopeKey.slice(CHAT_SCOPE_PREFIX.length),
-        record.updatedAt > now - DRAFT_EXPIRY_MS
+        record.updatedAt > Date.now() - DRAFT_EXPIRY_MS
           ? { revision: record.revision, active: isActiveDraft(record) }
           : // Expiry will mint a newer clear fence on read; hide the pending clear now.
             { revision: Number.MAX_SAFE_INTEGER, active: false },
@@ -303,12 +300,12 @@ async function sweepExpiredRecords(database: IDBDatabase): Promise<void> {
       }
       const record = parseStoredDraft(cursor.value);
       const expired = record ? expiredRecord(record, now) : undefined;
+      // Deleting an expired fence can reveal tab input; re-fencing changes no presence.
       if (expired === null) {
         cursor.delete();
         changed = true;
       } else if (expired) {
         cursor.update(expired);
-        changed = true;
       }
       cursor.continue();
     } catch {
@@ -416,7 +413,6 @@ export async function prepareDurableComposerRecovery(
         retired.revision > record.revision
       ) {
         store.put(tombstone(record, Date.now()));
-        changed = true;
       } else if (
         identifiable &&
         activeCount < MAX_ACTIVE_DRAFTS_PER_OWNER &&
@@ -532,9 +528,6 @@ export async function readDurableComposerDraft(
         store.delete(recordKey(scope));
       }
       await transactionComplete(transaction);
-      if (value !== undefined) {
-        notifyDurableComposerDraftChanges();
-      }
       return { status: "not-found" };
     }
     if (
@@ -553,9 +546,9 @@ export async function readDurableComposerDraft(
       return { status: "not-found" };
     }
     if (expired) {
+      // Presence already projects an expired draft as the newest clear.
       store.put(expired);
       await transactionComplete(transaction);
-      notifyDurableComposerDraftChanges();
       return { status: "not-found", revision: expired.revision, writeId: expired.writeId };
     }
     await transactionComplete(transaction);
