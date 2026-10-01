@@ -68,6 +68,7 @@ it.each(["during", "missing-foreign"])(
             exitCode: 1,
           });
           expect(backup.restoreRefusal).toContain("the writer is unknown");
+          expect(backup.migration).toBeUndefined();
           const result: UpdateRunResult = {
             status: "error",
             mode: "npm",

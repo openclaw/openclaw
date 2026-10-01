@@ -125,6 +125,7 @@ describe("type suppression inventory", () => {
     ).toEqual(
       [
         "extensions/openai/realtime-quicksilver-session-lifecycle.test.ts:@ts-expect-error JavaScript callers must still fail before reserving a native session.",
+        "src/auto-reply/reply/get-reply-run-admission.session-file.test.ts:@ts-expect-error Exercise the runtime fallback for a missing session key.",
         "test/type-contracts/kysely-sync.ts:@ts-expect-error Kysely checks selected column string literals.",
         "test/type-contracts/kysely-sync.ts:@ts-expect-error Kysely checks table string literals.",
         "test/type-contracts/kysely-sync.ts:@ts-expect-error Kysely checks where-reference string literals.",

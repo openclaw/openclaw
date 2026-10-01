@@ -271,12 +271,14 @@ describe("swarm tools integration", () => {
       // Gateway completion precedes the registry's waitable result publication.
       await settleRootWork(true);
       const result = await wait.execute("wait", {
-        ids: [...pending],
-        timeoutSeconds: 0,
+        ids: [publicRunId],
       });
       const details = result.details as {
         completed: Array<{ runId: string; result: string; structured?: unknown }>;
+        pending: string[];
       };
+      expect(details.completed.map((completed) => completed.runId)).toEqual([publicRunId]);
+      expect(details.pending).toEqual([]);
       for (const completed of details.completed) {
         const index = runIds.indexOf(completed.runId) + 1;
         expect(completed.result).toBe(`result-${index}`);

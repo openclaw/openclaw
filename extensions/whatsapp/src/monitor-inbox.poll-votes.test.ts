@@ -360,11 +360,25 @@ describe("web monitor inbox poll vote hook", () => {
         },
       ],
     });
-    await waitForMessageCalls(onMessage, 1);
     await waitForInboundWorkDrained();
+    const preflightDurableId = createWhatsAppDurableInboundMessageId({
+      remoteJid: CHAT_JID,
+      id: preflightMessageId,
+    });
+    expect(enqueueSpy).toHaveBeenCalledWith(
+      preflightDurableId,
+      expect.objectContaining({
+        message: expect.objectContaining({
+          key: expect.objectContaining({ id: preflightMessageId }),
+        }),
+      }),
+      expect.objectContaining({ laneKey: CHAT_JID }),
+    );
+    expect(getRecordChannelActivityMock()).toHaveBeenCalledTimes(1);
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({ event: expect.objectContaining({ id: preflightMessageId }) }),
     );
+    expect(onMessage).toHaveBeenCalledTimes(1);
 
     // Simulate ownership recorded from an accepted send (the only producer
     // since round 3), so the hook actually reaches the point that throws.
@@ -427,9 +441,8 @@ describe("web monitor inbox poll vote hook", () => {
       }),
       expect.objectContaining({ laneKey: CHAT_JID }),
     );
+    expect(enqueueSpy).toHaveBeenCalledTimes(2);
     expect(getRecordChannelActivityMock()).toHaveBeenCalledTimes(2);
-    await waitForMessageCalls(onMessage, 2);
-    await waitForInboundWorkDrained();
 
     expect(maybeEmitWhatsAppPollVoteReceivedHookMock).toHaveBeenCalledWith(
       expect.objectContaining({ key: expect.objectContaining({ id: voteMessageId }) }),
