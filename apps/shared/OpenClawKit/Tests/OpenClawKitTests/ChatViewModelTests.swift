@@ -7256,6 +7256,56 @@ struct ChatViewModelTests {
         #expect(!matches.2)
     }
 
+    @Test(arguments: [
+        (
+            "agent:ops:catalog:fixture:node%3ADevBox:Thread%3AA",
+            "Agent:OPS:catalog:fixture:node%3ADevBox:Thread%3AA",
+            "agent:ops:catalog:fixture:node%3ADevBox:thread%3Aa"),
+        (
+            "agent:ops:matrix:channel:!Room:Example.Org",
+            "Agent:OPS:Matrix:Channel:!Room:Example.Org",
+            "agent:ops:matrix:channel:!room:example.org"),
+        (
+            "agent:ops:matrix:channel:!Room:Example.Org:thread:$Event",
+            "Agent:OPS:Matrix:Channel:!Room:Example.Org:THREAD:$Event",
+            "agent:ops:matrix:channel:!Room:Example.Org:thread:$event"),
+        (
+            "agent:ops:signal:group:AbC123=",
+            "Agent:OPS:Signal:Group:AbC123=",
+            "agent:ops:signal:group:abc123="),
+        (
+            "agent:ops:signal:group:AbC123=:thread:xyz",
+            "Agent:OPS:Signal:Group:AbC123=:Thread:XyZ",
+            "agent:ops:signal:group:abc123=:thread:xyz"),
+    ]) @MainActor
+    func `session message events preserve opaque conversation identity`(
+        keys: (selected: String, alias: String, distinct: String)) async throws
+    {
+        let (_, vm) = await makeViewModel(
+            sessionKey: keys.selected,
+            activeAgentId: "ops",
+            historyResponses: [])
+        defer { vm.detachTransport() }
+
+        func deliver(sessionKey: String, text: String) throws {
+            let event = try #require(OpenClawChatGatewayPayloadCodec.event(from: EventFrame(
+                type: "event", event: "session.message",
+                payload: AnyCodable([
+                    "sessionKey": sessionKey,
+                    "agentId": "ops",
+                    "messageId": text,
+                    "message": chatTextMessage(role: "user", text: text, timestamp: 1).value,
+                ]))))
+            vm.handleTransportEvent(event)
+        }
+
+        try deliver(sessionKey: keys.distinct, text: "foreign conversation")
+        #expect(vm.messages.isEmpty)
+
+        try deliver(sessionKey: keys.alias, text: "selected conversation")
+        #expect(vm.messages.flatMap(\.content).compactMap(\.text) == ["selected conversation"])
+    }
+
     @Test func `ignores agent main session message for different current main alias`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
