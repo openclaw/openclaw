@@ -128,7 +128,7 @@ function recordCommand(tool, cwd, commandArgs, configuration) {
   );
 }
 
-async function startLeaseChannel(onError) {
+async function startLeaseChannel(onError, token = instance) {
   leaseChannel = net.createServer((socket) => {
     leaseConnections.add(socket);
     socket.once("close", () => leaseConnections.delete(socket));
@@ -143,7 +143,7 @@ async function startLeaseChannel(onError) {
         if (end < 0 && input.length <= 128) {
           return;
         }
-        if (end < 0 || input.slice(0, end) !== instance || !fs.existsSync(lease)) {
+        if (end < 0 || input.slice(0, end) !== token || !fs.existsSync(lease)) {
           socket.destroy();
           return;
         }
@@ -461,7 +461,10 @@ async function holdLease() {
   // Its retirement or death closes every actor's channel without filesystem polling.
   const { port } = JSON.parse(fs.readFileSync(leaseChannelFile, "utf8"));
   actorChannel = net.createConnection({ host: "127.0.0.1", port });
-  actorChannel.once("close", () => process.exit(0));
+  actorChannel.once("close", () => {
+    checkLease();
+    process.exit(0);
+  });
   await new Promise((resolve, reject) => {
     let reply = "";
     actorChannel.once("error", reject);
@@ -1541,6 +1544,22 @@ source "$2"`,
 
 if (mode === "supervise") {
   await supervise();
+} else if (mode === "lease-owner") {
+  try {
+    await startLeaseChannel(
+      (error) => {
+        throw error;
+      },
+      fs.readFileSync(lease, "utf8"),
+    );
+    process.stdout.write("ready\n");
+    await new Promise((resolve) => {
+      process.stdin.once("end", resolve);
+      process.stdin.resume();
+    });
+  } finally {
+    await retireLeaseChannel();
+  }
 } else {
   await command();
 }
