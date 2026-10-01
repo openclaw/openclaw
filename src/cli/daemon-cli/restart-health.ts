@@ -349,7 +349,7 @@ export async function waitForGatewayHealthyRestart(
       if (params.requirePluginHealth !== false && snapshot.activatedPluginErrors?.length) {
         return withWaitContext(snapshot, "plugin-errors", elapsedMs);
       }
-      if (snapshot.channelProbeErrors?.length) {
+      if (snapshot.channelProbeErrors?.some((error) => !error.retryable)) {
         return withWaitContext(snapshot, "channel-errors", elapsedMs);
       }
       if (snapshot.versionMismatch) {

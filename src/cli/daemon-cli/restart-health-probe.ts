@@ -8,6 +8,12 @@ import { createConfigIO } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveReadOnlyLocalGatewayAuth } from "../../gateway/call-device-auth.js";
 import { callGateway } from "../../gateway/call.js";
+import {
+  DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+  DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+  evaluateChannelHealth,
+  isChannelHealthRestartHandoff,
+} from "../../gateway/channel-health-policy.js";
 import { isGatewayProtocolResponseError } from "../../gateway/client.js";
 import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
 import {
@@ -26,6 +32,7 @@ import { LOOPBACK_PORT_PROBE_HOSTS } from "../../infra/ports-probe.js";
 import type { PortUsage } from "../../infra/ports-types.js";
 import { sleep } from "../../utils.js";
 import type {
+  GatewayChannelHealthError,
   GatewayPortHealthSnapshot,
   UnavailablePluginHealthSummary,
 } from "./restart-health.types.js";
@@ -76,7 +83,7 @@ export type GatewayReachability = {
   gatewayBuildId: string | null | undefined;
   activatedPluginErrors: PluginHealthErrorSummary[];
   unavailablePlugins: UnavailablePluginHealthSummary[];
-  channelProbeErrors: Array<{ id: string; error: string }>;
+  channelProbeErrors: GatewayChannelHealthError[];
   channelProbeTimeouts?: Array<{ id: string; error: string }>;
   probeError?: string;
   staleConnection?: GatewayStaleConnectionReason;
@@ -239,7 +246,41 @@ function readChannelProbeFailures(health: unknown) {
         healthState !== "healthy" &&
         (healthState !== "not-running" || lastError || account?.restartPending === true)
       ) {
-        return [{ id, error: lastError || healthState }];
+        const lifecycle = account?.lifecycle;
+        const startupGrace =
+          (lifecycle === "starting" || lifecycle === "recovering") &&
+          !account?.terminalDisconnect &&
+          evaluateChannelHealth(
+            {
+              lifecycle,
+              running: account?.running === true,
+              ingressUnavailable: account?.ingressUnavailable === true ? true : undefined,
+              lastStartAt:
+                typeof account?.lastStartAt === "number" ? account.lastStartAt : undefined,
+            },
+            {
+              channelId,
+              now: Date.now(),
+              channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+              staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+            },
+          ).reason === "startup-connect-grace";
+        const restartHandoff =
+          (healthState === "not-running" || healthState === "ingress-unavailable") &&
+          isChannelHealthRestartHandoff(
+            {
+              running: account?.running === true,
+              restartPending: account?.restartPending === true,
+            },
+            healthState,
+          );
+        return [
+          {
+            id,
+            error: lastError || healthState,
+            ...(startupGrace || restartHandoff ? { retryable: true } : {}),
+          },
+        ];
       }
       const probe = asOptionalRecord(account?.probe);
       if (!probe || (probe.timedOut !== true && probe.ok !== false)) {

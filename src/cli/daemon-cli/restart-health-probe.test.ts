@@ -603,10 +603,6 @@ describe("restart health", () => {
         lastError: "gateway restart-loop breaker tripped",
       },
     ],
-    [
-      "pending automatic restart",
-      { healthState: "not-running", running: false, restartPending: true, lastError: "" },
-    ],
     ["disconnected transport", { healthState: "disconnected", running: true, connected: false }],
   ])("rejects %s despite a successful account credential probe", async (_label, runtime) => {
     callGateway.mockImplementation(
@@ -683,5 +679,116 @@ describe("restart health", () => {
     });
     expect(snapshot.healthy).toBe(true);
     expect(snapshot.channelProbeErrors).toBeUndefined();
+  });
+  it.each([
+    { healthState: "starting", lifecycle: "starting", running: true },
+    { healthState: "reconnecting", lifecycle: "recovering", running: false },
+    { healthState: "not-running", running: false, restartPending: true },
+  ])(
+    "waits for channel recovery rather than reporting failure or early success: %j",
+    async (runtime) => {
+      const response = (account: object) =>
+        gatewayHealthResponse({
+          server: { version: "2026.4.24", connId: "new" },
+          health: {
+            ok: true,
+            channels: {
+              whatsapp: {
+                accounts: {
+                  default: {
+                    configured: true,
+                    probe: { ok: true },
+                    ...account,
+                  },
+                },
+              },
+            },
+          },
+        });
+      callGateway
+        .mockImplementationOnce(response({ ...runtime, lastStartAt: Date.now() }))
+        .mockImplementation(
+          response({ running: true, healthState: "healthy", lifecycle: "ready" }),
+        );
+      inspectPortUsage.mockResolvedValue(ownedPortUsage);
+      const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+      const snapshot = await waitForGatewayHealthyRestart({
+        service: makeGatewayService({ status: "running", pid: 8000 }),
+        port: 18789,
+        expectedVersion: "2026.4.24",
+        attempts: 3,
+        delayMs: 10,
+      });
+      expect(snapshot.healthy).toBe(true);
+      expect(snapshot.waitOutcome).toBe("healthy");
+      expect(sleep).toHaveBeenCalled();
+      expect(callGateway).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("keeps an expired startup grace terminal despite a successful credential probe", async () => {
+    callGateway.mockImplementation(
+      gatewayHealthResponse({
+        server: { version: "2026.4.24", connId: "new" },
+        health: {
+          ok: true,
+          channels: {
+            whatsapp: {
+              configured: true,
+              healthState: "starting",
+              lifecycle: "starting",
+              running: true,
+              lastStartAt: Date.now() - 120_001,
+              probe: { ok: true },
+            },
+          },
+        },
+      }),
+    );
+    inspectPortUsage.mockResolvedValue(ownedPortUsage);
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      expectedVersion: "2026.4.24",
+    });
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.waitOutcome).toBe("channel-errors");
+    expect(sleep).not.toHaveBeenCalled();
+  });
+  it("does not report recovery when the restart deadline expires during channel grace", async () => {
+    callGateway.mockImplementation(
+      gatewayHealthResponse({
+        server: { version: "2026.4.24", connId: "new" },
+        health: {
+          ok: true,
+          channels: {
+            whatsapp: {
+              configured: true,
+              healthState: "starting",
+              lifecycle: "starting",
+              running: true,
+              lastStartAt: Date.now(),
+              probe: { ok: true },
+            },
+          },
+        },
+      }),
+    );
+    inspectPortUsage.mockResolvedValue(ownedPortUsage);
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      expectedVersion: "2026.4.24",
+      attempts: 2,
+      delayMs: 10,
+    });
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.waitOutcome).toBe("timeout");
+    expect(snapshot.channelProbeErrors).toEqual([
+      { id: "whatsapp", error: "starting", retryable: true },
+    ]);
+    expect(sleep).toHaveBeenCalled();
   });
 });
