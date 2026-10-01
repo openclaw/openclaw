@@ -250,7 +250,7 @@ export function findExplicitNpmConfigKeys(
     return found;
   }
 
-  const [command, ...args] = resolveBundledNpmCommand([
+  const command = resolveBundledNpmCommand([
     "config",
     "list",
     "--location=project",
@@ -258,7 +258,7 @@ export function findExplicitNpmConfigKeys(
     "--long=false",
   ]);
   try {
-    const raw = execFileSync(command, args, {
+    const raw = execFileSync(command[0], command.slice(1), {
       cwd: scope.npmConfigCwd?.trim() || tryProcessCwd() || undefined,
       encoding: "utf-8",
       env: {
@@ -268,7 +268,7 @@ export function findExplicitNpmConfigKeys(
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5_000,
     });
-    const [installConfig] = raw.split(/^; "publishConfig" from /mu, 1);
+    const installConfig = raw.split(/^; "publishConfig" from /mu, 1)[0] ?? raw;
     for (const key of remaining) {
       const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
       if (new RegExp(`^${escapedKey}\\s*=`, "mu").test(installConfig)) {
