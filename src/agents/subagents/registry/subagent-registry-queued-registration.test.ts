@@ -1,5 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   rotateAgentEventLifecycleGeneration,
   type AgentEventPayload,
@@ -130,25 +132,60 @@ it("leaves no speculative intent when registration is refused before native admi
   });
 });
 
-it("terminalizes a committed intent after a definite descriptor refusal", async () => {
-  await withQueuedRegistrationFixture(async (f) => {
-    const intent = f.holdNextWrite();
-    const descriptor = f.holdNextWrite("before");
-    const registration = f.register();
-    await intent.entered;
-    intent.release();
-    await descriptor.entered;
-    descriptor.reject(new Error("descriptor refused"));
-    await expect(registration).rejects.toThrow("descriptor refused");
-    expect(f.current()).toMatchObject({
-      execution: { status: "terminal", outcome: { status: "error" } },
-      queuedLaunch: undefined,
-      collectorLaunchCleanupPending: true,
+it.each(["recorded child", "configured default"] as const)(
+  "terminalizes a committed intent after a definite descriptor refusal using its %s usage",
+  async (owner) => {
+    await withQueuedRegistrationFixture(async (f) => {
+      const recordedChild = owner === "recorded child";
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", default: recordedChild },
+            { id: "research", default: !recordedChild },
+          ],
+        },
+      };
+      f.options.getRuntimeConfig = () => cfg;
+      f.registration.childSessionKey = "global";
+      f.registration.childAgentId = recordedChild ? "research" : undefined;
+      f.registration.queuedLaunch!.request.sessionKey = "global";
+      for (const [agentId, inputTokens, outputTokens] of [
+        ["main", 11, 13],
+        ["research", 101, 103],
+      ] as const) {
+        await replaceSessionEntry(
+          { agentId, sessionKey: "global" },
+          {
+            sessionId: `${agentId}-collector-session`,
+            lifecycleRevision: `${agentId}-collector-lifecycle`,
+            updatedAt: 1,
+            inputTokens,
+            outputTokens,
+          },
+        );
+      }
+      const intent = f.holdNextWrite();
+      const descriptor = f.holdNextWrite("before");
+      const registration = f.register();
+      await intent.entered;
+      intent.release();
+      await descriptor.entered;
+      descriptor.reject(new Error("descriptor refused"));
+      await expect(registration).rejects.toThrow("descriptor refused");
+      expect(f.current()).toMatchObject({
+        execution: { status: "terminal", outcome: { status: "error" } },
+        queuedLaunch: undefined,
+        collectorLaunchCleanupPending: true,
+      });
+      expect(f.stored()?.execution.status).toBe("terminal");
+      expect(f.stored()?.collectorCompletion).toEqual({
+        status: "failed",
+        usage: { inputTokens: 101, outputTokens: 103 },
+      });
+      expect(f.scope.canLaunch()).toBe(false);
     });
-    expect(f.stored()?.execution.status).toBe("terminal");
-    expect(f.scope.canLaunch()).toBe(false);
-  });
-});
+  },
+);
 
 it("serializes Stop after a pending descriptor without losing either commit", async () => {
   await withQueuedRegistrationFixture(async (f) => {

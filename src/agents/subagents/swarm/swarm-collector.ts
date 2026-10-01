@@ -1,12 +1,11 @@
-import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import {
   consumeSwarmStructuredOutput,
   peekSwarmStructuredOutput,
 } from "../../tools/structured-output-tool.js";
+import { resolveSubagentChildSessionOwner } from "../registry/subagent-child-session-owner.js";
 import { ensureCompletionState } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import { updateSubagentArchiveAtMs } from "../registry/subagent-registry-helpers.js";
@@ -109,13 +108,9 @@ export async function prepareSwarmCollectorCompletion(
   if (!entry.collect || entry.collectorCompletion) {
     return { entry: undefined };
   }
-  const agentId = resolveAgentIdFromSessionKey(entry.childSessionKey);
+  const { agentId, storePath } = resolveSubagentChildSessionOwner(entry, cfg);
   return withSessionEntryReadOnlyInWorker(
-    {
-      agentId,
-      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
-      sessionKey: entry.childSessionKey,
-    },
+    { agentId, storePath, sessionKey: entry.childSessionKey },
     () => assertCurrent?.(),
     async (read) => {
       if (!read.ok) {
