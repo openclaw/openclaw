@@ -6,6 +6,7 @@ import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { SignalDaemonHandle } from "./daemon.js";
+import type { MonitorSignalOpts } from "./monitor.js";
 import { setSignalRuntime } from "./runtime.js";
 import { clearSignalRuntimeForTest } from "./runtime.test-support.js";
 import type { SignalIngressMonitor } from "./signal-ingress.js";
@@ -46,7 +47,7 @@ const signalToolResultIngressMonitor = vi.hoisted(() => ({
 let signalToolResultState: OpenClawTestState | undefined;
 let signalToolResultIngressQueue: ReturnType<typeof createChannelIngressQueueForTests> | undefined;
 
-export function toSignalToolResultTestError(value: unknown, fallbackMessage: string): Error {
+function toSignalToolResultTestError(value: unknown, fallbackMessage: string): Error {
   return value instanceof Error ? value : new Error(fallbackMessage, { cause: value });
 }
 
@@ -58,7 +59,7 @@ export async function waitForSignalToolResultIngressDispatchIdle() {
   await monitor.waitForIdle();
 }
 
-export async function waitForSignalToolResultIngressIdle() {
+async function waitForSignalToolResultIngressIdle() {
   const queue = signalToolResultIngressQueue;
   if (!queue) {
     throw new Error("Signal tool-result ingress monitor is not initialized");
@@ -80,6 +81,40 @@ export async function waitForSignalToolResultIngressIdle() {
   );
 }
 
+export async function receiveSignalPayloads(params: {
+  payloads: unknown[];
+  opts?: Partial<MonitorSignalOpts>;
+}) {
+  const abortController = new AbortController();
+  let ingressError: Error | undefined;
+  streamMock.mockImplementation(async ({ onEvent }) => {
+    try {
+      for (const payload of params.payloads) {
+        await onEvent({
+          event: "receive",
+          data: JSON.stringify(payload),
+        });
+      }
+      await waitForSignalToolResultIngressIdle();
+    } catch (error) {
+      ingressError = toSignalToolResultTestError(error, "Signal ingress delivery failed");
+    } finally {
+      abortController.abort();
+    }
+  });
+
+  const { monitorSignalProvider } = await import("./monitor.js");
+  await monitorSignalProvider({
+    autoStart: false,
+    baseUrl: "http://127.0.0.1:8080",
+    abortSignal: abortController.signal,
+    ...params.opts,
+  });
+  if (ingressError) {
+    throw ingressError;
+  }
+}
+
 export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
   return {
     waitForTransportReadyMock,
@@ -97,7 +132,7 @@ export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
   };
 }
 
-export let config: Record<string, unknown> = {};
+let config: Record<string, unknown> = {};
 
 export function setSignalToolResultTestConfig(next: Record<string, unknown>) {
   config = next;
