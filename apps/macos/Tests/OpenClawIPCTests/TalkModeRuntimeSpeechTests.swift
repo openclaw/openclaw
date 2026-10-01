@@ -348,7 +348,11 @@ private func makeRuntimeTestConfigSnapshot(
 
 private func makeRuntimeTestCatalogData() throws -> Data {
     try JSONEncoder().encode(TalkCatalogResult(
-        modes: [], transports: [], brains: [], speech: [:], transcription: [:],
+        modes: [],
+        transports: [],
+        brains: [],
+        speech: [:],
+        transcription: [:],
         realtime: [
             "activeProvider": AnyCodable("openai"),
             "providers": AnyCodable([
