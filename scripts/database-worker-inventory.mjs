@@ -330,37 +330,40 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
   const roots = ["src", "extensions", "packages", "scripts"];
   const pattern = [...primitives.keys()].join("|");
   const snapshot = ref !== "" || staged;
-  const result = spawnSync(
-    snapshot ? "git" : "rg",
-    snapshot
-      ? [
-          "grep",
-          "-l",
-          "-z",
-          "-E",
-          ...(ref ? [] : ["--cached"]),
-          pattern,
-          ...(ref ? [ref] : []),
-          "--",
-          ...roots,
-        ]
-      : [
-          "-l",
-          "--null",
-          "-g",
-          "*.{ts,tsx,js,mjs,mts,cts,cjs}",
-          pattern,
-          ...roots.filter((dir) => fs.existsSync(path.join(root, dir))),
-        ],
-    { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
-  );
-  if (result.error || (result.status !== 0 && result.status !== 1)) {
-    throw result.error ?? new Error(result.stderr || "SQLite inventory source scan failed");
-  }
-  const files = result.stdout
-    .split("\0")
-    .map((file) => (ref ? file.slice(ref.length + 1) : file))
-    .filter((file) => /\.(?:ts|tsx|js|mjs|mts|cts|cjs)$/.test(file) && !excluded.test(file));
+  // Git's untracked mode applies excludes to tracked files too. Merge a tracked
+  // scan so an ignore pattern cannot hide already-versioned SQL from the ratchet.
+  const modes = snapshot ? [ref ? [] : ["--cached"]] : [[], ["--untracked", "--exclude-standard"]];
+  const matches = modes.flatMap((mode) => {
+    const result = spawnSync(
+      "git",
+      [
+        "grep",
+        "--no-color",
+        "--no-recurse-submodules",
+        "-l",
+        "-z",
+        "-E",
+        ...(!snapshot ? ["-I"] : []),
+        ...mode,
+        pattern,
+        ...(ref ? [ref] : []),
+        "--",
+        ...roots,
+      ],
+      { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+    );
+    if (result.error || (result.status !== 0 && result.status !== 1)) {
+      throw result.error ?? new Error(result.stderr || "SQLite inventory source scan failed");
+    }
+    return result.stdout.split("\0");
+  });
+  const files = [
+    ...new Set(
+      matches
+        .map((file) => (ref ? file.slice(ref.length + 1) : file))
+        .filter((file) => /\.(?:ts|tsx|js|mjs|mts|cts|cjs)$/.test(file) && !excluded.test(file)),
+    ),
+  ];
   const texts = snapshot ? loadRatchetSources(root, files, ref) : null;
   const sources = parser.parseSourceFiles(
     files.map((fileName) => ({
@@ -407,7 +410,7 @@ function render(rows) {
     "",
     `This snapshot contains **${total.files} non-test files and ${total.calls} call expressions** for the five primitives below. The campaign previously reported 404 files; that is a historical estimate, not a fixed target or a count of call expressions. This inventory follows current source and excludes import-only matches, comments, tests, fixtures, and test support. Its scan scope and exclusions are explicit below.`,
     "",
-    "Regenerate with `pnpm db:worker-inventory:gen`; verify with `pnpm db:worker-inventory:check`. `node scripts/database-worker-inventory.mjs --json` emits every call's primitive, line, column, file owner, tier, and classification evidence. The script uses the repository's TypeScript parser and `rg`; it does not load application code or open a database.",
+    "Regenerate with `pnpm db:worker-inventory:gen`; verify with `pnpm db:worker-inventory:check`. `node scripts/database-worker-inventory.mjs --json` emits every call's primitive, line, column, file owner, tier, and classification evidence. The script uses the repository's TypeScript parser and Git; it does not load application code or open a database.",
     "",
     "## Scope and interpretation",
     "",
@@ -415,7 +418,7 @@ function render(rows) {
     "",
     "File tiers are the broadest applicable exposure and are not measured runtime call counts. A file may serve a worker and a synchronous legacy caller, or include both a runtime method and an allowed migration. Recheck the specific operation and its registered entry point before changing it. Maintenance invoked by Gateway timers remains T1. Prepared results never confer current authority; follow [worker access](/reference/database-schemas/worker-access).",
     "",
-    "The scan covers JavaScript/TypeScript files under `src/`, `extensions/`, `packages/`, and `scripts/` as selected by `rg` (respecting ignore rules). It recognizes direct calls, property calls with these names, and named-import aliases. It does not resolve higher-order aliases, dynamic dispatch, transitive wrappers, direct `DatabaseSync` methods, other query primitives, or native-language SQLite. It is a reproducible migration queue, not a complete prohibition checker. Tests are deliberately excluded rather than counted as T3.",
+    "The scan covers JavaScript/TypeScript files under `src/`, `extensions/`, `packages/`, and `scripts/` as selected by `git grep`. Working-tree scans include tracked files regardless of ignore patterns, include untracked files under Git's standard ignore rules, and skip binary files; snapshot scans use the selected index or commit. It recognizes direct calls, property calls with these names, and named-import aliases. It does not resolve higher-order aliases, dynamic dispatch, transitive wrappers, direct `DatabaseSync` methods, other query primitives, or native-language SQLite. It is a reproducible migration queue, not a complete prohibition checker. Tests are deliberately excluded rather than counted as T3.",
     "",
     "| Key | Primitive |",
     "| --- | --- |",
