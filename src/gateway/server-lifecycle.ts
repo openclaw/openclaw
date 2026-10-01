@@ -525,6 +525,7 @@ export async function prepareGatewayLifecycle(params: {
         resolveGatewayContext: runtime.resolvePluginGatewayContext,
         chatRunState,
         chatAbortControllers,
+        sessionLifecyclePersistence: runtimeState.sessionLifecyclePersistence,
         chatQueuedTurns,
         restartRecoveryCandidates,
         removeChatRun,

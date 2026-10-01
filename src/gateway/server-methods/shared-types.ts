@@ -194,6 +194,7 @@ type GatewayKernelContext = {
   /** Temporary profile-owned mentions for this exact Gateway lifetime. */
   mentionInbox?: MentionInbox;
   liveActivityCoordinator?: import("../live-activity-coordinator.js").LiveActivityCoordinator;
+  sessionLifecyclePersistence?: import("../session-lifecycle-persistence-owner.js").SessionLifecyclePersistenceOwner;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;

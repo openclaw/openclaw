@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   abortChatRunById,
   type ChatAbortControllerEntry,
+  type ChatAbortOps,
   isChatAbortControllerEntryAbortable,
   removeChatAbortControllerEntry,
   type RestartRecoveryCandidate,
@@ -96,6 +97,7 @@ async function sleepForRestartReplyDrain(delayMs: number): Promise<void> {
 }
 
 export type GatewayRunShutdownParams = {
+  sessionLifecyclePersistence?: ChatAbortOps["sessionLifecyclePersistence"];
   resolveGatewayContext: GatewayContextResolver;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatQueuedTurns: QueuedChatTurnMap;

@@ -5,7 +5,6 @@ import {
   createAgentRunRestartAbortError,
   isAgentRunDirectAbortReason,
 } from "../../agents/run-termination.js";
-import type { ReplySessionBinding } from "../../auto-reply/reply/get-reply.types.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
   interruptReplyRunTarget,
@@ -17,7 +16,6 @@ import {
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { createAbortError } from "../../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
@@ -27,11 +25,7 @@ import {
   isCompetingSessionWorkAdmissionActive,
 } from "../../sessions/session-lifecycle-admission.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
-import {
-  isChatAbortControllerEntryAbortable,
-  registerChatAbortController,
-  resolveChatRunExpiresAtMs,
-} from "../chat-abort.js";
+import { registerChatAbortController, resolveChatRunExpiresAtMs } from "../chat-abort.js";
 import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
 import { loadSessionEntry } from "../session-utils.js";
@@ -57,6 +51,7 @@ import {
   respondChatSessionRoutingChanged,
 } from "./chat-send-pre-admission.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
+import { createChatSendRunBinding } from "./chat-send-run-binding.js";
 import { captureAdmittedChatSendSessionSettings } from "./chat-send-session-settings.js";
 import { prepareGoalChatSendSession, type PreparedChatSendSession } from "./chat-send-session.js";
 import { normalizeOptionalChatText, normalizeUnknownChatText } from "./chat-text-normalization.js";
@@ -588,27 +583,16 @@ export async function admitChatSend(params: {
   }
 
   const acquiredGatewayWorkAdmission = gatewayWorkAdmission;
-  // Native initialization may create the SID after admission. Keep the original
-  // registration as the shared binding; retained callbacks cannot adopt a successor.
-  const sessionBinding = activeRunAbort.entry;
-  const onSessionPrepared = (binding: ReplySessionBinding) => {
-    if (binding.sessionKey !== sessionKey) {
-      return;
-    }
-    if (
-      context.chatAbortControllers.get(clientRunId) !== sessionBinding ||
-      lifecycleGeneration !== getAgentEventLifecycleGeneration() ||
-      !acquiredGatewayWorkAdmission.isActive() ||
-      !isChatAbortControllerEntryAbortable(sessionBinding) ||
-      sessionBinding.registrationCleanupRequested ||
-      sessionBinding.projectSessionActive === false ||
-      sessionBinding.projectSessionTerminalPending ||
-      sessionBinding.projectSessionTerminalPersisted
-    ) {
-      throw createAbortError("chat session preparation no longer owns its admission");
-    }
-    sessionBinding.sessionId = binding.sessionId;
-  };
+  const runBinding = createChatSendRunBinding({
+    activeRunAbort,
+    chatAbortControllers: context.chatAbortControllers,
+    clientRunId,
+    sessionKey,
+    lifecycleGeneration,
+    isAdmissionActive: () => acquiredGatewayWorkAdmission.isActive(),
+    loadCurrentSessionEntry: () =>
+      loadSessionEntry(sessionLoadKey, { ...sessionLoadOptions, clone: false }).entry,
+  });
   let gatewayWorkAdmissionRetains = 1;
   let finishPendingInput: (() => void) | undefined;
   const releaseGatewayWorkAdmission = () => {
@@ -693,8 +677,7 @@ export async function admitChatSend(params: {
       activeRunAbort,
       admittedSessionSettings,
       admittedSessionId,
-      sessionBinding,
-      onSessionPrepared,
+      ...runBinding,
       initialSessionEntry,
       chatSendTraceAttributes,
       assertInitialSkillSelection,

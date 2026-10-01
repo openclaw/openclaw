@@ -371,6 +371,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                     : {}),
                 resumeRequestedSession: reconnectResumeRequested,
                 onSessionPrepared: admission.onSessionPrepared,
+                onAdmittedRunContext: admission.onAdmittedRunContext,
                 abortSignal: activeRunAbort.controller.signal,
                 getProviderLoginConfig: context.getRuntimeConfig,
                 assertProviderLoginAuthority: () => {

@@ -42,6 +42,7 @@ import {
 } from "./server/health-state.js";
 import { listPluginNodeCapabilities } from "./server/plugins-http/route-capability.js";
 import { broadcastPresenceSnapshot } from "./server/presence-events.js";
+import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 import { resolveGrantExpiryDaysConfig } from "./standing-grant-expiry-config.js";
 
 type GatewayLifecycle = Awaited<ReturnType<typeof prepareGatewayLifecycle>>;
@@ -211,6 +212,7 @@ export async function startGatewayCoreRuntime(input: {
             logHealth,
             dedupe,
             chatAbortControllers,
+            sessionLifecyclePersistence,
             chatQueuedTurns,
             restartRecoveryCandidates,
             chatRunState,
@@ -245,6 +247,11 @@ export async function startGatewayCoreRuntime(input: {
     getRuntimeConfig,
     log,
   });
+  const sessionLifecyclePersistence = createSessionLifecyclePersistenceOwner({
+    onCommitted: liveActivityCoordinator.observe,
+    onTerminalTransition: liveActivityCoordinator.holdTerminal,
+  });
+  runtimeState.sessionLifecyclePersistence = sessionLifecyclePersistence;
   const activityLifetime = runtime.connectionWork.signal;
   activityLifetime.addEventListener("abort", liveActivityCoordinator.beginClose, { once: true });
   if (activityLifetime.aborted) {
@@ -276,6 +283,7 @@ export async function startGatewayCoreRuntime(input: {
         refreshConnectedUserProfiles: () =>
           resolvePluginGatewayContext()?.refreshConnectedUserProfile?.(),
         liveActivityCoordinator,
+        sessionLifecyclePersistence,
       }),
     )
     .catch(async (error: unknown) => {
@@ -668,6 +676,7 @@ export async function startGatewayCoreRuntime(input: {
     sessionCompanion,
     sessionObserver,
     liveActivityCoordinator,
+    sessionLifecyclePersistence,
     approvalSessionEvents,
     execApprovalManager,
     questionManager,

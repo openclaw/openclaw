@@ -24,6 +24,7 @@ import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.j
 import { cancelGatewayWorkerSessionWork } from "./server-worker-placement-cancel.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import { admitWorkerStopChat } from "./server-worker-placement.test-harness.js";
+import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
 const routing = vi.hoisted(() => ({ load: vi.fn() }));
 vi.mock("./session-utils.js", async (importOriginal) => ({
@@ -73,6 +74,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       raw: vi.fn(),
     };
     const context = {
+      sessionLifecyclePersistence: createSessionLifecyclePersistenceOwner(),
       dedupe: new Map(),
       chatRunState,
       chatAbortControllers: new Map(),
@@ -129,6 +131,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
     try {
       await replaceSessionEntry(target, entry);
       subscriptions = startGatewayEventSubscriptions({
+        sessionLifecyclePersistence: context.sessionLifecyclePersistence!,
         log,
         broadcast: context.broadcast,
         broadcastToConnIds: vi.fn(),

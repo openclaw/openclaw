@@ -46,6 +46,7 @@ type GatewayRequestContextRuntime = Pick<
   | "approvalWebPushDelivery"
   | "pluginApprovalIosPushDelivery"
   | "liveActivityCoordinator"
+  | "sessionLifecyclePersistence"
   | "pluginApprovalManager"
   | "placementStandingGrants"
   | "systemAgentApprovalManager"
@@ -278,6 +279,7 @@ export function createGatewayRequestContext(
     approvalWebPushDelivery: runtime.approvalWebPushDelivery,
     pluginApprovalIosPushDelivery: runtime.pluginApprovalIosPushDelivery,
     liveActivityCoordinator: runtime.liveActivityCoordinator,
+    sessionLifecyclePersistence: runtime.sessionLifecyclePersistence,
     pluginApprovalManager: runtime.pluginApprovalManager,
     placementStandingGrants: runtime.placementStandingGrants,
     systemAgentApprovalManager: runtime.systemAgentApprovalManager,
