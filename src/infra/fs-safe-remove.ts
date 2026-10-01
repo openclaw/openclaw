@@ -89,6 +89,7 @@ async function removeDirectoryEntry(
   root: Root,
   relativePath: string,
   suppressNotFound: boolean,
+  unlinkSymlinks: boolean,
 ): Promise<void> {
   const entry = await findDirectoryEntry(root, relativePath).catch((error: unknown) => {
     if (suppressNotFound && isNotFoundError(error)) {
@@ -97,6 +98,10 @@ async function removeDirectoryEntry(
     throw error;
   });
   if (!entry) {
+    await removeRootRelativePath(root, relativePath, suppressNotFound);
+    return;
+  }
+  if (entry.isSymbolicLink && unlinkSymlinks) {
     await removeRootRelativePath(root, relativePath, suppressNotFound);
     return;
   }
@@ -119,6 +124,7 @@ async function removeDirectoryEntry(
         root,
         joinRootRelativePath(relativePath, child.name),
         suppressNotFound,
+        unlinkSymlinks,
       );
     }
   }
@@ -130,6 +136,7 @@ export async function removePathWithinRoot(params: {
   relativePath: string;
   recursive?: boolean;
   force?: boolean;
+  symlinks?: "reject" | "unlink";
 }): Promise<void> {
   const root = await fsSafeRoot(params.rootDir);
   const suppressNotFound = params.force !== false;
@@ -145,9 +152,18 @@ export async function removePathWithinRoot(params: {
     return;
   }
   if (!recursive || !entry.isDirectory) {
+    if (entry.isSymbolicLink && params.symlinks === "unlink") {
+      await removeRootRelativePath(root, params.relativePath, suppressNotFound);
+      return;
+    }
     assertNotSymbolicLink(params.relativePath, entry);
     await removeRootRelativePath(root, params.relativePath, suppressNotFound);
     return;
   }
-  await removeDirectoryEntry(root, params.relativePath, suppressNotFound);
+  await removeDirectoryEntry(
+    root,
+    params.relativePath,
+    suppressNotFound,
+    params.symlinks === "unlink",
+  );
 }
