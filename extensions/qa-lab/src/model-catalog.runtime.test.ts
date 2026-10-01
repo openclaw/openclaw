@@ -1,7 +1,6 @@
 // Qa Lab tests cover model catalog plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "openclaw/plugin-sdk/infra-runtime";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -30,7 +29,7 @@ async function fixtureReadyBeforeSettlement(
 ): Promise<void> {
   const recorded = () =>
     fs.readFile(recordPath, "utf8").catch((error: unknown) => {
-      if (hasErrnoCode(error, "ENOENT")) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
         return "";
       }
       throw error;
