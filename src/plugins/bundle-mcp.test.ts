@@ -180,8 +180,8 @@ describe("loadEnabledBundleMcpConfig", () => {
 
       expectNoDiagnostics(loaded.diagnostics);
       expect(loaded.config.mcpServers).toEqual({
-        http: { type: "http", url: "https://example.test/mcp" },
-        sse: { type: "sse", url: "https://example.test/sse" },
+        http: { transport: "streamable-http", url: "https://example.test/mcp" },
+        sse: { transport: "sse", url: "https://example.test/sse" },
       });
     });
   });
