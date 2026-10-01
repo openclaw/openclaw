@@ -12,6 +12,13 @@ What the Codex harness owns during a turn, and what stays with OpenClaw. Part of
 
 ## Dynamic tools and web search
 
+OpenClaw exposes `skills_search` and `skills_read` as host-owned dynamic tools
+when eligible installed skills and tool policy permit them. Search includes
+skills omitted from OpenClaw's bounded prompt directory. Reads use an exact
+installed name and return complete instructions. These tools do not change
+Codex's native `skills` namespace or install marketplace skills. See
+[installed skill search](/tools/skills#search-installed-skills).
+
 Codex dynamic tools default to `searchable` loading. OpenClaw normally does
 not expose dynamic tools that duplicate Codex-native workspace operations:
 `read`, `write`, `edit`, `apply_patch`, `exec`, `process`,

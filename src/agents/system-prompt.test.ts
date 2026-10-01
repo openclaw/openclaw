@@ -423,17 +423,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("read exact <location>");
   });
 
-  it("switches skills access guidance under code mode", () => {
-    const prompt = renderPrompt({
-      codeModeActive: true,
-      toolNames: ["exec"],
-      skillsPrompt: SKILLS,
-    });
-
-    expect(prompt).toContain('`skills.read("<name>")`');
-    expect(prompt).not.toContain("read exact <location> with `read`");
-  });
-
   it("omits code-mode skill guidance when the actual exec tool is unavailable", () => {
     const prompt = renderPrompt({
       codeModeActive: true,

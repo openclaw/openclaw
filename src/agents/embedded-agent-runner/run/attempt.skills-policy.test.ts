@@ -21,6 +21,7 @@ import type {
 } from "../../tool-search-types.js";
 import { createToolSearchTools } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
+import { createInstalledSkillTools } from "../../tools/installed-skill-tools.js";
 import {
   beginPromptCacheObservation,
   collectPromptCacheTools,
@@ -252,12 +253,19 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     }> = [
       { label: "unrestricted", skillsPrompt, available: true },
       { label: "wildcard", toolsAllow: ["*"], skillsPrompt, available: true },
+      { label: "mixed wildcard", toolsAllow: ["message", "*"], skillsPrompt, available: true },
       { label: "finite", toolsAllow: ["message"], available: false },
       {
         label: "read executable",
-        toolExecutionAllow: ["skill_workshop", "read"],
+        toolExecutionAllow: ["skill_workshop", "read", "skills_read", "skills_search"],
         skillsPrompt,
         available: true,
+      },
+      {
+        label: "skill read denied",
+        toolExecutionAllow: ["read"],
+        skillsPrompt,
+        available: false,
       },
       {
         label: "read denied",
@@ -265,10 +273,14 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         skillsPrompt: "",
         available: false,
       },
+      { label: "execution denied", toolExecutionAllow: [], skillsPrompt: "", available: false },
     ];
     for (const testCase of cases) {
       resetEmbeddedAttemptHarness();
       enableSkills();
+      hoisted.createOpenClawCodingToolsMock.mockImplementation((options) =>
+        createInstalledSkillTools(options?.installedSkills ?? []),
+      );
       await run({
         sessionKey: `agent:main:${testCase.label.replace(" ", "-")}`,
         attemptOverrides: {
