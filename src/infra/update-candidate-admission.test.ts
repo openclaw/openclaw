@@ -405,12 +405,12 @@ describe("runUpdateCandidateAdmission", () => {
       reason: "invalid-verdict",
     },
   ])(
-    "falls back after $name and retains only the first redacted stderr diagnostic",
+    "falls back after $name and retains the last redacted stderr diagnostic",
     async ({ code, stdout, reason }) => {
       fixture = {
         code,
         stdout,
-        stderr: "cannot inspect token=synthetic-secret\nsecond diagnostic\n",
+        stderr: "earlier diagnostic\ncannot inspect token=synthetic-secret\n",
       };
       const result = await run({ env: { API_TOKEN: "synthetic-secret" } });
       expect(result).toMatchObject({
@@ -420,7 +420,7 @@ describe("runUpdateCandidateAdmission", () => {
       });
       expect(result.warning?.message).toContain("cannot inspect");
       expect(result.warning?.message).not.toContain("synthetic-secret");
-      expect(result.warning?.message).not.toContain("second diagnostic");
+      expect(result.warning?.message).not.toContain("earlier diagnostic");
       expect(result.verdict).toBeUndefined();
       await expect(fs.access(contextPath)).rejects.toMatchObject({ code: "ENOENT" });
     },

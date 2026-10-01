@@ -319,9 +319,7 @@ export async function resolveGitRepositoryPaths(
   const commonRaw = normalizeGitPathForFilesystem(
     await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"], options),
   );
-  const commonDir = await fs.realpath(
-    path.isAbsolute(commonRaw) ? commonRaw : path.resolve(sourceRoot, commonRaw),
-  );
+  const commonDir = await fs.realpath(path.resolve(sourceRoot, commonRaw));
   const primary = (await listGitWorktrees(sourceRoot, options))[0]?.path ?? sourceRoot;
   const canonicalRoot = await fs.realpath(primary);
   return { canonicalRoot, commonDir };

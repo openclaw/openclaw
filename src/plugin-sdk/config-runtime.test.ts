@@ -1,12 +1,40 @@
 /**
  * Tests config runtime exports and snapshot/cache behavior exposed through the SDK.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { normalizePluginsConfig as readNormalizedPluginsConfig } from "../plugins/config-state.js";
 import {
   resolveLivePluginConfigObject,
   resolvePluginConfigObject,
   type OpenClawConfig,
 } from "./config-runtime.js";
+import { normalizePluginsConfig } from "./plugin-config-runtime.js";
+
+afterEach(() => clearRuntimeConfigSnapshot());
+
+it("keeps public normalized policy mutable without changing the published host policy", () => {
+  const pluginConfig = { mode: "strict" };
+  const config: OpenClawConfig = {
+    plugins: {
+      allow: ["google"],
+      entries: { "google-gemini-cli": { enabled: true, config: pluginConfig } },
+    },
+  };
+  setRuntimeConfigSnapshot(config);
+  const policy = normalizePluginsConfig(config.plugins);
+  policy.allow.push("other");
+  policy.entries.google!.enabled = false;
+
+  expect(readNormalizedPluginsConfig(config.plugins).allow).toEqual(["google"]);
+  expect(readNormalizedPluginsConfig(config.plugins).entries.google?.enabled).toBe(true);
+  expect(normalizePluginsConfig(config.plugins).entries.google?.enabled).toBe(true);
+  expect(resolvePluginConfigObject(config, "google")).toBe(pluginConfig);
+  expect(Object.isFrozen(pluginConfig)).toBe(false);
+});
 
 describe("resolvePluginConfigObject", () => {
   it("returns the plugin config object for a configured plugin entry", () => {

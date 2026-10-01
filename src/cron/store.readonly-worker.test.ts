@@ -20,7 +20,7 @@ it.each([false, true])(
   "reports persisted quarantine through Doctor without caller-thread queries (cold=%s)",
   async (cold) => {
     await withOpenClawTestState({ label: "cron-quarantine-doctor" }, async (state) => {
-      saveCronQuarantinedJobs({
+      await saveCronQuarantinedJobs({
         storePath: resolveCronJobsStorePath(),
         entries: [{ sourceIndex: 0, reason: "missing-schedule", job: { id: "quarantined-job" } }],
         nowMs: 123,

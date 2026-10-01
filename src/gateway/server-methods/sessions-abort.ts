@@ -18,7 +18,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { captureYieldedMainSessionContinuation } from "../../agents/main-session-recovery/main-session-restart-recovery-target.js";
 import {
-  clearSessionQueues,
+  clearSessionLifecycleQueues,
   prepareSessionFollowupCleanup,
 } from "../../auto-reply/reply/queue/cleanup.js";
 import {
@@ -531,7 +531,12 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
               if (clearCapturedFollowups) {
                 queueCleared = clearCapturedFollowups() > 0;
               } else {
-                const cleared = clearSessionQueues(queueKeys);
+                const cleared = clearSessionLifecycleQueues({
+                  keys: queueKeys,
+                  agentId: targetAgentId,
+                  sessionKey: canonicalKey,
+                  assertCurrent: assertAbortCurrent,
+                });
                 queueCleared = cleared.followupCleared > 0 || cleared.laneCleared > 0;
               }
             }

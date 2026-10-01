@@ -579,12 +579,17 @@ describe("runPreparedReply media-only handling", () => {
     ]);
   });
 
-  it("loads configured and canonical workspace skills for managed-worktree sessions", async () => {
+  it.each([
+    { name: "dashboard", spawnedBy: undefined },
+    { name: "visible child", spawnedBy: "agent:default:main" },
+  ])("loads workspace skills and runs in the $name managed worktree", async ({ spawnedBy }) => {
     const params = baseParams({
+      sessionKey: "agent:default:dashboard:worktree-session",
       workspaceDir: "/tmp/agent-workspace",
       sessionEntry: {
         sessionId: "session-1",
         updatedAt: Date.now(),
+        spawnedBy,
         spawnedCwd: "/tmp/session-worktree",
         worktree: {
           id: "worktree-1",
@@ -1793,7 +1798,10 @@ describe("runPreparedReply media-only handling", () => {
       });
 
       expect(result).toEqual({ text: "ok" });
-      expect(commandQueue.clearCommandLane).toHaveBeenCalledWith("session:session-key");
+      expect(commandQueue.clearCommandLane).toHaveBeenCalledWith(
+        "session:session-key",
+        expect.any(Function),
+      );
       expect(embeddedAgentRuntime.abortEmbeddedAgentRun).not.toHaveBeenCalled();
       expect(activeOperation.result).toEqual({
         kind: "aborted",

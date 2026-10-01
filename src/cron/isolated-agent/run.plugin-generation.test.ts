@@ -45,6 +45,7 @@ async function setupPublishedGeneration(withAuth = false) {
   });
   const makeGeneration = () =>
     ({
+      remoteCatalog: null,
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: metadataSnapshot,
@@ -228,6 +229,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       },
       pluginGeneration: {
         pluginMetadataSnapshot: selected,
+        remoteCatalog: null,
         configuredCatalogEntries: [],
         inlineProviderModels: [],
       },

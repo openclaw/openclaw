@@ -478,6 +478,23 @@ OpenClaw filters skills at load time using `metadata.openclaw` (JSON5 object
 embedded in the frontmatter, see the parsing note above). A skill with no
 `metadata.openclaw` block is always eligible unless explicitly disabled.
 
+Skill **inventory**, skill **readiness**, and skill **visibility** are related
+but different:
+
+- **Inventory** answers whether OpenClaw discovered the skill in a configured
+  root or bundled source.
+- **Readiness** answers whether the current runtime can satisfy the skill's
+  declared requirements, such as binaries, environment variables, config paths,
+  operating system constraints, or reachable node-hosted capabilities.
+- **Visibility** answers whether a ready, eligible skill is exposed to the
+  selected agent after agent allowlists, invocation flags, and session snapshot
+  rules are applied.
+
+A skill can be present in inventory but still not ready or visible. Use
+[`openclaw skills check`](/cli/skills#commands) when debugging a skill that
+appears in configuration but does not show up for an agent, or when its required
+tool, credential, or host capability is missing.
+
 ```markdown
 ---
 name: image-lab
@@ -740,6 +757,13 @@ When native watch capacity is exhausted, OpenClaw logs one warning and stops
 the skills watchers. With watching enabled, later agent turns refresh file-backed
 skills through the existing snapshot preparation. Restart the Gateway after
 restoring watch capacity to enable native watching again.
+
+When native events are unavailable, skills polling runs every 30 seconds by
+default. This is also the minimum interval for explicitly requested polling;
+larger `CHOKIDAR_INTERVAL` values remain supported. Native event hints still
+trigger prompt refreshes with the normal debounce. Each watcher logs one warning
+when automatic selection falls back to polling, including the reported reason
+when available.
 
 Watcher subscriptions are retained for the 128 most recently used combinations of
 agent, configured workspace, and execution workspace. Subscriptions idle for an

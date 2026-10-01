@@ -79,7 +79,7 @@ export function recordPostCoreUpdateEvidence(
 
 /** Correct only a proven interrupted completion; all other terminal outcomes remain immutable. */
 export async function reconcileInterruptedUpdateRuns(
-  input: { env?: NodeJS.ProcessEnv; signal?: AbortSignal } = {},
+  input: { env?: NodeJS.ProcessEnv; signal?: AbortSignal; candidate?: UpdateRunRecord } = {},
   onCandidate?: (runId: string) => void,
 ): Promise<UpdateRunRecord[]> {
   const env = { ...(input.env ?? process.env) };
@@ -87,7 +87,10 @@ export async function reconcileInterruptedUpdateRuns(
   const context = captureOpenClawStateWorkerContext(options);
   // A later invocation may have installed the same build. Never attribute its
   // serving result to an older occurrence merely because the versions agree.
-  const expected = await readInterruptedUpdateCandidateAsync(options, context);
+  const expected =
+    "candidate" in input
+      ? input.candidate
+      : await readInterruptedUpdateCandidateAsync(options, context);
   const candidate = expected ? readInstalledUpdateCandidate(expected) : undefined;
   if (!expected || !candidate || !canSettleInterruptedUpdate(expected)) {
     return [];

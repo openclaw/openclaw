@@ -309,13 +309,14 @@ describe("manual cron delivery occurrence", () => {
                 finished.resolve(event);
               }
             },
-            runIsolatedAgentJob: async ({ job, abortSignal }) => {
+            runIsolatedAgentJob: async ({ job, abortSignal, deliveryAttemptFence }) => {
               const text = "Fresh result from this invocation.";
               const sessionKey = `agent:main:cron:${job.id}`;
               const delivery = await dispatchCronDelivery({
                 cfgWithAgentDefaults: cfg,
                 deps: {},
                 job,
+                deliveryAttemptFence,
                 agentId: "main",
                 agentSessionKey: sessionKey,
                 runSessionKey: sessionKey,

@@ -413,7 +413,8 @@ export function createFeishuMessageReceiveHandler({
       event.message.message_type.trim() === "post" &&
       messageDedupeKey !== messageId &&
       (await hasProcessedMessage(messageId, accountId, log)) &&
-      parsePostContent(event.message.content).attachments.length === 0
+      parsePostContent(event.message.content, { includeTopLevelFiles: false }).attachments
+        .length === 0
     ) {
       log(`feishu[${accountId}]: dropping duplicate event for message ${messageId}`);
       await completeSuppressedIngress();

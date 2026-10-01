@@ -251,7 +251,7 @@ export function publishPreparation(createTag = false): FakeStep[] {
     ),
     ...(createTag
       ? [
-          step("git", ["tag", "-a", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`]),
+          step("git", ["tag", "-s", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`]),
           step("git", ["push", "origin", `refs/tags/v${RELEASE}`]),
         ]
       : []),

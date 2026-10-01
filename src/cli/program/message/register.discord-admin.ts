@@ -9,7 +9,6 @@ const requiredOptions = {
   startTime: ["--start-time <iso>", "Event start time"],
 } as const;
 
-/** Register Discord admin and moderation message subcommands. */
 export function registerMessageDiscordAdminCommands(message: Command, helpers: MessageCliHelpers) {
   function register(
     parent: Command,

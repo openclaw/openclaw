@@ -73,6 +73,7 @@ function poolFor(state: GitWorkerRuntime, command: GitWorkerCommand): GitPool {
         : command.type.startsWith("workspace.")
           ? "workspace"
           : command.type === "repository.branches" ||
+              command.type === "repository.identities" ||
               command.type === "checkout.context" ||
               command.type === "checkout.revision"
             ? "reads"

@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -216,9 +217,13 @@ beforeEach(async () => {
 type SnapshotOptions = Parameters<typeof createVerifiedSqliteSnapshot>[0];
 
 async function expectSnapshotSuccess(options: SnapshotOptions): Promise<void> {
-  await expect(createVerifiedSqliteSnapshot(options)).resolves.toEqual({
+  const snapshot = await createVerifiedSqliteSnapshot(options);
+  const published = await fs.readFile(options.targetPath);
+  expect(snapshot).toEqual({
     path: options.targetPath,
     userVersion: 0,
+    sha256: createHash("sha256").update(published).digest("hex"),
+    sizeBytes: published.length,
   });
 }
 
@@ -348,8 +353,14 @@ describe("createVerifiedSqliteSnapshot", () => {
       source.prepare("DELETE FROM records WHERE value = ?").run(deletedValue);
 
       const result = await createVerifiedSqliteSnapshot({ sourcePath, targetPath });
-      expect(result).toEqual({ path: targetPath, userVersion: 0 });
-      expect((await fs.readFile(targetPath)).includes(deletedValue)).toBe(false);
+      const published = await fs.readFile(targetPath);
+      expect(result).toEqual({
+        path: targetPath,
+        userVersion: 0,
+        sha256: createHash("sha256").update(published).digest("hex"),
+        sizeBytes: published.length,
+      });
+      expect(published.includes(deletedValue)).toBe(false);
 
       withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
         expect(snapshot.prepare("SELECT value FROM records").all()).toEqual([

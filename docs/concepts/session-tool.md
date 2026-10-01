@@ -226,7 +226,7 @@ agent-to-agent replies use the same completion observation.
 The low-level Gateway `sessions.send` RPC has a different contract: its JSON
 `timeoutMs` limits **receiver execution**, just like `chat.send`. Omit that field
 to keep the receiver's configured budget; bound the CLI wait separately with
-[`gateway call --timeout`](/cli/gateway/query#gateway-call-method).
+[`gateway call --timeout`](/cli/gateway/query#gateway-call-%3Cmethod%3E).
 
 An accepted result keeps target admission separate from announcement delivery.
 `targetDisposition` is `queued` for a new turn or `steered` for an active turn, including default sends with no reply wait to your own running child;

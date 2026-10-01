@@ -129,18 +129,21 @@ describe("Control UI build chunking", () => {
     });
   });
 
-  it("lets snapshot prewarming load independently of the measured chat boot group", () => {
+  it("lets snapshot prewarming load independently of the measured boot groups", () => {
     const database = new URL("../pages/chat/session-snapshot-database.ts", import.meta.url)
       .pathname;
     const stableGroup = controlUiCodeSplitting.groups[0];
-    const chatGroup = controlUiCodeSplitting.groups.find(
-      (group) => group.name === "control-ui-boot-chat",
+    const bootGroup = controlUiCodeSplitting.groups.find(
+      (group) =>
+        typeof group.name === "string" &&
+        /^control-ui-boot-(?:shared|new|chat)$/u.test(group.name) &&
+        group.test?.(database),
     )!;
 
-    expect(chatGroup.test?.(database)).toBe(true);
+    expect(bootGroup).toBeDefined();
     expect(stableGroup?.test?.(database)).toBe(true);
     expect(controlUiStableChunkName(database)).toBe("session-snapshot-database");
-    expect(stableGroup?.priority).toBeGreaterThan(chatGroup.priority);
+    expect(stableGroup?.priority).toBeGreaterThan(bootGroup.priority);
   });
 
   it("consolidates shared boot without pulling in the chat route or optional panels", () => {
@@ -158,7 +161,13 @@ describe("Control UI build chunking", () => {
     // Representative always-loaded boot surface and a lazy island that must
     // keep its own chunk (terminal runtime is not part of the default boot).
     expect(bootGroup.test(`${repoRoot}/ui/src/components/app-sidebar.ts`)).toBe(true);
+    // Chat reaches narration through a dynamic import without a request of its own.
+    expect(bootGroup.test(`${repoRoot}/ui/src/components/app-sidebar-session-narration.ts`)).toBe(
+      true,
+    );
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-page.ts`)).toBe(false);
+    // Fetched shared chunks once co-located the chat view with modules New Session needs.
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-view.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/styles/chat.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/components/assistant-panel-content.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-content.ts`)).toBe(false);

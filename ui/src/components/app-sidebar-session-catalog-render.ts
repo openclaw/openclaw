@@ -531,6 +531,7 @@ function renderCatalogSessionRow(
     canOpenTerminal: session.canOpenTerminal === true,
     canDelete: session.canArchive && catalog.capabilities.archive,
     name: session.name ?? session.threadId,
+    displayName: session.name,
     meta,
   };
   const menuOpen = params.isMenuOpen(catalogKey);

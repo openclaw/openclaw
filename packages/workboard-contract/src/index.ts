@@ -408,6 +408,7 @@ export type {
   WorkboardSessionsBoard,
   WorkboardSessionsBoardRead,
   WorkboardSessionsBoardSpec,
+  WorkboardSessionsBoardView,
   WorkboardSessionsColumn,
   WorkboardSessionsColumnMatch,
   WorkboardSessionsObserverHealth,

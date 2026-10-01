@@ -121,6 +121,7 @@ scripts/changed-lanes.mts
 scripts/check-changelog-attributions.mjs
 scripts/check-changelog-attributions.mts
 scripts/crabbox-untrusted-bootstrap.sh
+scripts/generate-kysely-types.mts
 scripts/lib/arg-utils.mts
 scripts/lib/arg-utils.runtime.mjs
 scripts/lib/bundled-plugin-paths.mjs
@@ -261,8 +262,15 @@ src/agents/worktrees/filesystem-refs.native.ts
 src/agents/worktrees/git-path-inventory.ts
 src/agents/worktrees/git-worktree-operations.runtime.ts
 src/agents/worktrees/git.ts
+src/agents/worktrees/owner.ts
 src/agents/worktrees/provisioned-file-inspection.ts
+src/agents/worktrees/registry-read.kernel.ts
+src/agents/worktrees/registry-read.ts
+src/agents/worktrees/registry.ts
 src/agents/worktrees/repository-paths.ts
+src/agents/worktrees/run-lease-owner.ts
+src/agents/worktrees/run-lease-store.kernel.ts
+src/agents/worktrees/service-preparation.ts
 src/agents/worktrees/snapshot-exact-state.ts
 src/agents/worktrees/snapshot-index-objects.ts
 src/agents/worktrees/snapshot-inventory.ts
@@ -355,6 +363,8 @@ src/commands/doctor/shared/legacy-config-migrations.runtime.tts.ts
 src/commands/doctor/shared/legacy-config-migrations.ts
 src/commands/doctor/shared/legacy-config-migrations.web-search.ts
 src/commands/doctor/shared/legacy-config-record-shared.ts
+src/commands/doctor/shared/legacy-context-budget.ts
+src/commands/doctor/shared/legacy-copilot-discovery.ts
 src/commands/doctor/shared/legacy-model-ref-normalization.ts
 src/commands/doctor/shared/legacy-models-add-metadata.ts
 src/commands/doctor/shared/legacy-runtime-model-policy.ts
@@ -438,11 +448,9 @@ src/config/io.write-values.ts
 src/config/issue-format.ts
 src/config/json5-comments.ts
 src/config/legacy-codex-provider.ts
-src/config/legacy.context-budget.ts
 src/config/legacy.default-agent-owner-state.ts
 src/config/legacy.default-agent-owner.ts
 src/config/legacy.default-agent-roles.ts
-src/config/legacy.github-copilot.ts
 src/config/legacy.roster.ts
 src/config/legacy.shared.ts
 src/config/legacy.ts
@@ -711,6 +719,7 @@ src/infra/json-files.ts
 src/infra/kysely-sync-cache-state.ts
 src/infra/kysely-sync.ts
 src/infra/lifecycle-write-custody.ts
+src/infra/lru-cache.ts
 src/infra/map-size.ts
 src/infra/net/configured-local-origin-bypass.ts
 src/infra/net/fetch-guard.ts
@@ -1106,7 +1115,6 @@ src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-value-views.ts
 src/plugins/plugin-instance.ts
 src/plugins/plugin-lifecycle-trace.ts
-src/plugins/plugin-lru-cache.ts
 src/plugins/plugin-metadata-contributions.ts
 src/plugins/plugin-metadata-env.ts
 src/plugins/plugin-metadata-lifecycle.ts
@@ -1342,6 +1350,7 @@ src/state/openclaw-state-db-cache.ts
 src/state/openclaw-state-db-content-version.ts
 src/state/openclaw-state-db-cache.wal.ts
 src/state/openclaw-state-db-contract.ts
+src/state/openclaw-state-db-cron-delivery-migration.ts
 src/state/openclaw-state-db-delivery-queue-backfill.ts
 src/state/openclaw-state-db-doctor-schema.ts
 src/state/openclaw-state-db-existing-schema.ts
@@ -1394,6 +1403,7 @@ src/state/openclaw-state-lease-worker-owner.ts
 src/state/openclaw-state-lease-worker-storage.ts
 src/state/openclaw-state-lease-worker.ts
 src/state/openclaw-state-lease.ts
+src/state/openclaw-state-maintenance-context.ts
 src/state/openclaw-state-ownership.ts
 src/state/openclaw-state-read-error.ts
 src/state/openclaw-state-read-operation.ts

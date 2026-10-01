@@ -89,6 +89,102 @@ describe("CodexAppServerClient", () => {
     expect(receiveNotification).toHaveBeenCalledExactlyOnceWith(notification);
   });
 
+  it.each([
+    "Configured service tier `priority` is not advertised as supported for model `test-no-tier-model` and will be omitted from requests.",
+    "Code Mode is enabled in configuration, but model `test-no-code-mode-model` does not advertise Code Mode support. This may degrade model performance. Disable `features.code_mode` and `features.code_mode_only`, or select a model whose metadata enables Code Mode.",
+  ])("logs a managed warning once before notification fan-out: %s", (message) => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createHarness();
+    const first = vi.fn();
+    const second = vi.fn();
+    harness.client.addNotificationHandler(first);
+    harness.client.addNotificationHandler(second);
+    harness.send({ method: "warning", params: { threadId: "thread-1", message } });
+    expect(warn).toHaveBeenCalledExactlyOnceWith(message);
+    expect(first).not.toHaveBeenCalled();
+    expect(second).not.toHaveBeenCalled();
+
+    const actionable = {
+      method: "warning",
+      params: { threadId: "thread-1", message: message + " Additional action required." },
+    };
+    harness.send(actionable);
+    expect(first).toHaveBeenCalledExactlyOnceWith(actionable);
+    expect(second).toHaveBeenCalledExactlyOnceWith(actionable);
+  });
+
+  it("preserves changed, thread-scoped, and actionable warnings at ingress", () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createHarness();
+    const receive = vi.fn();
+    harness.client.addNotificationHandler(receive);
+    const message =
+      "Codex couldn't save diagnostic logs to its local database. Run `codex doctor` for diagnostics.";
+    const notifications = [
+      { method: "warning", params: { threadId: "thread-1", message } },
+      {
+        method: "warning",
+        params: { threadId: null, message: message + " Conversation state is also affected." },
+      },
+      {
+        method: "warning",
+        params: { threadId: null, message, details: "Conversation state is also affected." },
+      },
+      { method: "configWarning", params: { summary: message, details: "Rules were not applied." } },
+      { method: "guardianWarning", params: { threadId: "thread-1", message } },
+      {
+        method: "warning",
+        params: { threadId: null, message: "Conversation could not be saved." },
+      },
+    ];
+    for (const notification of notifications) {
+      harness.send(notification);
+    }
+    expect(receive.mock.calls.map(([notification]) => notification)).toEqual(notifications);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "keeps frames alive without replay when diagnostic logging fails before observers: %s",
+    async (beforeObserver) => {
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementationOnce(() => {
+        throw new Error("diagnostic sink failed");
+      });
+      const harness = createHarness();
+      const warning = {
+        method: "warning",
+        params: {
+          threadId: null,
+          message:
+            "Codex couldn't save diagnostic logs to its local database. Run `codex doctor` for diagnostics.",
+        },
+      };
+      if (beforeObserver) {
+        harness.send(warning);
+      }
+      const receive = vi.fn();
+      const closed = vi.fn();
+      harness.client.addNotificationHandler(receive);
+      harness.client.addCloseHandler(closed);
+      expect(receive).not.toHaveBeenCalled();
+      expect(harness.client.getCloseError()).toBeUndefined();
+      const pending = harness.client.request("account/read", {});
+      const result = expect(pending).resolves.toEqual({ account: null });
+      const { id } = JSON.parse(await harness.waitForWrite(0));
+      const next = { method: "account/updated", params: { authMode: "apiKey" } };
+      harness.process.stdout.write(
+        [...(beforeObserver ? [] : [warning]), next, { id, result: { account: null } }]
+          .map((frame) => JSON.stringify(frame))
+          .join("\n") + "\n",
+      );
+
+      await result;
+      expect(receive.mock.calls.map(([notification]) => notification)).toEqual([next]);
+      expect(warn).toHaveBeenCalledExactlyOnceWith(warning.params.message);
+      expect(closed).not.toHaveBeenCalled();
+    },
+  );
+
   it("isolates synchronous notification handler failures", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const harness = createHarness();

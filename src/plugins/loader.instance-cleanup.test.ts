@@ -5,7 +5,11 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { collectErrorGraphCandidates } from "../infra/errors.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { clearPluginRegistryLoadCache, loadOpenClawPlugins } from "./loader.js";
+import {
+  acquirePluginRegistryForInspection,
+  clearPluginRegistryLoadCache,
+  loadOpenClawPlugins,
+} from "./loader.js";
 import {
   makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
@@ -18,12 +22,69 @@ import {
   withPluginCache,
   type PluginCache,
 } from "./plugin-cache.js";
+import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
+import { createInspectionFixture } from "./registry-inspection.test-helpers.js";
+import { hasRetainedPluginRuntimeCloseError } from "./runtime-close-error.js";
 import {
   clearActivePluginRegistry,
   disposePluginRegistryInstances,
   setActivePluginRegistry,
 } from "./runtime.js";
+
+it.each(["settled", "rejected", "pending"] as const)(
+  "reports %s inspection disposal without confusing failure with retained custody",
+  async (outcome) => {
+    const fixture = createInspectionFixture();
+    const inspection = await acquirePluginRegistryForInspection({ config: fixture.config });
+    const instance = getPluginInstance(inspection.registry.plugins[0]!);
+    if (!instance) {
+      throw new Error("Missing inspection instance");
+    }
+    const finished = createDeferredCore();
+    const failure =
+      outcome === "pending"
+        ? new PluginInstanceDrainTimeoutError("fixture drain pending", finished.promise, {})
+        : new Error("fixture instance disposal failed");
+    const dispose = vi.fn(() => {
+      if (outcome === "settled") {
+        throw failure;
+      }
+    });
+    instance.lifecycle.onDispose(dispose);
+    const observedDispose = outcome === "settled" ? undefined : vi.spyOn(instance, "dispose");
+    if (outcome === "rejected") {
+      observedDispose?.mockRejectedValue(failure);
+    } else if (outcome === "pending") {
+      observedDispose?.mockResolvedValue({ errors: [failure] });
+    }
+    try {
+      const release = inspection.release();
+      const error: unknown = await release.catch((reason: unknown) => reason);
+      expect(
+        collectErrorGraphCandidates(error, (candidate) => [
+          candidate.cause,
+          ...(Array.isArray(candidate.errors) ? candidate.errors : []),
+        ]),
+      ).toContain(failure);
+      expect(hasRetainedPluginRuntimeCloseError(error)).toBe(outcome !== "settled");
+      expect(inspection.release()).toBe(release);
+      expect(instance.acceptingCalls).toBe(false);
+      expect(fixture.connection().database.isOpen).toBe(false);
+      if (outcome === "settled") {
+        expect(dispose).toHaveBeenCalledOnce();
+        expect(fixture.connection().instanceDisposals).toBe(1);
+      }
+    } finally {
+      observedDispose?.mockRestore();
+      await instance.dispose();
+      finished.resolve();
+      await fixture.cleanup(inspection);
+      resetPluginLoaderTestStateForTest();
+    }
+  },
+);
 
 it.each([true, false])(
   "keeps workflow admission through registration and retirement (activate: %s)",

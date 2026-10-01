@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fixtureReceiptClientSource } from "../../test/helpers/fixture-receipts.js";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
@@ -10,7 +11,7 @@ export async function probeMcpServer(runtime: SessionMcpRuntime, serverName: str
   return JSON.parse(String(text)) as { pid: number; label: string; lists: number };
 }
 
-export async function createMcpProbeFixture(tempDirs: string[]) {
+export async function createMcpProbeFixture(tempDirs: string[], receiptEndpoint?: string) {
   const workspaceDir = makeTempDir(tempDirs, "mcp-reload-");
   const serverPath = path.join(workspaceDir, "server.mjs");
   await fs.writeFile(
@@ -19,6 +20,7 @@ export async function createMcpProbeFixture(tempDirs: string[]) {
 import readline from "node:readline";
 import fs from "node:fs/promises";
 import { setTimeout } from "node:timers/promises";
+${receiptEndpoint ? fixtureReceiptClientSource(receiptEndpoint) : ""}
 let lists = 0;
 let toolName = "probe";
 async function handle(message) {
@@ -32,7 +34,7 @@ async function handle(message) {
     }
     if (message.params.arguments?.hold) {
       const marker = message.params.arguments.hold;
-      await fs.writeFile(marker + ".started", "started");
+      ${receiptEndpoint ? 'sendReceipt(marker, "started");' : ""}
       while (!(await fs.stat(marker).catch(() => undefined))) await setTimeout(10);
     }
     result = { content: [{ type: "text", text: JSON.stringify({ pid: process.pid, label: process.argv[2], lists }) }] };

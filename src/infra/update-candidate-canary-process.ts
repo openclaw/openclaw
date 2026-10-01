@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { redactSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { signalProcessTree } from "../process/kill-tree.js";
@@ -27,17 +28,21 @@ export function launchCanary(params: {
     windowsHide: true,
   });
   let stdout = "";
-  let firstStderrLine: string | undefined;
+  let lastStderrLine: string | undefined;
   let cliReason: string | undefined;
   const captureStderr = (line: string) => {
     if (!line.trim() || line.startsWith(UPDATE_CANARY_PROGRESS_PREFIX)) {
       return;
     }
-    const safe = redactSupportDiagnosticLine(line, { env, stateDir: params.stateDir });
-    firstStderrLine ??= safe;
+    const safe = redactSupportDiagnosticLine(
+      line,
+      { env, stateDir: params.stateDir },
+      Number.MAX_SAFE_INTEGER,
+    );
+    lastStderrLine = sliceUtf16Safe(safe, -200);
     // The CLI prints a generic heading before its actual failure reason.
     if (line.startsWith("[openclaw] Reason: ")) {
-      cliReason ??= safe.replace(/^\[openclaw\] Reason: /u, "");
+      cliReason = sliceUtf16Safe(safe.replace(/^\[openclaw\] Reason: /u, ""), -200);
     }
   };
   let stdoutBytes = 0;
@@ -75,7 +80,7 @@ export function launchCanary(params: {
         pending = "";
         droppingLine = true;
         if (stream === child.stderr) {
-          firstStderrLine ??= "[oversized log line omitted]";
+          lastStderrLine ??= "[oversized log line omitted]";
         }
         capture("[oversized log line omitted]");
       }
@@ -131,7 +136,7 @@ export function launchCanary(params: {
     hasExited: () => exited,
     processExited: () => processExited,
     stdout: () => stdout,
-    firstStderrLine: () => cliReason ?? firstStderrLine,
+    stderrDiagnostic: () => cliReason ?? lastStderrLine,
     outputExceeded: () => outputExceeded,
   };
 }

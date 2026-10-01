@@ -56,11 +56,11 @@ const gitToolingTargets = [
   "ci-workflow-guards",
 ].map((name) => `test/scripts/${name}.test.ts`);
 
-it("keeps ordinary activity unit changes with their UI unit owner", () => {
+it("keeps activity unit changes narrow unless a shared build input also changes", () => {
   expect(hasUiE2eAffectingChange(["ui/src/pages/activity/activity-page.test.ts"])).toBe(false);
   expect(
     hasUiE2eAffectingChange(["ui/src/pages/activity/activity-page.test.ts", "package.json"]),
-  ).toBe(false);
+  ).toBe(true);
 });
 
 it.each([

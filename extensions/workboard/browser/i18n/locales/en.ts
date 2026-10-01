@@ -99,6 +99,9 @@ export default {
     cardsBoard: "Cards",
     sessionsBoard: {
       kind: "Sessions",
+      peopleFilter: "People filter",
+      everyone: "Everyone",
+      involvingMe: "Involving me",
       agent: "Board agent",
       agentLabel: "Sessions board · {name}",
       agentUnavailable:

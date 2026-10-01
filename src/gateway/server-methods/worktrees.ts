@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
+  missingScopeErrorShape,
   validateWorktreesBranchesParams,
   validateWorktreesCreateParams,
   validateWorktreesGcParams,
@@ -37,7 +38,6 @@ function invalidParams(respond: Parameters<GatewayRequestHandlers[string]>[0]["r
 }
 
 async function resolveAuthorizedRepoRoot(
-  method: string,
   repoRoot: string,
   opts: Parameters<GatewayRequestHandlers[string]>[0],
 ): Promise<string | undefined> {
@@ -54,13 +54,13 @@ async function resolveAuthorizedRepoRoot(
   if (authorizedRoot) {
     return authorizedRoot;
   }
+  // Shared structured missing-scope contract (same shape as fs.listDir and
+  // sessions.groups.update) so clients can distinguish an authorization denial
+  // from a repository inspection failure instead of parsing prose.
   opts.respond(
     false,
     undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `${method} outside configured agent workspaces requires gateway scope: ${ADMIN_SCOPE}`,
-    ),
+    missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
   );
   return undefined;
 }
@@ -80,7 +80,7 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         invalidParams(respond);
         return;
       }
-      const repoRoot = await resolveAuthorizedRepoRoot("worktrees.create", params.repoRoot, opts);
+      const repoRoot = await resolveAuthorizedRepoRoot(params.repoRoot, opts);
       if (!repoRoot) {
         return;
       }
@@ -144,7 +144,7 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         invalidParams(respond);
         return;
       }
-      const repoRoot = await resolveAuthorizedRepoRoot("worktrees.branches", params.repoRoot, opts);
+      const repoRoot = await resolveAuthorizedRepoRoot(params.repoRoot, opts);
       if (!repoRoot) {
         return;
       }

@@ -311,10 +311,21 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
 
       for (const size of [viewport, { width: 1440, height: 1440 }, { width: 390, height: 844 }]) {
         await page.setViewportSize(size);
-        // The shell viewport owner can commit a resize between separate browser calls.
         const { content, header, composer } = await page
           .locator(".content--chat")
-          .evaluate((root) => {
+          .evaluate(async (root, viewportHeight) => {
+            // setViewportSize resolves before the rendering update in which the shell viewport
+            // owner publishes the new canvas height; until then a grown viewport keeps the old one.
+            const canvas = document.querySelector("openclaw-app")!;
+            await new Promise<void>((resolve) => {
+              const observer = new ResizeObserver(() => {
+                if (canvas.getBoundingClientRect().height === viewportHeight) {
+                  observer.disconnect();
+                  resolve();
+                }
+              });
+              observer.observe(canvas);
+            });
             const bounds = (element: Element | null) => {
               if (!element?.checkVisibility({ visibilityProperty: true })) {
                 return null;
@@ -327,7 +338,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
               header: bounds(root.querySelector(".loading-skeleton__header")),
               composer: bounds(root.querySelector(".loading-skeleton__composer")),
             };
-          });
+          }, size.height);
         expect(content).not.toBeNull();
         expect(header).not.toBeNull();
         expect(composer).not.toBeNull();

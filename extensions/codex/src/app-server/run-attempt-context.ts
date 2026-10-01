@@ -178,6 +178,14 @@ export async function prepareCodexAttemptContext(
     attempt: runtimeParams,
     skillsPrompt: params.skillsSnapshot?.prompt,
   });
+  // This section uses the existing native thread carrier only when there is no
+  // managed parent-local inference route; it is separate from immutable policy.
+  const refreshableInstructions =
+    joinPresentSections(
+      skillsInstructions,
+      workspaceBootstrapContext.sharedPersonaInstructions,
+      workspaceBootstrapContext.memoryInstructions,
+    ) || undefined;
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {
       dynamicTools: toolBridge.availableSpecs,
@@ -233,6 +241,7 @@ export async function prepareCodexAttemptContext(
     baseDeveloperInstructions,
     buildOpenClawPromptContext,
     skillsInstructions,
+    refreshableInstructions,
     promptState,
     codexContextProjectionMaxChars,
     codexContinuityProjectionMaxChars,

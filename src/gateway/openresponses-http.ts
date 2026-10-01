@@ -133,10 +133,6 @@ function createResponseSessionScope(params: {
   });
 }
 
-export const testing = {
-  resolveResponsesLimits,
-};
-
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
 }

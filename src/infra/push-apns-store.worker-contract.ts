@@ -9,6 +9,10 @@ export type ApnsRegistrationWorkerOperations = {
       | { status: "registered"; registration: ApnsRegistration };
   };
   "apns.registration.read": { input: string; output: ApnsRegistration | null };
+  "apns.registration.clearIfCurrent": {
+    input: { nodeId: string; registration: ApnsRegistration; nowMs: number };
+    output: boolean;
+  };
   "apns.registrations.read": { input: readonly string[]; output: Map<string, ApnsRegistration> };
 };
 
@@ -19,6 +23,7 @@ export function isApnsRegistrationWorkerCommand(command: {
   return (
     command.type === "apns.registration.register" ||
     command.type === "apns.registration.read" ||
+    command.type === "apns.registration.clearIfCurrent" ||
     command.type === "apns.registrations.read"
   );
 }

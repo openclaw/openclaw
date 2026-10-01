@@ -63,6 +63,49 @@ export function visitorGrant(email: string, overrides: Partial<VisitorGrant> = {
   };
 }
 
+type ProfileFixture = {
+  id: string;
+  emails: readonly string[];
+  role?: string;
+  mergedInto?: string | null;
+  githubIdentity?: { login: string } | null;
+};
+
+export function visitorProfileFixture(initial: ProfileFixture[] = []) {
+  let profiles = initial;
+  const withUserProfileIdentity: NonNullable<
+    PluginRuntime["gateway"]["withUserProfileIdentity"]
+  > = async ({ profileId, emails }, run) => {
+    const assertCurrent = () => {
+      const profile = profiles.find(({ id }) => id === profileId);
+      if (!profile || emails.some((email) => !profile.emails.includes(email))) {
+        throw new Error("Profile bindings changed");
+      }
+    };
+    assertCurrent();
+    return await run(assertCurrent);
+  };
+  const gateway: PluginRuntime["gateway"] = {
+    isAvailable: async () => true,
+    async request() {
+      throw new Error("Expected a mocked Gateway request");
+    },
+    async readSessionFacts() {
+      throw new Error("Unexpected session facts request");
+    },
+    withUserProfileIdentity,
+  };
+  const request = vi.spyOn(gateway, "request").mockResolvedValue({ profiles });
+  return {
+    gateway,
+    request,
+    setProfiles(this: void, next: ProfileFixture[]) {
+      profiles = next;
+      request.mockResolvedValue({ profiles });
+    },
+  };
+}
+
 export function visitorFixture(
   options: {
     config?: Partial<VisitorAccessConfig>;
@@ -70,7 +113,9 @@ export function visitorFixture(
     emails?: string[];
     githubEmail?: string | null;
     gatewayConfig?: OpenClawConfig;
-    profiles?: Array<{ id: string; emails: string[]; role?: string }>;
+    profiles?: ProfileFixture[];
+    store?: PluginStateKeyedStore<VisitorGrant>;
+    gateway?: PluginRuntime["gateway"];
   } = {},
 ) {
   const resolved = { ...config, ...options.config };
@@ -206,16 +251,9 @@ export function visitorFixture(
   const gatewayConfig = options.gatewayConfig ?? {
     gateway: { roles: { default: "guest", definitions: { guest: guestRole, staff: staffRole } } },
   };
+  const directory = visitorProfileFixture(options.profiles);
   const runtime: Pick<PluginRuntime, "gateway" | "config"> = {
-    gateway: {
-      isAvailable: async () => true,
-      async readSessionFacts() {
-        throw new Error("Unexpected session facts request");
-      },
-      async request() {
-        throw new Error("Expected a mocked Gateway request");
-      },
-    },
+    gateway: options.gateway ?? directory.gateway,
     config: {
       current: () => gatewayConfig,
       async mutateConfigFile() {
@@ -226,14 +264,12 @@ export function visitorFixture(
       },
     },
   };
-  const gatewayRequest = vi.spyOn(runtime.gateway, "request").mockResolvedValue({
-    profiles: options.profiles ?? [],
-  });
   const assertCurrent = vi.fn<() => void>();
+  const policy = new VisitorPolicyClient(resolved, fetcher);
   const service = new VisitorAccessService(
     resolved,
-    store,
-    new VisitorPolicyClient(resolved, fetcher),
+    options.store ?? store,
+    policy,
     logger,
     createVisitorAccessReader(runtime),
     fetcher,
@@ -241,9 +277,11 @@ export function visitorFixture(
   services.add(service);
   return {
     cloudflare,
+    policy,
     fetcher,
     grants,
-    gatewayRequest,
+    gatewayRequest: directory.request,
+    setProfiles: directory.setProfiles,
     logger,
     service,
     store,
