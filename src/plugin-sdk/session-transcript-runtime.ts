@@ -408,7 +408,7 @@ export async function appendAssistantMirrorMessageByIdentity(
           true,
         );
       }
-      const correlatedMessage = {
+      message = {
         ...message,
         openclawDeliveryMirror: {
           kind: "channel-final",
@@ -418,7 +418,6 @@ export async function appendAssistantMirrorMessageByIdentity(
           ...(sourceAssistantMessageId !== undefined ? { sourceAssistantMessageId } : {}),
         },
       };
-      message = correlatedMessage;
     }
     params.signal?.throwIfAborted();
     const appendResult = await locked.appendMessage({

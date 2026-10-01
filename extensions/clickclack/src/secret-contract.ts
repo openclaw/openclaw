@@ -1,4 +1,3 @@
-// ClickClack plugin module implements token secret contract behavior.
 import {
   collectConditionalChannelFieldAssignments,
   createChannelSecretTargetRegistryEntries,

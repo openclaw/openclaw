@@ -107,44 +107,14 @@ function resolveTelegramCommandMenuModelContext(params: {
   }
 }
 
-function resolveTelegramFastCommandModelContext(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  sessionKey: string;
-}): { provider?: string; model?: string } {
-  const defaultModel = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
-  const fallback = () => ({ provider: defaultModel.provider, model: defaultModel.model });
-  if (!params.sessionKey.trim()) {
-    return fallback();
-  }
-  try {
-    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-    const entry = getSessionEntry({ storePath, sessionKey: params.sessionKey });
-    if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
-      return fallback();
-    }
-    const override = resolveStoredModelOverride({
-      sessionEntry: entry,
-      loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
-      sessionKey: params.sessionKey,
-      defaultProvider: defaultModel.provider,
-    });
-    return {
-      provider: override?.provider ?? defaultModel.provider,
-      model: override?.model ?? defaultModel.model,
-    };
-  } catch {
-    return fallback();
-  }
-}
-
-function resolveTelegramFastCommandState(params: {
+function prepareTelegramFastCommandMenu(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
 }) {
   const defaultModel = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
-  const fallback = () =>
+  let modelContext = { provider: defaultModel.provider, model: defaultModel.model };
+  const fallbackState = () =>
     resolveFastModeState({
       cfg: params.cfg,
       provider: defaultModel.provider,
@@ -152,22 +122,40 @@ function resolveTelegramFastCommandState(params: {
       agentId: params.agentId,
     });
   if (!params.sessionKey.trim()) {
-    return fallback();
+    return { modelContext, state: fallbackState() };
   }
+  let state: ReturnType<typeof resolveFastModeState>;
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
     const entry = getSessionEntry({ storePath, sessionKey: params.sessionKey });
-    const modelContext = resolveTelegramFastCommandModelContext(params);
-    return resolveFastModeState({
+    try {
+      if (
+        !(entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride))
+      ) {
+        const override = resolveStoredModelOverride({
+          sessionEntry: entry,
+          loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
+          sessionKey: params.sessionKey,
+          defaultProvider: defaultModel.provider,
+        });
+        modelContext = {
+          provider: override?.provider ?? defaultModel.provider,
+          model: override?.model ?? defaultModel.model,
+        };
+      }
+    } catch {
+      // Keep a loaded session's fast mode when its parent model lookup fails.
+    }
+    state = resolveFastModeState({
       cfg: params.cfg,
-      provider: modelContext.provider ?? defaultModel.provider,
-      model: modelContext.model ?? defaultModel.model,
+      ...modelContext,
       agentId: params.agentId,
       sessionEntry: entry,
     });
   } catch {
-    return fallback();
+    state = fallbackState();
   }
+  return { modelContext, state };
 }
 
 async function resolveTelegramThinkMenuCurrentLevel(params: {
@@ -280,24 +268,16 @@ export async function executeTelegramBuiltinCommand(
       (arg) => typeof arg.choices === "function" && commandArgs?.values?.[arg.name] == null,
     );
   const sessionKeyForMenu = menuNeedsModelContext ? dispatch.targetSessionKey : "";
-  const fastCommandState =
+  const fastMenu =
     commandDefinition.key === "fast" && menuNeedsModelContext
-      ? resolveTelegramFastCommandState({
-          cfg: dispatch.runtimeCfg,
-          agentId: dispatch.route.agentId,
-          sessionKey: sessionKeyForMenu,
-        })
-      : undefined;
-  const fastMenuModelContext =
-    commandDefinition.key === "fast" && menuNeedsModelContext
-      ? resolveTelegramFastCommandModelContext({
+      ? prepareTelegramFastCommandMenu({
           cfg: dispatch.runtimeCfg,
           agentId: dispatch.route.agentId,
           sessionKey: sessionKeyForMenu,
         })
       : undefined;
   const menuModelContext = menuNeedsModelContext
-    ? (fastMenuModelContext ??
+    ? (fastMenu?.modelContext ??
       resolveTelegramCommandMenuModelContext({
         cfg: dispatch.runtimeCfg,
         agentId: dispatch.route.agentId,
@@ -342,12 +322,12 @@ export async function executeTelegramBuiltinCommand(
       currentFastModeStatus:
         commandDefinition.key === "fast"
           ? formatFastModeCurrentStatus(
-              fastCommandState ??
-                resolveTelegramFastCommandState({
+              fastMenu?.state ??
+                prepareTelegramFastCommandMenu({
                   cfg: dispatch.runtimeCfg,
                   agentId: dispatch.route.agentId,
                   sessionKey: sessionKeyForMenu,
-                }),
+                }).state,
             )
           : undefined,
     });

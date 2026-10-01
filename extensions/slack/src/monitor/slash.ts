@@ -972,9 +972,6 @@ export async function registerSlackMonitorSlashCommands(params: {
   let pluginCommandRuntimeModule:
     | typeof import("openclaw/plugin-sdk/plugin-command-runtime")
     | null = null;
-  let pluginCommandRuntime:
-    | import("openclaw/plugin-sdk/plugin-command-runtime").PluginCommandRuntime
-    | null = null;
   if (
     registration.mode === "disabled" &&
     resolveNativeCommandsEnabled({
@@ -996,7 +993,7 @@ export async function registerSlackMonitorSlashCommands(params: {
       provider: "slack",
     });
     pluginCommandRuntimeModule = await loadPluginCommandRuntime();
-    pluginCommandRuntime = pluginCommandRuntimeModule.createPluginCommandRuntime();
+    const pluginCommandRuntime = pluginCommandRuntimeModule.createPluginCommandRuntime();
     nativeCommands = mergeNativeCommandSpecs({
       primary: nativeCommands,
       secondary: pluginCommandRuntime.listNativeCandidates("slack"),
@@ -1007,7 +1004,7 @@ export async function registerSlackMonitorSlashCommands(params: {
   if (registration.mode === "single") {
     registerCommand(buildSlackSlashCommandMatcher(registration.name));
   } else if (registration.mode === "native") {
-    if (!slashCommandsRuntime || !pluginCommandRuntimeModule || !pluginCommandRuntime) {
+    if (!slashCommandsRuntime || !pluginCommandRuntimeModule) {
       throw new Error("Missing command runtimes for native Slack commands.");
     }
     for (const command of nativeCommands) {
