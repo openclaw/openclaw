@@ -10,7 +10,7 @@ read_when:
 
 ### Testbox spending limits
 
-The general, ARM, build-artifact, and Windows Testbox workflows share 32
+The general, high-memory, ARM, build-artifact, and Windows Testbox workflows share 32
 concurrency slots. A GitHub-hosted admission job validates the lease ID, runner,
 and runtime before the Blacksmith job becomes eligible. Dispatches wait in their
 assigned slot without canceling an active lease. Each slot retains one pending
@@ -30,15 +30,29 @@ the idle limit is not a substitute for caller cleanup.
 
 | Testbox               | Allowed runner        | Maximum job runtime |
 | --------------------- | --------------------- | ------------------- |
-| General runtime proof | 32-vCPU Ubuntu x64    | 240 minutes         |
+| General runtime proof | 16-vCPU Ubuntu x64    | 240 minutes         |
+| High-memory exception | 32-vCPU Ubuntu x64    | 240 minutes         |
 | ARM proof             | 16-vCPU Ubuntu ARM    | 120 minutes         |
 | Build artifacts       | 16-vCPU Ubuntu x64    | 35 minutes          |
 | Windows               | 8- or 16-vCPU Windows | 75 minutes          |
 
-General proof retains the measured memory allocation and four-hour envelope.
-Its existing `timeout_minutes` input can request a shorter positive integer;
-larger values fail before allocation. Native Blacksmith warmup does not expose
-arbitrary workflow inputs, and Crabbox `--ttl` does not enforce a Testbox lifetime.
+Routine remote proof uses the 16-class. The explicit high-memory workflow can
+use only four of the shared 32 slots; it does not add four more slots. Normal
+leases can also occupy those slots, so hash collisions may queue high-memory
+work below its ceiling. Stop owned leases when done rather than requesting new
+IDs to evade a busy slot.
+
+Use the 32-class only for a named command with measured memory need, a verified
+smaller-runner OOM, or a controlled comparison showing lower total billed cost.
+Record the evidence before allocation. The explicit full-suite Testbox PR gate
+retains this exception; ordinary remote commands and changed gates use 16-class.
+See [remote proof](/reference/test/remote-proof#testbox-runner-sizing) for selection.
+A failed test, queue delay, or generic timeout does not justify promotion.
+
+Both general profiles retain the four-hour envelope. The existing
+`timeout_minutes` input can request a shorter positive integer; larger values
+fail before allocation. Native Blacksmith warmup does not expose arbitrary
+workflow inputs, and Crabbox `--ttl` does not enforce a Testbox lifetime.
 The GitHub job timeout is the wall-clock limit.
 
 These controls cover dispatches using the updated workflows in this repository.

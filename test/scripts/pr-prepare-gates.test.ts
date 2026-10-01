@@ -518,7 +518,7 @@ describe("remote testbox gate delegation", () => {
       "--blacksmith-org",
       "openclaw",
       "--blacksmith-workflow",
-      ".github/workflows/ci-check-testbox.yml",
+      ".github/workflows/ci-check-high-memory-testbox.yml",
       "--blacksmith-job",
       "check",
       "--blacksmith-ref",

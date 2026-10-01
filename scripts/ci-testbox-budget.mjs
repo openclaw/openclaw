@@ -4,7 +4,8 @@ import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const PROFILES = {
-  check: { runner: "blacksmith-32vcpu-ubuntu-2404", minutes: 240 },
+  check: { runner: "blacksmith-16vcpu-ubuntu-2404", minutes: 240 },
+  "check-memory": { runner: "blacksmith-32vcpu-ubuntu-2404", minutes: 240 },
   arm: { runner: "blacksmith-16vcpu-ubuntu-2404-arm", minutes: 120 },
   build: { runner: "blacksmith-16vcpu-ubuntu-2404", minutes: 35 },
   windows: { runner: "blacksmith-16vcpu-windows-2025", minutes: 75 },
@@ -16,6 +17,7 @@ const WINDOWS_RUNNERS = new Set([
 const ADMISSION_AGE_MS = 10 * 60_000;
 const CONCURRENT_LEASES = 32;
 const MAX_IDLE_MINUTES = 15;
+const HIGH_MEMORY_LEASES = 4;
 
 export function assertFreshTestboxAdmission(expiresAt, now = Date.now()) {
   const deadline = Number(expiresAt);
@@ -53,7 +55,9 @@ export function planTestboxAdmission(
   assertFreshTestboxAdmission(expiresAt, now);
   // The shared finite namespace is enforced atomically by GitHub concurrency.
   // Do not include a workflow, branch, actor, or runner in this group name.
-  const slot = createHash("sha256").update(id).digest().readUInt32BE(0) % CONCURRENT_LEASES;
+  // High-memory work shares four of the global slots, never a separate pool.
+  const slots = profile === "check-memory" ? HIGH_MEMORY_LEASES : CONCURRENT_LEASES;
+  const slot = createHash("sha256").update(id).digest().readUInt32BE(0) % slots;
   return {
     group: `openclaw-testbox-budget-v1-${slot}`,
     runner: selectedRunner,

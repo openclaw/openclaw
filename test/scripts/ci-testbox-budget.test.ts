@@ -29,6 +29,24 @@ describe("Testbox spending admission", () => {
     expect(groups.size).toBe(32);
   });
 
+  it("defaults routine proof to 16-class and requires the high-memory profile for 32-class", () => {
+    expect(planTestboxAdmission(request, now).runner).toBe("blacksmith-16vcpu-ubuntu-2404");
+    expect(() =>
+      planTestboxAdmission({ ...request, runner: "blacksmith-32vcpu-ubuntu-2404" }, now),
+    ).toThrow(/not allowed/);
+    const groups = new Set<string>();
+    for (let index = 0; index < 128; index++) {
+      const plan = planTestboxAdmission(
+        { ...request, profile: "check-memory", id: `tbx_memory_${index}` },
+        now,
+      );
+      expect(plan.runner).toBe("blacksmith-32vcpu-ubuntu-2404");
+      expect(plan.group).toMatch(/^openclaw-testbox-budget-v1-[0-3]$/);
+      groups.add(plan.group);
+    }
+    expect(groups.size).toBe(4);
+  });
+
   it.each([0, -1, 241, 1.5, "invalid"])("rejects an unbounded runtime: %s", (minutes) => {
     expect(() => planTestboxAdmission({ ...request, minutes }, now)).toThrow(/runtime/);
   });
@@ -75,6 +93,7 @@ describe("Testbox spending admission", () => {
 
   it.each([
     ["ci-check-testbox.yml", "check", "check"],
+    ["ci-check-high-memory-testbox.yml", "check", "check-memory"],
     ["ci-check-arm-testbox.yml", "check-arm", "arm"],
     ["ci-build-artifacts-testbox.yml", "build-artifacts", "build"],
     ["windows-blacksmith-testbox.yml", "windows", "windows"],

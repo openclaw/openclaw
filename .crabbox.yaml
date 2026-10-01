@@ -28,6 +28,7 @@ actions:
   ephemeral: true
 blacksmith:
   org: openclaw
+  # Routine remote proof uses 16-class; high-memory proof opts in by workflow.
   workflow: .github/workflows/ci-check-testbox.yml
   job: check
   ref: main
