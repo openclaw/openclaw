@@ -133,7 +133,12 @@ describe("check-extension-package-tsc-boundary", () => {
       fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
       fs.cpSync(path.resolve(file), path.join(root, file), { recursive: true });
     }
-    for (const name of ["tsx", "@openclaw/fs-safe", "p-map"]) {
+    // Keep the planner's tool dependency closure outside the fixture compiler inputs.
+    fs.symlinkSync(
+      path.resolve("scripts/test-projects.test-support.mts"),
+      path.join(root, "scripts/test-projects.test-support.mts"),
+    );
+    for (const name of ["tsx", "@openclaw/fs-safe", "@babel/parser", "p-map"]) {
       const file = `node_modules/${name}`;
       fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
       fs.symlinkSync(path.resolve(file), path.join(root, file));
