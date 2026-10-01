@@ -12,6 +12,10 @@ import {
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
 import { writeMemoryIndexArchiveTranscript } from "./index-archive.test-support.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
@@ -37,6 +41,32 @@ describe("memory index", () => {
     getPersistentManager,
     seedSessionTranscript: seedMemoryIndexSessionTranscript,
   } = fixture;
+
+  it("reindexes memory tables in place without deleting unrelated agent rows", async () => {
+    const agentDbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const agentDb = openOpenClawAgentDatabase({ agentId: "main" });
+    agentDb.db
+      .prepare("INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)")
+      .run("test", "keep-me", JSON.stringify({ value: "keep-me" }), 1);
+    closeOpenClawAgentDatabasesForTest();
+
+    const manager = await getFreshManager(createCfg({}));
+    try {
+      await manager.sync({ reason: "test", force: true });
+      expect(manager.status().dbPath).toBe(agentDbPath);
+    } finally {
+      await manager.close?.();
+    }
+
+    const reopened = openOpenClawAgentDatabase({ agentId: "main" });
+    expect(
+      reopened.db
+        .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
+        .get("test", "keep-me"),
+    ).toEqual({
+      value_json: JSON.stringify({ value: "keep-me" }),
+    });
+  });
 
   const writeMemory = (filename: string, content: string) =>
     fs.writeFile(path.join(fixture.paths.memory, filename), content);

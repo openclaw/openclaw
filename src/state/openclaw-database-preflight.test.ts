@@ -3,6 +3,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import packageJson from "../../package.json" with { type: "json" };
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
@@ -55,6 +56,31 @@ function createState() {
 }
 
 describe("OpenClaw database schema preflight", () => {
+  it("keeps package schema support metadata aligned", () => {
+    expect(packageJson.openclaw.schemaVersions).toEqual({
+      state: OPENCLAW_STATE_SCHEMA_VERSION,
+      agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+    });
+  });
+
+  it("accepts an older v6 state database without the lazy setup id during restart preflight", async () => {
+    const stateDir = tempDirs.make("openclaw-database-preflight-older-v6-setup-id-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const statePath = openOpenClawStateDatabase({ env }).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const state = new DatabaseSync(statePath);
+    try {
+      state.exec("ALTER TABLE device_bootstrap_tokens DROP COLUMN setup_id;");
+    } finally {
+      state.close();
+    }
+    await expect(
+      assertOpenClawDatabasesReady({ env, operation: "gateway-restart" }),
+    ).resolves.toBeUndefined();
+  });
+
   function createReleasedStateDatabase() {
     const stateDir = tempDirs.make("openclaw-startup-database-admission-");
     const env = { OPENCLAW_STATE_DIR: stateDir };

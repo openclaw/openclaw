@@ -35,7 +35,7 @@ const descriptor: ComputerUseCapabilityDescriptor = {
   features: { recording: false, agentCursor: false, multiDisplay: false },
 };
 
-async function startComputer(ephemeral = true) {
+async function startComputer(ephemeral = true, prepare?: () => Promise<void>) {
   let providerGeneration = descriptor.provider.generation;
   const snapshot = vi.fn(async (_params: unknown, _signal?: AbortSignal) =>
     JSON.stringify({ format: "png", base64: "c2NyZWVu", displayFrameId: "frame-1" }),
@@ -57,6 +57,7 @@ async function startComputer(ephemeral = true) {
       id: "fixture",
       label: "Fixture",
       isAvailable: () => true,
+      prepare,
       capabilities: () => ({
         ...descriptor,
         provider: { ...descriptor.provider, generation: providerGeneration },
@@ -138,6 +139,34 @@ async function withComputer(
 }
 
 describe("private worker computer runtime", () => {
+  it("awaits the registered provider preparation before publishing the first manifest", async () => {
+    const gate = createDeferredCore();
+    const entered = createDeferredCore();
+    const prepare = vi.fn(() => {
+      entered.resolve();
+      return gate.promise;
+    });
+    let prepared = false;
+    const starting = startComputer(true, prepare).then((host) => {
+      prepared = true;
+      return host;
+    });
+    try {
+      await entered.promise;
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(prepared).toBe(false);
+      gate.resolve();
+      const host = await starting;
+      expect(await host.invoke({ operation: "capabilities" })).toMatchObject({ ok: true });
+      await host.runtime.cancelAll();
+      await host.invoke({ operation: "capabilities" });
+      expect(prepare).toHaveBeenCalledOnce();
+    } finally {
+      gate.resolve();
+      await (await starting).runtime.close();
+    }
+  });
+
   it("joins watcher and disconnect cleanup until physical computer close settles", async () => {
     const host = await startComputer();
     const physicalClose = createDeferredCore();
