@@ -196,6 +196,28 @@ export function buildPublishedInstallScenarios(version: string): PublishedInstal
   return scenarios;
 }
 
+export function resolvePublishedInstallSourceVerification(
+  sourceRoot: string,
+  expectedVersion: string,
+): Pick<
+  Parameters<typeof collectInstalledPackageErrors>[0],
+  "additionalCompanionManifestRoots" | "allowLegacyGeneratedOwnership"
+> {
+  const packageJsonPath = join(sourceRoot, "package.json");
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as InstalledPackageJson;
+  if (packageJson.name !== "openclaw" || packageJson.version !== expectedVersion) {
+    throw new Error(
+      `source checkout version mismatch: expected openclaw@${expectedVersion}, found ${packageJson.name ?? "<missing>"}@${packageJson.version ?? "<missing>"}.`,
+    );
+  }
+  return {
+    additionalCompanionManifestRoots: [join(sourceRoot, "extensions")],
+    allowLegacyGeneratedOwnership: !existsSync(
+      join(sourceRoot, "scripts/lib/runtime-dependency-ownership-build-plugin.mts"),
+    ),
+  };
+}
+
 type NpmRegistryKey = {
   key: string;
   keyid: string;
@@ -1267,7 +1289,11 @@ async function verifyPublishedRegistryProvenanceOnce(version: string): Promise<v
   );
 }
 
-function verifyScenario(version: string, scenario: PublishedInstallScenario): void {
+function verifyScenario(
+  version: string,
+  scenario: PublishedInstallScenario,
+  sourceVerification: ReturnType<typeof resolvePublishedInstallSourceVerification>,
+): void {
   const workingDir = mkdtempSync(join(tmpdir(), `openclaw-postpublish-${scenario.name}.`));
   const prefixDir = join(workingDir, "prefix");
 
@@ -1282,6 +1308,7 @@ function verifyScenario(version: string, scenario: PublishedInstallScenario): vo
       readFileSync(join(packageRoot, "package.json"), "utf8"),
     ) as InstalledPackageJson;
     const errors = collectInstalledPackageErrors({
+      ...sourceVerification,
       expectedVersion: scenario.expectedVersion,
       installedVersion: pkg.version?.trim() ?? "",
       packageRoot,
@@ -1320,9 +1347,10 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
 
   const { version } = args;
   const scenarios = buildPublishedInstallScenarios(version);
+  const sourceVerification = resolvePublishedInstallSourceVerification(process.cwd(), version);
   await retryNpmRegistryProvenanceRead(() => verifyPublishedRegistryProvenanceOnce(version));
   for (const scenario of scenarios) {
-    verifyScenario(version, scenario);
+    verifyScenario(version, scenario, sourceVerification);
   }
 
   console.log(
