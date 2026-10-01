@@ -14,6 +14,46 @@ overrides are covered in the
 
 Multi-user Gateways are not supported by the Agents API MVP.
 
+Configure native Agents API tools with
+`plugins.entries.agentsapi.config.nativeTools`. Omitting the setting uses live
+web search and programmatic tool calling, without computer use. The default list
+is equivalent to:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "agentsapi": {
+        "config": {
+          "nativeTools": [
+            { "type": "web_search", "mode": "live" },
+            { "type": "programmatic_tool_calling", "enabled": true }
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+A supplied list replaces the defaults. List every native tool declaration you
+want to send. Each entry requires a `type` string; other tool options are passed
+unchanged to the session's `agent.tools`. OpenClaw does not maintain an enum of
+tool types or options; the API validates them and reports unsupported values.
+
+An empty list sends no native tool declarations and disables native web search.
+The API still enables programmatic tool calling by default. To disable both,
+set `nativeTools` to `[{ "type": "programmatic_tool_calling", "enabled": false }]`.
+See the native API's [web-search guide](https://developers.openai.com/api/docs/guides/agents-api/tools/web-search)
+and [programmatic tool calling guide](https://developers.openai.com/api/docs/guides/tools-programmatic-tool-calling#agents-api).
+
+The list does not filter OpenClaw functions, MCP servers, installed plugins, or
+environment-provided shell and file tools. Those retain their existing settings;
+shell and file tools come from the execution environment without entries here.
+Existing sessions keep the tools selected at creation. Restart the Gateway after
+editing this setting, then start or reset a session to adopt it. There is no live
+tool-list update or automatic session reset.
+
 Configure HTTP MCP servers through the shared `mcp.servers` configuration or an
 enabled plugin's MCP bundle. For example:
 

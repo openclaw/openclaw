@@ -33,6 +33,7 @@ export function createTelegramSetupPluginBase(params: {
     capabilities: {
       chatTypes: ["direct", "group", "channel", "thread"],
       reactions: true,
+      reactionSlots: "single",
       threads: true,
       media: true,
       tts: {

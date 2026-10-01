@@ -1,4 +1,4 @@
-import { html, type TemplateResult } from "lit";
+import { html, type ReactiveControllerHost, type TemplateResult } from "lit";
 import { onTestFinished, vi } from "vitest";
 import type {
   SessionSuggestion,
@@ -85,7 +85,7 @@ export function createPaneHeaderWorkspaceFixture(
   };
 }
 
-export type TestChatPane = HTMLElement & {
+export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
   catalogMessages: unknown[];
   active: boolean;
   presented: boolean;
@@ -165,8 +165,6 @@ export type TestChatPane = HTMLElement & {
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   paneId: string;
   sessionKey: string;
-  updateComplete: Promise<boolean>;
-  requestUpdate: () => void;
   performUpdate: () => void;
   deferSessionHydrationUntilTranscript: (
     sessionKey: string,
@@ -227,7 +225,7 @@ export type TestChatPane = HTMLElement & {
     sidebarLayout?: SidebarLayout,
     panelDefinitions?: SidebarPanelDefinition[],
   ) => TemplateResult;
-};
+}
 
 type GatewayBrowserClientFixtureOverrides = Omit<Partial<GatewayBrowserClient>, "request"> & {
   request?: GatewayRequestHandler;

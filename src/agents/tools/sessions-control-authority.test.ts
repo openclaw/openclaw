@@ -216,7 +216,8 @@ describe("prepared session control target", () => {
     const tool = createSessionsTool({
       agentSessionKey: scope.sessionKey,
       agentSessionId: entry.sessionId,
-      controlOnly: true,
+      senderIsOwner: false,
+      sessionControlAuthority: authority,
       config: cfg,
     });
     try {

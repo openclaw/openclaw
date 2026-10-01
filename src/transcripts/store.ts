@@ -1,4 +1,3 @@
-// Stores meeting-capture transcripts in the shared SQLite state database.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { TranscriptUtterance as ProjectedTranscriptUtterance } from "../../packages/gateway-protocol/src/schema/transcripts.js";
@@ -50,11 +49,10 @@ import {
   createTranscriptStoreOperation,
   type TranscriptStoreOperation,
 } from "./store-worker-client.js";
-import type {
-  TranscriptAppendScheduler,
-  TranscriptReadRequests,
-  TranscriptWriteOperations,
-} from "./store-worker-contract.js";
+import type { TranscriptReadRequests } from "./store-worker-contract.js";
+import type { TranscriptAppendScheduler } from "./store-worker.types.js";
+// Stores meeting-capture transcripts in the shared SQLite state database.
+import type { TranscriptWriteOperations } from "./store-write.worker-contract.js";
 import type { TranscriptsSummary } from "./summary.js";
 import { renderTranscriptsMarkdown } from "./summary.js";
 

@@ -77,7 +77,9 @@ export function captureSubagentListReadContext(
   const pendingDescendants = new Map(
     runs.map((entry) => [
       entry.childSessionKey,
-      readIndex.countPendingDescendantRuns(entry.childSessionKey),
+      readIndex.countPendingDescendantRuns(entry.childSessionKey, {
+        excludeSuspendedDelivery: true,
+      }),
     ]),
   );
   const view = buildSubagentRunView({

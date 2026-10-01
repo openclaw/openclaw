@@ -619,7 +619,7 @@ export function runCiManifestFixture(options: {
     );
     const trustedReleasePolicy = path.join(root, ".ci-harness/scripts/lib");
     mkdirSync(trustedReleasePolicy, { recursive: true });
-    for (const name of ["release-context.mjs", "release-version.mjs"]) {
+    for (const name of ["release-context.mjs", "release-version.mjs", "ci-ios-smoke-plan.mjs"]) {
       writeFileSync(path.join(trustedReleasePolicy, name), readFileSync(`scripts/lib/${name}`));
     }
     copyFileSync(

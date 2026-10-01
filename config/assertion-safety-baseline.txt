@@ -465,7 +465,6 @@ extensions/line/src/outbound.ts	5
 extensions/line/src/send.ts	1
 extensions/line/src/setup-core.ts	1
 extensions/line/src/webhook-spool.ts	2
-extensions/line/src/webhook-utils.ts	1
 extensions/llm-task/doctor-contract-api.ts	1
 extensions/llm-task/src/llm-task-tool.ts	2
 extensions/lmstudio/src/models.ts	2
@@ -503,7 +502,7 @@ extensions/matrix/src/matrix/delivery-plan.ts	1
 extensions/matrix/src/matrix/deps.ts	2
 extensions/matrix/src/matrix/direct-management.ts	1
 extensions/matrix/src/matrix/errors.ts	1
-extensions/matrix/src/matrix/format.ts	4
+extensions/matrix/src/matrix/format.ts	3
 extensions/matrix/src/matrix/monitor/ack-config.ts	2
 extensions/matrix/src/matrix/monitor/context-summary.ts	2
 extensions/matrix/src/matrix/monitor/events.ts	3
@@ -518,7 +517,7 @@ extensions/matrix/src/matrix/monitor/reaction-events.ts	1
 extensions/matrix/src/matrix/monitor/room-history.ts	1
 extensions/matrix/src/matrix/monitor/rooms.ts	1
 extensions/matrix/src/matrix/monitor/verification-events.ts	5
-extensions/matrix/src/matrix/poll-summary.ts	2
+extensions/matrix/src/matrix/poll-summary.ts	1
 extensions/matrix/src/matrix/poll-types.ts	7
 extensions/matrix/src/matrix/probe.ts	1
 extensions/matrix/src/matrix/reaction-common.ts	1
@@ -556,7 +555,7 @@ extensions/mattermost/src/channel.ts	5
 extensions/mattermost/src/gateway-auth-bypass.ts	3
 extensions/mattermost/src/mattermost/client.ts	6
 extensions/mattermost/src/mattermost/directory.ts	2
-extensions/mattermost/src/mattermost/interactions.ts	4
+extensions/mattermost/src/mattermost/interactions.ts	3
 extensions/mattermost/src/mattermost/monitor-reactions.ts	2
 extensions/mattermost/src/mattermost/monitor-slash.ts	1
 extensions/mattermost/src/mattermost/monitor-websocket.ts	1
@@ -898,7 +897,7 @@ extensions/slack/src/monitor/provider-support.ts	3
 extensions/slack/src/monitor/provider.ts	4
 extensions/slack/src/monitor/reconnect-policy.ts	6
 extensions/slack/src/monitor/relay-source.ts	1
-extensions/slack/src/monitor/slash.ts	4
+extensions/slack/src/monitor/slash.ts	3
 extensions/slack/src/native-data-blocks.ts	1
 extensions/slack/src/outbound-adapter.ts	5
 extensions/slack/src/probe.ts	2
@@ -915,7 +914,7 @@ extensions/slack/src/target-parsing.ts	1
 extensions/sms/src/accounts.ts	1
 extensions/sms/src/channel.ts	5
 extensions/sms/src/status.ts	1
-extensions/sms/src/twilio.ts	3
+extensions/sms/src/twilio.ts	1
 extensions/synology-chat/src/accounts.ts	1
 extensions/synology-chat/src/client.ts	1
 extensions/synology-chat/src/inbound-event.ts	1
@@ -1135,7 +1134,7 @@ packages/ai/src/providers/anthropic-server-fallback.ts	3
 packages/ai/src/providers/anthropic-thinking-replay.ts	2
 packages/ai/src/providers/anthropic-tool-projection.ts	2
 packages/ai/src/providers/anthropic-usage.ts	3
-packages/ai/src/providers/anthropic.ts	6
+packages/ai/src/providers/anthropic.ts	3
 packages/ai/src/providers/azure-openai-responses.ts	1
 packages/ai/src/providers/clean-for-gemini.ts	8
 packages/ai/src/providers/google-shared.ts	2
@@ -1143,7 +1142,7 @@ packages/ai/src/providers/mistral.ts	5
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
 packages/ai/src/providers/openai-chatgpt-responses.ts	20
 packages/ai/src/providers/openai-completions-tool-calls.ts	5
-packages/ai/src/providers/openai-completions.ts	6
+packages/ai/src/providers/openai-completions.ts	1
 packages/ai/src/providers/openai-reasoning-effort.ts	6
 packages/ai/src/providers/openai-responses-shared.ts	6
 packages/ai/src/providers/openai-responses-tools.ts	2
@@ -1157,7 +1156,7 @@ packages/ai/src/providers/tool-schema-json-projection.ts	2
 packages/ai/src/stream.ts	1
 packages/ai/src/transports/anthropic-compaction-replay.ts	2
 packages/ai/src/transports/anthropic-payload-policy.ts	7
-packages/ai/src/transports/anthropic-transport-stream.ts	5
+packages/ai/src/transports/anthropic-transport-stream.ts	4
 packages/ai/src/transports/openai-compatible-conversation-turn.ts	2
 packages/ai/src/transports/openai-completions-compat.ts	2
 packages/ai/src/transports/openai-completions-params.ts	7
@@ -3004,7 +3003,6 @@ ui/src/lib/chat/tool-call-patch.ts	1
 ui/src/lib/chat/tool-cards.ts	2
 ui/src/lib/config-form-utils.ts	3
 ui/src/lib/config/config-draft-model.ts	3
-ui/src/lib/gateway-errors.ts	1
 ui/src/lib/keyboard-shortcuts.ts	1
 ui/src/lib/nodes/index.ts	2
 ui/src/lib/nodes/inventory.ts	1

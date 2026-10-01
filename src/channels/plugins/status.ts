@@ -4,7 +4,7 @@ import { inspectChannelAccount } from "../account-inspection.js";
 import { resolveChannelAccount } from "../account-resolution.js";
 import {
   projectSafeChannelAccountSnapshotFields,
-  redactChannelAccountSnapshotBaseUrl,
+  redactChannelStatusSummaryBaseUrl,
 } from "../account-snapshot-fields.js";
 import { buildChannelAccountSnapshotFromInspection } from "../account-summary.js";
 import {
@@ -68,7 +68,7 @@ export async function buildChannelAccountSnapshotFromAccount<ResolvedAccount>(pa
   });
   const projectedSnapshot = { ...snapshot };
   applyChannelAccountState(projectedSnapshot, state);
-  return redactChannelAccountSnapshotBaseUrl({
+  return redactChannelStatusSummaryBaseUrl({
     ...projectedSnapshot,
     enabled,
     accountId: normalizeOptionalString(snapshot.accountId) ? snapshot.accountId : params.accountId,

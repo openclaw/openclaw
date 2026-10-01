@@ -226,11 +226,7 @@ vi.mock("../agents/command/delivery.runtime.js", () => {
       async (params: {
         cfg: OpenClawConfig;
         deps: {
-          sendMessageTelegram?: (
-            to: string,
-            text: string,
-            opts: Record<string, unknown>,
-          ) => Promise<unknown>;
+          telegram?: (to: string, text: string, opts: Record<string, unknown>) => Promise<unknown>;
         };
         runtime: RuntimeEnv;
         opts: {
@@ -250,7 +246,7 @@ vi.mock("../agents/command/delivery.runtime.js", () => {
         }
         if (params.opts.deliver && params.opts.channel === "telegram" && params.opts.to) {
           for (const payload of payloads) {
-            await params.deps.sendMessageTelegram?.(params.opts.to, payload.text ?? "", {
+            await params.deps.telegram?.(params.opts.to, payload.text ?? "", {
               ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
               accountId: undefined,
               verbose: false,
@@ -1688,7 +1684,7 @@ describe("agentCommand", () => {
           sessionEffects: "internal",
         },
         runtime,
-        { sendMessageTelegram },
+        { telegram: sendMessageTelegram },
       );
 
       expect(sendMessageTelegram).toHaveBeenCalledWith("telegram:+1222", "assistant-visible", {

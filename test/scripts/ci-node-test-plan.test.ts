@@ -152,7 +152,7 @@ describe("Control UI release-only inventories", () => {
   it("retains PR-exempt entries while omitting release-only UI matrices", () => {
     const groups = createUiTestShardGroups({ includeReleaseOnlyTests: false });
     expect(groups.ui[0]?.includePatterns).not.toContain(sidebar);
-    expect(groups.e2e[0]?.includePatterns).not.toContain(embed);
+    expect(groups.e2e[0]?.includePatterns).toContain(embed);
     expect(groups.e2e[0]?.includePatterns).toContain(entry);
     expect(
       uiE2eRealGatewayTestFiles.filter((file) => groups.e2e[0]?.includePatterns?.includes(file)),
@@ -169,7 +169,7 @@ describe("Control UI release-only inventories", () => {
     );
   });
 
-  it("retains directly edited matrices without widening from their source owner", () => {
+  it("retains directly edited release matrices alongside PR-exempt entries", () => {
     const options = {
       includeReleaseOnlyTests: false,
       changedPaths: [
@@ -186,7 +186,7 @@ describe("Control UI release-only inventories", () => {
     ).toEqual(
       uiE2eRealGatewayTestFiles.filter((file) => releaseOnlyRealGateway.has(file)).toSorted(),
     );
-    expect(groups.e2e[0]?.includePatterns).not.toContain(embed);
+    expect(groups.e2e[0]?.includePatterns).toContain(embed);
     expect(groups.ui[0]?.includePatterns).not.toContain(sidebar);
     expectRealGatewayCoverage(groups.e2e, uiE2eRealGatewayTestFiles);
     expectRealGatewayCoverage(

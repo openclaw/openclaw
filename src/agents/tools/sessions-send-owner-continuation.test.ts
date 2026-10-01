@@ -226,7 +226,7 @@ describe("child followup requester continuation", () => {
       );
       return { runId: admission!.runId, status: "accepted" };
     });
-    startSessionsSendReplyFlow({
+    await startSessionsSendReplyFlow({
       completion,
       callGateway,
       runId: request!.runId,

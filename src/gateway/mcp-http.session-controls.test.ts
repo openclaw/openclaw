@@ -216,7 +216,7 @@ for (const transport of ["dispatch", "HTTP"] as const) {
                                 const scoped = await new McpLoopbackToolCache().resolve({
                                   cfg,
                                   context: bound.context,
-                                  sessionControlAuthority: operatorAuthority,
+                                  admittedRunContext,
                                   grantToken: grant.token,
                                   isGrantCurrent: bound.isCurrent,
                                 });

@@ -331,14 +331,6 @@ function createMentionLinkTokens(params: {
   return [open, text, close];
 }
 
-async function resolveMatrixSelfUserId(client: MatrixClient): Promise<string | null> {
-  const getUserId = (client as { getUserId?: () => Promise<string> | string }).getUserId;
-  if (typeof getUserId !== "function") {
-    return null;
-  }
-  return await Promise.resolve(getUserId.call(client)).catch(() => null);
-}
-
 function mutateInlineTokensWithMentions(params: {
   children: MarkdownInlineToken[];
   userIds: string[];
@@ -554,7 +546,7 @@ async function resolveMarkdownMentionState(params: {
   tableMode?: MarkdownTableMode;
 }): Promise<{ tokens: MarkdownToken[]; mentions: MatrixMentions }> {
   const tokens = parseMatrixMarkdown(params.analysis, params.tableMode);
-  const selfUserId = await resolveMatrixSelfUserId(params.client);
+  const selfUserId = await params.client.getUserId().catch(() => null);
   const userIds: string[] = [];
   const seenUserIds = new Set<string>();
   let roomMentioned = false;

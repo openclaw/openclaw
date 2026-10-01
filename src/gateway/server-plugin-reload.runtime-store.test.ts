@@ -257,13 +257,15 @@ it.each(["cold start", "hot enable"] as const)(
               nextConfig,
               sourceConfig: nextConfig,
               changedPaths,
-              prepareConfigEffects: () => {
-                markPreparedModelRuntimeSnapshotsStale(
-                  "prepared model runtime owner is stale before plugin drain",
-                  { waitForReplacement: true },
-                );
-                return async () => {};
-              },
+              prepareConfigEffects: () => ({
+                retire: () => {
+                  markPreparedModelRuntimeSnapshotsStale(
+                    "prepared model runtime owner is stale before plugin replacement",
+                    { waitForReplacement: true },
+                  );
+                },
+                rollback: async () => {},
+              }),
               env,
               commitRuntime: async (publication) => {
                 publication?.publish();

@@ -611,7 +611,8 @@ export function renderChat(props: ChatProps) {
           ? nothing
           : html`<openclaw-chat-comment-controller
               .paneId=${props.paneId}
-              .props=${{ ...props, disabled: !canCompose }}
+              .props=${props}
+              .disabled=${!canCompose}
               .sessionKey=${props.sessionKey}
               .presented=${props.presented ?? true}
             ></openclaw-chat-comment-controller>`

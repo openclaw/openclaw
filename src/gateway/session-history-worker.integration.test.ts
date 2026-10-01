@@ -1,6 +1,6 @@
 import { channel } from "node:diagnostics_channel";
 import path from "node:path";
-import type { StatementSync } from "node:sqlite";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import {
@@ -34,6 +34,43 @@ import {
   readSessionMessagesMatchingIdAsync,
 } from "./session-transcript-readers.js";
 
+function observeColdMetadataReads(database: DatabaseSync) {
+  const prototype: StatementSync = Object.getPrototypeOf(database.prepare("SELECT 1"));
+  const metadataReads: string[] = [];
+  const record = (sql: string) => {
+    if (
+      /^select\b.*\bfrom\s+["`]?session_transcript_cold_archives["`]?/is.test(sql) &&
+      sql.includes("archive_sha256")
+    ) {
+      metadataReads.push(sql);
+    }
+  };
+  // oxlint-disable-next-line typescript/unbound-method -- Forward each call with its native statement receiver.
+  const { all, get, iterate, run } = prototype;
+  const observers = [
+    vi.spyOn(prototype, "all").mockImplementation(function (this: StatementSync, ...args) {
+      record(this.sourceSQL);
+      return all.apply(this, args);
+    }),
+    vi.spyOn(prototype, "get").mockImplementation(function (this: StatementSync, ...args) {
+      record(this.sourceSQL);
+      return get.apply(this, args);
+    }),
+    vi.spyOn(prototype, "iterate").mockImplementation(function (this: StatementSync, ...args) {
+      record(this.sourceSQL);
+      return iterate.apply(this, args);
+    }),
+    vi.spyOn(prototype, "run").mockImplementation(function (this: StatementSync, ...args) {
+      record(this.sourceSQL);
+      return run.apply(this, args);
+    }),
+  ];
+  return {
+    metadataReads,
+    restore: () => observers.forEach((observer) => observer.mockRestore()),
+  };
+}
+
 it.each([
   "rpc",
   "http",
@@ -52,37 +89,7 @@ it.each([
           config: maintenanceConfig(fixture.scope.storePath),
         }),
       ).toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
-      const statement = fixture.database().prepare("SELECT 1");
-      const prototype: StatementSync = Object.getPrototypeOf(statement);
-      const metadataReads: string[] = [];
-      const record = (sql: string) => {
-        if (
-          /^select\b.*\bfrom\s+["`]?session_transcript_cold_archives["`]?/is.test(sql) &&
-          sql.includes("archive_sha256")
-        ) {
-          metadataReads.push(sql);
-        }
-      };
-      // oxlint-disable-next-line typescript/unbound-method -- Forward each call with its native statement receiver.
-      const { all, get, iterate, run } = prototype;
-      const observers = [
-        vi.spyOn(prototype, "all").mockImplementation(function (this: StatementSync, ...args) {
-          record(this.sourceSQL);
-          return all.apply(this, args);
-        }),
-        vi.spyOn(prototype, "get").mockImplementation(function (this: StatementSync, ...args) {
-          record(this.sourceSQL);
-          return get.apply(this, args);
-        }),
-        vi.spyOn(prototype, "iterate").mockImplementation(function (this: StatementSync, ...args) {
-          record(this.sourceSQL);
-          return iterate.apply(this, args);
-        }),
-        vi.spyOn(prototype, "run").mockImplementation(function (this: StatementSync, ...args) {
-          record(this.sourceSQL);
-          return run.apply(this, args);
-        }),
-      ];
+      const { metadataReads, restore } = observeColdMetadataReads(fixture.database());
       try {
         expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeDefined();
         expect(metadataReads).toHaveLength(1);
@@ -161,7 +168,7 @@ it.each([
           expect(metadataReads).toEqual([]);
         }
       } finally {
-        observers.forEach((observer) => observer.mockRestore());
+        restore();
       }
       expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
       expect(fixture.snapshot()).toEqual(fixture.original);
@@ -169,33 +176,23 @@ it.each([
   },
 );
 
-it("appends hot transcript events without admitting work to the history read lane", async () => {
+it("appends hot transcript events without reading cold metadata on the caller", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const fixture = await createSessionColdStorageFixture(state.statePath("hot-write.sqlite"));
     const target = { ...fixture.scope, sessionId: currentId };
     await waitForSessionTranscriptProjection(target);
-    const diagnostics = channel("openclaw.worker.task");
-    const tasks: unknown[] = [];
-    const record = (value: unknown) => {
-      if (
-        typeof value === "object" &&
-        value !== null &&
-        "worker" in value &&
-        typeof value.worker === "string" &&
-        value.worker.startsWith("session-transcript.worker")
-      ) {
-        tasks.push(value);
-      }
-    };
-    diagnostics.subscribe(record);
+    const { metadataReads, restore } = observeColdMetadataReads(fixture.database());
     try {
+      expect(readSessionColdTranscript(fixture.database(), currentId)).toBeUndefined();
+      expect(metadataReads).toHaveLength(1);
+      metadataReads.length = 0;
       await appendTranscriptMessage(target, {
         eventId: "hot-append",
         parentId: null,
         message: { role: "user", content: "A hot append keeps its own write owner" },
       });
       await waitForSessionTranscriptProjection(target);
-      expect(tasks).toEqual([]);
+      expect(metadataReads).toEqual([]);
       expect(fixture.snapshot().events).toContainEqual(
         expect.objectContaining({
           session_id: currentId,
@@ -203,7 +200,7 @@ it("appends hot transcript events without admitting work to the history read lan
         }),
       );
     } finally {
-      diagnostics.unsubscribe(record);
+      restore();
     }
   });
 });

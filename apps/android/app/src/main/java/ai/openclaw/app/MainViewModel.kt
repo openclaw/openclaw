@@ -10,6 +10,7 @@ import ai.openclaw.app.chat.ChatPermissionMode
 import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
+import ai.openclaw.app.chat.ChatReactionSummary
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSwarmGroup
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
@@ -686,6 +687,9 @@ class MainViewModel private constructor(
 
   val chatSessionOwnerAgentId: StateFlow<String?> = runtimeState(initial = null) { it.chat.sessionOwnerAgentId }
   val chatMessages: StateFlow<List<ChatMessage>> = runtimeState(initial = emptyList()) { it.chat.messages }
+  internal val chatMessageReactions: StateFlow<Map<String, List<ChatReactionSummary>>> = runtimeState(initial = emptyMap()) { it.chat.messageReactions }
+  internal val chatCanReact: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.canReact }
+  internal val chatReactionViewerId: StateFlow<String?> = runtimeState(initial = null) { it.chat.reactionViewerId }
   val chatTranscriptAnchor: StateFlow<ChatTranscriptAnchorState?> =
     runtimeState(initial = null) { it.chat.transcriptAnchor }
   val chatHistoryLoading: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.historyLoading }
@@ -1705,6 +1709,14 @@ class MainViewModel private constructor(
 
   fun refreshChat() {
     ensureRuntime().chat.refresh()
+  }
+
+  internal fun chatSetMessageReaction(
+    messageId: String,
+    emoji: String,
+    remove: Boolean,
+  ) {
+    runtimeRef.value?.chat?.setMessageReaction(messageId, emoji, remove)
   }
 
   fun refreshChatSessions(

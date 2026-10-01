@@ -9,6 +9,7 @@ import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import * as processRunner from "../../process/exec.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import {
   releaseUpdateCommandPreflightForHandoff,
@@ -21,6 +22,7 @@ import { createPackageRuntimeRecovery } from "./update-command-node-runtime.js";
 import { withRetainedUpdateServiceAuthority } from "./update-command-retained-service.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const nodeExecPath = resolveTestNodeExecPath();
 let root: string;
 let serviceRoot: string;
 beforeEach(() => {
@@ -100,7 +102,7 @@ it.each([
       });
       assert(recovery.installCommand);
       const installing = recovery.installCommand(
-        process.execPath,
+        nodeExecPath,
         [
           "-e",
           `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},JSON.stringify({pid:process.pid,nodeOptions:process.env.NODE_OPTIONS}));const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(proceed)})){clearInterval(timer)}},10);`,
@@ -356,7 +358,7 @@ it.each(["empty", "extra", "malformed", "invalid-entry", "invalid-utf8", "nul"] 
       });
       assert(recovery.installCommand);
       await recovery.installCommand(
-        process.execPath,
+        nodeExecPath,
         ["-e", `require('node:fs').writeFileSync(${JSON.stringify(effect)},'unauthorized')`],
         preload.env,
       );
@@ -386,7 +388,7 @@ it.each([undefined, ""])("preserves absent or empty native payload options: %s",
       "-e",
       gate.source,
       "--",
-      process.execPath,
+      nodeExecPath,
       "-e",
       `require('node:fs').writeFileSync(${JSON.stringify(effect)},JSON.stringify(process.env.NODE_OPTIONS ?? null));`,
     ],
@@ -431,7 +433,7 @@ it.skipIf(process.platform === "win32").each([false, true])(
           assert(native);
           const result = await native(
             [
-              process.execPath,
+              nodeExecPath,
               "-e",
               `require('node:fs').writeFileSync(${JSON.stringify(effect)},String(process.pid));`,
             ],
@@ -556,7 +558,7 @@ it.each([
         revoke();
       }
       await recovery.installCommand(
-        process.execPath,
+        nodeExecPath,
         ["-e", `require('node:fs').writeFileSync(${JSON.stringify(effect)},'unauthorized')`],
         process.env,
       );

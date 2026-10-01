@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { waitForDead, waitForPidFile } from "../../test/helpers/process-wait.js";
+import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import * as commands from "../process/exec.js";
 import { runCommandBuffered, runUtf8CommandWithTimeout } from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -571,8 +572,8 @@ it.each(["cancel", "deadline", "disk-full", "cooperative-cancel"] as const)(
       candidateRoot: root,
       env: { TMPDIR: root },
       workerEnv: () => ({
-        ...process.env,
-        NODE_OPTIONS: `--require ${JSON.stringify(preload)}`,
+        ...withRuntimePreload(process.env, preload),
+        BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
         XDG_CACHE_HOME: path.join(root, "unowned-cache"),
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       }),
