@@ -177,6 +177,12 @@ survives cleanup failure while the failed native owner retires. Use `run` when
 dependent commands share a binding or host publication must stay inside the
 same FIFO interval.
 
+During Gateway restart drain, an accepted publication sequence retains its native
+agent lease until its publication store closes. Close rejects new publications,
+joins accepted work, and releases that lease before its database borrow. Normal
+idle retirement and per-command authority checks remain unchanged; updates need
+no schema or state migration.
+
 The exported `OpenClawAgentSqliteWorkerStore` type retains its `run` and `close`
 contract for existing adapters. The factory's inferred return type additionally
 provides the typed single-command `execute` method.
