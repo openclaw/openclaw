@@ -1,7 +1,7 @@
 // Covers platform browser-open command resolution.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpawnResult } from "../process/exec-result.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
@@ -45,11 +45,17 @@ vi.mock("node:fs/promises", async () => {
   };
 });
 
-import { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand } from "./browser-open.js";
-import { resetWSLStateForTests } from "./wsl.js";
+let detectBrowserOpenSupport: typeof import("./browser-open.js").detectBrowserOpenSupport;
+let openUrl: typeof import("./browser-open.js").openUrl;
+let resolveBrowserOpenCommand: typeof import("./browser-open.js").resolveBrowserOpenCommand;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand } =
+    await import("./browser-open.js"));
+});
 
 afterEach(() => {
-  resetWSLStateForTests();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   detectBinaryMock.mockReset().mockResolvedValue(false);

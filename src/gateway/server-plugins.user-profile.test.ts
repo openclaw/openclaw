@@ -35,7 +35,6 @@ it.each(["caller", "plugin", "gateway", "role"] as const)(
           const loaded = loadGatewayPlugins({
             cfg: fixture.cfg,
             autoEnabledReasons: {},
-            log: logger,
             baseMethods: [],
             loadIntent: "startup",
             pluginIds: ["visitor-access"],

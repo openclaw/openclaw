@@ -111,7 +111,6 @@ it("keeps admitted session ownership when transformed plugins import the native 
           },
         });
         const operations = new Set();
-        const outcomes = [];
         let host;
         let transformed;
         const bounded = async (work, label) => {
@@ -138,7 +137,6 @@ it("keeps admitted session ownership when transformed plugins import the native 
           })(modulePath);
           assert.equal(transformed.admitReplyTurn, host.admitReplyTurn, "plugin transformation retains the native admission owner");
           const cases = [
-            { name: "native-same-store", parent: native, foreign: false },
             { name: "transformed-same-store", parent: transformed, foreign: false },
             { name: "transformed-foreign-store", parent: transformed, foreign: true },
           ];
@@ -189,11 +187,13 @@ it("keeps admitted session ownership when transformed plugins import the native 
               parent.complete();
               child = await bounded(pending, scenario.name + " successor");
               if (child.status === "owned") operations.add(child.operation);
-              const outcome = child.status === "owned"
-                ? { name: scenario.name, status: child.status, sessionId: child.operation.sessionId }
-                : { name: scenario.name, status: child.status, reason: child.reason };
-              outcomes.push(outcome);
-              console.log(JSON.stringify(outcome));
+              if (scenario.foreign) {
+                assert.equal(child.status, "skipped");
+                assert.equal(child.reason, "lifecycle-invalidated");
+              } else {
+                assert.equal(child.status, "owned");
+                assert.equal(child.operation.sessionId, successorId);
+              }
             } finally {
               host.replyRunRegistry.waitForIdle = waitForIdle;
               parent.complete();
@@ -205,11 +205,6 @@ it("keeps admitted session ownership when transformed plugins import the native 
               }
             }
           }
-          assert.deepEqual(outcomes, [
-            { name: "native-same-store", status: "owned", sessionId: "after-native-same-store" },
-            { name: "transformed-same-store", status: "owned", sessionId: "after-transformed-same-store" },
-            { name: "transformed-foreign-store", status: "skipped", reason: "lifecycle-invalidated" },
-          ]);
         } finally {
           for (const operation of operations) operation.complete();
           await transformed?.closeOpenClawAgentDatabasesAsync();

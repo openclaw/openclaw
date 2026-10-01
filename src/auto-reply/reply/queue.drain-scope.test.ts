@@ -18,10 +18,10 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import type { QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import {
+  clearFollowupQueueForTest,
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
-import { clearSessionLifecycleQueues } from "./queue/cleanup.js";
 
 installQueueRuntimeErrorSilencer();
 
@@ -29,9 +29,6 @@ it("drained followup turn keeps tracked work accepted after the triggering scope
   resetGatewayWorkAdmission();
   const key = `test-drain-scope-close-${Date.now()}`;
   const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
-  const followupRun = createRun({ prompt: "queued while request admitted" });
-  const runIdentity = { ...followupRun.run, agentId: "agent", sessionKey: key };
-  followupRun.run = runIdentity;
   const requestScope = new AsyncWorkScope();
   const requestRoot = tryBeginGatewayRootWorkAdmission("test:request");
   if (!requestRoot) {
@@ -44,7 +41,7 @@ it("drained followup turn keeps tracked work accepted after the triggering scope
   try {
     await requestScope.run(() =>
       requestRoot.run(async () => {
-        enqueueFollowupRun(key, followupRun, settings);
+        enqueueFollowupRun(key, createRun({ prompt: "queued while request admitted" }), settings);
         scheduleFollowupDrain(key, async () => {
           // The drain outlives the enqueue request across debounce and retries; by
           // the time the queued turn runs, the triggering request has settled and its
@@ -83,13 +80,7 @@ it("drained followup turn keeps tracked work accepted after the triggering scope
   } finally {
     scopeClosed.resolve();
     requestRoot.release();
-    clearSessionLifecycleQueues({
-      keys: [key],
-      agentId: runIdentity.agentId,
-      sessionId: runIdentity.sessionId,
-      sessionKey: key,
-      assertCurrent: () => {},
-    });
+    clearFollowupQueueForTest(key);
     resetGatewayWorkAdmission();
   }
 });

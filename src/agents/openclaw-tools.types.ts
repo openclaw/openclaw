@@ -16,6 +16,7 @@ import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import type { CronToolOptions } from "./tools/cron-tool.types.js";
 import type { QuestionPromptDelivery } from "./tools/question-prompt-send.js";
+import type { SessionsYieldCallback } from "./tools/sessions-yield-tool.js";
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
 export type OpenClawSharedToolsOptions = {
@@ -92,7 +93,7 @@ export type OpenClawSharedToolsOptions = {
   enableHeartbeatTool?: boolean;
   /** Host-only observation after a canonical progress-card replacement commits. */
   onProgressCardPlanSaved?: (unfinished: boolean) => void;
-  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
+  onYield?: SessionsYieldCallback;
   claimYieldCompletion?: () => boolean | Promise<boolean>;
   /** Records hot-path tool-prep stages for reply startup diagnostics. */
   recordToolPrepStage?: (name: string) => void;

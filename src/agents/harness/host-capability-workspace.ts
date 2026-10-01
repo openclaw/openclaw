@@ -2,27 +2,18 @@ import { isPathInsideWithRealpath } from "@openclaw/fs-safe/path";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { OpenClawCodingToolsOptions } from "../agent-tools.options.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
-
-function freezeSnapshot<T>(value: T, seen = new WeakSet<object>()): T {
-  if (!value || typeof value !== "object" || seen.has(value)) {
-    return value;
-  }
-  seen.add(value);
-  for (const nested of Object.values(value)) {
-    freezeSnapshot(nested, seen);
-  }
-  return Object.freeze(value);
-}
-
-export function cloneSnapshot<T>(value: T): T {
-  return freezeSnapshot(structuredClone(value));
-}
+import { cloneHostSnapshot as cloneSnapshot } from "./host-snapshot.js";
 
 export function captureRequiredWorkspaceToolFloor(
   attempt: Partial<EmbeddedRunAttemptParams>,
   pluginId: string,
   config: OpenClawConfig | undefined,
-): ((options?: OpenClawCodingToolsOptions) => Partial<OpenClawCodingToolsOptions>) | undefined {
+):
+  | {
+      root: string;
+      apply: (options?: OpenClawCodingToolsOptions) => Partial<OpenClawCodingToolsOptions>;
+    }
+  | undefined {
   const requiredCodexWorkspace = attempt.requireWorkspaceOnly === true && pluginId === "codex";
   const requiredWorkspace =
     attempt.requireWorkspaceOnly === true
@@ -48,7 +39,7 @@ export function captureRequiredWorkspaceToolFloor(
   if (!requiredWorkspace) {
     return undefined;
   }
-  return (options) => {
+  const apply = (options?: OpenClawCodingToolsOptions): Partial<OpenClawCodingToolsOptions> => {
     const requestedPermissionRoot = options?.sessionPermissionPolicy?.root;
     if (
       requiredWorkspace &&
@@ -92,4 +83,5 @@ export function captureRequiredWorkspaceToolFloor(
         : {}),
     };
   };
+  return { root: requiredWorkspace.root!, apply };
 }
