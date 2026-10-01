@@ -1,13 +1,16 @@
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
   readlinkSync,
+  renameSync,
   statSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -40,11 +43,19 @@ vi.mock("../../scripts/preinstall-package-manager-warning.mjs", async (importOri
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function fixture() {
+const unsupportedPathCharacters = [
+  ["\n", "a newline"],
+  ["\r", "a carriage return"],
+] as const;
+
+function fixture(character = "", field: "bunPath" | "entryPath" = "entryPath") {
   const root = tempDirs.make("openclaw-bun-launcher-");
-  const packageRoot = join(root, "package 'quoted' $dollar `literal` (space)");
+  const packageRoot = join(
+    root,
+    `package 'quoted' ${field === "entryPath" ? character : ""}(space)`,
+  );
   const binDir = join(root, "global-bin");
-  const bunPath = join(root, "runtime 'quoted' $dollar `literal` (space)");
+  const bunPath = join(root, `runtime 'quoted' ${field === "bunPath" ? character : ""}(space)`);
   mkdirSync(packageRoot);
   mkdirSync(binDir);
   const entryPath = join(packageRoot, "openclaw.mjs");
@@ -59,7 +70,9 @@ describe.skipIf(process.platform === "win32")("POSIX Bun CLI launcher", () => {
     writeFileSync(
       target.entryPath,
       [
+        'import { readFileSync } from "node:fs";',
         'if (process.argv[2] === "signal") process.kill(process.pid, "SIGTERM");',
+        'else if (process.argv[2] === "stdin") process.stdout.write(readFileSync(0));',
         "else { process.stdout.write(JSON.stringify(process.argv.slice(2))); process.exitCode = 23; }",
       ].join("\n"),
     );
@@ -72,6 +85,8 @@ describe.skipIf(process.platform === "win32")("POSIX Bun CLI launcher", () => {
       '"double"',
       "$(literal)",
       "`literal`",
+      "a\\path",
+      "line\nbreak",
       "--flag=value",
     ];
     const result = spawnSync(target.path, argv, { env: { PATH: "" }, encoding: "utf8" });
@@ -85,6 +100,112 @@ describe.skipIf(process.platform === "win32")("POSIX Bun CLI launcher", () => {
     expect(signaled.error).toBeUndefined();
     expect(signaled.status).toBeNull();
     expect(signaled.signal).toBe("SIGTERM");
+
+    const input = spawnSync(target.path, ["stdin"], {
+      env: { PATH: "" },
+      encoding: "utf8",
+      input: "original stdin\n",
+    });
+    expect(input.status, input.stderr).toBe(0);
+    expect(input.stdout).toBe("original stdin\n");
+  });
+
+  it.each([
+    "$store",
+    "`literal`",
+    '"double"',
+    "back\\slash",
+    "apostrophe's",
+    "two words",
+    "*glob*",
+  ])("preserves literal path bytes after released relocation: %j", (component) => {
+    const target = fixture(component, "bunPath");
+    // A POSIX argv probe avoids Node's separate ESM restriction on backslash filenames.
+    writeFileSync(target.bunPath, '#!/bin/sh\n[ -f "$1" ] || exit 98\nprintf \'%s\\0\' "$@"\n', {
+      mode: 0o755,
+    });
+    const content = renderBunCliLauncher(target);
+    const liveRoot = join(target.root, `live ${component}`);
+    // Published 2026.9.7 relocates raw sourceRoot + '/' bytes before retiring staging.
+    writeFileSync(target.path, content.replaceAll(`${target.packageRoot}/`, `${liveRoot}/`), {
+      mode: 0o755,
+    });
+    renameSync(target.packageRoot, liveRoot);
+
+    const result = spawnSync(target.path, ["two words", "$literal", ""], {
+      env: { PATH: "" },
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.split("\0")).toEqual([
+      join(liveRoot, "openclaw.mjs"),
+      "two words",
+      "$literal",
+      "",
+      "",
+    ]);
+    expect(content.split("\n").filter((line) => line.includes(`${target.packageRoot}/`))).toEqual([
+      `#openclaw-entry=${target.entryPath}`,
+    ]);
+    expect(parseBunCliLauncher(readFileSync(target.path, "utf8"))).toEqual({
+      bunPath: target.bunPath,
+      entryPath: join(liveRoot, "openclaw.mjs"),
+    });
+  });
+
+  it("rejects a split live data line before executing even an existing truncated target", () => {
+    const target = fixture();
+    symlinkSync(process.execPath, target.bunPath);
+    const truncated = join(target.root, "truncated-entry");
+    writeFileSync(truncated, 'require("node:fs").writeFileSync("runtime-executed", "bad");');
+    const liveRoot = `${truncated}\nprintf injected > data-executed\nsuffix`;
+    const content = renderBunCliLauncher(target).replaceAll(
+      `${target.packageRoot}/`,
+      `${liveRoot}/`,
+    );
+    writeFileSync(target.path, content, { mode: 0o755 });
+    renameSync(target.packageRoot, liveRoot);
+
+    const result = spawnSync(target.path, [], {
+      cwd: target.root,
+      env: { PATH: "" },
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(127);
+    expect(result.stderr).toContain("openclaw: Bun launcher target not found");
+    expect(result.stdout).toBe("");
+    expect(existsSync(join(target.root, "runtime-executed"))).toBe(false);
+    expect(existsSync(join(target.root, "data-executed"))).toBe(false);
+    expect(parseBunCliLauncher(content)).toBeNull();
+  });
+
+  it("rejects duplicate data records introduced by a hidden newline", () => {
+    const target = fixture();
+    symlinkSync(process.execPath, target.bunPath);
+    writeFileSync(target.entryPath, 'console.log("must not execute");');
+    const content = renderBunCliLauncher(target).replace(
+      `#openclaw-entry=${target.entryPath}`,
+      `#openclaw-entry=${target.entryPath}\n#openclaw-entry=${target.entryPath}`,
+    );
+    writeFileSync(target.path, content, { mode: 0o755 });
+    const result = spawnSync(target.path, [], { env: { PATH: "" }, encoding: "utf8" });
+    expect(result.status).toBe(127);
+    expect(result.stderr).toContain("openclaw: Bun launcher target not found");
+    expect(result.stdout).toBe("");
+    expect(parseBunCliLauncher(content)).toBeNull();
+  });
+
+  it.each(["runtime", "entry"])("explains a missing %s without executing", (missing) => {
+    const target = fixture();
+    if (missing === "entry") {
+      symlinkSync(process.execPath, target.bunPath);
+      unlinkSync(target.entryPath);
+    }
+    installBunCliLauncher(target);
+    const result = spawnSync(target.path, [], { env: { PATH: "" }, encoding: "utf8" });
+    expect(result.status).toBe(127);
+    expect(result.stderr).toContain("openclaw: Bun launcher target not found");
+    expect(result.stderr).toContain('Run "openclaw doctor" with Bun to repair.');
   });
 
   it("replaces its package symlink without modifying the entry and leaves a current install alone", () => {
@@ -165,7 +286,7 @@ describe.skipIf(process.platform === "win32")("POSIX Bun CLI launcher", () => {
 });
 
 describe("Bun launcher path contract", () => {
-  it.each(["relative/bun", "/runtime\nnext", "/runtime\rnext", "/runtime\0next"])(
+  it.each(["relative/bun", "/runtime\0next"])(
     "rejects an unstable executable or entry path: %j",
     (invalid) => {
       expect(() =>
@@ -211,6 +332,34 @@ describe.skipIf(process.platform === "win32")("packaged Bun launcher lifecycle",
     });
     expect(parseBunCliLauncher(readFileSync(target.path, "utf8"))?.bunPath).toBe(updatedBun);
   });
+
+  it.each(unsupportedPathCharacters)(
+    "keeps Bun's symlink for paths containing %j",
+    (character, label) => {
+      for (const field of ["bunPath", "entryPath"] as const) {
+        const target = fixture(character, field);
+        symlinkSync(target.entryPath, target.path);
+        lifecycle.resolveBinDir.mockReturnValue(target.binDir);
+        const reason = `${field === "bunPath" ? "Bun executable path" : "Install path"} contains ${label}, which cannot be stored in a launcher data line`;
+
+        expect(() => renderBunCliLauncher(target)).toThrow(reason);
+        expect(() => inspectBunCliLauncher(target)).toThrow(reason);
+        expect(() => installBunCliLauncher(target)).toThrow(reason);
+        expect(() =>
+          installPackageBunCliLauncher({
+            packageRoot: target.packageRoot,
+            bunVersion: "1.4.3",
+            env: {
+              npm_config_user_agent: "bun/1.4.3",
+              OPENCLAW_PACKAGE_BUN_LAUNCHER: target.bunPath,
+            },
+          }),
+        ).not.toThrow();
+        expect(readlinkSync(target.path)).toBe(target.entryPath);
+        expect(readdirSync(target.binDir)).toEqual(["openclaw"]);
+      }
+    },
+  );
 
   it.each(["missing", "foreign"])("does not claim a %s global command", (kind) => {
     const target = fixture();

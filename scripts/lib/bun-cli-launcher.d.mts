@@ -5,6 +5,7 @@ export type BunCliLauncherInspection = {
   state: "current" | "missing" | "stale" | "conflict";
 };
 export function renderBunCliLauncher(target: BunCliLauncherTarget): string;
+export function getBunCliLauncherPathIssue(target: BunCliLauncherTarget): string | null;
 export function parseBunCliLauncher(content: string): BunCliLauncherTarget | null;
 export function resolveBunGlobalBinDir(params: {
   bunPath: string;

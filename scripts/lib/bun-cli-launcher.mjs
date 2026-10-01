@@ -12,22 +12,60 @@ import {
 } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 
-const HEADER = "#!/bin/sh\n# OpenClaw Bun launcher ";
+const HEADER = "#!/bin/sh\n# OpenClaw Bun launcher\n";
+const BODY = `bun= entry= records=0 malformed=
+while IFS= read -r line; do
+  case $line in
+    '#openclaw-bun='*)
+      [ "$records" -eq 0 ] || malformed=1
+      bun=\${line#'#openclaw-bun='}
+      records=1 ;;
+    '#openclaw-entry='*)
+      [ "$records" -eq 1 ] || malformed=1
+      entry=\${line#'#openclaw-entry='}
+      records=2 ;;
+    *) [ "$records" -eq 0 ] || malformed=1 ;;
+  esac
+done < "$0"
+if [ "$records" -ne 2 ] || [ -n "$malformed" ] || [ ! -x "$bun" ] || [ ! -f "$entry" ]; then
+  printf 'openclaw: Bun launcher target not found (runtime: %s, entry: %s). Run "openclaw doctor" with Bun to repair.\\n' "$bun" "$entry" >&2
+  exit 127
+fi
+exec "$bun" "$entry" "$@"
+exit 127
+`;
 
-/** @param {string} value */
-function quote(value) {
-  return `'${value.replaceAll("'", "'\\''")}'`;
+/** @param {{bunPath: string, entryPath: string}} target @returns {string | null} */
+export function getBunCliLauncherPathIssue(target) {
+  const unsupported = [
+    ["\n", "a newline"],
+    ["\r", "a carriage return"],
+  ];
+  for (const [label, value] of [
+    ["Bun executable path", target.bunPath],
+    ["Install path", target.entryPath],
+  ]) {
+    if (!isAbsolute(value) || value.includes("\0")) {
+      return "Bun CLI launcher requires absolute, single-line runtime and entry paths";
+    }
+    for (const [character, name] of unsupported) {
+      if (value.includes(character)) {
+        return `${label} contains ${name}, which cannot be stored in a launcher data line`;
+      }
+    }
+  }
+  return null;
 }
 
 /** @param {{bunPath: string, entryPath: string}} target */
 export function renderBunCliLauncher(target) {
-  for (const value of [target.bunPath, target.entryPath]) {
-    if (!isAbsolute(value) || /[\0\r\n]/u.test(value)) {
-      throw new Error("Bun CLI launcher requires absolute, single-line runtime and entry paths");
-    }
+  const issue = getBunCliLauncherPathIssue(target);
+  if (issue) {
+    throw new Error(issue);
   }
-  // The comment lets staging relocate paths structurally, before shell quoting.
-  return `${HEADER}${JSON.stringify(target)}\nexec ${quote(target.bunPath)} ${quote(target.entryPath)} "$@"\n`;
+  // Released updaters rewrite raw prefixes, including an unknown final basename.
+  // Only inert data follows the terminal exit; the shell never parses paths as code.
+  return `${HEADER}${BODY}#openclaw-bun=${target.bunPath}\n#openclaw-entry=${target.entryPath}\n`;
 }
 
 /** @param {string} content */
@@ -36,15 +74,12 @@ export function parseBunCliLauncher(content) {
     return null;
   }
   try {
-    const target = JSON.parse(content.slice(HEADER.length).split("\n")[0]);
-    if (
-      typeof target?.bunPath !== "string" ||
-      typeof target?.entryPath !== "string" ||
-      renderBunCliLauncher({ bunPath: target.bunPath, entryPath: target.entryPath }) !== content
-    ) {
+    const match = /\n#openclaw-bun=([^\r\n]*)\n#openclaw-entry=([^\r\n]*)\n$/u.exec(content);
+    if (!match) {
       return null;
     }
-    return { bunPath: target.bunPath, entryPath: target.entryPath };
+    const target = { bunPath: match[1], entryPath: match[2] };
+    return renderBunCliLauncher(target) === content ? target : null;
   } catch {
     return null;
   }

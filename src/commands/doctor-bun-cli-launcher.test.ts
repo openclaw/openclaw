@@ -13,7 +13,8 @@ import { resolveDoctorRepairMode } from "./doctor-repair-mode.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 vi.mock("./onboard-helpers.js", () => ({ guardCancel: vi.fn() }));
-vi.mock("../../scripts/lib/bun-cli-launcher.mjs", () => ({
+vi.mock("../../scripts/lib/bun-cli-launcher.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../scripts/lib/bun-cli-launcher.mjs")>()),
   inspectBunCliLauncher: vi.fn(),
   installBunCliLauncher: vi.fn(),
   resolveBunGlobalBinDir: vi.fn(),
@@ -28,13 +29,13 @@ const binDir = path.join(fixtureRoot, "custom-bin");
 const launcherPath = path.join(binDir, "openclaw");
 const fileStat = fs.statSync(new URL(import.meta.url));
 
-function stubRuntime(bun = true, platform: NodeJS.Platform = "linux") {
+function stubRuntime(bun = true, platform: NodeJS.Platform = "linux", executable = bunPath) {
   vi.stubGlobal(
     "process",
     Object.create(process, {
       versions: { value: { ...process.versions, bun: bun ? "1.4.3" : undefined } },
       platform: { value: platform },
-      execPath: { value: bunPath },
+      execPath: { value: executable },
     }),
   );
 }
@@ -112,6 +113,43 @@ describe("Bun-only Doctor CLI launcher repair", () => {
       expect.stringContaining("launcher is missing"),
       "Bun CLI launcher",
     );
+  });
+
+  it.each([
+    ["\n", "a newline"],
+    ["\r", "a carriage return"],
+  ])("explains unsupported path character %j without offering repair", async (character, label) => {
+    for (const field of ["install", "runtime"] as const) {
+      const unsupportedRoot = path.join(
+        fixtureRoot,
+        `owner${character}path`,
+        "install",
+        "global",
+        "node_modules",
+        "openclaw",
+      );
+      stubRuntime(
+        true,
+        "linux",
+        field === "runtime" ? path.join(fixtureRoot, `bun${character}runtime`) : bunPath,
+      );
+      const prompt = prompter();
+      await noteBunCliLauncherIssues({
+        root: field === "install" ? unsupportedRoot : root,
+        prompter: prompt,
+      });
+      expect(note).toHaveBeenLastCalledWith(
+        expect.stringContaining(
+          `${field === "install" ? "Install path" : "Bun executable path"} contains ${label}, which cannot be stored in a launcher data line`,
+        ),
+        "Bun CLI launcher",
+      );
+      expect(vi.mocked(note).mock.calls.at(-1)?.[0]).toContain("openclaw.mjs");
+      expect(vi.mocked(note).mock.calls.at(-1)?.[0]).toContain("instead");
+      expect(prompt.confirmAutoFix).not.toHaveBeenCalled();
+      expect(installBunCliLauncher).not.toHaveBeenCalled();
+      expect(resolveBunGlobalBinDir).not.toHaveBeenCalled();
+    }
   });
 
   it.each([false, true])("honors noninteractive Doctor fix consent (fix=%s)", async (repair) => {

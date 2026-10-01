@@ -1,5 +1,6 @@
-import { isAbsolute } from "node:path";
+import { isAbsolute, join } from "node:path";
 import {
+  getBunCliLauncherPathIssue,
   inspectBunCliLauncher,
   installBunCliLauncher,
   resolveBunGlobalBinDir,
@@ -26,6 +27,11 @@ export function installPackageBunCliLauncher(params) {
   }
   // Reuse preinstall's persistent-Node check; a Bun install with Node keeps its bin.
   if (!probePackageCliNodeRuntime({ env, cwd: params.packageRoot })?.bunVersion) {
+    return;
+  }
+  if (
+    getBunCliLauncherPathIssue({ bunPath, entryPath: join(params.packageRoot, "openclaw.mjs") })
+  ) {
     return;
   }
   const binDir = resolveBunGlobalBinDir({ bunPath, env, cwd: params.packageRoot });

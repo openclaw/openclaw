@@ -38,7 +38,7 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
       await withTestDir({ prefix: "native-package-stage-" }, async (base) => {
         const project = path.join(
           base,
-          ...(layout === "bun-launcher" ? ["Bun '$` install"] : []),
+          ...(layout === "bun-launcher" ? ["Bun ' install"] : []),
           "install",
           "global",
         );

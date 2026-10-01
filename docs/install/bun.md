@@ -65,6 +65,9 @@ openclaw status --json
 On macOS and Linux without Node, the trusted package lifecycle installs a launcher
 that uses that exact Bun executable. Updates preserve it. To repair an older or
 missing launcher, run `/absolute/path/to/bun <package-root>/openclaw.mjs doctor --fix`.
+Paths with spaces, quotes, dollar signs, backticks, backslashes, and globs remain
+literal. Paths containing newlines or carriage returns require explicit Bun
+invocation instead of a generated launcher.
 See [Bun-only installs](/install/bun-compatibility#bun-only-installs) for update,
 rollback, and custom-bin behavior.
 

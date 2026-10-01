@@ -138,6 +138,22 @@ the private staging bin, then relocate and publish it with the package; rollback
 restores the previous launcher. Reinstalling the package refreshes the recorded
 Bun path. A lifecycle warning does not abort an otherwise usable package update.
 
+Launcher paths are literal data: spaces, apostrophes, double quotes, dollar signs,
+backticks, backslashes, and globs work in both staged and final installation paths.
+Released updaters can relocate the raw path bytes without turning them into shell
+code. The launcher uses shell builtins to read its own data lines, then `exec` to
+preserve arguments, stdin, exit status, and signals without a wrapper process,
+subprocess, or temporary file.
+
+The renderer requires absolute paths without NUL, newline, or carriage return.
+For unsupported paths, installation leaves Bun's original symlink unchanged and
+Doctor reports the reason without offering launcher repair. Invoke
+`<bun> <package-root>/openclaw.mjs` directly, with shell quoting as needed, or use
+single-line paths. If a released updater introduces a newline into a final path,
+the split data is never executed: the launcher exits 127 with a target-not-found
+message. Carriage-return paths remain unsupported even if a released updater
+inserts one; the strict launcher parser does not adopt that modified launcher.
+
 If the launcher is missing, relinked, or still names a moved Bun executable, run
 `<bun> <package-root>/openclaw.mjs doctor --fix` from that installation. Doctor
 reports the problem and uses its existing repair consent rules. It preserves
@@ -147,12 +163,10 @@ argument is not inherited by package lifecycle children. `bunx --bun openclaw`
 selects Bun for that invocation only, not for the plain shell command.
 
 `install-cli.sh` still provisions Node and uses its existing npm or Git install
-path. The macOS app owns its own launcher separately. Its reusable POSIX contract
-is `#!/bin/sh` followed by `exec '<absolute-bun>' '<package-root>/openclaw.mjs' "$@"`,
-with both paths shell-quoted (including embedded apostrophes), executable mode,
-and atomic publication at the app's existing CLI location. `exec` preserves
-arguments, exit status, and signal delivery without a wrapper process. The app
-must regenerate the launcher when its runtime or package root changes.
+path. The macOS app owns its own launcher separately. It can reuse this POSIX
+data-line launcher contract, executable mode, and atomic publication at its
+existing CLI location. The app must regenerate the launcher when its runtime or
+package root changes.
 
 Bun's uninstall cleanup removes dangling symlinks but can leave a generated shell
 launcher behind; see [Remove the CLI](/install/uninstall#remove-the-cli).

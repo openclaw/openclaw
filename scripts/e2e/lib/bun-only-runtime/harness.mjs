@@ -309,7 +309,7 @@ try {
     entry = path.join(install, "install/global/node_modules/openclaw/openclaw.mjs");
     const launcher = path.join(install, "bin/openclaw");
     assert(!fs.lstatSync(launcher).isSymbolicLink(), "Bun-only install must publish a launcher");
-    assert(read(launcher).startsWith("#!/bin/sh\n# OpenClaw Bun launcher "));
+    assert(read(launcher).startsWith("#!/bin/sh\n# OpenClaw Bun launcher\n"));
     env.PATH = `${path.dirname(launcher)}:${env.PATH}`;
     env.BUN_INSTALL = install;
     assert(

@@ -2,10 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
+  getBunCliLauncherPathIssue,
   inspectBunCliLauncher,
   installBunCliLauncher,
   resolveBunGlobalBinDir,
 } from "../../scripts/lib/bun-cli-launcher.mjs";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveBunGlobalInstallOwner } from "../infra/detect-package-manager.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
@@ -49,6 +51,13 @@ export async function noteBunCliLauncherIssues(params: {
   }
   const owner = resolveBunGlobalInstallOwner(params.root);
   if (!owner) {
+    return;
+  }
+  const entryPath = path.join(params.root, "openclaw.mjs");
+  const pathIssue = getBunCliLauncherPathIssue({ bunPath: process.execPath, entryPath });
+  if (pathIssue) {
+    const command = `${quoteCliArg(process.execPath)} ${quoteCliArg(entryPath)}`;
+    note(`${pathIssue}. Run ${command} instead.`, "Bun CLI launcher");
     return;
   }
   try {
