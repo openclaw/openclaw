@@ -371,13 +371,17 @@ class Tooltip extends OpenClawLitElement {
     await tooltip.updateComplete;
     if (this.webAwesomeTooltip === tooltip && this.#triggerElement === trigger) {
       tooltip.anchor = trigger;
-      if (this.autoSize) {
-        tooltip.popup.setAttribute("auto-size", "vertical");
-      } else {
-        tooltip.popup.removeAttribute("auto-size");
+      const popup = tooltip.popup;
+      if (!popup) {
+        return;
       }
-      tooltip.popup.autoSizePadding = this.autoSize ? 8 : 0;
-      tooltip.popup.shiftPadding = this.autoSize ? 8 : 0;
+      if (this.autoSize) {
+        popup.setAttribute("auto-size", "vertical");
+      } else {
+        popup.removeAttribute("auto-size");
+      }
+      popup.autoSizePadding = this.autoSize ? 8 : 0;
+      popup.shiftPadding = this.autoSize ? 8 : 0;
     }
   }
 
@@ -485,8 +489,8 @@ class Tooltip extends OpenClawLitElement {
     void ensureCustomElementDefined(
       "wa-tooltip",
       () => import("@awesome.me/webawesome/dist/components/tooltip/tooltip.js"),
-    ).then(
-      async () => {
+    )
+      .then(async () => {
         await this.updateComplete;
         await this.#syncWebAwesomeTooltip();
         const tooltip = this.webAwesomeTooltip;
@@ -499,14 +503,13 @@ class Tooltip extends OpenClawLitElement {
           tooltip.placement = this.#resolvedPlacement();
           tooltip.open = true;
         }
-      },
-      (error: unknown) => {
+      })
+      .catch((error: unknown) => {
         if (Tooltip.#activeByDocument.get(this.ownerDocument) === this) {
           this.#close();
           showToast({ message: formatUiError(error) });
         }
-      },
-    );
+      });
     this.#clearTimers(false);
     const active = Tooltip.#activeByDocument.get(this.ownerDocument);
     if (active && active !== this) {
