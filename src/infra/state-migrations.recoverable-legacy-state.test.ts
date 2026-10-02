@@ -114,15 +114,16 @@ describe("recoverable legacy state", () => {
   );
 
   it.each([false, true])(
-    "keeps Discord cache cleanup advisory unless another import fails (%s)",
-    async (failedImport) => {
+    "keeps Discord cache cleanup advisory unless retired state remains (%s)",
+    async (retiredState) => {
       await withOpenClawTestState({ label: "discord-cache-cleanup" }, async ({ stateDir, env }) => {
         const discordDir = path.join(stateDir, "discord");
         const sourcePath = path.join(discordDir, "command-deploy-cache.json");
+        const retiredPath = path.join(discordDir, "thread-bindings.json");
         await fs.mkdir(discordDir, { recursive: true });
         await fs.writeFile(sourcePath, "retired deploy hashes");
-        if (failedImport) {
-          await fs.writeFile(path.join(discordDir, "thread-bindings.json"), "{}");
+        if (retiredState) {
+          await fs.writeFile(retiredPath, "{}");
         }
         const unlink = fsSync.unlinkSync;
         vi.spyOn(fsSync, "unlinkSync").mockImplementation((target) => {
@@ -155,18 +156,21 @@ describe("recoverable legacy state", () => {
         await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("retired deploy hashes");
         expect(receipt.warnings.join("\n")).toContain("Discord command deployment cache");
         expect(receipt.warnings.join("\n")).toContain("synthetic cache cleanup permission denied");
-        if (failedImport) {
+        if (retiredState) {
           expect(() => throwIfDoctorStateMigrationRefused([receipt])).toThrow(
             "Doctor stopped because a state migration refused",
           );
-          expect(receipt.warnings.join("\n")).toContain("legacy Discord thread bindings store");
+          expect(receipt.warnings.join("\n")).toContain(
+            `Preserved retired Discord JSON state at ${retiredPath}. Install OpenClaw 2026.9.5, run "openclaw doctor --fix", then upgrade to latest.`,
+          );
+          await expect(fs.readFile(retiredPath, "utf8")).resolves.toBe("{}");
         } else {
           expect(() => throwIfDoctorStateMigrationRefused([receipt])).not.toThrow();
           expect(receipt.outcome).toBe("warning");
           expect(receipt.warnings.join("\n")).toContain("openclaw doctor --fix");
         }
         vi.restoreAllMocks();
-        if (!failedImport) {
+        if (!retiredState) {
           expect((await migration.migrateLegacyState(params)).warnings).toEqual([]);
           await expect(fs.stat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
         }
