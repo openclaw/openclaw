@@ -40,8 +40,15 @@ function run(context, command, args, options) {
     child.once("close", (status, signal) => resolve({ status, signal, stdout, stderr }));
   });
   context.after(async () => {
-    if (child.pid && child.exitCode === null && child.signalCode === null) {
-      process.kill(-child.pid, "SIGKILL");
+    // Kill the group even after the child exits: a descendant can still hold its pipes.
+    if (child.pid) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch (error) {
+        if (error.code !== "ESRCH" && error.code !== "EPERM") {
+          throw error;
+        }
+      }
     }
     await closed.catch(() => {});
   });
