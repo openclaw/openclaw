@@ -149,6 +149,41 @@ serveOwnedWorkerTasks(
           pending: result.found && result.value,
         };
       }
+      if (request.kind === "memory-session-targets") {
+        const { readMemorySessionTargets } = await import("./session-memory-targets.js");
+        return {
+          kind: request.kind,
+          targets: readMemorySessionTargets(
+            { ...request.params, env: cloneEnvWithPlatformSemantics(request.params.env) },
+            request.continuation,
+          ),
+        };
+      }
+      if (request.kind === "session-archive-inventory") {
+        const { listSessionTranscriptArchivesReadOnly } =
+          await import("./session-accessor.sqlite-history.js");
+        return {
+          kind: request.kind,
+          archives: listSessionTranscriptArchivesReadOnly({
+            ...request,
+            env: cloneEnvWithPlatformSemantics(request.env ?? process.env),
+          }),
+        };
+      }
+      if (request.kind === "session-corpus-inventory") {
+        const { readSessionTranscriptCorpusInventory } =
+          await import("../../../packages/memory-host-sdk/src/host/session-transcript-corpus.js");
+        return {
+          kind: request.kind,
+          entries: readSessionTranscriptCorpusInventory(
+            { ...request.scope, env: cloneEnvWithPlatformSemantics(request.scope.env) },
+            request.options,
+            request.artifacts,
+            request.database.path,
+            request.continuation,
+          ),
+        };
+      }
       if (request.kind === "session-archive-presence") {
         const { readTranscriptArchivePresenceInWorker } =
           await import("./session-accessor.sqlite-archive-read.js");

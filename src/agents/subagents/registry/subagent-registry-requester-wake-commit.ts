@@ -5,7 +5,7 @@ import type {
   PendingRequesterSettleWakeCommit,
   SubagentLifecycleWakeContext,
 } from "./subagent-registry-lifecycle-context.js";
-import { maskLifecycleIdentifier } from "./subagent-registry-lifecycle-delivery.js";
+import { maskLifecycleIdentifier } from "./subagent-registry-lifecycle-log.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
   mutateSubagentRuns,

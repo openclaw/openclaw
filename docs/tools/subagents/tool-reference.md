@@ -55,6 +55,10 @@ session to confirm the effective tool list.
 - **Process lifetime:** a detached OpenClaw sub-agent has its own run lifecycle. A background task created inside an external CLI backend is different: it shares the parent CLI subprocess and stops if that parent reaches `agents.defaults.timeoutSeconds`.
 - **Task delivery:** hidden and visible native sub-agents receive their delegated task in a `[Subagent Task]` message appended after any forked history. The message identifies the current child assignment and treats inherited conversation as background context. The hidden sub-agent system prompt carries runtime rules and routing context, not a duplicate of the task.
 
+Guests with `operator.sessions.write` can launch hidden native children for their
+own sandboxed work and receive private parent completions. The child keeps the
+initiating person's authority and model restrictions. See [Operator scopes](/gateway/operator-scopes#scope-levels).
+
 Native sub-agent continuations after a Gateway restart, descendant completion,
 or a `sessions_send` follow-up preserve the recorded run timeout, including `0`
 for no timeout, while the recorded session identity still matches. A replaced

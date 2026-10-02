@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 
 export function describeRetiredMatrixState(filePath: string): string {
   return `Retired pre-July Matrix state at ${filePath} was left unchanged. Install OpenClaw 2026.9.5, run "openclaw doctor --fix", and start the Matrix channel once to migrate it, then upgrade to latest. See https://docs.openclaw.ai/channels/matrix-migration.`;
@@ -9,7 +9,7 @@ export async function assertMatrixSupportedStateFile(filePath: string): Promise<
   try {
     await fs.lstat(filePath);
   } catch (error) {
-    if (hasNodeErrorCode(error, "ENOENT")) {
+    if (extractErrorCode(error) === "ENOENT") {
       return;
     }
     throw error;

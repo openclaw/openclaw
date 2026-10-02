@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";

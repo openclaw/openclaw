@@ -954,6 +954,9 @@
       ],
       "openclaw/plugin-sdk/agent-harness-completion": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-completion.d.ts"
+      ],
+      "openclaw/plugin-sdk/compiled-subprocess-testing": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/compiled-subprocess-testing.d.ts"
       ]
     }
   }

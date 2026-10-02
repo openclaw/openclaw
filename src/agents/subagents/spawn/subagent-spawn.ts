@@ -411,6 +411,14 @@ export async function spawnSubagentDirect(
         ),
         childLaunch.authorization,
         gatewayContextResolver,
+        childEntry?.sessionId && childEntry.lifecycleRevision
+          ? {
+              sessionKey: childSessionKey,
+              sessionId: childEntry.sessionId,
+              lifecycleRevision: childEntry.lifecycleRevision,
+              runId: childIdem,
+            }
+          : undefined,
       );
       acceptedChildRunId = readGatewayRunId(launch.response) ?? childIdem;
       cleanupOwner?.bindAcceptedRun(acceptedChildRunId);

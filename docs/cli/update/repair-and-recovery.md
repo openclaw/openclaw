@@ -156,13 +156,15 @@ before an upgrade when you need a complete recovery copy.
 
 An update can retain its running code in an `openclaw-update-runtime-*` directory
 beside the installation or in the system temporary directory. The updater settles
-its workers and removes that directory after success, failure, an exception, or
-`SIGINT`/`SIGTERM`, including failures while reporting the outcome. If a worker
-cannot settle or removal fails, it records `Runtime retained at <path>: <reason>`
-and leaves cleanup available to Doctor. A cleanup warning does not replace the
-original update outcome. An earlier nonzero exit remains nonzero while cleanup
-is draining. Mutation and recovery owners must still drain; their failures produce
-a nonzero exit even if the printed command result was successful.
+its workers after success, failure, an exception, or `SIGINT`/`SIGTERM`, including
+failures while reporting the outcome. Complete projections record
+`Runtime retained at <path>: <reason>` for the next eligible update or Doctor
+cleanup, so recursive deletion does not delay command exit. Incomplete preparation
+keeps immediate best-effort cleanup. Unsettled workers retain their runtime with
+the failure reason. A cleanup warning does not replace the original update
+outcome. An earlier nonzero exit remains nonzero while workers are draining.
+Mutation and recovery owners must still drain; their failures produce a nonzero
+exit even if the printed command result was successful.
 
 Retention copies plugin manifests and files inspected by plugin safety checks,
 so retaining the updater does not make the checkout's plugins fail hardlink

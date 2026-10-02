@@ -369,7 +369,6 @@ src/cli/plugins-cli-test-helpers.ts
 src/cli/plugins-cli.install.test.ts
 src/cli/plugins-cli.runtime.ts
 src/cli/plugins-cli.update.test.ts
-src/cli/run-main.exit.test.ts
 src/cli/run-main.ts
 src/cli/skills-cli.ts
 src/commands/agent-via-gateway.test.ts
@@ -540,7 +539,6 @@ src/logging/redact.ts
 src/media-understanding/apply.test.ts
 src/media-understanding/runner.entries.ts
 src/media-understanding/runner.ts
-src/media/fetch.test.ts
 src/media/web-media.ts
 src/node-host/invoke-system-run-plan.test.ts
 src/node-host/invoke-system-run.test.ts
