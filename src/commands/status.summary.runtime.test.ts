@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { statusSummaryRuntime } from "../status/summary.runtime.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 
 function resolveSessionRuntime(
   params: Parameters<typeof statusSummaryRuntime.resolveSessionRuntime>[0],
 ) {
   return statusSummaryRuntime.resolveSessionRuntime({
     ...params,
-    cfg: migratePersistedImplicitMainRoster(params.cfg).config as never,
+    cfg: createCanonicalAgentConfigFixture(params.cfg).config as never,
   });
 }
 

@@ -7,7 +7,7 @@ import {
 } from "../../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import { sessionChanges, type SessionRowFacts } from "../../sessions/session-row-changes.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
   resolveOpenClawAgentSqlitePath,
@@ -23,38 +23,11 @@ import {
   prepareSessionGroupCategoryMutation,
 } from "./session-group-categories.kernel.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
-
-type MembershipPublication = { facts?: Extract<SessionRowFacts, { kind: "member" }> };
-type ParticipantPublication = {
-  projectionChanged: boolean;
-  participants: ReturnType<typeof readSqliteSessionParticipantProjection>;
-};
-
-export type SessionSharingWorkerOperations = {
-  "category.prepare": { input: { scope: SessionAccessScope; from: string }; output: string[] };
-  "category.apply": {
-    input: { scope: SessionAccessScope; from: string; to?: string };
-    output: Array<{ sessionKey: string; sessionId: string }>;
-  };
-  add: {
-    input: { scope: SessionAccessScope; params: Parameters<typeof addSessionMember>[1] };
-    output: { value: ReturnType<typeof addSessionMember> } & MembershipPublication;
-  };
-  remove: {
-    input: {
-      scope: SessionAccessScope;
-      identityId: string;
-      expected?: Parameters<typeof removeSessionMember>[2];
-      expectedSessionId?: string;
-      expectedEntry?: Parameters<typeof removeSessionMember>[4];
-    };
-    output: { value: ReturnType<typeof removeSessionMember> } & MembershipPublication;
-  };
-  participant: {
-    input: { scope: SessionAccessScope; params: Parameters<typeof recordSessionParticipant>[1] };
-    output: { value: ReturnType<typeof recordSessionParticipant> } & ParticipantPublication;
-  };
-};
+import type {
+  MembershipPublication,
+  SessionSharingWorkerOperations,
+} from "./session-sharing-store.types.js";
+export type { SessionSharingWorkerOperations } from "./session-sharing-store.types.js";
 
 /** The canonical agent executor retains the connection and both live admission checks. */
 export function bindSqliteWorkerBackend(
@@ -84,7 +57,11 @@ export function bindSqliteWorkerBackend(
     execute(command) {
       const scope = { ...command.input.scope };
       const target = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteScope(scope)));
-      if (readDatabasePathIdentitySync(target).canonicalPath !== context.databasePath) {
+      const sameOwner = db.location()
+        ? readDatabasePathIdentitySync(target).canonicalPath === context.databasePath
+        : target === context.databasePath &&
+          getOpenClawAgentDatabaseIfOpen(toDatabaseOptions(resolveSqliteScope(scope)))?.db === db;
+      if (!sameOwner) {
         throw new Error("Session collaboration target changed its database owner");
       }
       scope.storePath = context.databasePath;

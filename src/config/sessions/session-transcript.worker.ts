@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { decodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import type {
   UsageCostWorkerInput,
   UsageCostWorkerReply,
@@ -21,9 +21,6 @@ import type {
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
 
-let closeReadOnlyCandidates:
-  | typeof import("../../state/openclaw-agent-db-readonly-scope.js").closeOpenClawAgentDatabaseReadOnlyCandidates
-  | undefined;
 let releaseReadValidation:
   | typeof import("../../state/openclaw-agent-db-validation-cache.js").releaseOpenClawAgentDatabaseReadValidation
   | undefined;
@@ -37,14 +34,8 @@ serveOwnedWorkerTasks(
     SessionTranscriptWorkerReply<keyof SessionTranscriptWorkerValues> | UsageCostWorkerReply
   > => {
     // Install cleanup before this worker can acquire either a cached or explicit reader.
-    if (!closeReadOnlyCandidates) {
-      const closeCandidates = (await import("../../state/openclaw-agent-db-readonly-scope.js"))
-        .closeOpenClawAgentDatabaseReadOnlyCandidates;
-      const releaseValidation = (await import("../../state/openclaw-agent-db-validation-cache.js"))
-        .releaseOpenClawAgentDatabaseReadValidation;
-      closeReadOnlyCandidates = closeCandidates;
-      releaseReadValidation = releaseValidation;
-    }
+    releaseReadValidation ??= (await import("../../state/openclaw-agent-db-validation-cache.js"))
+      .releaseOpenClawAgentDatabaseReadValidation;
     // SAFETY: The paired runtime constructs this request; the SQLite snapshot validates admission.
     const request = input as SessionTranscriptWorkerInput | UsageCostWorkerInput;
     if (request.kind === "sqlite-target") {
@@ -156,6 +147,41 @@ serveOwnedWorkerTasks(
         return {
           kind: "session-pending-archives" as const,
           pending: result.found && result.value,
+        };
+      }
+      if (request.kind === "memory-session-targets") {
+        const { readMemorySessionTargets } = await import("./session-memory-targets.js");
+        return {
+          kind: request.kind,
+          targets: readMemorySessionTargets(
+            { ...request.params, env: cloneEnvWithPlatformSemantics(request.params.env) },
+            request.continuation,
+          ),
+        };
+      }
+      if (request.kind === "session-archive-inventory") {
+        const { listSessionTranscriptArchivesReadOnly } =
+          await import("./session-accessor.sqlite-history.js");
+        return {
+          kind: request.kind,
+          archives: listSessionTranscriptArchivesReadOnly({
+            ...request,
+            env: cloneEnvWithPlatformSemantics(request.env ?? process.env),
+          }),
+        };
+      }
+      if (request.kind === "session-corpus-inventory") {
+        const { readSessionTranscriptCorpusInventory } =
+          await import("../../../packages/memory-host-sdk/src/host/session-transcript-corpus.js");
+        return {
+          kind: request.kind,
+          entries: readSessionTranscriptCorpusInventory(
+            { ...request.scope, env: cloneEnvWithPlatformSemantics(request.scope.env) },
+            request.options,
+            request.artifacts,
+            request.database.path,
+            request.continuation,
+          ),
         };
       }
       if (request.kind === "session-archive-presence") {
@@ -428,6 +454,17 @@ serveOwnedWorkerTasks(
           ),
         };
       }
+      if (request.kind === "conversation-rows") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { selectConversationRowsFromDatabase } =
+          await import("./session-accessor.sqlite-conversation-read.js");
+        const read = withOpenClawAgentDatabaseReadOnly(
+          (database) => selectConversationRowsFromDatabase(database, request.query),
+          { ...request.database, env: cloneEnvWithPlatformSemantics(request.env) },
+        );
+        return { kind: "conversation-rows", rows: read.found ? read.value : [] };
+      }
       if (request.kind === "conversation-delivery") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
@@ -616,25 +653,11 @@ serveOwnedWorkerTasks(
       return body ? [body.buffer] : [];
     },
     closeResource: (key) => {
-      const parsed: unknown = key === undefined ? undefined : JSON.parse(key);
-      if (
-        !Array.isArray(parsed) ||
-        !parsed.every(
-          (candidate) =>
-            isRecord(candidate) &&
-            typeof candidate.path === "string" &&
-            (candidate.scope === undefined || candidate.scope === "sibling-family"),
-        )
-      ) {
+      const request = decodeAgentDatabaseReaderRequest(key);
+      if (request?.kind !== "close") {
         throw new Error("Session reader cleanup requires captured physical paths");
       }
-      const candidates = parsed.map((candidate: { path: string; scope?: "sibling-family" }) =>
-        candidate.scope
-          ? { path: candidate.path, scope: candidate.scope }
-          : { path: candidate.path },
-      );
-      closeReadOnlyCandidates?.(candidates);
-      releaseReadValidation?.(candidates);
+      releaseReadValidation?.(request.candidates);
       pruneClosedHistoryDatabaseScopes();
     },
   },

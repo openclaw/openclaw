@@ -157,10 +157,9 @@ export function hasRequesterCompletionCohort(entry: SubagentRunRecord): boolean 
   );
 }
 
-/** A frozen completion cohort can own distinct tasks that share one child session. */
+/** A newer task cannot revoke another task's exact completion custody. */
 export function isRequesterCompletionCohortCurrent(
   entry: SubagentRunRecord,
-  cohort: readonly SubagentRunRecord[],
   latestForSession: (
     sessionKey: string,
     matches?: (candidate: SubagentRunRecord) => boolean,
@@ -171,26 +170,9 @@ export function isRequesterCompletionCohortCurrent(
     entry.childSessionKey,
     (candidate) => (candidate.taskRunId ?? candidate.runId) === taskRunId,
   );
-  if (
-    entry.killReconciliation?.supersededAt !== undefined ||
-    (task && compareSubagentRunGeneration(task, entry) > 0)
-  ) {
-    return false;
-  }
-  const latest = latestForSession(entry.childSessionKey);
   return (
-    !latest ||
-    compareSubagentRunGeneration(latest, entry) <= 0 ||
-    cohort.some(
-      (candidate) =>
-        candidate.runId === latest.runId &&
-        candidate.generation === latest.generation &&
-        candidate.requesterSessionKey === entry.requesterSessionKey &&
-        candidate.requesterAgentId === entry.requesterAgentId &&
-        candidate.requesterStorePath === entry.requesterStorePath &&
-        candidate.requesterTurnRunId === entry.requesterTurnRunId &&
-        (candidate.taskRunId ?? candidate.runId) !== taskRunId,
-    )
+    entry.killReconciliation?.supersededAt === undefined &&
+    (!task || compareSubagentRunGeneration(task, entry) <= 0)
   );
 }
 

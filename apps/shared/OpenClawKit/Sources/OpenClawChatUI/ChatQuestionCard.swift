@@ -834,7 +834,12 @@ extension OpenClawChatViewModel {
         self.markTimelineChanged()
     }
 
-    func reconcileQuestionsAfterEvent() {
+    func handleQuestionEvent(_ event: OpenClawChatTransportEvent) {
+        switch event {
+        case let .questionRequested(question): self.upsertQuestion(question)
+        case let .questionResolved(resolved): self.resolveQuestionEvent(resolved)
+        default: return
+        }
         guard !self.isQuestionAuthorityRetired else { return }
         // Invalidate a list snapshot captured before this event, then fetch the
         // authoritative set so other pending cards from that snapshot are not lost.

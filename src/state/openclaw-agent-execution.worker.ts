@@ -67,6 +67,7 @@ import {
   loadConversationDeliveryOperations,
   loadAgentPendingInputOperations,
   loadAgentArchivePruningOperations,
+  loadUsageCacheOperations,
   prepareAgentTranscript,
   type RegisteredAgentWorkerOperations,
 } from "./openclaw-agent-execution-operations.js";
@@ -376,6 +377,10 @@ function openAgentDatabaseBackend(
     "session.archivePruning.pruneRetention": loadAgentArchivePruningOperations,
     "session.archivePruning.removeLegacy": loadAgentArchivePruningOperations,
     "session.archivePruning.reclaimPages": loadAgentArchivePruningOperations,
+    "usageCache.writeRollup": loadUsageCacheOperations,
+    "usageCache.prune": loadUsageCacheOperations,
+    "usageCache.acquireLock": loadUsageCacheOperations,
+    "usageCache.releaseLock": loadUsageCacheOperations,
   });
   const context: AgentWorkerOperationContext = {
     open: openWriter,

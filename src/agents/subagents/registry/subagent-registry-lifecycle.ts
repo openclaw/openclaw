@@ -214,6 +214,7 @@ export class SubagentLifecycleController {
         this.options.runs.get(entry.runId) ?? getCurrentSubagentRunOwner(this.options.runs, entry);
       return (
         (current !== undefined && !isSameSubagentRunOwner(current, entry)) ||
+        this.newerGenerationOwnsSession(entry) ||
         shouldSuppressSubagentRecoverySessionEffects(current ?? entry)
       );
     };
@@ -230,6 +231,7 @@ export class SubagentLifecycleController {
       this.options.runs.get(entry.runId) ?? getCurrentSubagentRunOwner(this.options.runs, entry);
     if (
       (current !== undefined && !isSameSubagentRunOwner(current, entry)) ||
+      this.newerGenerationOwnsSession(entry) ||
       shouldSuppressSubagentRecoverySessionEffects(current ?? entry)
     ) {
       return false;
@@ -366,8 +368,7 @@ export class SubagentLifecycleController {
     return (
       current !== undefined &&
       current.pauseReason !== "sessions_yield" &&
-      this.isCleanupGeneration(entry, generation) &&
-      !this.newerGenerationOwnsSession(current)
+      this.isCleanupGeneration(entry, generation)
     );
   };
   isCleanupAttemptCurrent = (
@@ -377,15 +378,16 @@ export class SubagentLifecycleController {
   ): boolean =>
     getCurrentSubagentRunOwner(this.options.runs, entry)?.cleanupHandled === true &&
     this.isCleanupGenerationCurrent(runId, entry, generation);
-  isEndedHookOwnerCurrent = (_runId: string, entry: SubagentRunRecord): boolean => {
+  isCleanupOwnerCurrent = (_runId: string, entry: SubagentRunRecord): boolean => {
     const current =
       this.options.runs.get(entry.runId) ?? getCurrentSubagentRunOwner(this.options.runs, entry);
     return (
       (current === undefined || isSameSubagentRunOwner(current, entry)) &&
-      (current ?? entry).pauseReason !== "sessions_yield" &&
-      !this.newerGenerationOwnsSession(entry)
+      (current ?? entry).pauseReason !== "sessions_yield"
     );
   };
+  isEndedHookOwnerCurrent = (runId: string, entry: SubagentRunRecord): boolean =>
+    this.isCleanupOwnerCurrent(runId, entry) && !this.newerGenerationOwnsSession(entry);
 
   bumpTerminalGeneration(entry: SubagentRunRecord, bindingChanged = false): number {
     const identity = this.trackRun(entry);

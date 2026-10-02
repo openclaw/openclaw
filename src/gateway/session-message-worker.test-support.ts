@@ -15,7 +15,7 @@ export function createWorkerFanoutFixture({
   sessionKey: string;
 }) {
   const config: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
     session: { mainKey: "main", store: storePath },
   };
   const ledger: WorkerTranscriptCommitStore = {

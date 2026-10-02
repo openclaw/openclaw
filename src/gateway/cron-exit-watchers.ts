@@ -34,7 +34,7 @@ export type CronExitResult = {
 };
 
 export type CronExitWatcherHandlers = {
-  legacyDefaultAgentId?: string;
+  getDefaultAgentId?: () => string | undefined;
   getProcessSupervisor: () => ProcessSupervisor;
   fireOnExit: (
     job: OnExitCronJob,
@@ -67,11 +67,10 @@ function scopeKey(jobId: string): string {
   return `${SCOPE_PREFIX}:${jobId}`;
 }
 
-function isWatchableExitJob(job: CronJob, legacyDefaultAgentId?: string): job is OnExitCronJob {
+function isWatchableExitJob(job: CronJob, defaultAgentId?: string): job is OnExitCronJob {
   return (
     job.enabled &&
-    (!legacyDefaultAgentId ||
-      tryResolveCronJobEffectiveAgentId(job, undefined, legacyDefaultAgentId) !== undefined) &&
+    tryResolveCronJobEffectiveAgentId(job, defaultAgentId) !== undefined &&
     hasCanonicalCronDeliveryMode(job.delivery) &&
     job.schedule.kind === "on-exit"
   );
@@ -159,7 +158,7 @@ export function createCronExitWatchers(
   };
 
   const arm = (job: OnExitCronJob, consecutiveFailures = 0): Promise<void> => {
-    if (!isWatchableExitJob(job, handlers.legacyDefaultAgentId)) {
+    if (!isWatchableExitJob(job, handlers.getDefaultAgentId?.())) {
       return Promise.resolve();
     }
     const armed = createDeferredCore();
@@ -195,7 +194,7 @@ export function createCronExitWatchers(
       }
       try {
         const updated = await settleOwnerCallback(owner.updateWatcherState(slot.job, patch));
-        if (owns() && updated && isWatchableExitJob(updated, handlers.legacyDefaultAgentId)) {
+        if (owns() && updated && isWatchableExitJob(updated, handlers.getDefaultAgentId?.())) {
           slot.job = updated;
         }
       } catch (err) {
@@ -369,7 +368,7 @@ export function createCronExitWatchers(
     const want = new Map(
       jobs
         .filter((job): job is OnExitCronJob =>
-          isWatchableExitJob(job, handlers.legacyDefaultAgentId),
+          isWatchableExitJob(job, handlers.getDefaultAgentId?.()),
         )
         .map((j) => [j.id, j] as const),
     );

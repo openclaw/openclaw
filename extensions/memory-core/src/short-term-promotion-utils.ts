@@ -14,11 +14,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { deriveConceptTags, MAX_CONCEPT_TAGS } from "./concept-vocabulary.js";
-import type {
-  PromotionWeights,
-  ShortTermRecallEntry,
-  ShortTermRecallStore,
-} from "./short-term-promotion-types.js";
+import type { ShortTermRecallEntry, ShortTermRecallStore } from "./short-term-promotion-types.js";
 
 const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
@@ -43,14 +39,6 @@ const MEMORY_FLUSH_PROMPT_RE =
 const PROMOTION_SCORE_METADATA_RE =
   /\[\s*score=\d+(?:\.\d+)?\s+(?:signals=\d+\s+)?recalls=\d+\s+avg=\d+(?:\.\d+)?\s+source=memory\//i;
 const DREAMING_DIFF_PREFIX_RE = /@@\s*-\d+(?:,\d+)?\s+[-*+]\s+/iy;
-const DEFAULT_PROMOTION_WEIGHTS: PromotionWeights = {
-  frequency: 0.24,
-  relevance: 0.3,
-  diversity: 0.15,
-  recency: 0.15,
-  consolidation: 0.1,
-  conceptual: 0.06,
-};
 
 export function clampScore(value: number): number {
   if (!Number.isFinite(value)) {
@@ -503,31 +491,6 @@ export function toFinitePositive(value: unknown, fallback: number): number {
 
 export function toFiniteNonNegativeInt(value: unknown, fallback = 0): number {
   return asNonNegativeFiniteNumber(Math.floor(Number(value))) ?? fallback;
-}
-
-export function normalizeWeights(weights?: Partial<PromotionWeights>): PromotionWeights {
-  const merged = {
-    ...DEFAULT_PROMOTION_WEIGHTS,
-    ...weights,
-  };
-  const frequency = Math.max(0, merged.frequency);
-  const relevance = Math.max(0, merged.relevance);
-  const diversity = Math.max(0, merged.diversity);
-  const recency = Math.max(0, merged.recency);
-  const consolidation = Math.max(0, merged.consolidation);
-  const conceptual = Math.max(0, merged.conceptual);
-  const sum = frequency + relevance + diversity + recency + consolidation + conceptual;
-  if (sum <= 0) {
-    return { ...DEFAULT_PROMOTION_WEIGHTS };
-  }
-  return {
-    frequency: frequency / sum,
-    relevance: relevance / sum,
-    diversity: diversity / sum,
-    recency: recency / sum,
-    consolidation: consolidation / sum,
-    conceptual: conceptual / sum,
-  };
 }
 
 export function calculateRecencyComponent(ageDays: number, halfLifeDays: number): number {

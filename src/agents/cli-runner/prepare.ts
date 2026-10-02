@@ -1656,9 +1656,9 @@ async function prepareCliRunContextWithinReadFence(
         ? { prompt: "" }
         : await resolveCliSkillsPrompt({
             assertCurrent: assertSkillsCurrent,
-            skillsSnapshot: params.skillsSnapshot,
+            run: params,
             workspaceDir,
-            executionWorkspaceDir: params.sessionEntry?.worktree?.canonicalWorkspaceDir ?? cwd,
+            executionWorkspaceDir: cwd,
             config: params.config,
             agentId: sessionAgentId,
             sessionKey: params.sessionKey?.trim() || params.sessionId,

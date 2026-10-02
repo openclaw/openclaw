@@ -53,6 +53,12 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readConversations: reader(
+      "conversation-rows",
+      "conversations",
+      (input) => ({ kind: "conversation-rows", ...input }),
+      (value) => value.rows,
+    ),
     prewarm: reader(
       "prewarm",
       "prewarm acknowledgement",
@@ -64,6 +70,39 @@ export function createSessionHistoryWorkerReaders(
       "pending archives",
       (input) => ({ kind: "session-pending-archives", ...input }),
       (value) => value.pending,
+    ),
+    readMemorySessionTargets: reader(
+      "memory-session-targets",
+      "memory session targets",
+      (input) => ({
+        kind: "memory-session-targets",
+        ...input,
+        params: {
+          ...input.params,
+          env: captureSessionTranscriptStorageEnvironment(input.params.env),
+        },
+      }),
+      (value) => value.targets,
+    ),
+    readArchiveInventory: reader(
+      "session-archive-inventory",
+      "archive inventory",
+      (input) => ({
+        kind: "session-archive-inventory",
+        ...input,
+        env: captureSessionTranscriptStorageEnvironment(input.env ?? process.env),
+      }),
+      (value) => value.archives,
+    ),
+    readCorpusInventory: reader(
+      "session-corpus-inventory",
+      "corpus inventory",
+      (input) => ({
+        kind: "session-corpus-inventory",
+        ...input,
+        scope: { ...input.scope, env: captureSessionTranscriptStorageEnvironment(input.scope.env) },
+      }),
+      (value) => value.entries,
     ),
     readArchivePresence: reader(
       "session-archive-presence",

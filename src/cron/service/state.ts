@@ -138,7 +138,6 @@ export type CronServiceDeps = {
   defaultAgentId?: string;
   /** Resolve the current default when runtime config can change after startup. */
   resolveDefaultAgentId?: () => string | undefined;
-  legacyDefaultAgentId?: string;
   /** Resolve configured or persisted owners whose session stores need periodic cleanup. */
   resolveSessionStoreAgentIds?: () => string[];
   /** Revalidate resident policy using the supplied transaction or worker deletion facts. */

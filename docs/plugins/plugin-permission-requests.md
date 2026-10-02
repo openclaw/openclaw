@@ -163,8 +163,7 @@ available approval surfaces, and waits for a decision.
 
 Only the exact `allow-once` and `allow-always` decisions permitted by the
 request allow execution. Unknown, malformed, mismatched, missing, and timed-out
-decisions fail closed. The legacy `timeoutBehavior` field remains accepted for
-plugin compatibility but is deprecated and ignored. Do not set it in new hooks.
+decisions fail closed.
 
 `allow-always` is only durable when the requesting plugin or runtime implements
 that persistence. For ordinary `before_tool_call.requireApproval` hooks,

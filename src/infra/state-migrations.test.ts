@@ -853,7 +853,7 @@ describe("state migrations", () => {
           entries: { main: { name: "Main" }, ops: { name: "Ops" } },
         },
         channels: { chatapp: {} },
-      },
+      } satisfies OpenClawConfig,
       "main",
     );
     const credentialsDir = path.join(stateDir, "credentials");

@@ -149,7 +149,7 @@ it("dispatches a newly discovered model and preserves an admitted turn when disc
           heartbeat: { every: "0m" },
           modelPolicy: { allow: [`${provider}/*`] },
         },
-        list: [{ id: "main", workspace: state.workspaceDir }],
+        entries: { main: { workspace: state.workspaceDir } },
       },
       tools: { profile: "minimal" },
       plugins: {

@@ -133,7 +133,11 @@ transcript content.
 
 Move an existing domain operation across its worker boundary instead of creating
 a second store, generic SQL service, or cache manager. Read-only operations use the
-existing read-only worker scope and the relevant domain reader. Shared-state
+existing read-only worker scope and the relevant domain reader. Typed domain
+handlers register with the scoped transport; it owns bounded result transfer,
+cancellation, and child cleanup. Catalog preparation captures these worker-read
+facts before registry publication, while catalog writes retain the agent executor.
+Shared-state
 fixed reads and session transcript/history reads retain
 their established adapters and cleanup owners. A Promise around synchronous SQL,
 or `withOpenClawAgentDatabaseReadOnly` alone, does not move execution off thread.

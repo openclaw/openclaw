@@ -7,6 +7,7 @@ import type {
 import { resolveVisibleHistoryEventCount } from "../config/sessions/session-accessor.sqlite-history-projection.js";
 import {
   readRecentSessionTranscriptHistoryEventsFromProjection,
+  readOffPathSessionTranscriptEventsFromProjection,
   readSessionTranscriptHistoryEventByIdFromProjection,
   readSessionTranscriptHistoryEventLookupFromProjection,
   readSessionTranscriptHistoryEventPageFromProjection,
@@ -254,24 +255,32 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     opts: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions,
   ): Promise<ReadSessionMessagesResult> {
     const target = await access.resolveTarget(scope);
-    const messages =
-      (await readSnapshotIfPresent(
-        target,
-        (projection) =>
+    const snapshot = (await readSnapshotIfPresent(
+      target,
+      (projection) => ({
+        messages:
           opts.mode === "recent"
             ? readRecentSqliteMessageRecords(projection, opts).messages
             : projectSqliteHistoryEvents(
                 readSessionTranscriptHistoryEventsFromProjection(projection),
               ),
-        opts,
-      )) ?? [];
-    if (messages.length === 0 && opts.allowResetArchiveFallback === true) {
-      return await archivedTranscriptReader(target).read(opts);
-    }
-    return {
-      messages,
-      transcriptPath: target.sessionFile,
-    };
+        ...(opts.mode === "full" && opts.includeOffPathMessages
+          ? {
+              offPathMessages: projectSqliteHistoryEvents(
+                readOffPathSessionTranscriptEventsFromProjection(projection),
+              ),
+            }
+          : {}),
+      }),
+      opts,
+    )) ?? { messages: [], offPathMessages: [] };
+    const result =
+      snapshot.messages.length === 0 && opts.allowResetArchiveFallback === true
+        ? await archivedTranscriptReader(target).read(opts)
+        : { messages: snapshot.messages, transcriptPath: target.sessionFile };
+    return snapshot.offPathMessages
+      ? { ...result, messages: [...result.messages, ...snapshot.offPathMessages] }
+      : result;
   }
 
   async function readSessionMessageByIdAsync(

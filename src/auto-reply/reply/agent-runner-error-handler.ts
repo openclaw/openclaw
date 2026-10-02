@@ -144,9 +144,7 @@ export async function handleAgentExecutionError(params: {
     );
     takePendingLifecycleTerminal().emit("error", err);
     const switchErrorText = params.shouldSurfaceToControlUi
-      ? renderControlUiAgentFailureCopy(
-          "model switch could not be completed. The requested model may be temporarily unavailable.",
-        )
+      ? "⚠️ Couldn't switch models. Choose another model in the Control UI, then try again."
       : isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel)
         ? "⚠️ Agent failed before reply: model switch could not be completed. " +
           "The requested model may be temporarily unavailable. Please try again shortly."
@@ -181,7 +179,7 @@ export async function handleAgentExecutionError(params: {
     );
     const text =
       params.shouldSurfaceToControlUi && err.userMessage === undefined
-        ? renderControlUiAgentFailureCopy(message)
+        ? renderControlUiAgentFailureCopy()
         : externalReply.text;
     return await settleFailure({ text }, externalReply.isGenericRunnerFailure);
   }
@@ -280,7 +278,7 @@ export async function handleAgentExecutionError(params: {
       ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
       : (externalRunFailureReply?.text ??
         (params.shouldSurfaceToControlUi
-          ? renderControlUiAgentFailureCopy(message)
+          ? renderControlUiAgentFailureCopy()
           : (useHeartbeatFailureCopy ?? turn.isHeartbeat)
             ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
             : GENERIC_EXTERNAL_RUN_FAILURE_TEXT)));

@@ -170,7 +170,7 @@ describe("Gateway agent and artifact APIs", () => {
           gateway: { auth: { mode: "token", token } },
           agents: {
             entries: {
-              main: { default: true, workspace: mainWorkspace },
+              main: { workspace: mainWorkspace },
             },
           },
         },

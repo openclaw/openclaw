@@ -44,7 +44,6 @@ function setup(options: { existingSession?: boolean; url?: string; listedUrl?: s
   const ctx = {
     state: () => state,
     forProfile: () => profileCtx,
-    mapTabError: () => null,
   } as unknown as BrowserRouteContext;
   const { app, postHandlers } = createBrowserRouteApp();
   registerBrowserAgentScreencastRoutes(app, ctx);

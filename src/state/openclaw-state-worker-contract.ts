@@ -28,7 +28,6 @@ import type {
 } from "../gateway/session-group-catalog.types.js";
 import type * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import type { DeviceIdentity } from "../infra/device-identity-store.js";
-import type { PreparedSqliteAuditRecord } from "../infra/sqlite-audit-record.kernel.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import type {
   SqliteWalPeriodicRequest,
@@ -178,14 +177,6 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
         expected: ConfigHealthEntryBasis | null | undefined;
         updatedAtMs: number;
       };
-      output: boolean;
-    };
-    "diagnostic.register": {
-      input: { scope: string; maxEntries: number; record: PreparedSqliteAuditRecord };
-      output: void;
-    };
-    "config.snapshot.upsert": {
-      input: { record: PreparedSqliteAuditRecord; expectedPayloadJson?: string | null };
       output: boolean;
     };
   };

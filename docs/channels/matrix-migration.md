@@ -25,22 +25,24 @@ into the root OpenClaw package.
 
 ## What the migration does automatically
 
-Matrix migration runs when you run [`openclaw doctor --fix`](/gateway/doctor). File-based sidecars next to the dedicated Matrix store retain their client-start fallback, but credential-file import is Doctor-only; runtime reads only canonical SQLite credential state.
+Matrix migration runs when you run [`openclaw doctor --fix`](/gateway/doctor). The supported sync-cache JSON import retains its client-start fallback. Credential-file import is Doctor-only; runtime reads only canonical SQLite credential state.
 
 Doctor migration covers:
 
 - importing and verifying retired `~/.openclaw/credentials/matrix/credentials*.json` files before archiving them
 - keeping the same account selection and `channels.matrix` config
-- importing file-based sidecar state (`bot-storage.json` sync cache, `recovery-key.json`, `legacy-crypto-migration.json`, IndexedDB snapshots) into Matrix SQLite state; migrated files are archived with a `.migrated` suffix
+- importing supported account-scoped `bot-storage.json` sync caches into Matrix SQLite state and archiving migrated files with a `.migrated` suffix
 - reusing the most complete existing token-hash storage root for the same Matrix account, homeserver, user, and device when the access token changes later
 
 ## Retired pre-July state files
 
 Current releases support state formats written on or after July 1, 2026.
-Matrix thread bindings and startup-verification cooldowns already used SQLite
-by then. Their older `thread-bindings.json` and `startup-verification.json`
-imports are retired. Doctor and the affected runtime refuse these files and
-leave them unchanged. If they remain in an active Matrix storage root, first
+Matrix thread bindings, startup-verification cooldowns, recovery keys, crypto
+snapshots, storage metadata, and inbound-dedupe markers already used SQLite
+by then. Imports of `thread-bindings.json`, `startup-verification.json`,
+`recovery-key.json`, `legacy-crypto-migration.json`, `crypto-idb-snapshot.json`,
+`storage-meta.json`, and `inbound-dedupe.json` are retired. Doctor and the affected
+runtime refuse these files and leave them unchanged. If they remain in an active Matrix storage root, first
 install OpenClaw `2026.9.5`, run `openclaw doctor --fix`, and start the Matrix
 channel once to complete the import. Then upgrade to the latest release.
 
@@ -53,8 +55,9 @@ old rust crypto store. Current releases no longer carry that migration.
 
 If you are upgrading an installation that still uses the flat layout, first
 upgrade to a 2026.6 release, run `openclaw doctor --fix`, and start the gateway
-once so the flat store and any recoverable room keys are migrated. Then update
-to the latest release.
+once so the flat store and any recoverable room keys are migrated. Next, upgrade
+through `2026.9.5`, run its Doctor, and start Matrix once to convert any remaining
+JSON sidecars to SQLite before installing the latest release.
 
 The previous public Matrix plugin did **not** automatically create Matrix room-key backups. If your old installation had local-only encrypted history that was never backed up, some older encrypted messages may remain unreadable after the upgrade regardless of the migration path.
 

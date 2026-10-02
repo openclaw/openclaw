@@ -1,4 +1,5 @@
 // Codex tests cover media understanding provider plugin behavior.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   ImageDescriptionRequest,

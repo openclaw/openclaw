@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getAgentDir } from "../agents/config.js";
 import { resolveInstallAgentDir } from "../agents/install-agent-dir.js";
 import { readCurrentConfigForResolution } from "../config/io.runtime.js";
-import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -31,6 +30,7 @@ import {
   detectLegacyStateMigrations,
   planLegacyStateMigrationsReadOnly,
 } from "./state-migrations.doctor.js";
+import { resolveLegacyStateMigrationOwner } from "./state-migrations.legacy-owner.js";
 import { migrateLegacyAgentDir } from "./state-migrations.legacy-sessions.js";
 import type { LegacyStateMigrationPlan } from "./state-migrations.types.js";
 import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
@@ -125,7 +125,7 @@ describe("legacy state migration caller storage", () => {
   });
 
   it.each([undefined, "missing"])(
-    "keeps retained migration ownership separate from runtime selection with system owner %s",
+    "keeps raw migration ownership separate from runtime selection with system owner %s",
     async (systemAgentId) => {
       await withOpenClawTestState(
         { label: "retained-install-owner", layout: "split", agentEnv: "clear" },
@@ -137,15 +137,25 @@ describe("legacy state migration caller storage", () => {
               entries: { main: {}, worker: {} },
             },
           };
-          retainLegacyDefaultAgentId(cfg, "worker");
           const resolution = resolveInstallAgentDir(cfg, {
             env: state.env,
             homedir: () => state.home,
           });
+          const migration = resolveLegacyStateMigrationOwner({
+            cfg,
+            locatorConfig: {
+              agents: { list: [{ id: "main" }, { id: "worker", default: true }] },
+            },
+            env: state.env,
+            homedir: () => state.home,
+          });
 
-          expect(resolution.migrationTarget).toEqual(
-            systemAgentId ? undefined : { dir: state.agentDir("worker"), owner: "worker" },
-          );
+          expect(migration.migrationTarget).toEqual({
+            dir: state.agentDir("worker"),
+            owner: "worker",
+          });
+          expect(migration.sessionMigrationAgentId).toBe("worker");
+          expect(resolution.migrationTarget).toBeUndefined();
           expect(resolution.optionalDirectory).toBeUndefined();
         },
       );

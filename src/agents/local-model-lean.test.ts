@@ -243,7 +243,7 @@ describe("local model lean tool filtering", () => {
     ).toEqual(["read", "exec"]);
   });
 
-  it("uses the retained legacy owner when no session scope is provided", () => {
+  it("requires explicit selection despite retained Doctor ownership when no session is provided", () => {
     const cfg = retainLegacyDefaultAgentId(
       {
         agents: {
@@ -253,11 +253,15 @@ describe("local model lean tool filtering", () => {
             gemma: { experimental: { localModelLean: true } },
           },
         },
-      },
+      } satisfies OpenClawConfig,
       "gemma",
     );
 
-    expect(isLocalModelLeanEnabled({ config: cfg })).toBe(true);
+    expect(() => isLocalModelLeanEnabled({ config: cfg })).toThrowError(
+      expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
+    );
+    expect(isLocalModelLeanEnabled({ config: cfg, agentId: "gemma" })).toBe(true);
+    expect(isLocalModelLeanEnabled({ config: cfg, agentId: "ops" })).toBe(false);
   });
 
   it("uses the agent from an agent session key", () => {

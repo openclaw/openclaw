@@ -26,7 +26,6 @@ interface FrvReadOptions {
 
 export interface FrvClient {
   repository?: string;
-  loadFlakeClassifications: typeof import("./full-release-flake-classification.mjs").loadFlakeClassifications;
   getReleaseEvidenceClient: () => ReturnType<
     typeof import("./release-ci-summary.mjs").createReleaseEvidenceClient
   >;
@@ -98,7 +97,7 @@ export function watchRelease(
 ): Promise<{ complete: boolean; statePath: string }>;
 export function inspectContinuation(
   plan: Record<string, unknown>,
-  client: Pick<FrvClient, "getAttemptJobs" | "getRun" | "repository" | "loadFlakeClassifications">,
+  client: Pick<FrvClient, "getAttemptJobs" | "getRun" | "repository">,
   options?: FrvReadOptions,
 ): Promise<FrvContinuationStatus>;
 export function createClient(

@@ -14,8 +14,9 @@ import {
   type PackageUpdateTransaction,
 } from "./package-update-steps.js";
 import {
-  createNpmTarget,
-  createRootRunner,
+  createNpmUpdateOptions,
+  packageUpdateStepResult,
+  stagedNpmPrefix,
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
 import type { UpdateStepResult } from "./update-step-result.js";
@@ -103,17 +104,13 @@ describe("retained package update transactions", () => {
             : {}),
         };
         const update = runGlobalPackageUpdateSteps({
-          installTarget: createNpmTarget(globalRoot),
-          installSpec: outcome === "already current" ? "./candidate.tgz" : "openclaw@2.0.0",
-          packageName: "openclaw",
-          runCommand: createRootRunner(globalRoot),
-          timeoutMs: 1000,
+          ...createNpmUpdateOptions(
+            globalRoot,
+            outcome === "already current" ? "./candidate.tgz" : "openclaw@2.0.0",
+          ),
           runStep: async ({ name, argv }) => {
             const fallback = argv.includes("--omit=optional");
-            const stagePrefix = argv[argv.indexOf("--prefix") + 1];
-            if (!stagePrefix) {
-              throw new Error("missing stage prefix");
-            }
+            const stagePrefix = stagedNpmPrefix(argv);
             stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
             await writePackageRoot(
               stageRoot,
@@ -129,19 +126,19 @@ describe("retained package update transactions", () => {
             await fs.mkdir(path.join(stagePrefix, "bin"), { recursive: true });
             stageLauncher = path.join(stagePrefix, "bin", "openclaw");
             await fs.writeFile(stageLauncher, "new launcher\n");
-            return {
-              name,
-              command: argv.join(" "),
-              cwd: stagePrefix,
-              durationMs: 0,
-              exitCode: outcome === "fallback install timed out" && !fallback ? 1 : 0,
-              termination:
-                outcome === "install timed out" ||
-                (outcome === "fallback install timed out" && fallback)
-                  ? "timeout"
-                  : "exit",
-              killed: outcome === "install killed",
-            };
+            return packageUpdateStepResult(
+              { name, argv, cwd: stagePrefix },
+              {
+                durationMs: 0,
+                exitCode: outcome === "fallback install timed out" && !fallback ? 1 : 0,
+                termination:
+                  outcome === "install timed out" ||
+                  (outcome === "fallback install timed out" && fallback)
+                    ? "timeout"
+                    : "exit",
+                killed: outcome === "install killed",
+              },
+            );
           },
           validateCandidate: async (candidateRoot) => {
             phases.push("validate");

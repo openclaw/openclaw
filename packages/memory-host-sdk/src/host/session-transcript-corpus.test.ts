@@ -146,9 +146,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
               updatedAtMs: persisted?.updatedAt,
             },
           ]);
-          if (readOnly && !includeRetainedSqlite) {
-            expect(observed.queries.filter(isSummaryRead)).toEqual([]);
-          }
+          expect(observed.queries).toEqual([]);
           const decodedEntries = parse.mock.calls.filter(([json]) =>
             json.includes('"sessionId":"corpus-metadata"'),
           );

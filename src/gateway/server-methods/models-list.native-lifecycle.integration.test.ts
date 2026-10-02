@@ -241,7 +241,7 @@ it.for([false, true])(
             modelPolicy: { allow: [`${provider}/*`] },
             models: { [`${provider}/static-model`]: { agentRuntime: { id: harness } } },
           },
-          list: [{ id: "main", workspace: state.workspaceDir }],
+          entries: { main: { workspace: state.workspaceDir } },
         },
         models: {
           providers: {
@@ -631,7 +631,7 @@ it("models.list full refresh discovers an enabled provider without configured cr
     const cfg = {
       agents: {
         defaults: { models: { [`${provider}/*`]: {} } },
-        list: [{ id: "main", workspace: state.workspaceDir }],
+        entries: { main: { workspace: state.workspaceDir } },
       },
       plugins: {
         allow: [provider],

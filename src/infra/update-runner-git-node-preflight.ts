@@ -99,19 +99,23 @@ export async function prepareGitCandidateNodeRuntime(
         .find((key) =>
           process.platform === "win32" ? key.toUpperCase() === "PATH" : key === "PATH",
         ) ?? "PATH";
-    const directories = (resolveEnvironmentValue(env, "PATH") ?? "").split(path.delimiter);
+    const runtimeDirectory = path.dirname(currentPath);
+    const directories = (resolveEnvironmentValue(env, "PATH") ?? "")
+      .split(path.delimiter)
+      .filter((directory) => directory !== runtimeDirectory);
     const firstNode = directories.findIndex((directory) =>
       resolveExecutableFromPathEnv("node", [directory], env, { cwd: root, useCache: false }),
     );
     // Keep scoped package-manager launchers ahead of the runtime directory, which
-    // can contain a competing pnpm. Only overtake entries that already provide Node.
+    // can contain a competing pnpm. Reinsert the selected runtime before other
+    // Node providers so its old PATH position cannot hide a scoped launcher.
     const prefixLength = firstNode < 0 ? directories.length : firstNode;
     return {
       env: {
         ...env,
         [pathKey]: mergePathPrepend(directories.slice(prefixLength).join(path.delimiter), [
           ...directories.slice(0, prefixLength),
-          path.dirname(currentPath),
+          runtimeDirectory,
         ]),
       },
     };

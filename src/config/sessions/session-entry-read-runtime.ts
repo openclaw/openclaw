@@ -194,6 +194,7 @@ export async function withSessionDiagnosticTextInWorker(
 export async function readSessionEntryInWorker(
   input: SessionAccessScope,
   assertCallerCurrent: () => void,
+  onRegistryChange?: (change: AgentDatabaseRegistryChange) => void,
 ) {
   const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
@@ -249,7 +250,10 @@ export async function readSessionEntryInWorker(
       };
       const source = {
         assertCurrent,
-        onRegistryChange: owner.onRegistryChange,
+        onRegistryChange(change) {
+          owner.onRegistryChange(change);
+          onRegistryChange?.(change);
+        },
         createAdmission(binding) {
           return () => ({
             nativeLocations: binding.nativeLocations,
