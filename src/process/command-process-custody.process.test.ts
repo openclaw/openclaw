@@ -1,7 +1,13 @@
-import { existsSync, readFileSync, watch } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
 import { requireNodeTool } from "../../test/helpers/node-toolchain.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
@@ -12,10 +18,17 @@ import {
 import { runUtf8CommandWithTimeout } from "./exec-runner.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts?.close();
+});
 
 it.skipIf(process.platform === "win32")(
   "retains and stops a detached writer after its busy scope owner is killed",
-  async () => {
+  async ({ signal }) => {
     const root = directories.make("command-custody-");
     const receipt = path.join(root, "custody.json");
     const effect = path.join(root, "effect");
@@ -29,10 +42,15 @@ it.skipIf(process.platform === "win32")(
     const spawnOwner = moduleUrl("exec-spawn");
     const identityOwner = moduleUrl("pid-alive", "../shared/pid-alive");
     const leaf = `
-      const fs = require('node:fs');
-      globalThis.keepalive = new (require('node:worker_threads').MessageChannel)();
+      import fs from 'node:fs';
+      import { MessageChannel } from 'node:worker_threads';
+      ${fixtureReceiptClientSource(receipts.endpoint)}
+      globalThis.keepalive = new MessageChannel();
       keepalive.port1.on('message', () => {});
-      process.on('SIGUSR2', () => fs.writeFileSync(${JSON.stringify(effect)}, 'still writable'));
+      process.on('SIGUSR2', () => {
+        fs.writeFileSync(${JSON.stringify(effect)}, 'still writable');
+        sendReceipt(${JSON.stringify(effect)}, 'written');
+      });
       process.stdout.write('ready\\n');
     `;
     const script = `
@@ -43,7 +61,7 @@ it.skipIf(process.platform === "win32")(
       const record = value => fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify(value));
       process.on('SIGTERM', () => {});
       await withCommandProcessScope(async () => {
-        const child = spawnCommand([${JSON.stringify(node)}, '-e', ${JSON.stringify(leaf)}], {
+        const child = spawnCommand([${JSON.stringify(node)}, '--input-type=module', '-e', ${JSON.stringify(leaf)}], {
           stdio: ['ignore', 'pipe', 'ignore'], buffer: false, reject: false,
         });
         await once(child.stdout, 'data');
@@ -59,7 +77,6 @@ it.skipIf(process.platform === "win32")(
     const controller = new AbortController();
     let ready: { root: number; identity: CommandProcessIdentity } | undefined;
     let output = "";
-    let watcher: ReturnType<typeof watch> | undefined;
     try {
       const result = await runUtf8CommandWithTimeout(
         [
@@ -72,7 +89,7 @@ it.skipIf(process.platform === "win32")(
         {
           cwd: process.cwd(),
           env: { OPENCLAW_STATE_DIR: root },
-          signal: controller.signal,
+          signal: AbortSignal.any([signal, controller.signal]),
           timeoutMs: 30_000,
           killGraceMs: 100,
           killProcessTree: true,
@@ -99,15 +116,8 @@ it.skipIf(process.platform === "win32")(
         state: "spawned",
         identity: ready.identity,
       });
-      const written = new Promise<void>((resolve) => {
-        watcher = watch(root, () => {
-          if (existsSync(effect)) {
-            resolve();
-          }
-        });
-      });
       process.kill(ready.identity.pid, "SIGUSR2");
-      await written;
+      await withinTest(receipts.waitFor(effect, "written"), signal);
       expect(readFileSync(effect, "utf8")).toBe("still writable");
       expect(await settleCommandProcessGroups([ready.identity])).toEqual({
         settled: true,
@@ -115,7 +125,6 @@ it.skipIf(process.platform === "win32")(
       });
       expect(isChildProcessTreeAlive(ready.identity)).toBe(false);
     } finally {
-      watcher?.close();
       const identity =
         ready?.identity ??
         (existsSync(receipt)

@@ -135,6 +135,10 @@ capture and Doctor admission, during Doctor, or after Doctor finishes preserves 
 databases and reports `state-migrated-no-rollback` with the snapshot location and
 Doctor recovery guidance. Without Doctor write evidence, rollback requires the
 last verified database generations to remain unchanged.
+Snapshot capture first settles local SQLite writers under maintenance ownership,
+so later writer shutdown is not mistaken for intervening writes. The installed
+updater owns this ordering; staging a newer candidate cannot change an
+already-running older updater.
 On Windows, an eligible capture first runs the same native SQLite exclusion check
 used by rollback. This settles any retained WAL before recording write fingerprints,
 so later probe cleanup is not mistaken for another writer. If another connection
