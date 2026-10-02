@@ -767,17 +767,6 @@ class ChatComposerDraftTest {
   }
 
   @Test
-  fun stagedShareCommitsOnlyForMatchingQueueHead() {
-    val current = ChatShareDraft(id = 7, text = "current", attachments = emptyList(), droppedAttachmentCount = 0)
-    val replacement = ChatShareDraft(id = 8, text = "replacement", attachments = emptyList(), droppedAttachmentCount = 0)
-    val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "agent-a", sessionKey = "session-a")
-
-    assertTrue(canCommitStagedChatShare(current.id, current, owner, owner))
-    assertFalse(canCommitStagedChatShare(current.id, replacement, owner, owner))
-    assertFalse(canCommitStagedChatShare(current.id, null, owner, owner))
-  }
-
-  @Test
   fun pendingAttachmentsRemainKeyedAcrossComposerNavigationAndOwnerResolution() {
     val ownerA = ChatComposerOwner(gatewayStableId = "gateway", agentId = "agent-a", sessionKey = "main")
     val ownerB = ChatComposerOwner(gatewayStableId = "gateway", agentId = "agent-b", sessionKey = "session-b")
@@ -980,21 +969,6 @@ class ChatComposerDraftTest {
         gatewayDefaultAgentId = "  ",
         sessionKey = "main",
         mainSessionKey = "main",
-      ),
-    )
-  }
-
-  @Test
-  fun stagedShareRejectsAReplacementComposerOwner() {
-    val share = ChatShareDraft(id = 7, text = "share", attachments = emptyList(), droppedAttachmentCount = 0)
-    val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "agent-a", sessionKey = "session-a")
-
-    assertFalse(
-      canCommitStagedChatShare(
-        stagedId = share.id,
-        currentHead = share,
-        ownerSnapshot = owner,
-        currentOwner = owner.copy(sessionKey = "session-b"),
       ),
     )
   }

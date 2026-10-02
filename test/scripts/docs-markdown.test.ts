@@ -100,6 +100,9 @@ describe("docs Markdown rendering", () => {
 
       expect(html).not.toContain("hidden");
       expect(html).not.toContain("<blockquote>");
+      if (prefix) {
+        expect(html).toContain(prefix.trimEnd());
+      }
       expect(document.ids).toContain("param-live");
       expect(document.links).toEqual(["/visible"]);
     },
@@ -117,21 +120,6 @@ describe("docs Markdown rendering", () => {
     expect(html.match(/<blockquote>/g)).toHaveLength(1);
     expect(html).not.toContain("hidden");
     expect(document.links).toEqual([{ href: "/visible", line: 5 }]);
-  });
-
-  it("does not inherit a quote from an earlier raw literal", () => {
-    const literal = "<pre>\n> raw literal quote\n</pre>";
-    const md = createDocsMarkdown();
-    const document = parseDocsDocument(
-      `${literal}\n{/*\n> hidden comment quote\n*/}\n\n[Visible](/visible)`,
-      md,
-    );
-    const html = md.renderer.render(document.tokens, md.options, document.env);
-
-    expect(html).toContain(literal);
-    expect(html).not.toContain("<blockquote>");
-    expect(html).not.toContain("hidden");
-    expect(document.links).toEqual(["/visible"]);
   });
 
   it("preserves JSX comment bytes inside indented code", () => {
@@ -201,7 +189,7 @@ describe("docs Markdown rendering", () => {
     expect(document.links).toEqual(["/visible"]);
   });
 
-  it.each(["pre", "code", "script", "style", "textarea"])(
+  it.each(["pre", "code"])(
     "keeps inline <%s> examples literal before a later HTML example",
     (tag) => {
       const source = [

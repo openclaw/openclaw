@@ -1,3 +1,4 @@
+import { Script } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { nestedToolHistoryFixture } from "../test/nested-tool-activity-fixture.js";
 import { createQaBusState } from "./bus-state.js";
@@ -858,9 +859,16 @@ describe("live subagent scenario timeouts", () => {
     const { result, state, workspaceWrites } = runCompletionPolicyFlow();
 
     await expect(result).resolves.toMatchObject({ status: "pass" });
-    expect(workspaceWrites).toHaveLength(4);
+    expect(workspaceWrites).toHaveLength(5);
 
-    const chainFileNames = workspaceWrites.map(({ filePath }) => filePath.split("/").at(-1));
+    const [helperWrite, ...chainWrites] = workspaceWrites;
+    const helperFileName = helperWrite?.filePath.split("/").at(-1);
+    expect(helperFileName).toMatch(/^issue-109025-completion-exec-[0-9a-f-]+\.cjs$/u);
+    expect(helperWrite?.content).toContain("ISSUE109025_COMPLETION_EXEC_OK");
+    expect(helperWrite?.content).not.toContain("__CHILD_COMPLETION_TOKEN__");
+    expect(() => new Script(helperWrite?.content ?? "")).not.toThrow();
+
+    const chainFileNames = chainWrites.map(({ filePath }) => filePath.split("/").at(-1));
     const chainUuids = chainFileNames.map(
       (fileName) =>
         fileName?.match(
@@ -869,15 +877,17 @@ describe("live subagent scenario timeouts", () => {
     );
     expect(chainUuids.every((uuid) => uuid !== undefined)).toBe(true);
     expect(new Set(chainUuids).size).toBe(4);
-    expect(workspaceWrites.slice(0, -1).map(({ content }) => content.trim())).toEqual(
+    expect(chainWrites.slice(0, -1).map(({ content }) => content.trim())).toEqual(
       chainFileNames.slice(1),
     );
 
-    const terminalMarker = workspaceWrites.at(-1)?.content.trim();
+    const terminalMarker = chainWrites.at(-1)?.content.trim();
     expect(terminalMarker).toMatch(/^CHILD_DONE:[0-9a-f-]+$/u);
     const inboundText = state.getSnapshot().messages[0]?.text ?? "";
     expect(inboundText).toContain(chainFileNames[0]);
+    expect(inboundText).toContain(`node ${JSON.stringify(helperFileName)}`);
     expect(inboundText).toContain("__CHILD_COMPLETION_TOKEN__");
+    expect(inboundText).not.toContain("node -e");
     for (const chainFileName of chainFileNames.slice(1)) {
       expect(inboundText).not.toContain(chainFileName);
     }

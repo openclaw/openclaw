@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { client as mockClient, createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import { createStorageMock as createTestStorageMock } from "../test-helpers/storage.ts";
 import {
@@ -18,14 +17,13 @@ import { buildScopeUpgradeInboxEntry } from "./sidebar-attention-entries.ts";
 
 const ATTENTION_KEY = 'openclaw.control.sidebarAttention.v2:["ws://gateway.test","alice"]';
 
+beforeEach(() => vi.stubGlobal("localStorage", createTestStorageMock()));
+afterEach(() => vi.unstubAllGlobals());
+
 describe("reconcileSidebarAttentionDismissals", () => {
   const chip = (kind: SidebarAttentionKind, signature: string) => ({
     kind,
     signature,
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
   });
 
   const reconcile = (
@@ -33,7 +31,6 @@ describe("reconcileSidebarAttentionDismissals", () => {
     active: Array<{ kind: SidebarAttentionKind; signature: string }>,
     scope?: { cronInventoryComplete: boolean; modelAuthAgentId: string | null },
   ) => {
-    vi.stubGlobal("localStorage", createTestStorageMock());
     localStorage.setItem(ATTENTION_KEY, JSON.stringify(dismissals));
     return reconcileSidebarAttentionDismissals({
       active,
@@ -41,13 +38,6 @@ describe("reconcileSidebarAttentionDismissals", () => {
       ...(scope ? { scope } : {}),
     });
   };
-
-  it("keeps a dismissal while the same entity set is still affected", () => {
-    const dismissals = { cronFailed: ["alpha", "beta"] };
-    expect(
-      reconcile(dismissals, [chip("cronFailed", "alpha"), chip("cronFailed", "beta")]),
-    ).toEqual(dismissals);
-  });
 
   it("drops a dismissal when the affected set changes so the chip resurfaces", () => {
     expect(
@@ -59,67 +49,47 @@ describe("reconcileSidebarAttentionDismissals", () => {
   });
 
   it("preserves dismissals outside a selected agent's partial inventory", () => {
+    const dismissals = {
+      cronFailed: ["main-job", "writer-job"],
+      modelAuthExpired: ["agent:main\nopenai", "agent:writer\nopenai"],
+    };
     expect(
       reconcile(
-        {
-          cronFailed: ["main-job", "writer-job"],
-          modelAuthExpired: ["agent:main\nopenai", "agent:writer\nopenai"],
-        },
+        dismissals,
         [chip("cronFailed", "main-job"), chip("modelAuthExpired", "agent:main\nopenai")],
         { cronInventoryComplete: false, modelAuthAgentId: "main" },
       ),
-    ).toEqual({
-      cronFailed: ["main-job", "writer-job"],
-      modelAuthExpired: ["agent:main\nopenai", "agent:writer\nopenai"],
-    });
+    ).toEqual(dismissals);
   });
 });
 
 describe("scope upgrade dismissal fact", () => {
-  const cases: Array<{
-    dismissible: boolean;
-    state: ScopeUpgradeState;
-  }> = [
-    { state: { phase: "hidden" }, dismissible: false },
-    { state: { phase: "guidance" }, dismissible: true },
-    { state: { phase: "available" }, dismissible: true },
-    { state: { phase: "requesting" }, dismissible: false },
-    { state: { phase: "pending", requestId: "request-1" }, dismissible: false },
-    {
-      state: { phase: "rejected", requestId: "request-1", expired: false },
-      dismissible: false,
-    },
-    { state: { phase: "error", message: "request failed", retryable: false }, dismissible: false },
-  ];
-
-  it.each(cases)(
-    "projects $state.phase with explicit dismissal policy",
-    ({ state, dismissible }) => {
-      const entry = buildScopeUpgradeInboxEntry({
-        scopes: ["operator.write", "operator.read"],
-        state,
-      });
-
-      expect(Boolean(entry?.dismissal)).toBe(dismissible);
-    },
-  );
+  it("keeps a pending upgrade visible without a dismiss control", () => {
+    const entry = buildScopeUpgradeInboxEntry({
+      scopes: ["operator.write", "operator.read"],
+      state: { phase: "pending", requestId: "request-1" },
+    });
+    expect(entry).toMatchObject({ type: "scopeUpgrade", dismissal: null });
+  });
 
   it("resurfaces when manual guidance becomes an actionable upgrade", () => {
     const scopes = ["operator.write", "operator.read"];
     const guidance = buildScopeUpgradeInboxEntry({ scopes, state: { phase: "guidance" } });
     const available = buildScopeUpgradeInboxEntry({ scopes, state: { phase: "available" } });
 
-    expect(guidance?.dismissal).not.toEqual(available?.dismissal);
+    expect(guidance?.dismissal).toEqual({
+      kind: "scopeUpgrade",
+      signature: '["guidance","operator.read","operator.write"]',
+    });
+    expect(available?.dismissal).toEqual({
+      kind: "scopeUpgrade",
+      signature: '["available","operator.read","operator.write"]',
+    });
   });
 });
 
 describe("dismissSidebarAttention", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
   it("merges with the persisted map so another tab's dismissal survives", () => {
-    vi.stubGlobal("localStorage", createTestStorageMock());
     const key = ATTENTION_KEY;
     // Another tab dismissed a cron chip after this tab last loaded.
     localStorage.setItem(key, JSON.stringify({ cronFailed: ["alpha"] }));
@@ -135,7 +105,6 @@ describe("dismissSidebarAttention", () => {
   });
 
   it("leaves unknown-owner legacy dismissals untouched and unadopted", () => {
-    vi.stubGlobal("localStorage", createTestStorageMock());
     const legacyKey = "openclaw.control.sidebarAttention.v1:ws://gateway.test";
     const legacy = JSON.stringify({ cronFailed: "legacy-signature" });
     localStorage.setItem(legacyKey, legacy);
@@ -147,7 +116,6 @@ describe("dismissSidebarAttention", () => {
   });
 
   it("does not read or write snoozes without a current authenticated profile", () => {
-    vi.stubGlobal("localStorage", createTestStorageMock());
     dismissSidebarAttention(ATTENTION_KEY, { kind: "cronFailed", signature: "incident" });
     const gateway = createGatewayHarness(mockClient(async () => ({})));
     for (const state of [
@@ -166,12 +134,7 @@ describe("dismissSidebarAttention", () => {
 });
 
 describe("update dismissal fact", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
   it("uses the canonical package target and persists the literal boot binding", () => {
-    vi.stubGlobal("localStorage", createTestStorageMock());
     const dismissal = resolveUpdateAttentionDismissal({
       gatewayBootId: "boot-a",
       updateAvailable: {

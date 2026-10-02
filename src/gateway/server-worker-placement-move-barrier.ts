@@ -38,6 +38,7 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
       cfg: getRuntimeConfig(),
       key: sessionKey,
       agentId,
+      preserveQualifiedAddress: true,
       clone: false,
       exactRead: true,
     });

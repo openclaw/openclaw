@@ -342,20 +342,5 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     state,
     forProfile,
     listProfiles,
-    // Legacy methods delegate to default profile
-    ensureBrowserAvailable: (options) => forProfile().ensureBrowserAvailable(options),
-    ensureTabAvailable: (targetId, options) => forProfile().ensureTabAvailable(targetId, options),
-    isHttpReachable: (timeoutMs, signal) => forProfile().isHttpReachable(timeoutMs, signal),
-    isTransportAvailable: (timeoutMs, signal, pageProbe) =>
-      forProfile().isTransportAvailable(timeoutMs, signal, pageProbe),
-    isReachable: (timeoutMs, options) => forProfile().isReachable(timeoutMs, options),
-    listTabs: (options) => forProfile().listTabs(options),
-    openTab: (url, optsLocal) => forProfile().openTab(url, optsLocal),
-    labelTab: (targetId, label) => forProfile().labelTab(targetId, label),
-    focusTab: (targetId, options) => forProfile().focusTab(targetId, options),
-    closeTab: (targetId, options) => forProfile().closeTab(targetId, options),
-    stopRunningBrowser: () => forProfile().stopRunningBrowser(),
-    resetProfile: () => forProfile().resetProfile(),
-    mapTabError: toBrowserErrorResponse,
   };
 }

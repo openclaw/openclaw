@@ -5,7 +5,11 @@ import {
   iterateSessionContextMessages,
   projectSessionEntryMessage,
 } from "../../../packages/agent-core/src/harness/session/session.js";
-import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import {
+  classifyToolUseResultPairing,
+  isSyntheticMissingToolResult,
+  SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
+} from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { isCompactionReplayCheckpoint } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import {
   executeSqliteQueryTakeFirstSync,
@@ -580,7 +584,18 @@ function withTranscriptContextSnapshot<T>(
                   .where("seq", "in", [...bySeq.keys()]);
                 for (const row of iterateSqliteQuerySync(database.db, query)) {
                   const entry = bySeq.get(row.seq)!;
-                  payloads.set(entry, hydrateContextEntry(row.event_json, entry));
+                  const hydrated = hydrateContextEntry(row.event_json, entry);
+                  if (
+                    entry.type === "message" &&
+                    entry.message.role === "toolResult" &&
+                    isSyntheticMissingToolResult(entry.message) &&
+                    hydrated.type === "message" &&
+                    hydrated.message.role === "toolResult"
+                  ) {
+                    // Retain pairing provenance after SQL removes opaque tool details.
+                    hydrated.message.details = { [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true };
+                  }
+                  payloads.set(entry, hydrated);
                 }
               }
               return payloads;

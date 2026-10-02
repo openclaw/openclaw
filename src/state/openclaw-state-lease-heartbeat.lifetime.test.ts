@@ -43,7 +43,7 @@ vi.mock("../infra/node-sqlite.js", () => ({
 
 vi.mock("../infra/runtime-worker-url.js", () => ({
   resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/heartbeat.worker.js"),
-  resolveRuntimeWorkerArgv: () => ["/synthetic/heartbeat.worker.js"],
+  resolveRuntimeWorkerThreadExecArgv: () => [],
 }));
 
 // Error graph semantics have separate codec tests; keep this lifetime fixture JS-only.

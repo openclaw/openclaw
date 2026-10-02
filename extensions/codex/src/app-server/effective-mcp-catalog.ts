@@ -4,9 +4,17 @@ import {
   type McpToolCatalog,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  normalizeMcpCodexToolAnnotations,
+  readMcpAppIcons,
+  readMcpAppSettingsCapability,
+  readMcpAppToolExtensions,
+} from "openclaw/plugin-sdk/codex-mcp-projection";
+import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { parseCodexPluginMarketplaceId } from "../plugin-marketplace-discovery.js";
+import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexMcpServerStatus } from "./protocol.js";
 import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
@@ -25,7 +33,10 @@ function catalogTool(params: {
 }): McpToolCatalog["tools"][number] {
   const raw = asOptionalRecord(params.raw);
   const description = normalizeOptionalString(raw?.description);
-  const title = normalizeOptionalString(raw?.title);
+  const title =
+    normalizeOptionalString(raw?.title) ??
+    normalizeOptionalString(asOptionalRecord(raw?.annotations)?.title);
+  const ui = asOptionalRecord(asOptionalRecord(raw?._meta)?.ui);
   return {
     serverName: params.serverName,
     safeServerName: params.safeServerName,
@@ -34,6 +45,16 @@ function catalogTool(params: {
     ...(description ? { description } : {}),
     inputSchema: (asOptionalRecord(raw?.inputSchema) ?? { type: "object" }) as never,
     fallbackDescription: description ?? params.toolName,
+    appExtensions: readMcpAppToolExtensions(raw ?? {}),
+    codexAnnotations: normalizeMcpCodexToolAnnotations(raw?.annotations),
+    uiResourceUri: normalizeOptionalString(ui?.resourceUri),
+    ...(Array.isArray(ui?.visibility)
+      ? {
+          uiVisibility: ui.visibility.filter(
+            (value): value is "app" | "model" => value === "app" || value === "model",
+          ),
+        }
+      : {}),
     ...(params.deniedBySession ? { deniedBySession: true } : {}),
   };
 }
@@ -95,6 +116,16 @@ function buildCodexEffectiveMcpCatalog(
         serverName: status.name,
         safeServerName,
         launchSummary: "Codex native MCP connection",
+        ...(status.pluginId
+          ? {
+              pluginId:
+                parseCodexPluginMarketplaceId(status.pluginId)?.pluginName ?? status.pluginId,
+              marketplace: parseCodexPluginMarketplaceId(status.pluginId)?.marketplaceName,
+            }
+          : {}),
+        title: status.serverInfo?.title ?? undefined,
+        icons: readMcpAppIcons(status.serverInfo?.icons),
+        settings: readMcpAppSettingsCapability(status.serverCapabilities),
         toolCount:
           observedNames.size + [...deniedNames].filter((name) => !observedNames.has(name)).length,
       },
@@ -165,5 +196,107 @@ export async function loadCodexEffectiveMcpCatalog(
     return buildCodexEffectiveMcpCatalog(statuses, params.toolOverrides);
   } finally {
     await retained.release();
+  }
+}
+
+/** Explicit App requests retain the thread owner, never start a second MCP client. */
+export async function acquireCodexMcpAppRuntime(
+  params: Parameters<NonNullable<AgentHarness["acquireMcpAppRuntime"]>>[0],
+  options: { bindingStore: CodexAppServerBindingStore; pluginConfig?: unknown },
+) {
+  const identity = sessionBindingIdentity(params);
+  let binding = options.bindingStore.read(identity);
+  let retained = await retainSharedCodexAppServerClientByInstanceId(binding?.clientId);
+  if (!retained && params.prepareSession) {
+    const preparation = await params.prepareSession();
+    params.assertCurrent();
+    const { prepareCodexMcpAppSession } = await import("./mcp-app-session-preparation.js");
+    await prepareCodexMcpAppSession({
+      preparation,
+      bindingStore: options.bindingStore,
+      pluginConfig: options.pluginConfig,
+      assertCurrent: params.assertCurrent,
+    });
+    params.assertCurrent();
+    binding = options.bindingStore.read(identity);
+    retained = await retainSharedCodexAppServerClientByInstanceId(binding?.clientId);
+  }
+  if (!binding?.clientId || !retained) {
+    return undefined;
+  }
+  const acquired = retained;
+  const admittedBinding = binding;
+  try {
+    params.assertCurrent();
+    const current = options.bindingStore.read(identity);
+    if (
+      !current ||
+      current.clientId !== binding.clientId ||
+      current.threadId !== binding.threadId
+    ) {
+      throw new Error("Native MCP session binding changed");
+    }
+    const { createNativeMcpRuntime } = await import("./native-mcp-app.js");
+    params.assertCurrent();
+    const assertBinding = () => {
+      const latest = options.bindingStore.read(identity);
+      if (
+        !latest ||
+        latest.clientId !== admittedBinding.clientId ||
+        latest.threadId !== admittedBinding.threadId
+      ) {
+        throw new Error("Native MCP session binding changed");
+      }
+    };
+    const runtime = createNativeMcpRuntime({
+      client: retained.client,
+      threadId: binding.threadId,
+      attempt: params,
+      appRequester: params.appRequester,
+      originCallId: "",
+      assertCurrent: assertBinding,
+    });
+    // codex_apps requires a tool-origin connector binding; it cannot be adopted
+    // by a generic configured-server entrypoint.
+    const allowed = new Set(params.mcpServerNames.filter((name) => name !== "codex_apps"));
+    const getCatalog = runtime.getCatalog;
+    let catalog: McpToolCatalog | null = null;
+    runtime.getCatalog = async () => {
+      const loaded = await getCatalog();
+      for (const server of Object.values(loaded.servers)) {
+        if (server.serverName !== "codex_apps" && server.pluginId) {
+          allowed.add(server.serverName);
+        }
+      }
+      catalog = {
+        ...loaded,
+        servers: Object.fromEntries(
+          Object.entries(loaded.servers).filter(([name]) => allowed.has(name)),
+        ),
+        tools: loaded.tools.filter(
+          (tool) =>
+            allowed.has(tool.serverName) &&
+            !params.toolOverrides?.mcpToolsDeny?.[tool.serverName]?.includes(tool.toolName),
+        ),
+      };
+      return catalog;
+    };
+    runtime.peekCatalog = () => catalog;
+    const unprotect = protectCodexAppServerLiveThread(acquired.client, admittedBinding.threadId);
+    let cleanup: Promise<unknown> | undefined;
+    runtime.joinCleanup = async () => {
+      await cleanup;
+    };
+    return {
+      runtime,
+      releaseLease: () => {
+        unprotect();
+        cleanup = acquired.release();
+        void cleanup?.catch(() => undefined);
+      },
+    };
+  } catch (error) {
+    await retained.release();
+    throw error;
   }
 }

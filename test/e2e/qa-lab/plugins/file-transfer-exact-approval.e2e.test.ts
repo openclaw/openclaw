@@ -15,8 +15,11 @@ import { startGatewayServer } from "../../../../src/gateway/server.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getGatewayE2ePortBlock,
 } from "../../../../src/gateway/test-helpers.e2e.js";
+import {
+  acquireGatewayE2ePortBlock,
+  startClaimedGateway,
+} from "../../../../src/gateway/test-helpers.listener.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -60,7 +63,10 @@ describe("file-transfer exact approval transport", () => {
         OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
       },
     });
-    const port = await getGatewayE2ePortBlock();
+    const portClaim = await acquireGatewayE2ePortBlock();
+    const { port } = portClaim;
+    // Released here until the started Gateway owns the claim.
+    let unstartedPortClaim: typeof portClaim | undefined = portClaim;
     const gatewayToken = "qa-file-transfer-exact-approval-token";
     const target = path.join(state.home, "report.txt");
     const approvedObject = path.join(state.home, "approved-object.txt");
@@ -162,12 +168,15 @@ describe("file-transfer exact approval transport", () => {
         "default",
         state.workspaceDir,
       );
-      gateway = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token: gatewayToken },
-        controlUiEnabled: false,
-        sidecarStartup: "defer",
-      });
+      unstartedPortClaim = undefined;
+      gateway = await startClaimedGateway(portClaim, () =>
+        startGatewayServer(port, {
+          bind: "loopback",
+          auth: { mode: "token", token: gatewayToken },
+          controlUiEnabled: false,
+          sidecarStartup: "defer",
+        }),
+      );
       operator = await connectGatewayClient({
         url: `ws://127.0.0.1:${port}`,
         token: gatewayToken,
@@ -267,6 +276,7 @@ describe("file-transfer exact approval transport", () => {
       if (gateway) {
         await gateway.close({ reason: "file-transfer exact approval proof complete" });
       }
+      await unstartedPortClaim?.release();
       restoreActivePluginRegistrySnapshot(previousPluginRegistry);
       await state.cleanup();
     }

@@ -351,7 +351,6 @@ For one agent only:
   agents: {
     entries: {
       local: {
-        default: true,
         model: "lmstudio/gemma-4-e4b-it",
         experimental: {
           localModelLean: true,

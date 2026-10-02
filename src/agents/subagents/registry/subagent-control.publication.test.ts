@@ -1,6 +1,6 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import { persistSubagentRunsToDiskOrThrow, useSubagentControlFixture } from "./subagent-control.test-support.js";
+import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 /** A cancellation result cannot publish a predecessor's task outcome after admitted reactivation. */
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -13,11 +13,12 @@ import {
   getActiveSessionWorkAdmissionCount,
 } from "../../../sessions/session-lifecycle-admission.js";
 import type { AgentWaitResult } from "../../run-wait.js";
-import * as killRuntime from "./subagent-control-kill-runtime.js";
 import * as killSession from "./subagent-control-session.js";
 import { killSubagentRunAdmin } from "./subagent-control.js";
+import * as completionState from "./subagent-registry-completion.js";
 import * as registryHelpers from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
 import {
   removeSubagentSessionEntry,
@@ -123,17 +124,17 @@ it.each([
 
     const successorCompleted = createDeferred();
     const originalCompleted = createDeferred();
+    const originalTimingCompleted = createDeferred();
     const originalSettled = createDeferred();
-    fixture.persist.mockImplementation((runs, runIds) => {
-      persistSubagentRunsToDiskOrThrow(runs, runIds);
-      const original = runs.get(b0.runId);
+    const stopObserving = subscribeSubagentRunChanges("persistence", () => {
+      const original = subagentRuns.get(b0.runId);
       if (original?.execution.outcome) {
         originalSettled.resolve();
       }
       if (original?.execution.outcome?.status === "ok") {
         originalCompleted.resolve();
       }
-      if (runs.get("publication-b1")?.execution.outcome?.status === "ok") {
+      if (subagentRuns.get("publication-b1")?.execution.outcome?.status === "ok") {
         successorCompleted.resolve();
       }
     });
@@ -145,7 +146,12 @@ it.each([
     const persistTiming = registryHelpers.persistSubagentSessionTiming;
     vi.spyOn(registryHelpers, "persistSubagentSessionTiming").mockImplementation(
       async (entry, options) => {
-        if (entry === b0 && !completeDuringDrain && !provisional) {
+        if (
+          entry.runId === b0.runId &&
+          entry.generation === b0.generation &&
+          !completeDuringDrain &&
+          !provisional
+        ) {
           originalTimingEntered.resolve();
           await releaseOriginalTiming.promise;
         }
@@ -154,7 +160,15 @@ it.each([
           firstChildCleanup.resolve();
           await releaseFirstChildCleanup.promise;
         }
+        const completingOriginal =
+          entry.runId === b0.runId &&
+          entry.generation === b0.generation &&
+          entry.execution.status === "terminal" &&
+          entry.execution.outcome?.status === "ok";
         await persistTiming(entry, options);
+        if (completingOriginal) {
+          originalTimingCompleted.resolve();
+        }
       },
     );
     if (!completeDuringDrain && !provisional) {
@@ -169,8 +183,8 @@ it.each([
           endedAt: Date.now(),
         });
         await originalTimingEntered.promise;
-        expect(b0.execution.status).toBe("terminal");
-        expect(b0.execution.outcome?.status).toBe("error");
+        expect(subagentRuns.get(b0.runId)?.execution.status).toBe("terminal");
+        expect(subagentRuns.get(b0.runId)?.execution.outcome?.status).toBe("error");
         expect(
           await firstBoundary,
           "terminal publication must not wait for post-commit session cleanup",
@@ -219,13 +233,19 @@ it.each([
     let markerWaits = 0;
     let followup: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
     const handoffComplete = createDeferred();
-    const resolveTargetState = killRuntime.resolveSubagentKillTargetState;
+    const resolveTargetState = completionState.resolveSubagentKillTargetState;
     let observedTarget = false;
-    vi.spyOn(killRuntime, "resolveSubagentKillTargetState").mockImplementation((entry) => {
+    vi.spyOn(completionState, "resolveSubagentKillTargetState").mockImplementation((entry) => {
       const result = resolveTargetState(entry);
-      if (handoff && entry === b0 && !observedTarget) {
+      if (
+        handoff &&
+        followup !== undefined &&
+        entry.runId === b0.runId &&
+        entry.generation === b0.generation &&
+        !observedTarget
+      ) {
         observedTarget = true;
-        expect(subagentRuns.get(b0.runId)).toBe(b0);
+        expect(subagentRuns.get(b0.runId)?.generation).toBe(b0.generation);
         handoffOrder.push("captured outcome");
         // Replace during the real awaited scope handoff, before synchronous publication.
         queueMicrotask(() => {
@@ -235,12 +255,11 @@ it.each([
           }
           void followup
             .run(async () => {
-              // This is the synchronous owner used by the lazy reactivation facade.
+              // Follow-up admission authorizes the same asynchronous row owner as reactivation.
               expect(
-                replaceSubagentRunAfterSteerCore({
+                await replaceSubagentRunAfterSteerCore({
                   previousRunId: b0.runId,
                   nextRunId: "publication-b1",
-                  fallback: b0,
                   runTimeoutSeconds: b0.runTimeoutSeconds ?? 0,
                   task: "admitted follow-up task",
                 }),
@@ -306,7 +325,9 @@ it.each([
           terminalReply: { disposition: "visible", text: "original completed during cancellation" },
         });
         await originalCompleted.promise;
-        expect(b0.killReconciliation).toBeUndefined();
+        // Completion timing clears the abort marker after its registry outcome is durable.
+        await originalTimingCompleted.promise;
+        expect(subagentRuns.get(b0.runId)?.killReconciliation).toBeUndefined();
         childAdmission.release();
         if (replace) {
           await Promise.race([
@@ -345,8 +366,11 @@ it.each([
             ),
           ).toBe(true);
           const b1 = subagentRuns.get("publication-b1")!;
-          expect(subagentRuns.has(b0.runId)).toBe(false);
-          expect(b1).toMatchObject({ taskRunId: b0.taskRunId, execution: { status: "running" } });
+          expect(subagentRuns.get(b0.runId)).toMatchObject({
+            taskRunId: b0.taskRunId,
+            execution: { status: "terminal", suppressSessionEffects: true },
+          });
+          expect(b1).toMatchObject({ taskRunId: b1.runId, execution: { status: "running" } });
           if (typeof b0.generation !== "number") {
             throw new Error("Registration did not mint a run generation");
           }
@@ -394,7 +418,19 @@ it.each([
       });
       await successorCompleted.promise;
       expect(subagentRuns.get("publication-b1")?.execution.status).toBe("terminal");
+      if (priorChildKill && !handoff) {
+        // Successor admission retires the first child's delayed cleanup authority.
+        await expect(fixture.settle()).rejects.toMatchObject({
+          message: "Failed to settle subagent cleanup roots",
+          errors: [
+            expect.objectContaining({
+              message: "Subagent kill publication lost its original claim",
+            }),
+          ],
+        });
+      }
     } finally {
+      stopObserving();
       cancellationClock?.mockRestore();
       releaseMarker.resolve();
       releaseFirstChildCleanup.resolve();

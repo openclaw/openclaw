@@ -94,7 +94,7 @@ describe("agent defaults schema", () => {
       const result = validateConfigObject({
         agents: {
           defaults: { modelPolicy: { allow: [entry] } },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       });
       expect(result.ok, entry || "empty entry").toBe(false);
@@ -109,7 +109,7 @@ describe("agent defaults schema", () => {
   it("accepts exact refs, nested wildcards, configured aliases, and compat selectors", () => {
     const result = validateConfigObject({
       agents: {
-        entries: { main: { default: true } },
+        entries: { main: {} },
         defaults: {
           models: {
             "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
@@ -134,8 +134,9 @@ describe("agent defaults schema", () => {
   it("reports keyed per-agent policy paths", () => {
     const result = validateConfigObject({
       agents: {
+        ownership: "explicit",
         entries: {
-          main: { default: true },
+          main: {},
           runner: { modelPolicy: { allow: ["not-a-model-ref"] } },
         },
       },

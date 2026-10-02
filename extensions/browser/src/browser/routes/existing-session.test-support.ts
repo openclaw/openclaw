@@ -43,7 +43,7 @@ export function createExistingSessionAgentSharedModule() {
     browserNavigationPolicyForProfile: vi.fn((ctx: BrowserRouteContext) =>
       withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
     ),
-    handleRouteError: vi.fn((_ctx: BrowserRouteContext, res: BrowserResponse, err: unknown) => {
+    handleRouteError: vi.fn((res: BrowserResponse, err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       res.status(400);
       res.json({ error: message });

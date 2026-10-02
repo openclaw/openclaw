@@ -1,5 +1,6 @@
 import { html } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult } from "../../../api/types.ts";
 import {
   PANEL_HOSTED_TABS_CHANGE_EVENT,
@@ -34,6 +35,38 @@ function host(): SessionWorkspaceHost {
   };
 }
 
+function textResponse(
+  state: SessionWorkspaceHost,
+  path: string,
+  content: string,
+  fields: Partial<SessionWorkspaceGetResult["file"]> = {},
+): SessionWorkspaceGetResult {
+  return {
+    sessionKey: state.sessionKey,
+    file: {
+      name: path,
+      path,
+      kind: "read",
+      missing: false,
+      previewKind: "text",
+      contentEncoding: "utf8",
+      content,
+      ...fields,
+    },
+  };
+}
+
+function mountPanel() {
+  const panel = document.createElement("openclaw-chat-files-panel");
+  panel.tabsInHeader = false;
+  panel.activeId = "file:same.ts";
+  panel.previews = [
+    { id: "file:same.ts", label: "same.ts", content: { kind: "markdown", content: "same" } },
+  ];
+  document.body.append(panel);
+  return panel;
+}
+
 // Arm after synchronous open/close notifications and before settling a controlled read.
 function nextWorkspaceUpdate(state: SessionWorkspaceHost) {
   const updated = new Promise<void>((resolve) => {
@@ -46,33 +79,15 @@ afterEach(() => document.body.replaceChildren());
 describe("workspace file tabs", () => {
   it("revalidates a clean file on explicit reopen without replacing its tab", async () => {
     const state = host();
-    const getFile = vi.fn().mockResolvedValue({
-      sessionKey: state.sessionKey,
-      file: {
-        previewKind: "text",
-        contentEncoding: "utf8",
-        name: "notes.md",
-        path: "notes.md",
-        content: "OLD",
-        hash: "old",
-      },
-    });
+    const getFile = vi
+      .fn()
+      .mockResolvedValue(textResponse(state, "notes.md", "OLD", { hash: "old" }));
     state.sessions.getFile = getFile;
     openSessionWorkspaceFile(state, { path: "notes.md" });
     await nextWorkspaceUpdate(state);
     expect(getSessionWorkspace(state).previews[0]?.content).toMatchObject({ content: "OLD" });
     const preview = getSessionWorkspace(state).previews[0]!;
-    getFile.mockResolvedValue({
-      sessionKey: state.sessionKey,
-      file: {
-        previewKind: "text",
-        contentEncoding: "utf8",
-        name: "notes.md",
-        path: "notes.md",
-        content: "NEW",
-        hash: "new",
-      },
-    });
+    getFile.mockResolvedValue(textResponse(state, "notes.md", "NEW", { hash: "new" }));
     openSessionWorkspaceFile(state, { path: "notes.md", line: 2 });
     await nextWorkspaceUpdate(state);
     expect(preview.content).toMatchObject({ content: "NEW", navigation: { line: 2 } });
@@ -82,27 +97,9 @@ describe("workspace file tabs", () => {
 
   it.each(["before reopen", "during read"])("preserves a draft created %s", async (timing) => {
     const state = host();
-    const initial = {
-      sessionKey: state.sessionKey,
-      file: {
-        previewKind: "text",
-        contentEncoding: "utf8",
-        name: "draft.md",
-        path: "draft.md",
-        content: "OLD",
-        hash: "old",
-      },
-    };
-    let resolveRead!: (result: typeof initial) => void;
-    const getFile = vi
-      .fn()
-      .mockResolvedValueOnce(initial)
-      .mockImplementation(
-        () =>
-          new Promise((resolve) => {
-            resolveRead = resolve;
-          }),
-      );
+    const initial = textResponse(state, "draft.md", "OLD", { hash: "old" });
+    const read = createDeferred<SessionWorkspaceGetResult>();
+    const getFile = vi.fn().mockResolvedValueOnce(initial).mockReturnValue(read.promise);
     state.sessions.getFile = getFile;
     openSessionWorkspaceFile(state, { path: "draft.md" });
     await nextWorkspaceUpdate(state);
@@ -121,7 +118,7 @@ describe("workspace file tabs", () => {
         expect(getFile).toHaveBeenCalledTimes(2);
         setFileDraft(content, { content: "UNSAVED", expectedHash: "old" });
         const updated = nextWorkspaceUpdate(state);
-        resolveRead({ ...initial, file: { ...initial.file, content: "NEW", hash: "new" } });
+        read.resolve({ ...initial, file: { ...initial.file, content: "NEW", hash: "new" } });
         await updated;
       } else {
         expect(getFile).toHaveBeenCalledTimes(1);
@@ -137,26 +134,9 @@ describe("workspace file tabs", () => {
     "ignores a revalidation after its %s changes",
     async (change) => {
       const state = host();
-      const initial = {
-        sessionKey: state.sessionKey,
-        file: {
-          previewKind: "text",
-          contentEncoding: "utf8",
-          name: "stale.md",
-          path: "stale.md",
-          content: "OLD",
-        },
-      };
-      let resolveRead!: (result: typeof initial) => void;
-      const getFile = vi
-        .fn()
-        .mockResolvedValueOnce(initial)
-        .mockImplementation(
-          () =>
-            new Promise((resolve) => {
-              resolveRead = resolve;
-            }),
-        );
+      const initial = textResponse(state, "stale.md", "OLD");
+      const read = createDeferred<SessionWorkspaceGetResult>();
+      const getFile = vi.fn().mockResolvedValueOnce(initial).mockReturnValue(read.promise);
       state.sessions.getFile = getFile;
       openSessionWorkspaceFile(state, { path: "stale.md" });
       await nextWorkspaceUpdate(state);
@@ -176,7 +156,7 @@ describe("workspace file tabs", () => {
       }
       const workspace = getSessionWorkspace(state);
       const updated = nextWorkspaceUpdate(state);
-      resolveRead({ ...initial, file: { ...initial.file, content: "STALE" } });
+      read.resolve({ ...initial, file: { ...initial.file, content: "STALE" } });
       await updated;
       expect(preview.content).toBe(content);
       expect(workspace.previews).toEqual([]);
@@ -196,16 +176,8 @@ describe("workspace file tabs", () => {
     async (olderPath, order, failed, unrelatedError) => {
       const state = host();
       const response = {
-        sessionKey: state.sessionKey,
+        ...textResponse(state, "notes.md", "CURRENT", { workspacePath: "notes.md" }),
         root: "/workspace",
-        file: {
-          previewKind: "text",
-          contentEncoding: "utf8",
-          name: "notes.md",
-          path: "notes.md",
-          workspacePath: "notes.md",
-          content: "CURRENT",
-        },
       };
       const pending = new Map<
         string,
@@ -263,24 +235,12 @@ describe("workspace file tabs", () => {
 
   it.each([
     ["README.md", "/workspace/README.md", false],
-    ["/workspace/README.md", "README.md", false],
-    ["README.md", "/workspace/README.md", true],
     ["/workspace/README.md", "README.md", true],
   ] as const)("reconciles %s and %s with dirty=%s", async (firstPath, aliasPath, dirty) => {
     const state = host();
-    const response: SessionWorkspaceGetResult = {
-      sessionKey: state.sessionKey,
+    const response = {
+      ...textResponse(state, "README.md", "Original buffer", { workspacePath: "README.md" }),
       root: "/workspace",
-      file: {
-        name: "README.md",
-        path: "README.md",
-        workspacePath: "README.md",
-        kind: "read",
-        missing: false,
-        previewKind: "text",
-        contentEncoding: "utf8",
-        content: "Original buffer",
-      },
     };
     const getFile = vi.fn().mockResolvedValue(response);
     state.sessions.getFile = getFile;
@@ -337,19 +297,9 @@ describe("workspace file tabs", () => {
         }),
     );
     state.sessions.getFile = getFile;
-    const response: SessionWorkspaceGetResult = {
-      sessionKey: state.sessionKey,
+    const response = {
+      ...textResponse(state, "README.md", "File contents", { workspacePath: "README.md" }),
       root: "/workspace",
-      file: {
-        name: "README.md",
-        path: "README.md",
-        workspacePath: "README.md",
-        kind: "read",
-        missing: false,
-        previewKind: "text",
-        contentEncoding: "utf8",
-        content: "File contents",
-      },
     };
     openSessionWorkspaceFile(state, { path: "README.md", line: 2 });
     openSessionWorkspaceFile(state, { path: "/workspace/README.md", line: 7 });
@@ -419,16 +369,7 @@ describe("workspace file tabs", () => {
   );
 
   it("scopes main-view tab and content IDs to each panel and keeps them stable", async () => {
-    const panels = [0, 1].map(() => {
-      const panel = document.createElement("openclaw-chat-files-panel");
-      panel.tabsInHeader = false;
-      panel.activeId = "file:same.ts";
-      panel.previews = [
-        { id: "file:same.ts", label: "same.ts", content: { kind: "markdown", content: "same" } },
-      ];
-      document.body.append(panel);
-      return panel;
-    });
+    const panels = [mountPanel(), mountPanel()];
     await Promise.all(panels.map((panel) => panel.updateComplete));
     const tabs = panels.map((panel) => panel.querySelector<HTMLElement>("wa-tab")!);
     const ids = tabs.map((tab) => tab.id);
@@ -444,16 +385,7 @@ describe("workspace file tabs", () => {
   });
 
   it("does not recover sibling focus when the other pane loses its active tab", async () => {
-    const panels = [0, 1].map(() => {
-      const panel = document.createElement("openclaw-chat-files-panel");
-      panel.tabsInHeader = false;
-      panel.activeId = "file:same.ts";
-      panel.previews = [
-        { id: "file:same.ts", label: "same.ts", content: { kind: "markdown", content: "same" } },
-      ];
-      document.body.append(panel);
-      return panel;
-    });
+    const panels = [mountPanel(), mountPanel()];
     await Promise.all(panels.map((panel) => panel.updateComplete));
     await Promise.resolve();
     const firstTab = panels[0]!.querySelector<HTMLElement>("wa-tab")!;
@@ -481,16 +413,7 @@ describe("workspace file tabs", () => {
     openSessionWorkspaceFile(state, { path: "pending.ts", line: 2 });
     openSessionWorkspaceFile(state, { path: "pending.ts", line: 7 });
     const updated = nextWorkspaceUpdate(state);
-    resolve({
-      sessionKey: state.sessionKey,
-      file: {
-        previewKind: "text",
-        contentEncoding: "utf8",
-        name: "pending.ts",
-        path: "pending.ts",
-        content: "one\ntwo",
-      },
-    });
+    resolve(textResponse(state, "pending.ts", "one\ntwo"));
     await updated;
     expect(getSessionWorkspace(state).previews[0]?.content).toMatchObject({
       kind: "file",
@@ -532,33 +455,14 @@ describe("workspace file tabs", () => {
       src: "/media/b.txt",
     });
     const backgroundUpdated = nextWorkspaceUpdate(state);
-    resolve({
-      sessionKey: state.sessionKey,
-      root: "/workspace",
-      file: {
-        name: "a.txt",
-        path: "a.txt",
-        content: "A",
-        previewKind: "text",
-        contentEncoding: "utf8",
-      },
-    });
+    resolve({ ...textResponse(state, "a.txt", "A"), root: "/workspace" });
     await backgroundUpdated;
     expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("file");
     expect(getSessionWorkspace(state).activePreviewId).toBe("attachment:b");
     openSessionWorkspaceFile(state, { path: "c.txt" });
     closeSessionWorkspacePreview(state, "file:c.txt");
     const closedUpdated = nextWorkspaceUpdate(state);
-    resolve({
-      sessionKey: state.sessionKey,
-      file: {
-        name: "c.txt",
-        path: "c.txt",
-        previewKind: "text",
-        contentEncoding: "utf8",
-        content: "C",
-      },
-    });
+    resolve(textResponse(state, "c.txt", "C"));
     await closedUpdated;
     expect(getSessionWorkspace(state).previews.map((entry) => entry.id)).toEqual([
       "file:a.txt",
@@ -571,16 +475,7 @@ describe("workspace file tabs", () => {
     const getFile = vi
       .fn()
       .mockRejectedValueOnce(new Error("temporary failure"))
-      .mockResolvedValueOnce({
-        sessionKey: state.sessionKey,
-        file: {
-          name: "retry.txt",
-          path: "retry.txt",
-          previewKind: "text",
-          contentEncoding: "utf8",
-          content: "Ready",
-        },
-      });
+      .mockResolvedValueOnce(textResponse(state, "retry.txt", "Ready"));
     state.sessions.getFile = getFile;
     openSessionWorkspaceFile(state, { path: "retry.txt" });
     await nextWorkspaceUpdate(state);

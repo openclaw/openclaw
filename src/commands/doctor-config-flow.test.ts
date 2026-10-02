@@ -276,6 +276,7 @@ describe("doctor config flow", () => {
         gateway: { mode: "local" },
       },
       parsedConfig: { gateway: { mode: "local" } },
+      sourceConfigBeforeMigrations: { gateway: { mode: "local" } },
       repair: true,
     });
 
@@ -284,7 +285,7 @@ describe("doctor config flow", () => {
     expect(result.explicitSetPaths).toBeUndefined();
     expect(result.cfg.agents?.entries).toEqual({ main: { workspace: "/tmp/migrated-main" } });
     expect(result.pendingChangePanels).toContain(
-      "Prepared the canonical agent roster without retired default markers for persistence.",
+      "Prepared the canonical agent roster for persistence.",
     );
     expect(terminalNoteMock.mock.calls.some(([, title]) => title === "Doctor changes")).toBe(false);
     expect(terminalNoteMock.mock.calls.some(([message]) => message.includes("Persisted"))).toBe(
@@ -621,7 +622,6 @@ describe("doctor config flow", () => {
         agents: { entries: { openclaw: { default: true } } },
         session: { maintenance: { rotateBytes: "10mb" } },
         browser: {
-          relayBindHost: "0.0.0.0",
           profiles: { chromeLive: { driver: "extension", color: "#00AA00" } },
         },
         tools: { alsoAllow: ["browser"] },
@@ -631,7 +631,6 @@ describe("doctor config flow", () => {
 
     expect(result.cfg).not.toHaveProperty("bridge");
     expect(result.cfg.gateway?.auth).toEqual({ mode: "token", token: "ok" });
-    expect(result.cfg.browser).not.toHaveProperty("relayBindHost");
     expect(result.cfg.browser?.profiles?.chromeLive?.driver).toBe("extension");
     expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser", "codex"]);
     expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);

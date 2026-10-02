@@ -108,13 +108,16 @@ async function command(
     },
     { type, payload, requestId },
   );
+  let receipt: Record<string, unknown> | undefined;
   await expect
-    .poll(async () =>
-      (await messages(page)).find(
+    .poll(async () => {
+      receipt = (await messages(page)).find(
         (message) => message.type === "command-result" && message.requestId === requestId,
-      ),
-    )
-    .toMatchObject(expected);
+      );
+      return receipt;
+    })
+    .toBeDefined();
+  expect(receipt, JSON.stringify(receipt)).toMatchObject(expected);
 }
 
 async function headerLeadingInset(page: Page) {

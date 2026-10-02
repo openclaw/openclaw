@@ -39,11 +39,13 @@ import {
   promoteRequesterFinalAttachment,
 } from "../requester-final-attachment.js";
 import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
+import * as announceOutput from "./subagent-announce-output.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 import type { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
 import {
   REQUESTER_KEY,
   settledChild,
+  publishWakeTransition,
 } from "./subagent-announce.requester-settle-dispatch.test-support.js";
 
 const readDescendantFacts = vi.hoisted(() =>
@@ -111,8 +113,8 @@ vi.mock("./subagent-announce-delivery.js", () => ({
   }),
 }));
 
-import type { RequesterSettleWakeBatchState } from "./subagent-announce.requester-settle-state.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
+const readChildCompletionFindings = announceOutput.readChildCompletionFindings;
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -153,6 +155,11 @@ function createContext(): GatewayRequestContext {
 
 describe("requester settle dispatch deadline", () => {
   beforeEach(() => {
+    vi.spyOn(announceOutput, "readChildCompletionFindings").mockImplementation((children) =>
+      readChildCompletionFindings(children, (runId) =>
+        registryRead.listSubagentRunsForRequester().find((entry) => entry.runId === runId),
+      ),
+    );
     resetCommandQueueStateForTest();
     startTurn.mockReset();
     deliver.mockReset();
@@ -162,6 +169,7 @@ describe("requester settle dispatch deadline", () => {
   });
 
   afterEach(() => {
+    vi.mocked(announceOutput.readChildCompletionFindings).mockRestore();
     resetCommandQueueStateForTest();
     setSubagentAnnounceDeliveryDepsForTest();
     vi.useRealTimers();
@@ -233,14 +241,7 @@ describe("requester settle dispatch deadline", () => {
         isSourceCurrent: () => true,
         requesterSessionKey,
         settledEntry: child,
-        transitionBatch: (
-          batch: readonly SubagentRunRecord[],
-          state: RequesterSettleWakeBatchState,
-        ) => {
-          for (const entry of batch) {
-            entry.requesterSettleWake = state;
-          }
-        },
+        transitionBatch: publishWakeTransition,
         completeBatch,
       };
 
@@ -317,12 +318,7 @@ describe("requester settle dispatch deadline", () => {
       requesterSessionKey: REQUESTER_KEY,
       isSourceCurrent: () => true,
       settledEntry: child,
-      transitionBatch: (
-        _batch: readonly SubagentRunRecord[],
-        state: RequesterSettleWakeBatchState,
-      ) => {
-        child.requesterSettleWake = state;
-      },
+      transitionBatch: publishWakeTransition,
       completeBatch: () => {
         consumeSubagentPauseNotice(child);
       },
@@ -418,11 +414,7 @@ describe("requester settle dispatch deadline", () => {
           isSourceCurrent: () => true,
           requesterSessionKey: REQUESTER_KEY,
           settledEntry: child,
-          transitionBatch: (batch, state) => {
-            for (const entry of batch) {
-              entry.requesterSettleWake = state;
-            }
-          },
+          transitionBatch: publishWakeTransition,
           completeBatch,
         });
       await expect(wake()).resolves.toBe(false);
@@ -459,7 +451,7 @@ describe("requester settle dispatch deadline", () => {
     bindGatewayContextResolver(retired, () => (firstOpen ? firstContext : undefined));
     registryRead.listSubagentRunsForRequester.mockReturnValue([retired]);
     deliver.mockResolvedValue({ delivered: true, path: "direct" });
-    const transitionBatch = vi.fn();
+    const transitionBatch = vi.fn(publishWakeTransition);
     const completeBatch = vi.fn();
     const loaded = createDeferredCore();
     const pending = loaded.promise.then(() =>
@@ -496,6 +488,7 @@ describe("requester settle dispatch deadline", () => {
     expect(transitionBatch).toHaveBeenCalledWith(
       [replacement],
       expect.objectContaining({ attemptCount: 3 }),
+      expect.any(Function),
     );
     expect(completeBatch).toHaveBeenCalledOnce();
   });
@@ -504,7 +497,11 @@ describe("requester settle dispatch deadline", () => {
     "replaces a %s batch only after its owner closes",
     async (binding) => {
       const retired = settledChild();
-      const sibling = { ...structuredClone(retired), runId: "settled-sibling" };
+      const sibling = {
+        ...structuredClone(retired),
+        runId: "settled-sibling",
+        childSessionKey: "agent:main:subagent:settled-sibling",
+      };
       const retiredBatch = [retired, sibling];
       const firstContext = createContext();
       const replacementContext = createContext();
@@ -536,11 +533,7 @@ describe("requester settle dispatch deadline", () => {
           isSourceCurrent: () => true,
           requesterSessionKey: REQUESTER_KEY,
           settledEntry: entry,
-          transitionBatch: (batch, state) => {
-            batch.forEach((member) => {
-              member.requesterSettleWake = state;
-            });
-          },
+          transitionBatch: publishWakeTransition,
           completeBatch: (batch) => {
             batch.forEach((member) => {
               member.requesterSettleWake = undefined;
@@ -665,12 +658,7 @@ describe("requester settle dispatch deadline", () => {
       isSourceCurrent: () => true,
       requesterSessionKey: REQUESTER_KEY,
       settledEntry: child,
-      transitionBatch: (
-        _batch: readonly SubagentRunRecord[],
-        state: RequesterSettleWakeBatchState,
-      ) => {
-        child.requesterSettleWake = state;
-      },
+      transitionBatch: publishWakeTransition,
       completeBatch,
     };
     const wake = withPluginRuntimeGatewayRequestScope(
@@ -805,9 +793,7 @@ describe("requester settle dispatch deadline", () => {
             requesterSessionKey: REQUESTER_KEY,
             settledEntry: child,
             signal: stop.signal,
-            transitionBatch: (_batch, state) => {
-              child.requesterSettleWake = state;
-            },
+            transitionBatch: publishWakeTransition,
             completeBatch,
           }),
       );
@@ -960,12 +946,6 @@ describe("requester settle dispatch deadline", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(getCommandLaneSnapshot(SESSION_LANE)).toMatchObject({ activeCount: 1 });
 
-    const transitionBatch = (
-      _batch: readonly SubagentRunRecord[],
-      state: RequesterSettleWakeBatchState,
-    ) => {
-      child.requesterSettleWake = state;
-    };
     const wake = () =>
       withPluginRuntimeGatewayRequestScope(
         {
@@ -978,7 +958,7 @@ describe("requester settle dispatch deadline", () => {
             isSourceCurrent: () => true,
             requesterSessionKey: REQUESTER_KEY,
             settledEntry: child,
-            transitionBatch,
+            transitionBatch: publishWakeTransition,
             completeBatch: () => {},
           }),
       );

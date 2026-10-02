@@ -105,6 +105,39 @@ describe("GitHub publication request discovery", () => {
     });
   });
 
+  it.each([null, 123])(
+    "keeps each response archive snapshot immutable from %s",
+    async (archivedAt) => {
+      const loaded = sessionRead();
+      mocks.loadSession.mockReturnValue({
+        ...loaded,
+        entry: { ...loaded.entry, archivedAt: archivedAt ?? undefined },
+      });
+      const read = await prepareGitHubPublicationOptionsRead(createRequest(), {
+        sessionKey: "main",
+      });
+      const initial = read.currentSession();
+      const changedAt = archivedAt === null ? 123 : null;
+      mocks.loadSession.mockReturnValue({
+        ...loaded,
+        entry: { ...loaded.entry, archivedAt: changedAt ?? undefined },
+      });
+      const changed = read.currentSession();
+      expect(changed.archivedAt).toBe(changedAt);
+      expect(() => read.assertSessionUnchanged(changed)).not.toThrow();
+      expect(() => read.assertSessionUnchanged(initial)).toThrow("session access changed");
+
+      mocks.loadSession.mockReturnValue({
+        ...loaded,
+        entry: { ...loaded.entry, archivedAt: archivedAt ?? undefined },
+      });
+      const restored = read.currentSession();
+      expect(restored.archivedAt).toBe(archivedAt);
+      expect(() => read.assertSessionUnchanged(changed)).toThrow("session access changed");
+      expect(() => read.assertSessionUnchanged(restored)).not.toThrow();
+    },
+  );
+
   it("shares store discovery across every personal session authority re-read", () => {
     const agentId = "research";
     mocks.loadSession.mockReturnValue(sessionRead(agentId));

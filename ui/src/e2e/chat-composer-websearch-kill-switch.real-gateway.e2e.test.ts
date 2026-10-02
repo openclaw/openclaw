@@ -214,7 +214,7 @@ for (const globallyEnabled of [false, true]) {
           gateway: { controlUi: { enabled: true } },
           agents: {
             defaults: { model: { primary: "fixture/catalog-only" } },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           models: { catalogRefresh: { enabled: false } },
           tools: { web: { search: { enabled: globallyEnabled } } },

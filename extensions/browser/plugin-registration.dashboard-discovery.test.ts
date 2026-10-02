@@ -66,7 +66,6 @@ it.each(["stop", "replacement"] as const)(
         createBrowserRuntimeState({
           resolved: resolveBrowserConfig(undefined),
           port: 18_791,
-          onWarn: vi.fn(),
         }),
       );
       try {

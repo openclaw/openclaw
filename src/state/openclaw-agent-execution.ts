@@ -15,33 +15,31 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { captureAgentDatabaseAdmission } from "./agent-database-admission.js";
-import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
-import { hasAgentDatabaseMaintenanceAuthority } from "./openclaw-agent-db-lease.js";
 import { agentDatabaseLifecycle } from "./openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-resources.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "./openclaw-agent-db.paths.js";
+import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type {
   AgentDatabaseExecutionFileIdentity,
-  AgentDatabaseGenerationClaim,
+  AgentDatabaseExecutionScope,
   AgentDatabaseRequestExecutionSource,
+  OpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution-contract.js";
 import {
   createAgentDatabaseExecutionCapture,
   type IncognitoAgentExecutionOwner,
 } from "./openclaw-agent-execution-incognito.js";
 import {
+  captureBorrowedAgentDatabaseGenerationClaim,
   createAgentDatabaseNativeGeneration,
-  type AgentDatabaseExecutionScope,
+  supportsAgentDatabaseExecutionScope,
+  supportsOpenClawAgentDatabaseExecution,
   type AgentDatabaseNativeGeneration,
 } from "./openclaw-agent-execution-native.js";
 import {
-  getOpenClawDatabaseMaintenanceScope,
   observeOpenClawDatabaseMaintenanceResource,
   runOutsideOpenClawDatabaseMaintenanceScope,
 } from "./openclaw-state-db-async-lifecycle.js";
@@ -56,27 +54,7 @@ import {
   captureOpenClawStateWorkerContext,
 } from "./openclaw-state-worker-context.js";
 
-export type OpenClawAgentDatabaseExecution = {
-  readonly agentId: string;
-  readonly path: string;
-  /** The accepted native receipt; reading this never adopts the current pathname. */
-  readonly fileIdentity: AgentDatabaseExecutionFileIdentity | undefined;
-  assertCurrent(): void;
-  captureGenerationClaim(): AgentDatabaseGenerationClaim;
-  /** Initialize first-use storage through the same admitted native owner. */
-  prepare(source: AgentDatabaseRequestExecutionSource, signal?: AbortSignal): Promise<void>;
-  /** Admit a write against existing storage; a missing store remains missing. */
-  runExisting<T>(
-    source: AgentDatabaseRequestExecutionSource,
-    operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
-    options?: { retireNativeOnFailure: true },
-  ): Promise<T | undefined>;
-  /**
-   * Join this reference's work; native cleanup failures remain with its resource owner.
-   * The owner may retain one bounded idle generation.
-   */
-  release(): Promise<void>;
-};
+export { supportsOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution-native.js";
 
 type ExecutionOwner = {
   readonly kind: "file";
@@ -107,24 +85,6 @@ export const captureOpenClawAgentDatabaseExecution = createAgentDatabaseExecutio
   executions,
   captureFileAgentDatabaseExecution,
 );
-
-function supportsAgentDatabaseExecutionScope(options: OpenClawAgentDatabaseOptions): boolean {
-  return (
-    getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance !== true &&
-    !hasAgentDatabaseMaintenanceAuthority() &&
-    !getAgentDeletionDatabaseCleanup(options)
-  );
-}
-
-/** These native-only scopes still need their complete owning caller cutover. */
-export function supportsOpenClawAgentDatabaseExecution(
-  options: OpenClawAgentDatabaseOptions,
-): boolean {
-  return (
-    !isIncognitoOpenClawAgentSqlitePath(resolveOpenClawAgentSqlitePath(options), options) &&
-    supportsAgentDatabaseExecutionScope(options)
-  );
-}
 
 /** Borrow before callers yield; native opening stays lazy and release joins owned work. */
 function captureFileAgentDatabaseExecution(
@@ -385,7 +345,7 @@ function createAgentDatabaseExecution(
         createIfMissing,
         signal,
       );
-      if (generation === current && current.failed()) {
+      if (generation === current && current.failure()) {
         try {
           await owner.close();
         } catch (error) {
@@ -394,11 +354,11 @@ function createAgentDatabaseExecution(
       }
       return result;
     } catch (error) {
-      const nativeFailed = current.failed();
+      const nativeFailure = current.failure();
       const contended = !entered && isSqliteLockError(error);
-      if (generation === current && (nativeFailed || retireNativeOnFailure)) {
+      if (generation === current && (nativeFailure || retireNativeOnFailure)) {
         try {
-          if (nativeFailed && !contended) {
+          if (nativeFailure === "native" && !contended) {
             await owner.close();
           } else {
             // The rejected broker scope has settled; only its captured native owner is retired.
@@ -536,6 +496,8 @@ function createAgentDatabaseExecution(
         }
         assertReferenceCurrent();
       };
+      const captureGenerationClaim = () =>
+        captureBorrowedAgentDatabaseGenerationClaim(assertBorrowed, () => generation);
       return {
         agentId,
         path: borrowedPath,
@@ -544,24 +506,18 @@ function createAgentDatabaseExecution(
           return fileIdentity;
         },
         assertCurrent: assertBorrowed,
-        captureGenerationClaim() {
+        captureGenerationClaim,
+        capturePreparedGenerationClaim() {
           assertBorrowed();
-          const captured = generation;
-          if (!captured) {
-            throw new Error("Agent database execution has no admitted generation");
+          if (
+            agentDatabaseLifecycle.pending.has(pathname) ||
+            nativeClosing ||
+            cleanupFailure ||
+            !generation?.isPrepared()
+          ) {
+            return undefined;
           }
-          const claim = captured.captureClaim();
-          return {
-            identity: claim.identity,
-            incarnation: claim.incarnation,
-            assertCurrent() {
-              assertBorrowed();
-              if (generation !== captured) {
-                throw new Error("Agent database execution generation was replaced");
-              }
-              claim.assertCurrent();
-            },
-          };
+          return captureGenerationClaim();
         },
         async prepare(source, signal) {
           assertBorrowed();
@@ -584,20 +540,47 @@ function createAgentDatabaseExecution(
           await result;
         },
         async runExisting(source, operation, runOptions) {
-          assertBorrowed();
-          assertCreationReference(false);
-          const result = run(
-            source,
-            operation,
-            (nativeIdentity) => {
-              assertReferenceCurrent(nativeIdentity);
+          const capturedGeneration = generation;
+          const completion = createDeferredCore();
+          pending.add(completion.promise);
+          const result = (async () => {
+            try {
+              assertBorrowed();
               assertCreationReference(false);
-            },
-            expectedIdentity,
-            runOptions?.retireNativeOnFailure,
-          );
-          pending.add(result);
-          void result.finally(() => pending.delete(result)).catch(() => undefined);
+              return await run(
+                source,
+                operation,
+                (nativeIdentity) => {
+                  assertReferenceCurrent(nativeIdentity);
+                  assertCreationReference(false);
+                },
+                expectedIdentity,
+                runOptions?.retireNativeOnFailure,
+              );
+            } catch (error) {
+              if (runOptions?.retireNativeOnFailure && capturedGeneration) {
+                try {
+                  await closeNative(capturedGeneration);
+                } catch (cleanupError) {
+                  throw retainSqliteWorkerErrorCode(
+                    new AggregateError(
+                      [error, cleanupError],
+                      "Agent execution refusal and native cleanup failed",
+                      { cause: error },
+                    ),
+                    error,
+                  );
+                }
+              }
+              throw error;
+            }
+          })();
+          void result
+            .finally(() => {
+              pending.delete(completion.promise);
+              completion.resolve();
+            })
+            .catch(() => undefined);
           return result;
         },
         release() {

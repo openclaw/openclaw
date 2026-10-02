@@ -144,7 +144,7 @@ describe("Doctor OAuth snapshot isolation", () => {
     async ({ lane, rejected }) => {
       await withOpenClawTestState({ prefix: "openclaw-doctor-oauth-" }, async (state) => {
         const cfg = {
-          agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
+          agents: { entries: { main: { workspace: state.workspaceDir } } },
           mcp: {
             servers: {
               [SERVER_NAME]: {

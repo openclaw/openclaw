@@ -2,6 +2,11 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { PLUGIN_UI_CAPABILITIES } from "../plugin-ui-capabilities.js";
+import {
+  ClawHubDownloadabilitySchema,
+  ClawHubSelectedReleaseSchema,
+  ClawHubPluginMetadataSchema,
+} from "./clawhub-listing.js";
 import { closedObject } from "./closed-object.js";
 import {
   ControlUiLinkReaderMetadataSchema,
@@ -297,9 +302,18 @@ export const PluginsListResultSchema = closedObject({
 });
 
 /** Request payload for inspecting one plugin's declared capability surface. */
-export const PluginsInspectParamsSchema = closedObject({
-  pluginId: NonEmptyString,
-});
+export const PluginsInspectParamsSchema = Type.Union([
+  closedObject({ pluginId: NonEmptyString }),
+  closedObject({
+    source: Type.Literal("clawhub"),
+    packageName: NonEmptyString,
+    version: Type.Optional(NonEmptyString),
+  }),
+  closedObject({
+    catalogId: Type.String({ minLength: 1, maxLength: 512, pattern: "^[A-Za-z0-9_-]+$" }),
+    version: Type.Optional(NonEmptyString),
+  }),
+]);
 
 /** Newly declared capability items grouped by their existing manifest surface. */
 export const PluginDeclaredSurfaceWideningSchema = Type.Partial(PluginDeclaredSurfaceSchema, {
@@ -472,6 +486,13 @@ const PluginDiscoveryVersionSchema = closedObject({
 export const PluginDiscoveryDetailSchema = closedObject({
   origin: Type.Union([Type.Literal("clawhub"), Type.Literal("local")]),
   packageName: Type.Optional(NonEmptyString),
+  registry: Type.Optional(NonEmptyString),
+  requestedVersion: Type.Optional(NonEmptyString),
+  tags: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
+  selectedRelease: Type.Optional(Type.Union([ClawHubSelectedReleaseSchema, Type.Null()])),
+  downloadability: Type.Optional(ClawHubDownloadabilitySchema),
+  remoteError: Type.Optional(Type.String()),
+  metadata: Type.Optional(ClawHubPluginMetadataSchema),
   author: Type.Optional(
     closedObject({
       handle: Type.Optional(NonEmptyString),
@@ -588,7 +609,11 @@ export const PluginsInspectResultSchema = closedObject({
   source: Type.Optional(PluginInspectSourceSchema),
   declared: PluginDeclaredSurfaceSchema,
   components: PluginInstalledComponentsSchema,
-  reviewToken: NonEmptyString,
+  /** Catalog summaries are partial and cannot produce a capability-consent token. */
+  reviewToken: Type.Optional(NonEmptyString),
+  declaredSurfaceStatus: Type.Optional(
+    Type.Union([Type.Literal("partial"), Type.Literal("unavailable")]),
+  ),
   grants: PluginOperatorGrantsSchema,
   trust: Type.Optional(PluginInstallTrustSchema),
   /** Exact installed-version ClawHub metadata when a canonical package match exists. */

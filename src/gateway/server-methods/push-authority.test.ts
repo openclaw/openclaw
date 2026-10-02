@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { WebPushMutationGuard } from "../../infra/push-web-store.records.js";
 import {
   clearBoundWebPushSubscription,
@@ -9,7 +9,11 @@ import {
   setWebPushSubscriptionPreferences,
   type BoundWebPushSubscription,
 } from "../../infra/push-web.js";
-import { setUserPreferences } from "../../state/user-preferences.js";
+import { prepareUserProfileSelectionAuthority } from "../../state/user-channel-identity-operations.js";
+import {
+  getCanonicalUserPreferences,
+  setCanonicalUserPreferences,
+} from "../../state/user-preferences.js";
 import { resolveUserProfileId } from "../../state/user-profiles.js";
 import { pushHandlers } from "./push.js";
 import type { GatewayClient } from "./types.js";
@@ -35,13 +39,14 @@ vi.mock("../../infra/push-web.js", () => ({
   clearBoundWebPushSubscription: vi.fn(),
   withBoundWebPushSubscriptionByEndpoint: async <T>(
     params: { endpoint: string },
-    prepare: (subscription: BoundWebPushSubscription | null) => { start: () => T } | undefined,
+    prepare: (
+      subscription: BoundWebPushSubscription | null,
+    ) => { start: () => T } | undefined | Promise<{ start: () => T } | undefined>,
   ) => {
     const snapshotSubscription = await findBoundWebPushSubscriptionByEndpoint(params);
-    const action = prepare(snapshotSubscription);
     snapshotScope.active = true;
     try {
-      return action?.start();
+      return (await prepare(snapshotSubscription))?.start();
     } finally {
       snapshotScope.active = false;
     }
@@ -51,14 +56,32 @@ vi.mock("../../infra/push-web.js", () => ({
   setWebPushSubscriptionPreferences: vi.fn(),
 }));
 vi.mock("../../state/user-preferences.js", () => ({
-  getUserPreferences: vi.fn(() => ({})),
-  setUserPreferences: vi.fn(),
+  getCanonicalUserPreferences: vi.fn(async () => ({ profileId: "profile-owner", entries: {} })),
+  setCanonicalUserPreferences: vi.fn(),
+}));
+vi.mock("../../state/user-channel-identity-operations.js", () => ({
+  prepareUserProfileSelectionAuthority: vi.fn(async (id: string) => {
+    const profileId = resolveUserProfileId(id);
+    return profileId
+      ? { profileId, isCurrent: () => resolveUserProfileId(id) === profileId }
+      : undefined;
+  }),
+}));
+vi.mock("../../state/user-profile-list.js", () => ({
+  prepareUserProfileCatalog: async () => ({
+    readCurrentIdentity: (id: string) => ({ profileId: resolveUserProfileId(id) }),
+    release: vi.fn(),
+  }),
 }));
 vi.mock("../../state/user-profiles.js", () => ({ resolveUserProfileId: vi.fn() }));
 
 const endpoint = "https://push.example.test/authority";
 const keys = { p256dh: "synthetic-p256dh", auth: "synthetic-auth" };
-type WriteMethod = "push.web.subscribe" | "push.web.preferences.set" | "push.web.unsubscribe";
+type WriteMethod =
+  | "push.web.subscribe"
+  | "push.web.preferences.get"
+  | "push.web.preferences.set"
+  | "push.web.unsubscribe";
 
 function subscription(userProfileId: string | null = "profile-owner"): BoundWebPushSubscription {
   return {
@@ -164,13 +187,136 @@ beforeEach(() => {
   vi.mocked(registerWebPushSubscription).mockResolvedValue(subscription());
   vi.mocked(setWebPushSubscriptionPreferences).mockResolvedValue(true);
   vi.mocked(clearBoundWebPushSubscription).mockResolvedValue(true);
-  vi.mocked(setUserPreferences).mockImplementation(() => {
+  vi.mocked(setCanonicalUserPreferences).mockImplementation(async () => {
     expect(snapshotScope.active).toBe(true);
-    return { ok: true, value: undefined };
+    return { ok: true, value: { profileId: "profile-owner" } };
+  });
+  vi.mocked(prepareUserProfileSelectionAuthority).mockImplementation(async (id) => {
+    const profileId = resolveUserProfileId(id);
+    return profileId
+      ? { profileId, isCurrent: () => resolveUserProfileId(id) === profileId }
+      : undefined;
   });
 });
 
 describe("Web Push request authority across asynchronous storage", () => {
+  it.each(["unchanged", "profile changed", "request revoked", "rejected"] as const)(
+    "waits for preference reads and checks authority: %s",
+    async (change) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      let profileCurrent = true;
+      vi.mocked(prepareUserProfileSelectionAuthority).mockResolvedValue({
+        profileId: "profile-owner",
+        isCurrent: () => profileCurrent,
+      });
+      vi.mocked(getCanonicalUserPreferences).mockImplementation(async () => {
+        entered.resolve();
+        await release.promise;
+        if (change === "rejected") {
+          throw new Error("worker read failed");
+        }
+        return {
+          profileId: "profile-owner",
+          entries: { "notifications.web.v1": { detailLevel: "detailed" } },
+        };
+      });
+      const invocation = createInvocation("push.web.preferences.get");
+      const pending = invocation.invoke();
+      const outcome = pending.catch((error: unknown) => error);
+      try {
+        await awaitGateBeforeSettlement(entered.promise, pending, "preference read not reached");
+        expect(snapshotScope.active).toBe(true);
+        expect(invocation.respond).not.toHaveBeenCalled();
+        if (change === "profile changed") {
+          profileCurrent = false;
+        } else if (change === "request revoked") {
+          invocation.request.abort();
+        }
+      } finally {
+        release.resolve();
+      }
+      const error = await outcome;
+      if (change === "unchanged") {
+        expect(error).toBeUndefined();
+        expect(invocation.respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            durableIdentity: true,
+            user: expect.objectContaining({ detailLevel: "detailed" }),
+          }),
+          undefined,
+        );
+      } else {
+        expect(error).toBeInstanceOf(Error);
+        expect(invocation.respond).not.toHaveBeenCalled();
+      }
+      expect(snapshotScope.active).toBe(false);
+    },
+  );
+
+  it.each([
+    "unchanged",
+    "admission revoked",
+    "commit revoked",
+    "completion revoked",
+    "rejected",
+  ] as const)("publishes preferences only after the guarded write settles: %s", async (change) => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const committed = vi.fn();
+    let profileCurrent = true;
+    vi.mocked(prepareUserProfileSelectionAuthority).mockResolvedValue({
+      profileId: "profile-owner",
+      isCurrent: () => profileCurrent,
+    });
+    vi.mocked(setCanonicalUserPreferences).mockImplementation(async (_id, _entries, options) => {
+      entered.resolve();
+      await release.promise;
+      const assertCurrent = expectDefined(options?.assertCurrent, "preference admission guard");
+      assertCurrent();
+      if (change === "commit revoked") {
+        profileCurrent = false;
+      }
+      assertCurrent();
+      if (change === "rejected") {
+        throw new Error("worker write failed");
+      }
+      committed();
+      if (change === "completion revoked") {
+        profileCurrent = false;
+      }
+      return { ok: true, value: { profileId: "profile-owner" } };
+    });
+    const invocation = createInvocation("push.web.preferences.set", "user");
+    const pending = invocation.invoke();
+    const outcome = pending.catch((error: unknown) => error);
+    try {
+      await awaitGateBeforeSettlement(entered.promise, pending, "preference write not reached");
+      expect(snapshotScope.active).toBe(true);
+      expect(invocation.respond).not.toHaveBeenCalled();
+      expect(invocation.broadcast).not.toHaveBeenCalled();
+      if (change === "admission revoked") {
+        invocation.client.invalidated = true;
+      }
+    } finally {
+      release.resolve();
+    }
+    const error = await outcome;
+    if (change === "unchanged") {
+      expect(error).toBeUndefined();
+      expect(committed).toHaveBeenCalledOnce();
+      expect(invocation.respond.mock.calls[0]?.[0]).toBe(true);
+      expect(invocation.broadcast).toHaveBeenCalledOnce();
+    } else {
+      expect(error).toBeInstanceOf(Error);
+      expect(committed).toHaveBeenCalledTimes(change === "completion revoked" ? 1 : 0);
+      expect(invocation.respond).not.toHaveBeenCalled();
+      expect(invocation.broadcast).not.toHaveBeenCalled();
+    }
+    expect(snapshotScope.active).toBe(false);
+  });
+
   it.each([
     "invalidated client",
     "request abort",
@@ -188,7 +334,7 @@ describe("Web Push request authority across asynchronous storage", () => {
       (error: unknown) => error,
     );
     expect(findBoundWebPushSubscriptionByEndpoint).toHaveBeenCalledOnce();
-    expect(setUserPreferences).not.toHaveBeenCalled();
+    expect(setCanonicalUserPreferences).not.toHaveBeenCalled();
     if (change === "invalidated client") {
       invocation.client.invalidated = true;
     }
@@ -219,13 +365,17 @@ describe("Web Push request authority across asynchronous storage", () => {
     const error = await pending;
     if (change === "reconnect only") {
       expect(error).toBeNull();
-      expect(setUserPreferences).toHaveBeenCalledOnce();
-      expect(setUserPreferences).toHaveBeenCalledWith("profile-owner", expect.any(Object));
+      expect(setCanonicalUserPreferences).toHaveBeenCalledOnce();
+      expect(setCanonicalUserPreferences).toHaveBeenCalledWith(
+        "profile-owner",
+        expect.any(Object),
+        { assertCurrent: expect.any(Function) },
+      );
       expect(invocation.broadcast).toHaveBeenCalledOnce();
       expect(invocation.respond.mock.calls[0]?.[0]).toBe(true);
       expect(snapshotScope.active).toBe(false);
     } else {
-      expect(setUserPreferences).not.toHaveBeenCalled();
+      expect(setCanonicalUserPreferences).not.toHaveBeenCalled();
       expect(invocation.broadcast).not.toHaveBeenCalled();
       expect(error !== null || invocation.respond.mock.calls[0]?.[0] === false).toBe(true);
     }

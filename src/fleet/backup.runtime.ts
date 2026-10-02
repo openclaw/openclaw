@@ -564,7 +564,6 @@ export async function restoreFleetCell(params: {
       symlinks: "reject",
       hardlinks: "reject",
       maxBytes: MANIFEST_MAX_BYTES,
-      nonBlockingRead: true,
     });
     let manifest: unknown;
     try {

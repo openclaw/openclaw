@@ -53,12 +53,12 @@ describe("embedded attempt phase lifecycle state", () => {
     let timedOut = false;
     let timedOutDuringCompaction = false;
     const messages: never[] = [];
-    const removeTrailingEntries = vi.fn(() => 0);
+    const removeTrailingEntriesAsync = vi.fn(async () => 0);
     const sessionManager = Object.assign(SessionManager.inMemory(), {
-      appendCustomEntryAsync: vi.fn(),
+      appendCustomEntryAsync: vi.fn(async () => undefined),
       buildSessionContext: () => ({ messages }),
       getEntries: () => [],
-      removeTrailingEntries,
+      removeTrailingEntriesAsync,
     });
     const activeSession = {
       agent: { state: { messages } },
@@ -121,7 +121,7 @@ describe("embedded attempt phase lifecycle state", () => {
     });
 
     expect(result.timedOutDuringCompaction).toBe(true);
-    expect(removeTrailingEntries).toHaveBeenCalledOnce();
+    expect(removeTrailingEntriesAsync).toHaveBeenCalledOnce();
   });
 
   it("settles a user-aborted run whose async-task wait throws AbortError", async () => {
@@ -132,10 +132,10 @@ describe("embedded attempt phase lifecycle state", () => {
     hoisted.waitForCompletionRequiredAsyncTasks.mockRejectedValueOnce(abortError);
     const messages: never[] = [];
     const sessionManager = Object.assign(SessionManager.inMemory(), {
-      appendCustomEntryAsync: vi.fn(),
+      appendCustomEntryAsync: vi.fn(async () => undefined),
       buildSessionContext: () => ({ messages }),
       getEntries: () => [],
-      removeTrailingEntries: vi.fn(() => 0),
+      removeTrailingEntriesAsync: vi.fn(async () => 0),
     });
     const activeSession = {
       agent: { state: { messages } },
@@ -224,10 +224,10 @@ describe("embedded attempt phase lifecycle state", () => {
       sessionId: "session-1",
     };
     const sessionManager = Object.assign(SessionManager.inMemory(), {
-      appendCustomEntryAsync: vi.fn(),
+      appendCustomEntryAsync: vi.fn(async () => undefined),
       buildSessionContext: () => ({ messages }),
       getEntries: () => [],
-      removeTrailingEntries: vi.fn(() => 0),
+      removeTrailingEntriesAsync: vi.fn(async () => 0),
     });
 
     const runAbortDeadlineAtMs = Date.now() + 60_000;

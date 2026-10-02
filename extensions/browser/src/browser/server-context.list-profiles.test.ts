@@ -197,7 +197,6 @@ describe("browser server-context listProfiles", () => {
       exe: { kind: "chromium", path: "/usr/bin/chromium" },
       userDataDir: "/tmp/openclaw-profile",
       cdpPort: 18800,
-      startedAt: Date.now(),
       proc: {} as never,
     };
     const cleanup = createDeferred<void>();

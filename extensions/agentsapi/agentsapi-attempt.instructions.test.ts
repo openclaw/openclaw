@@ -69,7 +69,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async () => {
 
 vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({
   SessionManager: {
-    open: () => ({ buildSessionContext: () => ({ messages: [] }) }),
+    openAsync: async () => ({ buildSessionContext: () => ({ messages: [] }) }),
     openModelContextAsync: openModelContextAsyncMock,
   },
 }));

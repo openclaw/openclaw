@@ -26,6 +26,7 @@ import {
 } from "./session-accessor.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
+import * as reclamationDiagnostics from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
@@ -331,7 +332,7 @@ it("records successful archive pruning stages", async () => {
   });
 });
 
-it("coalesces automatic maintenance without redundant writer admissions", async () => {
+it("coalesces automatic maintenance through native planning and finalization", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = path.join(state.sessionsDir(), "sessions.json");
     const staleKey = "agent:main:subagent:writer-stale";
@@ -355,12 +356,17 @@ it("coalesces automatic maintenance without redundant writer admissions", async 
       finalized.resolve(result);
       return result;
     });
-    const reclamationKinds: unknown[] = [];
-    const operations = observeSlowWriters((_operation, fields) => {
-      if ("reclamationKind" in fields && fields.reclamationKind) {
-        reclamationKinds.push(fields.reclamationKind);
-      }
-    });
+    const workerOutcomes: Parameters<
+      typeof reclamationDiagnostics.logSqliteReclamationWorkerOutcome
+    >[0][] = [];
+    const logWorkerOutcome = reclamationDiagnostics.logSqliteReclamationWorkerOutcome;
+    vi.spyOn(reclamationDiagnostics, "logSqliteReclamationWorkerOutcome").mockImplementation(
+      (outcome) => {
+        workerOutcomes.push(outcome);
+        logWorkerOutcome(outcome);
+      },
+    );
+    const operations = observeSlowWriters();
     const request = {
       activeSessionKey: activeKey,
       archiveDirectory: state.sessionsDir(),
@@ -377,22 +383,24 @@ it("coalesces automatic maintenance without redundant writer admissions", async 
       kickSessionEntryMaintenanceAfterWrite(request);
       await finalized.promise;
       await yieldToEventLoop();
-      // Native commits retain admission; preparation and empty archive probes add no writer spans.
+      // Metadata uses the canonical actor; only archive finalization uses reclamation admission.
       expect(operations).toEqual([
         "session.maintenance.plan",
         "session.reclamation.retain",
-        "session.reclamation.worker-commit",
         "session.maintenance.plan",
         "session.reclamation.retain",
-        "session.reclamation.worker-commit",
         "session.reclamation.retain",
         "session.reclamation.worker-commit",
       ]);
-      expect(reclamationKinds).toEqual([
+      expect(workerOutcomes.map(({ kind }) => kind)).toEqual([
         "maintenance-plan",
         "maintenance-plan",
         "maintenance-finalize",
       ]);
+      for (const outcome of workerOutcomes) {
+        expect(outcome.outcome).toBe("resolved");
+        expect(outcome.workerThreadId).toBeGreaterThan(0);
+      }
       expect(loadSessionEntry({ sessionKey: staleKey, storePath })).toBeUndefined();
       expect(loadSessionEntry({ sessionKey: activeKey, storePath })?.sessionId).toBe("active");
     } finally {

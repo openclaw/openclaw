@@ -112,7 +112,7 @@ type QaTestFileExecutionUnit =
     };
 
 export type QaTestFileScenarioRunResult = {
-  evidence: QaEvidenceSummaryJson;
+  evidence: QaEvidenceSummaryV3Json;
   evidencePath: string;
   executionKind: QaTestFileExecutionKind;
   outputDir: string;

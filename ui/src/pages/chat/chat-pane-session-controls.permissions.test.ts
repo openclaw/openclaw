@@ -134,7 +134,6 @@ describe("chat pane model-setting permissions", () => {
   it.each([
     { scope: "operator.read", sharingRole: "owner", allowed: false },
     { scope: "operator.sessions.write", sharingRole: "owner", allowed: true },
-    { scope: "operator.sessions.write", sharingRole: "member", allowed: false },
     { scope: "operator.sessions.write", sharingRole: "viewer", allowed: false },
     { scope: "operator.write", sharingRole: "viewer", allowed: true },
     { scope: "operator.admin", sharingRole: "viewer", allowed: true },

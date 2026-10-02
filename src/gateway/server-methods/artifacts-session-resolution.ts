@@ -4,7 +4,7 @@ import {
   type ArtifactsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveSessionKeyForRun } from "../server-session-key.js";
+import { resolveSessionForRun } from "../server-session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
 import {
@@ -63,17 +63,18 @@ function resolveQuerySession(
   cfg: OpenClawConfig,
   projection?: ArtifactSessionProjection,
 ): ResolvedArtifactSession | undefined {
-  const sessionKey =
-    query.sessionKey ??
-    (query.runId &&
-      resolveSessionKeyForRun(query.runId, {
-        ...(query.agentId ? { agentId: query.agentId } : {}),
-        ...(projection ? { projection } : {}),
-      }));
+  const selected =
+    !query.sessionKey && query.runId
+      ? resolveSessionForRun(query.runId, {
+          ...(query.agentId ? { agentId: query.agentId } : {}),
+          ...(projection ? { projection } : {}),
+        })
+      : undefined;
+  const sessionKey = query.sessionKey ?? selected?.sessionKey;
   if (!sessionKey) {
     return undefined;
   }
-  let agentId = query.agentId;
+  let agentId = query.agentId ?? selected?.agentId;
   if (query.sessionKey) {
     const owner = resolveRequestedSessionAgentId(cfg, sessionKey, agentId);
     if (!owner.ok) {

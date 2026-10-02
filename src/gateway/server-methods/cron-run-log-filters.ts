@@ -6,16 +6,13 @@ export function filterCronRunLogJobsByAgent(
   jobs: readonly CronJob[],
   agentId: string | undefined,
   defaultAgentId: string | undefined,
-  legacyDefaultAgentId?: string,
 ): CronJob[] {
   if (!agentId) {
     return [...jobs];
   }
   const normalizedAgentId = normalizeAgentId(agentId);
   return jobs.filter(
-    (job) =>
-      tryResolveCronJobEffectiveAgentId(job, defaultAgentId, legacyDefaultAgentId) ===
-      normalizedAgentId,
+    (job) => tryResolveCronJobEffectiveAgentId(job, defaultAgentId) === normalizedAgentId,
   );
 }
 

@@ -3,6 +3,7 @@ import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.lifecycle-types.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import type { TranscriptEvent } from "./session-accessor.types.js";
+import type { SessionArchivePruningRead } from "./session-history-archive-pruning.types.js";
 
 export type SessionStateDeletePlan = {
   agentId: string;
@@ -140,4 +141,14 @@ export type SessionTranscriptMaintenanceSizingInput = {
   path: string;
   env: NodeJS.ProcessEnv;
   sessionIds: readonly string[];
+};
+
+export type SessionPendingArchivesWorkerInput = {
+  kind: "session-pending-archives";
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
+};
+
+export type SessionArchivePruningWorkerInput = SessionArchivePruningRead & {
+  kind: "session-archive-pruning";
 };

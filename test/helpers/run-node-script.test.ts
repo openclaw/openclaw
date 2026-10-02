@@ -9,6 +9,8 @@ import { withinTest } from "./promise.js";
 import { runNodeScript } from "./run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "./temp-dir.js";
 
+const PID_CLEANUP_HANG_GUARD_MS = 2_000;
+const PROCESS_CLEANUP_HANG_GUARD_MS = 15_000;
 let cleanupFixture: (() => Promise<void>) | undefined;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -145,7 +147,9 @@ child.once('message',()=>process.exit(0));
         // manually disposing roots the lifetime owner deliberately retained.
         if (existsSync(pidFile)) {
           writeFileSync(release, "release");
-          await waitForDead(await waitForPidFile(pidFile, 2_000), 15_000);
+          // Cleanup hang guards after the owner released the leaf, not readiness races.
+          const pid = await waitForPidFile(pidFile, AbortSignal.timeout(PID_CLEANUP_HANG_GUARD_MS));
+          await waitForDead(pid, AbortSignal.timeout(PROCESS_CLEANUP_HANG_GUARD_MS));
         }
         await fixture.cleanup();
         rmSync(directory, { recursive: true, force: true });

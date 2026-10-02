@@ -892,9 +892,6 @@ class TalkModeManager internal constructor(
     if (ttsOnAllResponses) {
       Log.d(tag, "gateway event: $event")
     }
-    if (event == "agent" && ttsOnAllResponses) {
-      return
-    }
     if (event != "chat") return
     val obj = parseJsonParamsObject(payloadJson) ?: return
     val runId = obj["runId"].asJsonStringOrNull() ?: return
