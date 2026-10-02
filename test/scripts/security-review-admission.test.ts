@@ -14,6 +14,7 @@ function fixture() {
     number: 7,
     state: "open",
     draft: false,
+    maintainer_can_modify: true,
     created_at: "2026-09-01T00:00:00Z",
     user: { id: 1, login: "contributor", type: "User" },
     changed_files: 2,
@@ -224,7 +225,11 @@ describe("published security clearance admission", () => {
         if (change === "head") {
           f.state.currentPull.head.sha = "d".repeat(40);
         } else if (change === "merged") {
-          Object.assign(f.state.currentPull, { state: "closed", merged: true });
+          Object.assign(f.state.currentPull, {
+            state: "closed",
+            merged: true,
+            maintainer_can_modify: false,
+          });
         } else {
           f.state.rollout = "grandfathered";
         }

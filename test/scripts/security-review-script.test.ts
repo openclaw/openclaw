@@ -13,6 +13,7 @@ const pr = {
   number: 7,
   state: "open",
   draft: false,
+  maintainer_can_modify: true,
   created_at: "2026-01-01T00:00:00Z",
   user: { id: 1, login: "maintainer", type: "User" },
   changed_files: 2,
@@ -21,10 +22,14 @@ const pr = {
 };
 const lifecycleChanges = [
   { name: "closed PR", changedPr: { ...pr, state: "closed" } },
+  {
+    name: "closed PR with maintainer edits disabled",
+    changedPr: { ...pr, state: "closed", maintainer_can_modify: false },
+  },
   { name: "draft PR", changedPr: { ...pr, draft: true } },
   { name: "target branch", changedPr: { ...pr, base: { ...pr.base, ref: "stable" } } },
 ];
-const mergedPr = { ...pr, state: "closed", merged: true };
+const mergedPr = { ...pr, state: "closed", merged: true, maintainer_can_modify: false };
 const rollout = {
   number: 152415,
   state: "closed",
@@ -1134,7 +1139,12 @@ describe("combined security review entry point", () => {
         changed_files: 1,
         head: { ...pr.head, repo: { id: 1, full_name: "openclaw/openclaw" } },
       };
-      const merged = { ...cleanupPr, state: "closed", merged: true };
+      const merged = {
+        ...cleanupPr,
+        state: "closed",
+        merged: true,
+        maintainer_can_modify: false,
+      };
       const routes = {
         [`GET ${pullPath}`]: {
           responses:
@@ -1205,8 +1215,9 @@ describe("combined security review entry point", () => {
     { ...pr, state: "unknown" },
     { ...pr, draft: "true" },
     { ...pr, base: { ...pr.base, ref: "" } },
-    { ...pr, state: "closed", maintainer_can_modify: false },
-    { ...mergedPr, maintainer_can_modify: false },
+    { ...pr, maintainer_can_modify: false },
+    { ...pr, state: "closed", maintainer_can_modify: null },
+    { ...mergedPr, user: { ...pr.user, id: 2 } },
     { ...pr, draft: true, user: { ...pr.user, id: 2 } },
     { ...pr, base: { ref: "stable", repo: { id: 3 } } },
   ])("keeps invalid or authority-changing transitions as failures: %j", (changedPr) => {
@@ -1587,7 +1598,7 @@ describe("combined security review entry point", () => {
     const result = evaluate({
       [`GET ${pullPath}`]: {
         responses: [
-          pr,
+          { ...pr, maintainer_can_modify: undefined },
           { ...pr, base: { ...pr.base, sha: "e".repeat(40) }, maintainer_can_modify: null },
         ],
       },
