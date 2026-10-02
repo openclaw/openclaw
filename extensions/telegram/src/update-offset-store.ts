@@ -47,7 +47,9 @@ function fingerprintFromToken(token?: string): string | null {
 }
 
 function safeParseState(state: unknown): TelegramUpdateOffsetState | null {
-  if (!isRecord(state)) return null;
+  if (!isRecord(state)) {
+    return null;
+  }
   if (state.version === 1 || state.version === 2) {
     throw new Error("Telegram update offsets require migration; run openclaw doctor --fix.");
   }
@@ -56,8 +58,9 @@ function safeParseState(state: unknown): TelegramUpdateOffsetState | null {
     (state.lastUpdateId !== null && !isValidUpdateId(state.lastUpdateId)) ||
     (state.botId !== null && typeof state.botId !== "string") ||
     (state.tokenFingerprint !== null && typeof state.tokenFingerprint !== "string")
-  )
+  ) {
     return null;
+  }
   return {
     version: STORE_VERSION,
     lastUpdateId: state.lastUpdateId,

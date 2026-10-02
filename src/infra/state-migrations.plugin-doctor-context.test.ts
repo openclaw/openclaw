@@ -374,13 +374,14 @@ describe("Telegram registered SQLite offset repair", () => {
     },
   ];
 
+  const firstOriginal = {
+    key: "first",
+    raw: '{ "version": 1, "lastUpdateId": 777, "extra": ["kept"] }',
+    createdAt: 11,
+    expiresAt: null,
+  };
   const originals = [
-    {
-      key: "first",
-      raw: '{ "version": 1, "lastUpdateId": 777, "extra": ["kept"] }',
-      createdAt: 11,
-      expiresAt: null,
-    },
+    firstOriginal,
     {
       key: "second",
       raw: '{ "version": 2, "lastUpdateId": 999, "botId": "111111" }',
@@ -522,7 +523,7 @@ describe("Telegram registered SQLite offset repair", () => {
             "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
           );
           for (let index = 0; index < padding; index++) {
-            insert.run("telegram", namespace, `middle-${index}`, originals[0].raw, 11, null);
+            insert.run("telegram", namespace, `middle-${index}`, firstOriginal.raw, 11, null);
           }
           db.exec("COMMIT");
         } catch (error) {
@@ -611,7 +612,7 @@ describe("Telegram registered SQLite offset repair", () => {
           });
           expect(result.warnings.join("\n")).toContain("repair owner expired");
           expect(readDeferredPluginMigrations({ env })).toEqual(pending);
-          expect(rows(db)[0]).toMatchObject({ value_json: originals[0].raw });
+          expect(rows(db)[0]).toMatchObject({ value_json: firstOriginal.raw });
         } finally {
           interception.mockRestore();
         }
@@ -669,7 +670,7 @@ describe("Telegram registered SQLite offset repair", () => {
             const current = openOpenClawStateDatabase({ env }).db;
             expect(rows(current)[0]).toMatchObject({
               entry_key: "first",
-              value_json: originals[0].raw,
+              value_json: firstOriginal.raw,
               created_at: 11,
               expires_at: null,
             });
