@@ -16,7 +16,11 @@ import path from "node:path";
 import { SandboxManager } from "@anthropic-ai/sandbox-runtime";
 import type { SandboxBackendHandle, SandboxFsBridge } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, describe, expect, it } from "vitest";
-import { createSrtSandboxBackendFactory, SRT_SANDBOX_BACKEND_ID } from "./backend.js";
+import {
+  createSrtSandboxBackendFactory,
+  shutdownSrtSandboxRuntime,
+  SRT_SANDBOX_BACKEND_ID,
+} from "./backend.js";
 import { resolveSrtPluginConfig } from "./config.js";
 import { PinOwnerClient } from "./pin-owner-client.js";
 import { buildPinOwnerCommand } from "./pin-owner-source.js";
@@ -31,7 +35,8 @@ const isDarwin = process.platform === "darwin";
 
 describe.skipIf(!isDarwin)("srt sandbox backend fs bridge (S3, end to end)", () => {
   const cleanups: Array<() => void> = [];
-  afterEach(() => {
+  afterEach(async () => {
+    await shutdownSrtSandboxRuntime();
     while (cleanups.length > 0) {
       cleanups.pop()?.();
     }

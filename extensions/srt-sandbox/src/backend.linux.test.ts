@@ -17,7 +17,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { CreateSandboxBackendParams } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, describe, expect, it } from "vitest";
-import { createSrtSandboxBackendFactory, SRT_SANDBOX_BACKEND_ID } from "./backend.js";
+import {
+  createSrtSandboxBackendFactory,
+  shutdownSrtSandboxRuntime,
+  SRT_SANDBOX_BACKEND_ID,
+} from "./backend.js";
 import { resolveSrtPluginConfig } from "./config.js";
 
 const isLinux = process.platform === "linux";
@@ -51,7 +55,8 @@ function makeParams(overrides: {
 
 describe.skipIf(!isLinux)("srt sandbox Linux bwrap filesystem matrix (AC-L2)", () => {
   const cleanups: Array<() => void> = [];
-  afterEach(() => {
+  afterEach(async () => {
+    await shutdownSrtSandboxRuntime();
     while (cleanups.length > 0) {
       cleanups.pop()?.();
     }

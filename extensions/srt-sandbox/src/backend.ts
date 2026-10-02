@@ -44,6 +44,11 @@ import {
   resolveWritableRoots,
   type SrtScopePolicyInput,
 } from "./srt-runtime-config.js";
+import {
+  acquireSrtRuntime,
+  releaseSrtRuntime,
+  shutdownSrtRuntime,
+} from "./srt-runtime-lifecycle.js";
 import { WindowsSrtSandboxBackend } from "./windows-backend.js";
 import { resolveWindowsSrtWin } from "./windows-sandbox-config.js";
 
@@ -59,7 +64,7 @@ type SrtBackendDependencies = {
  * WindowsSrtSandboxBackend). Both expose the scope key and a dispose() that
  * reaps the scope's sandbox processes, so teardown treats them uniformly.
  */
-type DisposableScopeBackend = { readonly scopeKey: string; dispose(): void };
+type DisposableScopeBackend = { readonly scopeKey: string; dispose(): void | Promise<void> };
 
 /**
  * Live per-scope backend instances, so scope teardown (manager.removeRuntime)
@@ -69,54 +74,30 @@ type DisposableScopeBackend = { readonly scopeKey: string; dispose(): void };
  */
 const liveScopeBackends = new Set<DisposableScopeBackend>();
 
-/** Shared SRT host runtime. SRT 0.0.76 owns one proxy/config per process. */
-let srtRuntimeInitialization: Promise<void> | undefined;
-
-async function ensureSrtRuntimeInitialized(runtimeConfig: SandboxRuntimeConfig): Promise<void> {
-  if (!srtRuntimeInitialization) {
-    const initialization = SandboxManager.initialize(runtimeConfig);
-    srtRuntimeInitialization = initialization;
-    try {
-      await initialization;
-    } catch (error) {
-      if (srtRuntimeInitialization === initialization) {
-        srtRuntimeInitialization = undefined;
-      }
-      throw error;
-    }
-    return;
-  }
-  await srtRuntimeInitialization;
-}
-
 /** Monotonic per-scope index (Windows account-pool / port-slot assignment). */
 let windowsScopeCounter = 0;
 let windowsScopeActive = false;
 
 /** Dispose every live SRT scope backend (plugin disable/restart teardown). */
-export function disposeAllSrtScopeBackends(): void {
+export async function disposeAllSrtScopeBackends(): Promise<void> {
   // Snapshot: dispose() removes the backend from the set as it runs.
   for (const backend of Array.from(liveScopeBackends)) {
-    backend.dispose();
+    await backend.dispose();
   }
 }
 
 /** Reap every scope and release SRT's process-global proxy/runtime resources. */
 export async function shutdownSrtSandboxRuntime(): Promise<void> {
-  disposeAllSrtScopeBackends();
-  const initialization = srtRuntimeInitialization;
-  srtRuntimeInitialization = undefined;
-  if (initialization) {
-    await initialization.catch(() => undefined);
-  }
-  await SandboxManager.reset();
+  // Claim reset ownership before the first await so a concurrent factory must
+  // fail closed for the entire scope-disposal + SRT reset interval.
+  await shutdownSrtRuntime(disposeAllSrtScopeBackends, liveScopeBackends.size > 0);
 }
 
 /** Dispose the live SRT scope backends for one scope (manager.removeRuntime). */
-export function disposeSrtScopeBackends(scopeKey: string): void {
+export async function disposeSrtScopeBackends(scopeKey: string): Promise<void> {
   for (const backend of Array.from(liveScopeBackends)) {
     if (backend.scopeKey === scopeKey) {
-      backend.dispose();
+      await backend.dispose();
     }
   }
 }
@@ -153,6 +134,7 @@ class SrtSandboxBackend {
    * allowlist + (Linux) netns. Left undefined on the P0 in-process path.
    */
   private sessionBroker: SessionBroker | undefined;
+  private disposed = false;
 
   constructor(
     private readonly params: CreateSandboxBackendParams,
@@ -171,11 +153,15 @@ class SrtSandboxBackend {
   }
 
   async initialize(): Promise<void> {
-    await ensureSrtRuntimeInitialized(this.runtimeConfig);
+    await acquireSrtRuntime(this, this.runtimeConfig);
   }
 
   /** Tear down this scope: reap every tracked sandbox process group, drop the pin owner. */
-  dispose(): void {
+  async dispose(): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
     this.execCustody.dispose();
     this.pinOwnerClient.dispose();
     this.sessionBroker?.dispose();
@@ -184,6 +170,7 @@ class SrtSandboxBackend {
     this.fsBridge = undefined;
     this.reaper.dispose();
     liveScopeBackends.delete(this);
+    await releaseSrtRuntime(this);
   }
 
   /**
@@ -417,7 +404,7 @@ export function createSrtSandboxBackendManager(): SandboxBackendManager {
     removeRuntime: async ({ entry }) => {
       // entry.containerName === backend.runtimeId === scopeKey (see
       // createSandboxBackend's toEntry mapping).
-      disposeSrtScopeBackends(entry.containerName);
+      await disposeSrtScopeBackends(entry.containerName);
     },
   };
 }

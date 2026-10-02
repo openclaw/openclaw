@@ -15,7 +15,7 @@ import type { CreateSandboxBackendParams, SandboxBackendHandle } from "openclaw/
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   createSrtSandboxBackendFactory,
-  disposeAllSrtScopeBackends,
+  shutdownSrtSandboxRuntime,
   SRT_SANDBOX_BACKEND_ID,
 } from "./backend.js";
 import { resolveSrtPluginConfig } from "./config.js";
@@ -71,8 +71,6 @@ function startOrigin(host: string): Promise<Origin> {
 describe.skipIf(!isLive)("srt sandbox backend — per-session broker wiring (S4-P1)", () => {
   let alpha: Origin;
   let beta: Origin;
-  const disposers: Array<() => void> = [];
-
   beforeAll(async () => {
     alpha = await startOrigin("localhost");
     beta = await startOrigin("localhost");
@@ -83,11 +81,7 @@ describe.skipIf(!isLive)("srt sandbox backend — per-session broker wiring (S4-
     beta.server.close();
     beta.server6?.close();
   });
-  afterEach(() => {
-    while (disposers.length) {
-      disposers.pop()?.();
-    }
-  });
+  afterEach(shutdownSrtSandboxRuntime);
 
   async function handleWith(
     perSessionNetwork: boolean,
@@ -101,7 +95,6 @@ describe.skipIf(!isLive)("srt sandbox backend — per-session broker wiring (S4-
       }),
     });
     const handle = await factory(makeParams(workspaceDir));
-    disposers.push(() => disposeAllSrtScopeBackends());
     return handle;
   }
 

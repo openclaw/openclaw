@@ -19,6 +19,7 @@ import {
   createSrtSandboxBackendFactory,
   createSrtSandboxBackendManager,
   resolveSrtSandboxWorkdir,
+  shutdownSrtSandboxRuntime,
   SRT_SANDBOX_BACKEND_ID,
 } from "./backend.js";
 import { resolveSrtPluginConfig } from "./config.js";
@@ -54,10 +55,11 @@ function makeParams(overrides: {
 
 describe("srt sandbox backend registration", () => {
   const disposers: Array<() => void> = [];
-  afterEach(() => {
+  afterEach(async () => {
     while (disposers.length > 0) {
       disposers.pop()?.();
     }
+    await shutdownSrtSandboxRuntime();
   });
 
   it("registers and resolves via getSandboxBackendFactory", () => {
@@ -83,6 +85,8 @@ describe("srt sandbox backend registration", () => {
 });
 
 describe.skipIf(!isDarwin)("srt sandbox macOS Seatbelt minimal path (8/8)", () => {
+  afterEach(shutdownSrtSandboxRuntime);
+
   it("confines writes to the specified directory while the rest stays read-only", async () => {
     const rwZone = mkdtempSync(path.join(tmpdir(), "srt-rw-"));
     const roZone = mkdtempSync(path.join(tmpdir(), "srt-ro-"));

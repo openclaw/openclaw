@@ -12,10 +12,11 @@ import type {
   CreateSandboxBackendParams,
   SandboxBackendManager,
 } from "openclaw/plugin-sdk/sandbox";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   createSrtSandboxBackendFactory,
   createSrtSandboxBackendManager,
+  shutdownSrtSandboxRuntime,
   SRT_SANDBOX_BACKEND_ID,
 } from "./backend.js";
 import { resolveSrtPluginConfig } from "./config.js";
@@ -23,6 +24,8 @@ import { resolveSrtPluginConfig } from "./config.js";
 type RemoveRuntimeParams = Parameters<SandboxBackendManager["removeRuntime"]>[0];
 
 const isDarwin = process.platform === "darwin";
+
+afterEach(shutdownSrtSandboxRuntime);
 
 const sleepMs = (ms: number) =>
   new Promise<void>((resolve) => {
