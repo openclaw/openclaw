@@ -142,7 +142,7 @@ export function resolveToolCardOutcome(
   if (card.toolOutput?.outcome === "unknown") {
     return isToolCardError(card) ? "failed" : "unknown";
   }
-  if (card.activity) {
+  if (card.activity?.status) {
     switch (card.activity.status) {
       case "failed":
       case "blocked":

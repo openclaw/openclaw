@@ -347,4 +347,26 @@ describe("tool card outcomes", () => {
     expect(done[0]).toMatchObject({ live: true, completed: true });
     expect(done.map((card) => resolveToolCardOutcome(card, true))).toEqual(["succeeded"]);
   });
+
+  it("keeps a live call running when history has no terminal outcome", () => {
+    const [card] = assistantCards(
+      [{ type: "toolcall", id: "call-live", name: "bash", arguments: { command: "sleep 5" } }],
+      {
+        activity: [
+          {
+            itemId: "tool:call-live",
+            toolCallId: "call-live",
+            kind: "tool",
+            name: "bash",
+            phase: "end",
+            title: "Command — outcome unknown",
+          },
+        ],
+        __openclawToolStreamLive: true,
+        __openclawToolStreamResultReceived: false,
+      },
+    );
+    expect(card?.activity?.status).toBeUndefined();
+    expect(resolveToolCardOutcome(card!, true)).toBe("running");
+  });
 });
