@@ -43,6 +43,7 @@ function createWaitManager(params: {
     runs,
     getRunsForChildSession: () => runs.values(),
     resumedRuns: new Set<string>(),
+    acquireTerminalCompletionLock: async () => () => {},
     persist: vi.fn(),
     persistOrThrow: vi.fn(),
     persistAsyncOrThrow: vi.fn(),
@@ -58,8 +59,8 @@ function createWaitManager(params: {
     resolveSubagentWaitTimeoutMs: () => 50,
     scheduleSweep: vi.fn(),
     // No reconciled session completion exists while the child is mid-turn.
-    resolveSubagentSessionCompletion: () => null,
-    resolveSubagentSessionStartedAt: () => params.entry.execution.startedAt,
+    resolveSubagentSessionCompletion: async () => null,
+    resolveSubagentSessionStartedAt: async () => params.entry.execution.startedAt,
     notifyContextEngineSubagentEnded: async () => {},
     completeCleanupBookkeeping: vi.fn(),
     completeSubagentRun: async (request: SubagentCompletionRequest) => {

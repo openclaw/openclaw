@@ -663,7 +663,6 @@ const subagentRunManager = createSubagentRunManager({
       requesterSessionKey: entry.requesterSessionKey,
       requesterAgentId: entry.requesterAgentId,
       requesterOrigin: entry.requesterOrigin,
-      requesterDisplayKey: entry.requesterDisplayKey,
       task: entry.task,
       timeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
       cleanup: "keep",
