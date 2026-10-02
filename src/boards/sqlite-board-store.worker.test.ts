@@ -100,7 +100,13 @@ it("keeps incognito Board mutations on the process-held database without creatin
       { sessionKey: target.sessionKey, storePath: options.path },
       { sessionKey: target.sessionKey, storePath: options.path },
     ]);
-    expect(facts).toEqual(changes.map((change) => ({ ...change, facts: { kind: "unchanged" } })));
+    expect(facts).toEqual(
+      changes.map(() => ({
+        sessionKey: target.sessionKey,
+        storePath: options.path,
+        facts: { kind: "unchanged" },
+      })),
+    );
     for (const suffix of ["", "-wal", "-shm"]) {
       expect(existsSync(`${options.path}${suffix}`)).toBe(false);
     }

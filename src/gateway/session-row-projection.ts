@@ -2,11 +2,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { createSubagentSessionListReadView } from "../agents/subagents/registry/subagent-registry-state.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import type { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { resolveStateDir } from "../config/state-dir.js";
-import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import {
   onSessionIdentityMutation,
   onSessionLifecycleEvent,
@@ -236,13 +235,13 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     acquireEntry,
     markRelated,
     invalidatePlacement: (sessionId) => placementFacts.invalidate(sessionId),
-    invalidateFacts: rowFacts.invalidate,
+    invalidateFacts: (row, domain) => rowFacts.invalidate(row, domain),
     enqueue,
     defer(row) {
       put(row);
       enqueue(row);
     },
-    deferArchive: archive.deferAcquisition,
+    deferArchive: (row) => archive.deferAcquisition(row),
     remove,
   });
   function topology(): Promise<void> {
@@ -356,32 +355,12 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
         dirty,
       );
     } else if (!presentationOnly) {
-      const query = { ...change, key: change.sessionKey };
-      const exact = matching(query);
-      for (const previous of new Set(
-        change.factsInvalidated === "category" ? exact : [...exact, ...matching(query, "id")],
-      )) {
-        markStoredRow(previous, change, prepared);
-      }
-      if (
-        !exact.length &&
-        !isInternalSessionEffectsKey(change.sessionKey) &&
-        !isIncognitoSessionKey(change.sessionKey)
-      ) {
-        const matches = rowScope.createSessionRowScopeMatcher(change, scope);
-        for (const source of stores.values()) {
-          const agentId = parseAgentSessionKey(change.sessionKey)?.agentId ?? source.agentId;
-          const row = records.create({
-            key: change.sessionKey,
-            agentId,
-            storeTarget: source.target,
-          });
-          if (!matches(row) || (!change.storePath && agentId !== source.agentId)) {
-            continue;
-          }
-          markStoredRow(row, change, prepared);
-        }
-      }
+      rowScope.visitSessionRowPublicationTargets(change, {
+        matching,
+        scope,
+        stores,
+        publish: (row) => markStoredRow(row, change, prepared),
+      });
     }
     // Dirty keys retain failed background work for the next reader.
     void ensureMaterialized().catch(() => {});

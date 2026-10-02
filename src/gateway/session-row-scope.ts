@@ -3,10 +3,16 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveGatewaySessionStoreTargets } from "../config/sessions/combined-store-gateway.js";
 import type { GatewaySessionStoreDiscovery } from "../config/sessions/combined-store-paths.js";
+import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
+import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openclaw-agent-db-registry-listing.js";
 import { SessionRowFactsPending } from "./session-row-prepared-read.js";
 import * as records from "./session-row-projection-record.js";
@@ -19,6 +25,44 @@ type SessionRowScopeQuery = { agentId?: string; storePath?: string };
 type SessionRowScope =
   | Pick<ReturnType<typeof prepareSessionRowScopes>, "physicalPaths">
   | undefined;
+
+/** Keyed publications select resident identities and admit only their named destination. */
+export function visitSessionRowPublicationTargets(
+  change: Extract<SessionRowChange, { sessionKey: string }>,
+  owner: {
+    matching: (query: records.Query, kind?: string) => records.Row[];
+    scope: SessionRowScope;
+    stores: ReadonlyMap<string, records.SessionRowStore>;
+    publish: (row: records.Row) => void;
+  },
+) {
+  const query = { ...change, key: change.sessionKey };
+  const exact = owner.matching(query);
+  for (const previous of new Set(
+    change.factsInvalidated === "category" ? exact : [...exact, ...owner.matching(query, "id")],
+  )) {
+    owner.publish(previous);
+  }
+  if (
+    exact.length ||
+    isInternalSessionEffectsKey(change.sessionKey) ||
+    isIncognitoSessionKey(change.sessionKey)
+  ) {
+    return;
+  }
+  const matches = createSessionRowScopeMatcher(change, owner.scope);
+  for (const source of owner.stores.values()) {
+    const agentId = parseAgentSessionKey(change.sessionKey)?.agentId ?? source.agentId;
+    const row = records.create({
+      key: change.sessionKey,
+      agentId,
+      storeTarget: source.target,
+    });
+    if (matches(row) && (change.storePath || agentId === source.agentId)) {
+      owner.publish(row);
+    }
+  }
+}
 
 /** Witness repeated registrations without replacing the topology owner's discovery snapshot. */
 export function createSessionRowRegistryRead(owner: {

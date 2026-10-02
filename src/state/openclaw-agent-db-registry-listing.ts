@@ -120,7 +120,7 @@ function advanceRegisteredAgentDatabasesMemo(
   }
   const previous = registry.memo;
   if (previous?.pathname !== pathname) {
-    return;
+    return undefined;
   }
   const memo = { pathname, token: Symbol(pathname) };
   // Only captured readers retain older nodes; the owner never keeps a backward history.

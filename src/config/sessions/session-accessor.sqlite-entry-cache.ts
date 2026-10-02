@@ -24,10 +24,10 @@ import {
   readSessionEntrySideMetadata,
   type SessionEntrySideMetadata,
 } from "./session-accessor.sqlite-entry-cache-projection.js";
+import { recordCommittedSessionMetadataPublication } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import {
   emitPreparedSessionSharingChange,
   publishSessionSharingEntryChange,
-  recordCommittedSessionMetadataPublication,
 } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
   publishTrackedCacheUpdate,
@@ -54,14 +54,16 @@ import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export {
+  retainPreparedSessionGenerationFacts,
+  retainPreparedSessionSharingFacts,
+} from "./session-accessor.sqlite-entry-cache-publication-state.js";
+export {
   assertSessionEntryCreationPublication,
   isPreparedSessionSharingChange,
   publishSessionEntryPlaceholderInsertion,
   publishSessionEntryWorkerMetadataInvalidation,
   publishSessionSharingMemberChange,
   readSessionEntryCreationTransition,
-  retainPreparedSessionGenerationFacts,
-  retainPreparedSessionSharingFacts,
   retainSessionEntryWorkerPublication,
   withSessionEntryCreationPublication,
   runWithSessionEntryCreationPublication,
