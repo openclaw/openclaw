@@ -146,7 +146,7 @@ async function seedJulyImportRun(
     }
     await store.register(
       createHash("sha256")
-        .update(`${vaultRootKey}\0${runId}\0${kind}\0${0}\0${pagePath}`, "utf8")
+        .update([vaultRootKey, runId, kind, 0, pagePath].join("\0"), "utf8")
         .digest("hex"),
       {
         kind,
