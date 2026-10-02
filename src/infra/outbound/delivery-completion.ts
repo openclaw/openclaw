@@ -9,9 +9,9 @@ import {
   markConversationDeliveryUnknown,
   type ConversationDeliveryRecord,
 } from "../../config/sessions/conversation-delivery-store.js";
-import {
-  type ConversationRegistryScope,
-  type PreparedConversationRegistryScope,
+import type {
+  ConversationRegistryScope,
+  PreparedConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
 import { mergeRestartRecoveryTerminalDeliveryEvidence } from "../../config/sessions/restart-recovery-state.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";

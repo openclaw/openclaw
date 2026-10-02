@@ -8,9 +8,9 @@ import {
   markConversationDeliverySuppressed,
   type ConversationDeliveryRecord,
 } from "../../config/sessions/conversation-delivery-store.js";
-import {
-  type ConversationRecord,
-  type PreparedConversationRegistryScope,
+import type {
+  ConversationRecord,
+  PreparedConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureConversationDeliveryTarget } from "./delivery-completion.js";

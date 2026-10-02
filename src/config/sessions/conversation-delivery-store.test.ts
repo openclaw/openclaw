@@ -471,7 +471,9 @@ describe("conversation delivery store", () => {
           message: "hello",
         },
         () => {
-          if (!current) throw new Error("delivery authority revoked");
+          if (!current) {
+            throw new Error("delivery authority revoked");
+          }
         },
       );
       const rejected = expect(begun).rejects.toThrow("delivery authority revoked");

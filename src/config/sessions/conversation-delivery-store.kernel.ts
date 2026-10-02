@@ -104,7 +104,7 @@ function assertConversationDeliveryInput(
 
 function createOperationQuery(database: OpenClawAgentReadOnlyDatabase["db"]) {
   const db = getSessionKysely(database);
-  return prepareSqliteQuerySync<string>(database, (parameter) =>
+  return prepareSqliteQuerySync<string, ConversationDeliveryRow>(database, (parameter) =>
     // Session pruning removes only session_conversations. The canonical
     // conversation row owns this delivery by foreign key and retains channel
     // identity even when no local session remains linked.
@@ -139,7 +139,7 @@ function selectOperation(
     query = createOperationQuery(database.db);
     operationQueryByDatabase.set(database.db, query);
   }
-  const row = query(operationId).rows[0] as ConversationDeliveryRow | undefined;
+  const row = query(operationId).rows[0];
   return row ? mapRow(row) : undefined;
 }
 
@@ -281,6 +281,6 @@ function findConversationTurnDeliveryInDatabase(
       .where("delivery.status", "in", ["queued", "sent", "replied"])
       .orderBy("delivery.updated_at", "desc")
       .limit(1),
-  ).rows[0] as ConversationDeliveryRow | undefined;
+  ).rows[0];
   return row ? mapRow(row) : undefined;
 }
