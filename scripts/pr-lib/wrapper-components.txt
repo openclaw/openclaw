@@ -509,6 +509,7 @@ src/config/sessions/artifacts.ts
 src/config/sessions/auth-profile-override-provenance.ts
 src/config/sessions/model-override-provenance.ts
 src/config/sessions/paths.ts
+src/config/sessions/session-incognito-transcript-contract.ts
 src/config/sessions/session-sqlite-target-paths.ts
 src/config/sessions/session-store-config.ts
 src/config/sessions/session-store-owner.ts
