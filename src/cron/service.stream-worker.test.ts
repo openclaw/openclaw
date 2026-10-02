@@ -253,7 +253,8 @@ describe("cron stream worker service", () => {
   });
 
   it("preserves shutdown failure while adopting the committed retirement identity after reply loss", async () => {
-    await withStreamService(async ({ service, job, storePath, source }) => {
+    await withStreamService(async ({ service, job, storePath, source, setDefaultAgent }) => {
+      setDefaultAgent("alpha");
       const fake = fakeSupervisor();
       const scheduler = createTestGatewayScheduler();
       const updateState = vi.fn(
@@ -275,6 +276,7 @@ describe("cron stream worker service", () => {
         }
       });
       const watchers = createCronStreamWatchers({
+        getDefaultAgentId: () => service.getDefaultAgentId(),
         scheduler,
         getProcessSupervisor: () => fake.supervisor,
         updateState,

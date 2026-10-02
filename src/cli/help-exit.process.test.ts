@@ -390,7 +390,11 @@ describe("models list JSON failure process output", () => {
       args: ["models", "list", "--provider", provider, "--json"],
       entry: preparedCliEntry,
       config: {},
-      env,
+      env: {
+        ...env,
+        OPENCLAW_DEBUG: undefined,
+        OPENCLAW_UPDATE_IN_PROGRESS: undefined,
+      },
       expectedExitCode: 1,
     });
 
@@ -400,7 +404,13 @@ describe("models list JSON failure process output", () => {
       ok: false,
       error: { type: "cli_error", message },
     });
-    expect(result.stderr).toContain(message);
+    if (provider === "autoqa-no-such-provider") {
+      expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+      expect(result.stderr).toContain("[openclaw] For help, run `openclaw doctor`.");
+      expect(result.stderr).not.toContain(message);
+    } else {
+      expect(result.stderr).toContain(message);
+    }
   });
 });
 
@@ -730,8 +740,10 @@ describe("JSON console style process output", () => {
           },
         },
         env: {
+          OPENCLAW_DEBUG: undefined,
           OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
           OPENCLAW_TEST_CONSOLE_STYLE: undefined,
+          OPENCLAW_UPDATE_IN_PROGRESS: undefined,
         },
         failRunMainImport: true,
         stateEnv: () => ({ OPENCLAW_TEST_CONSOLE_STYLE: "json" }),
@@ -747,10 +759,15 @@ describe("JSON console style process output", () => {
           }),
           expect.objectContaining({
             level: "error",
-            message: expect.stringContaining("forced run-main import failure"),
+            message: "[openclaw] Could not start the CLI.",
+          }),
+          expect.objectContaining({
+            level: "error",
+            message: "[openclaw] For help, run `openclaw doctor`.",
           }),
         ]),
       );
+      expect(result.stderr).not.toContain("forced run-main import failure");
     },
     SLOW_DOTENV_TEST_TIMEOUT_MS,
   );

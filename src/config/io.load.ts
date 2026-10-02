@@ -3,6 +3,7 @@ import { loadDotEnvAsync } from "../infra/dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
+import { applyImplicitAgentRosterDefaults } from "./implicit-agent-roster.js";
 import type { ConfigIoContext } from "./io.context.js";
 import {
   resolveConfigIoEffect,
@@ -33,7 +34,6 @@ import {
   warnIfConfigFromFuture,
   warnOnConfigMiskeys,
 } from "./io.warnings.js";
-import { migratePersistedImplicitMainRoster } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig } from "./types.js";
 import {
@@ -90,7 +90,7 @@ function* loadConfigWithEffects(
       // A missing config is the fresh-install default path: materialize the
       // same runtime defaults an empty {} config gets, or out-of-box behavior
       // (compaction safeguard, session/cron defaults) silently diverges.
-      const config = coerceConfig(migratePersistedImplicitMainRoster({}).config);
+      const config = coerceConfig(applyImplicitAgentRosterDefaults({}));
       const metadata = context.createValidationPluginMetadataSnapshotLoader({
         env: deps.env,
       });
@@ -121,19 +121,12 @@ function* loadConfigWithEffects(
       deps.env,
       deps.lowerPrecedenceEnv,
     );
-    const rosterMigration = migratePersistedImplicitMainRoster(readResolution.resolvedConfigRaw, {
-      env: deps.env,
-      homedir: deps.homedir,
-    });
-    const effectiveConfigRaw = rosterMigration.config;
+    const effectiveConfigRaw = applyImplicitAgentRosterDefaults(readResolution.resolvedConfigRaw);
     const hash = hashConfigRaw(raw);
     for (const warning of readResolution.envWarnings) {
       deps.logger.warn(
         `Config (${configPath}): missing env var "${warning.varName}" at ${warning.configPath} - feature using this value will be unavailable`,
       );
-    }
-    for (const diagnostic of rosterMigration.diagnostics) {
-      deps.logger.warn(`Config (${configPath}): ${diagnostic}`);
     }
     warnOnConfigMiskeys(effectiveConfigRaw, deps.logger);
     // A scalar/null root (truncated or clobbered file) must fail validation

@@ -548,7 +548,7 @@ class ChatControllerCommandControlsTest {
       advanceUntilIdle()
       requests.clear()
 
-      controller.renameSessionGroup(from = "Work", to = "Focus")
+      controller.renameSessionGroup(from = "Work", to = "Focus", expectedGatewayId = "gateway-test")
 
       // Membership enumeration sends the explicit high bound (absent limit is
       // capped at 100 rows server-side) across active + archived rows.
@@ -606,7 +606,7 @@ class ChatControllerCommandControlsTest {
           },
           requestGateway = { method, paramsJson -> request(gatewayScope.gatewayId, method, paramsJson) },
         )
-      val rename = async { controller.renameSessionGroup(from = "Work", to = "Focus") }
+      val rename = async { controller.renameSessionGroup(from = "Work", to = "Focus", expectedGatewayId = "gateway-a") }
       try {
         listEntered.await()
         // A accepted this reply before retirement; its queued continuation resumes on B.
@@ -645,7 +645,7 @@ class ChatControllerCommandControlsTest {
           }
         }
 
-      controller.dissolveSessionGroup("Work")
+      controller.dissolveSessionGroup("Work", expectedGatewayId = "gateway-test")
 
       // One failed member patch must not abandon the remaining members.
       val patches = requests.filter { it.first == "sessions.patch" }.map { it.second.orEmpty() }

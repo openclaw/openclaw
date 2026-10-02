@@ -8,6 +8,7 @@ import {
 } from "../../auto-reply/reply/reply-turn-admission.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -50,7 +51,17 @@ const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-owner-")
 
 it("keeps healthy stores recoverable when an earlier startup mark fails", async () => {
   await withOpenClawTestState({ label: "recovery-mark-failure" }, async (state) => {
-    const cfg = { agents: { entries: { main: { default: true }, worker: {} } } };
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          heartbeat: { agentId: "main" },
+          systemAgent: { agentId: "main" },
+        },
+        entries: { main: { workspace: state.statePath("workspace") }, worker: {} },
+      },
+      talk: { agentId: "main" },
+    };
     await state.writeConfig(cfg);
     for (const agentId of ["main", "worker"]) {
       const sessionKey = `agent:${agentId}:main`;

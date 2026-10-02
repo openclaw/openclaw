@@ -225,11 +225,15 @@ merge_verify() {
     echo "merge_verify requires a PR number and verification options." >&2
     return 2
   fi
-  local pr="$1" options="$2" replacement_head auto_merge_requested qualified_refusal json
+  local pr="$1" options="$2" replacement_head auto_merge_requested qualified_refusal
+  local qualified_stale_head_retirement json
   if ! printf '%s\n' "$options" | jq -e '
-    type == "object" and keys == ["autoMergeRequested","observation","qualifiedRefusal","replacementHead"] and
+    type == "object" and
+    (keys - ["qualifiedStaleHeadRetirement"]) ==
+      ["autoMergeRequested","observation","qualifiedRefusal","replacementHead"] and
     (.replacementHead | type == "string") and (.autoMergeRequested | type == "boolean") and
     (.qualifiedRefusal | type == "boolean") and
+    (if has("qualifiedStaleHeadRetirement") then (.qualifiedStaleHeadRetirement | type == "boolean") else true end) and
     (.observation == null or (.observation | type == "object"))
   ' >/dev/null; then
     echo "Invalid merge verification options: require replacementHead, autoMergeRequested, qualifiedRefusal, and observation." >&2
@@ -238,6 +242,7 @@ merge_verify() {
   replacement_head=$(printf '%s\n' "$options" | jq -r .replacementHead) || return 1
   auto_merge_requested=$(printf '%s\n' "$options" | jq -r .autoMergeRequested) || return 1
   qualified_refusal=$(printf '%s\n' "$options" | jq -r .qualifiedRefusal) || return 1
+  qualified_stale_head_retirement=$(printf '%s\n' "$options" | jq -r '.qualifiedStaleHeadRetirement // false') || return 1
   json=$(printf '%s\n' "$options" | jq -c '.observation // empty') || return 1
   MERGE_USE_CRABBOX_ADMIN_BYPASS=false
   enter_worktree "$pr" false || return 1
@@ -269,10 +274,14 @@ merge_verify() {
     return 1
   fi
   if [ "${GATES_MODE:-}" = github_pending ] && [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" != true ]; then
-    if { [ "$qualified_refusal" != true ] && { [ "$auto_merge_requested" != true ] || [ -n "$replacement_head" ]; }; } ||
+    if { [ "$qualified_refusal" != true ] &&
+      { [ "$auto_merge_requested" != true ] ||
+        { [ -n "$replacement_head" ] && [ "$qualified_stale_head_retirement" != true ]; }; }; } ||
+      { [ "$qualified_stale_head_retirement" = true ] &&
+        { [ "$auto_merge_requested" != true ] || [ -z "$replacement_head" ]; }; } ||
       [ "${HOSTED_GATES_TARGET_HEAD_SHA:-}" != "$PREP_HEAD_SHA" ] ||
       [ "${MERGE_TRANSPORT:-graphql}" != graphql ]; then
-      echo "Deferred GitHub gates require --auto-merge at the exact prepared head, without recovery or REST fallback." >&2
+      echo "Deferred GitHub gates require --auto-merge at the exact prepared head; recovery additionally requires qualified stale-head retirement." >&2
       return 1
     fi
     github_pending=true
@@ -590,7 +599,8 @@ merge_run() {
   local legacy_directory="${6:-}" legacy_refusal="" legacy_captures=()
   local cancel_auto="${7:-false}"
   local refusal_directory="${8:-}" refusal="" qualified_refusal=false
-  local provider_rejection="" qualified_pending_recovery=false retired_auto_admin=false
+  local provider_rejection="" stale_head_retirement="" qualified_pending_recovery=false
+  local retired_auto_admin=false stale_admin_head=false
   local MERGE_REFUSAL_DIRECTORY=""
   local MERGE_ADMIN_EVIDENCE="${9:-}" confirmed_admin="${10:-false}" MERGE_PRIOR_CI_PROOF=""
   local MERGE_USE_PRIOR_CI_ADMIN=false
@@ -625,18 +635,24 @@ merge_run() {
     }
   elif [ -n "$recovery_oid" ]; then
     if [ "$recovery_oid" != "$MERGE_OUTCOME_OID" ] ||
-      ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e --arg refusal "$refusal_directory" --arg replacement "$replacement_head" --argjson admin "$MERGE_USE_PRIOR_CI_ADMIN" '
+      ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e --arg refusal "$refusal_directory" \
+        --arg replacement "$replacement_head" --argjson admin "$MERGE_USE_PRIOR_CI_ADMIN" \
+        --argjson auto "$auto_merge_requested" '
         .phase == "intent" and
         (if $admin then .method == "squash" and
           (if $replacement != "" then .route == "auto" and .cancellation.state == "confirmed"
            else .accepted == false and .route == "admin" and .priorCiAdmin.dispatchTransport == "rest" end)
-         else (.accepted == false and (.route == "immediate" or ($refusal != "" and .route == "auto" and .method == "squash"))) or
+         elif $auto and $replacement != "" then
+          .accepted == false and .route == "admin" and .method == "squash" and
+          .priorCiAdmin.dispatchTransport == "rest" and .head != $replacement
+         else (.accepted == false and (.route == "immediate" or
+            ($refusal != "" and .route == "auto" and .method == "squash"))) or
           (.route == "auto" and .cancellation.state == "confirmed") end)
       ' >/dev/null; then
       if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
-        merge_outcome_stop "operator admin recovery requires an exact rejected prior-CI intent or a confirmed auto cancellation with an explicit selected head; no attempt was authorized"
+        merge_outcome_stop "operator admin recovery requires an exact qualified prior-CI intent or a confirmed auto cancellation with an explicit selected head; no attempt was authorized"
       else
-        merge_outcome_stop "operator recovery requires the exact unaccepted immediate intent or confirmed auto cancellation; no attempt was authorized"
+        merge_outcome_stop "operator recovery requires an exact unaccepted immediate intent, confirmed auto cancellation, or explicitly auto-routed stale admin head; no attempt was authorized"
       fi
       return 1
     fi
@@ -680,7 +696,14 @@ merge_run() {
     fi
   fi
 
-  if [ -n "$recovery_oid" ] && [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
+  if [ -n "$recovery_oid" ] && [ "$auto_merge_requested" = true ] &&
+    [ -n "$replacement_head" ] &&
+    printf '%s\n' "$recovery_record" | jq -e '.route == "admin"' >/dev/null; then
+    stale_head_retirement=$(node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" \
+      stale-head-retirement "$recovery_record" "$recovery_oid" "$replacement_head" .local) || return 1
+    stale_admin_head=true
+    qualified_pending_recovery=true
+  elif [ -n "$recovery_oid" ] && [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
     if [ -n "$replacement_head" ]; then
       # The retained cancellation qualified this transition; current-head evidence
       # still passes both live admin checks before the successor intent is written.
@@ -741,8 +764,8 @@ merge_run() {
   local verify_options
   verify_options=$(jq -cn --arg replacementHead "$replacement_head" \
     --argjson autoMergeRequested "$auto_merge_requested" --argjson observation "$MERGE_ENTRY_OBSERVATION" \
-    --argjson qualifiedRefusal "$qualified_refusal" \
-    '{replacementHead:$replacementHead,autoMergeRequested:$autoMergeRequested,qualifiedRefusal:$qualifiedRefusal,observation:$observation}') || return 1
+    --argjson qualifiedRefusal "$qualified_refusal" --argjson qualifiedStaleHeadRetirement "$stale_admin_head" \
+    '{replacementHead:$replacementHead,autoMergeRequested:$autoMergeRequested,qualifiedRefusal:$qualifiedRefusal,qualifiedStaleHeadRetirement:$qualifiedStaleHeadRetirement,observation:$observation}') || return 1
   merge_verify "$pr" "$verify_options" || return 1
   MERGE_ENTRY_OBSERVATION="$PR_HEAD_OBSERVATION"
   # shellcheck disable=SC1091
@@ -929,8 +952,14 @@ merge_run() {
     return 1
   fi
   if [ -n "$recovery_oid" ] && [ "$route" != immediate ] &&
-    { [ "$route" != admin ] || { [ -z "$provider_rejection" ] && [ "$retired_auto_admin" != true ]; }; }; then
-    merge_outcome_stop "operator recovery requires current immediate admission without admin, auto, or queue routing"
+    { { [ "$route" != admin ] ||
+        { [ -z "$provider_rejection" ] && [ "$retired_auto_admin" != true ]; }; } &&
+      { [ "$route" != auto ] || [ "$stale_admin_head" != true ]; }; }; then
+    merge_outcome_stop "operator recovery requires current immediate admission, qualified admin admission, or qualified stale-head auto admission"
+    return 1
+  fi
+  if [ "$stale_admin_head" = true ] && [ "$route" != auto ]; then
+    merge_outcome_stop "stale admin head retirement requires MERGEABLE/BLOCKED or MERGEABLE/BEHIND auto admission"
     return 1
   fi
   if [ "$route" = immediate ] && [ "$merge_method" = squash ] && [ -z "$merge_body_snapshot" ]; then
@@ -1061,6 +1090,11 @@ merge_run() {
     [ "$provider_rejection" != "$(node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" provider-rejection "$recovery_record" .local)" ]; then
     merge_outcome_stop "provider rejection evidence changed during admission"; return 1
   fi
+  if [ -n "$stale_head_retirement" ] &&
+    [ "$stale_head_retirement" != "$(node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" \
+      stale-head-retirement "$recovery_record" "$recovery_oid" "$replacement_head" .local)" ]; then
+    merge_outcome_stop "stale-head retirement evidence changed during admission"; return 1
+  fi
   if [ -n "$recovery_artifact_head" ]; then
     if [ "$recovery_artifacts" != "$(pr_git hash-object --no-filters -- "${required_artifacts[@]}")" ]; then
       merge_outcome_stop "recovery artifacts changed during admission"
@@ -1097,6 +1131,9 @@ merge_run() {
   fi
   if [ -n "$provider_rejection" ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson rejection "$provider_rejection" '.recovery.providerRejection=$rejection') || return 1
+  fi
+  if [ -n "$stale_head_retirement" ]; then
+    intent=$(printf '%s\n' "$intent" | jq -c --argjson retirement "$stale_head_retirement" '.recovery.staleHeadRetirement=$retirement') || return 1
   fi
   mark_pr_operation_side_effects_started
   MERGE_ADMISSION_ACTIVE=false

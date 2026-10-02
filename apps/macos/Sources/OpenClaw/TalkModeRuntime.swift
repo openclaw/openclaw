@@ -151,7 +151,7 @@ actor TalkModeRuntime {
         if enabled {
             await start()
         } else {
-            await self.stop()
+            await self.stop(reconfigurationGeneration: nil, lifecycleGeneration: nil)
         }
     }
 
@@ -249,10 +249,6 @@ actor TalkModeRuntime {
 
     func isCurrent(_ generation: Int) -> Bool {
         generation == self.lifecycleGeneration && self.isEnabled
-    }
-
-    func stop() async {
-        await self.stop(reconfigurationGeneration: nil, lifecycleGeneration: nil)
     }
 
     func detachResourcesForRealtimeStop() -> RealtimeTalkRelaySession? {
@@ -445,7 +441,7 @@ actor TalkModeRuntime {
 
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         if self.phase == .speaking, self.interruptOnSpeech {
-            if await shouldInterrupt(transcript: trimmed, hasConfidence: update.hasConfidence) {
+            if self.shouldInterrupt(transcript: trimmed, hasConfidence: update.hasConfidence) {
                 await stopSpeaking(reason: .speech)
                 self.lastTranscript = ""
                 self.lastHeard = nil
@@ -1434,10 +1430,12 @@ extension TalkModeRuntime {
         }
     }
 
-    private func shouldInterrupt(transcript: String, hasConfidence: Bool) async -> Bool {
+    private func shouldInterrupt(transcript: String, hasConfidence: Bool) -> Bool {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 3 else { return false }
-        if self.isLikelyEcho(of: trimmed) {
+        if let spoken = self.lastSpokenText?.lowercased(), !spoken.isEmpty,
+           spoken.contains(trimmed.lowercased())
+        {
             return false
         }
         let now = Date()
@@ -1445,11 +1443,5 @@ extension TalkModeRuntime {
             return false
         }
         return hasConfidence
-    }
-
-    private func isLikelyEcho(of transcript: String) -> Bool {
-        guard let spoken = lastSpokenText?.lowercased(), !spoken.isEmpty else { return false }
-        let probe = transcript.lowercased()
-        return spoken.contains(probe)
     }
 }

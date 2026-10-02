@@ -256,7 +256,7 @@ describe("doctor invalid config process exit", () => {
       expect(output).toContain("Doctor complete.");
       expect(output).not.toContain(STARTUP_RECOVERY);
       expect(output).not.toContain("Building Control UI assets");
-      expect(output).toContain("Merged agents.entries.jup.memorySearch");
+      expect(output).toContain("Merged agents.list[0].memorySearch");
 
       const repairedConfig = JSON.parse(fs.readFileSync(configPath, "utf8")) as OpenClawConfig;
       expect(repairedConfig.agents).not.toHaveProperty("list");

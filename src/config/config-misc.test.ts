@@ -657,14 +657,13 @@ describe("config strict validation", () => {
               perSession: true,
             },
           },
-          list: [
-            {
-              id: "openclaw",
+          entries: {
+            openclaw: {
               sandbox: {
                 perSession: false,
               },
             },
-          ],
+          },
         },
       });
 
@@ -677,7 +676,7 @@ describe("config strict validation", () => {
       expect(snap.sourceConfigBeforeMigrations?.agents?.defaults?.sandbox).toEqual({
         perSession: true,
       });
-      expect(snap.sourceConfigBeforeMigrations?.agents?.list?.[0]?.sandbox).toEqual({
+      expect(snap.sourceConfigBeforeMigrations?.agents?.entries?.openclaw?.sandbox).toEqual({
         perSession: false,
       });
       expect(snap.sourceConfig.agents?.entries?.openclaw?.sandbox).toEqual({

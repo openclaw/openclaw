@@ -311,7 +311,6 @@ final class NodeAppModel {
     private struct NodeGatewayLoopState: Sendable {
         var attempt = 0
         var options: GatewayConnectOptions
-        var didFallbackClientID = false
     }
 
     private enum NodeGatewayLoopStep: Sendable {
@@ -4387,12 +4386,10 @@ extension NodeAppModel {
                 let reconnectOptions = self.currentGatewayReconnectOptions(
                     stableID: stableID,
                     fallback: config.nodeOptions)
-                let effectiveClientId =
-                    GatewaySettingsStore.loadGatewayClientIdOverride(stableID: stableID) ?? reconnectOptions.clientId
                 let talkPermissionUpgradeRequest = self.forceOperatorTalkPermissionUpgradeRequest
                 let deviceAuthGatewayID = reconnectOptions.deviceAuthGatewayID ?? stableID
                 let operatorOptions = self.makeOperatorConnectOptions(
-                    clientId: effectiveClientId,
+                    clientId: reconnectOptions.clientId,
                     displayName: reconnectOptions.clientDisplayName,
                     deviceAuthGatewayID: deviceAuthGatewayID,
                     includeAdminScope: self.shouldRequestOperatorAdminScope(
@@ -4754,21 +4751,6 @@ extension NodeAppModel {
                   stableID: context.stableID)
         else { return .stop }
 
-        if !state.didFallbackClientID,
-           let fallbackClientID = self.legacyClientIdFallback(
-               currentClientId: state.options.clientId,
-               error: error)
-        {
-            var nextState = state
-            nextState.didFallbackClientID = true
-            nextState.options.clientId = fallbackClientID
-            GatewaySettingsStore.saveGatewayClientIdOverride(
-                stableID: context.stableID,
-                clientId: fallbackClientID)
-            self.gatewayStatusText = "Gateway rejected client id. Retrying…"
-            return .retry(nextState)
-        }
-
         var nextState = state
         nextState.attempt += 1
         let problem = self.applyNodeGatewayConnectionError(
@@ -4957,16 +4939,6 @@ extension NodeAppModel {
             includeDeviceIdentity: true,
             allowStoredDeviceAuth: allowStoredDeviceAuth,
             deviceAuthGatewayID: deviceAuthGatewayID)
-    }
-
-    private func legacyClientIdFallback(currentClientId: String, error: Error) -> String? {
-        let normalizedClientId = currentClientId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard normalizedClientId == "openclaw-ios" else { return nil }
-        let message = error.localizedDescription.lowercased()
-        guard message.contains("invalid connect params"), message.contains("/client/id") else {
-            return nil
-        }
-        return "moltbot-ios"
     }
 
     func setOperatorConnected(_ connected: Bool) {

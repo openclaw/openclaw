@@ -100,6 +100,8 @@ export type OpenClawSharedToolsOptions = {
 };
 
 export type OpenClawToolsOptions = {
+  /** Host-projected default sandbox surface; cannot execute other session actions. */
+  sandboxSessionRenameOnly?: boolean;
   /** Host-issued source for session-control schema projection; execution rechecks the caller. */
   sessionControlAuthority?: import("./admitted-run-context.js").AdmittedRunOperatorAuthority;
   /** Host-qualified restricted preview target; never permits Gateway-local ports. */

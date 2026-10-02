@@ -1603,7 +1603,7 @@ class GatewaySessionInvokeTest {
       val result =
         runInvokeScenario(
           invokeEventFrame =
-            """{"type":"event","event":"node.invoke.request","payload":{"id":"invoke-1","nodeId":"node-1","command":"debug.ping","params":{"ping":"pong"},"timeoutMs":5000}}""",
+            """{"type":"event","event":"node.invoke.request","payload":{"id":"invoke-1","nodeId":"node-1","command":"debug.ping","paramsJSON":"{\"ping\":\"pong\"}","timeoutMs":5000}}""",
           onHandshake = { request -> handshakeOrigin.compareAndSet(null, request.getHeader("Origin")) },
         ) {
           GatewaySession.InvokeResult.ok("""{"handled":true}""")
@@ -1666,7 +1666,7 @@ class GatewaySessionInvokeTest {
       val result =
         runInvokeScenario(
           invokeEventFrame =
-            """{"type":"event","event":"node.invoke.request","payload":{"id":"invoke-3","nodeId":"node-3","command":"camera.snap","params":{"facing":"front"},"timeoutMs":5000}}""",
+            """{"type":"event","event":"node.invoke.request","payload":{"id":"invoke-3","nodeId":"node-3","command":"camera.snap","paramsJSON":"{\"facing\":\"front\"}","timeoutMs":5000}}""",
         ) {
           throw IllegalStateException("CAMERA_PERMISSION_REQUIRED: grant Camera permission")
         }

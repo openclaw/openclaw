@@ -1,5 +1,9 @@
 import { stableStringify } from "@openclaw/normalization-core";
-import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope.js";
+import {
+  listAgentEntries,
+  toAgentEntriesRecord,
+  tryResolveAmbientOwnerAgentId,
+} from "../agents/agent-scope.js";
 import { resolveMemorySearchSourcePolicy } from "../agents/memory-search-source-policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
@@ -408,16 +412,24 @@ function prepareCapabilityComparisonConfig(
   entries: AgentConfig[],
   preferredDefaultAgentId: string,
 ): OpenClawConfig {
-  const hasDefault = entries.some((entry) => entry.default === true);
-  const comparisonEntries = hasDefault
-    ? entries
-    : entries.map((entry) =>
-        entry.id === preferredDefaultAgentId ? { ...entry, default: true } : entry,
-      );
   const { list: _legacyList, ...agents } = config.agents ?? {};
+  const systemAgentId =
+    agents.ownership !== "explicit" && entries.some((entry) => entry.id === preferredDefaultAgentId)
+      ? (tryResolveAmbientOwnerAgentId(config) ?? preferredDefaultAgentId)
+      : undefined;
   return {
     ...config,
-    agents: { ...agents, entries: toAgentEntriesRecord(comparisonEntries) },
+    agents: {
+      ...agents,
+      ownership: entries.length > 1 ? "explicit" : agents.ownership,
+      entries: toAgentEntriesRecord(entries),
+      defaults: systemAgentId
+        ? {
+            ...agents.defaults,
+            systemAgent: { ...agents.defaults?.systemAgent, agentId: systemAgentId },
+          }
+        : agents.defaults,
+    },
   };
 }
 export function pushResolvedAgentCapabilityChanges(params: {

@@ -132,7 +132,11 @@ describe("doctor lint state isolation", () => {
       await withOpenClawTestState({ prefix: "openclaw-doctor-lint-workshop-" }, async (state) => {
         const customDir = state.path("custom-agent");
         await state.writeConfig({
-          agents: { entries: { main: { default: true }, custom: { agentDir: customDir } } },
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "main" } },
+            entries: { main: {}, custom: { agentDir: customDir } },
+          },
           memory: { search: { enabled: false } },
         });
         const targets = [
@@ -648,7 +652,7 @@ describe("doctor lint state isolation", () => {
         { prefix: "openclaw-doctor-personal-skills-", layout },
         async (state) => {
           await state.writeConfig({
-            agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
+            agents: { entries: { main: { workspace: state.workspaceDir } } },
             memory: { search: { enabled: false } },
           });
           const personal = path.join(state.home, ".agents", "skills", "personal-probe");

@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveNpmJsonEntries } from "../../lib/npm-json-output.mts";
 import {
   createPackageDistContentInventoryEntry,
   PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
@@ -396,6 +397,24 @@ function packFutureRuntimeFixture(candidateTarball, outputTarball, sequence = 0)
 
 function main() {
   const [mode, packageRoot, outputTarball, sequence] = process.argv.slice(2);
+  if (mode === "pack-filename" && packageRoot) {
+    const entries = resolveNpmJsonEntries(readJson(packageRoot));
+    const entry = entries[0];
+    if (
+      entries.length !== 1 ||
+      !entry ||
+      typeof entry !== "object" ||
+      !("filename" in entry) ||
+      typeof entry.filename !== "string" ||
+      !entry.filename
+    ) {
+      throw new Error(
+        `first-hop npm pack JSON must contain exactly one package result with a filename: ${packageRoot}`,
+      );
+    }
+    process.stdout.write(entry.filename);
+    return;
+  }
   if (mode === "sources" && packageRoot) {
     process.stdout.write(`${listFirstHopSourceVersions(packageRoot, outputTarball).join("\n")}\n`);
     return;
@@ -444,7 +463,7 @@ function main() {
   }
   if (!packageRoot || (mode !== "negative" && mode !== "future")) {
     throw new Error(
-      "usage: update-first-hop-package-fixtures.mjs <negative|future> <package-root> OR <first-hop-tarball|negative-tarball|future-tarball|unsupported-admission-tarball|future-runtime-tarball> <source.tgz> <new-output.tgz> [sequence0–9]",
+      "usage: update-first-hop-package-fixtures.mjs pack-filename <npm-pack.json> OR <negative|future> <package-root> OR <first-hop-tarball|negative-tarball|future-tarball|unsupported-admission-tarball|future-runtime-tarball> <source.tgz> <new-output.tgz> [sequence0–9]",
     );
   }
   if (mode === "negative") {

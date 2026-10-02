@@ -330,7 +330,7 @@ describe("Gateway heartbeat session routing", () => {
                 "catalog-proof/*": {},
               },
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           models: {
             mode: "replace",

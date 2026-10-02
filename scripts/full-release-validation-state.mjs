@@ -19,7 +19,6 @@ import {
   validateFullReleaseCandidateRequest,
   validateRecordedFullReleaseCandidateRequest,
 } from "./full-release-candidate-contract.mjs";
-import { loadFlakeClassifications } from "./full-release-flake-classification.mjs";
 import {
   createPublicationAdmission,
   publicationObservationJson,
@@ -39,7 +38,6 @@ import {
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
   releasePlanGateFailures,
-  releaseChildClassificationEvidence,
   MAX_RELEASE_ARTIFACT_BYTES,
   serializeReleaseArtifact,
   selectReleaseStateArtifacts,
@@ -282,19 +280,6 @@ export async function readChild(child, previous, signal, options = {}) {
       observedRunAttempts: evidence.observedRunAttempts,
       sha256: evidence.compositeJobsSha256,
     });
-    if (snapshot.status === "completed" && snapshot.errors.length === 0) {
-      Object.assign(
-        snapshot,
-        await (options.loadFlakeClassifications ?? loadFlakeClassifications)({
-          repo: process.env.GITHUB_REPOSITORY,
-          child: snapshot,
-          parentRunId: options.parentRunId,
-          parentRunAttempt: options.parentRunAttempt,
-          targetSha: options.targetSha,
-          signal,
-        }),
-      );
-    }
     return snapshot;
   } catch (error) {
     const degraded = classifyReleaseGhTransportError(error) === "transient";
@@ -1514,7 +1499,6 @@ async function validateManifestMode() {
         Object.entries(drain.children).map(([key, child]) => [
           key,
           {
-            ...releaseChildClassificationEvidence(child),
             compositeJobsSha256: child.compositeJobsSha256,
             dispatchActor: child.dispatchActor,
             effectiveRunAttempt: child.runAttempt,
