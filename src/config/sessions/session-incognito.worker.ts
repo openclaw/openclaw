@@ -95,7 +95,7 @@ export function createIncognitoSessionWorker(
   };
   const sideData = createIncognitoSideDataWorker(database, env, admit);
   const transcript = createIncognitoTranscriptWorker(database, env, admit);
-  const outbox = createIncognitoOutboxWorker(database, env, admit);
+  const outbox = createIncognitoOutboxWorker(database, admit);
   const readOnly = <T>(operation: () => T): T => {
     // sqlite-allow-raw -- Guard reads on the retained writable memory connection.
     database.db.exec("PRAGMA query_only = ON");
