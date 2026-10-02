@@ -1995,6 +1995,34 @@ describe("capability cli", () => {
     expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(1);
   });
 
+  it("shows ordered embedding dimensions and bounded vector previews in text output", async () => {
+    mocks.embedBatch.mockResolvedValueOnce([
+      [0.1, -0.2],
+      Array.from({ length: 1536 }, (_, index) => index + 1),
+      [],
+    ]);
+
+    await runCapability("embedding", "create", "--text", "hello", "--text", "world", "--text", "");
+
+    expect(mocks.runtime.log).toHaveBeenCalledWith(
+      [
+        "embedding.create via local",
+        "provider: openai",
+        "model: text-embedding-3-small",
+        "outputs: 3",
+        "hello",
+        "dimensions: 2",
+        "embedding: [0.1, -0.2]",
+        "world",
+        "dimensions: 1536",
+        "embedding: [1, 2, 3, 4, 5, 6, 7, 8, ...]",
+        "",
+        "dimensions: 0",
+        "embedding: []",
+      ].join("\n"),
+    );
+  });
+
   it("closes the embedding provider without masking embedding failure", async () => {
     closeEmbeddingProviderMock.mockRejectedValueOnce(new Error("close failed"));
     mocks.embedBatch.mockRejectedValueOnce(new Error("embedding failed"));
