@@ -39,6 +39,7 @@ const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>(
   ["@openclaw/discord:dangerous-exec:src/voice/audio.ts", 1],
   ["@openclaw/imessage:dangerous-exec:src/client.ts", 1],
   ["@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-install.ts", 1],
+  ["@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-vc-runtime.ts", 1],
   ["@openclaw/mxc-sandbox:dangerous-exec:src/readiness.ts", 2],
   ["@openclaw/raft:dangerous-exec:src/gateway.ts", 1],
   ["@openclaw/signal:dangerous-exec:src/daemon.ts", 1],
