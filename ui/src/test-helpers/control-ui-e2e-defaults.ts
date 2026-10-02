@@ -38,6 +38,7 @@ export const defaultControlUiFeatureMethods = [
   "sessions.reset",
   "sessions.rewind",
   "sessions.search",
+  "system.info",
   "users.github.status",
   "users.github.authorize.start",
   "users.github.authorize.poll",
