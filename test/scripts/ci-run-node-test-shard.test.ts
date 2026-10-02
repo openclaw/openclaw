@@ -741,10 +741,19 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   );
 
   it.each(["bun-compatible", "dual"] as const)(
-    "runs native Bun PTY coverage on Bun while retaining process siblings on Node under %s",
+    "runs qualified process coverage on Bun while retaining process siblings on Node under %s",
     async (policy) => {
-      const bunFile = "src/process/terminal-pty-bun.test.ts";
-      const nodeFile = "src/process/terminal-pty.test.ts";
+      const bunFiles = [
+        "src/process/spawn-broker/event-order.test.ts",
+        "src/process/spawn-broker/group-custody.test.ts",
+        "src/process/terminal-pty-bun.test.ts",
+      ];
+      const nodeFiles = [
+        "src/process/spawn-broker/context.test.ts",
+        "src/process/spawn-broker/startup.test.ts",
+        "src/process/terminal-pty.test.ts",
+      ];
+      const includePatterns = [...bunFiles, ...nodeFiles];
       const seen: Array<{ runtime: string | undefined; includes: string[] }> = [];
       await expect(
         runShardPlans(
@@ -754,7 +763,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
               name: "process",
               plan: {
                 configs: ["test/vitest/vitest.process.config.ts"],
-                includePatterns: [bunFile, nodeFile],
+                includePatterns,
               },
             },
           ],
@@ -772,12 +781,14 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         ),
       ).resolves.toBe(0);
       expect(seen).toEqual([
-        { runtime: "node", includes: policy === "dual" ? [bunFile, nodeFile] : [nodeFile] },
-        { runtime: "bun", includes: [bunFile] },
+        { runtime: "node", includes: policy === "dual" ? includePatterns : nodeFiles },
+        { runtime: "bun", includes: bunFiles },
       ]);
-      expect(resolveCiTestRuntimeSelections({ targets: [bunFile] }, policy)).toEqual(
-        policy === "dual" ? [{ runtime: "node" }, { runtime: "bun" }] : [{ runtime: "bun" }],
-      );
+      for (const bunFile of bunFiles) {
+        expect(resolveCiTestRuntimeSelections({ targets: [bunFile] }, policy)).toEqual(
+          policy === "dual" ? [{ runtime: "node" }, { runtime: "bun" }] : [{ runtime: "bun" }],
+        );
+      }
     },
   );
 
@@ -1093,6 +1104,13 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   });
 
   it.each([
+    {
+      config: "test/vitest/vitest.extension-provider-openai.config.ts",
+      dir: "extensions",
+      targets: ["extensions/openai/realtime-quicksilver-peer-worker.test.ts"],
+      sibling: "extensions/openai/realtime-quicksilver-socket-worker.test.ts",
+      glob: "openai/realtime-quicksilver-*.test.ts",
+    },
     {
       config: "test/vitest/vitest.plugins.config.ts",
       dir: "src/plugins",
