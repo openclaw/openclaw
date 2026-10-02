@@ -1,15 +1,23 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { compareValidSemver } from "../../../../src/infra/semver.js";
 import { icons } from "../../components/icons.ts";
 import { renderReasonedDisabledControl } from "../../components/reasoned-disabled-control.ts";
 import { t } from "../../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
-import type { PluginCatalogItem, PluginsInspectResult } from "../../lib/plugins/index.ts";
+import type {
+  PluginCatalogItem,
+  PluginDiscoveryDetailResult,
+  PluginInstallRequest,
+  PluginsInspectResult,
+} from "../../lib/plugins/index.ts";
 import { renderPluginAskAction } from "./overview.ts";
 import { pluginRowKey } from "./plugin-row-message.ts";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
 
 type PluginLifecycleProps = {
   inspection: PluginsInspectResult | null;
+  catalog?: PluginDiscoveryDetailResult;
+  onUpdate?: (request: PluginInstallRequest) => void;
   mutationBlockedReason: string | null;
   canMutate: boolean;
   busy: Readonly<Record<string, PluginMutationAction>>;
@@ -24,6 +32,31 @@ export function renderPluginLifecycle(
   props: PluginLifecycleProps,
   plugin: PluginCatalogItem,
 ): TemplateResult {
+  const catalog = props.catalog ?? props.inspection?.catalog;
+  const packageName = catalog?.plugin.catalog.packageName;
+  const version = catalog?.plugin.catalog.latestVersion;
+  // Registry presentation alone must never change an installed plugin's source.
+  const update =
+    packageName &&
+    props.inspection?.source?.kind === "clawhub" &&
+    props.inspection.plugin.id === plugin.id &&
+    props.inspection.source.packageName === packageName &&
+    plugin.clawhubPackage === packageName &&
+    plugin.catalogId === catalog?.plugin.id &&
+    catalog?.detail.origin === "clawhub" &&
+    plugin.installed &&
+    plugin.version &&
+    version &&
+    (compareValidSemver(version, plugin.version) ?? 0) > 0
+      ? {
+          source: "clawhub" as const,
+          packageName,
+          version,
+          expectedPluginId: plugin.id,
+          mode: "update" as const,
+          enable: false,
+        }
+      : undefined;
   const key = pluginRowKey(plugin.id);
   const pending = props.busy[key];
   const busy = Boolean(pending);
@@ -61,6 +94,7 @@ export function renderPluginLifecycle(
     ${plugin.enabled ? askAction : nothing}
     ${action(enableAction, t(enableAction === "disable" ? "pluginsPage.detailDisable" : "pluginsPage.detailEnable"), plugin.enabled ? "oc-action-secondary" : "primary oc-action-primary", props.mutationBlockedReason ?? (plugin.state === "needs-setup" ? t("pluginsPage.setupRequiredNotice") : null), props.canMutate && plugin.state !== "needs-setup", () => props.onSetEnabled(plugin.id, !plugin.enabled, key))}
     ${!plugin.enabled ? askAction : nothing}
+    ${update && props.onUpdate ? action("update", t(pending === "update" ? "pluginsPage.updating" : "pluginsPage.updateVersion", { version: update.version }), "oc-action-secondary", props.mutationBlockedReason, props.canMutate, () => props.onUpdate?.(update)) : nothing}
     ${plugin.removable ? action("uninstall", t("pluginsPage.uninstall"), "oc-action-secondary", props.mutationBlockedReason, props.canMutate, () => props.onUninstall(plugin.id, key)) : nothing}
     <a
       class="btn btn--icon oc-action oc-action-icon oc-action-secondary"

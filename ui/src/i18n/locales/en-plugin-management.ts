@@ -18,6 +18,8 @@ const enPluginManagement = {
     pluginHelpValue: "Current value: {value}",
   },
   pluginsPage: {
+    updateVersion: "Update to {version}",
+    updating: "Updating",
     installProgress: {
       title: "Installation progress",
       stopped: "Installation stopped",

@@ -11,7 +11,7 @@ import type { PluginToolPreview } from "./tool-preview.ts";
 
 registerPluginManagementEnglish();
 
-export type PluginMutationAction = "install" | "enable" | "disable" | "uninstall";
+export type PluginMutationAction = "install" | "update" | "enable" | "disable" | "uninstall";
 
 export type PluginsPageDetail = {
   catalog?: PluginDiscoveryDetailResult;

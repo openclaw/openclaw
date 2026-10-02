@@ -11,8 +11,8 @@ doc-schema-version: 1
 ---
 
 The Control UI covers discovery, installation, schema-backed configuration,
-effective access, enablement, reload, and removal. The CLI adds update,
-advanced maintenance, and explicit install-source controls.
+effective access, enablement, ClawHub package updates, reload, and removal. The CLI
+adds advanced maintenance and explicit install-source controls.
 For its full command contract, flags, source-selection rules, and edge cases, see
 [`openclaw plugins`](/cli/plugins).
 
@@ -94,8 +94,15 @@ capability consent needs to be recorded. Config and installation changes stay un
 reload requires new capability consent, manage that acceptance through the
 deployment owner before retrying.
 
-The Control UI does not install from arbitrary npm, git, or local-path sources,
-or update plugin packages. Use the CLI workflows below for those operations.
+For an installed ClawHub package, its detail page offers **Update to <version>**
+when the same catalog package has a newer release. Choosing it downloads that
+version, preserves enablement and settings, and applies the normal installation
+security and capability checks. If the installation was pinned, this explicit
+update moves the pin to the selected version. Publishing a catalog release does
+not automatically update connected Gateways.
+
+The Control UI does not install from arbitrary npm, git, or local-path sources.
+Use the CLI workflows below for those sources and other package updates.
 
 ## List and search plugins
 

@@ -15,7 +15,11 @@ import { t } from "../../i18n/index.ts";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
-import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
+import type {
+  PluginDiscoveryDetailResult,
+  PluginInstallRequest,
+  PluginsInspectResult,
+} from "../../lib/plugins/index.ts";
 import "../../plugins/control-ui-contributions.ts";
 import { renderPluginReadme } from "./catalog-detail.ts";
 import { renderArtTile } from "./consent-dialog.ts";
@@ -86,6 +90,7 @@ export type DetailProps = SharedProps &
     onMcpLogin?: (serverName: string) => void;
     onEditMcp?: () => void;
     installProgress?: PluginInstallProgress;
+    onUpdate?: (request: PluginInstallRequest) => void;
     onAskSetting?: (field: PluginSettingsField) => void;
     skillsSection?: TemplateResult;
     tools?: PluginToolPreview[];
@@ -382,7 +387,7 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
   const notices = html`${props.error ? renderRetryError(props.error, props.onRefresh) : nothing}
   ${props.inspectionError ? renderRetryError(props.inspectionError, props.onRetryInspection) : nothing}
   ${plugin.error ? html`<div class="callout danger oc-banner oc-banner-error" role="alert">${formatUiExternalText(plugin.error)}</div>` : nothing}
-  ${renderPluginRowMessage(props.messages[key])}`;
+  ${renderPluginRowMessage(props.messages[key], { busy: Boolean(props.busy[key]), onContinue: props.canMutate ? props.onUpdate : undefined })}`;
   if (settings) {
     return renderSettingsPage(
       html`

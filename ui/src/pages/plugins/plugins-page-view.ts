@@ -179,6 +179,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
       ...settingsShared,
       pluginId,
       installProgress: consentController.getActiveInstall(pluginRowKey(pluginId)),
+      onUpdate: (request) => void consentController.install(request, pluginRowKey(pluginId)),
       inspection: detail?.inspection ?? null,
       mcpLoginBusy: model.mcpLoginBusy,
       canMcpLogin: model.canMcpLogin,

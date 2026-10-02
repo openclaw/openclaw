@@ -3,7 +3,12 @@
 import { render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import { createInspectResult, createPlugin, createResult } from "./plugins-page.test-support.ts";
+import {
+  createDiscoveryDetail,
+  createInspectResult,
+  createPlugin,
+  createResult,
+} from "./plugins-page.test-support.ts";
 import { renderPluginSettingsDetail, type DetailProps } from "./settings-view.ts";
 
 beforeEach(() => i18n.setLocale("en"));
@@ -220,3 +225,48 @@ it.each([false, true])(
     expect(container.textContent).not.toContain("Video generation");
   },
 );
+
+it.each([
+  { name: "current version", version: "1.0.0" },
+  { name: "older version", version: "0.9.9" },
+  { name: "invalid version", version: "next" },
+  { name: "npm install", source: "npm" as const },
+  { name: "different package", packageName: "@other/workboard" },
+  { name: "different registry identity", catalogId: "other-catalog" },
+  { name: "local catalog fallback", origin: "local" as const },
+  { name: "read-only operator", canMutate: false },
+  { name: "busy plugin", busy: { "plugin:workboard": "enable" as const } },
+])("does not dispatch an update for $name", (scenario) => {
+  const plugin = createPlugin({
+    origin: "global",
+    packageName: "@openclaw/workboard",
+    clawhubPackage: "@openclaw/workboard",
+    catalogId: "catalog:workboard",
+    version: "1.0.0",
+  });
+  const catalog = createDiscoveryDetail(plugin);
+  catalog.plugin.id = scenario.catalogId ?? plugin.catalogId!;
+  catalog.plugin.catalog.packageName = scenario.packageName ?? plugin.packageName;
+  catalog.plugin.catalog.latestVersion = scenario.version ?? "1.0.1";
+  catalog.detail.origin = scenario.origin ?? "clawhub";
+  const inspection = createInspectResult({
+    source: { kind: scenario.source ?? "clawhub", packageName: plugin.packageName },
+  });
+  const onUpdate = vi.fn();
+  const container = mount({
+    result: createResult(plugin),
+    inspection,
+    catalog,
+    onUpdate,
+    canMutate: scenario.canMutate ?? true,
+    busy: scenario.busy ?? {},
+  });
+  const button = container.querySelector<HTMLButtonElement>('[aria-label^="Update to"]');
+  button?.click();
+  expect(onUpdate).not.toHaveBeenCalled();
+  if (scenario.canMutate === false || scenario.busy) {
+    expect(button?.disabled).toBe(true);
+  } else {
+    expect(button).toBeNull();
+  }
+});

@@ -343,7 +343,7 @@ export class PluginsConsentController {
         await this.host.refreshCatalogAfterMutation(client);
       },
       {
-        action: "install",
+        action: request.mode === "update" ? "update" : "install",
         preserveMessageWhilePending: request.acknowledgeInstallPolicyWarning === true,
       },
       async (error, scope, isCurrent) => {
