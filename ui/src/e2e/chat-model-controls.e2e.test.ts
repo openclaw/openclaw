@@ -82,9 +82,18 @@ suite.define(() => {
           animations: "disabled",
         });
       }
-      await refresh.hover();
+      const refreshDetails = refresh.getByRole("button");
+      const openRefreshTooltip = refresh.locator("openclaw-tooltip[open]");
+      await refreshDetails.waitFor({ state: "visible" });
+      // The popup's opening scale animation can move this small target away
+      // from a stationary pointer before the tooltip's hover delay completes.
+      await picker.locator("wa-popup[data-anchored-overlay]").evaluate(async (popup) => {
+        const surface = popup.shadowRoot!.querySelector<HTMLElement>('[part="popup"]')!;
+        await Promise.all(surface.getAnimations().map((animation) => animation.finished));
+      });
+      await refreshDetails.hover();
       await expect
-        .poll(() => page.locator("openclaw-tooltip[open] .tooltip-content").textContent())
+        .poll(() => openRefreshTooltip.locator(".tooltip-content").textContent())
         .toBe("Refreshing models for Example…");
       if (artifactDir) {
         await page.screenshot({
@@ -93,8 +102,6 @@ suite.define(() => {
         });
       }
       const search = picker.locator("[data-chat-model-search]");
-      const refreshDetails = refresh.getByRole("button");
-      const openRefreshTooltip = refresh.locator("openclaw-tooltip[open]");
       await search.click();
       await search.press("Tab");
       expect(await refreshDetails.evaluate((button) => button === document.activeElement)).toBe(
