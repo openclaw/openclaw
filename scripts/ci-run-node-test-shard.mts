@@ -366,6 +366,17 @@ export function resolveShardChildCommand(
   testProjectsEntrypoint = resolveTestProjectsEntrypoint(),
   workerRun?: VitestWorkerRun,
 ) {
+  if (args[0] === "--native-bun") {
+    return {
+      command: nodeExecPath,
+      args: [
+        "--import",
+        "tsx",
+        fileURLToPath(new URL("./run-vitest.mts", import.meta.url)),
+        ...args,
+      ],
+    };
+  }
   const loaderArgs = testProjectsEntrypoint.endsWith(".mts") ? ["--import", "tsx"] : [];
   return {
     command: nodeExecPath,
@@ -441,6 +452,10 @@ async function runChild(
   timingKey: string,
   context?: Awaited<ReturnType<typeof createWorkerContext>>,
 ) {
+  const spawnEnv =
+    args[0] === "--native-bun" && context
+      ? { ...childEnv, OPENCLAW_NATIVE_BUN_PARENT_IPC: "1" }
+      : childEnv;
   // Use Node directly. `pnpm exec node` may reconcile the workspace before
   // tests, which destroys the sticky dependency fast path.
   const childCommand = resolveShardChildCommand(
@@ -457,7 +472,7 @@ async function runChild(
       command: childCommand.command,
       args: childCommand.args,
       options: {
-        env: childEnv,
+        env: spawnEnv,
         stdio: ["ignore", "pipe", "pipe", "ipc"],
       },
       homeMode: "tooling",
@@ -481,7 +496,7 @@ async function runChild(
     );
   } else {
     child = spawn(childCommand.command, childCommand.args, {
-      env: childEnv,
+      env: spawnEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
     completion = new Promise<number>((resolve) => {
@@ -810,6 +825,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
             return;
           }
           const runtime = selection.runtime;
+          const nativeBun = selection.engine === "bun-test";
           const nativeFiles = nativeShardFiles;
           if (
             runtime === "node" &&
@@ -835,13 +851,23 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
               : entry;
           const selectedArgs =
             selectedEntry.kind === "target" ? [selectedEntry.target] : selectedEntry.plan.configs;
-          const args =
-            vitestExtraArgs.length > 0 ? [...selectedArgs, "--", ...vitestExtraArgs] : selectedArgs;
-          const childEnv = buildChildEnv(selectedEntry, baseEnv, scratchDir, index, {
-            serial: concurrency === 1,
-            cacheSlot,
-            runtime,
-          });
+          const args = nativeBun
+            ? ["--native-bun", ...selection.files.map((file) => `./${file}`)]
+            : vitestExtraArgs.length > 0
+              ? [...selectedArgs, "--", ...vitestExtraArgs]
+              : selectedArgs;
+          const childEnv = nativeBun
+            ? prepareChildEnv(entry, { ...baseEnv, OPENCLAW_VITEST_RUNTIME: "bun" })
+            : buildChildEnv(selectedEntry, baseEnv, scratchDir, index, {
+                serial: concurrency === 1,
+                cacheSlot,
+                runtime,
+              });
+          if (nativeBun) {
+            delete childEnv[FS_MODULE_CACHE_ROOT_ENV_KEY];
+            delete childEnv[FS_MODULE_CACHE_PATH_ENV_KEY];
+            delete childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
+          }
           if (selection.includeAfterShard) {
             childEnv.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE =
               childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
@@ -863,8 +889,9 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
             childEnv.OPENCLAW_VITEST_NATIVE_SHARD_REQUEST_ID = uiReceipt.requestId;
           }
           const timingKey = entry.kind === "group" ? (entry.timingKey ?? entry.name) : entry.name;
-          const timingPrefix =
-            runtime === "bun"
+          const timingPrefix = nativeBun
+            ? "bun-native:"
+            : runtime === "bun"
               ? "bun:"
               : selection.configs || selection.includePatterns
                 ? "node-subset:"

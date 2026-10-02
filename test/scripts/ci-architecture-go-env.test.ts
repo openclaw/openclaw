@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -58,6 +58,12 @@ describe.skipIf(process.platform === "win32")("architecture CI Go memory environ
       const bin = join(root, "bin");
       const capture = join(root, "command.json");
       mkdirSync(bin);
+      const harness = join(root, ".ci-harness/scripts");
+      mkdirSync(harness, { recursive: true });
+      copyFileSync(
+        new URL("../../scripts/ci-additional-checks.sh", import.meta.url),
+        join(harness, "ci-additional-checks.sh"),
+      );
       writeExecutable(join(bin, "pnpm"), [
         "#!/usr/bin/env node",
         'const fs = require("node:fs");',

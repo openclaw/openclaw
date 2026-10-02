@@ -652,6 +652,93 @@ it("materializes an executable preflight manifest from the workflow revision", a
   expect(fixtureGit(workspace, ["status", "--porcelain"])).toBe("");
 });
 
+linuxIt.for([
+  { shape: "same", event: "pull_request" },
+  { shape: "different", event: "pull_request" },
+  { shape: "same", event: "schedule" },
+  { shape: "different", event: "schedule" },
+])(
+  "executes trusted additional checks after a $shape-SHA $event checkout",
+  async ({ shape, event }, { command }) => {
+    const root = command.createTempDir("ci-additional-harness-");
+    const origin = join(root, "origin");
+    const workspace = join(root, "checkout");
+    mkdirSync(origin);
+    mkdirSync(workspace);
+    fixtureGit(origin, ["init", "--quiet"]);
+    const script = "scripts/ci-additional-checks.sh";
+    const trustedScript = readFileSync(script, "utf8");
+    for (const file of [".github/actions/setup-node-env/action.yml", script]) {
+      mkdirSync(dirname(join(origin, file)), { recursive: true });
+      writeFileSync(join(origin, file), readFileSync(file));
+    }
+    fixtureGit(origin, ["add", "."]);
+    const workflow = fixtureCommit(
+      join(origin, ".git"),
+      fixtureGit(origin, ["write-tree"]),
+      undefined,
+      "trusted workflow",
+    );
+    let target = workflow;
+    if (shape === "different") {
+      writeFileSync(join(origin, script), "echo untrusted-candidate-script >&2\nexit 99\n");
+      fixtureGit(origin, ["add", script]);
+      target = fixtureCommit(
+        join(origin, ".git"),
+        fixtureGit(origin, ["write-tree"]),
+        workflow,
+        "different candidate",
+      );
+    }
+    fixtureGit(origin, ["update-ref", "HEAD", target]);
+    const gitConfig = join(root, "gitconfig");
+    writeFileSync(gitConfig, "");
+    const checkout = await command.run("python3", ["-I", "-S", gitOwnerPath], {
+      cwd: workspace,
+      env: {
+        ...process.env,
+        CHECKOUT_KIND: "linux-node",
+        CHECKOUT_REPO: "fixture/additional",
+        CHECKOUT_TOKEN: "",
+        CHECKOUT_SHA: target,
+        CHECKOUT_BASE_SHA: "",
+        CHECKOUT_GIT_COMMITS_JSON: "[]",
+        WORKFLOW_SHA: workflow,
+        GITHUB_WORKSPACE: workspace,
+        GITHUB_EVENT_NAME: event,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: gitConfig,
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: `url.${pathToFileURL(origin).href}.insteadOf`,
+        GIT_CONFIG_VALUE_0: "https://github.com/fixture/additional.git",
+      },
+    });
+    expect(checkout.status, `${checkout.stdout}\n${checkout.stderr}`).toBe(0);
+    expect(readFileSync(join(workspace, ".ci-harness", script), "utf8")).toBe(trustedScript);
+    if (shape === "different") {
+      expect(fixtureGit(join(workspace, ".ci-harness"), ["rev-parse", "HEAD"])).toBe(workflow);
+      expect(readFileSync(join(workspace, script), "utf8")).toContain("untrusted-candidate-script");
+    }
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "pnpm"), '#!/bin/sh\nprintf "%s\\n" "$*" > "$PROBE_COMMAND"\n');
+    chmodSync(join(bin, "pnpm"), 0o755);
+    const probe = join(root, "invoked-command");
+    const run = await command.run("bash", [`.ci-harness/${script}`], {
+      cwd: workspace,
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        ADDITIONAL_CHECK_GROUP: "runtime-topology-architecture",
+        PROBE_COMMAND: probe,
+      },
+    });
+    expect(run.status, `${run.stdout}\n${run.stderr}`).toBe(0);
+    expect(readFileSync(probe, "utf8")).toBe("check:architecture\n");
+    expect(fixtureGit(workspace, ["status", "--porcelain"])).toBe("");
+  },
+);
+
 // Ask Bash to decode the source independently of the generator and fixture codec.
 it("keeps exactly one byte-identical generated CI owner", () => {
   const workflow = readFileSync(".github/workflows/ci.yml", "utf8");

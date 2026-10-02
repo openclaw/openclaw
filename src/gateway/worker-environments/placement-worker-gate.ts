@@ -44,7 +44,8 @@ export type WorkerSessionPlacementGate = {
     claim: WorkerSessionTurnClaim;
     transcriptSeq?: number;
     liveSeq?: number;
-  }): void;
+    assertCurrent?: () => void;
+  }): Promise<void>;
   prepareWorkspaceResultOwnerRevocation(binding: WorkerPlacementBinding, error: Error): void;
   registerTurnClaimClosedHandler(handler: (claim: WorkerSessionTurnClaim) => void): () => void;
 };
@@ -229,15 +230,22 @@ export function createWorkerSessionPlacementGate(
       return validateWorkerTurn(claim) && store.isWorkerTurnToolAuthorized(claim, toolName);
     },
 
-    updateAckCursors(input): void {
-      if (!validateWorkerTurn(input.claim)) {
-        throw new Error(`Cannot ACK stale worker turn for session ${input.claim.sessionId}`);
-      }
-      store.updateAckCursors({
-        claim: input.claim,
-        ...(input.transcriptSeq === undefined ? {} : { transcript: input.transcriptSeq }),
-        ...(input.liveSeq === undefined ? {} : { liveEvent: input.liveSeq }),
-      });
+    async updateAckCursors(input) {
+      const assertCurrent = () => {
+        if (recoveryOnlyClaims.has(serializeWorkerSessionTurnClaim(input.claim))) {
+          throw new Error(`Cannot ACK stale worker turn for session ${input.claim.sessionId}`);
+        }
+        input.assertCurrent?.();
+      };
+      await store.updateAckCursors(
+        {
+          claim: input.claim,
+          ...(input.transcriptSeq === undefined ? {} : { transcript: input.transcriptSeq }),
+          ...(input.liveSeq === undefined ? {} : { liveEvent: input.liveSeq }),
+        },
+        assertCurrent,
+      );
+      assertCurrent();
     },
 
     prepareWorkspaceResultOwnerRevocation(binding, error): void {

@@ -57,6 +57,7 @@ function expectedHarnessSparseCheckoutArgs(linux: boolean) {
           "/scripts/generate-npm-package-lock.mts",
           "/scripts/changed-lanes.mts",
           "/scripts/lib/merge-head-diff-base.mjs",
+          "/scripts/ci-additional-checks.sh",
         ]
       : ["/scripts/lib/swift-toolchain.sh", "/scripts/lib/ci-ios-smoke-plan.mjs"]),
   ];

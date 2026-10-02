@@ -1493,6 +1493,7 @@ test/vitest/vitest.performance-config.ts
 test/vitest/vitest.plugin-sdk-paths.mjs
 test/vitest/vitest.startup-corpus-paths.mjs
 test/vitest/vitest.test-shards.mjs
+test/vitest/vitest.timeouts.ts
 test/vitest/vitest.tooling-isolated-paths.mjs
 test/vitest/vitest.ui-isolated-paths.mjs
 test/vitest/vitest.ui-paths.mjs

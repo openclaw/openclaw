@@ -3,7 +3,6 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
-import { withEnv } from "../../test-utils/env.js";
 import { createNodeProxyAgent, resolveEnvNodeProxyUrlForTarget } from "./node-proxy-agent.js";
 
 const PROXY_ENV_KEYS = [
@@ -21,11 +20,23 @@ function withProxyEnv<T>(
   env: Partial<Record<(typeof PROXY_ENV_KEYS)[number], string | undefined>>,
   fn: () => T,
 ): T {
-  const clearedEnv = Object.fromEntries(PROXY_ENV_KEYS.map((key) => [key, undefined])) as Record<
-    (typeof PROXY_ENV_KEYS)[number],
-    undefined
-  >;
-  return withEnv({ ...clearedEnv, ...env }, fn);
+  const previousEnv = process.env;
+  const scopedEnv = { ...previousEnv };
+  for (const key of PROXY_ENV_KEYS) {
+    const value = env[key];
+    if (value === undefined) {
+      delete scopedEnv[key];
+    } else {
+      scopedEnv[key] = value;
+    }
+  }
+  // These agents consume JS env values; keep their fixtures out of Bun's native fetch proxy cache.
+  process.env = scopedEnv;
+  try {
+    return fn();
+  } finally {
+    process.env = previousEnv;
+  }
 }
 
 describe("resolveEnvNodeProxyUrlForTarget", () => {
