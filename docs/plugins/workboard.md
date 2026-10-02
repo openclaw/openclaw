@@ -109,27 +109,30 @@ involvingProfileId?: string, includePeople?: boolean }` to
 `workboard.sessionsBoard.read`; `includePeople` returns the people facet for the picker.
 
 Columns are rules over Gateway-owned session status, observer health, and
-pull-request state. The Gateway's session observer already supplies the health
-judgment. Reads follow the current caller's session visibility; board specs and
+pull-request state. Health comes from the Gateway session observer: live digests
+for sessions someone is watching in the Control UI, and a terminal digest when an
+observed run ends. Sessions nobody watches have no health, so they match only run
+and pull-request rules. Reads follow the current caller's session visibility; board specs and
 pins follow the Gateway's trusted-operator model. Interactive edits are admitted
 under the caller's live authority immediately before the write. Draft and
 incognito sessions never enter a Sessions board or its facts reads.
 
 New Sessions boards use these columns, in this order:
 
-| Column      | Rule                                                                               |
-| ----------- | ---------------------------------------------------------------------------------- |
-| Needs input | Observer health is `waiting-on-user`.                                              |
-| Working     | Run is active **and** observer health is `on-track`, `grinding`, or `wrapping-up`. |
-| Stuck       | Observer health is `stuck` or `failed`.                                            |
-| In review   | A pull request is open or draft.                                                   |
-| Merged      | A pull request is merged.                                                          |
-| Done        | Observer health is `done`. This is also the fallback column.                       |
+| Column      | Rule                                                              |
+| ----------- | ----------------------------------------------------------------- |
+| Needs input | Observer health is `waiting-on-user`.                             |
+| Stuck       | Observer health is `stuck` or `failed`, or run state is `failed`. |
+| Working     | Run is active.                                                    |
+| In review   | A pull request is open or draft.                                  |
+| Merged      | A pull request is merged.                                         |
+| Done        | Observer health is `done`. This is also the fallback column.      |
 
 Placement uses an operator pin when its column still exists, then the first
-matching column in saved order, then the fallback column. Every field in a
-`match` rule must match; values within a field are alternatives. Health rules
-require an observer digest, which exists only for observed runs. Column names
+matching column in saved order, then the fallback column. `match` accepts one
+rule or an any-of array such as Stuck's
+`[{health:["stuck","failed"]},{run:["failed"]}]`, with every field within a rule
+required to match. Values within a field are alternatives. Column names
 and descriptions help people understand the board; `match` rules decide placement.
 
 Drag a session into another column, or ask the Board agent to move it, to pin
@@ -183,6 +186,9 @@ Create with `workboard.boards.upsert` and `kind: "sessions"`, or with
 Workboard stores board specs and operator pins in SQLite. Session status,
 observer digests, and pull-request state remain owned by the Gateway. On plugin
 startup, older automatic placements are removed; operator pins are preserved.
+Boards whose rules still match the previous defaults receive the new run-based
+rules; only the old default column order is reordered. Customized rules, labels,
+descriptions, and custom column order are preserved.
 Sessions boards never hold cards: card creation, capture, and dispatch reject a
 Sessions board destination. Deleting one removes its pins without deleting any
 sessions or its Board agent conversation.

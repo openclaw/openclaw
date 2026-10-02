@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
+  createDefaultWorkboardSessionsBoardSpec,
   normalizeWorkboardSessionsBoardSpec,
   patchWorkboardSessionsBoardSpec,
   type WorkboardSessionPlacement,
@@ -19,7 +20,7 @@ import type {
 } from "./persistence-types.js";
 
 type SessionsBoardDatabase = {
-  workboard_boards: { id: string; sessions_spec: string | null; updated_at: number };
+  workboard_boards: { id: string; kind: string; sessions_spec: string | null; updated_at: number };
   workboard_session_placements: {
     board_id: string;
     session_key: string;
@@ -30,6 +31,18 @@ type SessionsBoardDatabase = {
     updated_at: number;
   };
 };
+
+// Match the previous defaults as persisted by contract normalization, including field/value order.
+const PREVIOUS_DEFAULT_RULES = new Map(
+  Object.entries({
+    "needs-input": { health: ["waiting-on-user"] },
+    working: { health: ["on-track", "grinding", "wrapping-up"], run: ["active"] },
+    stuck: { health: ["stuck", "failed"] },
+    "in-review": { pullRequest: ["open", "draft"] },
+    merged: { pullRequest: ["merged"] },
+    done: { health: ["done"] },
+  }).map(([id, match]) => [id, JSON.stringify(match)]),
+);
 
 export class WorkboardSqliteSessionsBoardStore {
   constructor(
@@ -80,15 +93,47 @@ export class WorkboardSqliteSessionsBoardStore {
     }));
   }
 
-  repairPlacements(): number {
-    return Number(
-      executeSqliteQuerySync(
+  repairPlacements(): { placements: number; boards: number } {
+    return runSqliteImmediateTransactionSync(this.db, () => {
+      const query = getNodeSqliteKysely<SessionsBoardDatabase>(this.db);
+      const placements = Number(
+        executeSqliteQuerySync(
+          this.db,
+          query.deleteFrom("workboard_session_placements").where("source", "!=", "operator"),
+        ).numAffectedRows ?? 0n,
+      );
+      const defaults = createDefaultWorkboardSessionsBoardSpec().columns;
+      let boards = 0;
+      for (const { id } of executeSqliteQuerySync(
         this.db,
-        getNodeSqliteKysely<SessionsBoardDatabase>(this.db)
-          .deleteFrom("workboard_session_placements")
-          .where("source", "!=", "operator"),
-      ).numAffectedRows ?? 0n,
-    );
+        query.selectFrom("workboard_boards").select("id").where("kind", "=", "sessions"),
+      ).rows) {
+        const board = this.get(id);
+        if (
+          board.sessions.columns.some((column) => {
+            const previous = PREVIOUS_DEFAULT_RULES.get(column.id);
+            return previous === undefined || JSON.stringify(column.match) !== previous;
+          })
+        ) {
+          continue;
+        }
+        const columns = board.sessions.columns.map((column) => ({
+          ...column,
+          match: defaults.find((entry) => entry.id === column.id)?.match,
+        }));
+        if (
+          columns.map((column) => column.id).join(",") ===
+          [...PREVIOUS_DEFAULT_RULES.keys()].join(",")
+        ) {
+          columns.splice(1, 0, ...columns.splice(2, 1));
+        }
+        if (JSON.stringify(columns) !== JSON.stringify(board.sessions.columns)) {
+          this.update(id, { columns });
+          boards += 1;
+        }
+      }
+      return { placements, boards };
+    });
   }
 
   writePlacement(

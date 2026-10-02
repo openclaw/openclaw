@@ -31,8 +31,8 @@ describe("Sessions board storage", () => {
     const board = await store.upsertBoard({ id: "sessions", kind: "sessions", name: "Sessions" });
     expect(board.sessions?.columns.map((column) => column.id)).toEqual([
       "needs-input",
-      "working",
       "stuck",
+      "working",
       "in-review",
       "merged",
       "done",
@@ -232,8 +232,8 @@ describe("Sessions board storage", () => {
     const reopened = new WorkboardStore(stores.cards, stores);
     try {
       expect((await reopened.getSessionsBoard("sessions")).sessions).toEqual(board.sessions);
-      expect(await reopened.repairSessionPlacements()).toBe(2);
-      expect(await reopened.repairSessionPlacements()).toBe(0);
+      expect(await reopened.repairSessionPlacements()).toEqual({ placements: 2, boards: 0 });
+      expect(await reopened.repairSessionPlacements()).toEqual({ placements: 0, boards: 0 });
       expect(await reopened.listSessionPlacements("sessions")).toEqual([placement()]);
     } finally {
       await reopened.close();

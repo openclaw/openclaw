@@ -454,6 +454,10 @@ it("creates a sessions board from the default Cards kind without submitting clie
 
 it("validates session columns inline and preserves their ids and rules when labels change", async () => {
   const page = sessionsPage();
+  expectDefined(page.board.sessions.columns[0], "working column").match = [
+    { run: ["active"] },
+    { health: ["on-track"] },
+  ];
   await page.connect();
   button(page, "Edit board").click();
   await vi.advanceTimersByTimeAsync(0);

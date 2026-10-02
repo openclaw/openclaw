@@ -36,7 +36,7 @@ export type WorkboardSessionsColumn = {
   label: string;
   color?: string;
   description: string;
-  match?: WorkboardSessionsColumnMatch;
+  match?: WorkboardSessionsColumnMatch | WorkboardSessionsColumnMatch[];
   fallback?: boolean;
 };
 export type WorkboardSessionsBoardSpec = {
@@ -97,36 +97,35 @@ export function createDefaultWorkboardSessionsBoardSpec(): WorkboardSessionsBoar
         id: "needs-input",
         label: "Needs input",
         color: "yellow",
-        description:
-          "Observer health is waiting on the user for an answer, approval, or missing input.",
+        description: "Observer health is waiting-on-user.",
         match: { health: ["waiting-on-user"] },
-      },
-      {
-        id: "working",
-        label: "Working",
-        color: "blue",
-        description: "An active run with observer health on-track, grinding, or wrapping-up.",
-        match: { run: ["active"], health: ["on-track", "grinding", "wrapping-up"] },
       },
       {
         id: "stuck",
         label: "Stuck",
         color: "red",
-        description: "Observer health is stuck or failed.",
-        match: { health: ["stuck", "failed"] },
+        description: "Observer health is stuck or failed, or the run failed.",
+        match: [{ health: ["stuck", "failed"] }, { run: ["failed"] }],
+      },
+      {
+        id: "working",
+        label: "Working",
+        color: "blue",
+        description: "The run is active.",
+        match: { run: ["active"] },
       },
       {
         id: "in-review",
         label: "In review",
         color: "orange",
-        description: "A pull request is open or in draft and needs review or further work.",
+        description: "A pull request is open or draft.",
         match: { pullRequest: ["open", "draft"] },
       },
       {
         id: "merged",
         label: "Merged",
         color: "purple",
-        description: "The session's pull request has merged.",
+        description: "A pull request is merged.",
         match: { pullRequest: ["merged"] },
       },
       {
@@ -217,12 +216,19 @@ function normalizeColumn(value: unknown): WorkboardSessionsColumn {
   if (color !== undefined && !COLUMN_COLORS.has(color)) {
     throw new Error("column color must be an existing board color token.");
   }
+  const rules =
+    input.match === undefined
+      ? undefined
+      : (Array.isArray(input.match) ? input.match : [input.match]).map(normalizeMatch);
+  if (rules?.length === 0) {
+    throw new Error("column match must contain at least one rule.");
+  }
   return {
     id,
     label: text(input.label, "column label", 1, 60),
     ...(color !== undefined ? { color } : {}),
     description: text(input.description, "column description", 1, 400),
-    ...(input.match !== undefined ? { match: normalizeMatch(input.match) } : {}),
+    ...(rules !== undefined ? { match: rules.length === 1 ? rules[0] : rules } : {}),
     ...(input.fallback !== undefined
       ? { fallback: boolean(input.fallback, "column fallback") }
       : {}),

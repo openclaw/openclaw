@@ -148,9 +148,12 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
     );
   }
 
-  repairSessionPlacements(): Promise<number> {
+  repairSessionPlacements(): Promise<{ placements: number; boards: number }> {
     return this.enqueueMutation(() =>
-      this.trackMutation(() => this.sessionsBoardStore.repairPlacements()),
+      this.trackMutation(
+        () => this.sessionsBoardStore.repairPlacements(),
+        (result) => result.placements > 0 || result.boards > 0,
+      ),
     );
   }
 

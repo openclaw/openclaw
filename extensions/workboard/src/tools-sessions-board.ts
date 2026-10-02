@@ -12,6 +12,37 @@ const boardIdField = Type.Optional(
   }),
 );
 
+const matchRuleSchema = strictObject({
+  health: Type.Optional(
+    Type.Array(
+      Type.Union([
+        Type.Literal("on-track"),
+        Type.Literal("grinding"),
+        Type.Literal("stuck"),
+        Type.Literal("waiting-on-user"),
+        Type.Literal("wrapping-up"),
+        Type.Literal("done"),
+        Type.Literal("failed"),
+      ]),
+    ),
+  ),
+  run: Type.Optional(
+    Type.Array(Type.Union([Type.Literal("active"), Type.Literal("idle"), Type.Literal("failed")])),
+  ),
+  pullRequest: Type.Optional(
+    Type.Array(
+      Type.Union([
+        Type.Literal("none"),
+        Type.Literal("open"),
+        Type.Literal("draft"),
+        Type.Literal("merged"),
+        Type.Literal("closed"),
+      ]),
+    ),
+  ),
+  archived: Type.Optional(Type.Boolean()),
+});
+
 const columnSchema = strictObject({
   id: Type.String({
     minLength: 1,
@@ -28,40 +59,7 @@ const columnSchema = strictObject({
     maxLength: 400,
     description: "Description shown in the column tooltip.",
   }),
-  match: Type.Optional(
-    strictObject({
-      health: Type.Optional(
-        Type.Array(
-          Type.Union([
-            Type.Literal("on-track"),
-            Type.Literal("grinding"),
-            Type.Literal("stuck"),
-            Type.Literal("waiting-on-user"),
-            Type.Literal("wrapping-up"),
-            Type.Literal("done"),
-            Type.Literal("failed"),
-          ]),
-        ),
-      ),
-      run: Type.Optional(
-        Type.Array(
-          Type.Union([Type.Literal("active"), Type.Literal("idle"), Type.Literal("failed")]),
-        ),
-      ),
-      pullRequest: Type.Optional(
-        Type.Array(
-          Type.Union([
-            Type.Literal("none"),
-            Type.Literal("open"),
-            Type.Literal("draft"),
-            Type.Literal("merged"),
-            Type.Literal("closed"),
-          ]),
-        ),
-      ),
-      archived: Type.Optional(Type.Boolean()),
-    }),
-  ),
+  match: Type.Optional(Type.Union([matchRuleSchema, Type.Array(matchRuleSchema, { minItems: 1 })])),
   fallback: Type.Optional(
     Type.Boolean({ description: "Exactly one column must be the unresolved-session fallback." }),
   ),
@@ -111,7 +109,7 @@ export function createWorkboardSessionsBoardTools(params: {
       name: "workboard_sessions_board_update",
       label: "Sessions Board Update",
       description:
-        "Edit a Sessions board's columns, match rules, or scope. columns replaces the full ordered list; preserve ids when renaming labels. All fields in a match rule must match, and the first matching column wins. Exactly one fallback is required. Card tools do not apply to Sessions boards.",
+        "Edit a Sessions board's columns, match rules, or scope. columns replaces the full ordered list; preserve ids when renaming labels. All fields in each rule must match; a match array accepts any rule, and the first matching column wins. Exactly one fallback is required. Card tools do not apply to Sessions boards.",
       parameters: strictObject({
         boardId: boardIdField,
         columns: Type.Optional(Type.Array(columnSchema, { minItems: 2, maxItems: 12 })),

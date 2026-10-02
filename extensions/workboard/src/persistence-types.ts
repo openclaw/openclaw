@@ -55,7 +55,7 @@ export type WorkboardSessionsBoardStore = {
   get(boardId: string): Promise<WorkboardSessionsBoard>;
   update(boardId: string, patch: unknown): Promise<WorkboardSessionsBoard>;
   listPlacements(boardId: string): Promise<WorkboardSessionPlacement[]>;
-  repairPlacements(): Promise<number>;
+  repairPlacements(): Promise<{ placements: number; boards: number }>;
   writePlacement(
     boardId: string,
     placement: WorkboardSessionPlacementWrite,

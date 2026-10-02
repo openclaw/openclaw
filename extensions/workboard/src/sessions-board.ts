@@ -386,8 +386,13 @@ export function createWorkboardSessionsBoardService(
       await state.owner?.stop();
       state.owner = undefined;
       const repaired = await params.store.repairSessionPlacements();
-      if (repaired) {
-        context.logger.info(`Sessions board removed ${repaired} non-operator placements.`);
+      if (repaired.placements) {
+        context.logger.info(
+          `Sessions board removed ${repaired.placements} non-operator placements.`,
+        );
+      }
+      if (repaired.boards) {
+        context.logger.info(`Sessions board updated default rules on ${repaired.boards} boards.`);
       }
       const owner = createOwner(params, context, () => activeState().owner === owner);
       owned = state.owner = owner;

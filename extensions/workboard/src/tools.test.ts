@@ -106,6 +106,25 @@ describe("workboard tools", () => {
       await expect(store.getSessionsBoard("sessions")).resolves.toMatchObject({
         sessions: { scope: { includeArchived: true } },
       });
+      const columns = [
+        {
+          id: "stuck",
+          label: "Stuck",
+          description: "Observer health is stuck, or the run failed.",
+          match: [{ health: ["stuck"] }, { run: ["failed"] }],
+        },
+        { id: "done", label: "Done", description: "Fallback.", fallback: true },
+      ];
+      expect(Value.Check(update.parameters, { columns })).toBe(true);
+      expect(
+        Value.Check(update.parameters, {
+          columns: [{ ...columns[0], match: [] }, columns[1]],
+        }),
+      ).toBe(false);
+      await update.execute("update-any-of", { columns });
+      await expect(store.getSessionsBoard("sessions")).resolves.toMatchObject({
+        sessions: { columns, scope: { includeArchived: true } },
+      });
       await store.upsertBoard({ id: "another", kind: "sessions" });
       for (const [tool, input] of [
         [read, {}],
