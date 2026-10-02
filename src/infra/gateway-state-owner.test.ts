@@ -23,7 +23,7 @@ import {
   withStateDatabaseColdAdmission,
 } from "./gateway-state-owner.js";
 import * as nodeSqlite from "./node-sqlite.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
 describe("Gateway state ownership", () => {
   it.skipIf(process.platform === "win32").each(["state", "explicit"] as const)(
@@ -492,8 +492,8 @@ describe("Gateway state ownership", () => {
         );
         const stateUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabase);
         const child = await runNodeScript(
-          [
-            ...resolveRuntimeWorkerArgv(stateUrl).slice(0, -1),
+          (workerArgv) => [
+            ...workerArgv(stateUrl).slice(0, -1),
             "--input-type=module",
             "--eval",
             `import { runOpenClawStateWriteTransaction, closeOpenClawStateDatabaseForTest } from ${JSON.stringify(stateUrl.href)};
