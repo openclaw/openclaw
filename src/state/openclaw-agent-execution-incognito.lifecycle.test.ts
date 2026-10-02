@@ -12,7 +12,6 @@ import type {
   IncognitoLifecycleEntry,
   IncognitoLifecycleOperations,
 } from "../config/sessions/session-incognito-lifecycle-contract.js";
-import { forkIncognitoSessionFromParent } from "../config/sessions/session-incognito-lifecycle.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   markPluginRegistryActive,
@@ -264,7 +263,7 @@ it("forks the actor's checked transcript and preserves child lineage after delet
   assert(fresh);
   const sql = observeHostDataSql();
   try {
-    const fork = await forkIncognitoSessionFromParent({
+    const fork = await captureOpenClawAgentDatabaseExecution.forkIncognitoSessionFromParent({
       source: actor,
       destination: actor,
       sourceAuthority: {
@@ -309,7 +308,7 @@ it("settles source preparation before a cross-agent fork and rechecks source lif
   const last = await append(parent, "cross-agent answer");
   assert(last.ok && last.value.append);
   const childSessionKey = "agent:loss:dashboard:incognito-cross-child";
-  const fork = await forkIncognitoSessionFromParent({
+  const fork = await captureOpenClawAgentDatabaseExecution.forkIncognitoSessionFromParent({
     source: actor,
     destination: lossActor,
     sourceAuthority: authority,
@@ -338,7 +337,7 @@ it("settles source preparation before a cross-agent fork and rechecks source lif
   });
   const revoked = await create("cross-revoked-parent");
   await expect(
-    forkIncognitoSessionFromParent({
+    captureOpenClawAgentDatabaseExecution.forkIncognitoSessionFromParent({
       source: actor,
       destination: lossActor,
       sourceAuthority: authority,
@@ -371,7 +370,7 @@ it.each(["source", "destination"] as const)(
       authorize: async () => {},
     };
     await expect(
-      forkIncognitoSessionFromParent({
+      captureOpenClawAgentDatabaseExecution.forkIncognitoSessionFromParent({
         source: actor,
         destination: actor,
         sourceAuthority: side === "source" ? asynchronous : authority,
