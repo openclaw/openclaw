@@ -1,5 +1,6 @@
 /** Prompt fixture for interactive Doctor service repair. */
 import { expect, it, vi } from "vitest";
+import { isBunRuntime } from "../daemon/runtime-binary.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { GatewayService } from "../daemon/service-types.js";
 import * as sqliteLibrary from "../infra/bun-sqlite-library.js";
@@ -11,15 +12,15 @@ export const doctorSqliteDiagnostic =
   "SQLite (doctor process): /fixture/libsqlite3.dylib (3.53.4, extension loading enabled)";
 
 export function mockDoctorRuntimeFacts(runExec: ReturnType<typeof vi.fn>) {
-  runExec.mockReset().mockResolvedValue({
+  runExec.mockReset().mockImplementation(async (executable: string) => ({
     stdout: JSON.stringify({
       nodeVersion: "26.8.1",
-      bunVersion: "1.4.2",
+      bunVersion: isBunRuntime(executable) ? "1.4.2" : null,
       sqliteVersion: "3.53.4",
       sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
     }),
     stderr: "",
-  });
+  }));
   vi.spyOn(runtimePaths, "resolvePreferredNodePath").mockResolvedValue("/opt/available/bin/node");
   vi.spyOn(sqliteLibrary, "ensureSqliteLibrarySelected").mockReturnValue({
     source: "env",
