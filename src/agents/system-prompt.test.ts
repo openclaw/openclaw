@@ -226,20 +226,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(withoutAutomations).not.toContain("asked a 3rd time");
   });
 
-  it("routes temporal recall only when listing and history are available", () => {
-    for (const toolNames of [
-      ["sessions_search"],
-      ["sessions_search", "sessions_history"],
-      ["sessions_search", "sessions_list"],
-      ["sessions_search", "sessions_list", "sessions_history"],
-    ]) {
-      const prompt = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", toolNames });
-      expect(prompt.includes("for a time range")).toBe(
-        toolNames.includes("sessions_list") && toolNames.includes("sessions_history"),
-      );
-    }
-  });
-
   it.each([
     { name: "screen only", toolNames: ["screen"] },
     {
