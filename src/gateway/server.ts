@@ -6,6 +6,7 @@
  */
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { GatewayServerOptions } from "./server-public.js";
+import { GatewayStartupCleanupError } from "./server-shutdown.js";
 
 export { truncateCloseReason } from "./server/close-reason.js";
 export type { GatewayServer, GatewayServerOptions } from "./server-public.js";
@@ -50,7 +51,9 @@ export async function startGatewayServer(
       },
     };
   } catch (error) {
-    await ownedLock?.release();
+    if (!(error instanceof GatewayStartupCleanupError)) {
+      await ownedLock?.release();
+    }
     throw error;
   }
 }

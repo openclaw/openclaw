@@ -943,7 +943,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(cliRun.toolsAllow).toEqual(["read", "cron"]);
   });
 
-  it("keeps a cron-tool default toolsAllow marker after a self-edit before CLI execution", async () => {
+  it("runs a self-edited automatic snapshot with the owner tools on CLI", async () => {
     mockCliAnnounceRun();
     const job = makeMessageToolPolicyJob(
       { mode: "announce", channel: "messagechat", to: "123" },
@@ -973,7 +973,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       {},
       "CLI run params",
     );
-    expect(cliRun.toolsAllow).toEqual(["read", "cron"]);
+    expect(cliRun.toolsAllow).toBeUndefined();
   });
 
   it("keeps automatic exec completion notifications when announce delivery is active", async () => {

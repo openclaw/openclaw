@@ -726,6 +726,7 @@ describe("runGatewayLoop", () => {
         expect(start).toHaveBeenCalledWith({
           startupStartedAt: expect.any(Number),
           requestHotReloadRecovery: requestGatewayRestartWithSignalAdmission,
+          gatewayStateOwner: expect.objectContaining({ release: expect.any(Function) }),
         });
         expect(runtime.exit).toHaveBeenCalledWith(0);
         expect(flushLogger).toHaveBeenCalledOnce();

@@ -1,6 +1,8 @@
 // Cron turns must hydrate runtime-only model thinking through the provider-scoped helper,
 // never through a full live catalog build.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ResolvedPublishedModelCatalogOwner } from "../../agents/prepared-model-catalog.types.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 
 const scopedThinkingCatalogMock = vi.fn(
   async (..._args: unknown[]): Promise<Array<Record<string, unknown>>> => [],
@@ -14,13 +16,18 @@ vi.mock("./run-model-selection.runtime.js", async (importOriginal) => {
   };
 });
 
-const owner = {
+const metadataSnapshot = createPluginMetadataSnapshotFixture();
+const owner: ResolvedPublishedModelCatalogOwner = {
+  catalogOwner: { agentId: "main", workspaceDir: "/tmp/cron-workspace" },
   agentId: "main",
   agentDir: "/tmp/cron-agent",
   workspaceDir: "/tmp/cron-workspace",
   config: {},
+  authModes: {},
+  authStore: { version: 1, profiles: {} },
+  metadataSnapshot,
   modelCatalog: { entries: [], routeVariants: [] },
-} as never;
+};
 
 describe("resolveCronThinkingSelection scoped hydration", () => {
   beforeEach(() => {
@@ -77,7 +84,12 @@ describe("resolveCronThinkingSelection scoped hydration", () => {
       }),
     );
     try {
-      const carried = { provider: "ollama", id: "minimax-m3:cloud", reasoning: true };
+      const carried = {
+        provider: "ollama",
+        id: "minimax-m3:cloud",
+        name: "MiniMax M3",
+        reasoning: true,
+      };
       const { resolveCronThinkingSelection } = await import("./model-selection.js");
       const pending = resolveCronThinkingSelection({
         cfg: {},
