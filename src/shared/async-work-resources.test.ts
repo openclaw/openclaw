@@ -5,32 +5,6 @@ import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "./async-work
 import { createDeferredCore } from "./deferred.js";
 
 describe("async work resources", () => {
-  it("returns the default logical result while its owner still joins cleanup", async () => {
-    const owner = new AsyncWorkScope();
-    const cleanupStarted = createDeferredCore();
-    const finishCleanup = createDeferredCore();
-    const release = vi.fn(async () => {
-      cleanupStarted.resolve();
-      await finishCleanup.promise;
-    });
-    const result = owner.run(() =>
-      runWithAsyncWorkResources(async (onAcquired) => {
-        onAcquired({ release });
-        return "accepted";
-      }),
-    );
-    try {
-      expect(await result).toBe("accepted");
-      await cleanupStarted.promise;
-      expect(owner.hasPendingWork).toBe(true);
-      expect(release).toHaveBeenCalledOnce();
-    } finally {
-      finishCleanup.resolve();
-      await owner.drain();
-    }
-    expect(release).toHaveBeenCalledOnce();
-  });
-
   it("releases opted-in idle resources exactly once before returning the result", async () => {
     const owner = new AsyncWorkScope();
     const cleanupStarted = createDeferredCore();
@@ -64,28 +38,6 @@ describe("async work resources", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("returns an opted-in result while accepted work still owns its resources", async () => {
-    const owner = new AsyncWorkScope();
-    const finishAdmission = createDeferredCore();
-    const release = vi.fn();
-    const result = owner.run(() =>
-      runWithAsyncWorkResources(async (onAcquired) => {
-        onAcquired({ release, releaseBeforeResultWhenIdle: true });
-        void trackAsyncWork(() => finishAdmission.promise);
-        return "enqueued";
-      }),
-    );
-    try {
-      expect(await result).toBe("enqueued");
-      expect(owner.hasPendingWork).toBe(true);
-      expect(release).not.toHaveBeenCalled();
-    } finally {
-      finishAdmission.resolve();
-      await owner.drain();
-    }
-    expect(release).toHaveBeenCalledOnce();
-  });
-
   it("rejects opted-in idle cleanup failures without attempting release twice", async () => {
     const owner = new AsyncWorkScope();
     const failure = new Error("resource cleanup failed");
@@ -105,8 +57,10 @@ describe("async work resources", () => {
 
   it("does not replace a default logical result when later cleanup fails", async () => {
     const owner = new AsyncWorkScope();
+    const cleanupStarted = createDeferredCore();
     const finishCleanup = createDeferredCore();
     const release = vi.fn(async () => {
+      cleanupStarted.resolve();
       await finishCleanup.promise;
       throw new Error("resource cleanup failed");
     });
@@ -118,6 +72,9 @@ describe("async work resources", () => {
     );
     try {
       expect(await result).toBe("accepted");
+      await cleanupStarted.promise;
+      expect(owner.hasPendingWork).toBe(true);
+      expect(release).toHaveBeenCalledOnce();
     } finally {
       finishCleanup.resolve();
       await owner.drain();
@@ -141,6 +98,8 @@ describe("async work resources", () => {
     );
     try {
       expect(await result).toBe("enqueued");
+      expect(owner.hasPendingWork).toBe(true);
+      expect(release).not.toHaveBeenCalled();
       expect(operationSignal?.aborted).toBe(false);
       const reason = new Error("requester cancelled");
       owner.beginClose(reason);

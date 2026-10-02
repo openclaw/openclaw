@@ -26,16 +26,17 @@ import {
   closeOwnedWorkerTask,
   dispatchOwnedWorkerRequest,
   joinOwnedWorkerTask,
-  joinOwnedWorkerTasks,
   prepareWorkerTaskInput,
   expireWorkerTasks,
   retainWorkerTask,
   type OwnedWorkerTaskSettlement,
 } from "./worker-task-pool-owned.js";
+import { liveWorkerTaskPools } from "./worker-task-pool-registry.js";
 import { startCloseWorkerPoolResources } from "./worker-task-pool-resources.js";
 import { createWorkerTaskPoolRetirement } from "./worker-task-pool-retirement.js";
 import {
   createWorkerTaskPoolWorker,
+  postWorkerTaskInput,
   prepareWorkerTaskResources,
 } from "./worker-task-pool-worker.js";
 import type {
@@ -153,6 +154,7 @@ export class WorkerTaskPoolCore<Input, Output> {
         ownerOptions.nativeSource ??
         captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
     }
+    liveWorkerTaskPools.register(this);
   }
 
   run(input: WorkerTaskInput<Input>, options: WorkerTaskOptions<Input>): Promise<Output> {
@@ -333,7 +335,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     // A failed owned stop must be observed before that task permits its next retry.
     const unowned = [...this.slots].filter((slot) => !ownedSlots.has(slot));
     const closures = [...owned, ...unowned.map((slot) => this.retirement.retire(slot))];
-    return (tasks.length ? joinOwnedWorkerTasks(closures) : Promise.all(closures)).then(() =>
+    return liveWorkerTaskPools.close(this, closures, () =>
       joinWorkerTaskPreparationCleanups(this.completion, this.retirement.joinArtifacts()),
     );
   }
@@ -459,18 +461,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       }
       const transferList = task.options.transferList?.(input);
       if (!task.done) {
-        const transferStartedAt = performance.now();
-        worker.postMessage(
-          {
-            input,
-            taskId: task.id,
-            interactive: Boolean(task.options.onRequest || task.options.onRequestSync),
-            nativeSections: slot.nativeSections.buffer,
-            sampleMemory: true,
-          },
-          transferList,
-        );
-        task.transferMs += performance.now() - transferStartedAt;
+        postWorkerTaskInput(worker, slot, task, input, transferList);
       }
     } catch (error) {
       this.fail(slot, new WorkerTaskError(String(error), "unavailable"));

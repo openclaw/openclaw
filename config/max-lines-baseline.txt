@@ -387,7 +387,6 @@ src/commands/doctor-memory-search.test.ts
 src/commands/doctor-session-sqlite.ts
 src/commands/doctor-state-integrity.ts
 src/commands/doctor-state-migrations.test.ts
-src/commands/doctor/cron/index.test.ts
 src/commands/doctor/repair-sequencing.test.ts
 src/commands/doctor/shared/codex-route-warnings.test.ts
 src/commands/doctor/shared/legacy-config-core-normalizers.ts
@@ -520,7 +519,6 @@ src/infra/outbound/delivery-queue.recovery.test.ts
 src/infra/outbound/outbound-send-service.test.ts
 src/infra/outbound/targets.test.ts
 src/infra/restart.ts
-src/infra/session-cost-usage.test.ts
 src/infra/state-migrations.doctor.ts
 src/infra/state-migrations.session-store.ts
 src/infra/state-migrations.test.ts

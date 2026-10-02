@@ -16,7 +16,6 @@ type CreateBrowserRuntimeStateParams = {
   resolved: BrowserServerState["resolved"];
   port: number;
   server?: Server | null;
-  onWarn: (message: string) => void;
 };
 
 /** Creates Browser server state and starts runtime-wide cleanup handlers. */

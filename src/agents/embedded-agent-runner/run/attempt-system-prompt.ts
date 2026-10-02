@@ -39,7 +39,14 @@ function renderAttemptPromptSection(section: "STABLE" | "DYNAMIC" | "PERMISSION"
  * diagnostics/cache boundaries, but submit an empty provider prompt.
  */
 export function buildAttemptSystemPrompt(params: BuildAttemptSystemPromptParams) {
-  const baseSystemPrompt = buildEmbeddedSystemPrompt(params.embeddedSystemPrompt);
+  let renderedSkillsPrompt = "";
+  const baseSystemPrompt = buildEmbeddedSystemPrompt({
+    ...params.embeddedSystemPrompt,
+    onRenderedSkillsPrompt: (skillsPrompt) => {
+      renderedSkillsPrompt = skillsPrompt;
+      params.embeddedSystemPrompt.onRenderedSkillsPrompt?.(skillsPrompt);
+    },
+  });
   const transformedSystemPrompt = params.isRawModelRun
     ? ""
     : params.transformProviderSystemPrompt({
@@ -70,6 +77,7 @@ export function buildAttemptSystemPrompt(params: BuildAttemptSystemPromptParams)
   return {
     baseSystemPrompt,
     systemPrompt,
+    skillsPrompt: params.isRawModelRun ? "" : renderedSkillsPrompt,
     refreshSystemPrompt: (currentSystemPrompt: string, permissionNotice?: string) => {
       if (params.isRawModelRun) {
         return currentSystemPrompt;

@@ -6,6 +6,7 @@ import {
   mockGatewayMethods,
   type SubagentRegistryHarness,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 
@@ -16,11 +17,7 @@ export function registerYieldedParentCleanupCase({
   getRegistry: () => SubagentRegistryHarness;
   mocks: Pick<
     ReturnType<typeof createSubagentRegistryMockState>,
-    | "entries"
-    | "callGateway"
-    | "persistSubagentRunsToDiskOrThrow"
-    | "runSubagentAnnounceFlow"
-    | "runSubagentEnded"
+    "entries" | "callGateway" | "runSubagentAnnounceFlow" | "runSubagentEnded"
   >;
 }) {
   it("keeps a paused parent out of ordinary terminal cleanup when descendants settle", async () => {
@@ -39,7 +36,7 @@ export function registerYieldedParentCleanupCase({
       "agent.wait": { status: "ok", startedAt: Date.now() - 1, endedAt: Date.now() },
     });
 
-    mod.addSubagentRunForTests({
+    await mod.addSubagentRunForTests({
       runId: "run-yielded-parent",
       childSessionKey: "agent:main:subagent:parent",
       task: "yielded parent waiting on descendants",
@@ -54,13 +51,12 @@ export function registerYieldedParentCleanupCase({
 
     const parent = mod.getSubagentRunByRunId("run-yielded-parent");
     const terminalCommitted = createDeferred();
-    const persist = mocks.persistSubagentRunsToDiskOrThrow.getMockImplementation();
-    mocks.persistSubagentRunsToDiskOrThrow.mockImplementation((...args) => {
-      const result = persist?.(...args);
-      if (args[0].get("run-yielded-child-finished")?.execution.status === "terminal") {
+    const stopObserving = subscribeSubagentRunChanges("projection", () => {
+      if (
+        mod.getSubagentRunByRunId("run-yielded-child-finished")?.execution.status === "terminal"
+      ) {
         terminalCommitted.resolve();
       }
-      return result;
     });
     const join = observeRootWork();
     try {
@@ -73,6 +69,7 @@ export function registerYieldedParentCleanupCase({
       await terminalCommitted.promise;
     } finally {
       await join();
+      stopObserving();
     }
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
     expectRecordFields(

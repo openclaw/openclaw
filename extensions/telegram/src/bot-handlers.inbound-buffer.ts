@@ -40,6 +40,11 @@ import type { TelegramContext } from "./bot/types.js";
 
 type TelegramDebounceLane = "default" | "forward";
 
+// One multi-message forward reaches the bot as one update per message, often in later
+// getUpdates responses: live Test Server bursts (2026-10-01) arrived 208-790 ms apart while
+// the Gateway re-polled within 40 ms, so the quiet window must outlast one late delivery.
+const FORWARD_BURST_QUIET_MS = 1_000;
+
 export type TelegramInboundMediaHydration =
   | { kind: "ready"; allMedia: TelegramMediaRef[] }
   | { kind: "retry"; error: unknown };
@@ -108,7 +113,7 @@ export function createTelegramInboundBuffers({
     pending?: readonly TelegramDebounceEntry[],
   ): number => {
     if (entry.debounceLane === "forward") {
-      return 80;
+      return FORWARD_BURST_QUIET_MS;
     }
     const debounceMs = resolveDebounceMs();
     // Explicit zero disables ordinary bursts, not automatic long-paste assembly.

@@ -23,6 +23,38 @@ import {
 describe("MCP App standalone host", () => {
   beforeEach(resetStandaloneMcpAppTestState);
 
+  it("negotiates fullscreen and publishes display-mode changes through the serialized host", async () => {
+    const host = await createSerializedHost();
+    host.emit({
+      jsonrpc: "2.0",
+      id: "fullscreen",
+      method: "ui/request-display-mode",
+      params: { mode: "fullscreen" },
+    });
+    expect(host.frame.style.height).toBe("900px");
+    expect(host.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "ui/notifications/host-context-changed",
+        params: { displayMode: "fullscreen" },
+      }),
+      "http://127.0.0.1:18790",
+    );
+    expect(host.postMessage).toHaveBeenCalledWith(
+      { jsonrpc: "2.0", id: "fullscreen", result: { mode: "fullscreen" } },
+      "http://127.0.0.1:18790",
+    );
+    host.emit({
+      jsonrpc: "2.0",
+      id: "pip",
+      method: "ui/request-display-mode",
+      params: { mode: "pip" },
+    });
+    expect(host.postMessage).toHaveBeenCalledWith(
+      { jsonrpc: "2.0", id: "pip", result: { mode: "fullscreen" } },
+      "http://127.0.0.1:18790",
+    );
+  });
+
   it("mints an opaque ticket bound to the session, runtime, view, and lease", () => {
     const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
     expect(issued.ticket).toMatch(/^v1\.[A-Za-z0-9_-]+\.\d+\.[A-Za-z0-9_-]+$/u);
@@ -54,6 +86,18 @@ describe("MCP App standalone host", () => {
     ).toBeUndefined();
     expect(
       verifyMcpAppStandaloneTicket(issued.ticket, { nowMs: issued.expiresAtMs + 1, secret }),
+    ).toBeUndefined();
+  });
+
+  it("does not downgrade requester-bound views into bearer-only standalone authority", () => {
+    expect(
+      createMcpAppStandaloneTicket({
+        sessionKey: "agent:main:main",
+        view: { ...view, requesterId: "alice" },
+        toolOperationsAuthorized: true,
+        nowMs,
+        secret,
+      }),
     ).toBeUndefined();
   });
 

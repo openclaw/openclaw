@@ -25,7 +25,6 @@ import {
   TASK_SUGGESTION_TOOL_NAME_MIGRATION,
 } from "../shared/legacy-tool-name-migration.js";
 import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
-import { resolveLegacyCronMigrationId } from "./legacy-store-migration.js";
 import {
   collectLegacyOpenAICodexCronModelRoutes,
   copyTopLevelAgentTurnFields,
@@ -134,8 +133,7 @@ function normalizeStoredCronJobIdentity(raw: Record<string, unknown>): {
   const hadJobIdKey = "jobId" in raw;
   const id = normalizeOptionalStringifiedId(raw.id);
   const legacyJobId = normalizeOptionalStringifiedId(raw.jobId);
-  const canonicalId =
-    id ?? legacyJobId ?? resolveLegacyCronMigrationId(raw) ?? `cron-${randomUUID()}`;
+  const canonicalId = id ?? legacyJobId ?? `cron-${randomUUID()}`;
   const nonStringIdIssue = hadIdKey && raw.id != null && typeof raw.id !== "string";
   const missingIdIssue = !id && !legacyJobId;
   let mutated = false;

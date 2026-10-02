@@ -12,6 +12,7 @@ import {
 } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { loadSubagentRunsForControllerFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { getSubagentRunRuntimeKey } from "../agents/subagents/registry/subagent-run-generation.js";
 import {
   activateSwarmRun,
   isSwarmRunActive,
@@ -57,7 +58,7 @@ installGatewayTestHooks({
       async () => gateway?.close(),
       async () => {
         await settleSubagentRegistryPersistenceWork();
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         schedulerTesting.reset();
       },
     );
@@ -238,7 +239,9 @@ for (const { name, fault, replaceParent } of [
           );
         }
         for (const runId of queued) {
-          expect(isSwarmRunWaitingForCapacity(runId, subagentRuns.get(runId)!)).toBe(true);
+          expect(
+            isSwarmRunWaitingForCapacity(runId, getSubagentRunRuntimeKey(subagentRuns.get(runId)!)),
+          ).toBe(true);
         }
         const activeAdmissionCount = getActiveSessionWorkAdmissionCount();
         expect(activeAdmissionCount).toBeGreaterThanOrEqual(running.length);
@@ -399,7 +402,9 @@ for (const { name, fault, replaceParent } of [
           }
           if (queued.includes(runId)) {
             expect(run.execution.startedAt).toBeUndefined();
-            expect(ownsSwarmRunReservation(runId, subagentRuns.get(runId)!)).toBe(false);
+            expect(
+              ownsSwarmRunReservation(runId, getSubagentRunRuntimeKey(subagentRuns.get(runId)!)),
+            ).toBe(false);
           }
         }
         expect(start).not.toHaveBeenCalled();

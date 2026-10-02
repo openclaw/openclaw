@@ -22,7 +22,6 @@ struct CommandCenterTab: View {
         let title: String
         let detail: String
         let state: String
-        let trailing: String
         let color: Color
         let isUnread: Bool
         let isPinned: Bool
@@ -394,12 +393,12 @@ struct CommandCenterTab: View {
                             .buttonStyle(.plain)
                             .commandSessionActions(
                                 session: session,
-                                mainSessionKey: self.appModel.defaultChatSessionKey,
+                                mainSessionKey: self.appModel.mainSessionKey,
                                 categories: self.sessionCategories,
                                 isEnabled: self.sessionControlsAvailable,
                                 canArchive: ChatSessionSidebarModel.canArchiveSession(
                                     session,
-                                    mainSessionKey: self.appModel.defaultChatSessionKey),
+                                    mainSessionKey: self.appModel.mainSessionKey),
                                 actions: .gateway(
                                     session: session,
                                     performMutation: self.performSessionMutation,
@@ -473,13 +472,12 @@ struct CommandCenterTab: View {
     }
 
     private var defaultChatWorkItem: WorkItem {
-        let isOpen = self.appModel.chatSessionKey == self.appModel.defaultChatSessionKey
+        let isOpen = self.appModel.chatSessionKey == self.appModel.mainSessionKey
         return WorkItem(
             icon: isOpen ? "bubble.left.and.text.bubble.right.fill" : "bubble.left.fill",
             title: self.appModel.activeAgentName,
             detail: self.defaultChatActivityText,
             state: isOpen ? "open" : "default",
-            trailing: "chat",
             color: isOpen ? OpenClawBrand.accent : OpenClawBrand.ok,
             isUnread: self.effectiveDefaultChatSessionEntry?.unread == true,
             isPinned: self.effectiveDefaultChatSessionEntry?.pinned == true,
@@ -516,7 +514,7 @@ struct CommandCenterTab: View {
         let mainKey = ChatSessionSidebarModel.selectedSessionKey(
             sessions: sessions,
             currentSessionKey: "main",
-            mainSessionKey: self.appModel.defaultChatSessionKey,
+            mainSessionKey: self.appModel.mainSessionKey,
             activeAgentID: self.appModel.chatAgentId,
             sessionRoutingContract: self.appModel.chatSessionRoutingContract)
         return sessions.first { $0.key == mainKey }
@@ -525,7 +523,7 @@ struct CommandCenterTab: View {
     private var effectiveRecentChatSessions: [OpenClawChatSessionEntry] {
         self.dashboardModel.sessions.filter {
             SessionStatusScope.active.includes($0, at: self.dashboardModel.now) &&
-                Self.isRecentChatSession($0.key, defaultSessionKey: self.appModel.defaultChatSessionKey)
+                Self.isRecentChatSession($0.key, defaultSessionKey: self.appModel.mainSessionKey)
         }
     }
 
@@ -580,7 +578,6 @@ struct CommandCenterTab: View {
             title: Self.sessionTitle(session),
             detail: Self.sessionDetail(session, now: now),
             state: isCurrent ? "open" : "recent",
-            trailing: "chat",
             color: isCurrent ? OpenClawBrand.accent : OpenClawBrand.ok,
             isUnread: session.unread == true,
             isPinned: session.pinned == true,
@@ -970,7 +967,7 @@ struct CommandSessionsScreen: View {
         self.sessions
             .filter { CommandCenterTab.isRecentChatSession(
                 $0.key,
-                defaultSessionKey: self.appModel.defaultChatSessionKey) }
+                defaultSessionKey: self.appModel.mainSessionKey) }
             // A stale list must still obey the selected scope while its replacement loads.
             .filter { self.statusScope.includes($0, at: self.now) }
     }
@@ -1164,13 +1161,13 @@ struct CommandSessionsScreen: View {
         .buttonStyle(.plain)
         .commandSessionActions(
             session: session,
-            mainSessionKey: self.appModel.defaultChatSessionKey,
+            mainSessionKey: self.appModel.mainSessionKey,
             categories: self.sessionCategories,
             isArchived: session.archived == true,
             isEnabled: self.sessionControlsAvailable,
             canArchive: ChatSessionSidebarModel.canArchiveSession(
                 session,
-                mainSessionKey: self.appModel.defaultChatSessionKey),
+                mainSessionKey: self.appModel.mainSessionKey),
             actions: .gateway(
                 session: session,
                 archivesSession: { self.statusScope != .archived && session.archived != true },

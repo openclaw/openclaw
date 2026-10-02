@@ -13,6 +13,7 @@ import {
   disconnectGatewayClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
+import { createCanonicalAgentConfigFixture } from "../../../../src/test-utils/config-roster.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { stopChildProcess } from "../../../helpers/stop-child-process.js";
 
@@ -130,7 +131,7 @@ describe("node workspace document access", () => {
       });
       const nodeId = nodeIdentity.deviceId;
       const attachmentFixture = await writeAttachmentFixture(state.root);
-      const config: OpenClawConfig = {
+      const config: OpenClawConfig = createCanonicalAgentConfigFixture({
         gateway: {
           mode: "local",
           bind: "loopback",
@@ -176,7 +177,7 @@ describe("node workspace document access", () => {
             },
           },
         },
-      };
+      }).config;
       const gatewayOwner = createQaGatewayChild();
       let owner: GatewayClient | undefined;
       let reader: GatewayClient | undefined;

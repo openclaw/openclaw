@@ -52,6 +52,8 @@ import {
   resetUpdateStatusState,
   setUpdateAvailableCache,
   setUpdateScheduleCache,
+  withoutUpdateCampaign,
+  withoutUpdateTarget,
 } from "./update-status-state.js";
 
 type UpdateCheckState = {
@@ -110,16 +112,6 @@ function readState(): UpdateCheckState {
 
 function writeState(state: UpdateCheckState): void {
   writeConfigMachineState(UPDATE_CHECK_STATE_KEY, state);
-}
-
-function withoutCampaign(schedule: UpdateScheduleState): UpdateScheduleState {
-  const { campaign: _campaign, ...rest } = schedule;
-  return rest;
-}
-
-function withoutTarget(schedule: UpdateScheduleState): UpdateScheduleState {
-  const { target: _target, campaign: _campaign, ...rest } = schedule;
-  return rest;
 }
 
 function isPersistedAvailabilityForChannel(params: {
@@ -239,7 +231,7 @@ function clearAutoState(nextState: UpdateCheckState): void {
   delete nextState.autoFirstSeenAt;
 }
 
-/** Caches only the fast local install probe; remote Git refresh remains post-ready. */
+/** Shares local install discovery within the Gateway lifecycle. */
 export function initializeGatewayUpdateStatus(): ReturnType<typeof resolveStartupInstallStatus> {
   return currentUpdateCheckLifecycle().initialize();
 }
@@ -312,12 +304,15 @@ async function runGatewayUpdateCheckOwned(
     const channel = configChannel ?? schedule?.channel ?? DEFAULT_PACKAGE_CHANNEL;
     const currentSchedule =
       schedule?.channel === channel ? schedule : { channel, autoEnabled: false };
-    setSchedule(withoutTarget({ ...currentSchedule, autoEnabled: false }));
+    setSchedule(withoutUpdateTarget({ ...currentSchedule, autoEnabled: false }));
     return;
   }
   const autoDisabledByExternalSupervisor = isGatewayExternallySupervised();
   const initializedInstallStatus = await lifecycle.initialize();
   params.signal?.throwIfAborted();
+  if (initializedInstallStatus.status.error) {
+    throw new Error(initializedInstallStatus.status.error.message);
+  }
   const potentialChannel = resolveEffectiveUpdateChannel({
     configChannel,
     currentVersion: VERSION,
@@ -374,7 +369,7 @@ async function runGatewayUpdateCheckOwned(
   const initialSchedule: UpdateScheduleState = priorSchedule
     ? { ...priorSchedule, autoEnabled }
     : { channel: configuredChannel, autoEnabled };
-  setSchedule(autoDesired ? initialSchedule : withoutCampaign(initialSchedule));
+  setSchedule(autoDesired ? initialSchedule : withoutUpdateCampaign(initialSchedule));
   if (!autoDesired) {
     updateCampaign.clear();
   }
@@ -409,7 +404,7 @@ async function runGatewayUpdateCheckOwned(
         ...(target === undefined ? {} : { target }),
       });
     }
-    setSchedule(campaign ? { ...current, campaign } : withoutCampaign(current));
+    setSchedule(campaign ? { ...current, campaign } : withoutUpdateCampaign(current));
   };
 
   if (configuredChannel === "extended-stable" || configuredChannel === "dev") {
@@ -427,7 +422,7 @@ async function runGatewayUpdateCheckOwned(
     if (installStatus.status.installKind !== "package") {
       updateCampaign.clear();
       setAvailable(null);
-      setSchedule(withoutTarget(getUpdateSchedule() ?? initialSchedule));
+      setSchedule(withoutUpdateTarget(getUpdateSchedule() ?? initialSchedule));
       return;
     }
   }
@@ -533,7 +528,7 @@ async function runGatewayUpdateCheckOwned(
     ) {
       updateCampaign.clear();
       setAvailable(null);
-      setSchedule(withoutTarget(getUpdateSchedule() ?? initialSchedule));
+      setSchedule(withoutUpdateTarget(getUpdateSchedule() ?? initialSchedule));
       writeState(nextState);
       return;
     }
@@ -605,7 +600,7 @@ async function runGatewayUpdateCheckOwned(
     clearAutoState(nextState);
     setAvailable(null);
     updateCampaign.clear();
-    setSchedule(withoutTarget(getUpdateSchedule() ?? initialSchedule));
+    setSchedule(withoutUpdateTarget(getUpdateSchedule() ?? initialSchedule));
     writeState(nextState);
     return;
   }
@@ -625,7 +620,7 @@ async function runGatewayUpdateCheckOwned(
       clearAvailabilityState(nextState);
       setAvailable(null);
       updateCampaign.clear();
-      setSchedule(withoutTarget(getUpdateSchedule() ?? initialSchedule));
+      setSchedule(withoutUpdateTarget(getUpdateSchedule() ?? initialSchedule));
     }
     writeState(nextState);
     return;
@@ -711,7 +706,7 @@ async function runGatewayUpdateCheckOwned(
     }
     setAvailable(null);
     updateCampaign.clear();
-    setSchedule(withoutTarget(getUpdateSchedule() ?? initialSchedule));
+    setSchedule(withoutUpdateTarget(getUpdateSchedule() ?? initialSchedule));
   }
 
   writeState(nextState);

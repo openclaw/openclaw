@@ -91,7 +91,6 @@ describe("Security: DM Allowlist", () => {
       const authorized = await resolveTlonCommandAuthorizationWithIngress({
         senderShip: "~zod",
         ownerShip: "zod",
-        useAccessGroups: true,
       });
       expect(authorized.commandAccess.requested).toBe(true);
       expect(authorized.commandAccess.authorized).toBe(true);
@@ -101,7 +100,6 @@ describe("Security: DM Allowlist", () => {
       const unauthorized = await resolveTlonCommandAuthorizationWithIngress({
         senderShip: "~nec",
         ownerShip: "~zod",
-        useAccessGroups: true,
       });
       expect(unauthorized.commandAccess.requested).toBe(true);
       expect(unauthorized.commandAccess.authorized).toBe(false);

@@ -3,6 +3,7 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { redactSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { signalProcessTree } from "../process/kill-tree.js";
+import { resolveRuntimeArgs } from "./runtime-worker-url.js";
 import { UPDATE_CANARY_PROGRESS_PREFIX } from "./update-candidate-canary-progress.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
@@ -20,7 +21,8 @@ export function launchCanary(params: {
 }) {
   const { entry, args, env, capture } = params;
   params.assertCurrent?.();
-  const child = spawn(params.nodeRunner ?? process.execPath, [entry, ...args], {
+  const runtime = params.nodeRunner ?? process.execPath;
+  const child = spawn(runtime, [...resolveRuntimeArgs(runtime), entry, ...args], {
     cwd: params.root,
     env,
     detached: process.platform !== "win32",

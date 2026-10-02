@@ -134,7 +134,7 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
   <Accordion title="Fast mode">
     OpenClaw exposes a shared fast-mode toggle for `openai/*`:
 
-    - **Chat/UI:** `/fast status|auto|on|off`
+    - **Chat/UI:** `/fast status|auto|on|off|ultrafast|default`
     - **Config:** `agents.defaults.models["<provider>/<model>"].params.fastMode`
 
     Valid `params.fastMode` / `params.fast_mode` values and valid cutoff keys
@@ -144,7 +144,10 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
 
     When enabled on the embedded runtime, OpenClaw maps fast mode to OpenAI API
     Fast mode (formerly Priority processing) and sends
-    `service_tier = "priority"`. Fast mode does not rewrite `reasoning` or
+    `service_tier = "priority"`. Explicit `/fast ultrafast` or
+    `params.fastMode: "ultrafast"` sends `service_tier = "ultrafast"` instead.
+    The selected account and model must support that tier; the provider can
+    reject it or return a different effective tier. Fast mode does not rewrite `reasoning` or
     `text.verbosity`. `fastMode: "auto"` starts new model calls fast until the
     auto cutoff, then starts later retry, fallback, tool-result, or continuation
     calls without fast mode. The cutoff defaults to 60 seconds; set
@@ -206,7 +209,8 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     }
     ```
 
-    Supported values: `auto`, `default`, `flex`, `priority`.
+    Supported values: `auto`, `default`, `flex`, `priority`, `ultrafast`.
+    Availability depends on the selected provider route, account, and model.
 
     <Warning>
     `params.serviceTier` is an authored embedded-provider setting, not native

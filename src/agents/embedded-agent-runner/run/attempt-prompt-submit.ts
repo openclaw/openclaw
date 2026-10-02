@@ -11,7 +11,10 @@ import {
 import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { ackPendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
-import { recordAggregateTruncation } from "../prompt-cache-observability.js";
+import {
+  declarePromptHistoryRewrite,
+  recordAggregateTruncation,
+} from "../prompt-cache-observability.js";
 import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
 import {
   type getEmbeddedSessionPromptState,
@@ -165,6 +168,9 @@ export async function submitEmbeddedAttemptPrompt(input: {
           input.toolResultPromptProjectionState,
         );
         const providerMessages = providerPromptHistoryTruncation.messages;
+        if (providerPromptHistoryTruncation.truncatedCount > 0) {
+          declarePromptHistoryRewrite({ ...attempt, reason: "pruning" });
+        }
         if (providerPromptHistoryTruncation.aggregateTruncatedCount > 0) {
           recordAggregateTruncation(attempt);
         }
@@ -240,7 +246,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
       cleanupRuntimeContextMessage();
     }
     if (input.leasedSteering) {
-      ackPendingAgentSteeringItems(input.leasedSteering);
+      await ackPendingAgentSteeringItems(input.leasedSteering);
       input.onSteeringAcknowledged();
     }
   } finally {
@@ -307,17 +313,19 @@ export async function handleEmbeddedAttemptPromptError(input: {
   error: unknown;
   handleMidTurnPrecheckRequest: (request: MidTurnPrecheckRequest) => Promise<void>;
   markYieldAborted: () => void;
-  releaseLeasedSteering: (error?: unknown) => void;
+  releaseLeasedSteering: (error?: unknown) => void | Promise<void>;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
   yieldAbortSettled: Promise<void> | null;
   yieldDetected: boolean;
   yieldMessage: string | null;
 }): Promise<EmbeddedAttemptPromptErrorOutcome> {
-  input.releaseLeasedSteering(input.error);
   const yieldAborted = input.yieldDetected && isSessionsYieldAbortError(input.error);
   if (yieldAborted) {
     // Publish terminal state before fallible recovery so outer cleanup still recognizes the yield.
     input.markYieldAborted();
+  }
+  await input.releaseLeasedSteering(input.error);
+  if (yieldAborted) {
     await waitForEmbeddedAbortSettle({
       promise: input.yieldAbortSettled,
       runId: input.attempt.runId,

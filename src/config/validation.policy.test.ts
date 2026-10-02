@@ -249,7 +249,6 @@ describe("ambient heartbeat ownership", () => {
         defaults: { heartbeat: { every: "30m" } },
       },
     },
-    { name: "legacy default marker", agents: { entries: { main: { default: true }, ops: {} } } },
   ])("does not warn for a $name", ({ agents }) => {
     expect(warnings(agents)).toEqual([]);
   });

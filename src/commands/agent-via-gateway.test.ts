@@ -15,7 +15,6 @@ import {
 import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { formatCliFailureLines, formatCliJsonFailure } from "../cli/failure-output.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import { loggingState } from "../logging/state.js";
@@ -683,21 +682,9 @@ describe("agentCliCommand", () => {
     );
   });
 
-  it("dispatches a retained-owner global session through --local", async () => {
+  it("dispatches a persisted-owner global session through --local", async () => {
     await withTempStore(
       async () => {
-        const cfg = retainLegacyDefaultAgentId(
-          {
-            ...loadRuntimeConfig(),
-            agents: {
-              ...loadRuntimeConfig().agents,
-              ownership: "explicit",
-              list: [{ id: "ops" }, { id: "research" }],
-            },
-          },
-          "ops",
-        );
-        loadRuntimeConfig.mockReturnValue(cfg);
         mockLocalAgentReply();
 
         await agentCliCommand({ message: "hi", local: true, sessionKey: "global" }, runtime);
@@ -709,7 +696,11 @@ describe("agentCliCommand", () => {
         );
       },
       {
-        agents: { list: [{ id: "ops" }, { id: "research" }] },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
         session: { scope: "global" },
       },
     );
@@ -719,19 +710,6 @@ describe("agentCliCommand", () => {
     await withTempStore(
       async () => {
         vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://gateway.example.test");
-        const cfg = retainLegacyDefaultAgentId(
-          {
-            ...loadRuntimeConfig(),
-            gateway: { mode: "remote" },
-            agents: {
-              ...loadRuntimeConfig().agents,
-              ownership: "explicit",
-              list: [{ id: "ops" }, { id: "research" }],
-            },
-          },
-          "ops",
-        );
-        loadRuntimeConfig.mockReturnValue(cfg);
         mockLocalAgentReply();
 
         await agentCliCommand({ message: "hi", local: true }, runtime);
@@ -746,7 +724,12 @@ describe("agentCliCommand", () => {
         );
       },
       {
-        agents: { list: [{ id: "ops" }, { id: "research" }] },
+        gateway: { mode: "remote" },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
         session: { scope: "global" },
       },
     );

@@ -548,6 +548,25 @@ async function runStateLeaseOwnerInScope<T>(
           signal: operationSignal,
           renew: renewOperation,
           assertOwned: assertOperationOwned,
+          ...(workerHeartbeat
+            ? {
+                assertOwnedAsync: async () => {
+                  assertActive();
+                  const nativeHeartbeat = workerHeartbeat;
+                  if (!nativeHeartbeat) {
+                    abortLost();
+                    throw leaseLost.signal.reason;
+                  }
+                  const expiresAt = await nativeHeartbeat.verify();
+                  assertActive();
+                  nativeHeartbeat.assertRunning();
+                  if (expiresAt <= Date.now()) {
+                    abortLost();
+                    assertActive();
+                  }
+                },
+              }
+            : {}),
           assertOwnedInTransaction: assertOperationOwned,
         };
         workerOperations = createOpenClawStateLeaseWorkerOwner({

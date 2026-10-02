@@ -53,6 +53,12 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readConversations: reader(
+      "conversation-rows",
+      "conversations",
+      (input) => ({ kind: "conversation-rows", ...input }),
+      (value) => value.rows,
+    ),
     prewarm: reader(
       "prewarm",
       "prewarm acknowledgement",
@@ -64,6 +70,45 @@ export function createSessionHistoryWorkerReaders(
       "pending archives",
       (input) => ({ kind: "session-pending-archives", ...input }),
       (value) => value.pending,
+    ),
+    readLifecycleArtifactPlan: reader(
+      "lifecycle-artifact-plan",
+      "lifecycle artifact plan",
+      (input) => ({ kind: "lifecycle-artifact-plan", ...input }),
+      (value) => value,
+    ),
+    readMemorySessionTargets: reader(
+      "memory-session-targets",
+      "memory session targets",
+      (input) => ({
+        kind: "memory-session-targets",
+        ...input,
+        params: {
+          ...input.params,
+          env: captureSessionTranscriptStorageEnvironment(input.params.env),
+        },
+      }),
+      (value) => value.targets,
+    ),
+    readArchiveInventory: reader(
+      "session-archive-inventory",
+      "archive inventory",
+      (input) => ({
+        kind: "session-archive-inventory",
+        ...input,
+        env: captureSessionTranscriptStorageEnvironment(input.env ?? process.env),
+      }),
+      (value) => value.archives,
+    ),
+    readCorpusInventory: reader(
+      "session-corpus-inventory",
+      "corpus inventory",
+      (input) => ({
+        kind: "session-corpus-inventory",
+        ...input,
+        scope: { ...input.scope, env: captureSessionTranscriptStorageEnvironment(input.scope.env) },
+      }),
+      (value) => value.entries,
     ),
     readArchivePresence: reader(
       "session-archive-presence",
@@ -168,6 +213,7 @@ export function createSessionHistoryWorkerReaders(
             value.kind !== "conversation-binding" &&
             value.kind !== "transcript-binding" &&
             value.kind !== "artifacts" &&
+            value.kind !== "summary" &&
             value.kind !== "message-page" &&
             value.kind !== "around-id" &&
             value.kind !== "source-messages" &&
@@ -287,6 +333,12 @@ export function createSessionHistoryWorkerReaders(
           return value;
         },
       ),
+    readSuggestions: reader(
+      "session-suggestions",
+      "suggestions",
+      (input) => ({ kind: "session-suggestions", ...input }),
+      (value) => value.suggestions,
+    ),
     readExactEntries: async (input, signal) => {
       const captured = { ...input, env: captureSessionTranscriptStorageEnvironment(input.env) };
       return runRequest(

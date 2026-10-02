@@ -24,8 +24,8 @@ import {
   SessionLabelOwnerIndex,
 } from "./session-entry-selection.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
+export { cleanupSessionLifecycleArtifactsCore } from "./session-accessor.sqlite-artifact-cleanup.js";
 export {
-  cleanupSessionLifecycleArtifactsCore,
   deleteSessionEntryLifecycle,
   rollbackAgentHarnessSessionEntryLifecycle,
   rollbackPluginOwnedSessionEntryLifecycle,

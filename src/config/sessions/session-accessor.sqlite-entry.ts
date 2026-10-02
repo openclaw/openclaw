@@ -28,7 +28,6 @@ import type {
   SessionAccessScope,
   SessionEntryPatchContext,
   SessionEntryPatchOptions,
-  SessionEntryStatus,
   SessionEntrySummary,
   SessionTranscriptInstance,
   SessionTranscriptInstanceListOptions,
@@ -65,15 +64,13 @@ import {
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
-import {
-  hasSessionEntriesByStatus,
-  readSessionEntriesByStatus,
-  selectSessionEntryRows,
-} from "./session-accessor.sqlite-status.js";
+import { selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
 import type { SessionEntryListScope, SessionEntryReadScope } from "./session-accessor.types.js";
 import {
   assertCanonicalSessionKeyWrite,
   assertCanonicalSqliteSessionKeysCurrent,
+  readWithCanonicalSessionReaderContinuation,
+  type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
@@ -223,59 +220,32 @@ export function withSessionEntryReadOnlyScope<T>(
   }
 }
 
-/**
- * Proves whether a durable store has a row in one of the requested lifecycle states.
- * Unknown existing schemas stay eligible so the writable owner can surface or repair them.
- */
-export function hasSessionEntriesByStatusReadOnly(
-  scope: Partial<Omit<SessionAccessScope, "sessionKey">>,
-  statuses: readonly SessionEntryStatus[],
-): boolean {
-  const selectedStatuses = [...new Set(statuses)];
-  if (selectedStatuses.length === 0) {
-    return false;
-  }
-  const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => hasSessionEntriesByStatus(database, selectedStatuses),
-    toDatabaseOptions(resolved),
-  );
-  return result.found ? result.value : result.reason !== "database-missing";
-}
-
-/** Lists only entries whose normalized session row has one of the requested statuses. */
-export function listSessionEntriesByStatus(
-  scope: Partial<Omit<SessionAccessScope, "sessionKey">>,
-  statuses: readonly SessionEntryStatus[],
-): SessionEntrySummary[] {
-  const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  return readSessionEntriesByStatus(database, statuses).filter(
-    ({ sessionKey }) => !isInternalSessionEffectsKey(sessionKey),
-  );
-}
-
 /** Lists transcript-bearing SQLite sessions, including retained rows from session-id rotation. */
 export function listSessionTranscriptInstances(
   scope: Omit<SessionEntryListScope, "sessionKeys"> = {},
   options: SessionTranscriptInstanceListOptions = {},
+  continuation?: CanonicalSessionReaderContinuation,
 ): SessionTranscriptInstance[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
-  const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    const currentEntries =
-      options.sessionId !== undefined
-        ? {
-            get: (sessionKey: string) =>
-              readExactSessionEntryRowValidated(database, sessionKey, scope.projection)?.entry,
-          }
-        : new Map(
-            listSqliteSessionEntriesFromDatabase(database, resolved, {
-              ...scope,
-              clone: false,
-            }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-          );
-    return listTranscriptInstancesFromDatabase({ currentEntries, database, options });
-  }, toDatabaseOptions(resolved));
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) =>
+      readWithCanonicalSessionReaderContinuation(database, continuation, () => {
+        const currentEntries =
+          options.sessionId !== undefined
+            ? {
+                get: (sessionKey: string) =>
+                  readExactSessionEntryRowValidated(database, sessionKey, scope.projection)?.entry,
+              }
+            : new Map(
+                listSqliteSessionEntriesFromDatabase(database, resolved, {
+                  ...scope,
+                  clone: false,
+                }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+              );
+        return listTranscriptInstancesFromDatabase({ currentEntries, database, options });
+      }),
+    toDatabaseOptions(resolved),
+  );
   return result.found ? result.value : [];
 }
 

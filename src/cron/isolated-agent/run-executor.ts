@@ -694,8 +694,8 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
     normalizeVerboseLevel(params.agentVerboseDefault) ??
     "off";
   registerAgentRunContext(params.runId, {
-    sessionKey: params.runSessionKey,
     sessionId: params.cronSession.sessionEntry.sessionId,
+    agentId: params.agentId,
     verboseLevel: resolvedVerboseLevel,
   });
   const runStartedAt = params.runStartedAt ?? Date.now();

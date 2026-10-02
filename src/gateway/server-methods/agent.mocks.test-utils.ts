@@ -37,6 +37,10 @@ const mocks = vi.hoisted(() => ({
   emitGatewaySessionEndPluginHook: vi.fn(),
   emitGatewaySessionStartPluginHook: vi.fn(),
   getLatestSubagentRunByChildSessionKey: vi.fn(),
+  getLatestLiveSubagentRunByChildSessionKey:
+    vi.fn<
+      typeof import("../../agents/subagents/registry/subagent-registry-read.js").getLatestLiveSubagentRunByChildSessionKey
+    >(),
   replaceSubagentRunAfterSteer: vi.fn(),
   resolveExplicitAgentSessionKey: vi.fn(),
   resolveAgentExplicitRecipientSession: vi.fn(async () => ({})),
@@ -326,15 +330,29 @@ vi.mock("../../infra/agent-run-registry.js", async (importOriginal) => ({
   registerAgentRunContext: mocks.registerAgentRunContext,
 }));
 
-// Only the lookup this harness asserts on is stubbed; the rest of the read
-// surface stays real so registry paths reached through the gateway (paused-run
-// adoption, descendant queries) observe the runs these tests seed.
-vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../../agents/subagents/registry/subagent-registry-read.js")
-  >()),
-  getLatestSubagentRunByChildSessionKey: mocks.getLatestSubagentRunByChildSessionKey,
-}));
+// Completed-follow-up fixtures may supply the matching live owner. Other cases
+// retain real paused-run adoption and descendant reads over their seeded rows.
+vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../agents/subagents/registry/subagent-registry-read.js")
+    >();
+  return {
+    ...actual,
+    getLatestSubagentRunByChildSessionKey: mocks.getLatestSubagentRunByChildSessionKey,
+    getLatestLiveSubagentRunByChildSessionKey: (
+      ...args: Parameters<typeof actual.getLatestLiveSubagentRunByChildSessionKey>
+    ) => {
+      if (!mocks.getLatestLiveSubagentRunByChildSessionKey.getMockImplementation()) {
+        return actual.getLatestLiveSubagentRunByChildSessionKey(...args);
+      }
+      const run = mocks.getLatestLiveSubagentRunByChildSessionKey(...args);
+      return run && run.childSessionKey === args[0].trim() && (!args[1] || args[1](run))
+        ? run
+        : null;
+    },
+  };
+});
 
 vi.mock("../../agents/subagents/registry/subagent-registry.js", async (importOriginal) => ({
   ...(await importOriginal<

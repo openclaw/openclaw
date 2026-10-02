@@ -248,7 +248,7 @@ describe("Gateway Code Mode clock rollback", () => {
               },
               skipBootstrap: true,
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           plugins: { allow: [approvalPluginId] },
           tools: {

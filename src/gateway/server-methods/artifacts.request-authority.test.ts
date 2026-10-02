@@ -28,7 +28,10 @@ import { assistantFileMessage } from "./artifacts.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const boundaries = vi.hoisted(() => ({
-  visit: vi.fn<typeof import("../session-transcript-readers.js").visitSessionMessagesAsync>(),
+  visit:
+    vi.fn<
+      typeof import("../session-transcript-native.test-support.js").visitSessionMessagesAsync
+    >(),
   managed:
     vi.fn<
       typeof import("../managed-image-attachments.js").resolveManagedOutgoingMediaArtifactDownload
@@ -321,15 +324,17 @@ async function exercise(
 }
 
 describe("registered artifact request authority after session preparation", () => {
-  it.each(methods)("uses the current default agent after preparing %s", async (method) => {
+  it.each(methods)("uses the current system agent after preparing %s", async (method) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       let config: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, work: {} },
+        },
       };
       await state.writeConfig(config);
-      const readers = await vi.importActual<typeof import("../session-transcript-readers.js")>(
-        "../session-transcript-readers.js",
-      );
+      const readers = await import("../session-transcript-native.test-support.js");
       boundaries.visit.mockImplementation(readers.visitSessionMessagesAsync);
       const client: GatewayClient = {
         connId: "artifact-default-agent",
@@ -381,7 +386,13 @@ describe("registered artifact request authority after session preparation", () =
       const prepare = resolution.prepareArtifactSessionResolution;
       vi.spyOn(resolution, "prepareArtifactSessionResolution").mockImplementation(async (query) => {
         const resolve = await prepare(query);
-        config = { agents: { list: [{ id: "main" }, { id: "work", default: true }] } };
+        config = {
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "work" } },
+            entries: { main: {}, work: {} },
+          },
+        };
         return resolve;
       });
       const response = await request(

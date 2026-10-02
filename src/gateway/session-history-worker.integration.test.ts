@@ -2,6 +2,7 @@ import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { readMainSessionRecoveryCheckpoint } from "../agents/main-session-recovery/main-session-restart-recovery-replay-safety.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -30,7 +31,9 @@ import { readSessionPreviewItemsFromTranscriptAsync } from "./session-transcript
 import {
   readSessionMessageByIdAsync,
   readSessionMessageCountAsync,
+  readSessionTranscriptSummaryAsync,
 } from "./session-transcript-readers.js";
+import { readLatestSessionUsageFromTranscriptAsync } from "./session-transcript-usage.js";
 
 function historyParams(
   target: { agentId: string; sessionId: string; sessionKey: string; storePath: string },
@@ -402,5 +405,113 @@ it("reads a new branch and reset interval after earlier worker pages settle", as
     const reset = await read();
     expect(reset.history.messages.map(readChatHistoryMessageId)).toEqual(["reset-B"]);
     expect(reset.rawTranscriptSeq).toBe(1);
+  });
+});
+
+it("reduces full transcript recovery, usage, and MCP facts without caller-thread SQLite scans", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "worker-summary",
+      sessionKey: "agent:main:worker-summary",
+      storePath: state.statePath("summary.sqlite"),
+    };
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const messages = [
+      { role: "user", content: "Continue safely", provenance: { kind: "external_user" } },
+      {
+        role: "toolResult",
+        toolName: "exec",
+        content: [
+          { type: "text", text: JSON.stringify({ status: "completed", replaySafe: true }) },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "app-call", name: "demo__show", arguments: { city: "Paris" } },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "app-call",
+        toolName: "demo__show",
+        content: [{ type: "text", text: "ok" }],
+        details: {
+          mcpServer: "demo",
+          mcpTool: "show",
+          mcpAppPreview: {
+            mcpApp: {
+              viewId: "mcp-app-summary",
+              serverName: "demo",
+              toolName: "show",
+              toolCallId: "app-call",
+              uiResourceUri: "ui://demo/app",
+            },
+          },
+        },
+      },
+      ...Array.from({ length: 1200 }, () => ({
+        role: "assistant",
+        content: "x".repeat(1024),
+        provider: "test-provider",
+        model: "test-model",
+        usage: { input: 2, output: 1 },
+      })),
+    ];
+    await replaceTranscriptEvents(target, [
+      { type: "session", version: 3, id: target.sessionId },
+      ...messages.map((message, index) => ({
+        type: "message",
+        id: `summary-${index}`,
+        parentId: index ? `summary-${index - 1}` : null,
+        message,
+      })),
+    ]);
+    await waitForSessionTranscriptProjection(target);
+    const { db } = openOpenClawAgentDatabase({ agentId: target.agentId, path: target.storePath });
+    const prototype: StatementSync = Object.getPrototypeOf(db.prepare("SELECT 1"));
+    const scans: string[] = [];
+    const observers = (["all", "get", "iterate", "run"] as const).map((method) => {
+      const original = prototype[method];
+      return vi.spyOn(prototype, method).mockImplementation(
+        new Proxy(original, {
+          apply(read, receiver: StatementSync, args) {
+            if (
+              /\b(?:transcript_events|session_transcript_active_events)\b/iu.test(
+                receiver.sourceSQL,
+              )
+            ) {
+              scans.push(receiver.sourceSQL);
+            }
+            return Reflect.apply(read, receiver, args);
+          },
+        }),
+      );
+    });
+    try {
+      expect(await readMainSessionRecoveryCheckpoint(target)).toEqual({
+        replaySafe: true,
+        source: "external_user",
+      });
+      expect(scans).toEqual([]);
+      expect(await readLatestSessionUsageFromTranscriptAsync(target)).toMatchObject({
+        inputTokens: 2400,
+        outputTokens: 1200,
+      });
+      expect(scans).toEqual([]);
+      expect(
+        await readSessionTranscriptSummaryAsync(target, {
+          kind: "mcp-app",
+          lookup: { viewId: "mcp-app-summary" },
+        }),
+      ).toMatchObject({
+        kind: "mcp-app",
+        data: { toolInput: { city: "Paris" }, descriptor: { toolCallId: "app-call" } },
+      });
+      expect(scans).toEqual([]);
+    } finally {
+      observers.forEach((observer) => observer.mockRestore());
+    }
   });
 });

@@ -1,7 +1,12 @@
+import type { IncognitoSessionOperations } from "../config/sessions/session-incognito-contract.js";
 import type {
   SqliteWalPeriodicRequest,
   SqliteWalPeriodicResult,
 } from "../infra/sqlite-wal-write-admission.js";
+import type {
+  SqliteWorkerEphemeralTarget,
+  SqliteWorkerStore,
+} from "../infra/sqlite-worker-contract.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import type {
   SqliteWorkerAdmissionFactory,
@@ -33,6 +38,35 @@ export type AgentDatabaseGenerationClaim = {
   assertCurrent(): void;
 };
 
+export type AgentDatabaseExecutionScope = Pick<
+  SqliteWorkerStore<AgentDatabaseOperations>,
+  "execute"
+>;
+
+export type OpenClawAgentDatabaseExecution = {
+  readonly agentId: string;
+  readonly path: string;
+  /** The accepted native receipt; reading this never adopts the current pathname. */
+  readonly fileIdentity: AgentDatabaseExecutionFileIdentity | undefined;
+  assertCurrent(): void;
+  captureGenerationClaim(): AgentDatabaseGenerationClaim;
+  /** Reuse only a native generation whose preparation and registration publication settled. */
+  capturePreparedGenerationClaim(): AgentDatabaseGenerationClaim | undefined;
+  /** Initialize first-use storage through the same admitted native owner. */
+  prepare(source: AgentDatabaseRequestExecutionSource, signal?: AbortSignal): Promise<void>;
+  /** Admit a write against existing storage; a missing store remains missing. */
+  runExisting<T>(
+    source: AgentDatabaseRequestExecutionSource,
+    operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
+    options?: { retireNativeOnFailure: true },
+  ): Promise<T | undefined>;
+  /**
+   * Join this reference's work; native cleanup failures remain with its resource owner.
+   * The owner may retain one bounded idle generation.
+   */
+  release(): Promise<void>;
+};
+
 export type AgentDatabaseFileExecutionOpen = {
   kind?: "file";
   leaseId: string;
@@ -46,11 +80,7 @@ export type AgentDatabaseFileExecutionOpen = {
 };
 
 /** Process-private locators; neither a handle nor its incarnation grants authority. */
-export type AgentDatabaseIncognitoIdentity = Readonly<{
-  kind: "ephemeral";
-  handle: string;
-  incarnation: string;
-}>;
+export type AgentDatabaseIncognitoIdentity = Readonly<SqliteWorkerEphemeralTarget>;
 
 export type AgentDatabaseIncognitoOpen = {
   kind: "ephemeral";
@@ -72,8 +102,8 @@ type AgentDatabaseIncognitoMemory = {
   pageSize: number;
 };
 
-/** P1 deliberately admits no session-domain operation before its complete caller cutover. */
-export type AgentDatabaseIncognitoOperations = {
+/** Inactive actor operations; production routing changes only at the complete cutover. */
+export type AgentDatabaseIncognitoOperations = IncognitoSessionOperations & {
   "database.incognito.memory": { input: undefined; output: AgentDatabaseIncognitoMemory };
 };
 

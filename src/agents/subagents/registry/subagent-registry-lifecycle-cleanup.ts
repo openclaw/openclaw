@@ -18,11 +18,12 @@ import type {
   SubagentLifecycleWakeContext,
 } from "./subagent-registry-lifecycle-context.js";
 import { scheduleRequesterSettleWake } from "./subagent-registry-lifecycle-wake.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
+import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
-const pendingStoreRetirements = new WeakMap<SubagentRunRecord, Promise<void>>();
+const pendingStoreRetirements = new Map<object, Promise<void>>();
 
 export async function suspendPendingFinalDelivery(
   context: SubagentLifecycleCleanupContext & SubagentLifecycleWakeContext,
@@ -37,42 +38,63 @@ export async function suspendPendingFinalDelivery(
   },
 ): Promise<void> {
   const params = context.options;
-  const generation = args.entry.generation;
+  const currentEntry = getCurrentSubagentRunOwner(params.runs, args.entry);
+  if (!currentEntry) {
+    throw new Error(`subagent completion owner changed before suspension: ${args.runId}`);
+  }
   const committed = await blockSubagentCompletionDelivery({
-    subagent: args.entry,
-    reason: args.error ?? getDeliveryLastError(args.entry) ?? args.reason,
+    subagent: currentEntry,
+    reason: args.error ?? getDeliveryLastError(currentEntry) ?? args.reason,
     suspendedReason: args.reason,
-    lastDropReason: args.lastDropReason ?? args.entry.delivery?.lastDropReason,
+    lastDropReason: args.lastDropReason ?? currentEntry.delivery?.lastDropReason,
     enqueuedAt: args.enqueuedAt,
     storeReplaced: args.storeReplaced,
   });
   if (!committed) {
     throw new Error(`subagent completion owner changed before suspension: ${args.runId}`);
   }
-  if (params.runs.get(args.runId) !== args.entry || args.entry.generation !== generation) {
+  const entry = getCurrentSubagentRunOwner(params.runs, args.entry);
+  if (!entry) {
     return;
   }
-  params.resumedRuns.delete(args.runId);
-  if (args.entry.delivery?.discardReason === "task-missing") {
+  params.resumedRuns.delete(getSubagentRunRuntimeKey(args.entry));
+  if (entry.delivery?.discardReason === "task-missing") {
     return;
   }
-  logAnnounceGiveUp(args.entry, args.reason);
+  logAnnounceGiveUp(entry, args.reason);
   // Suspension settles this child for requester drain while cleanup stays incomplete.
-  scheduleRequesterSettleWake(context, args.runId, args.entry);
+  scheduleRequesterSettleWake(context, entry.runId, entry);
 }
 
 export function isSubagentCompletionDeliveryAllowed(
   context: SubagentLifecycleAnnounceCleanupContext,
-  entry: SubagentRunRecord,
+  observedEntry: SubagentRunRecord,
   cleanupGeneration: number,
-  committedDelivery: SubagentRunRecord["delivery"],
+  committedDeliveryOwner: SubagentRunRecord | undefined,
 ): boolean {
+  const entry = getCurrentSubagentRunOwner(context.options.runs, observedEntry);
+  if (!entry) {
+    return false;
+  }
+  const committedDelivery = committedDeliveryOwner?.delivery;
+  const ownsCommittedDelivery =
+    committedDeliveryOwner !== undefined &&
+    entry.requesterTurnRunId === committedDeliveryOwner.requesterTurnRunId &&
+    entry.requesterTurnYielded === committedDeliveryOwner.requesterTurnYielded &&
+    entry.requesterSettleWake?.rearmGeneration ===
+      committedDeliveryOwner.requesterSettleWake?.rearmGeneration &&
+    entry.requesterSettleWake?.batchRunIds?.toSorted().join("\0") ===
+      committedDeliveryOwner.requesterSettleWake?.batchRunIds?.toSorted().join("\0");
   const { runId, requesterSessionKey, requesterStorePath, requesterAgentId } = entry;
   const allowed =
     !subagentRuns.isCompletionAuthorityRetired(entry) &&
     entry.suppressCompletionDelivery !== true &&
     !isDeliverySuspended(entry) &&
-    (entry.delivery?.status !== "delivered" || entry.delivery === committedDelivery) &&
+    (entry.delivery?.status !== "delivered" ||
+      (ownsCommittedDelivery &&
+        committedDelivery?.status === "delivered" &&
+        committedDelivery.generation === entry.delivery.generation &&
+        committedDelivery.deliveredAt === entry.delivery.deliveredAt)) &&
     context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration);
   if (
     !allowed ||
@@ -93,7 +115,7 @@ export function suspendReplacedStoreNotifications(
   const pending = new Set<Promise<void>>();
   const entries = [...options.runs.values()]
     .filter((entry) => {
-      const work = pendingStoreRetirements.get(entry);
+      const work = pendingStoreRetirements.get(getSubagentRunRuntimeKey(entry));
       if (!work) {
         return true;
       }
@@ -114,7 +136,6 @@ export function suspendReplacedStoreNotifications(
     })
     .map((entry) => ({
       entry,
-      generation: entry.generation,
       deliveryGeneration: entry.delivery?.generation,
     }));
   if (!entries.length) {
@@ -122,17 +143,14 @@ export function suspendReplacedStoreNotifications(
   }
   entries.forEach(({ entry }) => subagentRuns.retireCompletionAuthority(entry));
   const work = runWithSubagentCleanupWorkAdmission(async () => {
-    for (const { entry, generation, deliveryGeneration } of entries) {
-      if (
-        options.runs.get(entry.runId) !== entry ||
-        entry.generation !== generation ||
-        entry.delivery?.generation !== deliveryGeneration
-      ) {
+    for (const { entry, deliveryGeneration } of entries) {
+      let current = getCurrentSubagentRunOwner(options.runs, entry);
+      if (!current || current.delivery?.generation !== deliveryGeneration) {
         continue;
       }
       if (
         !(await blockSubagentCompletionDelivery({
-          subagent: entry,
+          subagent: current,
           reason: "store replaced",
           suspendedReason: "permanent_failure",
           storeReplaced: true,
@@ -143,23 +161,20 @@ export function suspendReplacedStoreNotifications(
         });
         continue;
       }
-      if (
-        options.runs.get(entry.runId) !== entry ||
-        entry.generation !== generation ||
-        entry.delivery?.generation !== deliveryGeneration
-      ) {
+      current = getCurrentSubagentRunOwner(options.runs, entry);
+      if (!current || current.delivery?.generation !== deliveryGeneration) {
         continue;
       }
-      options.resumedRuns.delete(entry.runId);
+      options.resumedRuns.delete(getSubagentRunRuntimeKey(entry));
       recordSystemEventStoreReplaced();
     }
   }).finally(() => {
     for (const { entry } of entries) {
-      pendingStoreRetirements.delete(entry);
+      pendingStoreRetirements.delete(getSubagentRunRuntimeKey(entry));
     }
   });
   for (const { entry } of entries) {
-    pendingStoreRetirements.set(entry, work);
+    pendingStoreRetirements.set(getSubagentRunRuntimeKey(entry), work);
   }
   pending.add(work);
   return Promise.all(pending).then(() => {});

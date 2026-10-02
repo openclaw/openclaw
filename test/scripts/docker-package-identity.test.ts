@@ -127,79 +127,33 @@ esac
 }
 
 describe.skipIf(process.platform === "win32")("Docker package identity report", () => {
-  it("rejects installed manifests that do not match the package artifact", () => {
-    const { result } = runPackageIdentity({
-      artifactVersion: "1.2.3",
-      bunCli: "OpenClaw 11.2.30",
-      bunManifest: "11.2.30",
-      npmCli: "OpenClaw 11.2.30",
-      npmManifest: "11.2.30",
-      pnpmCli: "OpenClaw 11.2.30",
-      pnpmManifest: "11.2.30",
-    });
+  it.each(["npm", "pnpm", "bun"] as const)(
+    "rejects a %s manifest version that differs from the artifact",
+    (manager) => {
+      const { result } = runPackageIdentity({
+        artifactVersion: "1.2.3",
+        [`${manager}Manifest`]: "11.2.30",
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        `[${manager}] installed manifest version '11.2.30' != artifact '1.2.3'`,
+      );
+    },
+  );
 
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(
-      "[npm] installed manifest version '11.2.30' != artifact '1.2.3'",
-    );
-  });
-
-  it("rejects a stale CLI version that only contains the artifact version as a substring", () => {
-    const { result } = runPackageIdentity({
-      artifactVersion: "1.2.3",
-      npmCli: "OpenClaw 11.2.30 (wrong)",
-    });
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("[npm] CLI output parses to '11.2.30'");
-  });
-
-  it("rejects a pnpm manifest version that differs from the artifact", () => {
-    const { result } = runPackageIdentity({
-      artifactVersion: "1.2.3",
-      pnpmManifest: "11.2.30",
-    });
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(
-      "[pnpm] installed manifest version '11.2.30' != artifact '1.2.3'",
-    );
-  });
-
-  it("rejects a pnpm CLI version that differs from the artifact", () => {
-    const { result } = runPackageIdentity({
-      artifactVersion: "1.2.3",
-      pnpmCli: "OpenClaw 11.2.30 (wrong)",
-    });
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("[pnpm] CLI output parses to '11.2.30'");
-  });
-
-  it("rejects a Bun manifest version that differs from the artifact", () => {
-    const { result } = runPackageIdentity({
-      artifactVersion: "1.2.3",
-      bunManifest: "11.2.30",
-    });
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(
-      "[bun] installed manifest version '11.2.30' != artifact '1.2.3'",
-    );
-  });
-
-  it("rejects a Bun CLI version that differs from the artifact", () => {
-    const { result } = runPackageIdentity({
-      artifactVersion: "1.2.3",
-      bunCli: "OpenClaw 11.2.30 (wrong)",
-    });
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("[bun] CLI output parses to '11.2.30'");
-  });
+  it.each(["npm", "pnpm", "bun"] as const)(
+    "rejects a stale %s CLI version containing the artifact version as a substring",
+    (manager) => {
+      const { result } = runPackageIdentity({
+        artifactVersion: "1.2.3",
+        [`${manager}Cli`]: "OpenClaw 11.2.30 (wrong)",
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(`[${manager}] CLI output parses to '11.2.30'`);
+    },
+  );
 
   it.each([
-    { version: "2026.6.21-beta.1+build.7", nativeContract: "required" },
     { version: "2026.6.21-beta.1+build.7", nativeContract: "not-applicable" },
     { version: "1.2.3-beta-rc.1+build.7", nativeContract: "required" },
   ] as const)(
@@ -208,43 +162,31 @@ describe.skipIf(process.platform === "win32")("Docker package identity report", 
       const { identity, result } = runPackageIdentity({ artifactVersion: version, nativeContract });
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      expect(identity).toEqual(
-        expect.objectContaining({
-          package: expect.objectContaining({ version }),
-          containers: expect.arrayContaining([
-            expect.objectContaining({
-              role: "musl",
-              details: expect.objectContaining({
-                fsSafeNative: nativeContract === "required" ? "passed" : "not-applicable",
-              }),
+      expect(identity).toMatchObject({
+        package: { version },
+        containers: expect.arrayContaining([
+          expect.objectContaining({
+            role: "musl",
+            details: expect.objectContaining({
+              fsSafeNative: nativeContract === "required" ? "passed" : "not-applicable",
             }),
+          }),
+          ...[
+            ["npm", "/usr/local/lib/node_modules/openclaw"],
+            ["pnpm", "/fake/pnpm/openclaw"],
+            ["bun", "/fake/bun/openclaw"],
+          ].map(([role, installedPackageRoot]) =>
             expect.objectContaining({
-              role: "npm",
+              role,
               details: expect.objectContaining({
-                installedPackageRoot: "/usr/local/lib/node_modules/openclaw",
+                installedPackageRoot,
                 installedPackageVersion: version,
                 parsedOpenclawVersion: version,
               }),
             }),
-            expect.objectContaining({
-              role: "pnpm",
-              details: expect.objectContaining({
-                installedPackageRoot: "/fake/pnpm/openclaw",
-                installedPackageVersion: version,
-                parsedOpenclawVersion: version,
-              }),
-            }),
-            expect.objectContaining({
-              role: "bun",
-              details: expect.objectContaining({
-                installedPackageRoot: "/fake/bun/openclaw",
-                installedPackageVersion: version,
-                parsedOpenclawVersion: version,
-              }),
-            }),
-          ]),
-        }),
-      );
+          ),
+        ]),
+      });
     },
   );
 });

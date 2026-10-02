@@ -1,4 +1,7 @@
 import type { UpdateScheduleState } from "../../packages/gateway-protocol/src/index.js";
+import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
+import { sleepWithAbort } from "./backoff.js";
+import { formatErrorMessage } from "./errors.js";
 import { gitCommitPrefixesMatch } from "./git-commit.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { readVerifiedGitUpdateReceipt, type VerifiedGitUpdateReceipt } from "./restart-sentinel.js";
@@ -18,17 +21,56 @@ export async function resolveStartupInstallStatus(fetchRemoteGit: boolean, signa
     installReceipt?.upstreamRef && root && updateInstallRootsMatch(root, installReceipt.root)
       ? { currentSha: installReceipt.sha, upstreamRef: installReceipt.upstreamRef }
       : undefined;
-  const status = await checkUpdateStatus({
+  const timeoutMs = resolveGatewayStartupTiming().deadlineMs;
+  const options = {
     root,
     signal,
-    ...(fetchRemoteGit ? {} : { timeoutMs: 2500 }),
+    ...(fetchRemoteGit ? {} : { timeoutMs }),
     fetchGit: fetchRemoteGit,
     includeRegistry: false,
     ...(fetchRemoteGit ? { useDetachedDevUpstream: true } : {}),
     ...(gitUpstreamFallback ? { gitUpstreamFallback } : {}),
-  });
-  signal.throwIfAborted();
-  return { root, status, installReceipt };
+  };
+  for (let attempt = 0; ; attempt++) {
+    let status: UpdateCheckResult | undefined;
+    let timedOut = false;
+    let failure: unknown;
+    try {
+      status = await checkUpdateStatus({
+        ...options,
+        ...(!fetchRemoteGit
+          ? {
+              onGitProbeTimeout: () => {
+                timedOut = true;
+              },
+            }
+          : {}),
+      });
+      signal.throwIfAborted();
+      if (!timedOut) {
+        return { root, status, installReceipt };
+      }
+    } catch (error) {
+      if (!timedOut) {
+        throw error;
+      }
+      failure = error;
+    }
+    signal.throwIfAborted();
+    if (attempt === 0) {
+      await sleepWithAbort(1_000, signal);
+      continue;
+    }
+    const message = failure
+      ? formatErrorMessage(failure)
+      : `Git update facts unavailable after two ${timeoutMs / 1000}s probes`;
+    status = {
+      ...(status ?? { root, installKind: "unknown", packageManager: "unknown" }),
+      ...(status?.git ? { git: { ...status.git, error: message } } : {}),
+      error: { status: "failed", message, timeoutMs },
+    };
+    return { root, status, installReceipt };
+  }
 }
 
 type GitScheduleStatus = NonNullable<NonNullable<UpdateScheduleState["install"]>["git"]>;
@@ -52,6 +94,9 @@ function resolveGitScheduleStatus(
   installReceipt: VerifiedGitUpdateReceipt | null,
   root: string | null,
 ): GitScheduleStatus | undefined {
+  if (update.error?.timeoutMs) {
+    return { status: "unavailable", reason: "git-unavailable" };
+  }
   if (update.installKind !== "git") {
     return undefined;
   }

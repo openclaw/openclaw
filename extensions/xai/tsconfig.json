@@ -560,6 +560,9 @@
       "@openclaw/memory-core/api.js": [
         "../../.artifacts/extension-package-boundary/plugins/memory-core/api.d.ts"
       ],
+      "@openclaw/memory-core/session-search-visibility-api.js": [
+        "../../.artifacts/extension-package-boundary/plugins/memory-core/session-search-visibility-api.d.ts"
+      ],
       "@openclaw/ai": [
         "../../packages/plugin-sdk/dist/packages/ai/src/index.d.ts"
       ],

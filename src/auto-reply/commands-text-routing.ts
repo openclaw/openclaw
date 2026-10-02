@@ -4,7 +4,7 @@ import { getLoadedChannelPluginById } from "../channels/plugins/registry-loaded.
 import type { ShouldHandleTextCommandsParams } from "./commands-registry.types.js";
 
 /** Returns whether a surface can receive provider-native slash commands. */
-export function isNativeCommandSurface(surface?: string): boolean {
+function isNativeCommandSurface(surface?: string): boolean {
   const normalized = normalizeOptionalLowercaseString(surface);
   if (!normalized) {
     return false;

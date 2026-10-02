@@ -252,6 +252,12 @@ export function sidebarPanelDefinitions(
   // same cached diff loader so their live content and selection survive.
   const detailContent =
     state?.sidebarContent ?? (state ? resolveSessionDiffSidebarContent(state) : null);
+  // The region mounts only tabs in the layout. Rendering Review starts its lazy
+  // panel import, so default diff content must not build it before a tab exists.
+  const detailTabPresent =
+    state?.sidebarLayout.columns.some((column) =>
+      column.panels.some((panel) => panel.slot === "detail"),
+    ) ?? false;
   const workspaceContent =
     state && params && workspace
       ? html`<openclaw-chat-files-panel
@@ -288,7 +294,7 @@ export function sidebarPanelDefinitions(
               <strong>${t("chat.detailPanel.unavailable")}</strong>
               <span>${detailContent.message}</span>
             </div>`
-          : detailContent && params
+          : detailContent && params && detailTabPresent
             ? html`${presentedContent(
                 state?.sidebarContent ? (params.panePresentation ?? true) : true,
                 params.renderDetail(detailContent),

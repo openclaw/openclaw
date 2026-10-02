@@ -315,11 +315,17 @@ describe("dead config keys", () => {
     });
   });
 
+  it("directs legacy agents.list to Doctor", () => {
+    expect(validateConfigObjectRaw({ agents: { list: [{ id: "main" }] } })).toMatchObject({
+      ok: false,
+      issues: [{ path: "agents.list", message: expect.stringContaining("openclaw doctor --fix") }],
+    });
+  });
+
   it.each([
     ["canvasHost", { enabled: true }],
     ["tui", { footer: { showRemoteHost: true } }],
     ["defaultModel", "openai/gpt-5.6"],
-    ["agents.list", [{ id: "main" }]],
     ["channels.slack.identity", "bot"],
     ["channels.whatsapp.messagePrefix", "x"],
     ["channels.whatsapp.ackReaction", { emoji: "x" }],

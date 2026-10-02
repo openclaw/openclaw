@@ -506,7 +506,7 @@ describe("gateway chat metadata runtime", () => {
     const first = await harness.runtime.read({ agentId: "main" });
 
     harness.setConfig({
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
     });
     await harness.runtime.refresh();
     const second = await harness.runtime.read({ agentId: "main" });

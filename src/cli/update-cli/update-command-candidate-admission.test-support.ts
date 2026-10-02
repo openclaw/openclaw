@@ -168,6 +168,9 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   ] as const)(
     "candidate admission: reports $check refusals from $source before mutation",
     async ({ source, check }) => {
+      if (check === "node-runtime") {
+        runtimeRecovery.stubNodeRuntime();
+      }
       const verdict = candidateAdmissionVerdict(check);
       const { pkgRoot, stages, contexts } = await prepareCandidateAdmissionFixture({
         marker: source !== "unsupported",
@@ -258,6 +261,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   it.each([undefined, "17"])(
     "candidate admission: retains work deadline %s and installed Node preflight",
     async (timeout) => {
+      runtimeRecovery.stubNodeRuntime();
       const verdict = candidateAdmissionVerdict();
       verdict.warnings = [
         {
@@ -343,6 +347,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   it.each(["existing", "fresh"] as const)(
     "candidate admit with warn does not bypass runtime recovery (%s profile)",
     async (profile) => {
+      runtimeRecovery.stubNodeRuntime();
       const verdict = candidateAdmissionVerdict();
       verdict.facts.nodeEngines = ">=26.1.0";
       verdict.facts.checks[2] = {
@@ -421,6 +426,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   );
 
   it("candidate admission: retains a check the candidate did not report", async () => {
+    runtimeRecovery.stubNodeRuntime();
     const verdict = candidateAdmissionVerdict();
     verdict.facts.checks = verdict.facts.checks.filter((check) => check.name !== "node-runtime");
     const { stages, contexts } = await prepareCandidateAdmissionFixture({ marker: true, verdict });
@@ -442,6 +448,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   });
 
   it("candidate admission: forces installed checks through the option before staging", async () => {
+    runtimeRecovery.stubNodeRuntime();
     const { stages, contexts } = await prepareCandidateAdmissionFixture({
       marker: true,
       verdict: candidateAdmissionVerdict(),
@@ -492,6 +499,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   });
 
   it("candidate admission: keeps dry-run on installed checks without staging", async () => {
+    runtimeRecovery.stubNodeRuntime();
     const { stages, contexts } = await prepareCandidateAdmissionFixture({
       marker: true,
       verdict: candidateAdmissionVerdict(),
@@ -624,6 +632,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   });
 
   it("blocks package updates when the target requires a newer Node runtime", async () => {
+    runtimeRecovery.stubNodeRuntime();
     // This case specifies system-runtime guidance, independent of the host Node manager.
     vi.spyOn(versionManagerPath, "resolveNodeVersionManager").mockReturnValue("system");
     const root = await mockPackageInstallAtCaseDir();

@@ -4,7 +4,6 @@ import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import * as reportHealth from "./update-run-report-health.js";
 import {
-  renderUpdateRunNotice,
   renderUpdateRunReport,
   updateRunReportInputFromResult,
   updateRunReportInputFromSentinel,
@@ -77,7 +76,6 @@ describe("update run report", () => {
     expect(report.markdown).toContain(`Failed: preflight-node-runtime — ${detail}`);
     expect(report.markdown).toContain(`Failing check node-runtime (${reason}); key engines.node`);
     expect(report.markdown).toContain("Phases: staging");
-    expect(renderUpdateRunNotice(record, "finished")).toBe(renderUpdateRunReport(record).markdown);
     expect(record).toEqual(saved);
   });
 
@@ -158,7 +156,6 @@ describe("update run report", () => {
       }
       expect(report.headline).not.toContain("gateway is running");
       expect(report.markdown).not.toContain("chat");
-      expect(renderUpdateRunNotice(record, "finished", { currentHealth })).toBe(report.markdown);
       expect(record).toEqual(saved);
     },
   );
@@ -354,7 +351,7 @@ describe("update run report", () => {
     expect(report.lines).toContain(`Recorded verification: ${expected}.`);
   });
 
-  it.each(["report", "notice", "failure"])(
+  it.each(["report", "failure"])(
     "reports an unreadable identity as unavailable in the %s surface",
     async (surface) => {
       const record = run({
@@ -374,9 +371,7 @@ describe("update run report", () => {
                 { stateDir: "/fixture/state", env: {} },
               )
             ).body
-          : surface === "notice"
-            ? renderUpdateRunNotice(record, "finished")
-            : renderUpdateRunReport(record).markdown;
+          : renderUpdateRunReport(record).markdown;
       expect(text).toContain("identity unavailable");
       expect(text).not.toContain("version mismatch");
     },
@@ -450,19 +445,6 @@ describe("update run report", () => {
     );
     expect(report.markdown).toContain(reason);
     expect(report.markdown).toContain(guidance);
-  });
-
-  it("limits parking notices to the pre-updater milestone without loosening phase notices", () => {
-    const requested = run({ status: "running", phase: "requested" });
-    expect(renderUpdateRunNotice(requested, "parking")).toContain("Restarting the gateway now");
-    expect(renderUpdateRunNotice(requested, "activating")).toBeNull();
-    expect(renderUpdateRunNotice(requested, "verifying")).toBeNull();
-    for (const phase of ["staging", "activating", "verifying"] as const) {
-      const progressed = run({ status: "running", phase });
-      expect(renderUpdateRunNotice(progressed, "parking")).toBeNull();
-      expect(renderUpdateRunNotice(progressed, "ack")).toBeNull();
-    }
-    expect(renderUpdateRunNotice(run(), "parking")).toBeNull();
   });
 
   it("reports changed git commits when the package version stays the same", () => {
@@ -796,7 +778,7 @@ describe("update run report", () => {
   );
 
   describe("current-main failed-step fallback interactions", () => {
-    it("uses the first meaningful failure without changing saved JSON or notice semantics", () => {
+    it("uses the first meaningful failure without changing saved JSON", () => {
       const record = run({
         status: "failed",
         reason: "  ",
@@ -814,7 +796,6 @@ describe("update run report", () => {
 
       const report = renderUpdateRunReport(record);
       expect(report.headline).toBe("⚠️ OpenClaw update failed: finalize:doctor.");
-      expect(renderUpdateRunNotice(record, "finished")).toBe(report.markdown);
       expect(JSON.stringify(record)).toBe(saved);
     });
 

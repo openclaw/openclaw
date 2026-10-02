@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ok, type Result } from "@openclaw/normalization-core/result";
 import {
   openOpenClawAgentDatabase,
@@ -420,6 +421,7 @@ export function appendTranscriptEventSnapshotSync(
     options.beforeCommitInTransaction,
     options.expectedMutationAt,
     view,
+    { eventType: isRecord(event) && typeof event.type === "string" ? event.type : "unknown" },
   );
 }
 
@@ -487,6 +489,13 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
     undefined,
     options.expectedMutationAt,
     view,
+    {
+      eventType: "message",
+      messageRole:
+        isRecord(options.message) && typeof options.message.role === "string"
+          ? options.message.role
+          : "unknown",
+    },
   );
   if (!snapshot.ok) {
     return snapshot;

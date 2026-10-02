@@ -415,6 +415,47 @@ describe("PR failure cancellation", () => {
   );
 
   it.skipIf(process.platform === "win32")(
+    "does not require the PR monitor when fail-fast is disabled",
+    () => {
+      const workflow = readCiWorkflow();
+      const context = {
+        eventName: "pull_request" as const,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        failFastResult: "skipped",
+        preflightOutputs: {
+          disable_fail_fast: "true",
+          run_checks_node_core_nondist: "true",
+        },
+      };
+      expect(evaluateWorkflowExpression(workflow.jobs["pr-fail-fast"].if, context)).toBe(false);
+      const verify = workflow.jobs["ci-gate"].steps.find(
+        (entry: WorkflowStep) => entry.name === "Verify selected CI lanes",
+      );
+      const monitorRow = verify.env.JOB_RESULTS.split("\n")
+        .find((line: string) => line.startsWith("pr-fail-fast="))
+        .replace(/\$\{\{[\s\S]*?\}\}/gu, (expression: string) =>
+          String(evaluateWorkflowExpression(expression, context)),
+        );
+      expect(monitorRow).toBe("pr-fail-fast=skipped|false");
+      for (const [result, exit] of [
+        ["success", 0],
+        ["failure", 1],
+        ["cancelled", 1],
+      ] as const) {
+        const run = spawnSync("/bin/bash", ["-c", verify.run], {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            JOB_RESULTS: `preflight=success|true\nsecurity-fast=success|true\nchecks-node-core-test-nondist-shard=${result}|true\n${monitorRow}`,
+          },
+        });
+        expect(run.status, run.stdout).toBe(exit);
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
     "reports the originating failure after cancelling other jobs",
     () => {
       const workflow = readCiWorkflow();

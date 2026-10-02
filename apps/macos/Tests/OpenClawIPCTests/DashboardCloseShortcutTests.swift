@@ -132,7 +132,7 @@ struct DashboardCloseShortcutTests {
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
-        controller.loadInBackground(
+        controller.update(
             url: server.url(), auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
         controller.show()
         return controller

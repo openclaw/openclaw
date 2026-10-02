@@ -141,6 +141,57 @@ describe("browser default executable detection", () => {
     });
   });
 
+  it.each([
+    ["configured ARM64", "/tmp/browsers", "chrome-linux-arm64"],
+    ["default ARM64", undefined, "chrome-linux-arm64"],
+    ["configured x64", "/tmp/browsers", "chrome-linux64"],
+    ["older ARM64", "/tmp/browsers", "chrome-linux"],
+  ])("discovers Playwright Chromium in the %s cache layout", (_name, cachePath, linuxDir) => {
+    vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", cachePath);
+    const browserCache = cachePath ?? "/Users/test/.cache/ms-playwright";
+    const executable = `${browserCache}/chromium-1243/${linuxDir}/chrome`;
+    vi.mocked(fs.readdirSync).mockImplementation((candidate) => {
+      return (String(candidate) === browserCache ? ["chromium-1243"] : []) as never;
+    });
+    vi.mocked(fs.existsSync).mockImplementation((candidate) => String(candidate) === executable);
+
+    expect(resolveBrowserExecutableForPlatform(config, "linux")).toEqual({
+      kind: "chromium",
+      path: executable,
+    });
+  });
+
+  it("preserves executable and cache precedence when ARM64 Chromium is installed", () => {
+    const browserCache = "/tmp/browsers";
+    const configured = `${browserCache}/chromium-1243/chrome-linux-arm64/chrome`;
+    const defaultCache = "/Users/test/.cache/ms-playwright";
+    const defaultExecutable = `${defaultCache}/chromium-1243/chrome-linux-arm64/chrome`;
+    const system = "/usr/bin/google-chrome";
+    const custom = "/opt/custom/chrome";
+    const installed = new Set([configured, defaultExecutable, system, custom]);
+    vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", browserCache);
+    vi.mocked(fs.readdirSync).mockReturnValue(["chromium-1243"] as never);
+    vi.mocked(fs.existsSync).mockImplementation((candidate) => installed.has(String(candidate)));
+
+    expect(
+      resolveBrowserExecutableForPlatform({ ...config, executablePath: custom }, "linux"),
+    ).toEqual({ kind: "custom", path: custom });
+    expect(resolveBrowserExecutableForPlatform(config, "linux")).toEqual({
+      kind: "chrome",
+      path: system,
+    });
+    installed.delete(system);
+    expect(resolveBrowserExecutableForPlatform(config, "linux")).toEqual({
+      kind: "chromium",
+      path: configured,
+    });
+    mockExecutableAccessDeniedFor(configured);
+    expect(resolveBrowserExecutableForPlatform(config, "linux")).toEqual({
+      kind: "chromium",
+      path: defaultExecutable,
+    });
+  });
+
   it("classifies beta Linux Google Chrome builds as canary", () => {
     vi.mocked(fs.existsSync).mockImplementation(
       (candidate) => String(candidate) === "/usr/bin/google-chrome-beta",

@@ -1,4 +1,5 @@
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
+import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import {
   buildSubagentRunReadTopology,
@@ -7,15 +8,11 @@ import {
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
-  compareSubagentRunGeneration,
+  isSameSubagentRun,
   latestSubagentRun,
   recordLatestSubagentRun,
 } from "./subagent-run-generation.js";
-import {
-  hasSubagentRunEnded,
-  isRetainedUnendedSubagentRun,
-  isSubagentRunQueued,
-} from "./subagent-run-liveness.js";
+import { hasSubagentRunEnded, isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
 
 function resolveConcurrencyOwnerSessionKey(entry: SubagentRunRecord): string {
   return entry.collect
@@ -84,7 +81,8 @@ export function listRunsForRequesterFromRuns(
           sessionId: options.requesterSessionId,
           lifecycleRevision: options.requesterLifecycleRevision,
         })) &&
-      (!latestRuns || latestRuns.getLatestSubagentRun(entry.childSessionKey) === entry) &&
+      (!latestRuns ||
+        latestRuns.getLatestSubagentRun(entry.childSessionKey, entry.childAgentId) === entry) &&
       (!options?.requesterAgentId || entry.requesterAgentId === options.requesterAgentId) &&
       (options?.requesterStorePath === undefined ||
         (entry.requesterStorePath ?? null) === options.requesterStorePath) &&
@@ -199,23 +197,36 @@ export type SubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRe
 };
 
 export type LatestSubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRecord> = {
-  getLatestSubagentRun(childSessionKey: string): T | null;
+  getLatestSubagentRun(childSessionKey: string, childAgentId?: string): T | null;
 };
 
 export function buildLatestSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecord>(
   runs: Map<string, T>,
 ): LatestSubagentRunReadIndex<T> {
   const latestRunByChildSessionKey = new Map<string, T>();
+  const runsByChildSessionKey = new Map<string, T[]>();
   for (const entry of runs.values()) {
     const childSessionKey = entry.childSessionKey.trim();
     if (!childSessionKey) {
       continue;
     }
     recordLatestSubagentRun(latestRunByChildSessionKey, childSessionKey, entry);
+    const bucket = runsByChildSessionKey.get(childSessionKey);
+    if (bucket) {
+      bucket.push(entry);
+    } else {
+      runsByChildSessionKey.set(childSessionKey, [entry]);
+    }
   }
   return {
-    getLatestSubagentRun: (childSessionKey) =>
-      latestRunByChildSessionKey.get(childSessionKey.trim()) ?? null,
+    getLatestSubagentRun: (childSessionKey, childAgentId) => {
+      const key = childSessionKey.trim();
+      return childAgentId === undefined
+        ? (latestRunByChildSessionKey.get(key) ?? null)
+        : (latestSubagentRun(runsByChildSessionKey.get(key) ?? [], (entry) =>
+            matchesSubagentChildSessionOwner(entry, key, childAgentId),
+          ) ?? null);
+    },
   };
 }
 
@@ -245,16 +256,15 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     if (isRetainedUnendedSubagentRun(entry, clock)) {
       return true;
     }
-    if (hasSubagentRunEnded(entry) || entry.execution.status !== "queued") {
+    if (hasSubagentRunEnded(entry)) {
       return false;
     }
-    // Compact projections cannot own reservations; only the matching raw owner can.
+    // Compact facts resolve status through the captured resident owner, never acquire custody.
     const current = inMemoryDisplayByChildSessionKey.get(entry.childSessionKey.trim());
     return (
       current !== undefined &&
-      current.requesterSessionKey === entry.requesterSessionKey &&
-      compareSubagentRunGeneration(current, entry) === 0 &&
-      isSubagentRunQueued(current)
+      isSameSubagentRun(current, entry) &&
+      isRetainedUnendedSubagentRun(current, clock)
     );
   };
 
@@ -423,6 +433,7 @@ export function getLatestSubagentRunByChildSessionKeyFromRuns(
   runs: Map<string, SubagentRunRecord> | Iterable<SubagentRunRecord>,
   childSessionKey: string,
   matches?: (entry: SubagentRunRecord) => boolean,
+  childAgentId?: string,
 ): SubagentRunRecord | undefined {
   const key = childSessionKey.trim();
   if (!key) {
@@ -430,7 +441,21 @@ export function getLatestSubagentRunByChildSessionKeyFromRuns(
   }
   return latestSubagentRun(
     runs instanceof Map ? runs.values() : runs,
-    (entry) => entry.childSessionKey === key && (!matches || matches(entry)),
+    (entry) =>
+      matchesSubagentChildSessionOwner(entry, key, childAgentId) && (!matches || matches(entry)),
+  );
+}
+
+/** Latest run for a record's child session, scoped to the owner that record captured. */
+export function getLatestSubagentRunForChild(
+  runs: Map<string, SubagentRunRecord> | Iterable<SubagentRunRecord>,
+  child: Pick<SubagentRunRecord, "childSessionKey" | "childAgentId">,
+): SubagentRunRecord | undefined {
+  return getLatestSubagentRunByChildSessionKeyFromRuns(
+    runs,
+    child.childSessionKey,
+    undefined,
+    child.childAgentId,
   );
 }
 
@@ -438,6 +463,7 @@ export function getLatestSubagentRunByChildSessionKeyFromRuns(
 export function getSubagentRunByChildSessionKeyFromRuns(
   runs: Map<string, SubagentRunRecord>,
   childSessionKey: string,
+  childAgentId?: string,
 ): SubagentRunRecord | null {
   const key = childSessionKey.trim();
   if (!key) {
@@ -447,9 +473,13 @@ export function getSubagentRunByChildSessionKeyFromRuns(
   return (
     latestSubagentRun(
       runs.values(),
-      (entry) => entry.childSessionKey === key && isRetainedUnendedSubagentRun(entry),
+      (entry) =>
+        matchesSubagentChildSessionOwner(entry, key, childAgentId) &&
+        isRetainedUnendedSubagentRun(entry),
     ) ??
-    latestSubagentRun(runs.values(), (entry) => entry.childSessionKey === key) ??
+    latestSubagentRun(runs.values(), (entry) =>
+      matchesSubagentChildSessionOwner(entry, key, childAgentId),
+    ) ??
     null
   );
 }
@@ -457,12 +487,18 @@ export function getSubagentRunByChildSessionKeyFromRuns(
 export function resolveRequesterForChildSessionFromRuns(
   runs: Map<string, SubagentRunRecord>,
   childSessionKey: string,
+  childAgentId?: string,
 ): {
   requesterSessionKey: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
 } | null {
-  const latest = getLatestSubagentRunByChildSessionKeyFromRuns(runs, childSessionKey);
+  const latest = getLatestSubagentRunByChildSessionKeyFromRuns(
+    runs,
+    childSessionKey,
+    undefined,
+    childAgentId,
+  );
   if (!latest) {
     return null;
   }
@@ -476,8 +512,14 @@ export function resolveRequesterForChildSessionFromRuns(
 export function shouldIgnorePostCompletionAnnounceForSessionFromRuns(
   runs: Map<string, SubagentRunRecord>,
   childSessionKey: string,
+  childAgentId?: string,
 ): boolean {
-  const latest = getLatestSubagentRunByChildSessionKeyFromRuns(runs, childSessionKey);
+  const latest = getLatestSubagentRunByChildSessionKeyFromRuns(
+    runs,
+    childSessionKey,
+    undefined,
+    childAgentId,
+  );
   return Boolean(
     latest &&
     latest.spawnMode !== "session" &&
