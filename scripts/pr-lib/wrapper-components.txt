@@ -216,6 +216,7 @@ src/agents/model-extra-params.ts
 src/agents/model-ref-profile.ts
 src/agents/model-ref-shared.ts
 src/agents/model-runtime-policy.ts
+src/agents/model-selection-alias-scope.ts
 src/agents/model-selection-config.ts
 src/agents/model-selection-normalize.ts
 src/agents/model-selection-shared.ts
@@ -465,6 +466,7 @@ src/config/merge-patch.ts
 src/config/model-config-vocabulary.ts
 src/config/model-cost.ts
 src/config/model-input.ts
+src/config/model-input-normalization.ts
 src/config/model-policy-allowlist-migration.ts
 src/config/model-policy-ref.ts
 src/config/model-provider-config.ts
@@ -587,7 +589,7 @@ src/gateway/github-repository-publication-snapshot.ts
 src/gateway/operator-scopes.ts
 src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts
-src/gateway/worker-environments/placement-workspace-journal.worker-contract.ts
+src/gateway/worker-environments/placement-workspace-journal.types.ts
 src/gateway/worker-environments/session-attachment.ts
 src/gateway/worker-environments/workspace-actual-manifest.ts
 src/gateway/worker-environments/workspace-git-input.ts

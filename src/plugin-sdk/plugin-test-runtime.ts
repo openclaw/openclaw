@@ -84,6 +84,7 @@ export {
 export { addTestHook } from "../plugins/hooks.test-helpers.js";
 export { createPluginRecord } from "../plugins/status.test-helpers.js";
 export { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+export { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 export { useProviderCatalogMetadata } from "./test-helpers/provider-catalog.js";
 export { useProviderToolSchemaRuntimeForTest } from "./test-helpers/provider-tool-schemas.test-support.js";
 export { useBundledProviderPolicyArtifactsForTest } from "./test-helpers/provider-policy-artifacts.test-support.js";

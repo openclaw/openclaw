@@ -219,6 +219,19 @@ describe("MCP manager creation ownership", () => {
     expect(runtime.dispose).toHaveBeenCalledOnce();
     expect(cleanupScope.outcome).toBe("uncertain");
     expect(manager.listRuntimeKeys()).toEqual([]);
+
+    const otherSession = "unrelated-session";
+    await manager.getOrCreate({ ...params, sessionId: otherSession });
+    const targetedScope = createAgentCleanupScope();
+    await targetedScope.run(() => manager.disposeSession(otherSession));
+    expect(targetedScope.outcome).toBe("closed");
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const laterScope = createAgentCleanupScope();
+      await laterScope.run(() => manager.disposeAll());
+      expect(laterScope.outcome).toBe("uncertain");
+    }
+    expect(runtime.dispose).toHaveBeenCalledOnce();
   });
 
   it("constructs and retires an empty manager without binding or importing transports", async () => {

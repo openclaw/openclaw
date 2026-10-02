@@ -31,7 +31,7 @@ import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./worker-environments/placement-store.js";
-import { SessionWorkspaceReservationBusyError } from "./worker-environments/placement-workspace-reservation.js";
+import { SessionWorkspaceReservationBusyError } from "./worker-environments/placement-workspace-reservation.kernel.js";
 
 export async function settleDeniedRepositoryGitHubPublication(params: {
   execution: RepositoryGitHubPublicationExecution;

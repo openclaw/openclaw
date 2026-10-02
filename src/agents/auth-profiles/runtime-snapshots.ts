@@ -498,9 +498,6 @@ export function replaceOwnedRuntimeAuthProfileStoreSnapshots(
 export function clearRuntimeAuthProfileStoreSnapshots(): void {
   const snapshotsChanged = runtimeAuthStoreSnapshots.size > 0;
   const credentialsChanged = credentialState(runtimeStoreEntries()).length > 0;
-  const profileSetChanged = runtimeStoreEntries().some(
-    ([, store]) => Object.keys(store.profiles).length > 0,
-  );
   if (credentialsChanged) {
     runtimeAuthStoreCredentialsRevision += 1;
   }
@@ -514,7 +511,7 @@ export function clearRuntimeAuthProfileStoreSnapshots(): void {
   runtimeAuthStoreSnapshotRevisions.clear();
   runtimeAuthStoreMetadataRevisions.clear();
   if (snapshotsChanged) {
-    notifyRuntimeAuthStoreMutation(undefined, profileSetChanged);
+    notifyRuntimeAuthStoreMutation(undefined, credentialsChanged);
   }
 }
 

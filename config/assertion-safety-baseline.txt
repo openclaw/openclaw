@@ -369,7 +369,6 @@ extensions/feishu/src/reply-dispatcher.ts	1
 extensions/feishu/src/send.ts	8
 extensions/feishu/src/setup-core.ts	1
 extensions/feishu/src/setup-surface.ts	17
-extensions/feishu/src/thread-bindings.ts	2
 extensions/feishu/src/tool-account.ts	1
 extensions/feishu/src/typing-backoff.ts	2
 extensions/feishu/src/wiki.ts	2
@@ -920,7 +919,6 @@ extensions/synology-chat/src/inbound-event.ts	1
 extensions/synology-chat/src/outbound-media.ts	1
 extensions/synology-chat/src/setup-surface.ts	3
 extensions/synology-chat/src/test-http-utils.ts	6
-extensions/synology-chat/src/webhook-handler.ts	1
 extensions/talk-voice/index.ts	1
 extensions/teams-meetings/src/transports/teams-meetings-urls.ts	1
 extensions/telegram/src/account-selection.ts	1
@@ -2054,7 +2052,7 @@ src/config/sessions/session-sqlite-target.ts	2
 src/config/sessions/session-store-config.ts	1
 src/config/sessions/session-transcript-reconcile.worker.ts	1
 src/config/sessions/skill-prompt-blobs.ts	5
-src/config/sessions/store-entry-shape.ts	2
+src/config/sessions/store-entry-shape.ts	1
 src/config/sessions/transcript-assistant-message.ts	2
 src/config/sessions/transcript-replay.ts	1
 src/config/sessions/transcript-stream.ts	1

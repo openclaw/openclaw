@@ -57,10 +57,6 @@ function extractUserText(message: unknown): string | undefined {
   return normalizeContextText(text) || undefined;
 }
 
-function readMessageTimestamp(message: unknown): number {
-  return resolveNonNegativeIntegerOption(asOptionalObjectRecord(message)?.timestamp, 0);
-}
-
 function appendContextMessages(
   events: Array<{ event: unknown }>,
   messages: SessionCompanionContextMessage[],
@@ -80,7 +76,7 @@ function appendContextMessages(
           ? extractUserText(message)
           : undefined;
     if (text && (role === "assistant" || role === "user")) {
-      messages.push({ role, text, ts: readMessageTimestamp(message) });
+      messages.push({ role, text, ts: resolveNonNegativeIntegerOption(message?.timestamp, 0) });
     }
   }
 }

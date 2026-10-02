@@ -72,6 +72,48 @@ class FakeCommandChild extends EventEmitter {
 }
 
 describe("plugin lifecycle matrix probe", () => {
+  it("serves fixture packages after the registry reports its listening port", async ({
+    signal,
+  }) => {
+    const dir = tempDirs.make("openclaw-plugin-registry-ready-");
+    const tarball = path.join(dir, "fixture.tgz");
+    writeFileSync(tarball, "fixture package");
+    const registry = await probeTesting.startNpmFixtureRegistry(
+      dir,
+      [["registry-probe", "1.0.0", tarball]],
+      process.env,
+      signal,
+    );
+    try {
+      const response = await fetch(`${registry.env.NPM_CONFIG_REGISTRY}/registry-probe`, {
+        signal,
+      });
+      expect(response.ok).toBe(true);
+      expect(await response.json()).toMatchObject({
+        name: "registry-probe",
+        "dist-tags": { latest: "1.0.0" },
+      });
+    } finally {
+      await registry.stop();
+    }
+  });
+
+  it("joins registry cleanup when its startup is cancelled", async () => {
+    const dir = tempDirs.make("openclaw-plugin-registry-cancel-");
+    const tarball = path.join(dir, "fixture.tgz");
+    writeFileSync(tarball, "fixture package");
+    const cancellation = new AbortController();
+    cancellation.abort(new Error("registry startup cancelled"));
+    await expect(
+      probeTesting.startNpmFixtureRegistry(
+        dir,
+        [["registry-probe", "1.0.0", tarball]],
+        process.env,
+        cancellation.signal,
+      ),
+    ).rejects.toMatchObject({ name: "AbortError", cause: cancellation.signal.reason });
+  });
+
   it("accepts inspect JSON for an enabled loaded plugin", async () => {
     const dir = tempDirs.make("openclaw-plugin-lifecycle-probe-");
     const inspectPath = path.join(dir, "inspect.json");

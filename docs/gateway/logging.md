@@ -276,6 +276,11 @@ reads use the current catalog while its replacement loads in the background, the
 rows refresh with the new catalog. Startup still waits for the first catalog.
 Renewals that retain identical catalog content do not dirty resident rows.
 
+Concurrent lists share metadata preparation and selected-row materialization.
+Selected pages yield to the event loop between bounded materialization batches,
+including when stored facts are already cached. A long `materialize` wait does
+not by itself indicate an event-loop stall or repeated work for each caller.
+
 Profile and run-registry publications refresh their derived display facts without
 rereading session entries. Worker environment and placement publications refresh
 only the selected rows' worker facts on their next presentation. Stored session

@@ -23,6 +23,7 @@ import {
   CONTRACTS_PLUGIN_VITEST_CONFIG,
   E2E_VITEST_CONFIG,
   hasImportGraphImpactOnTargets,
+  isRoutableChangedTarget,
   isTestFileTarget,
   listRunnableVitestConfigTargets,
   resolveAffectedTestsFromImportGraph,
@@ -515,7 +516,9 @@ export function resolveChangedNodeTestTargets(
   const owners = [
     ...new Set([
       ...targetPlan.targets,
-      ...(aggressive ? paths.filter(isTestFileTarget) : []),
+      ...(aggressive
+        ? paths.filter((file) => isTestFileTarget(file) && isRoutableChangedTarget(file))
+        : []),
       ...ownerOptIns,
       ...(aggressive
         ? []

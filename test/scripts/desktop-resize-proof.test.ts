@@ -15,7 +15,6 @@ import {
 } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
-import { mock } from "node:test";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   type DesktopProofSourceStatus,
@@ -366,16 +365,18 @@ describe("desktop proof identity and public evidence", () => {
 
   it("keeps the tap off a port claimed before its listener binds", async () => {
     const upstream = await acquireTestPortBlock({ offsets: [0] });
-    const listen = mock.method(net.Server.prototype, "listen");
+    const createServer = net.createServer;
     // Model the kernel choosing another fixture's claimed but unbound port.
-    const listenSpy = vi.spyOn(net.Server.prototype, "listen").mockImplementation(function (
-      this: net.Server,
-      ...args
-    ) {
-      if (args[0] === 0) {
-        args[0] = upstream.port;
-      }
-      return Reflect.apply(listen, this, args);
+    const createServerSpy = vi.spyOn(net, "createServer").mockImplementation((...args) => {
+      const server = createServer(...args);
+      const listen = server.listen.bind(server);
+      server.listen = (...listenArgs) => {
+        if (listenArgs[0] === 0) {
+          listenArgs[0] = upstream.port;
+        }
+        return Reflect.apply(listen, server, listenArgs);
+      };
+      return server;
     });
     let closeTap: (() => Promise<void>) | undefined;
     await runQaGatewayFixture(
@@ -387,11 +388,7 @@ describe("desktop proof identity and public evidence", () => {
         closeTap = tap.close;
         expect(tap.port).not.toBe(upstream.port);
       },
-      () => {
-        listenSpy.mockRestore();
-        listen.mock.restore();
-        listen.mock.resetCalls();
-      },
+      () => createServerSpy.mockRestore(),
       () => closeTap?.(),
       () => upstream.release(),
     );

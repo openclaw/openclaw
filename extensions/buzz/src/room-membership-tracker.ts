@@ -1,4 +1,5 @@
 import type { Event, Filter, Relay } from "nostr-tools";
+import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import { isNewerBuzzRevision } from "./event-order.js";
 import { catchUpBuzzRoomHistory } from "./history-catchup.js";
 import { BUZZ_INBOUND_MESSAGE_KINDS, isBuzzInboundMessageKind } from "./message-event.js";
@@ -95,7 +96,7 @@ export async function createBuzzRoomMembershipTracker(params: {
   const pendingMemberships = new Map<string, Map<string, ExpectedMembership>>();
   const refreshes = new Map<string, RefreshState>();
   const restoringRooms = new Map<string, RestoringRoom>();
-  let membershipQueryTail = Promise.resolve();
+  const withMembershipQueryLock = createAsyncLock();
   const memberships = await queryBuzzRoomMemberships(params);
   params.signal?.throwIfAborted();
   const effectiveMemberships = (): ReadonlyMap<string, BuzzRoomMembership> => {
@@ -156,8 +157,8 @@ export async function createBuzzRoomMembershipTracker(params: {
     memberships.set(membership.roomId, membership);
     params.onMembershipsChanged?.(effectiveMemberships());
   };
-  const queryMembership = (channelId: string): Promise<BuzzRoomMembership | undefined> => {
-    const query = membershipQueryTail.then(async () => {
+  const queryMembership = (channelId: string): Promise<BuzzRoomMembership | undefined> =>
+    withMembershipQueryLock(async () => {
       params.signal?.throwIfAborted();
       return (
         await queryBuzzRoomMemberships({
@@ -168,12 +169,6 @@ export async function createBuzzRoomMembershipTracker(params: {
         })
       ).get(channelId);
     });
-    membershipQueryTail = query.then(
-      () => undefined,
-      () => undefined,
-    );
-    return query;
-  };
 
   const refreshMembership = async (channelId: string, state: RefreshState): Promise<void> => {
     for (const delayMs of MEMBERSHIP_REFRESH_DELAYS_MS) {

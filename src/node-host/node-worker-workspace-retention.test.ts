@@ -3,7 +3,15 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -568,7 +576,7 @@ describe("node worker workspace retention", () => {
     expect(fs.existsSync(generation)).toBe(true);
   });
 
-  it("protects an in-flight workspace command admitted during collection", async () => {
+  it("protects an in-flight workspace command admitted during collection", async ({ signal }) => {
     const root = tempDirs.make("node-worker-workspace-retention-command-");
     const workspace = new NodeWorkerWorkspaceRuntime({ root });
     const input = testWorkerLaunchInput("/unused", "command-retention");
@@ -576,7 +584,7 @@ describe("node worker workspace retention", () => {
       generationPath(root, input, input.descriptor.admission.ownerEpoch),
       "started",
     );
-    const release = path.join(path.dirname(started), "release");
+    const receipts = await openFixtureReceiptChannel();
     const command = workspace.exec({
       gatewayNamespace: input.gatewayNamespace,
       environmentId: input.descriptor.admission.environmentId,
@@ -584,20 +592,45 @@ describe("node worker workspace retention", () => {
       generation: input.descriptor.admission.ownerEpoch,
       argv: [
         "node",
+        "--input-type=module",
         "-e",
-        `const fs=require("node:fs");fs.writeFileSync("started","");const gate="release";const until=Date.now()+5000;while(!fs.existsSync(gate)&&Date.now()<until)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);`,
+        `${fixtureReceiptClientSource(receipts.endpoint)}
+import fs from "node:fs";
+fs.writeFileSync("started", "");
+sendReceipt("command", "started");
+await awaitRelease("command", "release");`,
       ],
     });
-    await vi.waitFor(() => expect(fs.existsSync(started)).toBe(true));
-    const retention = workspace.applyRetainSnapshot(retainInput(input, 1, []), async () => []);
-    fs.writeFileSync(release, "release");
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          receipts.waitFor("command", "started"),
+          command,
+          "Workspace command settled before starting",
+        ).catch((error: unknown) => {
+          // The command can settle before its receipt crosses the separate socket.
+          if (!fs.existsSync(started)) {
+            throw error;
+          }
+        }),
+        signal,
+      );
+      const retention = workspace.applyRetainSnapshot(retainInput(input, 1, []), async () => []);
+      receipts.release("command", "release");
 
-    await command;
-    await retention;
-    expect(fs.existsSync(path.dirname(started))).toBe(true);
+      await withinTest(Promise.all([command, retention]), signal);
+      expect(fs.existsSync(path.dirname(started))).toBe(true);
 
-    await workspace.applyRetainSnapshot(retainInput(input, 2, []), async () => []);
-    expect(fs.existsSync(path.dirname(started))).toBe(false);
+      await withinTest(
+        workspace.applyRetainSnapshot(retainInput(input, 2, []), async () => []),
+        signal,
+      );
+      expect(fs.existsSync(path.dirname(started))).toBe(false);
+    } finally {
+      receipts.release("command", "release");
+      await command.catch(() => {});
+      await receipts.close();
+    }
   });
 
   it("rejects conflicting replay and ignores an older sequence", async () => {

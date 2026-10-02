@@ -15,6 +15,7 @@ async function runFixture(
     | "explicit-unbound"
     | "supervisor-loss"
     | "native-resource"
+    | "resource-idle-broker"
     | "resource-supervisor-loss"
     | "resource-auto-close-success"
     | "resource-auto-close-failure"
@@ -43,6 +44,19 @@ async function runFixture(
 }
 
 describe("retained native worker lifecycle", () => {
+  it("retires an idle broker only after independent resource custody joins", async () => {
+    expect(await runFixture("resource-idle-broker")).toEqual({
+      ending: "resource-idle-broker",
+      independentCustodyPreserved: true,
+      idleBrokerJoined: true,
+      sourceReusable: true,
+      firstCloseRejected: true,
+      sameOwnerRetried: true,
+      childClosedBeforeStopped: true,
+      sqliteReusable: true,
+    });
+  }, 20_000);
+
   it("preserves constructor ALS for callbacks serviced from another context", async () => {
     const expected = ["message", "error", "exit"].map((event) => ({
       event,

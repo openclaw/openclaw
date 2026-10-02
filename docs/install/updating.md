@@ -474,6 +474,11 @@ newer writes. If the previous runtime cannot read the current databases, the
 updater retains the candidate and recovery artifacts and reports why rollback
 was refused.
 
+Rollback snapshots settle local SQLite writers under maintenance ownership before
+capture, so writer shutdown during rollback is not mistaken for intervening writes.
+The installed updater owns snapshot capture; staging a newer candidate cannot
+change that behavior in an already-running older updater.
+
 Switch channels or target a specific version:
 
 ```bash

@@ -435,7 +435,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         let welcomeQuestion: SystemAgentChatQuestion | undefined;
         try {
           if (params.welcomeVariant === "onboarding") {
-            const onboardingWelcome = await buildOnboardingWelcome({ engine });
+            const onboardingWelcome = await buildOnboardingWelcome({
+              engine,
+              locale: client?.connect.locale,
+            });
             welcome = onboardingWelcome.text;
             welcomeQuestion = onboardingWelcome.question;
           } else if (params.welcomeVariant === "new-agent") {
