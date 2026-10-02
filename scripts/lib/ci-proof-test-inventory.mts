@@ -74,6 +74,7 @@ export const RELEASE_ONLY_RUNTIME_TEST_FILES = [
   "src/gateway/server-methods/models-dispatch.lifecycle.integration.test.ts",
   "src/gateway/server-methods/models-list.native-lifecycle.integration.test.ts",
   "src/gateway/server-methods/session-catalog-import.integration.test.ts",
+  "src/gateway/server-methods/sessions.abort-contention.real-lock.test.ts",
   "src/gateway/server-plugins.lifecycle.test.ts",
   "src/gateway/server.acp-native-model.product.test.ts",
   "src/gateway/server.catalog-startup.test.ts",
