@@ -41,6 +41,13 @@ silently discard persisted data.
 Legacy normalization belongs to Doctor and migration owners, with the existing
 backup and verification flow. Runtime readers consume canonical state.
 
+Old `openclaw.extension.json` npm declaration stubs are ignored by discovery and
+Doctor. They are not plugin manifests, and their files remain unchanged. Reinstall
+the package with `openclaw plugins install npm:<package>` and update any explicit
+`plugins.load.paths` entry to the installed plugin root. To use the old automatic
+stub repair, run `openclaw doctor --fix` on `2026.9.7` before upgrading. Current
+`openclaw.plugin.json` manifests and npm package installation remain supported.
+
 OpenClaw `v2026.9.7` can still write ownerless and mode-less cron jobs, and its
 migration/import writers can preserve null, `deliver`, or mixed-case delivery
 modes. Those cron repairs remain supported; this change retires no cron format.
