@@ -686,7 +686,7 @@ describe("buildChildCompletionFindings", () => {
     },
   );
 
-  it.each(["ANNOUNCE_SKIP", "REPLY_SKIP", "HEARTBEAT_OK"])(
+  it.each(["HEARTBEAT_OK"])(
     "does not override an intentional %s completion with fallback output",
     (resultText) => {
       const findings = buildChildCompletionFindings([
@@ -712,7 +712,7 @@ describe("buildChildCompletionFindings", () => {
         childSessionKey: "agent:main:subagent:silent",
         task: "silent task",
         createdAt: 1,
-        completion: { resultText: "ANNOUNCE_SKIP" },
+        completion: { terminalReply: { disposition: "silent" } },
         execution: { outcome: { status: "ok" } },
       },
       {
