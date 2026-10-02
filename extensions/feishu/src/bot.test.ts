@@ -1949,14 +1949,14 @@ describe("handleFeishuMessage command authorization", () => {
 
   it.each([
     {
-      name: "keeps root_id as topic key when root_id and thread_id both exist",
+      name: "prefers thread_id over root_id when both exist",
       groupConfig: { groupSessionScope: "group_topic_sender" as const },
       messageId: "msg-scope-topic-thread-id",
       senderOpenId: "ou-topic-user",
       message: { root_id: "om_root_topic", thread_id: "omt_topic_1" },
       expectedPeer: {
         kind: "group" as const,
-        id: "oc-group:topic:om_root_topic:sender:ou-topic-user",
+        id: "oc-group:topic:omt_topic_1:sender:ou-topic-user",
       },
       expectedParentPeer: { kind: "group" as const, id: "oc-group" },
     },
@@ -1977,12 +1977,12 @@ describe("handleFeishuMessage command authorization", () => {
     },
 
     {
-      name: "maps legacy topicSessionMode=enabled to root_id when both root_id and thread_id exist",
+      name: "maps legacy topicSessionMode=enabled to thread_id when both root_id and thread_id exist",
       accountConfig: { topicSessionMode: "enabled" as const },
       messageId: "msg-legacy-topic-thread-id",
       senderOpenId: "ou-legacy-thread-id",
       message: { root_id: "om_root_legacy", thread_id: "omt_topic_legacy" },
-      expectedPeer: { kind: "group" as const, id: "oc-group:topic:om_root_legacy" },
+      expectedPeer: { kind: "group" as const, id: "oc-group:topic:omt_topic_legacy" },
       expectedParentPeer: { kind: "group" as const, id: "oc-group" },
     },
 
@@ -2073,49 +2073,6 @@ describe("handleFeishuMessage command authorization", () => {
     const expectedParentPeer = { kind: "group" as const, id: "oc-group" };
     expectResolvedRouteCall(0, expectedPeer, expectedParentPeer);
     expectResolvedRouteCall(1, expectedPeer, expectedParentPeer);
-  });
-
-  it("keeps topic session key stable after first turn creates a thread", async () => {
-    mockShouldComputeCommandAuthorized.mockReturnValue(false);
-
-    const cfg = createFeishuTestConfig({
-      groups: {
-        "oc-group": {
-          requireMention: false,
-          groupSessionScope: "group_topic",
-          replyInThread: "enabled",
-        },
-      },
-    });
-    const firstTurn = createFeishuTestEvent({
-      messageId: "msg-topic-first",
-      senderOpenId: "ou-topic-init",
-      chatId: "oc-group",
-      chatType: "group",
-      text: "create topic",
-    });
-    const secondTurn = createFeishuTestEvent({
-      messageId: "msg-topic-second",
-      senderOpenId: "ou-topic-init",
-      chatId: "oc-group",
-      chatType: "group",
-      text: "follow up in same topic",
-      message: { root_id: "msg-topic-first", thread_id: "omt_topic_created" },
-    });
-
-    await dispatchMessage({ cfg, event: firstTurn });
-    await dispatchMessage({ cfg, event: secondTurn });
-
-    expectResolvedRouteCall(0, { kind: "group", id: "oc-group:topic:msg-topic-first" });
-    expectResolvedRouteCall(1, { kind: "group", id: "oc-group:topic:msg-topic-first" });
-    expect(mockCreateFeishuReplyDispatcher).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        replyToMessageId: "msg-topic-first",
-        rootId: "msg-topic-first",
-        typingTargetMessageId: "msg-topic-second",
-      }),
-    );
   });
 
   it("hydrates missing native topic thread_id before routing starter events", async () => {

@@ -418,6 +418,101 @@ export async function listFeishuThreadMessages(params: {
   return results;
 }
 
+const topicRootMessageIdCache = new Map<string, string>();
+const TOPIC_ROOT_MESSAGE_ID_CACHE_LIMIT = 512;
+
+/**
+ * Resolves a Feishu topic (`omt_…`) to the message that anchors replies for it.
+ *
+ * The reply API addresses a message, never a topic, and an inbound event's `root_id` can point
+ * at the quoted message instead of the topic root. Callers that only know the topic therefore
+ * need the topic's oldest message to keep one session and one reply anchor per topic.
+ * Best-effort: a failed lookup returns undefined so the caller keeps its own fallback.
+ */
+async function resolveFeishuTopicRootMessageId(params: {
+  cfg: ClawdbotConfig;
+  topicId?: string | null;
+  accountId?: string;
+}): Promise<string | undefined> {
+  const topicId = params.topicId?.trim();
+  if (!topicId) {
+    return undefined;
+  }
+  const cacheKey = `${params.accountId ?? "default"}:${topicId}`;
+  const cached = topicRootMessageIdCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const listParams = {
+    params: {
+      container_id_type: "thread",
+      container_id: topicId,
+      // Topic order is immutable, so the oldest message is the root and one page suffices.
+      sort_type: "ByCreateTimeAsc",
+      page_size: 1,
+    },
+  } as const;
+  let response: { code?: number; msg?: string; data?: { items?: Array<{ message_id?: string }> } };
+  try {
+    const client = createConfiguredFeishuClient({ cfg: params.cfg, accountId: params.accountId });
+    // SAFETY: this call resolves to the Feishu message-list envelope, and only code/msg/data.items are read.
+    response = (await client.im.message.list(listParams)) as typeof response;
+  } catch (err) {
+    logVerbose(
+      `feishu topic root lookup failed for ${topicId}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return undefined;
+  }
+
+  if (response.code !== 0) {
+    logVerbose(`feishu topic root lookup failed for ${topicId}: code=${response.code}`);
+    return undefined;
+  }
+  const rootMessageId = response.data?.items?.[0]?.message_id?.trim();
+  if (!rootMessageId) {
+    return undefined;
+  }
+
+  if (topicRootMessageIdCache.size >= TOPIC_ROOT_MESSAGE_ID_CACHE_LIMIT) {
+    topicRootMessageIdCache.clear();
+  }
+  topicRootMessageIdCache.set(cacheKey, rootMessageId);
+  return rootMessageId;
+}
+
+/**
+ * Turns the thread identity a channel target carries into a reply anchor.
+ *
+ * A Feishu reply addresses a message, so a target that names a topic (`omt_…`) needs the topic's
+ * root message; a target that already names a message is returned unchanged and costs no lookup.
+ *
+ * A failed lookup keeps the topic id instead of clearing the target: send owners already refuse
+ * to fall back to a top-level post after a threaded reply fails, and dropping the target here
+ * would silently post a new top-level message in a topic chat.
+ */
+export async function resolveFeishuReplyAnchorMessageId(params: {
+  cfg: ClawdbotConfig;
+  threadId?: string | null;
+  accountId?: string;
+}): Promise<string | undefined> {
+  const threadId = params.threadId?.trim();
+  if (!threadId || !isFeishuTopicId(threadId)) {
+    return threadId;
+  }
+  return (
+    (await resolveFeishuTopicRootMessageId({
+      cfg: params.cfg,
+      topicId: threadId,
+      accountId: params.accountId,
+    })) ?? threadId
+  );
+}
+
+function isFeishuTopicId(value: string): boolean {
+  return value.startsWith("omt_");
+}
+
 type SendFeishuMessageParams = {
   cfg: ClawdbotConfig;
   to: string;

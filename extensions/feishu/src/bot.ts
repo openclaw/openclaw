@@ -518,7 +518,6 @@ export async function handleFeishuMessage(params: {
         messageId: ctx.messageId,
         rootId: ctx.rootId,
         threadId: effectiveThreadId,
-        chatType: ctx.chatType,
         groupConfig,
         feishuCfg,
       })

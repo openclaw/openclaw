@@ -187,20 +187,6 @@ describe("Feishu plugin adapters", () => {
       expect.objectContaining({ cfg, to: "ou_user", accountId: "work" }),
     );
   });
-  it("owns topic and sender session inheritance", () => {
-    for (const [rawId, parents] of [
-      ["oc_group:Topic:om_root:Sender:ou_user", ["oc_group:topic:om_root", "oc_group"]],
-      ["oc_group:topic:om_root", ["oc_group"]],
-    ] as const) {
-      expect(
-        feishuPlugin.messaging?.resolveSessionConversation?.({ kind: "group", rawId }),
-      ).toEqual({
-        id: rawId.toLowerCase(),
-        baseConversationId: "oc_group",
-        parentConversationCandidates: parents,
-      });
-    }
-  });
   it.each([
     ["ou_123", { to: "user:ou_123" }],
     ["oc_123", { to: "chat:oc_123" }],

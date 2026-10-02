@@ -41,6 +41,7 @@ import {
   type SendMediaResult,
 } from "./media.js";
 import { readNativeFeishuCardJson } from "./native-card.js";
+import { withFeishuOutboundSendAnchor } from "./outbound-send-anchor.js";
 import {
   assertFeishuCardWithinEnvelope,
   buildFeishuPresentationFallback,
@@ -59,7 +60,6 @@ import {
   createFeishuReplyDeliveryResult,
   type FeishuReplyDeliverySource,
 } from "./reply-delivery-result.js";
-import { withFeishuSendContext } from "./send-context.js";
 import {
   chunkFeishuCardMarkdown,
   sendCardFeishu,
@@ -406,23 +406,7 @@ async function sendFeishuTtsSupplementPayload(params: {
   return lastResult ?? { channel: "feishu", messageId: "" };
 }
 
-function withFeishuOutboundSendContext(adapter: ChannelOutboundAdapter): ChannelOutboundAdapter {
-  const { sendText, sendMedia, sendPayload } = adapter;
-  return {
-    ...adapter,
-    ...(sendText
-      ? { sendText: async (ctx) => withFeishuSendContext(ctx, () => sendText(ctx)) }
-      : {}),
-    ...(sendMedia
-      ? { sendMedia: async (ctx) => withFeishuSendContext(ctx, () => sendMedia(ctx)) }
-      : {}),
-    ...(sendPayload
-      ? { sendPayload: async (ctx) => withFeishuSendContext(ctx, () => sendPayload(ctx)) }
-      : {}),
-  };
-}
-
-export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendContext({
+export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendAnchor({
   deliveryMode: "direct",
   chunker: chunkFeishuMarkdown,
   chunkerMode: "markdown",
