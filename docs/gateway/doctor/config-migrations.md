@@ -63,20 +63,12 @@ Doctor refuses these retired inputs:
 - Telegram `dm`, `direct.*.threadReplies`, native draft preview settings, and scalar
   or flat streaming settings (`streamMode`, `chunkMode`, `blockStreaming`,
   `blockStreamingCoalesce`, and `draftChunk`), including account overrides.
-- Nextcloud Talk `allowPrivateNetwork`; use the intermediate migration before the
-  canonical `network.dangerouslyAllowPrivateNetwork` setting.
 
 Configs containing these keys must be repaired before current validation can
 succeed. Doctor preserves the config and stops with recovery guidance instead
 of stripping these settings or replacing them with a backup. For an older installation,
 [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
 and run its Doctor migrations before installing the latest version.
-
-The pre-July Nextcloud Talk JSON replay cache is no longer imported. Its old files
-are left untouched; the intermediate release owns that import. Current SQLite
-replay state, July-era Teams/Nextcloud streaming settings, Telegram tuning and
-group-history settings, and the four channels' explicit listener keys retain
-their Doctor migrations.
 
 ## Cron ownership before roster migration
 

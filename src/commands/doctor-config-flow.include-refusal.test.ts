@@ -23,7 +23,7 @@ describe("doctor config persistence", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  it("refuses retired channel inputs before include repair or backup recovery", async () => {
+  it("refuses retired Telegram inputs before include repair or backup recovery", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       const configPath = await writeOpenClawConfig(home, {
         channels: { $include: "./channels.json" },
@@ -52,10 +52,6 @@ describe("doctor config persistence", () => {
             disabled: { streaming: false },
           },
         },
-        "nextcloud-talk": {
-          allowPrivateNetwork: true,
-          accounts: { work: { allowPrivateNetwork: false } },
-        },
       };
       const includedBytes = JSON.stringify(channels);
       await fs.writeFile(includePath, includedBytes);
@@ -83,8 +79,6 @@ describe("doctor config persistence", () => {
         "channels.telegram.accounts.flat.draftChunk",
         "channels.telegram.accounts.scalar.streaming",
         "channels.telegram.accounts.disabled.streaming",
-        "channels.nextcloud-talk.allowPrivateNetwork",
-        "channels.nextcloud-talk.accounts.work.allowPrivateNetwork",
       ]) {
         expect(failure).toHaveProperty("message", expect.stringContaining(field));
       }
@@ -94,11 +88,10 @@ describe("doctor config persistence", () => {
     });
   });
 
-  it("keeps canonical channel streaming and private-network settings eligible for Doctor", async () => {
+  it("keeps canonical Telegram streaming settings eligible for Doctor", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       const channels = {
         telegram: { streaming: { mode: "off" as const }, direct: { "42": {} } },
-        "nextcloud-talk": { network: { dangerouslyAllowPrivateNetwork: false } },
       };
       const configPath = await writeOpenClawConfig(home, {
         channels,
@@ -107,9 +100,6 @@ describe("doctor config persistence", () => {
       });
       const ctx = await prepareDoctorContext(configPath);
       expect(ctx.cfg.channels?.telegram?.streaming).toEqual(channels.telegram.streaming);
-      expect(ctx.cfg.channels?.["nextcloud-talk"]?.network).toEqual(
-        channels["nextcloud-talk"].network,
-      );
     });
   });
 

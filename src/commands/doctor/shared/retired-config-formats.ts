@@ -107,9 +107,6 @@ export function findRetiredConfigUpgradeRequirement(
       }
     }
   });
-  visitChannelEntries(config, "nextcloud-talk", (scope, configPath) => {
-    checkKeys(scope, configPath, ["allowPrivateNetwork"]);
-  });
   for (const channelId of ["discord", "line", "matrix", "telegram"]) {
     visitChannelEntries(config, channelId, (scope, configPath) => {
       checkKeys(scope.threadBindings, `${configPath}.threadBindings`, ["ttlHours"]);
