@@ -2,13 +2,13 @@
 import fsSync, { type BigIntStats, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { CanonicalSessionReaderContinuation } from "../../../../src/config/sessions/session-canonical-key.js";
 import { normalizeAgentId } from "./config-utils.js";
 import { isFileMissingError, normalizeComparablePath } from "./fs-utils.js";
 import {
   isDreamingNarrativeSessionStoreKey,
   extractAgentIdFromSessionsDir,
   canonicalizeMainSessionAlias,
+  type CanonicalSessionReaderContinuation,
   cloneEnvWithPlatformSemantics,
   getRuntimeConfig,
   isCronRunSessionKey,

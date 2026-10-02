@@ -33,8 +33,8 @@ vi.mock("../../infra/push-web.js", () => ({
   setWebPushSubscriptionPreferences: vi.fn(),
 }));
 vi.mock("../../state/user-preferences.js", () => ({
-  getUserPreferences: vi.fn(),
-  setUserPreferences: vi.fn(),
+  getCanonicalUserPreferences: vi.fn(),
+  setCanonicalUserPreferences: vi.fn(),
 }));
 vi.mock("../session-sharing.js", async () => ({
   // The real Web Push handler has no session target; leave its request guards intact.

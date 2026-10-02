@@ -53,7 +53,6 @@ extensions/browser/src/browser/chrome.executables.ts	1
 extensions/browser/src/browser/chrome.ts	4
 extensions/browser/src/browser/client-fetch.ts	2
 extensions/browser/src/browser/config-mutations.ts	1
-extensions/browser/src/browser/config.ts	1
 extensions/browser/src/browser/errors.ts	4
 extensions/browser/src/browser/extension-install-layout.ts	4
 extensions/browser/src/browser/extension-relay/auth-v2.ts	4

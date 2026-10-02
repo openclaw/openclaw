@@ -94,7 +94,7 @@ describe("requester settle wake commit retry", () => {
   });
 
   it.each(["another requester", "the same task"])(
-    "rejects a frozen completion whose newer run belongs to %s",
+    "keeps frozen completion custody task-scoped when a newer run belongs to %s",
     async (replacement) => {
       const entry = makeRetainedChild();
       entry.generation = 1;
@@ -108,8 +108,12 @@ describe("requester settle wake commit retry", () => {
       };
       const { context } = makeContext([entry, successor]);
       const commit = vi.fn(() => true);
-      await commitRequesterWake(context, [entry, successor], undefined, commit, false);
-      expect(commit).not.toHaveBeenCalled();
+      await commitRequesterWake(context, [entry], undefined, commit, false);
+      if (replacement === "another requester") {
+        expect(commit).toHaveBeenCalledExactlyOnceWith([entry], expect.any(Object));
+      } else {
+        expect(commit).not.toHaveBeenCalled();
+      }
     },
   );
 

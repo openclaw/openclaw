@@ -215,11 +215,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   const currentCompletionRows = (rows: SubagentRunRecord[]) =>
     frozenBatchRunIds?.length
       ? rows.filter((entry) =>
-          isRequesterCompletionCohortCurrent(
-            entry,
-            settledBatch,
-            getLatestLiveSubagentRunByChildSessionKey,
-          ),
+          isRequesterCompletionCohortCurrent(entry, getLatestLiveSubagentRunByChildSessionKey),
         )
       : dedupeLatestChildCompletionRows(
           filterCurrentDirectChildCompletionRows(rows, {

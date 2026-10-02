@@ -77,7 +77,7 @@ export function createSubagentRegistrySweeper(params: {
   resumeRequesterSettleWake: SubagentLifecycleController["resumeRequesterSettleWake"];
   startSubagentAnnounceCleanupFlow: SubagentLifecycleController["startSubagentAnnounceCleanupFlow"];
   completeCleanupBookkeeping: SubagentLifecycleController["completeCleanupBookkeeping"];
-  isEndedHookOwnerCurrent: SubagentLifecycleController["isEndedHookOwnerCurrent"];
+  isCleanupOwnerCurrent: SubagentLifecycleController["isCleanupOwnerCurrent"];
   sessionEffectsHostCurrent: SubagentLifecycleController["sessionEffectsHostCurrent"];
   shouldSuppressSessionEffects: SubagentLifecycleController["shouldSuppressSessionEffects"];
   discardTerminalDelivery: typeof SubagentLifecycleController.discardTerminalDelivery;
@@ -303,7 +303,7 @@ export function createSubagentRegistrySweeper(params: {
               clearPendingLifecycleTimeout: params.clearPendingLifecycleTimeout,
               discardTerminalDelivery: params.discardTerminalDelivery,
               completeCleanupBookkeeping: params.completeCleanupBookkeeping,
-              isCurrent: () => params.isEndedHookOwnerCurrent(runId, entry),
+              isCurrent: () => params.isCleanupOwnerCurrent(runId, entry),
               sessionEffectsHostCurrent: params.sessionEffectsHostCurrent,
               shouldSuppressSessionEffects: params.shouldSuppressSessionEffects,
               shouldEmitEndedHookForRun: params.shouldEmitEndedHookForRun,

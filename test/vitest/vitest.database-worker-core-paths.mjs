@@ -1,5 +1,10 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/system-agent/audit.test.ts",
+  "src/system-agent/operations.test.ts",
+  "src/system-agent/operations.setup.test.ts",
+  "src/system-agent/rescue-message.test.ts",
+  "src/system-agent/transcript-store.test.ts",
   "src/infra/restart-sentinel.update-result.test.ts",
   "src/auto-reply/reply/conversation-turn-capture.test.ts",
   "src/status/status-plugin-health.runtime.test.ts",
@@ -562,6 +567,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-execution.integrity.test.ts",
   "src/state/openclaw-agent-execution-incognito.test.ts",
   "src/state/openclaw-agent-execution-incognito.sessions.test.ts",
+  "src/state/openclaw-agent-execution-incognito.side-data.test.ts",
   "src/state/openclaw-agent-execution.creation-witness.test.ts",
   "src/state/openclaw-agent-execution.close-wedge.test.ts",
   "src/state/openclaw-agent-execution-cleanup.test.ts",
@@ -920,6 +926,9 @@ const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);
 
 // Preserve watch admission for consumers previously inferred into fast lanes.
 export const databaseWorkerCoreFormerFastKinds = new Map([
+  ["src/system-agent/audit.test.ts", "unitFastIsolated"],
+  ["src/system-agent/operations.test.ts", "unitFastIsolated"],
+  ["src/system-agent/rescue-message.test.ts", "unitFastIsolated"],
   ["packages/memory-host-sdk/src/host/session-files.test.ts", "unitFastIsolated"],
   ["src/infra/restart-sentinel.update-result.test.ts", "unitFast"],
   ["src/commands/doctor-maintenance.session-workers.test.ts", "unitFast"],

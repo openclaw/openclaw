@@ -67,6 +67,7 @@ export {
   type SessionTranscriptInstance,
 } from "../../../../src/config/sessions/session-history.js";
 export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
+export type { CanonicalSessionReaderContinuation } from "../../../../src/config/sessions/session-canonical-key.js";
 export type { SessionEntry } from "../../../../src/config/sessions/types.js";
 export { isExecCompletionEvent } from "../../../../src/infra/heartbeat-events-filter.js";
 export {

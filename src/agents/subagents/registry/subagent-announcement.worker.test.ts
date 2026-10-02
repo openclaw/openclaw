@@ -277,8 +277,10 @@ it.each(["not-committed", "unknown", "successor"] as const)(
       release.resolve();
       await registration;
       await fixture.settle();
-      expect(fixture.wake).not.toHaveBeenCalled();
-      expect(loadSubagentRegistryFromSqlite().get(run.runId)?.cleanupCompletedAt).toBeUndefined();
+      if (change !== "successor") {
+        expect(fixture.wake).not.toHaveBeenCalled();
+        expect(loadSubagentRegistryFromSqlite().get(run.runId)?.cleanupCompletedAt).toBeUndefined();
+      }
       if (change === "not-committed") {
         expect(subagentRuns.get(run.runId)?.cleanupHandled).not.toBe(true);
         expect(loadSubagentRegistryFromSqlite().get(run.runId)).toEqual(before);
@@ -301,6 +303,15 @@ it.each(["not-committed", "unknown", "successor"] as const)(
         await fixture.settle();
         expect(fixture.wake).not.toHaveBeenCalled();
       } else {
+        expect(fixture.wake).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            settledEntry: expect.objectContaining({ runId: run.runId }),
+          }),
+        );
+        expect(loadSubagentRegistryFromSqlite().get(run.runId)).toMatchObject({
+          cleanupCompletedAt: expect.any(Number),
+          execution: { status: "terminal", suppressSessionEffects: true },
+        });
         expect(subagentRuns.get(`${run.runId}-successor`)?.execution.status).toBe("running");
       }
     } finally {

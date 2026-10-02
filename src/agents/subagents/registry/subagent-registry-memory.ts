@@ -298,7 +298,6 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         !record ||
         !isSameSubagentRunOwner(this.get(entry.runId), entry) ||
         record.generation !== entry.generation ||
-        record.execution.suppressSessionEffects === true ||
         (!record.requesterTurnRunId &&
           !record.requesterSettleWake &&
           record.pauseReason !== "sessions_yield" &&

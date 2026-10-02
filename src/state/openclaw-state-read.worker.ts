@@ -103,10 +103,7 @@ import {
   isStateDiagnosticCommand,
   readStateDiagnosticCommand,
 } from "./openclaw-state-read-diagnostics.js";
-import {
-  prepareRegisteredStateRead,
-  stateReadWorkerRegistry,
-} from "./openclaw-state-read-operation-registry.js";
+import { stateReadRegistry } from "./openclaw-state-read-operation-registry.js";
 import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
 import type {
   OpenClawStateReadReply,
@@ -134,12 +131,16 @@ import {
 import { readUserProfileAvatarCommand } from "./user-profiles-internal.js";
 
 serveOwnedWorkerTasks(
-  prepareRegisteredStateRead((input): OpenClawStateReadReply => {
+  function read(input): OpenClawStateReadReply | Promise<OpenClawStateReadReply> {
     let sourceAdmitted: true | undefined;
     let nativeCleanupFailure: OpenClawStateReadReply["nativeCleanupFailure"];
     try {
       if (!isReadRequest(input)) {
         throw new Error("Shared-state reader requires a captured state location and read command");
+      }
+      const prepared = stateReadRegistry.prepare(input.command.type);
+      if (prepared) {
+        return prepared.then(() => read(input));
       }
       const reply = runWithSqliteWorkerStateContext(input.context, (): OpenClawStateReadReply => {
         if (input.checkFreshAdmission) {
@@ -153,7 +154,7 @@ serveOwnedWorkerTasks(
             },
           );
         }
-        const command = { input: undefined, ...input.command };
+        const { command } = input;
         if (command.type === "admit") {
           return { ok: true, type: "admit" };
         }
@@ -213,9 +214,6 @@ serveOwnedWorkerTasks(
         const result = withOpenClawStateReadOnlyLocation(
           ({ db }): OpenClawStateReadResult => {
             sourceAdmitted = true;
-            if (stateReadWorkerRegistry.has(command)) {
-              return stateReadWorkerRegistry.execute(command, db);
-            }
             if (command.type === "doctor.gatewayOwnerLease.read") {
               return { type: command.type, lease: readGatewayOwnerLeaseFromDatabase(db) };
             }
@@ -255,6 +253,9 @@ serveOwnedWorkerTasks(
             }
             if (isChannelIngressReadCommand(command)) {
               return readChannelIngressInDatabase(db, command);
+            }
+            if ("input" in command && stateReadRegistry.has(command)) {
+              return stateReadRegistry.execute(command, db);
             }
             if (command.type === "subagents.runs") {
               if (command.scope.kind === "all") {
@@ -687,6 +688,6 @@ serveOwnedWorkerTasks(
         ...(nativeCleanupFailure ? { nativeCleanupFailure } : {}),
       };
     }
-  }),
+  },
   { closeResource: closeRetainedOpenClawStateReadConnections },
 );

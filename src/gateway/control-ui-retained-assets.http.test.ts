@@ -1,8 +1,9 @@
+import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
-import { brotliCompressSync, brotliDecompressSync } from "node:zlib";
+import { brotliCompressSync, brotliDecompressSync, gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -11,11 +12,13 @@ import {
 } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { CONTROL_UI_ASSET_MANIFEST_FILENAME } from "./control-ui-asset-manifest.js";
 import {
   createControlUiAssetRetention,
   type ControlUiAssetRetention,
 } from "./control-ui-asset-retention.js";
 import {
+  createRetentionManifest,
   holdRetentionAssetRead,
   withRetentionFixture,
   writeRetentionBuild,
@@ -114,6 +117,45 @@ describe("Control UI retained asset HTTP requests", () => {
           await preparing;
         }
       });
+    });
+  });
+
+  it("serves an identity-only retained generation when the client accepts precompressed encodings", async () => {
+    await withRetentionFixture(async ({ root }) => {
+      const prior = await writeRetentionBuild(path.join(root, "prior"), "prior");
+      const source = await fs.readFile(path.join(prior.root, prior.assetPath), "utf8");
+      const entries = [...prior.manifest.assets];
+      for (const [extension, contents] of [
+        ["br", brotliCompressSync(source)],
+        ["gz", gzipSync(source)],
+      ] as const) {
+        const assetPath = `${prior.assetPath}.${extension}`;
+        await fs.writeFile(path.join(prior.root, assetPath), contents);
+        entries.push({
+          path: assetPath,
+          size: contents.byteLength,
+          sha256: createHash("sha256").update(contents).digest("hex"),
+        });
+      }
+      await fs.writeFile(
+        path.join(prior.root, CONTROL_UI_ASSET_MANIFEST_FILENAME),
+        `${JSON.stringify(createRetentionManifest(entries))}\n`,
+      );
+      await createControlUiAssetRetention(prior.root).prepare();
+      const current = await writeRetentionBuild(path.join(root, "current"), "current");
+      const retainedAssets = createControlUiAssetRetention(current.root);
+      await retainedAssets.prepare();
+
+      const { handled, res, end, setHeader } = await runControlUiRequest(
+        current.root,
+        `/${prior.assetPath}`,
+        { retainedAssets, headers: { "accept-encoding": "br, gzip" } },
+      );
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(200);
+      expect(setHeader).not.toHaveBeenCalledWith("Content-Encoding", expect.anything());
+      expect(responseBody(end)).toBe(source);
     });
   });
 
