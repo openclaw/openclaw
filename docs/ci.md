@@ -31,8 +31,9 @@ cancelling eligible same-repository work. Fork monitoring is read-only. Exact
 known hourly-main test and supported static failures can remain advisory when the PR leaves their
 subjects unchanged and all remaining checks finish. Canonical PR reruns let every
 Node matrix leg finish so inherited failures do not cancel the remaining proof
-needed for an explicit admin landing. Native matrix fail-fast applies only to PRs
-in other repositories. Main and manual runs retain complete matrices. See
+needed for an explicit admin landing. Add the `ci:no-fail-fast` label before a PR
+run to keep its complete matrix running after a failure. Native matrix fail-fast
+applies only to unlabeled PRs in other repositories. Main and manual runs retain complete matrices. See
 [failure cancellation](/ci/pipeline#fail-fast-order).
 
 First-hop compatibility uses a 3,200-second container budget and a 3,500-second lane
