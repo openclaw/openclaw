@@ -226,12 +226,7 @@ public struct ChatSessionsSheet: View {
         Button {
             self.isPresentingGroups = true
         } label: {
-            Label {
-                Text("Groups")
-                    .font(OpenClawChatTypography.body)
-            } icon: {
-                Image(systemName: "folder")
-            }
+            chatActionLabel(Text("Groups"), systemImage: "folder")
         }
         .help("Manage thread groups")
     }
@@ -313,14 +308,14 @@ public struct ChatSessionsSheet: View {
                 Button {
                     self.inspectedSession = session
                 } label: {
-                    self.actionLabel("Get Info…", systemImage: "info.circle")
+                    chatActionLabel("Get Info…", systemImage: "info.circle")
                 }
                 Divider()
                 Button {
                     self.renameText = session.displayName ?? ""
                     self.renameTarget = session
                 } label: {
-                    self.actionLabel("Rename", systemImage: "pencil")
+                    chatActionLabel("Rename", systemImage: "pencil")
                 }
                 if !session.isArchived {
                     self.pinButton(session)
@@ -339,7 +334,7 @@ public struct ChatSessionsSheet: View {
                             agentID: session.agentId)
                     }
                 } label: {
-                    self.actionLabel(
+                    chatActionLabel(
                         LocalizedStringKey(
                             session.hasActiveRun == true
                                 ? String(localized: "Fork from last completed message")
@@ -353,7 +348,7 @@ public struct ChatSessionsSheet: View {
                         agentID: session.agentId)
                     self.refreshScopedSessionsSoon()
                 } label: {
-                    self.actionLabel(
+                    chatActionLabel(
                         LocalizedStringKey(session.unread == true
                             ? String(localized: "Mark Read")
                             : String(localized: "Mark Unread")),
@@ -370,7 +365,7 @@ public struct ChatSessionsSheet: View {
                 agentID: session.agentId)
             self.refreshScopedSessionsSoon()
         } label: {
-            self.actionLabel(
+            chatActionLabel(
                 session.isPinned ? "Unpin" : "Pin",
                 systemImage: session.isPinned ? "pin.slash" : "pin")
         }
@@ -381,7 +376,7 @@ public struct ChatSessionsSheet: View {
             self.viewModel.setSessionArchived(session, archived: !session.isArchived)
             self.refreshScopedSessionsSoon()
         } label: {
-            self.actionLabel(title, systemImage: session.isArchived ? "tray.and.arrow.up" : "archivebox")
+            chatActionLabel(title, systemImage: session.isArchived ? "tray.and.arrow.up" : "archivebox")
         }
     }
 
@@ -449,15 +444,6 @@ public struct ChatSessionsSheet: View {
         self.batchErrors = result.errorsByKey
         self.selectedSessionKeys = Set(result.errorsByKey.keys)
         self.refreshScopedSessionsSoon()
-    }
-
-    private func actionLabel(_ title: LocalizedStringKey, systemImage: String) -> some View {
-        Label {
-            Text(title)
-                .font(OpenClawChatTypography.body)
-        } icon: {
-            Image(systemName: systemImage)
-        }
     }
 
     private func refreshScopedSessionsIfNeeded(debounce: Bool) async {
