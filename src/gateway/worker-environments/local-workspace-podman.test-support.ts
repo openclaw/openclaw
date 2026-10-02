@@ -5,6 +5,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { expect, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { localWorkspaceStore } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
@@ -16,6 +17,7 @@ export async function proveRequiredPodmanWorkspace(
   root: string,
   owner: LocalWorkspaceOwner,
   signal: AbortSignal,
+  verifyCleanup: (body: () => Promise<void>) => Promise<void>,
 ) {
   const [
     { insertRegistryWorktree },
@@ -365,10 +367,18 @@ export async function proveRequiredPodmanWorkspace(
         }),
       ).rejects.toThrow("child owner revoked");
     } finally {
-      lines.close();
-      await cleanup.terminate();
-      child.kill("SIGKILL");
-      await closed;
+      await verifyCleanup(() =>
+        runQaGatewayFixture(
+          async () => {
+            lines.close();
+            await cleanup.terminate();
+          },
+          async () => {
+            child.kill("SIGKILL");
+            await closed;
+          },
+        ),
+      );
     }
     // The source-only fixture deliberately installed an unsafe host helper.
     // Publication must reject it, then succeed only after the fixture owner removes it.
@@ -433,8 +443,12 @@ export async function proveRequiredPodmanWorkspace(
     expect(localWorkspaceStore().get(owner.worktree.id)).toBeUndefined();
     await expect(fs.stat(sandbox.workspaceDir)).rejects.toMatchObject({ code: "ENOENT" });
   } finally {
-    for (const runtime of (await readRegistry()).entries) {
-      await removeSandboxContainer(runtime.containerName);
-    }
+    await verifyCleanup(async () => {
+      const runtimes = (await readRegistry()).entries;
+      await runQaGatewayFixture(
+        async () => {},
+        ...runtimes.map((runtime) => () => removeSandboxContainer(runtime.containerName)),
+      );
+    });
   }
 }
