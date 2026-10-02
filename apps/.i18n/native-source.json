@@ -5368,7 +5368,6 @@
     {"path":"apps/macos/Sources/OpenClaw/StatusMenuSessionCards.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.c9ce2968446628f9","source":"Allow once"},
     {"path":"apps/macos/Sources/OpenClaw/StatusMenuSessionCards.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.35af2e746e246bba","source":"Deny"},
     {"path":"apps/macos/Sources/OpenClaw/StatusMenuSessionCards.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.45a25731e4215d3f","source":"Session approval"},
-    {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/InstanceIdentity.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.89e793f469e9c960","source":"Apple Watch"},
     {"path":"apps/ios/Sources/Design/OpenClawDocsScreen.swift","kind":"ui-modifier","surface":"apple","id":"native.apple.2b95b1290af3c2c0","source":"Docs"},
     {"path":"apps/ios/Sources/Design/OpenClawDocsScreen.swift","kind":"ui-modifier","surface":"apple","id":"native.apple.14e12e0f69b6b400","source":"Opens Settings / Gateway"},
     {"path":"apps/ios/Sources/Design/OpenClawDocsScreen.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.4ed79577652edaf0","source":"Browse the current OpenClaw reference."},

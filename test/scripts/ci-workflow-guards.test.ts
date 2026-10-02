@@ -5233,7 +5233,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       frozenTarget: false,
       compatibilityTarget: false,
       policy: "bun-compatible",
-      runtimes: ["bun"],
+      runtimes: ["bun", "node"],
       shards: [1, 2, 3],
     },
     {
@@ -5416,18 +5416,31 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
                 expect(childEnv.OPENCLAW_VITEST_INCLUDE_FILE).toBeUndefined();
               }
               const includeFile = childEnv.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE;
-              if (childEnv.OPENCLAW_VITEST_RUNTIME === "bun") {
+              if (
+                childEnv.OPENCLAW_VITEST_RUNTIME === "bun" ||
+                scenario.policy === "bun-compatible"
+              ) {
                 expect(includeFile).toBeTruthy();
                 const included = JSON.parse(readFileSync(includeFile!, "utf8"));
-                const retentionFiles = [
+                const nodeFiles = [
+                  "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
                   "ui/src/pages/chat/chat-pane-retention.test.ts",
                   "ui/src/pages/chat/chat-thread-retention.test.ts",
+                  "ui/src/pages/chat/session-snapshot-store.test.ts",
                   "ui/src/pages/usage/usage-page-retention.test.ts",
                 ];
-                expect(included.length).toBeGreaterThan(1000);
-                expect(included).toEqual(expect.arrayContaining(retentionFiles));
-                if (uiGroups[0]?.includePatterns) {
-                  expect(included.toSorted()).toEqual(uiGroups[0].includePatterns.toSorted());
+                if (childEnv.OPENCLAW_VITEST_RUNTIME === "node") {
+                  expect(included.toSorted()).toEqual(nodeFiles);
+                } else {
+                  expect(included.length).toBeGreaterThan(1000);
+                  expect(included.filter((file: string) => nodeFiles.includes(file))).toEqual([]);
+                  if (uiGroups[0]?.includePatterns) {
+                    expect(included.toSorted()).toEqual(
+                      uiGroups[0].includePatterns
+                        .filter((file) => !nodeFiles.includes(file))
+                        .toSorted(),
+                    );
+                  }
                 }
               } else {
                 expect(includeFile).toBeUndefined();

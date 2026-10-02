@@ -21,7 +21,6 @@ import {
   installBrowserCommonMiddleware,
 } from "./server-middleware.js";
 
-/** Running bridge server details returned to callers that manage its lifecycle. */
 export type BrowserBridge = {
   server: Server;
   port: number;
@@ -81,7 +80,6 @@ function buildNoVncBootstrapHtml(params: ResolvedNoVncObserver): string {
 </html>`;
 }
 
-/** Start an authenticated loopback browser bridge and register browser routes. */
 export async function startBrowserBridgeServer(params: {
   resolved: ResolvedBrowserConfig;
   host?: string;
@@ -203,7 +201,6 @@ async function stopBrowserBridgeServerOnce(server: Server): Promise<void> {
   bridgeStates.delete(server);
 }
 
-/** Stop a browser bridge server and clear its ephemeral port auth. */
 export function stopBrowserBridgeServer(server: Server): Promise<void> {
   const current = bridgeStopPromises.get(server);
   if (current) {

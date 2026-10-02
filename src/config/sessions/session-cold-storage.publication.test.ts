@@ -115,6 +115,7 @@ const result: SessionColdMutationResult = {
   sessionKey: "agent:main:committed-window",
 };
 const changes = vi.fn();
+const factChanges = vi.fn();
 let unsubscribe: () => void;
 
 beforeEach(() => {
@@ -123,7 +124,12 @@ beforeEach(() => {
   observed.native.mockImplementation(() => {
     throw new Error("Restore publication executed SQLite on the calling thread");
   });
-  unsubscribe = sessionChanges.subscribe(changes);
+  const unsubscribeChanges = sessionChanges.subscribe(changes);
+  const unsubscribeFacts = sessionChanges.subscribeFacts(factChanges);
+  unsubscribe = () => {
+    unsubscribeChanges();
+    unsubscribeFacts();
+  };
 });
 afterEach(() => {
   unsubscribe();
@@ -154,6 +160,11 @@ it("publishes the committed key exactly once after the worker settles, without h
   expect(changes).toHaveBeenCalledExactlyOnceWith({
     storePath: preparation.target.path,
     sessionKey: "agent:main:committed-window",
+  });
+  expect(factChanges).toHaveBeenCalledExactlyOnceWith({
+    storePath: preparation.target.path,
+    sessionKey: "agent:main:committed-window",
+    facts: { kind: "unchanged" },
   });
 });
 

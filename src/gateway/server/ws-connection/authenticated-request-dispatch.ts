@@ -348,6 +348,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
 
       const executeRequest = async () => {
         diagnostics?.bindTrace();
+        const settled = createDeferredCore();
         let entry: GatewayRequestEntry | undefined;
         // Ordinary mutations survive reconnects; an explicit reload wait instead
         // belongs to its requester so disconnect can release its admission fence.
@@ -402,7 +403,13 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           // deadline. Operator requests share bounded starts without serializing completion.
           if (client.connect.role === "operator") {
             diagnostics?.startQueue();
-            const start = scheduleGatewayRequestStart(frameBytes, req, connId);
+            const start = scheduleGatewayRequestStart(
+              frameBytes,
+              req,
+              connId,
+              settled.promise,
+              context.requestEntryLifetime?.signal,
+            );
             if (!start) {
               respondWithAuthority(
                 false,
@@ -461,6 +468,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             staleInstall?.error ?? errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
           );
         } finally {
+          settled.resolve();
           policyResponse?.finish();
           diagnostics?.finish(signal?.aborted ? "cancelled" : dispatchOutcome);
           entry?.release();

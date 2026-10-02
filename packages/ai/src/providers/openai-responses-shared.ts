@@ -11,7 +11,10 @@ import {
   type OpenAIResponsesReplayMode,
 } from "../transports/openai-responses-compaction-replay.js";
 import { recordResponsesContextUsage } from "../transports/openai-responses-context-usage.js";
-import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
+import {
+  responsesServiceTierObserver,
+  type OpenAIResponsesRequestParams,
+} from "../transports/openai-responses-contracts.js";
 import { ResponsesStreamFailure } from "../transports/openai-responses-debug.js";
 import { createResponsesStreamWithEncryptedContentRetry } from "../transports/openai-responses-replay-internal.js";
 import { hasOnlyResponsesFunctionTools } from "../transports/openai-responses-stream-errors.js";
@@ -214,6 +217,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     firstEventAbort = firstEvent;
     let started = false;
     let admittedRequest: OpenAIResponsesRequestParams | undefined;
+    let requestedTier: unknown;
     const requestOptions: ResponsesRequestOptions = {
       signal: firstEvent.signal,
       ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
@@ -230,6 +234,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
         suppressOpenAIResponsesCompaction(output, model, options, checkpoint),
       canRetryStream: () => output.content.length === 0,
       wrapStream: ({ stream: openaiStream, response, attempt }) => {
+        requestedTier = attempt.request.service_tier;
         admittedRequest = attempt.kind === "initial" ? attempt.request : undefined;
         return withProviderResponseHook({
           stream: openaiStream,
@@ -265,6 +270,8 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
         : undefined;
     const terminal = await processResponsesStream(hookedOpenAIStream, output, stream, model, {
       ...processStreamOptions,
+      onServiceTier: (responseTier) =>
+        responsesServiceTierObserver.observe(options, requestedTier, responseTier),
       canRetryIdentityConflict: () => hasOnlyResponsesFunctionTools(admittedRequest),
       reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
         sessionId: options?.sessionId,

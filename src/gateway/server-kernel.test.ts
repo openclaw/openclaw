@@ -60,7 +60,6 @@ describe("createGatewayKernel", () => {
       const port = await getFreePort();
       const state = await createOpenClawTestState({
         label: "gateway-kernel-breaker-recovery-close",
-        layout: "home",
         env: {
           ...KERNEL_TEST_ENV,
           OPENCLAW_SKIP_CHANNELS: undefined,
@@ -163,7 +162,6 @@ describe("createGatewayKernel", () => {
       const port = await getFreePort();
       const state = await createOpenClawTestState({
         label: `gateway-kernel-${entry}-close-readiness`,
-        layout: "home",
         env: { ...KERNEL_TEST_ENV },
       });
       const token = "gateway-kernel-close-readiness-token";
@@ -417,7 +415,6 @@ describe("createGatewayKernel", () => {
       const port = await getFreePort();
       const state = await createOpenClawTestState({
         label: "gateway-kernel-reload-candidate",
-        layout: "home",
         env: {
           ...KERNEL_TEST_ENV,
           OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
@@ -573,7 +570,6 @@ describe("createGatewayKernel", () => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
       label: "gateway-kernel-deferred-readiness",
-      layout: "home",
       env: {
         ...KERNEL_TEST_ENV,
         OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
@@ -804,7 +800,6 @@ describe("createGatewayKernel", () => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
       label: "gateway-kernel-no-transport",
-      layout: "home",
       env: {
         OPENCLAW_DIAGNOSTICS: "1",
         OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: undefined,
@@ -999,7 +994,6 @@ describe("createGatewayKernel", () => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
       label: "gateway-kernel-tls-failure",
-      layout: "home",
       env: { ...KERNEL_TEST_ENV },
     });
     const token = "gateway-kernel-tls-failure-token";

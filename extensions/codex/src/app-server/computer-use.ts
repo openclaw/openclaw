@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { reconcileCodexComputerUseStartArtifacts } from "./auth-bridge.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { describeControlFailure } from "./capabilities.js";
@@ -886,26 +887,16 @@ function chooseKnownComputerUseMarketplace(
 }
 
 async function delay(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) {
-    throw abortError(signal);
+  try {
+    await sleepWithAbort(Math.max(1, ms), signal);
+  } catch (error) {
+    if (!signal?.aborted) {
+      throw error;
+    }
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new Error("Computer Use setup was aborted.");
   }
-  await new Promise<void>((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-      reject(abortError(signal));
-    };
-    const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
-function abortError(signal?: AbortSignal): Error {
-  const reason = signal?.reason;
-  return reason instanceof Error ? reason : new Error("Computer Use setup was aborted.");
 }
 
 async function readComputerUsePlugin(

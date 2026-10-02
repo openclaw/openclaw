@@ -393,11 +393,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
                 refreshDiagnostics: host.connection.canWrite,
               });
             },
-            onBoardFilterChange: (boardFilter) =>
-              host.navigation.openPage(workboardPageTarget(boardFilter), {
-                replace: true,
-                preserveSearch: true,
-              }),
+            onBoardFilterChange: onBoardChange,
             onNewBoard,
             onRequestUpdate: requestUpdate,
           })}

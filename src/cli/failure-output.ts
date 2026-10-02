@@ -1,4 +1,5 @@
 // Shared root CLI failure formatting with debug stack gating and recovery hints.
+import { isInvalidConfigError } from "../config/io.invalid-config.js";
 import { isGatewayTransportError } from "../gateway/transport-error.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
@@ -235,6 +236,12 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     }
     return [
       `[openclaw] ${options.title}`,
+      // Config validation owns actionable file/field details; some startup paths have not printed them.
+      ...(isInvalidConfigError(options.error) && !options.error.diagnosticEmitted
+        ? [
+            `[openclaw] Reason: ${formatCliOperatorError(options.error, { argv: options.argv, env })}`,
+          ]
+        : []),
       stateBusy
         ? "[openclaw] Another OpenClaw process is using your data. Wait for it to finish before trying again."
         : options.includeDoctorHint === false

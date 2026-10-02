@@ -125,6 +125,9 @@ A schema-valid but unset path explains that the runtime default applies; an unkn
 `openclaw config schema`. With `--json`, both use the standard [CLI JSON failure envelope](/cli#json-failures)
 on stdout and exit with status 1. Without `--json`, diagnostics remain on stderr.
 
+Nested paths inside open-ended parameter bags, such as `agents.defaults.params.custom.nested`,
+are schema-valid even before they are set. This does not confirm that a provider supports the parameter.
+
 Explicit `null`, `false`, `0`, and empty strings remain readable values in both modes;
 `--json` preserves their types. Optional fields with no runtime value are reported as unset.
 
