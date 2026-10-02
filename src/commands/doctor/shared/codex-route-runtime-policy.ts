@@ -465,26 +465,3 @@ export function rewriteModelConfigSlotIfCanonicalCodexRuntime(params: {
     });
   }
 }
-
-export function clearConfigLegacyAgentRuntimePolicies(cfg: OpenClawConfig): string[] {
-  const changes: string[] = [];
-  clearLegacyAgentRuntimePolicy(asMutableRecord(cfg.agents?.defaults), "agents.defaults", changes);
-  for (const { agent, path } of listMutableCodexRouteAgentEntries(cfg)) {
-    clearLegacyAgentRuntimePolicy(agent, path, changes);
-  }
-  return changes;
-}
-
-function clearLegacyAgentRuntimePolicy(
-  container: MutableRecord | undefined,
-  pathLabel: string,
-  changes: string[],
-): void {
-  if (!container) {
-    return;
-  }
-  if (asMutableRecord(container.agentRuntime)) {
-    delete container.agentRuntime;
-    changes.push(`Removed ${pathLabel}.agentRuntime; runtime is now provider/model scoped.`);
-  }
-}

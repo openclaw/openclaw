@@ -4,13 +4,10 @@ import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/n
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import {
-  asAgentRuntimePolicyConfig,
   isOpenAICodexModelRef,
   modelRefUsesCodexRuntime,
-  readLegacyDefaultsRuntime,
   readModelConfigPrimaryRef,
   resolveImplicitDefaultAgentModelRef,
-  resolveRuntime,
   resolveRuntimeModelRef,
   type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
@@ -76,7 +73,6 @@ function collectAgentModelRefs(params: {
   hits: CodexRouteHit[];
   agent: unknown;
   path: string;
-  runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): void {
   const agent = asMutableRecord(params.agent);
@@ -88,7 +84,6 @@ function collectAgentModelRefs(params: {
       hits: params.hits,
       path: `${params.path}.${key}`,
       value: agent[key],
-      runtime: key === "model" ? params.runtime : undefined,
       blockedModelIdentities: params.blockedModelIdentities,
     });
   }
@@ -146,12 +141,10 @@ export function collectConfigModelRefs(
 ): CodexRouteHit[] {
   const hits: CodexRouteHit[] = [];
   const defaults = cfg.agents?.defaults;
-  const defaultsRuntime = readLegacyDefaultsRuntime(defaults);
   collectAgentModelRefs({
     hits,
     agent: defaults,
     path: "agents.defaults",
-    runtime: resolveRuntime({ defaultsRuntime }),
     blockedModelIdentities,
   });
 
@@ -161,10 +154,6 @@ export function collectConfigModelRefs(
       hits,
       agent: agentRecord,
       path,
-      runtime: resolveRuntime({
-        agentRuntime: asAgentRuntimePolicyConfig(agentRecord.agentRuntime),
-        defaultsRuntime,
-      }),
       blockedModelIdentities,
     });
   }

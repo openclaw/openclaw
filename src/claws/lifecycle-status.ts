@@ -299,7 +299,7 @@ export async function readClawStatus(
       ),
       mcpServers: (options.readOnly
         ? readClawMcpServerRefs(install.agentId, options)
-        : reconcileClawMcpServerRefs(install.agentId, configuredMcpServers, options)
+        : await reconcileClawMcpServerRefs(install.agentId, configuredMcpServers, options)
       ).map((ref) => inspectMcpServer(ref, configuredMcpServers)),
       cronJobs: readClawCronRefs(install.agentId, options),
     });

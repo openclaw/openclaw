@@ -76,11 +76,7 @@ function isAbsoluteHttp(url: string): boolean {
 }
 
 function isLoopbackHttpUrl(url: string): boolean {
-  try {
-    return isLoopbackHost(new URL(url).hostname);
-  } catch {
-    return false;
-  }
+  return isLoopbackHost(URL.parse(url)?.hostname ?? "");
 }
 
 function withLoopbackBrowserAuth(

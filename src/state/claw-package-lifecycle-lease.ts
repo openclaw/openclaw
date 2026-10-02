@@ -11,6 +11,7 @@ import {
   releaseOpenClawStateLeaseInTransaction,
   renewOpenClawStateLeaseInTransaction,
 } from "./openclaw-state-lease-store.js";
+import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 
 type ClawPackageLifecycleArtifact =
   | { kind: "plugin"; source: "clawhub"; ref: string }
@@ -25,6 +26,33 @@ export type MaintainedClawPackageLifecycleLease = {
   assertCurrent: () => void;
   release: () => void;
 };
+
+const writeAuthorities = new WeakMap<
+  object,
+  {
+    identity: OpenClawStateLeaseIdentity;
+    artifact: ClawPackageLifecycleArtifact;
+    path: string;
+    assertCurrent: () => void;
+  }
+>();
+
+export function captureClawPackageLifecycleWriteAuthority(
+  lease: MaintainedClawPackageLifecycleLease,
+  artifact: Pick<ClawPackageLifecycleArtifact, "kind" | "source" | "ref">,
+) {
+  const authority = writeAuthorities.get(lease);
+  if (
+    !authority ||
+    authority.artifact.kind !== artifact.kind ||
+    authority.artifact.source !== artifact.source ||
+    authority.artifact.ref !== artifact.ref
+  ) {
+    throw new Error("Package write requires its original lifecycle owner.");
+  }
+  authority.assertCurrent();
+  return authority;
+}
 
 type ClawPackageLifecycleLeaseOptions = OpenClawStateDatabaseOptions & {
   nowMs?: number;
@@ -89,7 +117,8 @@ export function acquireClawPackageLifecycleLease(
     return null;
   }
 
-  return {
+  let active = true;
+  const lease: ClawPackageLifecycleLease = {
     heartbeat: (heartbeatNowMs = Date.now()) => {
       runOpenClawStateWriteTransaction(
         ({ db }) => {
@@ -108,12 +137,24 @@ export function acquireClawPackageLifecycleLease(
       );
     },
     release: () => {
+      active = false;
       runOpenClawStateWriteTransaction(
         ({ db }) => releaseOpenClawStateLeaseInTransaction(db, identity),
         { env, path: databasePath },
       );
     },
   };
+  writeAuthorities.set(lease, {
+    identity,
+    artifact: { ...artifact },
+    path: databasePath,
+    assertCurrent: () => {
+      if (!active) {
+        throw new Error("Package lifecycle lease has been released.");
+      }
+    },
+  });
+  return lease;
 }
 
 /** Renews an acquired lease while an asynchronous package mutation is in flight. */
@@ -129,13 +170,17 @@ export function maintainClawPackageLifecycleLease(
     }
   }, LEASE_TTL_MS / 3);
   heartbeat.unref();
-  return {
+  const assertActive = () => {
+    if (heartbeatError) {
+      throw heartbeatError instanceof Error
+        ? heartbeatError
+        : new Error(formatErrorMessage(heartbeatError));
+    }
+    writeAuthorities.get(lease)?.assertCurrent();
+  };
+  const maintained: MaintainedClawPackageLifecycleLease = {
     assertCurrent: () => {
-      if (heartbeatError) {
-        throw heartbeatError instanceof Error
-          ? heartbeatError
-          : new Error(formatErrorMessage(heartbeatError));
-      }
+      assertActive();
       lease.heartbeat();
     },
     release: () => {
@@ -143,6 +188,11 @@ export function maintainClawPackageLifecycleLease(
       lease.release();
     },
   };
+  const authority = writeAuthorities.get(lease);
+  if (authority) {
+    writeAuthorities.set(maintained, { ...authority, assertCurrent: assertActive });
+  }
+  return maintained;
 }
 
 export async function withClawPackageLifecycleLease<T>(
