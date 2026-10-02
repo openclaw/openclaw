@@ -37,12 +37,12 @@ function insertChildren<T>(
   entries: readonly T[] | undefined,
   fields: (entry: T, ordinal: number) => Record<string, () => SQLInputValue>,
 ): void {
-  const { compiled, bind } = compileSqliteQueryBindings<void>(() =>
+  const deletion = compileSqliteQueryBindings<void>(() =>
     getNodeSqliteKysely<Record<typeof table, Row>>(db)
       .deleteFrom(table)
       .where("card_id", "=", cardId),
   );
-  db.prepare(compiled.sql).run(...bind());
+  db.prepare(deletion.compiled.sql).run(...deletion.bind());
   entries?.forEach((entry, ordinal) => {
     const { compiled, bind } = compileSqliteQueryBindings<void>((parameter) =>
       getNodeSqliteKysely<WorkboardCardDatabase>(db)
