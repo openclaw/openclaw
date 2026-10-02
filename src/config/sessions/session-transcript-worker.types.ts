@@ -32,7 +32,6 @@ import type {
 } from "./disk-budget.types.js";
 import type { SessionGoalOperationLookupResult } from "./goals-operations.types.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
-import type { SessionTranscriptBoundedActiveContext } from "./session-accessor.sqlite-active-context.js";
 import type { SessionTranscriptMessageEvent } from "./session-accessor.sqlite-active-events.js";
 import type {
   SessionPendingArchivesWorkerInput,
@@ -44,7 +43,6 @@ import type {
 } from "./session-accessor.sqlite-branches.js";
 import type {
   SessionEntryStatusSelection,
-  SessionTranscriptContextVersion,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import type {
@@ -60,7 +58,6 @@ import type {
   SessionModelContextLimits,
 } from "./session-accessor.sqlite-model-context.js";
 import type { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
-import type { loadTranscriptReadSnapshotSync } from "./session-accessor.sqlite-read.js";
 import type {
   SessionEntryReplacementSelection,
   SessionEntryReplacementState,
@@ -97,6 +94,9 @@ import type {
   SessionStoreTargetReadResult,
 } from "./session-store-target-inventory.js";
 import type {
+  PreparedSessionTranscriptHydration,
+  SessionTranscriptCurrentTurnEntryRead,
+  SessionTranscriptHydrationWorkerResult,
   SessionTranscriptHydrationWorkerInput,
   SessionTranscriptCurrentTurnEntryWorkerInput,
   SessionTranscriptRecentActiveEventsWorkerInput,
@@ -121,7 +121,13 @@ import type {
 } from "./session-transcript-worker-receipts.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
-export type { SessionTranscriptCurrentTurnEntryRequest } from "./session-transcript-hydration.types.js";
+export type {
+  PreparedSessionTranscriptHydration,
+  SessionTranscriptCurrentTurnEntryRead,
+  SessionTranscriptCurrentTurnEntryRequest,
+  SessionTranscriptHydrationChunk,
+  SessionTranscriptHydrationWorkerResult,
+} from "./session-transcript-hydration.types.js";
 
 type SessionTranscriptMatchWorkerInput = {
   kind: "transcript-match";
@@ -133,31 +139,6 @@ type SessionTranscriptSearchWorkerInput = {
   kind: "transcript-search";
   database: { agentId: string; path: string };
   params: SessionTranscriptSearchParams;
-};
-
-export type PreparedSessionTranscriptHydration =
-  | { kind: "full"; snapshot: ReturnType<typeof loadTranscriptReadSnapshotSync> }
-  | { kind: "bounded"; snapshot: SessionTranscriptBoundedActiveContext };
-
-export type SessionTranscriptHydrationWorkerResult =
-  | {
-      kind: "full";
-      version: ReturnType<typeof loadTranscriptReadSnapshotSync>["version"];
-      eventCount: number;
-    }
-  | Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>;
-
-export type SessionTranscriptHydrationChunk = {
-  kind: "transcript-hydration-chunk";
-  encoding: string;
-  frames: Array<{ data: Uint8Array; endOfEvent: boolean }>;
-};
-
-export type SessionTranscriptCurrentTurnEntryRead = {
-  kind: "current-turn-entry";
-  version: SessionTranscriptContextVersion;
-  anchor?: TranscriptEntryAnchor;
-  event?: TranscriptEvent;
 };
 
 export type SessionModelContextWorkerInput = {
