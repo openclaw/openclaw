@@ -1065,6 +1065,7 @@ src/plugins/compat/media-legacy-projection.ts
 src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/registry-records.ts
 src/plugins/compat/registry.ts
+src/plugins/compat/session-persistence-records.ts
 src/plugins/config-activation-shared.ts
 src/plugins/config-contract-matches.ts
 src/plugins/config-normalization-shared.ts
@@ -1644,3 +1645,8 @@ scripts/github/security-sensitive-guard.mjs
 scripts/lib/bounded-response.mjs
 scripts/pr-lib/merge-prior-ci-cancellation.mjs
 scripts/pr-lib/merge-prior-ci-security.mjs
+src/config/sessions/supported-session-store.ts
+src/plugin-sdk/channel-route.ts
+src/utils/delivery-context.shared.ts
+src/utils/message-channel-constants.ts
+src/utils/message-channel-core.ts

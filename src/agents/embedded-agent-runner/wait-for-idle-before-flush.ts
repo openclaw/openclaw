@@ -4,7 +4,6 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import type { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
-import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
 
 type IdleAwareAgent = {
   waitForIdle?: (() => Promise<void>) | undefined;
@@ -12,7 +11,7 @@ type IdleAwareAgent = {
 
 type ToolResultFlushManager = Pick<
   ReturnType<typeof guardSessionManager>,
-  "getSessionTarget" | "getSessionId" | "hasPendingToolResults" | "flushPendingToolResults"
+  "getSessionTarget" | "getSessionId" | "hasPendingToolResults" | "flushPendingToolResultsAsync"
 >;
 
 const DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
@@ -66,9 +65,9 @@ export async function flushPendingToolResultsAfterIdle(opts: {
   }
   const { sessionManager } = opts;
   if (
-    sessionManager?.flushPendingToolResults &&
+    sessionManager?.flushPendingToolResultsAsync &&
     sessionManager.hasPendingToolResults?.() !== false
   ) {
-    await withSessionManagerWrite(sessionManager, () => sessionManager.flushPendingToolResults?.());
+    await sessionManager.flushPendingToolResultsAsync();
   }
 }

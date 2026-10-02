@@ -1370,7 +1370,7 @@ src/agents/embedded-agent-runner/model.provider-hooks.ts	8
 src/agents/embedded-agent-runner/model.registry-resolution.ts	3
 src/agents/embedded-agent-runner/model.ts	5
 src/agents/embedded-agent-runner/openrouter-model-capabilities.ts	2
-src/agents/embedded-agent-runner/replay-history.ts	20
+src/agents/embedded-agent-runner/replay-history.ts	19
 src/agents/embedded-agent-runner/run-entry.ts	2
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts	4
 src/agents/embedded-agent-runner/run/attempt-before-agent-run.ts	2
@@ -1512,7 +1512,6 @@ src/agents/session-activity-notes.ts	1
 src/agents/session-dirs.ts	2
 src/agents/session-model-auto-revert.ts	1
 src/agents/session-placement-admission.ts	1
-src/agents/session-raw-append-message.ts	2
 src/agents/session-suspension.ts	1
 src/agents/session-tool-result-guard.ts	3
 src/agents/session-transcript-repair.ts	2

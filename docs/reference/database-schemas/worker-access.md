@@ -1130,8 +1130,10 @@ before using the result. Caller-owned in-memory recovery keeps its existing
 buffer. Compaction persistence, stored bytes, retention, and update behavior are
 unchanged.
 
-Streaming assistant and tool-result completion events use the session manager's
-existing SQLite writer domain. The host retains extension hooks, redaction, and
+SessionManager's awaited persistence family uses its existing SQLite writer
+domain for file-backed transcripts, including user and custom messages,
+`beforeFreshMessageCommit`, metadata, compaction, and branch/leaf mutations.
+The host retains extension hooks, redaction, and
 tool-result custody; the worker validates the prepared parent, appends the exact
 storage bytes, and returns the committed version and any required view reload.
 The manager adopts that receipt before publishing pending-tool changes. Each
@@ -1142,18 +1144,21 @@ prompt payloads. No cross-transaction root cache is introduced.
 Runtime custom messages, prompt cache markers, bootstrap completion and prompt-error
 markers, and nested tool activity use the same awaited writer. The manager captures
 custom payloads before queueing, rechecks its current parent at admission, and adopts
-the committed version before publishing the result. Non-user asynchronous message
-appends use this worker; user-input custody and transaction-local callbacks retain
-their native transaction contract.
+the committed version before publishing the result. User-input custody and
+transaction-local callbacks keep their existing admission and commit contracts.
 
 Runtime report navigation and writes use the same broker's agent database owner.
 Custom report selectors consume prepared facts on the host, and the worker
 compares the transcript version before appending. Only a definite version conflict
 repeats selection; uncertain writes are never replayed. Startup orphan repair
 retains its native transaction so session settlement and the report remain atomic.
-Process-held incognito databases, user-input custody, compaction, provider replay,
-and the shipped synchronous SessionManager SDK remain separate migration work.
-Schemas, stored bytes, retention, and update behavior are unchanged.
+Bundled session callers await this owner before dependent publication. The
+shipped synchronous SessionManager methods remain named third-party
+compatibility adapters, deprecated for removal at the next Plugin SDK major;
+each warns once per method per process. Incognito retains its process-local
+database owner until its separate worker cutover. Schemas, stored bytes,
+retention, and update behavior are unchanged. See the
+[SDK migration](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence).
 
 Channel identity administration, profile display and avatar edits, role assignments, email linking, and
 HTTP/WebSocket sign-in acquisition use that writer and the existing read worker.

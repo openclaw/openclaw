@@ -108,17 +108,14 @@ export function prepareTranscriptMessageAppend<TMessage extends object>(
     // Pending user custody retains its transaction-owned preparation.
     return undefined;
   }
-  const message = redactTranscriptMessageForStorage(options.message, options);
-  const messageJson = JSON.stringify(canonicalizePersistedUserMessageMedia(message).message);
-  // SAFETY: Decode the detached canonical message from its own JSON storage bytes.
-  const prepared = { messageJson, persistedMessage: JSON.parse(messageJson) as TMessage };
+  const prepared = prepareTranscriptMessageAppendForWorker(options);
   if (
     !candidate ||
     (options.message.role !== "assistant" && options.message.role !== "toolResult")
   ) {
     return prepared;
   }
-  const eventJson = serializePreparedMessageEvent(candidate.envelope, messageJson);
+  const eventJson = serializePreparedMessageEvent(candidate.envelope, prepared.messageJson);
   const read = withOpenClawAgentDatabaseReadOnly(
     ({ db }) =>
       prepareTranscriptPayloadForReuse(db, eventJson, {
@@ -128,6 +125,16 @@ export function prepareTranscriptMessageAppend<TMessage extends object>(
     toDatabaseOptions(resolveSqliteTranscriptScope(candidate.scope)),
   );
   return read.found ? { ...prepared, physicalPayload: read.value } : prepared;
+}
+
+/** Redaction stays on the host; physical payload preparation belongs to the writer. */
+export function prepareTranscriptMessageAppendForWorker<TMessage extends object>(
+  options: Pick<TranscriptMessageAppendOptions<TMessage>, "message" | "config">,
+): PreparedTranscriptMessageAppend<TMessage> {
+  const message = redactTranscriptMessageForStorage(options.message, options);
+  const messageJson = JSON.stringify(canonicalizePersistedUserMessageMedia(message).message);
+  // SAFETY: Decode the detached canonical message from its own JSON storage bytes.
+  return { messageJson, persistedMessage: JSON.parse(messageJson) as TMessage };
 }
 
 export function appendTranscriptMessageInTransaction<TMessage>(
@@ -141,6 +148,9 @@ export function appendTranscriptMessageInTransaction<TMessage>(
   projection?: { scheduleProjectionReconcile?: boolean; onProjectionReconcileNeeded?: () => void },
 ): TranscriptMessageAppendResult<TMessage> | undefined {
   const pending = resolveSessionPendingInputAppend(database, resolved, options.message);
+  // Accepted input already owns its hook and redaction decision. A host-prepared
+  // candidate must never replace those bytes during promotion or terminal replay.
+  const storagePreparation = pending ? undefined : preparedMessage;
   if (
     pending &&
     readSessionEntryRow(database, resolved.sessionKey)?.entry.sessionId !== resolved.sessionId
@@ -148,7 +158,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     throw new Error("Pending input session changed before transcript promotion");
   }
   const serializeForStorage = (message: TMessage): TMessage =>
-    preparedMessage?.persistedMessage ??
+    storagePreparation?.persistedMessage ??
     (options.messageAlreadyRedacted
       ? message
       : redactTranscriptMessageForStorage(message, options));
@@ -202,7 +212,10 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     if (existing) {
       if (
         !options.prepareMessageAfterIdempotencyCheck &&
-        !messagesMatchForIdempotentReplay(existing.message, serializeForStorage(options.message))
+        !messagesMatchForIdempotentReplay(
+          existing.message,
+          pending?.message ?? serializeForStorage(options.message),
+        )
       ) {
         throw new TranscriptTurnAdmissionConflictError(idempotencyKey);
       }
@@ -244,18 +257,18 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     parentId: parentId ?? null,
     ...(options.appendMode ? { appendMode: options.appendMode } : {}),
     timestamp: resolveTimestampMsToIsoString(now),
-    message: preparedMessage?.persistedMessage ?? finalMessage,
+    message: storagePreparation?.persistedMessage ?? finalMessage,
   };
   let eventJson: string | undefined;
-  if (preparedMessage) {
+  if (storagePreparation) {
     // The parent is authoritative only after BEGIN; serialize just its small envelope here.
     const { message: _message, ...envelope } = event;
-    eventJson = serializePreparedMessageEvent(envelope, preparedMessage.messageJson);
+    eventJson = serializePreparedMessageEvent(envelope, storagePreparation.messageJson);
   }
   const appended = appendTranscriptEventInTransaction(database, resolved, event, {
     ...projection,
     eventJson,
-    preparedPayload: preparedMessage?.physicalPayload,
+    preparedPayload: storagePreparation?.physicalPayload,
     idempotencyKeyMode:
       options.idempotencyLookup === "caller-checked"
         ? "relocate-owner"
@@ -285,7 +298,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     throw new Error(`SQLite transcript append did not insert message ${messageId}.`);
   }
   const persistedMessage =
-    preparedMessage?.persistedMessage ??
+    storagePreparation?.persistedMessage ??
     // SAFETY: Receipt custody comes from this event's exact committed JSON after storage normalization.
     (JSON.parse(appended) as typeof event).message;
   const anchor = readAnchor({ message: persistedMessage, messageId });

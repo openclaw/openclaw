@@ -623,6 +623,7 @@ describe("queued compaction successor ownership", () => {
           throw new Error("Expected the suite's replaceable safety-timeout mock");
         }
         const caller = new AbortController();
+        const backendEntered = createDeferred();
         const releaseBackend = createDeferred();
         const observed = createDeferred<{
           outcome: BackendAppendOutcome;
@@ -673,6 +674,7 @@ describe("queued compaction successor ownership", () => {
               signal.removeEventListener("abort", onAbort);
             }
           })();
+          backendEntered.resolve();
           return backendWork;
         });
         const entryBefore = structuredClone(
@@ -689,17 +691,18 @@ describe("queued compaction successor ownership", () => {
             signal,
           ),
         );
-        const pending = compact(backendCompactParams(caller.signal)).then(
-          (result) => {
-            queuedSettled = true;
-            return result;
-          },
-          (error: unknown) => {
-            queuedSettled = true;
-            throw error;
-          },
-        );
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const pending = compact(backendCompactParams(caller.signal)).finally(() => {
+          queuedSettled = true;
+        });
         try {
+          await Promise.race([
+            backendEntered.promise,
+            pending.then(() => {
+              throw new Error("Queued compaction settled before the backend checkpoint");
+            }),
+          ]);
+          await vi.advanceTimersByTimeAsync(1);
           await expect(pending).resolves.toMatchObject({ ok: false, compacted: false });
           expect(backendSignal).not.toBe(caller.signal);
           expect(backendSignal?.aborted).toBe(true);
@@ -718,6 +721,7 @@ describe("queued compaction successor ownership", () => {
           expect(contextEngineCompactMock).toHaveBeenCalledOnce();
           expect(maintain).not.toHaveBeenCalled();
         } finally {
+          vi.useRealTimers();
           boundedCompact.mockImplementation(previousImplementation);
           releaseBackend.resolve();
           await pending.catch(() => undefined);

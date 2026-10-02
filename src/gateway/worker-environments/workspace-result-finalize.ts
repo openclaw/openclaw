@@ -9,6 +9,7 @@ import { withSessionPlacementComputer } from "../../agents/session-placement-com
 import { withSessionSkillResources } from "../../agents/session-placement-skill-resources.js";
 import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import {
   attachErrorDiagnostic,
   formatErrorMessageForDisplay,
@@ -260,36 +261,40 @@ export async function reconcileWorkspaceAfterTurn(params: {
           report: async (report) => {
             const manager = await SessionManager.openAsync(transcriptTarget);
             assertResultCurrent();
-            await withSessionManagerWrite(manager, () => {
-              // Execution may have ended; the exact pending result still owns settlement.
-              assertResultCurrent();
-              if ("cleared" in report) {
-                manager.appendCustomMessageEntry(
-                  WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
-                  "A later cloud workspace result superseded the previous conflict.",
-                  false,
+            await withSessionTranscriptWriteAssertion(transcriptTarget, assertResultCurrent, () =>
+              withSessionManagerWrite(manager, async () => {
+                // Execution may have ended; the exact pending result still owns settlement.
+                assertResultCurrent();
+                if ("cleared" in report) {
+                  await manager.appendCustomMessageEntryAsync(
+                    WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
+                    "A later cloud workspace result superseded the previous conflict.",
+                    false,
+                  );
+                  return;
+                }
+                const committedConflict = {
+                  ...report,
+                  summary: formatWorkspaceConflictSummary(
+                    report.paths,
+                    report.stagedResultRef,
+                    report.totalCount,
+                  ),
+                };
+                await manager.appendCustomMessageEntryAsync(
+                  WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
+                  committedConflict.summary,
+                  true,
+                  {
+                    paths: committedConflict.paths,
+                    stagedResultRef: committedConflict.stagedResultRef,
+                    totalCount: committedConflict.totalCount,
+                  },
                 );
-                return;
-              }
-              workspaceConflict = {
-                ...report,
-                summary: formatWorkspaceConflictSummary(
-                  report.paths,
-                  report.stagedResultRef,
-                  report.totalCount,
-                ),
-              };
-              manager.appendCustomMessageEntry(
-                WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
-                workspaceConflict.summary,
-                true,
-                {
-                  paths: workspaceConflict.paths,
-                  stagedResultRef: workspaceConflict.stagedResultRef,
-                  totalCount: workspaceConflict.totalCount,
-                },
-              );
-            });
+                assertResultCurrent();
+                workspaceConflict = committedConflict;
+              }),
+            );
           },
         });
         await params.publishAcceptedWorkspace?.(params.turnClaim);

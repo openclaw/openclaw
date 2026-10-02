@@ -292,6 +292,12 @@ export function createSessionHistoryWorkerReaders(
         input.limits ? undefined : receiveChunk,
       );
     },
+    readMaintenance: reader(
+      "transcript-maintenance",
+      "transcript maintenance facts",
+      (input) => ({ kind: "transcript-maintenance", ...input }),
+      (value) => value,
+    ),
     readCurrentTurnEntry: reader(
       "current-turn-entry",
       "a current-turn entry",

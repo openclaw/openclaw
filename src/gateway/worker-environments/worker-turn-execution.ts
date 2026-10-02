@@ -11,7 +11,6 @@ import {
   overlayConfiguredModelCatalog,
 } from "../../agents/model-catalog.js";
 import { convertToLlm } from "../../agents/sessions/messages.js";
-import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
@@ -23,7 +22,6 @@ import {
   prepareActiveNodeContext,
 } from "../../infra/active-node-context.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/agent-run-registry.js";
-import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
 import { createWorkerBrowserToolDefinition } from "../../worker/browser-runtime.js";
 import { createWorkerComputerTool } from "../../worker/computer-runtime.js";
@@ -57,6 +55,7 @@ import {
   windowInitialMessages,
 } from "./worker-turn-payload.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
+import { persistWorkerTurnUserMessage } from "./worker-turn-user-message.js";
 import {
   type executeRemoteExecTurn,
   reconcileWorkspaceAfterTurn,
@@ -443,39 +442,14 @@ export async function executeWorkerTurn(
       throw new StaleWorkerBuildError();
     }
     if (!userMessageAlreadyPersisted && !recorder) {
-      const canonical = buildPersistedUserTurnMessage({
-        text: turn.transcriptPrompt ?? turn.prompt,
-        media: turn.media,
-        mediaImageLayout: {
-          slots: media.imageFactIndexes.map((factIndex) => ({
-            kind: "inline" as const,
-            ...(factIndex === null ? {} : { factIndex }),
-          })),
-        },
+      baseLeafId = await persistWorkerTurnUserMessage({
+        turn,
+        manager,
+        transcriptTarget,
+        media,
+        assertRunCurrent: params.assertRunCurrent,
+        isAuthorized,
       });
-      const message = {
-        ...canonical,
-        content: [
-          { type: "text" as const, text: turn.transcriptPrompt ?? turn.prompt },
-          ...media.images,
-        ],
-        __openclaw: {
-          ...canonical["__openclaw"],
-          mediaImageBlockFactIndexes: media.imageFactIndexes,
-        },
-      };
-      baseLeafId = await withSessionManagerWrite(manager, () => {
-        params.assertRunCurrent?.();
-        if (!isAuthorized()) {
-          throw new Error("Worker turn authority changed before transcript write");
-        }
-        resolveWorkerTurnTranscriptTarget({
-          ...transcriptTarget,
-          sessionTarget: transcriptTarget,
-        });
-        return manager.appendMessage(message);
-      });
-      turn.onUserMessagePersisted?.(message);
     }
     const initialMessagePlan = windowInitialMessages(media.history);
     if (initialMessagePlan.kind === "provider-replay-unavailable") {

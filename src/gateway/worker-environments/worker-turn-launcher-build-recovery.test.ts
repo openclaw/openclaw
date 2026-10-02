@@ -55,9 +55,9 @@ import {
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 
-function expectSinglePersistedInput() {
+async function expectSinglePersistedInput() {
   expect(
-    openSessionManager()
+    (await openSessionManager())
       .buildSessionContext()
       .messages.filter((message) => message.role === "user"),
   ).toHaveLength(1);
@@ -110,7 +110,9 @@ async function createBuildRecoveryHarness(
     if (rejection === "handoff") {
       throw new StaleWorkerBuildError();
     }
-    const leafId = openSessionManager().appendMessage(
+    const leafId = await (
+      await openSessionManager()
+    ).appendMessageAsync(
       makeAgentAssistantMessage({
         content: [{ type: "text", text: "Continued on the replacement worker" }],
         timestamp: 51,
@@ -326,7 +328,9 @@ describe("worker turn launcher build recovery", () => {
     };
     const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
       request.onDispatchReady?.();
-      const leafId = openSessionManager().appendMessage(
+      const leafId = await (
+        await openSessionManager()
+      ).appendMessageAsync(
         makeAgentAssistantMessage({
           content: [{ type: "text", text: "Ran on the refreshed worker" }],
           timestamp: 51,
@@ -626,7 +630,7 @@ describe("worker turn launcher build recovery", () => {
         if (outcome === "reconnected") {
           expect(settled).toHaveProperty("value");
           expect(harness.launchTurn).toHaveBeenCalledOnce();
-          expectSinglePersistedInput();
+          await expectSinglePersistedInput();
         } else {
           expect(settled).toHaveProperty("error");
           expect(harness.launchTurn).not.toHaveBeenCalled();
@@ -683,7 +687,7 @@ describe("worker turn launcher build recovery", () => {
       await harness.execute();
       expect(harness.launchTurn).toHaveBeenCalledTimes(2);
       expect(harness.onUserMessagePersisted).toHaveBeenCalledOnce();
-      expectSinglePersistedInput();
+      await expectSinglePersistedInput();
       expect(harness.launchTurn.mock.calls[1]?.[0].plan.assignment.initialMessages).toEqual([]);
     },
   );
@@ -711,7 +715,7 @@ describe("worker turn launcher build recovery", () => {
       });
       expect(harness.environments.destroy).not.toHaveBeenCalled();
       expect(harness.runLocal).not.toHaveBeenCalled();
-      expectSinglePersistedInput();
+      await expectSinglePersistedInput();
     },
   );
 
@@ -728,7 +732,7 @@ describe("worker turn launcher build recovery", () => {
         harness.originalClaimIds[0],
       );
       expect(harness.runLocal).not.toHaveBeenCalled();
-      expectSinglePersistedInput();
+      await expectSinglePersistedInput();
       expect(placements.get(SESSION_ID)).toMatchObject({
         state: "active",
         turnClaim: null,

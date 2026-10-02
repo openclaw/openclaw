@@ -596,6 +596,7 @@ serveOwnedWorkerTasks(
           }
           if (
             request.kind === "transcript-hydration" ||
+            request.kind === "transcript-maintenance" ||
             request.kind === "current-turn-entry" ||
             request.kind === "recent-active-events" ||
             request.kind === "latest-active-message"
