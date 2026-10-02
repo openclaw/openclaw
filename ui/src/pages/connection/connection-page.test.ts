@@ -19,7 +19,6 @@ import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import "../debug/debug-overlay-content.ts";
 import { DebugOverlay } from "../debug/debug-overlay.ts";
 import { ConnectionPage } from "./connection-page.ts";
-import { supportsSystemInfo } from "./system-info.ts";
 
 const gatewayActivity = {
   eventLoop: {
@@ -442,21 +441,6 @@ describe("ConnectionPage ping", () => {
   });
 });
 
-describe("supportsSystemInfo", () => {
-  it("requires the Gateway to advertise system.info", () => {
-    const hello = {
-      features: { methods: ["health", "system.info"] },
-    } as ApplicationGatewaySnapshot["hello"];
-    const unsupportedHello = {
-      features: { methods: ["health"] },
-    } as ApplicationGatewaySnapshot["hello"];
-
-    expect(supportsSystemInfo(hello)).toBe(true);
-    expect(supportsSystemInfo(unsupportedHello)).toBe(false);
-    expect(supportsSystemInfo(null)).toBe(false);
-  });
-});
-
 function editInput(page: ConnectionPage, label: string, value: string) {
   const input = control(page, `input[aria-label="${label}"]`);
   input.value = value;
@@ -758,27 +742,33 @@ describe("ConnectionPage Gateway lifecycle", () => {
     expect(request).toHaveBeenCalledTimes(retry ? 3 : 2);
   });
 
-  it("retires a pending host read when its method advertisement disappears", async () => {
-    const response = deferred<SystemInfoResult>();
-    const request = vi
-      .fn()
-      .mockReturnValueOnce(response.promise)
-      .mockResolvedValue(deviceSystemInfo);
-    const current = source({ request } as unknown as GatewayBrowserClient);
-    const { page } = await mount(current.gateway);
-    current.publish({
-      ...current.gateway.snapshot,
-      hello: gatewayHelloForMethods([]),
-    });
-    response.resolve(deviceSystemInfo);
-    await settleLitElement(page);
-    expect(page.querySelector(".config-host__name")).toBeNull();
-    current.publish({
-      ...current.gateway.snapshot,
-      hello: gatewayHelloForMethods(["system.info"]),
-    });
-    await settleLitElement(page);
-    expect(page.querySelector(".config-host__name")?.textContent?.trim()).toBe("Gateway");
-    expect(request).toHaveBeenCalledTimes(2);
-  });
+  it.each(["advertisement", "scope"] as const)(
+    "retires a pending host read when its %s disappears",
+    async (change) => {
+      const response = deferred<SystemInfoResult>();
+      const request = vi
+        .fn()
+        .mockReturnValueOnce(response.promise)
+        .mockResolvedValue(deviceSystemInfo);
+      const current = source({ request } as unknown as GatewayBrowserClient);
+      const { page } = await mount(current.gateway);
+      current.publish({
+        ...current.gateway.snapshot,
+        hello: gatewayHelloForMethods(
+          change === "advertisement" ? [] : ["system.info"],
+          change === "scope" ? ["operator.sessions.read"] : ["operator.admin"],
+        ),
+      });
+      response.resolve(deviceSystemInfo);
+      await settleLitElement(page);
+      expect(page.querySelector(".config-host__name")).toBeNull();
+      current.publish({
+        ...current.gateway.snapshot,
+        hello: gatewayHelloForMethods(["system.info"]),
+      });
+      await settleLitElement(page);
+      expect(page.querySelector(".config-host__name")?.textContent?.trim()).toBe("Gateway");
+      expect(request).toHaveBeenCalledTimes(2);
+    },
+  );
 });
