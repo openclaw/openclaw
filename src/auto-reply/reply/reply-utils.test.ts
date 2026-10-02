@@ -276,13 +276,18 @@ describe("typing controller", () => {
     expect(start).toHaveBeenCalledTimes(30);
   });
 
-  it("runs the channel idle callback once when a handed-off queued follow-up settles", async () => {
+  it("runs the channel idle callback while a queued follow-up holds typing", async () => {
     const events: string[] = [];
+    let finalize!: () => void;
+    const finalization = new Promise<string>((resolve) => {
+      finalize = () => resolve("finalized");
+    });
     const lifecycle = createReplyDispatcherWithTyping({
       deliver: async () => undefined,
       onReplyStart: () => undefined,
       onIdle: () => {
         events.push("idle");
+        finalize();
       },
       onCleanup: () => {
         events.push("cleanup");
@@ -298,11 +303,15 @@ describe("typing controller", () => {
     lifecycle.dispatcher.markComplete();
     await lifecycle.dispatcher.waitForIdle();
     lifecycle.markRunComplete();
-    lifecycle.markDispatchIdle();
-    expect(events).toEqual([]);
+
+    const withheld = new Promise<string>((resolve) => {
+      setTimeout(() => resolve("finalization-withheld"), 50);
+    });
+    await expect(Promise.race([finalization, withheld])).resolves.toBe("finalized");
+    expect(events).toEqual(["idle"]);
 
     typing.cleanup();
-    expect(events).toEqual(["cleanup", "idle"]);
+    expect(events).toEqual(["idle", "cleanup"]);
   });
 
   it("sends the first typing signal without periodic keepalive refreshes", async () => {

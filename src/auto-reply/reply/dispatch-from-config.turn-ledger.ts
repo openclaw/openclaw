@@ -1,3 +1,8 @@
+// Per-dispatch settled-delivery ledger (#114768). Answers "did this turn produce
+// a visible message" from transport settlement, not queue/route admission. Every
+// dispatcher send in the dispatch pipeline uses the shared send operation and every
+// routed transport result is recorded, so no delivery lane can bypass the
+// no-visible-reply fallback gate with a fresh inference flag.
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDeliveryState } from "../../agents/reply-completion.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
@@ -7,11 +12,6 @@ import {
   ReplyDispatchDeliveryError,
   resolveRoutedReplyDeliveryOutcome,
 } from "./reply-dispatch-outcome.js";
-// Per-dispatch settled-delivery ledger (#114768). Answers "did this turn produce
-// a visible message" from transport settlement, not queue/route admission. Every
-// dispatcher send in the dispatch pipeline uses the shared send operation and every
-// routed transport result is recorded, so no delivery lane can bypass the
-// no-visible-reply fallback gate with a fresh inference flag.
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher-idle.js";
 import {
   captureReplyDispatchDeliveryOutcome,
