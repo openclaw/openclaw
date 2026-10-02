@@ -151,8 +151,22 @@ export async function configureGatewayForSetup(
   }
 
   if (tailscaleMode === "funnel" && authMode !== "password") {
-    await prompter.note(t("wizard.gatewayNotes.tailscaleFunnelPassword"), t("wizard.gateway.auth"));
-    authMode = "password";
+    // Token auth is a mutable default, so funnel may switch it to password. Any
+    // other mode (notably trusted-proxy) is identity-bearing config the operator
+    // owns: rewriting it would drop the identity blocks and leave password mode
+    // without a secret, which stops the Gateway from starting.
+    if (authMode === "token") {
+      await prompter.note(
+        t("wizard.gatewayNotes.tailscaleFunnelPassword"),
+        t("wizard.gateway.auth"),
+      );
+      authMode = "password";
+    } else {
+      throw new Error(
+        `Tailscale Funnel requires password auth, but the Gateway is configured with "${authMode}" auth. ` +
+          `Re-run with --gateway-auth password to switch, or keep Tailscale exposure off.`,
+      );
+    }
   }
 
   let gatewayToken: string | undefined;

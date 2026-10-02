@@ -181,6 +181,51 @@ describe("configureGatewayForSetup", () => {
     },
   );
 
+  it("refuses to rewrite a trusted-proxy gateway to password for tailscale funnel", async () => {
+    // Funnel requires password auth, but a trusted-proxy gateway is
+    // identity-bearing: rewriting it would drop trustedProxy and leave password
+    // mode without a secret, which stops the Gateway from starting.
+    const baseConfig = {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy" as const,
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-user"],
+          },
+        },
+        trustedProxies: ["10.0.0.5"],
+      },
+    };
+    await expect(
+      configure({
+        flow: "quickstart",
+        baseConfig,
+        nextConfig: baseConfig,
+        quickstartGateway: resolveQuickstartGatewayDefaults(baseConfig, { tailscale: "funnel" }),
+      }),
+    ).rejects.toThrow(/Funnel requires password auth/);
+  });
+
+  it("still switches token auth to password for tailscale funnel", async () => {
+    mocks.getTailnetHostname.mockResolvedValue("test-tailnet.ts.net");
+    const baseConfig = {
+      gateway: {
+        auth: { mode: "token" as const, token: "existing-token" },
+      },
+    };
+    const result = await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: undefined }, () =>
+      configure({
+        flow: "quickstart",
+        baseConfig,
+        nextConfig: baseConfig,
+        quickstartGateway: resolveQuickstartGatewayDefaults(baseConfig, { tailscale: "funnel" }),
+      }),
+    );
+    expect(result.nextConfig.gateway?.auth?.mode).toBe("password");
+    expect(result.nextConfig.gateway?.tailscale?.mode).toBe("funnel");
+  });
+
   it("seeds advanced gateway prompts from explicit classic options", async () => {
     const gatewayDefaults = resolveQuickstartGatewayDefaults(
       {},
