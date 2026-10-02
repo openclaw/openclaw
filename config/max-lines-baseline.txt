@@ -421,8 +421,6 @@ src/config/sessions/transcript.test.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
 src/cron/isolated-agent/run-executor.ts
 src/cron/isolated-agent/run.test-harness.ts
-src/cron/service/ops.test.ts
-src/cron/store.test.ts
 src/daemon/launchd.test.ts
 src/daemon/schtasks.startup-fallback.test.ts
 src/daemon/systemd.test.ts
@@ -470,7 +468,6 @@ src/gateway/server-methods/agents-mutate.test.ts
 src/gateway/server-methods/agents.ts
 src/gateway/server-methods/approval-shared.test.ts
 src/gateway/server-methods/approval.test.ts
-src/gateway/server-methods/chat.abort-persistence.test.ts
 src/gateway/server-methods/chat.directive-tags.test.ts
 src/gateway/server-methods/config.ts
 src/gateway/server-methods/cron.ts
@@ -523,7 +520,6 @@ src/infra/outbound/delivery-queue-recovery.ts
 src/infra/outbound/delivery-queue.recovery.test.ts
 src/infra/outbound/outbound-send-service.test.ts
 src/infra/outbound/targets.test.ts
-src/infra/package-update-steps.ts
 src/infra/restart.ts
 src/infra/session-cost-usage.test.ts
 src/infra/state-migrations.doctor.ts

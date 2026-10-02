@@ -73,6 +73,7 @@ export function handleMessageEnd(
     ctx.state.deterministicApprovalPromptPending = false;
     ctx.state.deterministicApprovalPromptSent = false;
     ctx.state.currentSourceMessagingToolSentTextsNormalized.length = 0;
+    ctx.state.lastToolTurnOnlySourceProgress = undefined;
     ctx.state.lastAssistant = undefined;
     return;
   }

@@ -16,7 +16,7 @@ import {
   type SessionRowChange,
 } from "../sessions/session-row-changes.js";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "../state/agent-deletion-journal.read.js";
-import { retainUserProfileCatalog } from "../state/user-profile-list.js";
+import { prepareUserProfileCatalog, retainUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureSessionGroupCatalog } from "./session-group-catalog.js";
 import { createSessionMembershipProjection } from "./session-membership-projection.js";
 import { createSessionProjectionDrain, yieldSessionListWork } from "./session-projection-work.js";
@@ -593,6 +593,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     }),
   });
   await inOwnerContext(async () => {
+    (await prepareUserProfileCatalog()).release();
     await ensureSessionGroupCatalog();
     for (;;) {
       await refreshBatch();

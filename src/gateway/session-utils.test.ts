@@ -47,8 +47,8 @@ import {
 } from "./session-utils-model.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { buildGatewaySessionRow as buildGatewaySessionRowOwner } from "./session-utils-row.js";
+import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
-  type GatewaySessionStoreDiscoveryCache,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
   prepareGatewaySessionStoreTargetsReadOnly,
@@ -2555,12 +2555,12 @@ describe("gateway session utils", () => {
         agents: {
           defaults: {
             model: {
-              primary: "clawrouter/openai/gpt-5.6",
+              primary: "sol-projection",
               fallbacks: ["openai/gpt-5.6-luna"],
             },
             models: {
               "openai/gpt-5.6-sol": {
-                alias: "clawrouter/openai/gpt-5.6",
+                alias: "sol-projection",
                 agentRuntime: { id: "codex" },
               },
             },

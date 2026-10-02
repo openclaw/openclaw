@@ -23,6 +23,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAgentHarnessToolSurfaceRuntime } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { toStringifiedError as toCopilotToolError } from "openclaw/plugin-sdk/error-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { isRawCopilotModelRun } from "./attempt-mode.js";
 
@@ -617,9 +618,7 @@ async function executeCatalogTool(
 }
 
 function toToolStartArgs(args: unknown): Record<string, unknown> {
-  return args && typeof args === "object" && !Array.isArray(args)
-    ? (args as Record<string, unknown>)
-    : { value: args };
+  return asOptionalRecord(args) ?? { value: args };
 }
 
 function createFailureResult(message: string, error: unknown): ToolResultObject {

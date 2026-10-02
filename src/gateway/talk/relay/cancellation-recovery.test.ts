@@ -21,23 +21,10 @@ import {
   sendTalkRealtimeRelayAudio,
   stopTalkRealtimeRelaySession,
 } from "./index.js";
-import { drainingRelaySessions, relaySessions } from "./state.js";
+import { drainRelayTestSessions, makeRelayTransport } from "./index.test-support.js";
+import { relaySessions } from "./state.js";
 
 const activeRelaySessions = new Map<string, string>();
-
-function makeRelayTransport(overrides: Partial<RealtimeVoiceBridge> = {}) {
-  return {
-    connect: vi.fn(async () => undefined),
-    sendAudio: vi.fn(),
-    setMediaTimestamp: vi.fn(),
-    handleBargeIn: vi.fn(),
-    submitToolResult: vi.fn(),
-    acknowledgeMark: vi.fn(),
-    close: vi.fn(),
-    isConnected: vi.fn(() => true),
-    ...overrides,
-  };
-}
 
 function createRelayFixture(transportOverrides: Partial<RealtimeVoiceBridge> = {}) {
   let request: RealtimeVoiceBridgeCreateRequest | undefined;
@@ -144,24 +131,7 @@ describe("talk realtime relay cancellation recovery", () => {
 
   afterEach(async () => {
     try {
-      for (const [relaySessionId, connId] of activeRelaySessions) {
-        try {
-          await stopTalkRealtimeRelaySession({ relaySessionId, connId });
-        } catch (error) {
-          if (
-            !(error instanceof Error) ||
-            !error.message.includes("Unknown realtime relay session")
-          ) {
-            throw error;
-          }
-        }
-      }
-      await Promise.all(
-        [...drainingRelaySessions].map(
-          (session) =>
-            session.closing?.completion ?? session.voiceSessionClose ?? Promise.resolve(),
-        ),
-      );
+      await drainRelayTestSessions(activeRelaySessions);
     } finally {
       activeRelaySessions.clear();
       vi.useRealTimers();

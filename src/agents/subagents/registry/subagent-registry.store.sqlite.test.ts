@@ -34,9 +34,10 @@ import {
   loadSubagentSessionListRunsFromSqlite,
   loadSubagentRunsForSessionsInDatabase,
   saveSubagentRegistryChangesToSqlite,
-  saveSubagentRegistryToSqlite,
 } from "./subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { resolveSubagentDisplayStatus } from "./subagent-session-metrics.js";
 
 type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
 
@@ -655,6 +656,19 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
+  it.each([undefined, "parent"] as const)(
+    "retains yielded pause reason in cold compact reads (completion target: %s)",
+    (completionTarget) => {
+      const run = createRun({ pauseReason: "sessions_yield", completionTarget });
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      closeOpenClawStateDatabaseForTest();
+
+      const compact = loadSubagentSessionListRunsFromSqlite().get(run.runId);
+      expect(compact?.pauseReason).toBe("sessions_yield");
+      expect(resolveSubagentDisplayStatus(compact!)).toBe("waiting for external continuation");
+    },
+  );
+
   it("rejects writes outside the canonical nested state", async () => {
     const missingState = createRun({ execution: undefined });
     const retiredState = createRun();
@@ -664,9 +678,9 @@ describe("subagent registry sqlite store", () => {
     });
 
     for (const run of [missingState, retiredState, invalidStatus]) {
-      expect(() => saveSubagentRegistryToSqlite(new Map([[run.runId, run]]))).toThrow(
-        "subagent run is missing canonical nested state",
-      );
+      expect(() =>
+        saveSubagentRegistryChangesToSqlite(new Map([[run.runId, run]]), [run.runId]),
+      ).toThrow("subagent run is missing canonical nested state");
     }
   });
 

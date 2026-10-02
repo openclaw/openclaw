@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import { bindHostSkillCatalog } from "../harness/host-skills.js";
 import { readInstalledSkill } from "../installed-skill-catalog.js";

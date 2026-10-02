@@ -8,7 +8,7 @@ import type { StoredComposerSession } from "./outbox-store-codec.ts";
 import { createStoredChatOutboxReader } from "./outbox-store-projection.ts";
 import {
   storedChatOutboxScopeKey,
-  storageTargetForGateway,
+  storageTargetForComposer,
   subscribeStoredChatOutboxChanges,
   writeStoredOutboxStore,
 } from "./outbox-store.ts";
@@ -42,7 +42,7 @@ function subscribe(reader: ReturnType<typeof createStoredChatOutboxReader>) {
 }
 
 function seedTab(rows: Record<string, StoredComposerSession>) {
-  writeStoredOutboxStore(sessionStorage, storageTargetForGateway(gatewayUrl), {
+  writeStoredOutboxStore(sessionStorage, storageTargetForComposer(state()), {
     version: 4,
     gatewayOwner: gatewayUrl,
     recovery: {},
@@ -80,6 +80,23 @@ afterEach(async () => {
 });
 
 describe("stored draft projection", () => {
+  it("retires a cached tab summary when the same offline client loses local admission", () => {
+    seedTab({ a: { draft: "offline input", draftRevision: 10, updatedAt: 1 } });
+    const host = {
+      ...state(),
+      connected: false,
+      client: {
+        recoveryScope: "",
+        recoveryScopeReady: false,
+        offlineRecoveryScope: owner.recoveryScope,
+      },
+    };
+    const reader = createStoredChatOutboxReader();
+    expect(reader.read(host).hasSessionDraft(key("a"))).toBe(true);
+    host.client.offlineRecoveryScope = "";
+    expect(reader.read(host).hasSessionDraft(key("a"))).toBe(false);
+  });
+
   it.each(["read", "sweep"])(
     "clears a cached attachment-only draft badge after expiry through %s",
     async (path) => {

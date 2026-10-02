@@ -12,7 +12,7 @@ import {
   withSubagentRunReadSnapshot,
 } from "../subagents/registry/subagent-registry-state.js";
 import * as registryState from "../subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../subagents/registry/subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "../subagents/registry/subagent-registry.store.test-support.js";
 import { createSubagentsTool } from "./subagents-tool.js";
 
 it("keeps persisted subagent wait selection off the calling thread", async () => {
@@ -31,7 +31,7 @@ it("keeps persisted subagent wait selection off the calling thread", async () =>
         completion: { required: false },
         delivery: { status: "not_required" },
       });
-      persistSubagentRunsToDiskOrThrow(new Map([[run.runId, run]]));
+      persistSubagentRunsToDiskOrThrow(new Map([[run.runId, run]]), [run.runId]);
       clearSubagentRunsReadCacheForTest();
       let registryReads = 0;
       const statements = (["get", "all", "iterate"] as const).map((method) => {
@@ -191,7 +191,7 @@ it.each([
             run.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
             persistSubagentRunsToDiskOrThrow(
               new Map([run, replacement].map((entry) => [entry.runId, entry])),
-              trigger === "named run publication" ? [run.runId] : undefined,
+              trigger === "named run publication" ? [run.runId] : [run.runId, replacement.runId],
             );
           });
           await publisher.drain();

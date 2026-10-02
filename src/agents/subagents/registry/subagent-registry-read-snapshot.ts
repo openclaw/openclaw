@@ -6,17 +6,13 @@ import {
 } from "../../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
-import {
-  getSubagentRunIdLookup,
-  getSubagentSessionReadLookup,
-} from "./subagent-registry-memory.js";
+import { getSubagentSessionReadLookup } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import {
   acceptedFullSnapshot,
   assertSubagentReadContext,
   consumeSubagentRuns,
   getPersistedSubagentRunsSnapshot,
-  getPersistedRunIdLookup,
   getSessionListLookup,
   mergeSelectedFullRuns,
   prepareSubagentRunsCache,
@@ -107,8 +103,8 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
       let liveKeys: string[];
       let persistedKeys: string[];
       if ("runIds" in readScope) {
-        liveKeys = getSubagentRunIdLookup(inMemoryRuns).select(readScope.runIds);
-        persistedKeys = getPersistedRunIdLookup(compactCache, compact).select(
+        liveKeys = getSubagentSessionReadLookup(inMemoryRuns).selectRunIds(readScope.runIds);
+        persistedKeys = getSessionListLookup(compactCache, compact).selectRunIds(
           readScope.runIds,
           liveKeys,
         );
@@ -288,7 +284,7 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
     assertSubagentReadContext(context);
   };
   let changed: (ids: readonly string[] | undefined) => void = () => {};
-  const unsubscribe = subscribeSubagentRunChanges((ids) => changed(ids));
+  const unsubscribe = subscribeSubagentRunChanges("projection", ({ runIds }) => changed(runIds));
   const dispose = () => {
     disposed = true;
     unsubscribe();
@@ -442,7 +438,7 @@ export async function prepareSubagentMaintenanceReadSnapshot(
   let published: (runIds: readonly string[] | undefined) => void = () => {
     invalidated = true;
   };
-  const unsubscribe = subscribeSubagentRunChanges((runIds) => published(runIds));
+  const unsubscribe = subscribeSubagentRunChanges("projection", ({ runIds }) => published(runIds));
   const dispose = () => {
     disposed = true;
     unsubscribe();

@@ -14,7 +14,7 @@ import type {
   WorkerEnvironmentAttachmentRecord,
   WorkerEnvironmentSessionIdentity,
 } from "./session-attachment.js";
-import type { WorkerEnvironmentMutationMethods } from "./store-worker-contract.js";
+import type { WorkerEnvironmentMutationMethods } from "./store.types.js";
 
 type AttachmentTable = {
   session_id: string;

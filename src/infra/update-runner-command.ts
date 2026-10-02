@@ -1,17 +1,19 @@
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { formatErrorMessage } from "./errors.js";
+import { parseNpmErrorCode } from "./npm-error.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
 import { createGlobalInstallEnv } from "./update-global.js";
 import { createNpmFailureFacts } from "./update-npm-failure.js";
-import { isFailedUpdateStep } from "./update-run-step.js";
+import { createUpdateStepFailureError, isFailedUpdateStep } from "./update-run-step.js";
 import { UPDATE_RUN_HEARTBEAT_MS } from "./update-run-timeouts.js";
 import type {
   CommandRunner,
   RunStepOptions,
   UpdateRunResult,
   UpdateStepInfo,
+  UpdateStepProgress,
 } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
@@ -38,11 +40,36 @@ function selectCommandFailureMessage(stdout: string, stderr: string): string {
   );
 }
 
+export async function reportUpdateStepCompletion(
+  progress: UpdateStepProgress | undefined,
+  step: Parameters<NonNullable<UpdateStepProgress["onStepComplete"]>>[0],
+  commandFailure?: { cause: unknown },
+): Promise<void> {
+  let reportOutcome: { ok: true } | { ok: false; error: unknown } = { ok: true };
+  try {
+    await progress?.onStepComplete?.(step);
+  } catch (error) {
+    reportOutcome = { ok: false, error };
+  }
+  if (reportOutcome.ok) {
+    return;
+  }
+  if (commandFailure || isFailedUpdateStep(step)) {
+    const failure = commandFailure ? commandFailure.cause : createUpdateStepFailureError(step);
+    throw new AggregateError(
+      [failure, reportOutcome.error],
+      "Update command and completion reporting failed",
+      { cause: failure },
+    );
+  }
+  throw reportOutcome.error;
+}
+
 export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
   const { runCommand, name, argv, cwd, timeoutMs, env, progress, stepIndex, totalSteps } = opts;
   const command = argv.join(" ");
   const stepInfo: UpdateStepInfo = { name, command, index: stepIndex, total: totalSteps };
-  progress?.onStepStart?.(stepInfo);
+  await progress?.onStepStart?.(stepInfo);
 
   const started = Date.now();
   const onHeartbeat = progress?.onHeartbeat;
@@ -85,11 +112,21 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
   if (
     !failureFacts &&
     result.code !== 0 &&
-    ["package-install", "package-install-omit-optional", "package-pack"].includes(name) &&
-    (/(?:^|[\\/])npm(?:\.cmd|\.exe)?$/iu.test(argv[0] ?? "") ||
+    [
+      "package-install",
+      "package-install-prefer-online",
+      "package-install-omit-optional",
+      "package-pack",
+    ].includes(name) &&
+    (/(?:^|[\\/])(?:npm|bun)(?:\.cmd|\.exe)?$/iu.test(argv[0] ?? "") ||
       /\bnpm (?:ERR!|error)(?:\s|$)/u.test(`${result.stderr}\n${result.stdout}`))
   ) {
-    failureFacts = createNpmFailureFacts(result.stdout, result.stderr, env);
+    failureFacts = createNpmFailureFacts(
+      result.stdout,
+      result.stderr,
+      env,
+      /(?:^|[\\/])bun(?:\.exe)?$/iu.test(argv[0] ?? "") ? "bun" : "npm",
+    );
   }
   failureFacts ??= isFailedUpdateStep({
     exitCode: result.code,
@@ -102,7 +139,7 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
           {
             check: name,
             code:
-              result.stderr.match(/\bnpm (?:ERR!|error) code ([A-Z][A-Z0-9_]+)/u)?.[1] ??
+              parseNpmErrorCode(result.stderr) ??
               (result.termination && result.termination !== "exit"
                 ? result.termination
                 : "command-failed"),
@@ -126,13 +163,12 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
     termination: result.termination,
     ...(failureFacts ? { failureFacts } : {}),
   };
-  progress?.onStepComplete?.({ ...stepInfo, ...completion });
-
   const stepResult: UpdateStepResult = {
     ...completion,
     cwd,
   };
   opts.results?.push(stepResult);
+  await reportUpdateStepCompletion(progress, { ...stepInfo, ...completion }, commandError);
   if (commandError) {
     throw commandError.cause;
   }
@@ -145,6 +181,7 @@ export function normalizeFallbackFailureReason(
   switch (stepName) {
     case "package-install":
     case "package-install-omit-optional":
+    case "package-install-prefer-online":
     case "package-stage":
     case "package-verify":
     case "package-swap":

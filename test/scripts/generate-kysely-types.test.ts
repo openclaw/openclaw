@@ -44,6 +44,8 @@ describe("Kysely declarations", () => {
     for (const file of [
       "package.json",
       "scripts/prepare-git-hooks.mjs",
+      "scripts/prepare-native-protocol.mjs",
+      "scripts/runtime-postbuild-shared.mjs",
       "scripts/generate-kysely-types.mts",
       "scripts/lib/direct-run.mjs",
     ]) {
@@ -101,11 +103,16 @@ describe("Kysely declarations", () => {
         env,
         encoding: "utf8",
       });
-    for (const file of ["scripts/generate-kysely-types.mts", "scripts/prepare-git-hooks.mjs"]) {
+    for (const file of [
+      "scripts/generate-kysely-types.mts",
+      "scripts/prepare-git-hooks.mjs",
+      "scripts/prepare-native-protocol.mjs",
+    ]) {
       const result = run(file);
       expect(result.status, result.stderr).toBe(0);
     }
     expect(fs.existsSync(path.join(packageRoot, ".artifacts"))).toBe(false);
+    expect(fs.existsSync(path.join(packageRoot, "apps"))).toBe(false);
     fs.unlinkSync(path.join(packageRoot, "scripts/lib/direct-run.mjs"));
     const missing = run("scripts/generate-kysely-types.mts");
     expect(missing.status).toBe(1);

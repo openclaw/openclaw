@@ -1,9 +1,8 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
@@ -16,17 +15,12 @@ import {
 import { retireTerminalRestartRecoverySourceClaim } from "./restart-recovery-claim.js";
 
 describe("pending final delivery restart proof", () => {
-  let tmpDir: string;
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-pending-final-");
   let storePath: string;
   const sessionKey = "agent:main:discord:direct:123";
 
-  beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pending-final-"));
-    storePath = path.join(tmpDir, "sessions.json");
-  });
-
-  afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+  beforeEach(() => {
+    storePath = path.join(sessionDirs.make(), "sessions.json");
   });
 
   async function writePendingFinal(

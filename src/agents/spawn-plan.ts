@@ -273,6 +273,7 @@ export function resolveSpawnAdmission(params: {
   requestedAgentId?: string;
   configuredAgentIds: string[];
   additionalActiveChildren?: number;
+  countActiveRuns?: typeof countActiveRunsForSession;
 }):
   | {
       ok: true;
@@ -311,7 +312,7 @@ export function resolveSpawnAdmission(params: {
         maxSpawnDepth,
         collect: false,
         activeChildren:
-          countActiveRunsForSession(params.requesterSessionKey, {
+          (params.countActiveRuns ?? countActiveRunsForSession)(params.requesterSessionKey, {
             collect: false,
             requesterAgentId: params.requesterAgentId,
           }) + (params.additionalActiveChildren ?? 0),

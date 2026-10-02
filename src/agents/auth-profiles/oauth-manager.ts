@@ -12,6 +12,7 @@ import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { OAUTH_REFRESH_CALL_TIMEOUT_MS, authProfilesLog } from "./constants.js";
+import { observeCanonicalAuthProfileCredentials } from "./credential-observation.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import {
   resolveEffectiveOAuthCredentialCore,
@@ -435,6 +436,14 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       : resolveSharedAuthStorePath();
     const globalRefreshLockPath = resolveOAuthRefreshLockPath(params.provider, params.profileId);
     const peerConfig = params.cfg ?? {};
+    const fenceTerminalPeers = (credential: OAuthCredential) =>
+      fenceOAuthRefreshPeers({
+        cfg: peerConfig,
+        ownerDatabasePath: authPath,
+        profileId: params.profileId,
+        generation: credential,
+        fence: credential,
+      });
 
     let observation: ReturnType<typeof beginOAuthRefreshObservation> | undefined;
     let observationTransferred = false;
@@ -586,15 +595,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             if (isPendingOAuthRefreshFence(cred)) {
               return { kind: "observe", ownerAgentDir, generation: cred };
             }
-            const peerClaims = personalProfile
-              ? []
-              : await fenceOAuthRefreshPeers({
-                  cfg: peerConfig,
-                  ownerDatabasePath: authPath,
-                  profileId: params.profileId,
-                  generation: cred,
-                  fence: cred,
-                });
+            const peerClaims = personalProfile ? [] : await fenceTerminalPeers(cred);
             failOAuthRefreshPeerClaims({
               profileId: params.profileId,
               fence: cred,
@@ -665,15 +666,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
               };
             }
             if (isOAuthRefreshFence(current)) {
-              const peerClaims = personalProfile
-                ? []
-                : await fenceOAuthRefreshPeers({
-                    cfg: peerConfig,
-                    ownerDatabasePath: authPath,
-                    profileId: params.profileId,
-                    generation: current,
-                    fence: current,
-                  });
+              const peerClaims = personalProfile ? [] : await fenceTerminalPeers(current);
               failOAuthRefreshPeerClaims({
                 profileId: params.profileId,
                 fence: current,
@@ -1075,6 +1068,9 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         if (!settled) {
           throw new Error("Failed to persist refreshed OAuth credential");
         }
+        observeCanonicalAuthProfileCredentials(claim.authPath, {
+          [params.profileId]: settled.credential,
+        });
         return await buildValidatedAccess(settled.credential, params);
       } catch (error) {
         if (error instanceof OAuthSettlementCredentialValidationError) {

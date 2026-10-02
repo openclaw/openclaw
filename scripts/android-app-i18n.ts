@@ -3,6 +3,7 @@ import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.ts";
+import { compareAscii as compareText } from "./lib/canonical-json.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
@@ -125,10 +126,6 @@ export type AndroidUiLiteralFinding = {
   path: string;
   source: string;
 };
-
-function compareText(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
 
 function decodeXml(value: string): string {
   return value
@@ -378,7 +375,7 @@ export function findUnusedAndroidResourceKeys(
   return [...keys].filter((key) => !references.has(key));
 }
 
-function lineNumber(source: string, offset: number): number {
+export function lineNumber(source: string, offset: number): number {
   return source.slice(0, offset).split("\n").length;
 }
 
@@ -602,7 +599,7 @@ function createDoubleQuoteScanner() {
   };
 }
 
-function findClosingDelimiter(
+export function findClosingDelimiter(
   source: string,
   openingOffset: number,
   opening: string,

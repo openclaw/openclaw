@@ -9,7 +9,7 @@ import {
   resolveProjectCheckout,
   withProjectCheckoutLifecycle,
 } from "./project-checkout.js";
-import type { ProjectRegistryInsert, ProjectRegistryRecord } from "./project-registry.kernel.js";
+import type { ProjectRegistryInsert, ProjectRegistryRecord } from "./project-registry.types.js";
 
 type ProjectRegistrationInput = {
   path: string;

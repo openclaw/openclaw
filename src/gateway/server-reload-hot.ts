@@ -26,7 +26,8 @@ import {
   shouldRefreshContextWindowCache,
 } from "./config-reload-recovery.js";
 import type { GatewayHotReloadApplication } from "./config-reload-status.types.js";
-import { commitHooksConfigReload, resolveHooksConfig } from "./hooks.js";
+import { commitHookTransformMappingReload } from "./hooks-mapping.js";
+import { resolveHooksConfig } from "./hooks.js";
 import type { GatewayCronExitWatcherHandoff } from "./server-cron.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
@@ -318,7 +319,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         // Accepted config owns the remaining effects. A failure here must retain
         // its secrets and report a committed operation instead of restoring old state.
         if (plan.reloadHooks) {
-          commitHooksConfigReload();
+          commitHookTransformMappingReload();
         }
         internalHooks?.commit();
         applyGatewayLaneConcurrency(laneConcurrency);

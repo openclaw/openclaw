@@ -4,16 +4,11 @@ import type { PluginWebSearchProviderEntry } from "../../plugins/web-provider-ty
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  scope: vi.fn(),
-  defaults: vi.fn(),
   options: vi.fn(),
   configured: vi.fn(),
   available: vi.fn(),
   selection: vi.fn(),
   metadata: vi.fn(),
-  descriptors: vi.fn(),
-  source: vi.fn(),
-  auth: vi.fn(),
   policy: vi.fn(),
   catalog: vi.fn(),
   decisions: vi.fn(),
@@ -24,10 +19,12 @@ vi.mock("../../agents/auth-profiles/store.js", () => ({
   getPreparedRuntimeAuthProfileStoreSnapshot: () => undefined,
 }));
 vi.mock("./model-auth-agent-scope.js", () => ({
-  resolveModelAuthAgentScope: mocks.scope,
+  resolveModelAuthAgentScope: () => ({ ok: true, agentId: "main", agentDir: "/synthetic/agent" }),
   modelAuthAgentScopeError: vi.fn(),
 }));
-vi.mock("../../agents/model-selection.js", () => ({ resolveDefaultModelForAgent: mocks.defaults }));
+vi.mock("../../agents/model-selection.js", () => ({
+  resolveDefaultModelForAgent: () => ({ provider: "custom", model: "model" }),
+}));
 vi.mock("../../flows/search-setup.js", () => ({ listSearchProviderOptions: mocks.options }));
 vi.mock("../../web-search/runtime.js", () => ({
   isWebSearchProviderConfigured: mocks.configured,
@@ -38,13 +35,13 @@ vi.mock("../../plugins/management-service.js", () => ({
   resolveManagedPluginMetadata: mocks.metadata,
 }));
 vi.mock("../../plugins/credential-descriptors.js", () => ({
-  resolvePluginCredentialDescriptors: mocks.descriptors,
+  resolvePluginCredentialDescriptors: () => [credential],
 }));
 vi.mock("../../config/runtime-snapshot.js", () => ({
-  getRuntimeConfigSourceSnapshot: mocks.source,
+  getRuntimeConfigSourceSnapshot: () => undefined,
 }));
 vi.mock("../../agents/tools/model-config.helpers.js", () => ({
-  hasAuthProfileForProvider: mocks.auth,
+  hasAuthProfileForProvider: () => false,
 }));
 vi.mock("../../agents/web-search-tool-policy.js", () => ({
   resolveWebSearchToolPolicy: mocks.policy,
@@ -89,26 +86,18 @@ function context() {
 beforeEach(() => {
   vi.clearAllMocks();
   config = { tools: { web: { search: { provider: "example" } } } };
-  mocks.scope.mockReturnValue({ ok: true, agentId: "main", agentDir: "/synthetic/agent" });
-  mocks.defaults.mockReturnValue({ provider: "custom", model: "model" });
   mocks.options.mockReturnValue([provider()]);
   mocks.available.mockReturnValue([provider()]);
   mocks.configured.mockReturnValue(true);
   mocks.selection.mockReturnValue("example");
   mocks.metadata.mockReturnValue({ byPluginId: new Map([["example", { id: "example" }]]) });
-  mocks.descriptors.mockReturnValue([credential]);
-  mocks.source.mockReturnValue(undefined);
-  mocks.auth.mockReturnValue(false);
   mocks.policy.mockReturnValue({ allowed: true });
-  withModelCatalog();
   mocks.native.mockReturnValue({ kind: "managed" });
   mocks.runtime.mockReturnValue({ id: "openclaw" });
   mocks.decisions.mockReturnValue({
     evaluateEntry: async () => ({}),
     evaluateNative: (_entry: unknown, host: unknown) => host,
   });
-});
-function withModelCatalog() {
   mocks.catalog.mockResolvedValue({
     entries: [
       {
@@ -124,7 +113,7 @@ function withModelCatalog() {
     authStore: {},
     isCurrent: () => true,
   });
-}
+});
 
 describe("Search settings status projection", () => {
   it.each(["missing-catalog", "unknown-model"])(
@@ -149,7 +138,7 @@ describe("Search settings status projection", () => {
     mocks.decisions.mockImplementation(
       ({ requesterProfileId }: { requesterProfileId?: string }) => ({
         evaluateEntry: async () => ({
-          runtimeAuth: { id: requesterProfileId === "personal" ? "codex" : "openclaw" },
+          runtimeAuth: { id: requesterProfileId === "personal" ? "custom-harness" : "openclaw" },
         }),
         evaluateNative: (_entry: unknown, host: unknown) => host,
       }),
@@ -161,8 +150,9 @@ describe("Search settings status projection", () => {
     const personal = await prepareWebSearchStatus(context(), {}, "personal");
     expect(shared.status?.route.kind).toBe("managed");
     expect(personal.status).toMatchObject({
-      model: { runtime: "codex" },
-      route: { kind: "external" },
+      model: { runtime: "custom-harness" },
+      route: { kind: "external", testable: false },
+      testProvider: { id: "example" },
     });
   });
 
@@ -230,7 +220,7 @@ describe("Search settings status projection", () => {
     "does not advertise a probe when disabled by global or tool policy (global=%s)",
     async (globalEnabled) => {
       config = { tools: { web: { search: { enabled: globalEnabled, provider: "example" } } } };
-      mocks.policy.mockReturnValue({ allowed: false });
+      mocks.policy.mockReturnValue({ allowed: !globalEnabled });
       const result = await prepareWebSearchStatus(context(), {});
       expect(result.status?.route).toMatchObject({ kind: "disabled", testable: false });
       expect(result.status?.testProvider).toBeUndefined();
@@ -238,47 +228,26 @@ describe("Search settings status projection", () => {
     },
   );
 
-  it.each([
-    { provider: "openai", transport: "openai-responses" },
-    { provider: "fixture-search", transport: "fixture-responses" },
-  ])(
-    "reports the $provider native owner without a vendor-specific label",
-    async ({ provider: nativeProvider, transport }) => {
-      withModelCatalog();
-      mocks.native.mockReturnValue({
+  it("reports a plugin's native owner without a vendor-specific label", async () => {
+    mocks.native.mockReturnValue({
+      kind: "native",
+      provider: "fixture-search",
+      transport: "fixture-responses",
+    });
+    const result = await prepareWebSearchStatus(context(), {
+      modelProvider: "custom",
+      modelId: "model",
+    });
+    expect(result.status).toMatchObject({
+      model: { provider: "custom", id: "model", runtime: "openclaw" },
+      route: {
         kind: "native",
-        provider: nativeProvider,
-        transport,
-      });
-      const result = await prepareWebSearchStatus(context(), {
-        modelProvider: "custom",
-        modelId: "model",
-      });
-      expect(result.status).toMatchObject({
-        model: { provider: "custom", id: "model", runtime: "openclaw" },
-        route: {
-          kind: "native",
-          provider: nativeProvider,
-          label: "Native web search",
-          testable: false,
-        },
-      });
-    },
-  );
-
-  it.each(["codex", "claude-cli", "custom-harness"])(
-    "does not infer native search capability for the %s harness",
-    async (runtime) => {
-      withModelCatalog();
-      mocks.runtime.mockReturnValue({ id: runtime });
-      const result = await prepareWebSearchStatus(context(), {});
-      expect(result.status).toMatchObject({
-        model: { runtime },
-        route: { kind: "external", testable: false },
-        testProvider: { id: "example" },
-      });
-    },
-  );
+        provider: "fixture-search",
+        label: "Native web search",
+        testable: false,
+      },
+    });
+  });
 
   it("retains missing credentials instead of equating configuration with provider health", async () => {
     mocks.configured.mockReturnValue(false);

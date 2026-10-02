@@ -9,6 +9,7 @@
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { createBaseToolHandlerState } from "./agent-tool-handler-state.test-helpers.js";
 
 const hookMocks = vi.hoisted(() => ({

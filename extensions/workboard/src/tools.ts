@@ -1,5 +1,6 @@
 import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/core";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
 import { redactClaimToken } from "./card-redaction.js";
@@ -129,10 +130,7 @@ export function createWorkboardTools(params: {
         const agentId = typeof record.agentId === "string" ? record.agentId : undefined;
         const tenant = typeof record.tenant === "string" ? record.tenant : undefined;
         const boardId = typeof record.boardId === "string" ? record.boardId : undefined;
-        const limit =
-          typeof record.limit === "number" && Number.isFinite(record.limit)
-            ? Math.max(1, Math.min(200, Math.trunc(record.limit)))
-            : 50;
+        const limit = resolveIntegerOption(record.limit, 50, { min: 1, max: 200 });
         const cards = (await store.list({ boardId }))
           .filter((card) => record.includeArchived === true || !card.metadata?.archivedAt)
           .filter((card) => !status || card.status === status)

@@ -73,7 +73,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
       "send it through an available, permitted messaging tool",
     );
     expect(String(deliveredCallArg().triggerMessage)).toContain(
-      "when no further work or user-facing update is owed, or after sending that update",
+      "briefly record the reviewed outcome and any remaining work",
     );
     expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
     expect(deliverSpy).toHaveBeenCalledOnce();
@@ -98,14 +98,14 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
       completionRequesterSessionId: "sess-main",
     });
     expect(deliveredCallArg().completionTarget).toBeUndefined();
-    // Deliverable, not forced: NO_REPLY stays silent when nothing is owed.
+    // The conversation's reply policy decides whether a visible update is owed.
     expect(deliveredCallArg().requireVisibleReply).toBeUndefined();
     const trigger = String(deliveredCallArg().triggerMessage);
     expect(trigger).toContain("private marker");
     expect(trigger).not.toContain("Your final reply stays internal");
     expect(trigger).toContain("under its normal reply rules");
     expect(trigger).toContain("must go through the message tool, send your answer with it");
-    expect(trigger).toContain("when no user-facing update is owed");
+    expect(trigger).toContain("avoid repeating an update already delivered");
     expect(transitionBatchSpy.mock.calls.at(0)?.[1]).toMatchObject({
       status: "dispatching",
       yieldedFinalDeliverable: true,

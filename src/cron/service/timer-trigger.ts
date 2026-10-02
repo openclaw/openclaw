@@ -1,5 +1,9 @@
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { type CronRetryOn, resolveCronExecutionRetryHint } from "../retry-hint.js";
+import {
+  CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
+  hasCanonicalCronDeliveryMode,
+} from "../store/delivery-codec.js";
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type {
   CronJob,
@@ -247,8 +251,6 @@ export function resolveDeliveryState(params: {
   error?: string;
   deliverySuppressionReason?: CronResolvedDeliveryState["deliverySuppressionReason"];
 }): CronResolvedDeliveryState {
-  const primaryDeliveryPlan = resolveCronDeliveryPlan(params.job);
-  const primaryDeliveryRequested = primaryDeliveryPlan.requested;
   const noFailureNotification = { status: "not-requested" as const };
   const verifiedDelivery =
     params.delivered === true &&
@@ -260,6 +262,15 @@ export function resolveDeliveryState(params: {
       failureNotification: noFailureNotification,
     };
   }
+  if (!hasCanonicalCronDeliveryMode(params.job.delivery)) {
+    return {
+      status: "unknown",
+      error: CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
+      failureNotification: noFailureNotification,
+    };
+  }
+  const primaryDeliveryPlan = resolveCronDeliveryPlan(params.job);
+  const primaryDeliveryRequested = primaryDeliveryPlan.requested;
   if (!primaryDeliveryRequested) {
     if (primaryDeliveryPlan.mode === "webhook" && params.deliveryAttempted === true) {
       return {

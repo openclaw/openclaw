@@ -115,6 +115,12 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "cold-metadata", ...input }),
       (value) => value,
     ),
+    readColdStorageInventory: reader(
+      "cold-storage-inventory",
+      "cold storage inventory",
+      (input) => ({ kind: "cold-storage-inventory", ...input }),
+      (value) => value,
+    ),
     searchTranscripts: reader(
       "transcript-search",
       "search",
@@ -156,7 +162,9 @@ export function createSessionHistoryWorkerReaders(
         if (
           typeof value === "boolean" ||
           Array.isArray(value) ||
-          (value.kind !== "reactions" &&
+          (value.kind !== "active-accounting" &&
+            value.kind !== "bounded-tail" &&
+            value.kind !== "reactions" &&
             value.kind !== "conversation-binding" &&
             value.kind !== "transcript-binding" &&
             value.kind !== "artifacts" &&
@@ -167,6 +175,7 @@ export function createSessionHistoryWorkerReaders(
             value.kind !== "rpc" &&
             value.kind !== "http" &&
             value.kind !== "delta" &&
+            value.kind !== "inline-visibility" &&
             value.kind !== "recent" &&
             value.kind !== "message-by-id" &&
             value.kind !== "message-count" &&
@@ -307,6 +316,12 @@ export function createSessionHistoryWorkerReaders(
       "pending input receipts",
       (input) => ({ kind: "session-pending-input-receipts", ...input }),
       (value) => value.receipts,
+    ),
+    readGoalOperationReceipt: reader(
+      "goal-operation-receipt",
+      "a Goal operation receipt",
+      (input) => ({ kind: "goal-operation-receipt", ...input }),
+      (value) => value.result,
     ),
     readEntryResult: reader(
       "session-entry-read",

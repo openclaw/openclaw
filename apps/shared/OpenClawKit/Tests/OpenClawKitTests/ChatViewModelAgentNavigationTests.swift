@@ -252,7 +252,7 @@ private final class AgentNavigationFixture {
 @MainActor
 struct ChatViewModelAgentNavigationTests {
     private func globalSession(owner: String) -> OpenClawChatSessionEntry {
-        var entry = OpenClawChatSessionEntry.placeholder(key: "global")
+        var entry = OpenClawChatSessionEntry(key: "global")
         entry.agentId = owner
         entry.label = "\(owner) notes"
         entry.pinned = true

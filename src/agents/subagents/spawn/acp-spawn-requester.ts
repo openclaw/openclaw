@@ -4,17 +4,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMeta } from "../../../acp/runtime/session-meta.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
-import {
-  listSessionEntriesReadOnly,
-  loadSessionEntryReadOnly,
-  resolveSessionTranscriptRuntimeTarget,
-} from "../../../config/sessions/session-accessor.js";
+import { listSessionEntriesReadOnly } from "../../../config/sessions/session-accessor.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { formatErrorMessage } from "../../../infra/errors.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
-import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
   isSubagentSessionKey,
   parseAgentSessionKey,
@@ -31,8 +24,6 @@ import {
   hasSessionLocalHeartbeatRelayRoute,
   isHeartbeatEnabledForSessionAgent,
 } from "./acp-spawn-heartbeat.js";
-
-const log = createSubsystemLogger("agents/acp-spawn");
 
 type AcpSpawnRequesterContext = {
   agentChannel?: string;
@@ -82,38 +73,6 @@ export function resolveRequesterInternalSessionKey(params: {
   return requesterSessionKey
     ? resolveInternalSessionKey({ key: requesterSessionKey, alias })
     : alias;
-}
-
-export async function persistAcpSpawnSessionFileBestEffort(params: {
-  sessionId: string;
-  sessionKey: string;
-  sessionEntry: SessionEntry | undefined;
-  storePath: string;
-  agentId: string;
-  threadId?: string | number;
-  stage: "spawn" | "thread-bind";
-}): Promise<SessionEntry | undefined> {
-  try {
-    const resolvedSessionFile = await resolveSessionTranscriptRuntimeTarget({
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      agentId: params.agentId,
-      threadId: params.threadId,
-    });
-    return (
-      loadSessionEntryReadOnly({
-        storePath: params.storePath,
-        sessionKey: resolvedSessionFile.sessionKey,
-        clone: false,
-      }) ?? params.sessionEntry
-    );
-  } catch (error) {
-    log.warn(
-      `ACP session-file persistence failed during ${params.stage} for ${params.sessionKey}: ${formatErrorMessage(error)}`,
-    );
-    return params.sessionEntry;
-  }
 }
 
 export function resolveAcpSpawnRequesterState(params: {
@@ -174,13 +133,7 @@ export function shouldStreamAcpSpawnToParent(params: {
   streamToParentRequested: boolean;
   requester: AcpSpawnRequesterState;
 }): boolean {
-  // For mode=run without thread binding, implicitly route output to parent
-  // only for spawned subagent orchestrator sessions with heartbeat enabled
-  // AND a session-local heartbeat delivery route (target=last + usable last route).
-  // Skip requester sessions that are thread-bound (or carrying thread context)
-  // so user-facing threads do not receive unsolicited ACP progress chatter
-  // unless streamTo="parent" is explicitly requested. Use resolved spawnMode
-  // (not params.mode) so default mode selection works.
+  // Thread-bound requesters require an explicit request to avoid unsolicited progress chatter.
   const implicitStreamToParent =
     params.spawnMode === "run" &&
     !params.requestThreadBinding &&

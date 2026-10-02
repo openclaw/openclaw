@@ -103,6 +103,25 @@ export async function loadAgentReplacementOperations() {
   } satisfies Handlers;
 }
 
+export async function loadAgentRestartRecoveryOperations() {
+  const kernel = await import("../config/sessions/session-accessor.sqlite-recovery.worker.js");
+  return {
+    "session.restart.recover": (
+      input: Parameters<typeof kernel.recoverRestartTombstoneInDatabase>[1],
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction("session.lifecycle.recover-tombstone", "Session recovery", (current) => {
+        const result = kernel.recoverRestartTombstoneInDatabase(current, input);
+        deferSqliteWorkerCommitReceipt(
+          current.db,
+          result.publication ?? { kind: "session-restart-recovery-unchanged" },
+        );
+        admit("commit", result.publication);
+        return result;
+      }),
+  } satisfies Handlers;
+}
+
 export async function loadAgentEntryReadOperations() {
   const kernel = await import("../config/sessions/session-accessor.sqlite-entry-read.js");
   return {
@@ -225,6 +244,7 @@ export type RegisteredAgentWorkerOperations = WorkerOperations<
   Awaited<ReturnType<typeof loadAgentTranscriptOperations>> &
     Awaited<ReturnType<typeof loadAgentReplacementOperations>> &
     Awaited<ReturnType<typeof loadAgentEntryReadOperations>> &
+    Awaited<ReturnType<typeof loadAgentRestartRecoveryOperations>> &
     Awaited<ReturnType<typeof loadAgentTrajectoryOperations>> &
     Awaited<ReturnType<typeof loadAgentArchiveOperations>> &
     Awaited<ReturnType<typeof loadAgentAcpOperations>> &

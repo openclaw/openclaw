@@ -1,14 +1,11 @@
 import { statSync } from "node:fs";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "../../infra/errno.js";
 import {
   executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
@@ -32,7 +29,6 @@ import {
 } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawConfig } from "../types.js";
-import { resolveSessionArtifactDirectory } from "./paths.js";
 import { runSqliteTranscriptArchiveWorkerOperation } from "./session-accessor.sqlite-archive.js";
 import type {
   SessionTranscriptReadScope,
@@ -173,17 +169,17 @@ async function runColdMutation(
             }),
           );
         }
-        if (plan.kind === "cold-restore" && completed.result.restored && claim.isCurrent()) {
-          const session = executeSqliteQueryTakeFirstSync(
-            database.db,
-            getNodeSqliteKysely<DB>(database.db)
-              .selectFrom("session_windows")
-              .select("session_key")
-              .where("session_id", "=", plan.sessionId),
-          );
-          if (session) {
-            sessionChanges.emit({ storePath: database.path, sessionKey: session.session_key });
-          }
+        if (
+          plan.kind === "cold-restore" &&
+          completed.result.restored &&
+          completed.result.sessionKey !== undefined &&
+          claim.isCurrent()
+        ) {
+          assertAllowed();
+          sessionChanges.emit({
+            storePath: database.path,
+            sessionKey: completed.result.sessionKey,
+          });
         }
         return completed.result;
       } finally {
@@ -428,17 +424,16 @@ export async function restoreSessionColdTranscript(
     resolved = target;
     const options = toDatabaseOptions(target);
     if (!isIncognitoOpenClawAgentSqlitePath(target.path, options)) {
+      // Synchronous inspection stays within the admission check above.
       try {
         statSync(target.path);
       } catch (error) {
         if (!hasErrnoCode(error, "ENOENT")) {
           throw error;
         }
-        assertPreparedCurrent();
         // First writers may create this store; there is no cold transcript to restore yet.
         return;
       }
-      assertPreparedCurrent();
       const source = createOpenClawAgentDatabasePathMatcher();
       source(target.path, target.path);
       return await withSessionHistoryWorkerDatabase(options, async (owner) => {
@@ -572,109 +567,4 @@ export async function runSessionColdStorageMaintenance(params: {
     params.onProgress?.({ ...result });
   }
   return result;
-}
-
-async function fileBytes(pathname: string): Promise<number> {
-  try {
-    return (await fs.stat(pathname)).size;
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return 0;
-    }
-    throw error;
-  }
-}
-
-export async function getSessionColdStorageStatus(config: OpenClawConfig): Promise<
-  Array<{
-    agentId: string;
-    storePath: string;
-    hotTranscripts: number;
-    coldTranscripts: number;
-    databaseBytes: number;
-    walBytes: number;
-    archiveBytes: number;
-    embeddedArchiveBytes: number;
-  }>
-> {
-  return Promise.all(
-    configuredStores(config).map(async ({ agentId, storePath }) => {
-      const counts = withOpenClawAgentDatabaseReadOnly(
-        (database) =>
-          runSqliteDeferredTransactionSync(
-            database.db,
-            () => {
-              const db = getNodeSqliteKysely<DB>(database.db);
-              return {
-                hotTranscripts:
-                  executeSqliteQueryTakeFirstSync(
-                    database.db,
-                    db
-                      .selectFrom("session_windows as window")
-                      .leftJoin(
-                        "session_transcript_cold_archives as cold",
-                        "cold.session_id",
-                        "window.session_id",
-                      )
-                      .select((eb) => eb.fn.countAll<number>().as("count"))
-                      .where("cold.session_id", "is", null)
-                      .where((eb) =>
-                        eb.exists(
-                          eb
-                            .selectFrom("transcript_events as event")
-                            .select("event.seq")
-                            .whereRef("event.session_id", "=", "window.session_id"),
-                        ),
-                      ),
-                  )?.count ?? 0,
-                embeddedArchiveBytes:
-                  executeSqliteQueryTakeFirstSync(
-                    database.db,
-                    db
-                      .selectFrom("session_transcript_cold_archives")
-                      .select((eb) => eb.fn.sum<number>("archive_bytes").as("bytes"))
-                      .where("storage", "=", "sqlite"),
-                  )?.bytes ?? 0,
-                coldTranscripts:
-                  executeSqliteQueryTakeFirstSync(
-                    database.db,
-                    db
-                      .selectFrom("session_transcript_cold_archives")
-                      .select((eb) => eb.fn.countAll<number>().as("count")),
-                  )?.count ?? 0,
-              };
-            },
-            { databaseLabel: database.path, operationLabel: "session cold storage inventory" },
-          ),
-        { agentId, path: storePath },
-      );
-      const directory = path.join(resolveSessionArtifactDirectory(storePath), "cold");
-      const files = await fs.readdir(directory, { withFileTypes: true }).catch((error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return [];
-        }
-        throw error;
-      });
-      const archiveBytes = (
-        await Promise.all(
-          files
-            .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl.zst"))
-            .map((entry) => fileBytes(path.join(directory, entry.name))),
-        )
-      ).reduce((sum, bytes) => sum + bytes, 0);
-      const { hotTranscripts, coldTranscripts, embeddedArchiveBytes } = counts.found
-        ? counts.value
-        : { hotTranscripts: 0, coldTranscripts: 0, embeddedArchiveBytes: 0 };
-      return {
-        agentId,
-        storePath,
-        hotTranscripts,
-        coldTranscripts,
-        embeddedArchiveBytes,
-        databaseBytes: await fileBytes(storePath),
-        walBytes: await fileBytes(`${storePath}-wal`),
-        archiveBytes,
-      };
-    }),
-  );
 }

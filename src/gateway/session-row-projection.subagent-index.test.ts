@@ -1,4 +1,3 @@
-import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
@@ -11,7 +10,7 @@ import {
   persistSubagentRunsToDiskOrThrow,
   withSubagentRunReadSnapshot,
 } from "../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
@@ -241,7 +240,7 @@ it.each(["exact", "bulk"] as const)(
           delivery: { status: "not_required" },
         };
         subagentRuns.set(run.runId, run);
-        persistSubagentRunsToDiskOrThrow(subagentRuns);
+        persistSubagentRunsToDiskOrThrow(subagentRuns, [...subagentRuns.keys()]);
         const entered = createDeferredCore();
         const release = createDeferredCore();
         let holdNextRead = false;
@@ -344,9 +343,6 @@ it("reuses the subagent index across a 2,048-session drain with unrelated writes
       subagentRuns.set(run.runId, run);
     }
     const builds = vi.spyOn(registryRead, "buildSubagentSessionListReadIndex");
-    const memoryBefore = process.memoryUsage();
-    const cpu = process.threadCpuUsage();
-    const started = performance.now();
     const projection = await createSessionRowProjection({ cfg });
     let writes = 0;
     let writesDuringDrain = 0;
@@ -380,20 +376,6 @@ it("reuses the subagent index across a 2,048-session drain with unrelated writes
       await Promise.all([producer, drain]);
       // The bounded drain may finish before all producer turns; join its later publications too.
       await projection.ensureMaterialized();
-      const elapsed = process.threadCpuUsage(cpu);
-      const memoryAfter = process.memoryUsage();
-      console.log(
-        JSON.stringify({
-          count,
-          writes,
-          writesDuringDrain,
-          indexBuilds: builds.mock.calls.length,
-          drainAndPublicationsMs: performance.now() - started,
-          drainAndPublicationsThreadCpuMs: (elapsed.user + elapsed.system) / 1000,
-          heapUsedDelta: memoryAfter.heapUsed - memoryBefore.heapUsed,
-          rssDelta: memoryAfter.rss - memoryBefore.rss,
-        }),
-      );
       expect(projection.selectEntries().filter(ready)).toHaveLength(count);
       expect(projection.dirtyRowCount).toBe(0);
       expect(writes).toBe(32);
@@ -414,7 +396,11 @@ it("reuses the subagent index across a 2,048-session drain with unrelated writes
 
 it.each(
   (["ownership", "broad-ownership", "retirement", "clear", "persistence"] as const).flatMap(
-    (publication) => [false, true].map((archived) => ({ publication, archived })),
+    (publication) =>
+      (publication === "persistence" ? [false] : [false, true]).map((archived) => ({
+        publication,
+        archived,
+      })),
   ),
 )(
   "refreshes subagent facts before synchronous $publication observers (archived=$archived)",

@@ -49,7 +49,6 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     transcriptTarget?: AgentRunSessionTarget;
     task?: string;
     lifecycleGeneration?: string;
-    persistenceFailure?: "return-false" | "throw";
     gatewayContextResolver?: GatewayContextResolver;
   }): boolean => {
     const previousRunId = replaceParams.previousRunId.trim();
@@ -228,10 +227,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
         previousRunId,
         nextRunId,
       });
-      if (
-        replaceParams.persistenceFailure === "return-false" ||
-        replaceParams.lifecycleGeneration !== undefined
-      ) {
+      if (replaceParams.lifecycleGeneration !== undefined) {
         return false;
       }
       throw error;

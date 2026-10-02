@@ -76,7 +76,6 @@ function createMaintenanceFixture(command: string, exitCode: number) {
   git(["config", "gc.autoPackLimit", "1"]);
 
   const ready = join(root, "maintenance-ready.json");
-  const release = join(root, "release-maintenance");
   const completed = join(root, "maintenance-completed");
   const hook = join(root, "recent-objects.mjs");
   writeFileSync(
@@ -86,18 +85,13 @@ function createMaintenanceFixture(command: string, exitCode: number) {
       'import { execFileSync } from "node:child_process";',
       'import { existsSync, fstatSync, renameSync, writeFileSync } from "node:fs";',
       `const ready = ${JSON.stringify(ready)};`,
-      `const release = ${JSON.stringify(release)};`,
       "if (!existsSync(ready)) {",
       '  const pgid = Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim());',
       "  const notifierOpen = fstatSync(3).isSocket() || fstatSync(3).isFIFO();",
       '  writeFileSync(ready + ".pending", JSON.stringify({ pgid, notifierOpen }));',
       '  renameSync(ready + ".pending", ready);',
       '  sendReceipt(ready, "ready");',
-      "  const deadline = Date.now() + 10_000;",
-      "  while (!existsSync(release)) {",
-      '    if (Date.now() >= deadline) throw new Error("maintenance gate was not released");',
-      "    await new Promise(resolve => setTimeout(resolve, 10));",
-      "  }",
+      '  await awaitRelease(ready, "release");',
       `  writeFileSync(${JSON.stringify(completed)}, "complete\\n");`,
       "}",
     ].join("\n"),
@@ -122,7 +116,7 @@ function createMaintenanceFixture(command: string, exitCode: number) {
     ].join("\n"),
   );
   chmodSync(script, 0o755);
-  return { repo, env, git, script, ready, release, completed };
+  return { repo, env, git, script, ready, completed };
 }
 
 describePosix("scripts/pr Git maintenance ownership", () => {
@@ -132,19 +126,32 @@ describePosix("scripts/pr Git maintenance ownership", () => {
   afterAll(async () => {
     await receipts.close();
   });
-  it.each(["git fetch origin main", "git gc --auto"])(
+  it.for(["git fetch origin main", "git gc --auto"])(
     "suppresses automatic maintenance during %s",
-    (command) => {
+    async (command, { signal }) => {
       const fixture = createMaintenanceFixture(command, 0);
       const config = readFileSync(join(fixture.repo, ".git/config"), "utf8");
-      writeFileSync(fixture.release, "release\n");
-      const result = spawnSync(process.execPath, [runner, fixture.repo, fixture.script], {
+      receipts.release(fixture.ready, "release");
+      const child = spawn(process.execPath, [runner, fixture.repo, fixture.script], {
         cwd: fixture.repo,
         env: fixture.env,
-        encoding: "utf8",
-        timeout: 10_000,
+        stdio: ["ignore", "ignore", "pipe"],
       });
-      expect(result.status, result.stderr).toBe(0);
+      let stderr = "";
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (chunk: string) => (stderr += chunk));
+      const closed = new Promise<number | null>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", resolve);
+      });
+      try {
+        expect(await withinTest(closed, signal), stderr).toBe(0);
+      } finally {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+        await closed;
+      }
       expect(existsSync(fixture.ready)).toBe(false);
       expect(existsSync(fixture.completed)).toBe(false);
       expect(
@@ -228,7 +235,7 @@ describePosix("scripts/pr Git maintenance ownership", () => {
         expect(fixture.git(["rev-parse", lockRef])).toBe(ownerOid);
       } finally {
         // The gate belongs to this fixture. Let Git finish and join it; no PID-based cleanup.
-        writeFileSync(fixture.release, "release\n");
+        receipts.release(fixture.ready, "release");
         await closed;
       }
       expect(child.exitCode, stderr).toBe(exitCode);

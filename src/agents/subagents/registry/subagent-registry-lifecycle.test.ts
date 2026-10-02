@@ -75,6 +75,7 @@ import { createSubagentRegistryContextCleanup } from "./subagent-registry-contex
 import { resetSubagentRegistryRuntimeLoadersForTests } from "./subagent-registry-deps.js";
 import {
   registerDetachedCleanupAuthorityTest,
+  registerDeliveredCleanupEndedHookTest,
   registerDirectSessionCleanupAuthorityTests,
 } from "./subagent-registry-lifecycle-cleanup.test-support.js";
 import {
@@ -95,11 +96,11 @@ import type {
 } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
+import { settleRequesterTurnAfterSessionSpawns } from "./subagent-registry-requester-yield.js";
 import {
-  markRequesterTurnYieldedInRuns,
-  settleRequesterTurnAfterSessionSpawns,
-} from "./subagent-registry-requester-yield.js";
-import { createRequesterInitialTransferFixture } from "./subagent-registry-requester-yield.test-support.js";
+  createRequesterInitialTransferFixture,
+  markRequesterTurnYieldedWithAuthority,
+} from "./subagent-registry-requester-yield.test-support.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import { registerTerminalStateSignalAuthorityTests } from "./subagent-registry-terminal-state.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
@@ -233,7 +234,6 @@ vi.mock("../announce/subagent-announce.js", () => ({
 
 vi.mock("./subagent-registry-cleanup.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./subagent-registry-cleanup.js")>()),
-  resolveCleanupCompletionReason: () => SUBAGENT_ENDED_REASON_COMPLETE,
   resolveDeferredCleanupDecision: () => ({ kind: "give-up", reason: "expiry" }),
 }));
 
@@ -3387,32 +3387,10 @@ describe("subagent registry lifecycle hardening", () => {
     },
   );
 
-  it("emits ended hook while retrying cleanup after completion was already delivered", async () => {
-    const entry = createRunEntry({
-      delivery: { status: "delivered", announcedAt: 3_500, deliveredAt: 3_500 },
-      endedAt: 4_000,
-      expectsCompletionMessage: true,
-    });
-    const emitSubagentEndedHookForRun = vi.fn(async () => {});
-
-    const controller = createLifecycleController({
-      entry,
-      shouldEmitEndedHookForRun: () => true,
-      emitSubagentEndedHookForRun,
-    });
-
-    await expect(
-      completeAndJoinCleanup(controller, entry, { triggerCleanup: true }),
-    ).resolves.toBeUndefined();
-
-    expect(emitSubagentEndedHookForRun).toHaveBeenCalledTimes(1);
-    expect(emitSubagentEndedHookForRun).toHaveBeenCalledWith({
-      entry,
-      reason: SUBAGENT_ENDED_REASON_COMPLETE,
-      sendFarewell: true,
-      isCurrent: expect.any(Function),
-      prepareCurrent: expect.any(Function),
-    });
+  registerDeliveredCleanupEndedHookTest({
+    createRunEntry,
+    createLifecycleController,
+    completeAndJoinCleanup,
   });
 
   it("suppresses a deferred ended hook after a newer session generation registers", async () => {
@@ -5055,7 +5033,7 @@ describe("requester settle wake trigger", () => {
             },
             async () => {
               expect(
-                await markRequesterTurnYieldedInRuns({
+                await markRequesterTurnYieldedWithAuthority({
                   requesterSessionKey,
                   requesterAgentId: "main",
                   requesterTurnRunId,

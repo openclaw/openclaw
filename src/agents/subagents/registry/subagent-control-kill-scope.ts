@@ -15,7 +15,6 @@ import {
   ensureSubagentControllerOwnsRun,
   getLatestOwnedSubagentRun,
   isCurrentSubagentRun,
-  isSameSubagentRunGeneration,
   type ResolvedSubagentController,
 } from "./subagent-control-scope.js";
 import {
@@ -56,7 +55,7 @@ export type KillSelection = {
 };
 
 export type KillScope = {
-  cancellationControl: SubagentCancellationControl | undefined;
+  cancellationControl: SubagentCancellationControl;
   refresh: () => Promise<number>;
   stateContext: OpenClawStateWorkerContext;
 };
@@ -110,7 +109,10 @@ export async function withSubagentKillScope<T>(
       );
       if (
         !entry ||
-        !isSameSubagentRunGeneration(entry, snapshot) ||
+        entry.childSessionKey !== snapshot.childSessionKey ||
+        entry.runId !== snapshot.runId ||
+        entry.generation !== snapshot.generation ||
+        entry.createdAt !== snapshot.createdAt ||
         selected.has(entry.childSessionKey)
       ) {
         continue;

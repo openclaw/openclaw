@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { publishSystemEventStoreResolver } from "../../../infra/system-event-ownership.js";
+import { settleRequesterTurnAfterSessionSpawns } from "../registry/subagent-registry-requester-yield.js";
 import {
-  markRequesterTurnYieldedInRuns,
-  settleRequesterTurnAfterSessionSpawns,
-} from "../registry/subagent-registry-requester-yield.js";
-import { createRequesterInitialTransferFixture } from "../registry/subagent-registry-requester-yield.test-support.js";
+  createRequesterInitialTransferFixture,
+  markRequesterTurnYieldedWithAuthority,
+} from "../registry/subagent-registry-requester-yield.test-support.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import type { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
@@ -141,7 +141,7 @@ it("holds an adopted child's old wake until its current requester turn yields", 
     runs,
     transfer: createRequesterInitialTransferFixture(runs, vi.fn()),
   };
-  expect(await markRequesterTurnYieldedInRuns(requester)).toBe(1);
+  expect(await markRequesterTurnYieldedWithAuthority(requester)).toBe(1);
   expect(
     await settleRequesterTurnAfterSessionSpawns({
       ...requester,

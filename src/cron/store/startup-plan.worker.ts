@@ -96,6 +96,7 @@ export function planCronStartupInWorker(
                 skipAtIfAlreadyRan: true,
                 allowCronMissedRunByLastRun: true,
                 activeInProcess: owner.active,
+                legacyDefaultAgentId: preparation.legacyDefaultAgentId,
               })
             ) {
               continue;

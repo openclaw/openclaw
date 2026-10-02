@@ -120,6 +120,8 @@ const rawSqliteAllowPathGroups = {
     "src/commands/doctor/cron/legacy-run-log-migration.ts",
     "src/commands/doctor/cron/migration-ledger.ts",
     "src/commands/doctor-sqlite-compact.ts",
+    // Exclusive Doctor maintenance reads auto-vacuum and page-size PRAGMAs.
+    "src/commands/doctor-sqlite-reclamation.ts",
     "src/commands/doctor-session-sqlite.ts",
     "src/infra/session-sqlite-migration-readers.ts",
     "src/commands/doctor-session-sqlite-transcript-readers.ts",

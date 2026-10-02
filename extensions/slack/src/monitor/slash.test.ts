@@ -7,8 +7,8 @@ import {
   normalizeSessionDeliveryState,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   createArgMenusHarness,
   createSlashCommand,
@@ -415,7 +415,7 @@ describe("slack slash commands access groups", () => {
 });
 
 describe("slack slash command session metadata", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDirs = useSessionStoreTempDirs(afterAll, "slack-threaded-stop-");
   const { deliverSlackSlashRepliesMock, recordSessionMetaFromInboundMock, resolveAgentRouteMock } =
     getSlackSlashMocks();
 
@@ -423,7 +423,7 @@ describe("slack slash command session metadata", () => {
     const { createInboundSlackTestContext, createSlackTestAccount } =
       await import("./message-handler/prepare.test-helpers.js");
     const { createSlackCommandHandler } = await import("./slash.js");
-    const storePath = path.join(tempDirs.make("slack-threaded-stop-"), "sessions.sqlite");
+    const storePath = path.join(tempDirs.make(), "sessions.sqlite");
     const cfg: OpenClawConfig = {
       session: { store: storePath },
       channels: { slack: { dmPolicy: "open", allowFrom: ["*"] } },

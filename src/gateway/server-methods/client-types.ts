@@ -108,6 +108,8 @@ export type GatewayClient = {
     internalDeliveryMediaUrls?: string[];
     runtimeContextFragments?: RuntimeContextFragment[];
     internalDeliverySuppressText?: boolean;
+    /** Host-owned: deliver only authored output, never runtime error payloads. */
+    internalDeliverySuppressErrors?: boolean;
     /** Plugin-owned tools authorized for this internal subagent run. */
     runtimePluginToolGrant?: RuntimePluginToolGrant;
     /** Host-owned exact tool cap for a tracked plugin subagent run. */

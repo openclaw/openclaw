@@ -52,6 +52,7 @@ jobs:
 
             // pull_request checks out GitHub's synthetic merge commit. Its first
             // parent is the exact base tree used to produce the tested result.
+            const protocolInputs = JSON.parse(require("node:fs").readFileSync("scripts/native-protocol-inputs.json", "utf8"));
             const result = await exec.getExecOutput("git", [
               "diff",
               "--quiet",
@@ -61,6 +62,8 @@ jobs:
               "apps/ios/",
               "apps/macos/",
               "apps/shared/OpenClawKit/",
+              ...protocolInputs.directories.map((directory) => `${directory}/`),
+              ...protocolInputs.files,
               ".github/workflows/shared-openclawkit-periphery.yml",
               "scripts/install-periphery.sh",
               "scripts/lib/swift-toolchain.sh",
@@ -147,7 +150,7 @@ jobs:
             --clean-build \
             --format json \
             --report-include '../shared/OpenClawKit/Sources/**' \
-            --retain-files '../shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift' \
+            --retain-files '**/GenerateGatewayProtocol/GatewayModels.swift' \
             --write-results "$output_dir/periphery.json" \
             >"$output_dir/periphery.stdout.json" \
             2>"$output_dir/periphery.stderr.log"
@@ -198,12 +201,13 @@ jobs:
           install-bun: "false"
           install-deps: "false"
 
-      - name: Install Mermaid renderer dependencies
+      - name: Install native asset dependencies
         env:
           CI: "true"
         run: >-
           pnpm install --frozen-lockfile --prefer-offline --optional
           --filter '@openclaw/mermaid-renderer...'
+          --filter '@openclaw/gateway-protocol...'
           --config.ignore-scripts=false
           --config.engine-strict=false
           --config.enable-pre-post-scripts=true
@@ -224,13 +228,15 @@ jobs:
           output_dir="$RUNNER_TEMP/shared-periphery-macos"
           mkdir -p "$output_dir"
           cd apps/macos
+          swift package --scratch-path ../../.cache/periphery-swift clean
+          swift build --build-system native --scratch-path ../../.cache/periphery-swift --build-tests --enable-index-store
           set +e
           periphery scan \
             --config .periphery.yml \
-            --clean-build \
+            --skip-build \
             --format json \
             --report-include '../shared/OpenClawKit/Sources/**' \
-            --retain-files '../shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift' \
+            --retain-files '**/GenerateGatewayProtocol/GatewayModels.swift' \
             --write-results "$output_dir/periphery.json" \
             >"$output_dir/periphery.stdout.json" \
             2>"$output_dir/periphery.stderr.log"

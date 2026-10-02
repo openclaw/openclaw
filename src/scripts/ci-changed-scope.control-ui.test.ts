@@ -26,15 +26,18 @@ it("runs browser proof and native asset builds for Mermaid inputs", () => {
   expect(shouldRunIosScreenshots([file])).toBe(true);
 });
 
-it.each(["packages/normalization-core/src/record-coerce.test.ts", "package.json"])(
-  "keeps unrelated shared Node inputs out of platform builds: %s",
-  (file) => {
+it.each([
+  ["packages/normalization-core/src/record-coerce.test.ts", false],
+  ["package.json", true],
+] as const)(
+  "routes shared Node inputs through their native protocol consumers: %s",
+  (file, nativeProtocolInput) => {
     expect(detectChangedScope([file])).toMatchObject({
       runNode: true,
       runWindows: false,
-      runAndroid: false,
-      runMacos: false,
-      runIosBuild: false,
+      runAndroid: nativeProtocolInput,
+      runMacos: nativeProtocolInput,
+      runIosBuild: nativeProtocolInput,
       runUiTests: false,
     });
     expect(shouldRunIosScreenshots([file])).toBe(false);

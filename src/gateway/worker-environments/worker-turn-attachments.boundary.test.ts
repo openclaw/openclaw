@@ -218,7 +218,7 @@ describe("current attachments in an active remote placement", () => {
               stopReason: "stop",
               timestamp: Date.now(),
             });
-            createWorkerSessionPlacementGate(placements).updateAckCursors({
+            await createWorkerSessionPlacementGate(placements).updateAckCursors({
               claim: request.turnClaim,
               transcriptSeq: 2,
               liveSeq: 1,

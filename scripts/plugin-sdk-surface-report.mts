@@ -185,12 +185,16 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      3757,
+      // +1: createChannelSecretContract consolidates seven channel secret contracts (approved by Peter, 2026-10-01).
+      // +1: createSessionHeaderLink shares plugin-owned conversation navigation (PR #158742).
+      3759,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      2186,
+      // +1: createChannelSecretContract consolidates seven channel secret contracts (approved by Peter, 2026-10-01).
+      // +1: createSessionHeaderLink shares plugin-owned conversation navigation (PR #158742).
+      2188,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

@@ -27,10 +27,11 @@ backup.
 
 ## Upgrading very old versions
 
-For installations older than June 2026, upgrade to **`2026.9.5` first**, run its
+For installations older than July 2026, upgrade to **`2026.9.5` first**, run its
 Doctor migrations, and then upgrade to `latest`. The bridge release still
 imports the old `tasks/runs.sqlite`, `flows/registry.sqlite`, and
-`plugin-state/state.sqlite` databases, imports pre-June plugin JSON state and
+`plugin-state/state.sqlite` databases, imports the JSON plugin install index,
+pre-June plugin JSON state, and
 `credentials/oauth.json`, repairs retired agent and channel config keys, and
 includes the old runtime aliases. The retired plugin imports cover Telegram,
 iMessage, Active Memory, Nostr, and Microsoft Teams; see
@@ -430,7 +431,8 @@ checks still prevent completion.
 
 ### Package-publication recovery
 
-Supported POSIX npm updates print an external-Node recovery command before
+Supported POSIX npm updates print a recovery command using the selected external
+Node or Bun executable before
 transferring the staged package into recovery custody. Keep the printed commands;
 each names one operation with required `--anchor` and `--operation` arguments.
 The initial journal and helper are published together in a private control
@@ -443,6 +445,12 @@ directory. `status` reads the operation, `repair` resumes only its recorded
 package publication, and `retire` removes only its recorded obsolete objects.
 These commands do not replace post-update plugin, migration or service recovery.
 Keep other package managers stopped while recovering the operation.
+
+Bun recovery requires a supported Bun runtime with WAL-reset-safe SQLite and can
+run without Node installed. The installed updater controls the first upgrade:
+older releases may omit the recovery command on Bun or refuse a Bun recovery
+runtime. Installing a newer candidate does not change that first-hop behavior;
+subsequent updates use the candidate's recovery support.
 
 Retirement records removal of the disposable directory before recording the
 helper's final unlink intent. The helper is then removed. The bounded last
@@ -466,6 +474,11 @@ migrations. Automatic rollback keeps compatible databases in place, preserving
 newer writes. If the previous runtime cannot read the current databases, the
 updater retains the candidate and recovery artifacts and reports why rollback
 was refused.
+
+Rollback snapshots settle local SQLite writers under maintenance ownership before
+capture, so writer shutdown during rollback is not mistaken for intervening writes.
+The installed updater owns snapshot capture; staging a newer candidate cannot
+change that behavior in an already-running older updater.
 
 Switch channels or target a specific version:
 

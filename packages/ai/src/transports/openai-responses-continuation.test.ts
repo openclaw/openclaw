@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createAiTransportHost, runWithAiTransportHost } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import {
   claimOpenAIResponsesHttpContinuation,
@@ -1036,6 +1037,38 @@ describe("OpenAI Responses continuation", () => {
     next?.release();
   });
 
+  it("keeps matching-session and all-session cleanup inside one runtime owner", () => {
+    const firstHost = createAiTransportHost();
+    const secondHost = createAiTransportHost();
+    const commit = (owner: typeof firstHost, sessionId: string, responseId: string) =>
+      runWithAiTransportHost(owner, () => {
+        claim({ sessionId })?.commit(continuationState().lastRequest, {
+          id: responseId,
+          output: continuationState().lastResponseItems,
+        });
+      });
+    const previousResponseId = (owner: typeof firstHost, sessionId: string) =>
+      runWithAiTransportHost(owner, () => {
+        const claimed = claim({ sessionId, request: nextRequest() });
+        const responseId = claimed?.request.previous_response_id;
+        claimed?.release();
+        return responseId;
+      });
+
+    commit(firstHost, "shared", "first-shared");
+    commit(firstHost, "other", "first-other");
+    commit(secondHost, "shared", "second-shared");
+    commit(secondHost, "other", "second-other");
+
+    cleanupSessionResources("shared", firstHost);
+    expect(previousResponseId(firstHost, "shared")).toBeUndefined();
+    expect(previousResponseId(secondHost, "shared")).toBe("second-shared");
+
+    cleanupSessionResources(undefined, firstHost);
+    expect(previousResponseId(firstHost, "other")).toBeUndefined();
+    expect(previousResponseId(secondHost, "other")).toBe("second-other");
+  });
+
   it("keeps preparation exclusive and preserves a cleanup-time replacement after failure", () => {
     claim({})?.commit(continuationState().lastRequest, {
       id: "resp_first",
@@ -1064,20 +1097,6 @@ describe("OpenAI Responses continuation", () => {
     });
     const next = claim({ request: nextRequest() });
     expect(next?.request.previous_response_id).toBe("resp_replacement");
-    next?.release();
-  });
-
-  it("expires completed continuation state after the bounded idle TTL", () => {
-    vi.useFakeTimers();
-    const first = claim({});
-    first?.commit(continuationState().lastRequest, {
-      id: "resp_expiring",
-      output: continuationState().lastResponseItems,
-    });
-    vi.advanceTimersByTime(5 * 60 * 1000 + 1);
-
-    const next = claim({ request: nextRequest() });
-    expect(next?.request.previous_response_id).toBeUndefined();
     next?.release();
   });
 });

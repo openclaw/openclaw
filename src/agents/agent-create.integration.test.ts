@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
@@ -28,6 +29,10 @@ import {
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import {
+  persistProviderAuthProfileBatch,
+  stageProviderAuthProfileBatch,
+} from "../plugins/provider-auth-persistence.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import {
   readAgentDeletionRecoveryHolds,
@@ -42,6 +47,8 @@ import { readAgentProvenance } from "../state/agent-provenance.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  getOpenClawAgentDatabaseIfOpen,
+  isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
@@ -64,6 +71,7 @@ import { createAgent } from "./agent-create.js";
 import { isAgentDeletionBlocked } from "./agent-lifecycle-registry.js";
 import { resolveSharedAuthStorePath } from "./auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { readWorkspaceStateSnapshot } from "./workspace-state-store.js";
 import {
   DEFAULT_IDENTITY_FILENAME,
@@ -665,6 +673,152 @@ it("finishes creation bookkeeping when delegated authority closes after successf
     await state.cleanup();
   }
 });
+
+it.each(["commit", "rollback", "close-failure"] as const)(
+  "stores staged auth for a recreated id inside the creation claim (%s)",
+  async (phase) => {
+    const state = await createOpenClawTestState({
+      scenario: "minimal",
+      label: `agent-create-recreated-auth-${phase}`,
+    });
+    const workspace = state.path("work-workspace");
+    const agentDir = state.agentDir("work");
+    const deletion = beginAgentDeletionJournal({
+      agentId: "work",
+      operationId: randomUUID(),
+      agentDir,
+      workspaceDir: workspace,
+      sessionsDir: state.sessionsDir("work"),
+      deleteFiles: false,
+    });
+    runOpenClawStateWriteTransaction((database) =>
+      completeAgentDeletionJournalInDatabase(database, deletion.agentId, deletion.operationId),
+    );
+    const originalConfig = await fs.readFile(state.configPath, "utf8");
+    const readProfiles = () =>
+      ensureAuthProfileStore(agentDir, { readOnly: true, syncExternalCli: false }).profiles;
+    let staged = false;
+    let retainedCreation: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
+    let restoreNativeClose: (() => void) | undefined;
+    const settlement: string[] = [];
+    // An ordinary writer outside the creation lifecycle, through the same wizard path.
+    const writeOutsideCreation = () =>
+      persistProviderAuthProfileBatch({
+        profiles: [
+          {
+            profileId: "openai:after",
+            credential: { type: "api_key", provider: "openai", key: "sk-test-after" },
+          },
+        ],
+        config: {},
+        agentDir,
+      });
+    const isWorkDatabaseOpen = () =>
+      isOpenClawAgentDatabaseOpen(resolveAuthProfileDatabasePath(agentDir));
+    try {
+      const creation = createAgent({
+        name: "work",
+        workspace,
+        beforePersistentApply: () => {
+          if (phase === "rollback" && staged) {
+            throw new Error("creation authority closed");
+          }
+        },
+        prepareConfigCommit: async () => {
+          // The guided wizard's staged auth write opens the recreated agent's own database.
+          const receipt = await stageProviderAuthProfileBatch({
+            profiles: [
+              {
+                profileId: "openai:default",
+                credential: { type: "api_key", provider: "openai", key: "sk-test-recreated" },
+              },
+            ],
+            config: {},
+            agentDir,
+          });
+          staged = true;
+          retainedCreation = AsyncLocalStorage.snapshot();
+          if (phase === "close-failure") {
+            const database = getOpenClawAgentDatabaseIfOpen({
+              agentId: "work",
+              path: resolveAuthProfileDatabasePath(agentDir),
+            });
+            if (!database) {
+              throw new Error("Staged auth did not retain its database");
+            }
+            const close = database.db.close.bind(database.db);
+            let failed = false;
+            const closeSpy = vi.spyOn(database.db, "close").mockImplementation(() => {
+              if (!failed) {
+                failed = true;
+                settlement.push("close-failed");
+                throw new Error("injected native close failure");
+              }
+              close();
+              settlement.push("close-retried");
+            });
+            restoreNativeClose = () => closeSpy.mockRestore();
+            return {
+              ...receipt,
+              rollback: async () => {
+                settlement.push("rollback");
+                await receipt.rollback();
+              },
+            };
+          }
+          return receipt;
+        },
+      });
+      if (phase === "commit") {
+        expect(await creation).toMatchObject({ status: "created", agentId: "work" });
+        expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toHaveProperty(
+          "agents.entries.work",
+        );
+        expect(readAgentDeletionJournal("work")).toBeUndefined();
+        expect(readProfiles()["openai:default"]).toMatchObject({
+          type: "api_key",
+          provider: "openai",
+        });
+        // Creation owned its handles only until publication; ordinary writers reopen freely.
+        expect(isWorkDatabaseOpen()).toBe(false);
+        await writeOutsideCreation();
+        expect(readProfiles()["openai:after"]).toMatchObject({ type: "api_key" });
+      } else {
+        const error = await creation.then(
+          () => undefined,
+          (cause: unknown) => cause,
+        );
+        expect(String(error)).toContain(
+          phase === "close-failure" ? "injected native close failure" : "creation authority closed",
+        );
+        expect(String(error)).not.toContain("staged config rollback failed");
+        if (phase === "close-failure") {
+          expect(settlement).toEqual(["close-failed", "close-retried", "rollback"]);
+        }
+        expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+        expect(readAgentDeletionJournal("work")).toMatchObject({ cleanupCompleted: true });
+        expect(readProfiles()["openai:default"]).toBeUndefined();
+        // The retained tombstone must fence the same process: no warm handle survives
+        // the failed creation, and a cold open is refused until creation claims the record.
+        await expect(writeOutsideCreation()).rejects.toThrow("agent work is deleted");
+        if (!retainedCreation) {
+          throw new Error("Auth staging did not capture its creation context");
+        }
+        await expect(retainedCreation(writeOutsideCreation)).rejects.toThrow(
+          "Agent creation claim is no longer active",
+        );
+        expect(isWorkDatabaseOpen()).toBe(false);
+        expect(readProfiles()["openai:after"]).toBeUndefined();
+        expect(readAgentDeletionJournal("work")).toMatchObject({ cleanupCompleted: true });
+      }
+    } finally {
+      restoreNativeClose?.();
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      await state.cleanup();
+    }
+  },
+);
 
 it("preserves env references from guided staging when preparation changes the environment", async () => {
   const state = await createOpenClawTestState({

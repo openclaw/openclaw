@@ -853,8 +853,7 @@ extension OpenClawChatView {
         #endif
         self.replyMessageButton(for: message)
         self.openFullMessageButton(for: message)
-        self.rewindMessageButton(for: message)
-        self.forkMessageButton(for: message)
+        self.messageSessionActions(for: message)
         self.listenMessageButton(for: message)
         if let outboxState = self.viewModel.outboxState(for: message.id) {
             if outboxState.isFailed {
@@ -1003,8 +1002,6 @@ extension OpenClawChatView {
             EmptyView()
         } else if self.composerChrome == .clean, self.visibleEmptyAssistantIntro != nil {
             EmptyView()
-        } else if self.showsCleanLoadingPlaceholder(hasVisibleContent: hasVisibleContent) {
-            EmptyView()
         } else if let error = activeErrorText {
             if hasVisibleContent {
                 EmptyView()
@@ -1082,8 +1079,7 @@ extension OpenClawChatView {
         if let error = activeErrorText,
            hasVisibleContent,
            !self.viewModel.isLoading,
-           visibleEmptyAssistantIntro == nil,
-           !self.showsCleanLoadingPlaceholder(hasVisibleContent: hasVisibleContent)
+           visibleEmptyAssistantIntro == nil
         {
             let presentation = self.errorPresentation(for: error)
             ChatNoticeBanner(
@@ -1359,7 +1355,7 @@ extension OpenClawChatView {
     }
 
     @ViewBuilder
-    private func rewindMessageButton(for message: OpenClawChatMessage) -> some View {
+    private func messageSessionActions(for message: OpenClawChatMessage) -> some View {
         let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if self.showsComposer, role == "user",
            message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
@@ -1374,16 +1370,8 @@ extension OpenClawChatView {
                     Image(systemName: "arrow.uturn.backward")
                 }
             }
-            .disabled(self.messageSessionActionsDisabled)
-        }
-    }
+            .disabled(!self.viewModel.canPerformMessageSessionAction)
 
-    @ViewBuilder
-    private func forkMessageButton(for message: OpenClawChatMessage) -> some View {
-        let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if self.showsComposer, role == "user",
-           message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        {
             Button {
                 Task { await self.viewModel.forkAtMessage(message) }
             } label: {
@@ -1394,12 +1382,8 @@ extension OpenClawChatView {
                     Image(systemName: "arrow.triangle.branch")
                 }
             }
-            .disabled(self.messageSessionActionsDisabled)
+            .disabled(!self.viewModel.canPerformMessageSessionAction)
         }
-    }
-
-    private var messageSessionActionsDisabled: Bool {
-        !self.viewModel.canPerformMessageSessionAction
     }
 
     @ViewBuilder

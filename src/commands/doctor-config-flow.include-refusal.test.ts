@@ -37,7 +37,7 @@ describe("doctor config persistence", () => {
           const includePath = path.join(path.dirname(configPath), "browser.json");
           const includeRaw = JSON.stringify({
             enabled: true,
-            relayBindHost: "127.0.0.1",
+            color: "#FF4500",
             executablePath: "${BROWSER_BIN}",
           });
           await fs.writeFile(includePath, includeRaw);

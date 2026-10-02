@@ -11,10 +11,12 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import {
+  SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle-context.js";
+import type { createRunEntry as createLifecycleRunEntry } from "./subagent-registry-lifecycle-controller.test-support.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
@@ -138,7 +140,7 @@ export function registerDirectSessionCleanupAuthorityTests({
   sessionEntryReadMocks,
   waitForLifecycleState,
 }: {
-  createRunEntry: (overrides?: Partial<SubagentRunRecord>) => SubagentRunRecord;
+  createRunEntry: typeof createLifecycleRunEntry;
   createLifecycleController: (
     options: { entry: SubagentRunRecord } & Partial<SubagentLifecycleOptions>,
   ) => SubagentLifecycleController;
@@ -150,7 +152,7 @@ export function registerDirectSessionCleanupAuthorityTests({
   completeAndJoinCleanup: (
     controller: SubagentLifecycleController,
     entry: SubagentRunRecord,
-    options: Pick<SubagentCompletionRequest, "triggerCleanup" | "sessionEffects">,
+    options: Pick<SubagentCompletionRequest, "triggerCleanup" | "sessionEffects" | "terminalReply">,
   ) => Promise<void>;
   gatewayMocks: {
     callGateway: Mock<(options: CallGatewayOptions) => Promise<Record<string, unknown>>>;
@@ -295,5 +297,45 @@ export function registerDirectSessionCleanupAuthorityTests({
     expect(entry.execution.status).toBe("terminal");
     expect(entry.execution.suppressSessionEffects).toBe(true);
     expect(runs.has(entry.runId)).toBe(false);
+  });
+}
+
+export function registerDeliveredCleanupEndedHookTest({
+  createRunEntry,
+  createLifecycleController,
+  completeAndJoinCleanup,
+}: Pick<
+  Parameters<typeof registerDirectSessionCleanupAuthorityTests>[0],
+  "createRunEntry" | "createLifecycleController" | "completeAndJoinCleanup"
+>) {
+  it("emits ended hook while retrying cleanup after completion was already delivered", async () => {
+    const entry = createRunEntry({
+      delivery: { status: "delivered", announcedAt: 3_500, deliveredAt: 3_500 },
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+    });
+    const emitSubagentEndedHookForRun = vi.fn(async () => {});
+
+    const controller = createLifecycleController({
+      entry,
+      shouldEmitEndedHookForRun: () => true,
+      emitSubagentEndedHookForRun,
+    });
+
+    await expect(
+      completeAndJoinCleanup(controller, entry, {
+        triggerCleanup: true,
+        terminalReply: { disposition: "visible", text: "final completion reply" },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(emitSubagentEndedHookForRun).toHaveBeenCalledTimes(1);
+    expect(emitSubagentEndedHookForRun).toHaveBeenCalledWith({
+      entry,
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      sendFarewell: true,
+      isCurrent: expect.any(Function),
+      prepareCurrent: expect.any(Function),
+    });
   });
 }

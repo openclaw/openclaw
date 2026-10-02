@@ -53,10 +53,10 @@ describe("resolveSessionKeyForRun", () => {
   });
 
   it.each([
-    { agentId: "main", key: "agent:main:acp:run-1", expected: "acp:run-1" },
-    { agentId: "retired", key: "agent:retired:acp:run-1", expected: "acp:run-1" },
+    { agentId: "main", key: "agent:main:acp:run-1", expected: "agent:main:acp:run-1" },
+    { agentId: "retired", key: "agent:retired:acp:run-1", expected: "agent:retired:acp:run-1" },
     { agentId: "main", key: "agent:work:acp:run-1", expected: undefined },
-  ])("keeps caller-facing keys scoped to $agentId for $key", ({ agentId, key, expected }) => {
+  ])("keeps stored keys scoped to $agentId for $key", ({ agentId, key, expected }) => {
     const projection = indexedProjection({ [key]: { sessionId: "run-1", updatedAt: 123 } });
     expect(resolveSessionKeyForRun("run-1", { agentId, projection })).toBe(expected);
   });
@@ -83,7 +83,7 @@ describe("resolveSessionKeyForRun", () => {
     );
     registerAgentRunContext("qualified-run", { sessionKey: "agent:research:main" });
     expect(resolveSessionKeyForRun("qualified-run", { agentId: "research", projection })).toBe(
-      "main",
+      "agent:research:main",
     );
     expect(
       resolveSessionKeyForRun("qualified-run", { agentId: "ops", projection }),
@@ -114,7 +114,9 @@ describe("resolveSessionKeyForRun", () => {
       "agent:main:acp:run-1": { sessionId: "run-1", updatedAt: 1 },
     });
     registerAgentRunContext("run-1", { sessionKey: "agent:retired:acp:run-1" });
-    expect(resolveSessionKeyForRun("run-1", { agentId: "main", projection })).toBe("acp:run-1");
+    expect(resolveSessionKeyForRun("run-1", { agentId: "main", projection })).toBe(
+      "agent:main:acp:run-1",
+    );
     expect(resolveSessionKeyForRun("run-1", { projection })).toBe("agent:retired:acp:run-1");
   });
 
@@ -139,7 +141,7 @@ describe("resolveSessionKeyForRun", () => {
       "agent:main:first": { sessionId: "run-tied", updatedAt: 100 },
       "agent:main:second": { sessionId: "run-tied", updatedAt: 100 },
     });
-    expect(resolveSessionKeyForRun("run-dup", { projection })).toBe("acp:run-dup");
+    expect(resolveSessionKeyForRun("run-dup", { projection })).toBe("agent:main:acp:run-dup");
     expect(resolveSessionKeyForRun("run-tied", { projection })).toBeUndefined();
   });
 });

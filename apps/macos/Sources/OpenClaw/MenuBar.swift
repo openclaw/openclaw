@@ -427,7 +427,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Retire it before terminateLater starts the asynchronous cleanup loop.
         OnboardingController.shared.close()
         let cleanupDeadline = AppTerminationTiming.cleanupDeadlineSeconds(
-            hasAppHostedGateway: GatewayProcessManager.shared.hasAppHostedGateway)
+            hasAppHostedGateway: GatewayProcessManager.shared.hasAppHostedGateway,
+            operationTimeout: GatewayProcessManager.shared.gatewayOperationShutdownTimeout)
         self.terminationCleanupTask = Task { @MainActor [weak self] in
             async let hostedGatewayCleanup: Void = GatewayProcessManager.shared.shutdownAppHostedGateway()
             async let processCleanupResult: Void = Self.cleanUpProcesses()

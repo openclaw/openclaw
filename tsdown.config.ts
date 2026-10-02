@@ -1,6 +1,6 @@
 // tsdown config defines package build entrypoints and output options.
 import fs from "node:fs";
-import { createRequire, isBuiltin } from "node:module";
+import { createRequire } from "node:module";
 import path from "node:path";
 import type { DtsOptions, TsdownPlugin, UserConfig } from "tsdown";
 import {
@@ -243,6 +243,7 @@ function workerDeployBuildConfig(entry: Record<string, string>): UserConfig {
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
     entry,
     outDir: "dist",
+    platform: "node",
     dts: false,
     env,
     define: {
@@ -260,7 +261,8 @@ function workerDeployBuildConfig(entry: Record<string, string>): UserConfig {
       "utf-8-validate": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
     },
     deps: {
-      alwaysBundle: (id) => !isBuiltin(id),
+      // Rolldown's Node target owns builtin resolution, independently of the build host.
+      alwaysBundle: () => true,
       onlyBundle: false,
     },
     fixedExtension: false,
@@ -282,11 +284,12 @@ function workerHelperBuildConfig(
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
     entry,
     outDir: "dist",
+    platform: "node",
     dts: false,
     env,
     define,
     deps: {
-      alwaysBundle: (id) => !isBuiltin(id),
+      alwaysBundle: () => true,
       onlyBundle: false,
     },
     fixedExtension: false,

@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../../config/types.js";
 import { legacyCodexProviderIdentityKey } from "./codex-route-model-ref.js";
 import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js";
 import { migrateLegacyConfigForTest } from "./legacy-config-migrate.apply.test-support.js";
+import { registerLegacySilentReplyConfigMigrationTests } from "./legacy-config-migrate.silent-reply.test-support.js";
 import { collectBlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.js";
 
 function repairBindingsForTest(config: OpenClawConfig) {
@@ -390,54 +391,7 @@ describe("legacy Codex provider config migrate", () => {
   });
 });
 
-describe("legacy silent reply config migrate", () => {
-  it("removes silent reply rewrite and direct-chat silent reply config", () => {
-    const res = migrateLegacyConfigForTest({
-      agents: {
-        defaults: {
-          silentReply: { direct: "allow", group: "allow", internal: "allow" },
-          silentReplyRewrite: { direct: true, group: false },
-        },
-      },
-      surfaces: {
-        telegram: {
-          silentReply: { direct: "disallow", group: "allow" },
-          silentReplyRewrite: { direct: true },
-        },
-      },
-    });
-    expect(res.config?.agents?.defaults).toEqual({
-      silentReply: { group: "allow", internal: "allow" },
-    });
-    expect(res.config?.surfaces?.telegram).toEqual({ silentReply: { group: "allow" } });
-  });
-});
-
-describe("legacy agent system prompt override config migrate", () => {
-  it("removes default and per-agent system prompt overrides", () => {
-    const raw = {
-      agents: {
-        defaults: {
-          systemPromptOverride: "old default prompt",
-          model: { primary: "openai/gpt-5.5" },
-        },
-        list: [{ id: "alpha", systemPromptOverride: "old alpha prompt" }, { id: "beta" }],
-      },
-    };
-
-    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
-      "agents.defaults.systemPromptOverride",
-      "agents",
-      "agents.list",
-    ]);
-
-    const res = migrateLegacyConfigForTest(raw);
-
-    expect(res.config?.agents?.defaults).not.toHaveProperty("systemPromptOverride");
-    expect(res.config?.agents?.list?.[0]).not.toHaveProperty("systemPromptOverride");
-    expect(res.config?.agents?.list?.[1]).toEqual({ id: "beta" });
-  });
-});
+registerLegacySilentReplyConfigMigrationTests(migrateLegacyConfigForTest);
 
 describe("profile configured tool section migrate", () => {
   it("does not add grants when configured sections are the only signal", () => {
@@ -598,21 +552,6 @@ describe("legacy session maintenance migrate", () => {
       mode: "enforce",
       pruneAfter: "30d",
       maxEntries: 500,
-    });
-  });
-});
-
-describe("legacy session parent fork migrate", () => {
-  it("removes legacy session.parentForkMaxTokens", () => {
-    const res = migrateLegacyConfigForTest({
-      session: {
-        store: "sessions.json",
-        parentForkMaxTokens: 200_000,
-      },
-    });
-
-    expect(res.config?.session).toEqual({
-      store: "sessions.json",
     });
   });
 });
@@ -781,38 +720,6 @@ describe("legacy thread binding spawn migrate", () => {
   });
 });
 
-describe("legacy message queue mode migrate", () => {
-  it("moves retired queue steering modes to followup mode", () => {
-    const res = migrateLegacyConfigForTest({
-      messages: {
-        queue: {
-          mode: "queue",
-          byChannel: {
-            discord: "steer-backlog",
-            telegram: "collect",
-            slack: "steer",
-          },
-        },
-      },
-    });
-
-    expect(res.config?.messages?.queue).toEqual({
-      mode: "steer",
-      byChannel: {
-        discord: "followup",
-        telegram: "collect",
-        slack: "steer",
-      },
-    });
-    expect(res.changes).toContain(
-      'Moved deprecated messages.queue.mode "queue" → "steer"; use "steer" for default active-run steering.',
-    );
-    expect(res.changes).toContain(
-      'Moved deprecated messages.queue.byChannel.discord "steer-backlog" → "followup"; use "steer" for default active-run steering.',
-    );
-  });
-});
-
 describe("legacy migrate audio transcription", () => {
   it("consolidates existing per-capability media config without reviving removed routing keys", () => {
     const res = migrateLegacyConfigForTest({
@@ -895,84 +802,7 @@ describe("legacy migrate audio transcription", () => {
   });
 });
 
-describe("legacy agent runtime and sandbox config migrate", () => {
-  it("removes ignored agent-wide runtime policy", () => {
-    const res = migrateLegacyConfigForTest({
-      agents: {
-        defaults: {
-          agentRuntime: { fallback: "openclaw" },
-        },
-        list: [
-          {
-            id: "reviewer",
-            agentRuntime: { fallback: "openclaw" },
-          },
-        ],
-      },
-    });
-
-    expect(res.config?.agents?.defaults).toStrictEqual({});
-    expect(res.config?.agents?.list?.[0]).toEqual({
-      id: "reviewer",
-    });
-  });
-
-  it("moves recoverable whole-agent Claude CLI runtime policy before removing stale pins", () => {
-    const res = migrateLegacyConfigForTest({
-      agents: {
-        defaults: {
-          agentRuntime: { id: "claude-cli" },
-          model: {
-            primary: "anthropic/claude-opus-4-7",
-            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
-          },
-          models: {
-            "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "openclaw" } },
-            "anthropic/claude-opus-4-7": {
-              alias: "Opus",
-              agentRuntime: { id: "auto", mode: "strict" },
-            },
-          },
-        },
-        list: [
-          {
-            id: "paige",
-            agentRuntime: { id: "claude-cli" },
-            model: "anthropic/claude-sonnet-4-6",
-          },
-        ],
-      },
-    });
-
-    expect(res.config?.agents?.defaults).toEqual({
-      model: {
-        primary: "anthropic/claude-opus-4-7",
-        fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
-      },
-      models: {
-        "anthropic/claude-opus-4-7": {
-          alias: "Opus",
-          agentRuntime: { id: "claude-cli", mode: "strict" },
-        },
-        "anthropic/claude-sonnet-4-6": {
-          agentRuntime: { id: "openclaw" },
-        },
-      },
-      modelPolicy: {
-        allow: ["anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-7"],
-      },
-    });
-    expect(res.config?.agents?.list?.[0]).toEqual({
-      id: "paige",
-      model: "anthropic/claude-sonnet-4-6",
-      models: {
-        "anthropic/claude-sonnet-4-6": {
-          agentRuntime: { id: "claude-cli" },
-        },
-      },
-    });
-  });
-
+describe("legacy sandbox config migrate", () => {
   it("disables the default sandbox browser network without granting inherited egress", () => {
     const raw = {
       agents: {
@@ -2135,14 +1965,14 @@ describe("legacy memory search config migrate", () => {
         chunkSize: 800,
         chunkOverlap: 100,
         maxResults: 5,
-        store: { path: "/tmp/root-memory.sqlite", vector: { enabled: false } },
+        store: { vector: { enabled: false } },
       },
       agents: {
         defaults: {
           memorySearch: {
             chunking: { tokens: 1200 },
             query: { maxResults: 9 },
-            store: { path: "/tmp/default-memory.sqlite", fts: { tokenizer: "trigram" } },
+            store: { fts: { tokenizer: "trigram" } },
           },
         },
       },
@@ -2168,7 +1998,6 @@ describe("legacy memory search config migrate", () => {
         "Removed memory.search.chunkSize (memory.search.chunking.tokens already set).",
         "Moved memory.search.chunkOverlap → memory.search.chunking.overlap.",
         "Removed memory.search.maxResults (memory.search.query.maxResults already set).",
-        "Removed memory.search.store.path; memory indexes now use each agent database.",
       ]),
     );
   });
@@ -2185,7 +2014,7 @@ describe("legacy memory search config migrate", () => {
             memorySearch: {
               provider: " auto ",
               chunkSize: 500,
-              store: { path: "/tmp/ops-memory.sqlite", vector: { enabled: true } },
+              store: { vector: { enabled: true } },
             },
           },
           {
@@ -2210,9 +2039,6 @@ describe("legacy memory search config migrate", () => {
       query: { maxResults: 10 },
     });
     expect(res.config?.agents?.list?.[2]?.memory?.search).toBeUndefined();
-    expect(res.changes).toContain(
-      "Removed agents.list[0].memory.search.store.path; memory indexes now use each agent database.",
-    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

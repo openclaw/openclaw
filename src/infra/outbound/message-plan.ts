@@ -131,12 +131,14 @@ export function planOutboundTextMessageUnits(params: {
     return withDeliveryTopology([planTextUnit(params.text, 0)]);
   }
 
+  // In newline mode the channel chunker below owns length splits. Splitting a long
+  // paragraph here would cut fenced code before a fence-aware chunker sees it.
   const blockChunks =
     params.chunkMode !== "newline"
       ? [params.text]
       : (params.chunkerMode ?? "text") === "markdown"
         ? chunkMarkdownTextWithMode(params.text, params.textLimit, "newline")
-        : chunkByParagraph(params.text, params.textLimit);
+        : chunkByParagraph(params.text, params.textLimit, { splitLongParagraphs: false });
   if (!blockChunks.length && params.text) {
     blockChunks.push(params.text);
   }

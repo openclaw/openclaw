@@ -1,6 +1,5 @@
 // Exercises restart-notice retries against the real SQLite outbound queue.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   captureDeliveryQueueStateContext,
@@ -40,6 +39,7 @@ import {
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { resolveUpdateRunNoticeTarget } from "./update-run-notice-target.js";
 
@@ -88,23 +88,21 @@ type DeliveryRequest = {
 describe("restart sentinel notice recovery", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
   let stateDir = "";
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(async () => {
-      vi.useRealTimers();
-      vi.restoreAllMocks();
-      resetGatewayWorkAdmission();
-      resetPluginRuntimeStateForTest();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      envSnapshot?.restore();
-      envSnapshot = undefined;
-      cleanup();
-    });
+  const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-notice-");
+  afterEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    resetGatewayWorkAdmission();
+    resetPluginRuntimeStateForTest();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    envSnapshot?.restore();
+    envSnapshot = undefined;
   });
 
   beforeEach(() => {
     closeOpenClawStateDatabaseForTest();
-    stateDir = tempDirs.make("openclaw-restart-notice-");
+    stateDir = tempDirs.make();
     envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_SUPERVISOR_MODE"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     mocks.sendDurableMessageBatch.mockReset();
@@ -443,7 +441,7 @@ describe("restart sentinel notice recovery", () => {
       setTestEnvValue("OPENCLAW_SUPERVISOR_MODE", "external");
       claimOpenClawStateOwnership("restart-notice-fixture", { env: process.env });
       const context = captureDeliveryQueueStateContext(stateDir);
-      const replacement = tempDirs.make("openclaw-restart-notice-replacement-");
+      const replacement = tempDirs.make();
       const entered = createDeferredCore();
       const resume = createDeferredCore();
       mocks.hookRunner.hasHooks.mockImplementation((name?: string) => name === "message_sending");
@@ -485,7 +483,7 @@ describe("restart sentinel notice recovery", () => {
       setTestEnvValue("OPENCLAW_SUPERVISOR_MODE", "external");
       claimOpenClawStateOwnership("lifecycle-notice-fixture", { env: process.env });
       const context = captureDeliveryQueueStateContext(stateDir);
-      const replacement = tempDirs.make("openclaw-lifecycle-notice-replacement-");
+      const replacement = tempDirs.make();
       const entered = createDeferredCore();
       const resume = createDeferredCore();
       const pause = async () => {
@@ -581,7 +579,7 @@ describe("restart sentinel notice recovery", () => {
         revision: 123,
       };
       const queued = await enqueueRestartSentinelNotice(request, context);
-      const replacement = tempDirs.make("openclaw-restart-recovery-replacement-");
+      const replacement = tempDirs.make();
       setTestEnvValue("OPENCLAW_STATE_DIR", replacement);
       setTestEnvValue("OPENCLAW_SUPERVISOR_MODE", "");
       await expect(
