@@ -356,10 +356,24 @@ describe("tsdown config", () => {
     expect(child.define?.SEALED_RUNTIME_BUILD).toBeUndefined();
   });
 
-  it("builds the Docker healthcheck as a stable dist entry", () => {
-    const distGraph = requireUnifiedDistGraph();
-
-    expect(entrySources(distGraph)["docker-healthcheck"]).toBe("src/docker-healthcheck.ts");
+  it.each([
+    ["docker-healthcheck", "src/docker-healthcheck.ts"],
+    ["cli/gateway-lifecycle.runtime", "src/cli/gateway-cli/lifecycle.runtime.ts"],
+    [
+      "config/sessions/session-transcript-reconcile",
+      "src/config/sessions/session-transcript-reconcile.ts",
+    ],
+    ["provider-dispatcher.runtime", "src/auto-reply/reply/provider-dispatcher.runtime.ts"],
+    ["plugins/hook-runner-global", "src/plugins/hook-runner-global.ts"],
+    ["gateway/worker-environments/runtime", "src/gateway/worker-environments/runtime.ts"],
+    // Already-running v2026.9.1 Gateways lazily load this reload entry.
+    ["gateway/plugin-channel-reload-targets", "src/gateway/plugin-channel-reload-targets.ts"],
+    [
+      "telegram-ingress-worker.runtime",
+      "extensions/telegram/src/telegram-ingress-worker.runtime.ts",
+    ],
+  ])("keeps %s behind its stable root dist entry", (entry, source) => {
+    expect(entrySources(requireUnifiedDistGraph())[entry]).toBe(source);
   });
 
   it("emits the dist modules referenced by every Docker client", () => {
@@ -406,54 +420,6 @@ describe("tsdown config", () => {
     expect(hasPluginEntry("amazon-bedrock-mantle")).toBe(false);
   });
 
-  it("keeps gateway lifecycle lazy runtime behind one stable dist entry", () => {
-    const distGraph = requireUnifiedDistGraph();
-
-    expect(entrySources(distGraph)["cli/gateway-lifecycle.runtime"]).toBe(
-      "src/cli/gateway-cli/lifecycle.runtime.ts",
-    );
-  });
-
-  it("keeps lazy transcript reconciliation behind one stable dist entry", () => {
-    const distGraph = requireUnifiedDistGraph();
-
-    expect(entrySources(distGraph)["config/sessions/session-transcript-reconcile"]).toBe(
-      "src/config/sessions/session-transcript-reconcile.ts",
-    );
-  });
-
-  it("keeps reply dispatcher lazy runtime behind one root stable dist entry", () => {
-    const distGraph = requireUnifiedDistGraph();
-
-    expect(entrySources(distGraph)["provider-dispatcher.runtime"]).toBe(
-      "src/auto-reply/reply/provider-dispatcher.runtime.ts",
-    );
-  });
-
-  it("keeps gateway shutdown hook runner behind one stable dist entry", () => {
-    const distGraph = requireUnifiedDistGraph();
-
-    expect(entrySources(distGraph)["plugins/hook-runner-global"]).toBe(
-      "src/plugins/hook-runner-global.ts",
-    );
-  });
-
-  it("keeps worker environment bootstrap behind one stable dist entry", () => {
-    const distGraph = requireUnifiedDistGraph();
-
-    expect(entrySources(distGraph)["gateway/worker-environments/runtime"]).toBe(
-      "src/gateway/worker-environments/runtime.ts",
-    );
-  });
-
-  it("preserves the reload entry lazy-loaded by already-running v2026.9.1 Gateways", () => {
-    const distGraph = requireUnifiedDistGraph();
-
-    expect(entrySources(distGraph)["gateway/plugin-channel-reload-targets"]).toBe(
-      "src/gateway/plugin-channel-reload-targets.ts",
-    );
-  });
-
   it("keeps PI model discovery synthetic auth refs behind one stable runtime dist entry", () => {
     const distGraph = requireUnifiedDistGraph();
     const importSpecifiers = [
@@ -465,14 +431,6 @@ describe("tsdown config", () => {
     expect(importSpecifiers).toEqual(["../plugins/synthetic-auth.runtime.js"]);
     expect(entrySources(distGraph)["plugins/synthetic-auth.runtime"]).toBe(
       "src/plugins/synthetic-auth.runtime.ts",
-    );
-  });
-
-  it("keeps Telegram ingress worker behind one root stable dist entry", () => {
-    const distGraph = requireUnifiedDistGraph();
-
-    expect(entrySources(distGraph)["telegram-ingress-worker.runtime"]).toBe(
-      "extensions/telegram/src/telegram-ingress-worker.runtime.ts",
     );
   });
 

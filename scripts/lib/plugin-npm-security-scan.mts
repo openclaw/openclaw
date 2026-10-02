@@ -133,11 +133,16 @@ const RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map(
 
 // Runtime launches added after 9.5: FaceTime starts its own staged capture
 // helper with no arguments and a sanitized env, and ONNX forks its bundled
-// worker entry from process.execPath.
-const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
+// worker entry from process.execPath. Freeze these requirements for 9.6 and 9.7.
+const RELEASE_2026_9_7_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
   ...RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
   ["@openclaw/facetime:dangerous-exec:src/audio-pump.ts", 1],
   ["@openclaw/onnx:dangerous-exec:src/worker-client.ts", 1],
+]);
+
+const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
+  ...RELEASE_2026_9_7_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+  ["@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-vc-runtime.ts", 1],
 ]);
 
 type ReviewedReleaseLayout = {
@@ -362,6 +367,11 @@ const FROZEN_EXTENDED_STABLE_2026_8_33_LAYOUT = {
   ]),
 };
 
+const FROZEN_EXTENDED_STABLE_2026_8_33_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map([
+  ...RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+  ["@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-vc-runtime.ts", 1],
+]);
+
 const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurityInventoryPolicy>([
   [
     "release/2026.9.1",
@@ -408,9 +418,16 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
     {
       ...CURRENT_SECURITY_INVENTORY_POLICY,
       optionalPackedFindingCounts: RELEASE_2026_9_6_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_7_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
-  ["release/2026.9.7", CURRENT_SECURITY_INVENTORY_POLICY],
+  [
+    "release/2026.9.7",
+    {
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      requiredSourceFindingCounts: RELEASE_2026_9_7_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
   [
     "extended-stable/2026.6.33",
     {
@@ -433,7 +450,8 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
     {
       layout: FROZEN_EXTENDED_STABLE_2026_8_33_LAYOUT,
       optionalPackedFindingCounts: FROZEN_RELEASE_2026_9_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
-      requiredSourceFindingCounts: RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+      requiredSourceFindingCounts:
+        FROZEN_EXTENDED_STABLE_2026_8_33_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
 ]);
