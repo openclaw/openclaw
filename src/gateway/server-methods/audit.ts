@@ -123,6 +123,7 @@ function readAuditListPage(
     ...(cursor !== undefined ? { cursor } : {}),
     filters: {
       ...(includeMessages ? { includeMessages: true } : {}),
+      // SAFETY: legacy clients may send status:"observed" without kind; the cast only reads an optional string field.
       ...(params.kind === "skill_selection" || (params as { status?: string }).status === "observed"
         ? { includeSkillSelections: true }
         : {}),
