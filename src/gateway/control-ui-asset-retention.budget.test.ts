@@ -76,11 +76,11 @@ describe("Control UI asset retention budget", () => {
       await owner.prepare();
 
       // Identity next + full previous = 88,204,138 B; two full builds exceed the 96 MiB budget.
-      expect(owner.resolveAsset(previous.assetPath)?.filePath).toBe(
+      expect((await owner.resolveAsset(previous.assetPath))?.filePath).toBe(
         path.join(previousTarget, previous.assetPath),
       );
       const nextTarget = path.join(cache, next.retained.generation);
-      expect(owner.resolveAsset(next.assetPath)?.filePath).toBe(
+      expect((await owner.resolveAsset(next.assetPath))?.filePath).toBe(
         path.join(nextTarget, next.assetPath),
       );
       expect(
@@ -124,10 +124,10 @@ describe("Control UI asset retention budget", () => {
         },
       );
       for (const entry of prior.assets) {
-        expect(owner.resolveAsset(entry.path)).toBeNull();
+        expect(await owner.resolveAsset(entry.path)).toBeNull();
       }
       await expect(fs.access(priorTarget)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(owner.resolveAsset(current.assetPath)?.filePath).toBe(
+      expect((await owner.resolveAsset(current.assetPath))?.filePath).toBe(
         path.join(cache, current.manifest.generation, current.assetPath),
       );
       expect(await fs.readdir(cache)).toEqual([current.manifest.generation]);
