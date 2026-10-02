@@ -3326,7 +3326,9 @@ describe("release CI summary child correlation", () => {
     fixture.client.getRunAttemptJobs.mockImplementation((runId) =>
       runId === selected.runId ? jobs : originalJobs(runId),
     );
-    await expect(verifyFixture(fixture)).rejects.toThrow("does not pass release policy");
+    await expect(verifyFixture(fixture)).rejects.toThrow(
+      "Release manifest contains failed selected job evidence",
+    );
   });
 
   it.each(["", "ship"])(
