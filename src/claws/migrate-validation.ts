@@ -1,8 +1,9 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord as record } from "@openclaw/normalization-core/record-coerce";
 import {
   DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
 } from "../config/agent-limits.js";
+import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isAvatarDataUrl } from "../shared/avatar-policy.js";
@@ -118,16 +119,6 @@ function modelPrimary(model: ModelConfig): string | undefined {
   return model?.primary;
 }
 
-function modelFallbacks(model: ModelConfig): string[] {
-  return model && typeof model === "object" && Array.isArray(model.fallbacks)
-    ? model.fallbacks
-    : [];
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-  return isRecord(value) ? value : undefined;
-}
-
 function unsupportedFields(value: unknown, fields: readonly string[], prefix: string): string[] {
   const source = record(value);
   if (!source) {
@@ -160,6 +151,20 @@ function unsupportedSubagentDefaultFields(value: unknown): string[] {
       return true;
     })
     .map((field) => `agents.defaults.subagents.${field}`);
+}
+
+function inheritPortableSettings<T extends object>(
+  settings: T | undefined,
+  defaults: Partial<T> | undefined,
+  keys: readonly (keyof T)[],
+): Partial<T> {
+  const inherited: Partial<T> = { ...settings };
+  for (const key of keys) {
+    if (inherited[key] === undefined && defaults?.[key] !== undefined) {
+      inherited[key] = defaults[key];
+    }
+  }
+  return inherited;
 }
 
 export function resolveMigrationAgentSettings(
@@ -226,80 +231,46 @@ export function resolveMigrationAgentSettings(
     );
   }
 
-  const inheritedSubagents = {
-    ...agent.subagents,
-    ...(agent.subagents?.allowAgents === undefined && defaults.subagents?.allowAgents !== undefined
-      ? { allowAgents: defaults.subagents.allowAgents }
-      : {}),
-    ...(agent.subagents?.delegationMode === undefined &&
-    defaults.subagents?.delegationMode !== undefined
-      ? { delegationMode: defaults.subagents.delegationMode }
-      : {}),
+  const inheritedSubagents = inheritPortableSettings(agent.subagents, defaults.subagents, [
+    "allowAgents",
+    "delegationMode",
+  ]);
+  const inheritedHeartbeat = inheritPortableSettings(agent.heartbeat, defaults.heartbeat, [
+    "every",
+    "activeHours",
+    "lightContext",
+    "isolatedSession",
+    "timeoutSeconds",
+  ]);
+  const inheritedSandbox = inheritPortableSettings(agent.sandbox, defaults.sandbox, [
+    "mode",
+    "scope",
+    "workspaceAccess",
+  ]);
+  const inheritedHumanDelay = inheritPortableSettings(agent.humanDelay, defaults.humanDelay, [
+    "mode",
+    "minMs",
+    "maxMs",
+  ]);
+  const inheritedAgent = {
+    ...agent,
+    ...(Object.keys(inheritedSubagents).length > 0 ? { subagents: inheritedSubagents } : {}),
+    ...(Object.keys(inheritedHeartbeat).length > 0 ? { heartbeat: inheritedHeartbeat } : {}),
+    ...(Object.keys(inheritedSandbox).length > 0 ? { sandbox: inheritedSandbox } : {}),
+    ...(Object.keys(inheritedHumanDelay).length > 0 ? { humanDelay: inheritedHumanDelay } : {}),
   };
-  const inheritedHeartbeat = {
-    ...agent.heartbeat,
-    ...(agent.heartbeat?.every === undefined && defaults.heartbeat?.every !== undefined
-      ? { every: defaults.heartbeat.every }
-      : {}),
-    ...(agent.heartbeat?.activeHours === undefined && defaults.heartbeat?.activeHours !== undefined
-      ? { activeHours: defaults.heartbeat.activeHours }
-      : {}),
-    ...(agent.heartbeat?.lightContext === undefined &&
-    defaults.heartbeat?.lightContext !== undefined
-      ? { lightContext: defaults.heartbeat.lightContext }
-      : {}),
-    ...(agent.heartbeat?.isolatedSession === undefined &&
-    defaults.heartbeat?.isolatedSession !== undefined
-      ? { isolatedSession: defaults.heartbeat.isolatedSession }
-      : {}),
-    ...(agent.heartbeat?.timeoutSeconds === undefined &&
-    defaults.heartbeat?.timeoutSeconds !== undefined
-      ? { timeoutSeconds: defaults.heartbeat.timeoutSeconds }
-      : {}),
-  };
-  const inheritedSandbox = {
-    ...agent.sandbox,
-    ...(agent.sandbox?.mode === undefined && defaults.sandbox?.mode !== undefined
-      ? { mode: defaults.sandbox.mode }
-      : {}),
-    ...(agent.sandbox?.scope === undefined && defaults.sandbox?.scope !== undefined
-      ? { scope: defaults.sandbox.scope }
-      : {}),
-    ...(agent.sandbox?.workspaceAccess === undefined &&
-    defaults.sandbox?.workspaceAccess !== undefined
-      ? { workspaceAccess: defaults.sandbox.workspaceAccess }
-      : {}),
-  };
-  const inheritedHumanDelay = {
-    ...agent.humanDelay,
-    ...(agent.humanDelay?.mode === undefined && defaults.humanDelay?.mode !== undefined
-      ? { mode: defaults.humanDelay.mode }
-      : {}),
-    ...(agent.humanDelay?.minMs === undefined && defaults.humanDelay?.minMs !== undefined
-      ? { minMs: defaults.humanDelay.minMs }
-      : {}),
-    ...(agent.humanDelay?.maxMs === undefined && defaults.humanDelay?.maxMs !== undefined
-      ? { maxMs: defaults.humanDelay.maxMs }
-      : {}),
-  };
-  const effectiveHeartbeat =
-    Object.keys(inheritedHeartbeat).length > 0 ? inheritedHeartbeat : undefined;
 
   const defaultModel = defaults.model;
   if (defaultModel === undefined) {
-    return {
-      ...agent,
-      ...(Object.keys(inheritedSubagents).length > 0 ? { subagents: inheritedSubagents } : {}),
-      ...(effectiveHeartbeat ? { heartbeat: effectiveHeartbeat } : {}),
-      ...(Object.keys(inheritedSandbox).length > 0 ? { sandbox: inheritedSandbox } : {}),
-      ...(Object.keys(inheritedHumanDelay).length > 0 ? { humanDelay: inheritedHumanDelay } : {}),
-    };
+    return inheritedAgent;
   }
   const primary = modelPrimary(agent.model) ?? modelPrimary(defaultModel);
   const hasAgentFallbacks = typeof agent.model === "object" && Array.isArray(agent.model.fallbacks);
   const hasDefaultFallbacks =
     typeof defaultModel === "object" && Array.isArray(defaultModel.fallbacks);
-  const fallbacks = hasAgentFallbacks ? modelFallbacks(agent.model) : modelFallbacks(defaultModel);
+  const fallbacks = hasAgentFallbacks
+    ? resolveAgentModelFallbackValues(agent.model)
+    : resolveAgentModelFallbackValues(defaultModel);
   const effectiveModel =
     typeof agent.model === "string" && !hasDefaultFallbacks
       ? agent.model
@@ -308,12 +279,5 @@ export function resolveMigrationAgentSettings(
           ...(primary ? { primary } : {}),
           ...(hasAgentFallbacks || hasDefaultFallbacks ? { fallbacks } : {}),
         };
-  return {
-    ...agent,
-    model: effectiveModel,
-    ...(Object.keys(inheritedSubagents).length > 0 ? { subagents: inheritedSubagents } : {}),
-    ...(effectiveHeartbeat ? { heartbeat: effectiveHeartbeat } : {}),
-    ...(Object.keys(inheritedSandbox).length > 0 ? { sandbox: inheritedSandbox } : {}),
-    ...(Object.keys(inheritedHumanDelay).length > 0 ? { humanDelay: inheritedHumanDelay } : {}),
-  };
+  return { ...inheritedAgent, model: effectiveModel };
 }

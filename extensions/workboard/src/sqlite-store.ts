@@ -5,6 +5,7 @@ import {
   openSqliteWorkerStore,
   runSqliteWorkerStoreOperation,
 } from "openclaw/plugin-sdk/sqlite-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -19,7 +20,11 @@ import type {
   WorkboardSqliteWorkerOperations,
 } from "./sqlite-store-contract.js";
 import { unwrapWorkboardSqliteResult } from "./sqlite-store-errors.js";
-import { resolveWorkboardSqlitePath } from "./sqlite-store-paths.js";
+
+type WorkboardStoreOperation = Exclude<
+  keyof WorkboardSqliteOperations,
+  "connection.open" | "connection.close" | "dataVersion"
+>;
 
 type WorkboardSqliteStores = {
   cards: WorkboardCardStore;
@@ -35,10 +40,11 @@ type WorkboardSqliteStores = {
 
 export function createWorkboardSqliteStores(options: {
   dbPath?: string;
-  env?: NodeJS.ProcessEnv;
   workerModuleUrl: URL;
 }): WorkboardSqliteStores {
-  const databasePath = path.resolve(options.dbPath ?? resolveWorkboardSqlitePath(options.env));
+  const databasePath = path.resolve(
+    options.dbPath ?? path.join(resolveStateDir(), "plugins", "workboard", "workboard.sqlite"),
+  );
   const worker = openSqliteWorkerStore<WorkboardSqliteWorkerOperations>({
     moduleUrl: options.workerModuleUrl,
     databasePath,
@@ -155,10 +161,9 @@ export function createWorkboardSqliteStores(options: {
       operations.delete(pending);
     }
   }
-  function bindOperation<Args extends unknown[], Result>(
-    operation: (connection: number, args: Args) => Promise<Result>,
-  ): (...args: Args) => Promise<Result> {
-    return (...args) => run(args, operation);
+  function bindOperation<K extends WorkboardStoreOperation>(type: K, writes = false) {
+    return (...args: WorkboardSqliteOperations[K]["input"]["args"]) =>
+      run(args, (connection, captured) => execute(type, { connection, args: captured }, writes));
   }
   return {
     async runWithWriteAuthority(assertCurrent, operation) {
@@ -175,88 +180,42 @@ export function createWorkboardSqliteStores(options: {
     ready,
     dataVersion: () => run(undefined, (connection) => execute("dataVersion", { connection })),
     cards: {
-      register: bindOperation((connection, args) =>
-        execute("cards.register", { connection, args }, true),
-      ),
-      registerIfAbsent: bindOperation((connection, args) =>
-        execute("cards.registerIfAbsent", { connection, args }, true),
-      ),
-      registerIfUpdatedAt: bindOperation((connection, args) =>
-        execute("cards.registerIfUpdatedAt", { connection, args }, true),
-      ),
-      claimIfOwnerAvailable: bindOperation((connection, args) =>
-        execute("cards.claimIfOwnerAvailable", { connection, args }, true),
-      ),
-      deleteIfUpdatedAt: bindOperation((connection, args) =>
-        execute("cards.deleteIfUpdatedAt", { connection, args }, true),
-      ),
-      lookup: bindOperation((connection, args) => execute("cards.lookup", { connection, args })),
-      delete: bindOperation((connection, args) =>
-        execute("cards.delete", { connection, args }, true),
-      ),
-      entries: bindOperation((connection, args) => execute("cards.entries", { connection, args })),
-      listCardStatuses: bindOperation((connection, args) =>
-        execute("cards.listCardStatuses", { connection, args }),
-      ),
-      listBoardAggregates: bindOperation((connection, args) =>
-        execute("cards.listBoardAggregates", { connection, args }),
-      ),
-      listStatsAggregates: bindOperation((connection, args) =>
-        execute("cards.listStatsAggregates", { connection, args }),
-      ),
-      hasCards: bindOperation((connection, args) =>
-        execute("cards.hasCards", { connection, args }),
-      ),
+      register: bindOperation("cards.register", true),
+      registerIfAbsent: bindOperation("cards.registerIfAbsent", true),
+      registerIfUpdatedAt: bindOperation("cards.registerIfUpdatedAt", true),
+      claimIfOwnerAvailable: bindOperation("cards.claimIfOwnerAvailable", true),
+      deleteIfUpdatedAt: bindOperation("cards.deleteIfUpdatedAt", true),
+      lookup: bindOperation("cards.lookup"),
+      delete: bindOperation("cards.delete", true),
+      entries: bindOperation("cards.entries"),
+      listCardStatuses: bindOperation("cards.listCardStatuses"),
+      listBoardAggregates: bindOperation("cards.listBoardAggregates"),
+      listStatsAggregates: bindOperation("cards.listStatsAggregates"),
+      hasCards: bindOperation("cards.hasCards"),
     },
     boards: {
-      register: bindOperation((connection, args) =>
-        execute("boards.register", { connection, args }, true),
-      ),
-      lookup: bindOperation((connection, args) => execute("boards.lookup", { connection, args })),
-      delete: bindOperation((connection, args) =>
-        execute("boards.delete", { connection, args }, true),
-      ),
-      entries: bindOperation((connection, args) => execute("boards.entries", { connection, args })),
+      register: bindOperation("boards.register", true),
+      lookup: bindOperation("boards.lookup"),
+      delete: bindOperation("boards.delete", true),
+      entries: bindOperation("boards.entries"),
     },
     sessionsBoard: {
-      get: bindOperation((connection, args) => execute("sessionsBoard.get", { connection, args })),
-      update: bindOperation((connection, args) =>
-        execute("sessionsBoard.update", { connection, args }, true),
-      ),
-      listPlacements: bindOperation((connection, args) =>
-        execute("sessionsBoard.listPlacements", { connection, args }),
-      ),
-      writePlacements: bindOperation((connection, args) =>
-        execute("sessionsBoard.writePlacements", { connection, args }, true),
-      ),
+      get: bindOperation("sessionsBoard.get"),
+      update: bindOperation("sessionsBoard.update", true),
+      listPlacements: bindOperation("sessionsBoard.listPlacements"),
+      writePlacements: bindOperation("sessionsBoard.writePlacements", true),
     },
     subscriptions: {
-      register: bindOperation((connection, args) =>
-        execute("subscriptions.register", { connection, args }, true),
-      ),
-      lookup: bindOperation((connection, args) =>
-        execute("subscriptions.lookup", { connection, args }),
-      ),
-      delete: bindOperation((connection, args) =>
-        execute("subscriptions.delete", { connection, args }, true),
-      ),
-      entries: bindOperation((connection, args) =>
-        execute("subscriptions.entries", { connection, args }),
-      ),
+      register: bindOperation("subscriptions.register", true),
+      lookup: bindOperation("subscriptions.lookup"),
+      delete: bindOperation("subscriptions.delete", true),
+      entries: bindOperation("subscriptions.entries"),
     },
     attachments: {
-      register: bindOperation((connection, args) =>
-        execute("attachments.register", { connection, args }, true),
-      ),
-      lookup: bindOperation((connection, args) =>
-        execute("attachments.lookup", { connection, args }),
-      ),
-      delete: bindOperation((connection, args) =>
-        execute("attachments.delete", { connection, args }, true),
-      ),
-      entries: bindOperation((connection, args) =>
-        execute("attachments.entries", { connection, args }),
-      ),
+      register: bindOperation("attachments.register", true),
+      lookup: bindOperation("attachments.lookup"),
+      delete: bindOperation("attachments.delete", true),
+      entries: bindOperation("attachments.entries"),
     },
     close() {
       sealed = true;
