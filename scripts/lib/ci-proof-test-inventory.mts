@@ -880,6 +880,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/workboard/browser/components/toast.test.ts",
   "extensions/workboard/browser/pages/workboard/view-card-time.test.ts",
   "extensions/workboard/browser/pages/workboard/view.test.ts",
+  "extensions/workboard/doctor-contract-api.test.ts",
   "extensions/workboard/src/cli.test.ts",
   "extensions/workboard/src/command.test.ts",
   "extensions/workboard/src/dispatcher-ownership.test.ts",

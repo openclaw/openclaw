@@ -16,6 +16,13 @@
       "hasSubcommands": true
     }
   ],
+  "doctorContract": {
+    "stateMigrations": [
+      {
+        "id": "workboard-28-kv-to-sqlite"
+      }
+    ]
+  },
   "enabledByDefault": false,
   "activation": {
     "onStartup": true,
