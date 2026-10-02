@@ -31,12 +31,12 @@ import { appendTranscriptMessage, resetSessionEntryLifecycle } from "./session-a
 import * as archiveStore from "./session-accessor.sqlite-archive-store.js";
 import * as archives from "./session-accessor.sqlite-archive.js";
 import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import * as entryEviction from "./session-accessor.sqlite-lifecycle.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
 import {
   joinSessionHistoryBudgetSweeps,
   type SessionHistoryBudgetQueueObservation,
 } from "./session-history-budget.test-support.js";
-import * as entryEviction from "./session-history-entry-eviction.runtime.js";
 import {
   enforceSqliteSessionHistoryDiskBudget,
   inspectSqliteSessionHistoryDiskBudget,
@@ -199,8 +199,8 @@ it.each([
     forgetCachedDatabase();
 
     let capEntryCalls = 0;
-    const deleteEntry = entryEviction.deleteDiskBudgetArchivedSessionEntry;
-    vi.spyOn(entryEviction, "deleteDiskBudgetArchivedSessionEntry").mockImplementation(
+    const deleteEntry = entryEviction.deleteDiskBudgetSessionEntryLifecycle;
+    vi.spyOn(entryEviction, "deleteDiskBudgetSessionEntryLifecycle").mockImplementation(
       async (...args) => {
         if (victim === "cap-entry" && args[0].target.canonicalKey === sessionKey) {
           capEntryCalls += 1;

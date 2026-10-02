@@ -48,10 +48,6 @@ it.each([
   { scopes: ["operator.read"], summary: "You have permission to view server information." },
   { scopes: ["operator.write"], summary: "You have permission to send messages and make changes." },
   {
-    scopes: ["operator.sessions.read", "operator.sessions.write"],
-    summary: "You have permission to work in your own sessions.",
-  },
-  {
     scopes: ["operator.sessions.read"],
     summary: "You have permission to view your own sessions.",
   },

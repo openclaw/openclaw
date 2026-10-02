@@ -195,6 +195,8 @@ export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "se
   expectedWriterRunId?: string;
   /** Optional lifecycle fence paired with sessionId for run-owned writes. */
   expectedLifecycleRevision?: string;
+  /** Exact owner facts, including absent fields, checked inside the write transaction. */
+  expectedOwner?: Pick<SessionEntry, "lifecycleRevision" | "activeWriterRunId">;
 };
 
 export type SessionEntrySummary = {
@@ -373,6 +375,14 @@ export type SessionTranscriptWriteTransactionContext = SessionTranscriptRuntimeT
 export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
 
 export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<unknown> & {
+  /** Audited preparation runs once on the host against worker-read idempotency facts. */
+  workerPreparation?: Pick<
+    TranscriptMessageAppendOptions<unknown>,
+    "prepareMessageAfterIdempotencyCheck" | "beforeFreshMessageCommit"
+  >;
+  predicate?:
+    | { kind: "latest-assistant-differs"; runId: string; text: string }
+    | { kind: "active-entry"; entryId: string; errorMessage: string };
   /**
    * Runs inside the session writer queue before the SQLite transaction begins.
    * The commit phase revalidates session ownership and database idempotency
@@ -390,6 +400,9 @@ export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<
 export type SessionTranscriptTurnWriteContext = Partial<SessionTranscriptRuntimeTarget>;
 
 export type SessionTranscriptTurnPersistOptions = {
+  /** Retained caller authority, with no same-database reads inside worker grants. */
+  assertCurrent?: () => void;
+  acceptedResultGuard?: { expectedWriterRunId: string | null; errorMessage: string };
   /** Runtime config used for lock settings, redaction, and header metadata. */
   config?: OpenClawConfig;
   /** Working directory recorded in a newly created transcript header. */
@@ -439,6 +452,7 @@ export type SessionTranscriptTurnPersistOptions = {
 };
 
 export interface SessionTranscriptTurnPersistResult {
+  predicateSkipped?: boolean;
   sessionTurnMutationResult?: SessionTranscriptTurnMutationResult;
   appendedCount: number;
   messages: TranscriptMessageAppendResult<unknown>[];

@@ -311,7 +311,13 @@ async function auditSystemdDefinition(
       }
       if (
         preserved.has(key) ||
-        (key === "Service.EnvironmentFile" && current?.every((value) => value === environmentFile))
+        (key === "Service.EnvironmentFile" &&
+          (current?.every((value) => value === environmentFile) ||
+            (sourcePath !== unitPath &&
+              command?.managedDefinition &&
+              command.managedOverrides &&
+              command.managedOverrides.environment !== true &&
+              !command.reloadPending)))
       ) {
         continue;
       }

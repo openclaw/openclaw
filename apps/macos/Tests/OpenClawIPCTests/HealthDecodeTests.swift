@@ -13,6 +13,7 @@ struct HealthDecodeTests {
         let snap = decodeHealthSnapshot(from: data)
 
         #expect(snap?.channels["whatsapp"]?.linked == true)
+        #expect(snap?.channels["telegram"]?.probe?.elapsedMs == 800)
         #expect(snap?.sessions.count == 1)
     }
 

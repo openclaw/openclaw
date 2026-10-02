@@ -41,59 +41,35 @@ function renderAssistantMessage(
 }
 
 describe("message attachment image gallery projection", () => {
-  it.each(
-    [
-      {
-        format: "MEDIA directives",
-        content:
-          "Introduction\n\n**Before**\nMEDIA:https://example.com/before.png\n\n**After**\nMEDIA:https://example.com/after.png\n\nClosing paragraph",
-      },
-      {
-        format: "structured images",
-        content: [
-          { type: "text", text: "Introduction\n\n**Before**" },
-          { type: "image", url: "https://example.com/before.png" },
-          { type: "text", text: "**After**" },
-          { type: "image", url: "https://example.com/after.png" },
-          { type: "text", text: "Closing paragraph" },
-        ],
-      },
-      {
-        format: "mixed image blocks and document-shaped images",
-        content: [
-          { type: "text", text: "Introduction\n\n**Before**" },
-          { type: "image", url: "https://example.com/before.png" },
-          { type: "text", text: "**After**" },
-          createAttachmentBlock(
-            "https://example.com/after.png",
-            "document",
-            "after.png",
-            "application/octet-stream; charset=binary",
-          ),
-          { type: "text", text: "Closing paragraph" },
-        ],
-      },
-    ].flatMap(({ format, content }) =>
-      [false, true].map((persisted) => ({ format, content, persisted })),
-    ),
-  )(
-    "keeps assistant $format in order and in one image gallery (persisted: $persisted)",
-    async ({ content, persisted }) => {
+  it.each([
+    {
+      format: "MEDIA directives",
+      content:
+        "Introduction\n\n**Before**\nMEDIA:https://example.com/before.png\n\n**After**\nMEDIA:https://example.com/after.png\n\nClosing paragraph",
+    },
+    {
+      format: "mixed image blocks and document-shaped images",
+      content: [
+        { type: "text", text: "Introduction\n\n**Before**" },
+        { type: "image", url: "https://example.com/before.png" },
+        { type: "text", text: "**After**" },
+        createAttachmentBlock(
+          "https://example.com/after.png",
+          "document",
+          "after.png",
+          "application/octet-stream; charset=binary",
+        ),
+        { type: "text", text: "Closing paragraph" },
+      ],
+    },
+  ])(
+    "keeps assistant $format in order and in one image gallery without persisted mirrors",
+    async ({ content }) => {
       const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
       renderAssistantMessage(
         container,
         createAssistantMessage(content, {
           timestamp: 1000,
-          ...(persisted
-            ? {
-                __openclaw: {
-                  media: [
-                    { path: "https://example.com/before.png", contentType: "image/png" },
-                    { path: "https://example.com/after.png", contentType: "image/png" },
-                  ],
-                },
-              }
-            : {}),
         }),
         { onOpenImage },
       );

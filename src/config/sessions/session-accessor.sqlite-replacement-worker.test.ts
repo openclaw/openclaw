@@ -7,6 +7,7 @@ import {
   observeHostDataSql,
   observeSqliteReadSql,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { acquireStateDatabaseSchemaLease } from "../../infra/gateway-state-owner.js";
 import {
   isSqliteWorkerError,
   type SqliteWorkerOperations,
@@ -51,15 +52,21 @@ import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 
 it("does not probe archive recovery during ordinary replacements", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const maintenance = createOpenClawDatabaseMaintenanceScope();
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const schemaLease = acquireStateDatabaseSchemaLease(database.path);
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: () => schemaLease.assertCurrent(),
+      assertDatabaseAccess: schemaLease.assertDatabaseAccess,
+    });
     try {
       // The native maintenance path exposes SQL from the same replacement kernel.
       await maintenance.run(async () => {
-        const database = openOpenClawAgentDatabase({ agentId: "main" });
         const sessionKey = "agent:main:replacement-no-archive";
         writeSessionEntry(database, sessionKey, { sessionId: "replacement", updatedAt: 1 });
         ensureSessionTranscriptArchiveSchema(database.db);
         const sql = observeSqliteReadSql(StatementSync.prototype);
+        const nativeExec = vi.spyOn(database.db, "exec");
         try {
           await applySessionEntryExactReplacements({
             storePath: database.path,
@@ -69,16 +76,24 @@ it("does not probe archive recovery during ordinary replacements", async () => {
               replacements: [{ sessionKey, entry: { ...row!.entry, label: "committed" } }],
             }),
           });
+          expect(
+            nativeExec.mock.calls.some(([statement]) => /\bBEGIN\s+IMMEDIATE\b/i.test(statement)),
+          ).toBe(true);
           expect(readExactSessionEntryRow(database, sessionKey)?.entry.label).toBe("committed");
           expect(
             sql.queries.filter((query) => /from "session_transcript_archives"/i.test(query)),
           ).toEqual([]);
         } finally {
+          nativeExec.mockRestore();
           sql.restore();
         }
       });
     } finally {
-      await maintenance.close();
+      try {
+        await maintenance.close();
+      } finally {
+        schemaLease.release();
+      }
     }
   });
 });
@@ -471,6 +486,7 @@ it.each([
   "lost delivery after native completion",
   "lost result and commit receipt after final grant",
   "unknown native settlement after commit",
+  "post-commit observer failure",
   "unknown native settlement and lifecycle callback failure",
 ] as const)("settles canonical replacement with %s", async (fault) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -512,10 +528,14 @@ it.each([
     });
     const deliveryFailure = new Error("Replacement committed but its reply was lost");
     const missingReceipt = fault === "lost result and commit receipt after final grant";
+    const observerFailure = fault === "post-commit observer failure";
     const callbackFails = fault === "unknown native settlement and lifecycle callback failure";
     const nativeUnknown = fault === "unknown native settlement after commit" || callbackFails;
     const callbackFailure = new Error("Replacement lifecycle callback failed after native commit");
     const committedLifecycle = vi.fn(() => {
+      if (observerFailure) {
+        throw deliveryFailure;
+      }
       if (callbackFails) {
         throw callbackFailure;
       }
@@ -583,7 +603,7 @@ it.each([
                   }
                   verifiedCommits++;
                   injected = true;
-                  if (!nativeUnknown) {
+                  if (!nativeUnknown && !observerFailure) {
                     throw deliveryFailure;
                   }
                   return result;

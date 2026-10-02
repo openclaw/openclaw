@@ -236,7 +236,6 @@ describe("resolveNpmChannelTag", () => {
           runCommand,
         }),
       ).resolves.toEqual({
-        target: "latest",
         version: "1.0.4",
         nodeEngine: ">=22.19.0",
       });
@@ -281,7 +280,6 @@ describe("resolveNpmChannelTag", () => {
         runCommand: npm12RunCommand,
       }),
     ).resolves.toEqual({
-      target: "latest",
       version: "2026.7.1",
       nodeEngine: ">=22.22.3",
       schemaVersions: { state: 3, agent: 11 },
@@ -348,7 +346,6 @@ describe("resolveNpmChannelTag", () => {
             },
           }),
         ).resolves.toEqual({
-          target: "latest",
           version: "2026.6.6",
           nodeEngine: ">=22.19.0",
           schemaVersions: { state: 1, agent: 1 },
@@ -381,7 +378,6 @@ describe("resolveNpmChannelTag", () => {
     await expect(
       fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 }),
     ).resolves.toEqual({
-      target: "latest",
       version: "2026.6.8",
       nodeEngine: ">=22.19.0",
       schemaVersions: { state: 1, agent: 1 },
@@ -418,7 +414,6 @@ describe("resolveNpmChannelTag", () => {
       await vi.advanceTimersByTimeAsync(2000);
 
       await expect(resultPromise).resolves.toMatchObject({
-        target: "latest",
         version: null,
         nodeEngine: null,
         error: "TimeoutError: request timed out",
@@ -443,7 +438,6 @@ describe("resolveNpmChannelTag", () => {
     await expect(
       fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 }),
     ).resolves.toEqual({
-      target: "latest",
       version: null,
       nodeEngine: null,
       error: "HTTP 503",

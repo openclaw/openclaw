@@ -18,17 +18,10 @@ import {
   LOG_RECORD_EXPORT_FAILURE_REPORT_INTERVAL_MS,
   MAX_OTEL_LOG_BODY_CHARS,
 } from "./service-constants.js";
-import {
-  normalizeOtelLogString,
-  type OtelContentCapturePolicy,
-} from "./service-content-normalization.js";
+import { normalizeOtelLogString } from "./service-content-normalization.js";
 import { observeOtlpExporterHealth, type ExporterHealthUpdate } from "./service-exporter-health.js";
 import { errorCategory, formatError } from "./service-exporter.js";
-import {
-  addTraceAttributes,
-  contextForTrustedTraceContext,
-  normalizedTrustedTraceContext,
-} from "./service-trace-context.js";
+import { contextForTraceContext, normalizedTrustedTraceContext } from "./service-trace-context.js";
 import type {
   BuiltOtelLogRecord,
   OtelHttpAgentFactory,
@@ -46,7 +39,7 @@ const LOG_SEVERITY_MAP: Record<string, SeverityNumber> = {
 };
 
 export function createDiagnosticsLogExporter(params: {
-  contentCapturePolicy: OtelContentCapturePolicy;
+  captureContent: boolean;
   emitExporterEvent: (event: ExporterHealthUpdate) => void;
   flushIntervalMs?: number;
   headers?: Record<string, string>;
@@ -60,7 +53,7 @@ export function createDiagnosticsLogExporter(params: {
   serviceName: string;
 }) {
   const {
-    contentCapturePolicy,
+    captureContent,
     emitExporterEvent,
     flushIntervalMs,
     headers,
@@ -184,7 +177,7 @@ export function createDiagnosticsLogExporter(params: {
     ): BuiltOtelLogRecord => {
       const logLevelName = evt.level || "INFO";
       const severityNumber = LOG_SEVERITY_MAP[logLevelName] ?? (9 as SeverityNumber);
-      const body = contentCapturePolicy.logBodies
+      const body = captureContent
         ? normalizeOtelLogString(evt.message || "log", MAX_OTEL_LOG_BODY_CHARS)
         : "log";
       const attributes = Object.create(null) as Record<string, string | number | boolean>;
@@ -203,7 +196,9 @@ export function createDiagnosticsLogExporter(params: {
         assignOtelLogAttribute(attributes, "code.function", evt.code.functionName);
       }
       const traceContext = normalizedTrustedTraceContext(evt, metadata);
-      addTraceAttributes(attributes, traceContext);
+      if (traceContext?.traceFlags) {
+        attributes["openclaw.traceFlags"] = traceContext.traceFlags;
+      }
 
       const logRecord: LogRecord = {
         body,
@@ -212,7 +207,7 @@ export function createDiagnosticsLogExporter(params: {
         attributes: redactOtelAttributes(attributes),
         timestamp: evt.ts,
       };
-      const logContext = contextForTrustedTraceContext(evt, metadata);
+      const logContext = contextForTraceContext(traceContext);
       if (logContext) {
         logRecord.context = logContext;
       }
@@ -235,7 +230,7 @@ export function createDiagnosticsLogExporter(params: {
         attributes: redactOtelAttributes(attributes),
         timestamp: evt.ts,
       };
-      const logContext = contextForTrustedTraceContext(evt, metadata);
+      const logContext = contextForTraceContext(traceContext);
       if (logContext) {
         logRecord.context = logContext;
       }

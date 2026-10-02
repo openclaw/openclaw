@@ -55,12 +55,10 @@ enum PushRelayRegistrationStore {
     }
 
     static func loadAppAttestKeyID(scope: AppAttestScope) -> String? {
-        let value = GenericPasswordKeychainStore.loadString(
+        GenericPasswordKeychainStore.loadString(
             service: self.service,
             account: self.scopedAccount(self.appAttestKeyIDAccount, scope: scope))?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if value?.isEmpty == false { return value }
-        return nil
+            .trimmedNonEmpty
     }
 
     @discardableResult
@@ -79,12 +77,10 @@ enum PushRelayRegistrationStore {
     }
 
     static func loadAttestedKeyID(scope: AppAttestScope) -> String? {
-        let value = GenericPasswordKeychainStore.loadString(
+        GenericPasswordKeychainStore.loadString(
             service: self.service,
             account: self.scopedAccount(self.appAttestedKeyIDAccount, scope: scope))?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if value?.isEmpty == false { return value }
-        return nil
+            .trimmedNonEmpty
     }
 
     @discardableResult

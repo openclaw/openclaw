@@ -24,6 +24,7 @@ import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agen
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
+import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
 import { listSessionEntriesReadOnly } from "./session-accessor.sqlite-entry-list.read.js";
 import {
   loadSessionEntry,
@@ -58,10 +59,11 @@ import type {
   SessionExactEntriesWorkerResult,
   SessionExactEntriesWorkerSelection,
   SessionHistoryWorkerDatabase,
+  SessionEntryListWorkerInput,
 } from "./session-transcript-worker.types.js";
 import type { SessionEntry } from "./types.js";
 
-function captureSessionEntryReadScope(input: SessionEntryReadScope) {
+export function captureSessionEntryReadScope(input: SessionEntryReadScope) {
   const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const scope = {
@@ -75,7 +77,10 @@ function captureSessionEntryReadScope(input: SessionEntryReadScope) {
   return { scope, env, agentId };
 }
 
-function isNativeSessionEntryRead(scope: SessionEntryReadScope, agentId: string | undefined) {
+export function isNativeSessionEntryRead(
+  scope: SessionEntryReadScope,
+  agentId: string | undefined,
+) {
   const storePath = scope.storePath;
   return Boolean(
     isIncognitoSessionKey(scope.sessionKey) ||
@@ -298,15 +303,23 @@ type SessionStoreWorkerReadScope = {
 };
 
 /** Read descriptive summaries through the original store selection and reader lifetime. */
-export async function readSessionEntrySummariesInWorker(input: SessionStoreWorkerReadScope) {
+export async function readSessionEntrySummariesInWorker(
+  input: Omit<SessionStoreWorkerReadScope, "agentId"> &
+    Pick<SessionEntryListWorkerInput["scope"], "agentId" | "cleanupSession">,
+) {
   const { scope, agentId } = captureSessionEntryReadScope({ ...input, sessionKey: "" });
   if (isNativeSessionEntryRead(scope, agentId)) {
     // Process-held transcripts keep their existing native reader until its worker cutover.
     return listSessionEntriesReadOnly({
       ...scope,
+      clone: false,
       projection: "list",
       hydrateSkillPromptRefs: false,
-    });
+    })
+      .filter(({ sessionKey, entry }) =>
+        matchesPluginHostCleanupSession(sessionKey, entry, input.cleanupSession),
+      )
+      .map(({ sessionKey, entry }) => ({ sessionKey, entry: structuredClone(entry) }));
   }
   return withSessionStoreReaderInWorker(
     { ...input, env: scope.env, storePath: scope.storePath ?? input.storePath },
@@ -318,6 +331,7 @@ export async function readSessionEntrySummariesInWorker(input: SessionStoreWorke
           storePath: database.path,
           env: database.env,
           projection: "list",
+          cleanupSession: input.cleanupSession,
           hydrateSkillPromptRefs: false,
         },
         continuation,

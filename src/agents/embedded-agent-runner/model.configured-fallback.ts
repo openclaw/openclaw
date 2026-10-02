@@ -14,7 +14,7 @@ import {
   resolveProviderRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "../provider-request-config.js";
-import { mergeModelMediaInput, resolveConfiguredFallbackReasoning } from "./model.compat.js";
+import { mergeModelMediaInput, resolveMergedConfiguredModelReasoning } from "./model.compat.js";
 import {
   clampModelMaxTokensToContextWindow,
   hasConfiguredModelRouteSupport,
@@ -48,7 +48,7 @@ export function buildConfiguredFallbackModel(params: {
   workspaceDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model | undefined {
-  const { provider, modelId, cfg, agentDir, workspaceDir, runtimeHooks } = params;
+  const { provider, modelId, cfg, workspaceDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
   const configuredModel = findConfiguredProviderModel(
@@ -77,9 +77,7 @@ export function buildConfiguredFallbackModel(params: {
     stripSecretRefMarkers: true,
   });
   const resolvedParams = mergeConfiguredRuntimeModelParams({
-    cfg,
-    provider,
-    modelId,
+    ...params,
     discoveredParams: staticCatalogModel?.params,
     providerParams: providerConfig?.params,
     configuredParams: configuredModel?.params,
@@ -99,11 +97,8 @@ export function buildConfiguredFallbackModel(params: {
       manifestAliasTransport?.api ??
       normalizeResolvedTransportApi(staticCatalogModel?.api) ??
       resolveConfiguredProviderDefaultApi({
-        provider,
+        ...params,
         providerConfig,
-        cfg,
-        workspaceDir,
-        runtimeHooks,
       }) ??
       "openai-responses",
     baseUrl:
@@ -128,19 +123,13 @@ export function buildConfiguredFallbackModel(params: {
   const fallbackCompat = resolveCatalogOwnedModelCompat({
     ...(staticCatalogModel ? { catalogRoute: staticCatalogModel } : {}),
     catalogCompat: staticCatalogModel?.compat,
-    configuredRoute: {
-      api: fallbackTransport.api,
-      baseUrl: fallbackTransport.baseUrl,
-    },
+    configuredRoute: fallbackTransport,
     configuredCompat: configuredModel?.compat,
   });
   if (
     configuredModel &&
     shouldSuppressConfiguredModel({
-      provider,
-      modelId,
-      cfg,
-      workspaceDir,
+      ...params,
       baseUrl: fallbackTransport.baseUrl,
     })
   ) {
@@ -161,10 +150,10 @@ export function buildConfiguredFallbackModel(params: {
     capability: "llm",
     transport: "stream",
   });
-  const fallbackReasoning = resolveConfiguredFallbackReasoning({
+  const fallbackReasoning = resolveMergedConfiguredModelReasoning({
     provider,
     compat: fallbackCompat,
-    reasoning: metadataModel?.reasoning,
+    configuredReasoning: metadataModel?.reasoning,
   });
   const configuredFallbackMaxTokens = configuredModel?.maxTokens ?? providerConfig?.maxTokens;
   const resolvedFallbackMaxTokens = configuredFallbackMaxTokens ?? staticCatalogModel?.maxTokens;
@@ -175,10 +164,7 @@ export function buildConfiguredFallbackModel(params: {
     resolvedFallbackContextWindow,
   );
   return normalizeResolvedModel({
-    provider,
-    cfg,
-    agentDir,
-    workspaceDir,
+    ...params,
     model: attachModelProviderRequestRouteFacts(
       attachModelProviderLocalService(
         attachModelProviderRequestTransport(
@@ -199,11 +185,9 @@ export function buildConfiguredFallbackModel(params: {
               ? { thinkingLevelMap: configuredModel.thinkingLevelMap }
               : {}),
             cost: mergeConfiguredModelCost({
-              provider,
-              cfg,
+              ...params,
               configuredModel,
               catalogCost: staticCatalogModel?.cost,
-              providerMetadataOwners: params.providerMetadataOwners,
             }),
             contextWindow: resolvedFallbackContextWindow,
             contextTokens: configuredModel?.contextTokens ?? staticCatalogModel?.contextTokens,
@@ -231,6 +215,5 @@ export function buildConfiguredFallbackModel(params: {
       ),
       params.providerMetadataOwners,
     ),
-    runtimeHooks,
   });
 }

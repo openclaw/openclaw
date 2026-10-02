@@ -119,7 +119,11 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
     throw error;
   });
   assertCurrent();
-  const { step, require: command, run } = createGitHubPublicationCommandRunner(assertCurrent);
+  const {
+    step,
+    require: command,
+    run,
+  } = createGitHubPublicationCommandRunner(assertCurrent, "session.materialize");
   const cloneOptions = { signal: params.signal, token: github?.token, assertCurrent };
   const source = { url: repository.url, target: project.repoRoot };
   const remoteHead = await step(() =>

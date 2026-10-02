@@ -482,13 +482,9 @@ export function createControlUiHandlers(
                   .has(client.connId) === true,
             })
           : undefined;
-        const currentBinding = async () => {
-          if (!client) {
-            return await prepareCheckDetailsSession(parsed.sessionKey, context, client);
-          }
-          return (await reader?.()) ?? null;
-        };
-        const binding = await currentBinding();
+        const binding = client
+          ? ((await reader?.()) ?? null)
+          : await prepareCheckDetailsSession(parsed.sessionKey, context, client);
         if (!binding) {
           throw new gitHubPublicApi.ControlUiGitHubError(404, "Session CI details unavailable");
         }

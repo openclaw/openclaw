@@ -1,7 +1,6 @@
 // Imessage tests cover monitor.last route plugin behavior.
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
@@ -10,6 +9,8 @@ import {
   recordInboundSession,
   type ensureConfiguredBindingRouteReady,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createTestRegistry,
   resetPluginRuntimeStateForTest,
@@ -19,6 +20,7 @@ import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-s
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,6 +30,14 @@ import {
   normalizeIMessageAcpConversationId,
 } from "./conversation-id.js";
 import { monitorIMessageProvider } from "./monitor.js";
+import {
+  createChatDb,
+  createChatDbMessage,
+  DEFAULT_SENDER,
+  insertChatDbMessage,
+  readChatDbMessagesAfter,
+  withChatDb,
+} from "./monitor.last-route.test-support.js";
 import * as iMessageMediaStaging from "./monitor/media-staging.js";
 import {
   advanceIMessageRecoveryCursor,
@@ -42,7 +52,6 @@ import {
 import type { probeIMessagePrivateApi } from "./probe.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
-const DEFAULT_SENDER = "+15550001111";
 const ANCHOR_REPAIR_GUID = "11111111-1111-4111-8111-111111111111";
 const WATCH_SUBSCRIBE_PARAMS = { attachments: false, include_reactions: true } as const;
 const WATCH_SUBSCRIBE_OPTIONS = { timeoutMs: 10_000 } as const;
@@ -55,9 +64,6 @@ type IMessageTestRequest = (method: string, params?: Record<string, unknown>) =>
 type IMessageTestRequestResult =
   | Record<string, unknown>
   | ((params?: Record<string, unknown>) => unknown);
-type ChatDbMessage = Required<
-  Pick<IMessagePayload, "id" | "guid" | "sender" | "text" | "created_at">
->;
 type MonitorRunParams = {
   accountId?: string;
   imessage?: Record<string, unknown>;
@@ -93,59 +99,6 @@ function createIMessageTestRequest(
 async function settleNotifications(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
-}
-
-function withChatDb<T>(dbPath: string, run: (database: DatabaseSync) => T): T {
-  const database = new DatabaseSync(dbPath);
-  try {
-    return run(database);
-  } finally {
-    database.close();
-  }
-}
-
-function createChatDbMessage(
-  id: number,
-  guid: string,
-  text: string,
-  createdAt = new Date().toISOString(),
-): ChatDbMessage {
-  return { id, guid, sender: DEFAULT_SENDER, text, created_at: createdAt };
-}
-
-const CHAT_DB_SCHEMA = "CREATE TABLE message (guid TEXT, sender TEXT, text TEXT, created_at TEXT);";
-const CHAT_DB_INSERT =
-  "INSERT INTO message(rowid, guid, sender, text, created_at) VALUES (?, ?, ?, ?, ?)";
-
-function createChatDb(dbPath: string, messages: ChatDbMessage[] = []): void {
-  withChatDb(dbPath, (database) => {
-    database.exec(CHAT_DB_SCHEMA);
-    const insert = database.prepare(CHAT_DB_INSERT);
-    for (const message of messages) {
-      insert.run(message.id, message.guid, message.sender, message.text, message.created_at);
-    }
-  });
-}
-
-function insertChatDbMessage(dbPath: string, message: ChatDbMessage): void {
-  withChatDb(dbPath, (database) => {
-    database
-      .prepare(CHAT_DB_INSERT)
-      .run(message.id, message.guid, message.sender, message.text, message.created_at);
-  });
-}
-
-function readChatDbMessagesAfter(dbPath: string, rowid: number): IMessagePayload[] {
-  return withChatDb(dbPath, (database) => {
-    const messages = database
-      .prepare(
-        "SELECT rowid AS id, guid, sender, text, created_at FROM message WHERE rowid > ? ORDER BY rowid",
-      )
-      .all(rowid) as ChatDbMessage[];
-    return messages.map((message) =>
-      Object.assign(message, { chat_id: 123, is_from_me: false, is_group: false }),
-    );
-  });
 }
 
 function expireCachedPrivateApiStatus(): void {
@@ -591,6 +544,7 @@ describe("iMessage monitor last-route updates", () => {
 
   async function runIMessageMonitor(params: MonitorRunParams = {}): Promise<void> {
     await monitorIMessageProvider({
+      scheduler: createTestPluginServiceScheduler(),
       ...(params.accountId ? { accountId: params.accountId } : {}),
       config: {
         channels: {
@@ -725,25 +679,33 @@ describe("iMessage monitor last-route updates", () => {
     ).toBe(false);
   });
 
-  it("waits for configured ACP target readiness before dispatching an authorized message", async () => {
-    let releaseReadiness: ((value: { ok: true }) => void) | undefined;
-    ensureConfiguredBindingRouteReadyMock.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          releaseReadiness = resolve;
-        }),
-    );
+  it("waits for configured ACP target readiness before dispatching an authorized message", async ({
+    signal,
+  }) => {
+    const readiness = createDeferred<{ ok: true }>();
+    const readinessEntered = createDeferred<void>();
+    const dispatchEntered = createDeferred<void>();
+    ensureConfiguredBindingRouteReadyMock.mockImplementationOnce(() => {
+      readinessEntered.resolve();
+      return readiness.promise;
+    });
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async () => {
+      dispatchEntered.resolve();
+      return EMPTY_DISPATCH_RESULT;
+    });
     createIMessageWatchClient({
       onClose: async (notify) => {
         notify(createInboundMessage({ id: 81, guid: "acp-ready-81", text: "start the agent" }));
-        await vi.waitFor(() => {
+        try {
+          await withinTest(readinessEntered.promise, signal);
           expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
-        });
-        expect(dispatchReplyWithBufferedBlockDispatcherMock).not.toHaveBeenCalled();
-        releaseReadiness?.({ ok: true });
-        await vi.waitFor(() => {
+          expect(dispatchReplyWithBufferedBlockDispatcherMock).not.toHaveBeenCalled();
+          readiness.resolve({ ok: true });
+          await withinTest(dispatchEntered.promise, signal);
           expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
-        });
+        } finally {
+          readiness.resolve({ ok: true });
+        }
       },
     });
 

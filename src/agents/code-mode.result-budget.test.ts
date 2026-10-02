@@ -105,7 +105,9 @@ async function dispatch(
   });
   const activeSession = {
     isCompacting: false,
-    [agentSessionQueuePromptContext]: () => () => undefined,
+    [agentSessionQueuePromptContext]: () => {
+      throw new Error("Unexpected prompt context in the result-budget probe");
+    },
     agent,
     get messages() {
       return agent.state.messages;

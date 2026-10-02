@@ -85,12 +85,8 @@ import {
   resolveExecHostApprovalContext,
   sendExecApprovalFollowupResult,
 } from "./bash-tools.exec-host-shared.js";
-import { appendExecTimeoutRetryGuidance } from "./bash-tools.exec-output.js";
-import {
-  createApprovalSlug,
-  normalizeNotifyOutput,
-  runExecProcess,
-} from "./bash-tools.exec-runtime.js";
+import { appendExecTimeoutRetryGuidance, normalizeNotifyOutput } from "./bash-tools.exec-output.js";
+import { createApprovalSlug, runExecProcess } from "./bash-tools.exec-runtime.js";
 import type {
   ExecApprovalFollowupFactory,
   ExecApprovalFollowupOutcome,

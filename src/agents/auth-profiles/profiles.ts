@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
-import { removePersistedPluginModelCatalogCredentials } from "../plugin-model-catalog.js";
+import { removePersistedPluginModelCatalogCredentials } from "../plugin-model-catalog-credentials.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import {
   listCandidateAuthProfileStores,
@@ -20,6 +20,7 @@ import {
   type OAuthRefreshGenerationPeer,
 } from "./oauth-refresh-peers.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
+import { preparePersonalAuthProfileUsage } from "./personal-usage.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import { removeRuntimeExternalProfileReferences } from "./runtime-external-profile-references.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
@@ -432,58 +433,63 @@ async function removeAuthProfileTargetsWithLocks(
         return { kind: "retry" };
       }
     }
-    // Scrub first so a failed catalog write leaves the saved profile available
-    // for a retry. Only captured secret values are removed, never other accounts.
-    for (const candidate of catalogStores) {
-      await removePersistedPluginModelCatalogCredentials({ ...candidate, credentials });
-    }
-
-    removeOAuthRefreshGenerationPeers(await prepareAuthProfileRemovalPeers(targets, cfg));
-
-    const stores: AuthProfileStore[] = [];
     const restoreRemovedStores: Array<() => void> = [];
-    for (const target of targets) {
-      let stale = false;
-      let publishRemoval: (() => boolean) | undefined;
-      const updated = await updateAuthProfileStoreWithLock({
-        agentDir: target.agentDir,
-        updater: (store) => {
-          if (!authProfileRemovalTargetMatches(target, store)) {
-            stale = true;
-            return false;
-          }
-          const before = captureAuthProfileStorePersistenceSnapshot(target.agentDir);
-          if (!removeProfileReferences(store, target.profileIds, target.provider)) {
-            return false;
-          }
-          const saved = saveAuthProfileStoreIfPersistenceSnapshotMatches({
-            store,
-            snapshot: before,
-            agentDir: target.agentDir,
-          });
-          restoreRemovedStores.push(() =>
-            restoreAuthProfileStorePersistenceSnapshot(before, saved.owned, target.agentDir),
-          );
-          publishRemoval = saved.publishRuntimeSnapshots;
-          // The guarded save supplies the exact compensation receipt.
-          return false;
-        },
-      });
-      if (updated === null) {
-        return { kind: "contention" };
-      }
-      if (stale) {
-        return { kind: "retry" };
-      }
-      publishRemoval?.();
-      stores.push(updated);
-    }
+    const stores: AuthProfileStore[] = [];
+    let result: AuthProfileRemovalResult = { kind: "updated", stores };
+    let removalFailure: { error: unknown } | undefined;
     try {
-      for (const candidate of catalogStores) {
-        await removePersistedPluginModelCatalogCredentials({ ...candidate, credentials });
+      removeOAuthRefreshGenerationPeers(await prepareAuthProfileRemovalPeers(targets, cfg));
+
+      for (const target of targets) {
+        let stale = false;
+        let publishRemoval: (() => boolean) | undefined;
+        const updated = await updateAuthProfileStoreWithLock({
+          agentDir: target.agentDir,
+          updater: (store) => {
+            if (!authProfileRemovalTargetMatches(target, store)) {
+              stale = true;
+              return false;
+            }
+            const before = captureAuthProfileStorePersistenceSnapshot(target.agentDir);
+            if (!removeProfileReferences(store, target.profileIds, target.provider)) {
+              return false;
+            }
+            const saved = saveAuthProfileStoreIfPersistenceSnapshotMatches({
+              store,
+              snapshot: before,
+              agentDir: target.agentDir,
+            });
+            restoreRemovedStores.push(() =>
+              restoreAuthProfileStorePersistenceSnapshot(before, saved.owned, target.agentDir),
+            );
+            publishRemoval = saved.publishRuntimeSnapshots;
+            // The guarded save supplies the exact compensation receipt.
+            return false;
+          },
+        });
+        if (updated === null) {
+          result = { kind: "contention" };
+          break;
+        }
+        if (stale) {
+          result = { kind: "retry" };
+          break;
+        }
+        publishRemoval?.();
+        stores.push(updated);
       }
     } catch (error) {
-      const failures: unknown[] = [error];
+      removalFailure = { error };
+    }
+    try {
+      // Publication rechecks captured auth, so one scrub after deletion also
+      // covers refreshes that were planned before logout. Failure restores auth.
+      await removePersistedPluginModelCatalogCredentials({
+        candidates: catalogStores,
+        credentials,
+      });
+    } catch (error) {
+      const failures: unknown[] = removalFailure ? [removalFailure.error, error] : [error];
       for (let index = restoreRemovedStores.length - 1; index >= 0; index -= 1) {
         try {
           restoreRemovedStores[index]?.();
@@ -508,7 +514,10 @@ async function removeAuthProfileTargetsWithLocks(
         { cause: error },
       );
     }
-    return { kind: "updated", stores };
+    if (removalFailure) {
+      throw removalFailure.error;
+    }
+    return result;
   });
 }
 
@@ -651,32 +660,40 @@ export async function markAuthProfileSuccess(params: {
   const updatesSelection = !inherited && !personal;
   const lastUsed = Date.now();
   let applied = false;
-  const updated = await updateAuthProfileStoreWithLock({
-    agentDir: ownerAgentDir,
-    profileId,
-    updater: (freshStore) => {
-      const freshProfile = freshStore.profiles[profileId];
-      if (
-        !freshProfile ||
-        freshProfile.setup?.replacement ||
-        resolveProviderIdForAuth(freshProfile.provider) !== providerKey
-      ) {
-        return false;
-      }
-      // Inherited selection ownership is not defined. Clear shared health in
-      // the credential owner without changing its last-good or rotation state.
-      if (updatesSelection) {
-        freshStore.lastGood = replaceProviderAuthState(freshStore.lastGood, providerKey, profileId);
-      }
-      freshStore.usageStats ??= {};
-      freshStore.usageStats[profileId] = resetAuthProfileFailureState(
-        freshStore.usageStats[profileId] ?? {},
-        { lastProbeAt: Date.now(), ...(inherited ? {} : { lastUsed }) },
-      );
-      applied = true;
-      return true;
-    },
-  });
+  const updated = personal
+    ? await preparePersonalAuthProfileUsage(store, profileId)
+        .record({ kind: "success", expectedProfile: profile, lastUsed })
+        .then((result) => (result === null ? null : store))
+    : await updateAuthProfileStoreWithLock({
+        agentDir: ownerAgentDir,
+        profileId,
+        updater: (freshStore) => {
+          const freshProfile = freshStore.profiles[profileId];
+          if (
+            !freshProfile ||
+            freshProfile.setup?.replacement ||
+            resolveProviderIdForAuth(freshProfile.provider) !== providerKey
+          ) {
+            return false;
+          }
+          // Inherited selection ownership is not defined. Clear shared health in
+          // the credential owner without changing its last-good or rotation state.
+          if (updatesSelection) {
+            freshStore.lastGood = replaceProviderAuthState(
+              freshStore.lastGood,
+              providerKey,
+              profileId,
+            );
+          }
+          freshStore.usageStats ??= {};
+          freshStore.usageStats[profileId] = resetAuthProfileFailureState(
+            freshStore.usageStats[profileId] ?? {},
+            { lastProbeAt: Date.now(), ...(inherited ? {} : { lastUsed }) },
+          );
+          applied = true;
+          return true;
+        },
+      });
   if (updated && applied) {
     const usage = updated.usageStats?.[profileId];
     if (usage) {

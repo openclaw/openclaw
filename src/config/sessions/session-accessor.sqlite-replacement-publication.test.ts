@@ -1,6 +1,8 @@
+import "./session-accessor.sqlite-replacement-publication.test-support.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSessionMembershipProjection } from "../../gateway/session-membership-projection.js";
 import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
+import * as logging from "../../logging/logger.js";
 import {
   onSessionIdentityMutation,
   type SessionIdentityMutation,
@@ -35,55 +37,12 @@ import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js"
 import { addSessionMember } from "./session-sharing-store.native.js";
 import type { InternalSessionEntry } from "./types.js";
 
-// The canonical executor still owns real SQL, admission, and settlement; only reply delivery changes.
-const delivery = vi.hoisted(() => ({
-  afterResult: undefined as (() => void | Promise<void>) | undefined,
-  releaseFailure: undefined as Error | undefined,
-  afterRelease: undefined as (() => Promise<void>) | undefined,
-}));
-vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>();
-  return {
-    ...actual,
-    captureOpenClawAgentDatabaseExecution: (
-      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
-    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
-      const owned = actual.captureOpenClawAgentDatabaseExecution(...args);
-      return {
-        ...owned,
-        runExisting: (source, operation, options) =>
-          owned.runExisting(
-            source,
-            (scope) =>
-              operation({
-                execute: async (command, commandOptions) => {
-                  const result = await scope.execute(command, commandOptions);
-                  if (command.type === "session.entries.replace") {
-                    await delivery.afterResult?.();
-                  }
-                  return result;
-                },
-              }),
-            options,
-          ),
-        release: async () => {
-          await owned.release();
-          const afterRelease = delivery.afterRelease;
-          delivery.afterRelease = undefined;
-          await afterRelease?.();
-          if (delivery.releaseFailure) {
-            throw delivery.releaseFailure;
-          }
-        },
-      };
-    },
-  };
-});
+const { getReplacementPublicationDelivery } =
+  await import("./session-accessor.sqlite-replacement-publication.test-support.js");
+const delivery = getReplacementPublicationDelivery();
 
 afterEach(() => {
-  delivery.afterResult = undefined;
-  delivery.releaseFailure = undefined;
-  delivery.afterRelease = undefined;
+  vi.restoreAllMocks();
 });
 
 it("settles publication before a successor writer and preserves metadata after worker retirement", async () => {
@@ -143,6 +102,19 @@ it.each([
   "late writer",
 ] as const)("preserves replacement publication through %s", async (boundary) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cleanupWarnings: unknown[][] = [];
+    const getChildLogger = logging.getChildLogger;
+    vi.spyOn(logging, "getChildLogger").mockImplementation((...args) => {
+      const logger = getChildLogger(...args);
+      const warn = logger.warn.bind(logger);
+      vi.spyOn(logger, "warn").mockImplementation((...values) => {
+        if (values[0] === "Session mutation completed before executor cleanup failed") {
+          cleanupWarnings.push(values);
+        }
+        return warn(...values);
+      });
+      return logger;
+    });
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const options = { agentId: "main", path: database.path };
     const sessionKey = "agent:main:replacement-settlement";
@@ -277,11 +249,7 @@ it.each([
           };
         },
       });
-      if (
-        boundary === "lost result" ||
-        boundary === "callback failure" ||
-        boundary === "release failure"
-      ) {
+      if (boundary === "lost result" || boundary === "callback failure") {
         await expect(operation).rejects.toBe(failure);
       } else {
         await operation;
@@ -298,6 +266,16 @@ it.each([
         });
       }
       expect(executions).toBe(1);
+      expect(cleanupWarnings).toEqual(
+        boundary === "release failure"
+          ? [
+              [
+                "Session mutation completed before executor cleanup failed",
+                { errors: [failure.message] },
+              ],
+            ]
+          : [],
+      );
       if (metadataOnly) {
         expect(whileWaiting).toMatchObject({
           entry: { visibility: "shared" },

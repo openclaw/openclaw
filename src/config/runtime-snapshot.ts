@@ -4,7 +4,7 @@ import { clearExecutablePathCache } from "../infra/executable-path.js";
 import { prepareRuntimePluginsConfig } from "../plugins/config-state.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
-import { notifyListeners } from "../shared/listeners.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 import {
   resetPublishedConfigRuntimeEnv,
   type PreparedConfigRuntimeEnv,
@@ -169,19 +169,6 @@ export function hashRuntimeConfigValue(value: OpenClawConfig): string {
   return fingerprint;
 }
 
-function createRuntimeConfigSnapshotMetadata(
-  config: OpenClawConfig,
-  sourceConfig?: OpenClawConfig,
-): RuntimeConfigSnapshotMetadata {
-  runtimeConfigSnapshotRevision += 1;
-  return {
-    revision: runtimeConfigSnapshotRevision,
-    fingerprint: hashRuntimeConfigValue(config),
-    sourceFingerprint: sourceConfig ? hashRuntimeConfigValue(sourceConfig) : null,
-    updatedAtMs: Date.now(),
-  };
-}
-
 export function setRuntimeConfigSnapshot(
   config: OpenClawConfig,
   sourceConfig?: OpenClawConfig,
@@ -207,7 +194,12 @@ function publishRuntimeConfigSnapshot(
   sourceConfig?: OpenClawConfig,
   valuesUnchanged = false,
 ): void {
-  const metadata = createRuntimeConfigSnapshotMetadata(config, sourceConfig);
+  const metadata: RuntimeConfigSnapshotMetadata = {
+    revision: ++runtimeConfigSnapshotRevision,
+    fingerprint: hashRuntimeConfigValue(config),
+    sourceFingerprint: sourceConfig ? hashRuntimeConfigValue(sourceConfig) : null,
+    updatedAtMs: Date.now(),
+  };
   const facts = serializeConfigResolutionFacts(config);
   // The live previous object may have been edited in place since it was published, so it cannot
   // classify the scope either: a narrow scope read from an edited object would leave rows built
@@ -448,10 +440,7 @@ export function getRuntimeConfigSnapshotRefreshHandler(): RuntimeConfigSnapshotR
 export function registerRuntimeConfigWriteListener(
   listener: (event: RuntimeConfigWriteNotification) => void,
 ): () => void {
-  runtimeConfigWriteListeners.add(listener);
-  return () => {
-    runtimeConfigWriteListeners.delete(listener);
-  };
+  return registerListener(runtimeConfigWriteListeners, listener);
 }
 
 export function registerManagedRuntimeConfigWriteOwner(
@@ -463,12 +452,7 @@ export function registerManagedRuntimeConfigWriteOwner(
   const owners = managedRuntimeConfigWriteOwners.get(configPath) ?? new Set();
   owners.add(owner);
   managedRuntimeConfigWriteOwners.set(configPath, owners);
-  let released = false;
   const unregister = () => {
-    if (released) {
-      return;
-    }
-    released = true;
     const currentOwners = managedRuntimeConfigWriteOwners.get(configPath);
     currentOwners?.delete(owner);
     if (!currentOwners || currentOwners.size === 0) {

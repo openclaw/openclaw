@@ -3,7 +3,6 @@
  * Merges persisted stores, runtime snapshots, inherited main-agent OAuth
  * profiles, and external CLI overlays while keeping save paths local.
  */
-import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -69,6 +68,7 @@ import {
   type AuthProfileReadOwner,
   type LoadAuthProfileStoreOptions,
 } from "./runtime-read.js";
+import { assertPersonalAuthProfileRuntime, authProfileRuntimeMode } from "./runtime-scope.js";
 import {
   captureRuntimeAuthProfileLegacyCandidates,
   pruneAuthProfileStoreReferences,
@@ -148,12 +148,6 @@ type SaveAuthProfileStoreOptions = {
   sharedStoreWrite?: boolean;
   syncExternalCli?: boolean;
 };
-
-type AuthProfileRuntimeMode =
-  | { kind: "env-only" }
-  | { kind: "agent-dir"; agentDir: string; sharedStore?: AuthProfileStore; env: NodeJS.ProcessEnv };
-
-const authProfileRuntimeMode = new AsyncLocalStorage<AuthProfileRuntimeMode>();
 
 /** Run a bounded operation without persisted or external CLI auth profiles. */
 export function withEnvOnlyAuthProfileStore<T>(run: () => T): T {
@@ -310,7 +304,6 @@ function shouldKeepProfileInLocalStore(params: {
   store: AuthProfileStore;
   profileId: string;
   credential: AuthProfileStore["profiles"][string];
-  agentDir?: string;
   options?: SaveAuthProfileStoreOptions;
   persistedStores: PersistedAuthProfileStores;
   externalProfiles: () => RuntimeExternalOAuthProfile[];
@@ -342,17 +335,12 @@ function shouldKeepProfileInLocalStore(params: {
   if (params.options?.filterExternalAuthProfiles === false) {
     return true;
   }
-  if (params.store.runtimeExternalProfileIds?.includes(params.profileId)) {
+  if (
+    params.store.runtimeExternalProfileIds?.includes(params.profileId) &&
+    !params.persistedStores.localStore?.profiles[params.profileId]
+  ) {
     // Runtime external profiles are normally overlays. Persist only when they
     // have explicit local state or differ from the runtime snapshot.
-    const persistedCredential = params.persistedStores.localStore?.profiles[params.profileId];
-    if (persistedCredential) {
-      return shouldPersistRuntimeExternalOAuthProfile({
-        profileId: params.profileId,
-        credential: params.credential,
-        profiles: params.externalProfiles(),
-      });
-    }
     const runtimeCredential = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(
       params.owner.databasePath,
     )?.profiles[params.profileId];
@@ -1023,7 +1011,6 @@ export function createAuthProfileStoreRuntime(
           store: params.store,
           profileId,
           credential,
-          agentDir: params.agentDir,
           options: params.options,
           persistedStores: params.persistedStores,
           externalProfiles: getExternalProfiles,
@@ -1078,11 +1065,7 @@ export function createAuthProfileStoreRuntime(
     const agentDir = resolveRuntimeAuthProfileAgentDir(params.agentDir);
     try {
       if (params.profileId && isUserModelAuthProfileId(params.profileId)) {
-        if (authProfileRuntimeMode.getStore()) {
-          throw new Error(
-            "Personal model accounts are unavailable in an isolated auth-store scope.",
-          );
-        }
+        assertPersonalAuthProfileRuntime();
         return updatePersonalAuthProfileStore({
           profileId: params.profileId,
           updater: params.updater,

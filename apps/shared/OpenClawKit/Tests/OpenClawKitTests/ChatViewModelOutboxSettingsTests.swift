@@ -343,4 +343,52 @@ struct ChatViewModelOutboxSettingsTests {
         #expect(await patchCalls.current() == 0)
         #expect(await store.loadCommands().first?.status == .queued)
     }
+
+    @Test @MainActor
+    func `settings failure parking keeps replacement session errors`() async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let parkingCalls = SettingsPatchCounter()
+        let failureParkingStarted = DeleteGate()
+        let failureParkingRelease = DeleteGate()
+        let outbox = ScriptedOutbox(base: store, parkingHook: {
+            await parkingCalls.increment()
+            guard await parkingCalls.current() == 2 else { return }
+            await failureParkingStarted.open()
+            await failureParkingRelease.wait()
+        })
+        let catalog = OpenClawChatComposerCapabilityCatalog(
+            sessionSettingsAvailable: true,
+            permissionMutationAvailable: true,
+            sessionSettingsCASAvailable: true)
+        let transport = OutboxTestTransport(
+            healthy: false,
+            composerCapabilityCatalog: catalog,
+            sessionSettingsPatchHook: {
+                throw NSError(
+                    domain: "ChatViewModelOutboxSettingsTests",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Restriction was not saved."])
+            })
+        let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
+        defer { vm.detachTransport() }
+        vm.sessions = [outboxSessionEntry(
+            key: "main", thinkingLevels: ["off"], sessionID: "session-main", permissionMode: .full)]
+        vm.sessionId = "session-main"
+        await vm.loadComposerCapabilities()
+        let target = vm.currentModelPatchTarget()
+
+        vm.selectComposerPermissionMode(.guarded)
+        await failureParkingStarted.wait()
+        vm.switchSession(to: "other")
+        await vm.bootstrapTask?.value
+        vm.errorText = "Other session error"
+        vm.composerCapabilityState.errorMessage = "Other capability error"
+        await failureParkingRelease.open()
+        await vm.waitForPendingSessionSettings(for: target)
+
+        #expect(vm.sessionKey == "other")
+        #expect(vm.errorText == "Other session error")
+        #expect(vm.composerCapabilityState.errorMessage == "Other capability error")
+    }
 }

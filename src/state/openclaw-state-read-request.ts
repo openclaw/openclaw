@@ -6,6 +6,23 @@ import type {
 } from "./openclaw-state-read.types.js";
 
 export function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
+  if (
+    command.type === "secrets.metadata" ||
+    command.type === "secrets.execEnvironment" ||
+    command.type === "secrets.value" ||
+    command.type === "sessionState.versions" ||
+    command.type === "sessionState.ambientTargets" ||
+    command.type === "sessionState.events" ||
+    command.type === "operatorApprovals.history" ||
+    command.type === "diagnostic.latest" ||
+    command.type === "operatorApprovals.listCronGrants" ||
+    command.type === "acpSessions.metadata" ||
+    command.type === "githubPublication.knownPullRequestUrls" ||
+    command.type === "githubRepository.knownPullRequestUrls" ||
+    command.type === "workers.placementProjection"
+  ) {
+    return structuredClone(command);
+  }
   if (isWorkspaceJournalReadCommand(command)) {
     return command.type === "placementJournals.owners"
       ? { ...command }
@@ -122,21 +139,6 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
   if (command.type === "devicePairing.bootstrapContext") {
     return { ...command, input: { ...command.input } };
   }
-  if (
-    command.type === "operatorApprovals.history" ||
-    command.type === "diagnostic.latest" ||
-    command.type === "operatorApprovals.listCronGrants"
-  ) {
-    return structuredClone(command);
-  }
-  if (
-    command.type === "acpSessions.metadata" ||
-    command.type === "githubPublication.knownPullRequestUrls" ||
-    command.type === "githubRepository.knownPullRequestUrls" ||
-    command.type === "workers.placementProjection"
-  ) {
-    return structuredClone(command);
-  }
   if (command.type === "pluginBlob.lookup") {
     const { pluginId, namespace, key } = command.input;
     return { type: command.type, input: { pluginId, namespace, key } };
@@ -201,8 +203,21 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
   return { ...command };
 }
 
+function stringBytes(values: readonly (string | undefined)[]): number {
+  return values.reduce((bytes, value) => bytes + Buffer.byteLength(value ?? "", "utf8"), 0);
+}
+
 function commandBytes(command: OpenClawStateReadRequest["command"]): number {
-  if (isWorkspaceJournalReadCommand(command)) {
+  if (
+    command.type === "secrets.execEnvironment" ||
+    command.type === "secrets.value" ||
+    command.type === "sessionState.versions" ||
+    command.type === "sessionState.ambientTargets" ||
+    command.type === "sessionState.events" ||
+    command.type === "workers.placementProjection" ||
+    command.type === "workers.placementPendingResults" ||
+    isWorkspaceJournalReadCommand(command)
+  ) {
     return Buffer.byteLength(JSON.stringify(command), "utf8");
   }
   let bytes = Buffer.byteLength(command.type, "utf8");
@@ -212,11 +227,11 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "cron.activeReceiptOwners") {
     return bytes + Buffer.byteLength(command.agentId, "utf8");
   }
+  if (command.type === "claws.packageOwnership") {
+    return bytes + Buffer.byteLength(command.agentId ?? "", "utf8");
+  }
   if (command.type === "workerPlacements.changeSnapshot") {
-    return (command.profileIds ?? []).reduce(
-      (total, profileId) => total + Buffer.byteLength(profileId, "utf8"),
-      bytes,
-    );
+    return bytes + stringBytes(command.profileIds ?? []);
   }
   if (command.type === "tui.lastSession.read") {
     return bytes + Buffer.byteLength(command.stateKey, "utf8");
@@ -228,10 +243,12 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     return command.entries.reduce(
       (total, input) =>
         total +
-        input.keys.reduce((sum, key) => sum + Buffer.byteLength(key, "utf8"), 0) +
-        Buffer.byteLength(input.legacyKey ?? "", "utf8") +
-        Buffer.byteLength(input.entry?.lifecycleRevision ?? "", "utf8") +
-        Buffer.byteLength(input.entry?.sessionId ?? "", "utf8") +
+        stringBytes([
+          ...input.keys,
+          input.legacyKey,
+          input.entry?.lifecycleRevision,
+          input.entry?.sessionId,
+        ]) +
         (input.entry?.sessionStartedAt === undefined ? 0 : 8),
       bytes,
     );
@@ -243,10 +260,7 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     return bytes + Buffer.byteLength(command.blobId, "utf8");
   }
   if (command.type === "cron.jobNames") {
-    return command.jobIds.reduce(
-      (sum, id) => sum + Buffer.byteLength(id, "utf8"),
-      bytes + Buffer.byteLength(command.storePath ?? "", "utf8"),
-    );
+    return bytes + stringBytes([command.storePath, ...command.jobIds]);
   }
   if (command.type === "cron.quarantine") {
     return bytes + Buffer.byteLength(command.storeKey, "utf8");
@@ -256,10 +270,7 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   }
   if (command.type === "sessionRepositoryWorkspaces.find") {
     return command.owners.reduce(
-      (total, owner) =>
-        total +
-        Buffer.byteLength(owner.agentId, "utf8") +
-        Buffer.byteLength(owner.sessionKey, "utf8"),
+      (total, owner) => total + stringBytes([owner.agentId, owner.sessionKey]),
       bytes,
     );
   }
@@ -276,29 +287,20 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     return (
       bytes +
       (command.scope.kind === "descendants"
-        ? command.scope.sessionKeys.reduce(
-            (total, key) => total + Buffer.byteLength(key, "utf8"),
-            0,
-          ) +
+        ? stringBytes(command.scope.sessionKeys) +
           command.scope.liveTopology.reduce(
-            (total, link) =>
-              total +
-              Buffer.byteLength(link.childSessionKey, "utf8") +
-              Buffer.byteLength(link.requesterSessionKey, "utf8"),
+            (total, link) => total + stringBytes([link.childSessionKey, link.requesterSessionKey]),
             0,
           )
         : command.scope.kind === "session"
           ? Buffer.byteLength(command.scope.sessionKey, "utf8")
           : command.scope.kind === "ids"
-            ? command.scope.runIds.reduce(
-                (total, runId) => total + Buffer.byteLength(runId, "utf8"),
-                0,
-              )
+            ? stringBytes(command.scope.runIds)
             : 0)
     );
   }
   if (command.type === "mcpOAuth.statuses") {
-    return command.input.reduce((total, key) => total + Buffer.byteLength(key, "utf8"), bytes);
+    return bytes + stringBytes(command.input);
   }
   if (
     command.type === "mcpOAuth.readOnly" ||
@@ -312,13 +314,7 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     return bytes + Buffer.byteLength(JSON.stringify(command.cfg), "utf8");
   }
   if (command.type === "conversationBindings.inspect") {
-    return (
-      bytes +
-      Object.values(command.conversation).reduce(
-        (sum, value) => sum + Buffer.byteLength(value ?? "", "utf8"),
-        0,
-      )
-    );
+    return bytes + stringBytes(Object.values(command.conversation));
   }
   if (command.type === "cron.currentReceipt") {
     return bytes + Buffer.byteLength(JSON.stringify(command.handle), "utf8") + 2;
@@ -418,9 +414,11 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     return bytes + Buffer.byteLength(command.runId, "utf8");
   }
   if (command.type === "updateRuns.reconciliationCandidates") {
-    return (command.input.runIds ?? []).reduce(
-      (total, runId) => total + Buffer.byteLength(runId, "utf8"),
-      bytes + 3 + (command.input.repairHistorySinceMs === undefined ? 0 : 8),
+    return (
+      bytes +
+      stringBytes(command.input.runIds ?? []) +
+      3 +
+      (command.input.repairHistorySinceMs === undefined ? 0 : 8)
     );
   }
   if (command.type === "updateRuns.list") {
@@ -437,8 +435,7 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     command.type === "skills.library.manifests"
   ) {
     return command.input.reduce(
-      (total, pin) =>
-        total + Buffer.byteLength(pin.skillId, "utf8") + Buffer.byteLength(pin.revision, "utf8"),
+      (total, pin) => total + stringBytes([pin.skillId, pin.revision]),
       bytes,
     );
   }
@@ -461,10 +458,7 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     return (
       bytes +
       Buffer.byteLength(command.profileId, "utf8") +
-      Object.values(command.expected).reduce(
-        (total, value) => total + Buffer.byteLength(value, "utf8"),
-        0,
-      )
+      stringBytes(Object.values(command.expected))
     );
   }
   if (command.type === "userProfiles.githubIdentity.cached") {
@@ -474,9 +468,10 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     command.type === "userProfiles.githubAttribution.resolve" ||
     command.type === "userPreferences.values"
   ) {
-    return command.profileIds.reduce(
-      (total, profileId) => total + Buffer.byteLength(profileId, "utf8"),
-      bytes + (command.type === "userPreferences.values" ? Buffer.byteLength(command.key) : 0),
+    return (
+      bytes +
+      stringBytes(command.profileIds) +
+      (command.type === "userPreferences.values" ? Buffer.byteLength(command.key) : 0)
     );
   }
   if (command.type === "userProfiles.channelIdentity.resolve") {
@@ -505,9 +500,6 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       (input.executionLimit === undefined ? 0 : 8)
     );
   }
-  if (command.type === "workers.placementProjection") {
-    return Buffer.byteLength(JSON.stringify(command), "utf8");
-  }
   if (command.type === "workerEnvironments.pruneCandidates") {
     return (
       bytes +
@@ -517,23 +509,21 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     );
   }
   if (command.type === "workerEnvironments.snapshot") {
-    return (
-      bytes + (command.ids?.reduce((total, id) => total + Buffer.byteLength(id, "utf8"), 0) ?? 0)
-    );
+    return bytes + stringBytes(command.ids ?? []);
   }
   return bytes;
 }
 
 export function requestBytes(request: OpenClawStateReadRequest): number {
-  return [
-    ...Object.entries(request.context.environment).flatMap(([key, value]) => [key, value]),
-    request.context.existingSchemaPath,
-    request.databasePath,
-    request.location,
-    request.expectedIdentity,
-    request.snapshotRoot,
-  ].reduce(
-    (bytes, value) => bytes + (value === undefined ? 0 : Buffer.byteLength(value, "utf8")),
-    commandBytes(request.command),
+  return (
+    commandBytes(request.command) +
+    stringBytes([
+      ...Object.entries(request.context.environment).flatMap(([key, value]) => [key, value]),
+      request.context.existingSchemaPath,
+      request.databasePath,
+      request.location,
+      request.expectedIdentity,
+      request.snapshotRoot,
+    ])
   );
 }

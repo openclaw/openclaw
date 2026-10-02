@@ -6,22 +6,28 @@ import { createToolingDependencyFixture } from "./tooling-dependencies.test-supp
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("bootstraps the opted-in entrypoint without linking dependencies", () => {
-  const fixture = createToolingDependencyFixture(tempDirs.make("openclaw-tooling-bootstrap-"));
-  const result = fixture.run();
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.stdout).toBe("qualified bootstrap OK\n");
-  expect(existsSync(join(fixture.checkout, "node_modules"))).toBe(false);
+it.each([false, true])(
+  "bootstraps without linking dependencies (stale ancestor: %s)",
+  (staleAncestor) => {
+    const fixture = createToolingDependencyFixture(
+      tempDirs.make("openclaw-tooling-bootstrap-"),
+      staleAncestor,
+    );
+    const result = fixture.run();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("qualified bootstrap OK\n");
+    expect(existsSync(join(fixture.checkout, "node_modules"))).toBe(false);
 
-  const ordinary = fixture.run("ordinary.mjs");
-  expect(ordinary.status).toBe(1);
-  expect(ordinary.stderr).toContain("Repository dependencies are missing");
-  expect(ordinary.stdout).toBe("");
-  expect(existsSync(join(fixture.checkout, "node_modules"))).toBe(false);
-});
+    const ordinary = fixture.run("ordinary.mjs");
+    expect(ordinary.status).toBe(1);
+    expect(ordinary.stderr).toContain("Repository dependencies are missing");
+    expect(ordinary.stdout).toBe("");
+    expect(existsSync(join(fixture.checkout, "node_modules"))).toBe(false);
+  },
+);
 
 it.each(["tsx", "fixture-pkg"])("rejects stale %s before executing its source", (name) => {
-  const fixture = createToolingDependencyFixture(tempDirs.make("openclaw-tooling-version-"));
+  const fixture = createToolingDependencyFixture(tempDirs.make("openclaw-tooling-version-"), true);
   fixture.writePackage(name, 'console.log("STALE PACKAGE EXECUTED");', "0.0.0-stale");
   const result = fixture.run();
   expect(result.status).toBe(1);
@@ -34,7 +40,7 @@ it.each(["tsx", "fixture-pkg"])("rejects stale %s before executing its source", 
 
 it.each(["tsx", "fixture-pkg"])("refuses %s linked to another checkout's source", (name) => {
   const root = tempDirs.make("openclaw-tooling-workspace-");
-  const fixture = createToolingDependencyFixture(root);
+  const fixture = createToolingDependencyFixture(root, true);
   const workspace = join(root, "workspace");
   mkdirSync(workspace);
   const installed = join(fixture.tooling, "node_modules", name);

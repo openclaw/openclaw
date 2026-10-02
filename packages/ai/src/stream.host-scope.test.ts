@@ -18,6 +18,7 @@ import {
 } from "./host.js";
 import { cleanupSessionResources, registerSessionResourceCleanup } from "./session-resources.js";
 import { createLlmRuntime, createNodeLlmRuntime } from "./stream.js";
+import { createZeroUsage } from "./usage.test-support.js";
 
 const original = getDefaultAiTransportHost();
 afterEach(() => configureAiTransportHost(original));
@@ -42,14 +43,7 @@ function message(text: string): AssistantMessage {
     api: model.api,
     stopReason: "stop",
     timestamp: 1,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
   };
 }
 function registryFor(resolve: (value: string) => Promise<string>) {
@@ -249,19 +243,6 @@ describe("runtime-owned transport host", () => {
     expect(() => getAiTransportHost().resolveSecretSentinel("unknown")).toThrow("unknown Gateway");
   });
 
-  it("binds an ordinary stream to the default host selected when it starts", async () => {
-    configureAiTransportHost({ resolveSecretSentinel: (value) => "first:" + value });
-    const runtime = createLlmRuntime(
-      registryFor(async (value) => getAiTransportHost().resolveSecretSentinel(value)),
-    );
-    const stream = runtime.streamSimple(model, { messages: [] }, { apiKey: "opaque" });
-
-    configureAiTransportHost({ resolveSecretSentinel: (value) => "replacement:" + value });
-
-    expect((await stream.result()).content).toEqual([{ type: "text", text: "first:opaque" }]);
-    expect(getAiTransportHost().resolveSecretSentinel("caller")).toBe("replacement:caller");
-  });
-
   it("does not let a nested ordinary runtime inherit native policy", async () => {
     configureAiTransportHost({ resolveSecretSentinel: (value) => "Gateway:" + value });
     const ordinary = createLlmRuntime(
@@ -313,7 +294,7 @@ describe("runtime-owned transport host", () => {
     }
   });
 
-  it("cleans every default host used by an ordinary runtime after replacement", () => {
+  it("binds and cleans ordinary streams across default host replacement", async () => {
     const owners: object[] = [];
     const unregister = registerSessionResourceCleanup((_sessionId, owner) => {
       if (owner) {
@@ -323,11 +304,19 @@ describe("runtime-owned transport host", () => {
     try {
       configureAiTransportHost({ resolveSecretSentinel: (value) => "first:" + value });
       const firstHost = getDefaultAiTransportHost();
-      const runtime = createLlmRuntime(registryFor(async (value) => value));
-      runtime.streamSimple(model, { messages: [] }, { apiKey: "opaque", sessionId: "shared" });
+      const runtime = createLlmRuntime(
+        registryFor(async (value) => getAiTransportHost().resolveSecretSentinel(value)),
+      );
+      const stream = runtime.streamSimple(
+        model,
+        { messages: [] },
+        { apiKey: "opaque", sessionId: "shared" },
+      );
 
       configureAiTransportHost({ resolveSecretSentinel: (value) => "replacement:" + value });
       const replacementHost = getDefaultAiTransportHost();
+      expect((await stream.result()).content).toEqual([{ type: "text", text: "first:opaque" }]);
+      expect(getAiTransportHost().resolveSecretSentinel("caller")).toBe("replacement:caller");
       runtime.cleanupSessionResources("shared");
       runtime.cleanupSessionResources("shared");
 

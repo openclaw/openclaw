@@ -4,7 +4,6 @@ import ai.openclaw.wear.shared.WearRealtimeTalkEntry
 import ai.openclaw.wear.shared.WearRealtimeTalkRole
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 import ai.openclaw.wear.shared.WearRealtimeTalkStatus
-import ai.openclaw.wear.shared.WearReplyText
 import ai.openclaw.wear.shared.WearReplyTextPage
 import ai.openclaw.wear.shared.WearReplyTextStatus
 import android.os.SystemClock
@@ -57,7 +56,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -285,10 +283,6 @@ internal fun OpenClawWearScreens(
         state = pagerState,
         modifier = Modifier.fillMaxSize(),
         rotaryScrollableBehavior = null,
-        userScrollEnabled =
-          homePages.getOrNull(pagerState.currentPage) != WearHomePage.Voice ||
-            voicePagerState.currentPage == VOICE_HOME_MODE ||
-            voicePagerState.currentPage == VOICE_THREAD_MODE,
       ) { page ->
         when (homePages.getOrNull(page)) {
           WearHomePage.Chat -> {
@@ -363,13 +357,7 @@ internal fun OpenClawWearScreens(
           WearHomePage.Pulse -> {
             AgentPulsePage(
               snapshot = snapshot,
-              onRefresh = {
-                if (snapshot.agentPulseSupported) {
-                  onAgentPulseRefresh()
-                } else {
-                  onRefresh()
-                }
-              },
+              onRefresh = onAgentPulseRefresh,
             )
           }
 
@@ -1259,15 +1247,6 @@ private fun AgentPulsePage(
           EmptyPanel(
             title = stringResource(R.string.pulse_unavailable),
             detail = stringResource(R.string.gateway_offline_detail),
-          )
-        }
-      }
-
-      !snapshot.agentPulseSupported -> {
-        item {
-          EmptyPanel(
-            title = stringResource(R.string.pulse_unavailable),
-            detail = stringResource(R.string.update_required_detail),
           )
         }
       }

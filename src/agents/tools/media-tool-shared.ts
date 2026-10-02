@@ -10,8 +10,8 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import {
   findCapabilityProviderById,
   resolveCapabilityModelRefForProviders,
-  type CapabilityModelRef,
 } from "../../../packages/media-generation-core/src/capability-model-ref.js";
+import { parseGenerationModelRef } from "../../../packages/media-generation-core/src/model-ref.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
@@ -72,8 +72,6 @@ type TextToolResult = {
   model: string;
   attempts: TextToolAttempt[];
 };
-
-type ParseGenerationModelRef = (raw: string | undefined) => CapabilityModelRef | null;
 
 export const REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS = 120_000;
 
@@ -173,19 +171,18 @@ export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(
   providers: T[];
   modelConfig: ToolModelConfig;
   modelOverride?: string;
-  parseModelRef: ParseGenerationModelRef;
 }): T | undefined {
   const selectedRef =
     resolveCapabilityModelRefForProviders({
       providers: params.providers,
       raw: params.modelOverride,
-      parseModelRef: params.parseModelRef,
+      parseModelRef: parseGenerationModelRef,
       normalizeProviderId,
     }) ??
     resolveCapabilityModelRefForProviders({
       providers: params.providers,
       raw: params.modelConfig.primary,
-      parseModelRef: params.parseModelRef,
+      parseModelRef: parseGenerationModelRef,
       normalizeProviderId,
     });
   if (!selectedRef) {
@@ -490,7 +487,6 @@ export async function loadMediaToolReferences<T>(params: {
   fsPolicy?: ToolFsPolicy;
   maxBytes: number;
   ssrfPolicy?: SsrFPolicy;
-  timeoutMs?: number;
   signal?: AbortSignal;
   mapMedia: (media: LoadedToolReferenceMedia) => T;
   mapRemote?: (url: string) => T;
@@ -542,7 +538,7 @@ export async function loadMediaToolReferences<T>(params: {
       const timeout =
         params.toolName === "music_generate" && !params.sandbox
           ? buildTimeoutAbortSignal({
-              timeoutMs: params.timeoutMs ?? 30_000,
+              timeoutMs: 30_000,
               operation: "music-generate.reference-fetch",
               ...(params.signal ? { signal: params.signal } : {}),
               ...(reference.isHttpUrl ? { url: resolvedPath ?? resolvedInput } : {}),

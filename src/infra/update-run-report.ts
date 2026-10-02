@@ -109,6 +109,22 @@ export function formatUpdateRunCurrentHealth(health: UpdateRunReportHealth): str
     : "Current health unavailable; saved verification describes the update attempt only.";
 }
 
+/** Serving observation is independent of permission to restart or roll back. */
+export function resolveUpdateRunVerifiedServingVersion(
+  verification: UpdateRunRecord["verification"],
+  observation: Pick<UpdateRunRecord["steps"][number], "failureFacts" | "exitCode"> | undefined,
+): string | undefined {
+  if (observation?.exitCode !== 0 || observation.failureFacts?.length) {
+    return undefined;
+  }
+  const { recovery } = verification;
+  return recovery?.serviceRestartSafe && recovery.service === "healthy"
+    ? recovery.version
+    : verification.versionMatch && verification.readyz && verification.settled
+      ? verification.runningVersion
+      : undefined;
+}
+
 /** Public-report callers redact identifiers before using this shared formatter. */
 export function formatUpdateRunRecovery(
   verification: UpdateRunRecord["verification"],
@@ -136,13 +152,8 @@ export function formatUpdateRunRecovery(
       : "runtime files verified";
     return `${packageOutcome}; Gateway health ${recovery.service === "failed" ? "failed" : "unverified"} (${reason}). Run \`openclaw gateway status --deep\` to check the serving version and readiness.`;
   }
-  const version =
-    recovery?.serviceRestartSafe && recovery.service === "healthy"
-      ? recovery.version
-      : verification.versionMatch && verification.readyz && verification.settled
-        ? verification.runningVersion
-        : undefined;
-  if (observation.exitCode === 0 && version && !observation.failureFacts?.length) {
+  const version = resolveUpdateRunVerifiedServingVersion(verification, observation);
+  if (version) {
     const constraint =
       recovery?.serviceRestartSafe === false ? `; restart remains unsafe (${reason})` : "";
     return `${recovery?.packageRollbackVerified ? "package rollback verified; " : ""}verified serving ${bounded(version, 120)}${constraint}`;
@@ -158,6 +169,11 @@ export function formatUpdateRunRecovery(
 
 function bounded(text: string, limit: number): string {
   return text.length <= limit ? text : `${sliceUtf16Safe(text, 0, limit - 1)}…`;
+}
+
+function formatUpdateVersion(identity: UpdateRunRecord["after"]): string | undefined {
+  const sha = identity.sha?.slice(0, 8);
+  return identity.version ? `${identity.version}${sha ? ` (${sha})` : ""}` : sha;
 }
 
 function recoveryHints(run: ReportInput, nextAction?: string): string[] {
@@ -209,9 +225,9 @@ export function renderUpdateRunReport(
     run.origin.nextAction
       ? { kind: "unavailable" }
       : undefined);
-  // Git updates can change commits without changing the package version.
-  const before = run.before.sha?.slice(0, 8) ?? run.before.version;
-  const after = run.after.sha?.slice(0, 8) ?? run.after.version;
+  // Keep the version visible and distinguish Git updates within the same version.
+  const before = formatUpdateVersion(run.before);
+  const after = formatUpdateVersion(run.after);
   const reason = bounded(
     run.reason?.trim() ||
       (run.status === "failed" &&
@@ -333,6 +349,9 @@ export function renderUpdateRunReport(
   )) {
     const failure = `Failed: ${step.step}${step.detail ? ` — ${step.detail}` : ""}`;
     lines.push(bounded(failure, 300));
+    if (step.termination === "signal" && step.stderrTail) {
+      lines.push(`Stderr (${step.signal ?? "unknown signal"}):\n${step.stderrTail}`);
+    }
     lines.push(
       ...(step.failureFacts ?? []).slice(0, 5).map((fact) =>
         formatUpdateFailureFact({

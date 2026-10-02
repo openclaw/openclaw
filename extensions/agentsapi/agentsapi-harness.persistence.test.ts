@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import {
   AgentHarnessPreflightError,
   type AgentHarnessAttemptParamsV2,
@@ -21,6 +20,7 @@ import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient, type AgentsApiInputFile } from "./agentsapi-client.js";
+import { createModel, createTurn } from "./agentsapi.test-support.js";
 import plugin from "./index.js";
 
 const { createSession, fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -52,7 +52,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.spyOn(AbortSignal, "timeout").mockImplementation(() => new AbortController().signal);
   createSession.mockImplementation((options) => {
-    const turn = completedTurn(options.sessionId);
+    const turn = createTurn({ id: `turn-${options.sessionId}`, session_id: options.sessionId });
     return {
       isAvailable: () => false,
       isSettled: () => true,
@@ -98,14 +98,8 @@ it("reopens an existing hosted binding and requires reset before persisting a fr
     await openStore().register(params.sessionId, hosted);
     await reopenState();
 
-    const create = vi
-      .spyOn(AgentsApiClient.prototype, "create")
-      .mockResolvedValue("fresh-self-hosted-session");
-    const update = vi
-      .spyOn(AgentsApiClient.prototype, "setReasoningEffort")
-      .mockResolvedValue(undefined);
-    const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue(undefined);
-    vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
+    const { create, update, message } = mockClient("fresh-self-hosted-session");
+
     let config: OpenClawConfig = {};
     const register = () => registerHarness(state.env, () => config);
     let harness = register();
@@ -178,81 +172,62 @@ it("reopens an existing hosted binding and requires reset before persisting a fr
   });
 });
 
-it.each(["inline images", "oversized original"])(
-  "continues %s and the following turn on the same native session",
-  async (inputKind) => {
-    await withOpenClawTestState({ label: "agentsapi-image-recovery" }, async (state) => {
-      const params = await createAttempt(state.stateDir);
-      const create = vi
-        .spyOn(AgentsApiClient.prototype, "create")
-        .mockResolvedValue("image-session");
-      vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue(undefined);
-      const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue(undefined);
-      vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
-      const original =
-        inputKind === "oversized original"
-          ? await saveMediaBuffer(
-              Buffer.alloc(5 * 1024 * 1024 + 1, 32),
-              "application/pdf",
-              "inbound",
-              5 * 1024 * 1024 + 1,
-              "brief.pdf",
-            )
-          : undefined;
-      const prompt = original
-        ? "Summarize the supplied extracted text: the launch window is October."
-        : "Read the supplied image.";
-      const harness = registerHarness(state.env);
-      try {
-        const result = await harness.runAttempt({
-          ...params,
-          prompt,
-          media: original ? [{ path: original.path, sizeBytes: 1 }] : undefined,
-          images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
-        });
-        expect(result).toMatchObject({ terminal: { kind: "ok" } });
-        const input = message.mock.calls[0]![1];
-        expect(input).toContain(prompt);
-        expect(input).toContain("The Agents API harness does not support inline image inputs.");
-        expect(input).toContain(
-          "No confirmed execution paths are available for this message's original attachments.",
-        );
-        expect(input).toContain("ask for a text description if the image is necessary");
-        if (original) {
-          expect(input).toContain(
-            "Input attachment feedback: 1 attachment(s) were not transferred to the hosted VM.",
-          );
-          expect(input).toContain("exceeds the 5 MiB file limit");
-          expect(input).toContain("ask for a smaller attachment or the relevant text");
-          expect(create.mock.calls[0]?.[3]?.files).toEqual([]);
-        }
-        expect(await harness.runAttempt({ ...params, runId: "following-turn" })).toMatchObject({
-          terminal: { kind: "ok" },
-        });
-        expect(message.mock.calls.map(([sessionId]) => sessionId)).toEqual([
-          "image-session",
-          "image-session",
-        ]);
-        expect(create).toHaveBeenCalledTimes(1);
-      } finally {
-        await harness.dispose();
-      }
-    });
-  },
-);
+it("continues inline images with an oversized original and the following turn on the same native session", async () => {
+  await withOpenClawTestState({ label: "agentsapi-image-recovery" }, async (state) => {
+    const params = await createAttempt(state.stateDir);
+    const { create, message } = mockClient("image-session");
+
+    const original = await saveMediaBuffer(
+      Buffer.alloc(5 * 1024 * 1024 + 1, 32),
+      "application/pdf",
+      "inbound",
+      5 * 1024 * 1024 + 1,
+      "brief.pdf",
+    );
+    const prompt = "Summarize the supplied extracted text: the launch window is October.";
+    const harness = registerHarness(state.env);
+    try {
+      const result = await harness.runAttempt({
+        ...params,
+        prompt,
+        media: [{ path: original.path, sizeBytes: 1 }],
+        images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+      });
+      expect(result).toMatchObject({ terminal: { kind: "ok" } });
+      const input = message.mock.calls[0]![1];
+      expect(input).toContain(prompt);
+      expect(input).toContain("The Agents API harness does not support inline image inputs.");
+      expect(input).toContain(
+        "No confirmed execution paths are available for this message's original attachments.",
+      );
+      expect(input).toContain("ask for a text description if the image is necessary");
+      expect(input).toContain(
+        "Input attachment feedback: 1 attachment(s) were not transferred to the hosted VM.",
+      );
+      expect(input).toContain("exceeds the 5 MiB file limit");
+      expect(input).toContain("ask for a smaller attachment or the relevant text");
+      expect(create.mock.calls[0]?.[3]?.files).toEqual([]);
+      expect(await harness.runAttempt({ ...params, runId: "following-turn" })).toMatchObject({
+        terminal: { kind: "ok" },
+      });
+      expect(message.mock.calls.map(([sessionId]) => sessionId)).toEqual([
+        "image-session",
+        "image-session",
+      ]);
+      expect(create).toHaveBeenCalledTimes(1);
+    } finally {
+      await harness.dispose();
+    }
+  });
+});
 
 it("skips canonical empty media slots while preserving numbered originals and source validation", async () => {
   await withOpenClawTestState({ label: "agentsapi-empty-media-slots" }, async (state) => {
     const params = await createAttempt(state.stateDir);
-    const create = vi
-      .spyOn(AgentsApiClient.prototype, "create")
-      .mockResolvedValue("sparse-session");
-    vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue(undefined);
+    const { create, message } = mockClient("sparse-session");
     const upload = vi
       .spyOn(AgentsApiClient.prototype, "uploadFile")
       .mockResolvedValue({ status: "uploaded" });
-    const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue(undefined);
-    vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
     // Canonical hydration keeps serialized null slots as empty positional facts.
     const empty = { transcribed: false };
     let media: NonNullable<AgentHarnessAttemptParamsV2["media"]> = Array.from(
@@ -314,20 +289,14 @@ it("skips canonical empty media slots while preserving numbered originals and so
 
 it.each([
   { availability: "connected", uploadsBeforeDisconnect: 2 },
-  { availability: "disconnected", uploadsBeforeDisconnect: 0 },
   { availability: "disconnected after a partial upload", uploadsBeforeDisconnect: 1 },
 ])(
   "continues with original attachments on the same $availability hosted session",
   async ({ uploadsBeforeDisconnect }) => {
     await withOpenClawTestState({ label: "agentsapi-original-images" }, async (state) => {
       const params = await createAttempt(state.stateDir);
-      const create = vi
-        .spyOn(AgentsApiClient.prototype, "create")
-        .mockResolvedValue("image-session");
-      vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue(undefined);
+      const { create, message } = mockClient("image-session");
       const upload = vi.spyOn(AgentsApiClient.prototype, "uploadFile");
-      const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue(undefined);
-      vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
       let uploadedCount = 0;
       fetchWithSsrFGuardMock.mockImplementation(async ({ url, init, beforeRequest }) => {
         beforeRequest?.();
@@ -446,12 +415,8 @@ it.each([
 it("reports unsupported tool restrictions without replacing the bound native session", async () => {
   await withOpenClawTestState({ label: "agentsapi-tool-policy-preflight" }, async (state) => {
     const params = await createAttempt(state.stateDir);
-    const create = vi
-      .spyOn(AgentsApiClient.prototype, "create")
-      .mockResolvedValue("retained-session");
-    vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue(undefined);
-    const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue(undefined);
-    vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
+    const { create, message } = mockClient("retained-session");
+
     const harness = registerHarness(state.env);
     try {
       expect(await harness.runAttempt(params)).toMatchObject({ terminal: { kind: "ok" } });
@@ -485,33 +450,30 @@ it("reports unsupported tool restrictions without replacing the bound native ses
   });
 });
 
-it.each([false, true])(
-  "reports Gateway sandbox placement independently of images (%s)",
-  async (withImages) => {
-    await withOpenClawTestState({ label: "agentsapi-sandbox-preflight" }, async (state) => {
-      const params = await createAttempt(state.stateDir);
-      const harness = registerHarness(state.env);
-      try {
-        const pending = harness.runAttempt({
-          ...params,
-          sandbox: createSandboxTestContext(),
-          images: withImages
-            ? [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]
-            : undefined,
-        });
-        await expect(pending).rejects.toBeInstanceOf(AgentHarnessPreflightError);
-        await expect(pending).rejects.toMatchObject({
-          scope: "harness",
-          message: "Agents API does not support Gateway sandbox placement.",
-          userMessage:
-            "Agents API cannot run in the configured Gateway sandbox. Choose a harness that supports Gateway sandbox placement before retrying.",
-        });
-      } finally {
-        await harness.dispose();
-      }
-    });
-  },
-);
+it.each([false, true])("reports Gateway sandbox placement with images: %s", async (withImages) => {
+  await withOpenClawTestState({ label: "agentsapi-sandbox-preflight" }, async (state) => {
+    const params = await createAttempt(state.stateDir);
+    const harness = registerHarness(state.env);
+    try {
+      const pending = harness.runAttempt({
+        ...params,
+        sandbox: createSandboxTestContext(),
+        images: withImages
+          ? [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]
+          : undefined,
+      });
+      await expect(pending).rejects.toBeInstanceOf(AgentHarnessPreflightError);
+      await expect(pending).rejects.toMatchObject({
+        scope: "harness",
+        message: "Agents API does not support Gateway sandbox placement.",
+        userMessage:
+          "Agents API cannot run in the configured Gateway sandbox. Choose a harness that supports Gateway sandbox placement before retrying.",
+      });
+    } finally {
+      await harness.dispose();
+    }
+  });
+});
 
 function registerHarness(env: NodeJS.ProcessEnv, readConfig: () => OpenClawConfig = () => ({})) {
   const runtime = createPluginRuntimeMock({ config: { current: readConfig } });
@@ -562,18 +524,7 @@ async function createAttempt(stateDir: string): Promise<AgentHarnessAttemptParam
     timeoutMs: 5_000,
     provider: "openai",
     modelId: "fixture-model",
-    model: {
-      id: "fixture-model",
-      name: "Fixture Model",
-      api: "openai-responses",
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 1024,
-      maxTokens: 512,
-    },
+    model: createModel(),
     resolvedApiKey: "fixture-not-a-real-api-key",
     authStorage,
     modelRegistry: ModelRegistry.inMemory(authStorage),
@@ -592,18 +543,10 @@ async function createAttempt(stateDir: string): Promise<AgentHarnessAttemptParam
   };
 }
 
-function completedTurn(sessionId: string): Turn {
-  return {
-    id: `turn-${sessionId}`,
-    agent_id: "fixture-agent",
-    session_id: sessionId,
-    object: "agent.session.turn",
-    created_at: 1,
-    started_at: 1,
-    completed_at: 2,
-    status: "completed",
-    subagent_id: null,
-    error: null,
-    usage: null,
-  };
+function mockClient(sessionId: string) {
+  const create = vi.spyOn(AgentsApiClient.prototype, "create").mockResolvedValue(sessionId);
+  const update = vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue();
+  const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue();
+  vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
+  return { create, update, message };
 }

@@ -39,6 +39,7 @@ import {
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
 import { resolveSystemPromptRepoRoot } from "../system-prompt-params.js";
+import { resolveRootedRunRuntimeWorkspace } from "../workspace-run.js";
 import type {
   CompactEmbeddedAgentSessionParams,
   CompactEmbeddedAgentSessionRuntimeParams,
@@ -305,6 +306,11 @@ export async function compactEmbeddedAgentSessionDirect(
   ) {
     return lockedHarnessCompactionFailure(lockedHarnessRuntime);
   }
+  const rootedRuntimeWorkspace = resolveRootedRunRuntimeWorkspace({
+    ...requestedParams,
+    workspaceDir: requestedWorkspaceDir,
+    agentId: requestedAgentIds.sessionAgentId,
+  });
   const callerResult = createDeferredCore<EmbeddedAgentCompactResult>();
   const trackOwner = captureAsyncWorkTracker();
   const parentSignal = getAsyncWorkSignal();
@@ -324,8 +330,9 @@ export async function compactEmbeddedAgentSessionDirect(
           config: requestedParams.config ?? {},
           agentId: requestedAgentIds.sessionAgentId,
           agentDir: requestedAgentDir,
-          workspaceDir: requestedWorkspaceDir,
-          preserveWorkspaceDirOnRefresh: requestedWorkspaceDir !== canonicalWorkspaceDir,
+          workspaceDir: rootedRuntimeWorkspace?.workspaceDir ?? requestedWorkspaceDir,
+          preserveWorkspaceDirOnRefresh:
+            !rootedRuntimeWorkspace && requestedWorkspaceDir !== canonicalWorkspaceDir,
           ...(requestedParams.allowGatewaySubagentBinding
             ? { allowGatewaySubagentBinding: true }
             : {}),
@@ -392,8 +399,9 @@ export async function compactEmbeddedAgentSessionDirect(
           preparedModelRuntimeOwnerSnapshot.config,
           Boolean(transcriptBytePreflightAuthority),
         ) ?? preparedModelRuntimeOwnerSnapshot.config;
-      const preparedWorkspaceDir =
-        preparedModelRuntimeOwnerSnapshot.workspaceDir ?? requestedWorkspaceDir;
+      const preparedWorkspaceDir = rootedRuntimeWorkspace
+        ? requestedWorkspaceDir
+        : (preparedModelRuntimeOwnerSnapshot.workspaceDir ?? requestedWorkspaceDir);
       const repoRoot =
         resolveSystemPromptRepoRoot({
           config: preparedConfig,
@@ -424,6 +432,12 @@ export async function compactEmbeddedAgentSessionDirect(
         ...(transcriptBytePreflightClaim
           ? {
               transcriptBytePreflightAuthority: true as const,
+              ...(transcriptBytePreflightClaim.withCompactionPersistenceAsync
+                ? {
+                    transcriptByteCompactionPersistenceAsync:
+                      transcriptBytePreflightClaim.withCompactionPersistenceAsync,
+                  }
+                : {}),
               ...(transcriptBytePreflightClaim.withCompactionPersistence
                 ? {
                     transcriptByteCompactionPersistence:

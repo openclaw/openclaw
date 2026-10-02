@@ -26,10 +26,10 @@ export async function withWorktreeSource<T>(
   run: (current: CreateManagedWorktreeParams & WorktreeAllocationGuard) => T | Promise<T>,
 ): Promise<T> {
   const { withSource, ...operation } = params;
+  params.commitGuard?.();
   if (!withSource) {
     return await run(operation);
   }
-  params.commitGuard?.();
   return await withSource((source) => {
     const commitGuard = () => {
       params.commitGuard?.();

@@ -373,14 +373,9 @@ export function createGatewayHttpServer(opts: {
           root: controlUiRoot,
         }) ?? false;
       const handleStandaloneControlUiRequest = async () => {
-        if (!controlUiEnabled) {
+        if (!controlUiEnabled || !(await handleControlUiRequest())) {
           respondNotFound(res);
-          return true;
         }
-        if (await handleControlUiRequest()) {
-          return true;
-        }
-        respondNotFound(res);
         return true;
       };
       const requestStages: GatewayHttpRequestStage[] = [

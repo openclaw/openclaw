@@ -9,23 +9,36 @@ read_when:
 `openclaw doctor --fix` owns the persistent file-to-SQLite migrations. This page
 describes each migration source and what to do when one stays blocked.
 
-Pre-June Telegram and iMessage caches, Active Memory session toggles, Nostr bus
+Pre-June iMessage caches, Active Memory session toggles, Nostr bus
 and profile state, and Microsoft Teams conversations, polls, SSO tokens, and
 feedback learnings are no longer imported from JSON files. If those sources
 remain, Doctor preserves them and directs you to [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
 and run its migrations first. Existing SQLite state remains authoritative.
-Doctor archives a retired Telegram `thread-bindings-*.json` file as a completed
-no-op only when it is a regular file containing exactly version `1` and an empty
-`bindings` array. Nonempty, malformed, symlinked, or otherwise uncertain files
-remain preserved for operator review. If archiving a verified empty file fails,
-Doctor keeps the original bytes for a later retry and reports a recoverable
-warning. This cleanup failure does not block an update.
+
+Pre-July Telegram bot-info, sticker, thread-binding, update-offset, message,
+sent-message, and topic-name JSON sidecars are no longer inspected or archived.
+Doctor leaves their files untouched, including empty thread-binding files. If
+you still need their state, restore a complete pre-update backup and run
+`openclaw doctor --fix` on OpenClaw `2026.9.5` before updating again. The separate
+Telegram JSON ingress-spool migration still imports pending updates, processing
+claims, and failed tombstones with verified backups.
+
 Retired `subagents/runs.json` files are also ignored and left untouched;
 transient runs are never restored from them.
 
 The pre-July plugin install index at `plugins/installs.json` is no longer imported
 or archived. Doctor preserves it and stops with the same intermediate-upgrade
 guidance. July-era SQLite plugin install records remain supported.
+
+Session records that need the retired `room` → `groupChannel` conversion are refused
+without changing their original bytes. Preserve the state, install OpenClaw
+`2026.9.5`, run `openclaw doctor --fix`, then upgrade again. A canonical
+`groupChannel` with an ignored `room` field remains unchanged.
+
+The July Doctor importer could still write `provider` and `lastProvider` aliases.
+Doctor retains their repair, backs up existing SQLite rows, and updates canonical
+delivery metadata and its query projections together. Runtime reads require that
+repair; canonical delivery fields and unrelated stored values keep their values.
 
 ## Legacy state migration
 
@@ -207,6 +220,10 @@ transaction still validates every transcript and trajectory row before committin
 invalid JSON later in either store rolls back the media changes. Databases with
 no media repairs still receive a complete validation scan, including after imports
 or restores.
+
+If another connection commits before the media repair transaction starts, Doctor
+refuses that repair with `source changed before migration transaction`. Stop other
+OpenClaw processes using that database and rerun `openclaw doctor --fix`.
 
 Missing file copies of canonical SQLite transcript archives produce recoverable
 warnings with the total count and at most five example paths per database.

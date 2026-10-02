@@ -7,8 +7,10 @@ import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
   startSessionWorkAdmissionInterruption,
 } from "../sessions/session-lifecycle-admission.js";
-import type { WorkerPlacementSessionRuntime } from "./server-worker-placement-reclaim.js";
-import { resolveWorkerPlacementSessionTarget } from "./server-worker-placement-session-target.js";
+import {
+  resolveWorkerPlacementSessionTarget,
+  type WorkerPlacementSessionRuntime,
+} from "./server-worker-placement-session-target.js";
 import type { WorkerPlacementMoveBarrier } from "./worker-environments/placement-move-service.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
@@ -44,7 +46,7 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
     });
     const lifecycleIdentities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
     let begun: Awaited<ReturnType<typeof begin>> | undefined;
-    await runExclusiveSessionLifecycleMutation({
+    return await runExclusiveSessionLifecycleMutation("placement-move", {
       scope: target.storePath,
       identities: lifecycleIdentities,
       signal,
@@ -108,11 +110,8 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
         if (!begun) {
           throw new Error(`Session ${sessionKey} placement move barrier did not start`);
         }
+        return begun;
       },
     });
-    if (!begun) {
-      throw new Error(`Session ${sessionKey} placement move barrier did not complete`);
-    }
-    return begun;
   };
 }

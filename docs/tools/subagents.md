@@ -32,6 +32,10 @@ genuinely needs the requester's current transcript, spawn it with
 follow-up thread.
 </Note>
 
+The Control UI shows the assigned task without model-only subagent instructions.
+Named subagent sessions use their task title without an automatic “Subagent:”
+prefix; their parent relationship and view-only state still identify the run.
+
 A subagent run ends; a session does not. When you open a subagent run in the
 Control UI, its transcript is view-only. Use **Open parent session** in the
 composer area to continue the conversation with the parent. You can still use

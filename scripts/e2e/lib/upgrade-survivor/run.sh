@@ -2599,7 +2599,7 @@ run_plugin_fixture_phase seed-source-only-plugin-shadow seed_source_only_plugin_
 if [ "$SCENARIO" = "sqlite-volume" ]; then
   phase seed-baseline-shared-state node scripts/e2e/lib/upgrade-survivor/sqlite-volume-shared-state.mjs \
     seed-baseline-plugin-state "$(package_root)"
-  phase seed-volume-state node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-volume
+  phase seed-volume-state node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-volume "$(package_root)"
   phase validate-volume-baseline-config validate_baseline_config
 fi
 phase assert-baseline assert_baseline_state

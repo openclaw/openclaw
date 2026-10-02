@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.9.7",
+  "version": "2026.9.8",
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "schemaVersions": {
@@ -53,6 +53,8 @@
     "README.md",
     "THIRD_PARTY_NOTICES.md",
     "dist/",
+    "!dist/worker/**",
+    "dist/worker-artifacts/*.tar.gz",
     ".openclaw-lifecycle-pending",
     "!dist/.buildstamp",
     "!dist/.runtime-postbuildstamp",
@@ -150,7 +152,6 @@
     "!dist/plugin-sdk/memory-core-host-status.d.ts",
     "!dist/plugin-sdk/memory-host-events.d.ts",
     "!dist/plugin-sdk/memory-host-markdown.d.ts",
-    "!dist/plugin-sdk/memory-host-search.d.ts",
     "!dist/plugin-sdk/message-tool-delivery-hints.d.ts",
     "!dist/plugin-sdk/migration.d.ts",
     "!dist/plugin-sdk/migration-runtime.d.ts",
@@ -417,6 +418,7 @@
     "scripts/install-cli.sh",
     "scripts/install-policy.sh",
     "scripts/install.ps1",
+    "scripts/openclaw-immutable-launcher.mjs",
     "scripts/prepare-git-hooks.mjs",
     "scripts/prepare-native-protocol.mjs",
     "scripts/runtime-postbuild-shared.mjs",
@@ -452,7 +454,8 @@
     "!dist/plugin-sdk/agent-harness-attempt-runtime.d.ts",
     "!dist/plugin-sdk/secret-egress-runtime.d.ts",
     "!dist/plugin-sdk/compiled-subprocess-testing.d.ts",
-    "!dist/plugin-sdk/compiled-subprocess-testing.js"
+    "!dist/plugin-sdk/compiled-subprocess-testing.js",
+    "!dist/plugin-sdk/memory-host-search.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -2240,7 +2243,7 @@
   ],
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",
-    "@anthropic-ai/sdk": "0.127.0",
+    "@anthropic-ai/sdk": "0.128.0",
     "@babel/generator": "8.0.6",
     "@babel/parser": "8.0.6",
     "@babel/traverse": "8.0.6",
@@ -2255,7 +2258,7 @@
     "@modelcontextprotocol/sdk": "1.30.1",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.22.0",
+    "@openclaw/fs-safe": "0.23.0",
     "@openclaw/proxyline": "0.3.12",
     "@silvia-odwyer/photon-node": "0.3.4",
     "@trycua/cua-driver": "0.28.2",

@@ -4,13 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const clientMocks = vi.hoisted(() => ({
   browserCloseTabByRawTargetId: vi.fn(async () => {}),
-  onLoad: undefined as (() => Promise<void>) | undefined,
 }));
 
-vi.mock("./client.js", async () => {
-  await clientMocks.onLoad?.();
-  return clientMocks;
-});
+vi.mock("./client-tab-close.runtime.js", () => clientMocks);
 
 import {
   closeTrackedBrowserTabsForSessions,
@@ -44,15 +40,15 @@ describe("session tab registry", () => {
     vi.useRealTimers();
   });
 
-  it("reserves cleanup while its client loads before an overlapping closer can fail", async () => {
+  it("reserves cleanup while its client closes before an overlapping closer can fail", async () => {
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
-    clientMocks.onLoad = () => {
+    clientMocks.browserCloseTabByRawTargetId.mockImplementationOnce(() => {
       entered.resolve();
       return release.promise;
-    };
+    });
     const sessionKey = "agent:main:main";
-    await trackSessionBrowserTab({ sessionKey, targetId: "loading-client" });
+    await trackSessionBrowserTab({ sessionKey, targetId: "closing-client" });
     const onWarn = vi.fn();
     const closeTab = vi.fn<() => Promise<void>>(() => {
       throw new Error("close failed");
@@ -65,7 +61,6 @@ describe("session tab registry", () => {
       );
     } finally {
       release.resolve();
-      clientMocks.onLoad = undefined;
     }
     await expect(Promise.all(pending)).resolves.toEqual([1, 0]);
     expect(clientMocks.browserCloseTabByRawTargetId).toHaveBeenCalledOnce();
@@ -222,17 +217,28 @@ describe("session tab registry", () => {
   });
 
   it.each(["lifecycle", "sweep"] as const)(
-    "preserves %s activity semantics while the raw client loads",
+    "preserves %s activity semantics while cleanup authority prepares",
     async (kind) => {
       const tab = { sessionKey: "agent:main:main", targetId: "active-tab" };
       await trackSessionBrowserTab({ ...tab, now: 1_000 });
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const prepareCurrent = async () => {
+        entered.resolve();
+        await release.promise;
+        return true;
+      };
       const cleanup =
         kind === "lifecycle"
-          ? closeTrackedBrowserTabsForSessions({ sessionKeys: [tab.sessionKey] })
-          : sweepTrackedBrowserTabs({ now: 10_000, idleMs: 1 });
-      await Promise.resolve();
-      expect(clientMocks.browserCloseTabByRawTargetId).not.toHaveBeenCalled();
-      await touchSessionBrowserTab({ ...tab, now: 11_000 });
+          ? closeTrackedBrowserTabsForSessions({ sessionKeys: [tab.sessionKey], prepareCurrent })
+          : sweepTrackedBrowserTabs({ now: 10_000, idleMs: 1, prepareCurrent });
+      try {
+        await entered.promise;
+        expect(clientMocks.browserCloseTabByRawTargetId).not.toHaveBeenCalled();
+        await touchSessionBrowserTab({ ...tab, now: 11_000 });
+      } finally {
+        release.resolve();
+      }
       await expect(cleanup).resolves.toBe(kind === "lifecycle" ? 1 : 0);
       expect(clientMocks.browserCloseTabByRawTargetId).toHaveBeenCalledTimes(
         kind === "lifecycle" ? 1 : 0,
@@ -245,7 +251,15 @@ describe("session tab registry", () => {
     async (closeFails) => {
       const tab = { sessionKey: "agent:main:main", targetId: "touched-sweep" };
       await trackSessionBrowserTab({ ...tab, now: 1_000 });
-      const sweep = sweepTrackedBrowserTabs({ now: 10_000, idleMs: 1 });
+      const release = createDeferred<void>();
+      const sweep = sweepTrackedBrowserTabs({
+        now: 10_000,
+        idleMs: 1,
+        prepareCurrent: async () => {
+          await release.promise;
+          return true;
+        },
+      });
       const closeTab = vi.fn(() => {
         if (closeFails) {
           throw new Error("close failed");
@@ -255,7 +269,11 @@ describe("session tab registry", () => {
       const lifecycle = () =>
         closeTrackedBrowserTabsForSessions({ sessionKeys: [tab.sessionKey], closeTab });
       const pending = [sweep, lifecycle(), lifecycle()];
-      await touchSessionBrowserTab({ ...tab, now: 11_000 });
+      try {
+        await touchSessionBrowserTab({ ...tab, now: 11_000 });
+      } finally {
+        release.resolve();
+      }
 
       await expect(Promise.all(pending)).resolves.toEqual([0, closeFails ? 0 : 1, 0]);
       expect(clientMocks.browserCloseTabByRawTargetId).not.toHaveBeenCalled();
@@ -316,6 +334,14 @@ describe("session tab registry", () => {
       const cleanup = closeTrackedBrowserTabsForSessions({
         sessionKeys: [tab.sessionKey],
         closeTab: replacementPhase === "during-prepare" ? undefined : closeTab,
+        ...(replacementPhase === "during-prepare"
+          ? {
+              prepareCurrent: async () => {
+                await release.promise;
+                return true;
+              },
+            }
+          : {}),
       });
       try {
         if (replacementPhase === "during-close") {
@@ -412,7 +438,7 @@ describe("session tab registry", () => {
     },
   );
 
-  it.each(["published", "during-prepare"] as const)(
+  it.each(["published", "default-client"] as const)(
     "shares the first owner's outcome %s without retrying the registration",
     async (ownerTiming) => {
       const tab = { sessionKey: "agent:main:main", targetId: "failed-owner" };
@@ -430,17 +456,17 @@ describe("session tab registry", () => {
       const first = ownerTiming === "published" ? beginOwner() : beginDefault();
       const second = ownerTiming === "published" ? beginDefault() : beginOwner();
       try {
-        if (ownerTiming === "during-prepare") {
-          await vi.dynamicImportSettled();
+        if (ownerTiming === "default-client") {
+          await first;
         }
         expect(clientMocks.browserCloseTabByRawTargetId).toHaveBeenCalledTimes(
-          ownerTiming === "during-prepare" ? 1 : 0,
+          ownerTiming === "default-client" ? 1 : 0,
         );
       } finally {
         release.resolve();
       }
       await expect(Promise.all([first, second])).resolves.toEqual([
-        ownerTiming === "during-prepare" ? 1 : 0,
+        ownerTiming === "default-client" ? 1 : 0,
         0,
       ]);
       expect(closeTab).toHaveBeenCalledTimes(ownerTiming === "published" ? 1 : 0);

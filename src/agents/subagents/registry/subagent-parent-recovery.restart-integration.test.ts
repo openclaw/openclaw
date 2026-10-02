@@ -88,6 +88,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
     let previousOpen = true;
     const previousContext = {
       recoveryRuntime: gatewayRuntime,
+      chatAbortControllers: new Map(),
       resolveGatewayContext: () => (previousOpen ? previousContext : undefined),
     } as GatewayRequestContext;
     bindGatewayContextResolver(predecessor, previousContext.resolveGatewayContext);
@@ -102,6 +103,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
     const replacementRuntime = { ...gatewayRuntime };
     const replacementContext = {
       recoveryRuntime: replacementRuntime,
+      chatAbortControllers: new Map(),
       resolveGatewayContext: () => (replacementOpen ? replacementContext : undefined),
     } as GatewayRequestContext;
     bindGatewayContextResolver(replacementRuntime, replacementContext.resolveGatewayContext);

@@ -262,12 +262,14 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       "release/2026.9.5",
       "release/2026.9.6",
       "release/2026.9.7",
+      "release/2026.9.8",
+      "release/2026.10.1",
     ]) {
       expect(resolveReviewedSourceLayout(current, context)?.id, context).toBe("current");
     }
     expect(resolveReviewedSourceLayout(frozenLegacy, "release/2026.9.1")).toBeUndefined();
     expect(resolveReviewedSourceLayout(current, "release/2099.1.1")).toBeUndefined();
-    expect(resolveReviewedSourceLayout(current, "release/2026.9.8")).toBeUndefined();
+    expect(resolveReviewedSourceLayout(current, "release/2026.10.2")).toBeUndefined();
     expect(resolveReviewedSourceLayout(frozenLegacy)).toBeUndefined();
     expect(resolveReviewedSourceLayout(frozenLegacy, "extended-stable/2026.6.33")?.id).toBe(
       "extended-stable-2026.6.33",
@@ -796,11 +798,14 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
           "extended-stable/2026.7.33",
           "release/2026.9.7",
           "release/2026.9.8",
+          "release/2026.10.1",
         ]) {
           const admitted =
             context === "" ||
             context === "release/2026.9.6" ||
             context === "release/2026.9.7" ||
+            context === "release/2026.9.8" ||
+            context === "release/2026.10.1" ||
             (context === "release/2026.9.5" && reviewedIn95);
           const label = `${context || "current"}: ${count ?? "absent"}`;
           const scanned = await scanPublishablePluginPackages([artifact.artifact], context);
@@ -843,6 +848,117 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     },
   );
 
+  it("freezes the 9.8 acpx proxy asset while matching the current packed inventory", () => {
+    const packageName = "@openclaw/acpx";
+    const authBridgeKey = `${packageName}:dangerous-exec:src/codex-auth-bridge.ts`;
+    const proxyKey = `${packageName}:dangerous-exec:src/runtime-internals/mcp-proxy.mjs`;
+    const reportErrors = (findings: string[], targetContextRef: string) =>
+      buildPluginNpmSecurityScanReport({
+        candidateSha: CANDIDATE_SHA,
+        packageResults: [
+          syntheticResult(packageName, { reviewedCriticalFindings: findings }),
+          syntheticResult("@openclaw/codex", { reviewedCriticalFindings: currentLayoutFindings() }),
+        ],
+        targetContextRef,
+        toolingSha: TOOLING_SHA,
+      }).errors.filter((error) => error.startsWith(`${packageName}:`));
+
+    expect(reportErrors([authBridgeKey], "release/2026.10.1")).toEqual([]);
+    expect(reportErrors([authBridgeKey], "release/2026.9.8")).toEqual([
+      expect.stringContaining(proxyKey),
+    ]);
+    expect(reportErrors([authBridgeKey, proxyKey], "release/2026.9.8")).toEqual([]);
+    expect(reportErrors([authBridgeKey, proxyKey], "release/2026.10.1")).toEqual([
+      expect.stringContaining(proxyKey),
+    ]);
+  });
+
+  it("reviews exactly one current MXC SDK wire-contract probe", async () => {
+    const packageName = "@openclaw/mxc-sandbox";
+    const readinessKey = `${packageName}:dangerous-exec:src/readiness.ts`;
+    const fixturePath = "test/mxc-sdk-wire-contract.integration.test.ts";
+    const fixtureKey = `${packageName}:dangerous-exec:${fixturePath}`;
+    const probe =
+      'import { execFileSync } from "node:child_process";\nexecFileSync(process.execPath, []);\n';
+    const source = readFileSync(join(process.cwd(), "extensions/mxc", fixturePath), "utf8");
+    const artifact = writePluginArtifact({
+      extensionId: "mxc",
+      files: {
+        "src/readiness.ts": probe.repeat(2),
+        [fixturePath]: source,
+      },
+      packageName,
+    });
+    const changedBytes = writePluginArtifact({
+      extensionId: "mxc-changed",
+      files: {
+        "src/readiness.ts": probe.repeat(2),
+        [fixturePath]: source.replace("timeout: 30_000", "timeout: 30_001"),
+      },
+      packageName,
+    });
+
+    for (const context of ["", "release/2026.10.1"] as const) {
+      const scanned = await scanPublishablePluginPackages([artifact.artifact], context);
+      expect(scanned.scanErrors, context).toEqual([]);
+      const result = scanned.packageResults[0]!;
+      expect(result.expectedReviewedCriticalFindings, context).toEqual([fixtureKey]);
+      expect(result.reviewedCriticalFindings, context).toEqual([
+        readinessKey,
+        readinessKey,
+        fixtureKey,
+      ]);
+      expect(result.unexpectedCriticalFindings, context).toEqual([]);
+      for (const count of [0, 1, 2]) {
+        const report = buildPluginNpmSecurityScanReport({
+          candidateSha: CANDIDATE_SHA,
+          packageResults: [
+            {
+              ...result,
+              reviewedCriticalFindings: [
+                readinessKey,
+                readinessKey,
+                ...Array.from({ length: count }, () => fixtureKey),
+              ],
+            },
+            syntheticResult("@openclaw/codex", {
+              reviewedCriticalFindings: currentLayoutFindings(),
+            }),
+          ],
+          targetContextRef: context,
+          toolingSha: TOOLING_SHA,
+        });
+        expect(
+          report.errors.filter((error) => error.startsWith(`${packageName}:`)),
+          `${context || "current"}: ${count}`,
+        ).toHaveLength(count === 1 ? 0 : 1);
+      }
+      const changed = await scanPublishablePluginPackages([changedBytes.artifact], context);
+      expect(changed.scanErrors, context).toEqual([]);
+      expect(changed.packageResults[0]?.expectedReviewedCriticalFindings, context).toEqual([
+        fixtureKey,
+      ]);
+      expect(changed.packageResults[0]?.reviewedCriticalFindings, context).toEqual([
+        readinessKey,
+        readinessKey,
+      ]);
+      expect(changed.packageResults[0]?.unexpectedCriticalFindings, context).toEqual([
+        { line: 40, path: fixturePath, ruleId: "dangerous-exec" },
+      ]);
+    }
+
+    const frozen = await scanPublishablePluginPackages([artifact.artifact], "release/2026.9.8");
+    expect(frozen.scanErrors).toEqual([]);
+    expect(frozen.packageResults[0]?.expectedReviewedCriticalFindings).toEqual([]);
+    expect(frozen.packageResults[0]?.reviewedCriticalFindings).toEqual([
+      readinessKey,
+      readinessKey,
+    ]);
+    expect(frozen.packageResults[0]?.unexpectedCriticalFindings).toEqual([
+      { line: 40, path: fixturePath, ruleId: "dangerous-exec" },
+    ]);
+  });
+
   it.each([
     "exact",
     "changed bytes",
@@ -850,7 +966,7 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     "changed package",
     "removed exec",
     "extra exec",
-  ])("qualifies only the reviewed current native persona fixture: %s", async (variant) => {
+  ])("qualifies only the exact reviewed native persona fixture: %s", async (variant) => {
     const fixturePath = "src/app-server/run-attempt.skills.native.test.ts";
     const source = readFileSync(join(process.cwd(), "extensions/codex", fixturePath), "utf8");
     const packageName = variant === "changed package" ? "@openclaw/other" : "@openclaw/codex";
@@ -891,6 +1007,18 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       variant === "exact" ? [key] : [],
     );
     expect(result.unexpectedCriticalFindings).toHaveLength(
+      variant === "exact" || variant === "removed exec" ? 0 : variant === "extra exec" ? 2 : 1,
+    );
+    const release = await scanPublishablePluginPackages([artifact], "release/2026.10.1");
+    expect(release.scanErrors).toEqual([]);
+    const releaseResult = release.packageResults[0]!;
+    expect(releaseResult.expectedReviewedCriticalFindings).toEqual(
+      packageName === "@openclaw/codex" && packedPath === fixturePath ? [key] : [],
+    );
+    expect(releaseResult.reviewedCriticalFindings.filter((finding) => finding === key)).toEqual(
+      variant === "exact" ? [key] : [],
+    );
+    expect(releaseResult.unexpectedCriticalFindings).toHaveLength(
       variant === "exact" || variant === "removed exec" ? 0 : variant === "extra exec" ? 2 : 1,
     );
     if (variant === "removed exec") {

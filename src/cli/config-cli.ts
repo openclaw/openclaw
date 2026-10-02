@@ -230,11 +230,13 @@ async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const { readBestEffortRuntimeConfigSchema } = await import("../config/runtime-schema.js");
-    const schema = structuredClone((await readBestEffortRuntimeConfigSchema()).schema) as {
+    const schema = (await readBestEffortRuntimeConfigSchema()).schema as {
       properties?: Record<string, unknown>;
     };
-    schema.properties = { $schema: { type: "string" }, ...schema.properties };
-    writeRuntimeJson(runtime, schema);
+    writeRuntimeJson(runtime, {
+      ...schema,
+      properties: { $schema: { type: "string" }, ...schema.properties },
+    });
   } catch (err) {
     runtime.error(danger(`Config schema error: ${formatErrorMessage(err)}`));
     exitCliAfterOutput(runtime, 1);

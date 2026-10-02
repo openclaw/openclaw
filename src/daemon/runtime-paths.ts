@@ -331,10 +331,7 @@ export async function resolveRecordedDaemonRuntime(
   if (!runtime) {
     return undefined;
   }
-  const info =
-    runtime === "bun"
-      ? await resolveBunRuntimeInfo(runtimePath, undefined, env)
-      : await resolveNodeRuntimeInfo(runtimePath, env);
+  const info = await resolveRuntimeInfo(runtimePath, runtime, execFileAsync, env);
   return { ...info, runtime, path: runtimePath };
 }
 

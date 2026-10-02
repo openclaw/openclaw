@@ -744,22 +744,3 @@ export function hasActiveCronRun(job: Pick<CronJob, "id" | "state">, activeInPro
     (activeInProcess ?? isCronJobActive(job.id))
   );
 }
-
-/** Returns whether a cron job should execute at `nowMs`, honoring force mode and active runs. */
-export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean }) {
-  if (!job.state) {
-    job.state = {};
-  }
-  if (hasActiveCronRun(job)) {
-    return false;
-  }
-  if (opts.forced) {
-    return true;
-  }
-  return (
-    isJobEnabled(job) &&
-    isTimeScheduledJob(job) &&
-    hasScheduledNextRunAtMs(job.state.nextRunAtMs) &&
-    nowMs >= job.state.nextRunAtMs
-  );
-}

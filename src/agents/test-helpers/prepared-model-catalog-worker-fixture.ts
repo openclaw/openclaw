@@ -118,6 +118,7 @@ export function usePreparedCatalogWorkerFixtures(
     });
   });
   return {
+    readCatalogWorkers: (): readonly Worker[] => [...workers],
     makeTempDir: (prefix: string) => tempDirs.make(prefix),
     observeCatalogEntry: (
       receipts: FixtureReceiptChannel,

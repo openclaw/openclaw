@@ -42,7 +42,10 @@ export type GitReadOperations = {
       | undefined
     >;
   };
-  "checkout.revision": { input: { root: string; includeIndex: boolean }; output: string | null };
+  "checkout.revision": {
+    input: { root: string; includeIndex: boolean; branch?: string; defaultBranch?: string };
+    output: string | null;
+  };
   "checkout.context": {
     input: { root: string; githubHost?: string };
     output: GitCheckoutContext | null;

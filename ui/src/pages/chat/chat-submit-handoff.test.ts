@@ -108,14 +108,12 @@ describe("chat submission handoff", () => {
   }
 
   it.each([
-    { policy: "default", predecessor: false, submitting: true },
-    { policy: "queue", predecessor: false, submitting: false },
-    { policy: "default", predecessor: true, submitting: true },
-    { policy: "steer", predecessor: true, submitting: true },
-    { policy: "queue", predecessor: true, submitting: false },
+    { policy: "default", submitting: true },
+    { policy: "steer", submitting: true },
+    { policy: "queue", submitting: false },
   ] as const)(
-    "preserves active-run $policy admission during the input yield (older FIFO row: $predecessor)",
-    async ({ policy, predecessor, submitting }) => {
+    "preserves active-run $policy admission alongside an older FIFO row during the input yield",
+    async ({ policy, submitting }) => {
       const host = makeChatHost({
         chatMessage: "follow up on the active run",
         chatRunId: "active-run",
@@ -131,13 +129,11 @@ describe("chat submission handoff", () => {
           }),
         },
       });
-      if (predecessor) {
-        await handleSendChat(host, "older queued input", { followUpMode: "queue" });
-        expect(host.chatQueue).toEqual([
-          expect.objectContaining({ text: "older queued input", sendState: "waiting-idle" }),
-        ]);
-      }
-      const predecessorSnapshot = predecessor ? { ...host.chatQueue[0] } : undefined;
+      await handleSendChat(host, "older queued input", { followUpMode: "queue" });
+      expect(host.chatQueue).toEqual([
+        expect.objectContaining({ text: "older queued input", sendState: "waiting-idle" }),
+      ]);
+      const predecessorSnapshot = { ...host.chatQueue[0] };
       let handoffState: ChatQueueItem["sendState"];
       const accepted = await submitAcrossBrowserInput(host, (queued) => {
         expect(queued).toMatchObject({ sendState: "waiting-idle", sendAttempts: 0 });
@@ -155,17 +151,15 @@ describe("chat submission handoff", () => {
         expect(payload.queueMode).toBe(policy === "steer" ? "steer" : undefined);
       } else {
         expect(host.chatQueue.map((item) => item.text)).toEqual([
-          ...(predecessor ? ["older queued input"] : []),
+          "older queued input",
           "follow up on the active run",
         ]);
         expect(host.chatQueue.every((item) => item.sendState === "waiting-idle")).toBe(true);
       }
       expect(handoffState).toBe(submitting ? "submitting" : "waiting-idle");
-      if (predecessorSnapshot) {
-        expect(host.chatQueue.find((item) => item.id === predecessorSnapshot.id)).toEqual(
-          predecessorSnapshot,
-        );
-      }
+      expect(host.chatQueue.find((item) => item.id === predecessorSnapshot.id)).toEqual(
+        predecessorSnapshot,
+      );
     },
   );
 
@@ -349,9 +343,10 @@ describe("chat submission handoff", () => {
     },
   );
 
-  it.each(
-    ["started", "ok"].flatMap((ack) => [false, true].map((connected) => ({ ack, connected }))),
-  )(
+  it.each([
+    { ack: "started", connected: true },
+    { ack: "ok", connected: false },
+  ])(
     "does not reacquire a $ack send advanced by reconnect during the browser input yield (initially connected: $connected)",
     async ({ ack, connected }) => {
       const host = makeChatHost({

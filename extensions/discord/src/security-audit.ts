@@ -187,7 +187,8 @@ export async function collectDiscordSecurityAuditFindings(params: {
   const guildsConfigured = Object.keys(guildEntries).length > 0;
   const dmAllowFrom = Array.isArray(dmAllowFromRaw) ? dmAllowFromRaw : [];
   const ownerAllowFromConfigured =
-    normalizeAllowFromList([...dmAllowFrom, ...storeAllowFrom]).length > 0;
+    normalizeAllowFromList([...(discordCfg.allowFrom ?? dmAllowFrom), ...storeAllowFrom]).length >
+    0;
   if (
     effectiveGroupPolicy !== "disabled" &&
     guildsConfigured &&

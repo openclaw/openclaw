@@ -153,7 +153,6 @@ export type ModelAuthAvailabilityResolver = {
     provider: string,
     ref?: ModelAuthAvailabilityRef,
   ): ModelAuthAvailability;
-  hasSyntheticAuth(provider: string): boolean;
 };
 
 function evaluateCliRuntimeModelAuthAvailability(
@@ -259,7 +258,6 @@ type CreateModelAuthAvailabilityResolverParams = {
   env?: NodeJS.ProcessEnv;
   syntheticAuthProviderRefs?: readonly string[];
   metadataSnapshot?: PluginMetadataSnapshot;
-  skipSetupProviderFallback?: boolean;
   externalCliProviderIds?: readonly string[];
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   allowPreparedRuntimeAuth?: boolean;
@@ -1514,14 +1512,6 @@ export function createModelAuthAvailabilityResolver(
         : evaluation;
     },
     resolveProviderAuthAvailability,
-    hasSyntheticAuth: (provider) =>
-      synthetic.has(normalizeProviderIdForAuth(provider)) ||
-      synthetic.has(normalizeProvider(provider)) ||
-      (normalizeProviderIdForAuth(provider) === OPENAI_PROVIDER_ID && synthetic.has("codex")) ||
-      hasSyntheticLocalProviderAuthConfig({
-        cfg: params.cfg,
-        provider: normalizeProviderIdForAuth(provider),
-      }),
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

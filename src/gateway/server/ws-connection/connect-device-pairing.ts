@@ -266,7 +266,10 @@ export async function authorizeGatewayConnectDevice(
         return replacementPending?.requestId;
       };
       const inlineApprovalAttempted =
-        trustedProxyApprovalScopes !== null || pairing.request.silent === true;
+        trustedProxyApprovalScopes !== null ||
+        pairing.request.silent === true ||
+        // A previously interactive first-node request may now qualify locally.
+        (role === "node" && reason === "role-upgrade" && plan.localApproval === "silent");
       if (inlineApprovalAttempted) {
         if (trustedProxyApprovalScopes !== null) {
           approved = await approveDevicePairing(pairing.request.requestId, {
@@ -309,6 +312,10 @@ export async function authorizeGatewayConnectDevice(
                 !isConnectAuthorizationCurrent() ||
                 pending.deviceId !== device.id ||
                 pending.publicKey !== devicePublicKey ||
+                // Pending retries can merge roles; a node connect cannot approve
+                // an unrelated operator request carried by the same pending row.
+                (role === "node" &&
+                  (pending.role !== role || pending.roles?.some((entry) => entry !== role))) ||
                 (plan.localApproval === "trusted-cidr" && !isScopelessNodePairingRequest(pending))
               ) {
                 return false;

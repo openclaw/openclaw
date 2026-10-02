@@ -205,7 +205,7 @@ export function usePreparedPoolFixture() {
           bundleHash: BUNDLE_HASH,
           assertCurrent: () => {},
         })!
-      : placements.transition({
+      : await placements.transition({
           sessionId,
           from: "requested",
           to: "provisioning",
@@ -215,7 +215,7 @@ export function usePreparedPoolFixture() {
     if (stage === "provisioning") {
       return store.get(record.environmentId)!;
     }
-    const syncing = placements.transition({
+    const syncing = await placements.transition({
       sessionId,
       from: "provisioning",
       to: "syncing",
@@ -241,7 +241,7 @@ export function usePreparedPoolFixture() {
       },
     });
     if (stage === "active") {
-      const starting = placements.transition({
+      const starting = await placements.transition({
         sessionId,
         from: "syncing",
         to: "starting",
@@ -249,7 +249,7 @@ export function usePreparedPoolFixture() {
         patch: { workspaceBaseManifestRef: "manifest", remoteWorkspaceDir: "/workspace" },
       });
       nowMs = activatedAtMs;
-      placements.transition({
+      await placements.transition({
         sessionId,
         from: "starting",
         to: "active",
@@ -269,10 +269,10 @@ export function usePreparedPoolFixture() {
       const ownerEpoch = placement.activeOwnerEpoch;
       const owner = { sessionId, environmentId, ownerEpoch };
       const expectedGeneration = placement.generation;
-      const draining = placements.startDrain({ ...owner, expectedGeneration });
-      placements.startReconcile({ ...owner, expectedGeneration: draining.generation });
+      const draining = await placements.startDrain({ ...owner, expectedGeneration });
+      await placements.startReconcile({ ...owner, expectedGeneration: draining.generation });
     }
-    placements.fail({ sessionId, recoveryError: "session teardown" });
+    await placements.fail({ sessionId, recoveryError: "session teardown" });
     await destroy(record);
   }
 

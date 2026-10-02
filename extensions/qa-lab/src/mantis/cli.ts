@@ -20,7 +20,7 @@ type MantisDiscordSmokeCommanderOptions = Omit<
 
 type MantisBeforeAfterCommanderOptions = Omit<
   MantisBeforeAfterOptions,
-  "allowFailures" | "commandRunner" | "fastMode" | "now"
+  "commandRunner" | "fastMode" | "now"
 > & { fast?: boolean };
 
 async function runBeforeAfter(opts: MantisBeforeAfterOptions) {

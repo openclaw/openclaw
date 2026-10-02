@@ -18,7 +18,6 @@ import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.
 import { createWorkerMachineCatalog } from "./provider-machine-catalog.js";
 import { createWorkerNodeProvisioning } from "./provider-node-provisioning.js";
 import { createWorkerProviderOwnerLifecycle } from "./provider-owner-lifecycle.js";
-import { retireMismatchedWorkerLease } from "./provider-persisted-lease.js";
 import { prepareWorkerProviderProject } from "./provider-project-preparation.js";
 import { createWorkerProvisionCancellation } from "./provider-provisioning-cancellation.js";
 import { createWorkerRuntimeRefresher } from "./provider-runtime-refresh.js";
@@ -63,6 +62,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     finishConfirmedProvisionCleanup,
     preserveIndeterminateProvisionCleanup,
     destroy,
+    retireMismatchedLease,
   } = createWorkerProviderOwnerLifecycle({
     ...options,
     providerFor,
@@ -360,7 +360,11 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       const detail = boundedError(error);
       const permanent =
         error instanceof WorkerProviderError || options.isServiceError(error, "invalid_profile");
-      if (record.state === "requested" || (preparationComplete && permanent)) {
+      // A current refusal cannot disprove allocation by an earlier attempt.
+      if (
+        record.state === "requested" ||
+        (provisioningTransition !== undefined && preparationComplete && permanent)
+      ) {
         await move(record, "failed", { lastError: detail });
         throw serviceError(
           permanent ? "invalid_profile" : "provider_failure",
@@ -546,7 +550,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       ).catch(() => undefined);
       return;
     }
-    if (await retireMismatchedWorkerLease(record, provider, store, finishDestroy)) {
+    if (await retireMismatchedLease(record, provider)) {
       return;
     }
     const lease = lifecycleLease(record, leaseId);

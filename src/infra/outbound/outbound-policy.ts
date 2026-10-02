@@ -29,26 +29,7 @@ export type CrossContextDecoration = {
   presentationBuilder?: CrossContextPresentationBuilder;
 };
 
-const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
-  "send",
-  "poll",
-  "poll-vote",
-  "reply",
-  "sendWithEffect",
-  "sendAttachment",
-  "upload-file",
-  "edit",
-  "delete",
-  "pin",
-  "unpin",
-  "thread-create",
-  "thread-reply",
-  "topic-create",
-  "topic-edit",
-  "sticker",
-]);
-
-// Mutations are guarded above, but markers only apply to outbound payloads that
+// All mutations are guarded, but markers only apply to outbound payloads that
 // create new visible content. Existing-message edits/pins/deletes should not
 // grow cross-context forwarding text.
 const CONTEXT_MARKER_ACTIONS = new Set<ChannelMessageActionName>([
@@ -60,6 +41,18 @@ const CONTEXT_MARKER_ACTIONS = new Set<ChannelMessageActionName>([
   "upload-file",
   "thread-reply",
   "sticker",
+]);
+
+const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
+  ...CONTEXT_MARKER_ACTIONS,
+  "poll-vote",
+  "edit",
+  "delete",
+  "pin",
+  "unpin",
+  "thread-create",
+  "topic-create",
+  "topic-edit",
 ]);
 
 function resolveContextGuardTarget(

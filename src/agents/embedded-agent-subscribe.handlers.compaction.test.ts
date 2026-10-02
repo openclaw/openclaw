@@ -184,7 +184,7 @@ describe("compaction handlers", () => {
           stream: "compaction",
           data: { phase: "end", completed: true, willRetry: false, outcome: "completed" },
         });
-        const events = listSessionStateEventsSince(sessionKey, agentId, 0).events.filter(
+        const events = (await listSessionStateEventsSince(sessionKey, agentId, 0)).events.filter(
           (event) => event.runId === runId,
         );
         expect(events).toHaveLength(expectedEventCount);

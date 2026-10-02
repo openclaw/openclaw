@@ -76,7 +76,7 @@ export function createProviderReplayDispatch(
     resolveMoveDestination: async () => undefined,
     runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
     runReclaimBarrier: async ({ begin, reclaim }) =>
-      await reclaim({ kind: "local", path: "/gateway/workspace" }, begin()),
+      await reclaim({ kind: "local", path: "/gateway/workspace" }, await begin()),
     runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
     ...createWorkerWorkspaceRecoveryFixture({
       resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),

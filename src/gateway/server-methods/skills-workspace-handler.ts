@@ -21,12 +21,12 @@ import type {
 } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
 
-export function resolveSkillsAgentWorkspace(params: unknown, context: GatewayRequestContext) {
+export function resolveSkillsAgentWorkspace(
+  params: { agentId?: string },
+  context: GatewayRequestContext,
+) {
   const cfg = context.getRuntimeConfig();
-  const agentIdRaw =
-    params && typeof params === "object" && "agentId" in params
-      ? normalizeOptionalString((params as { agentId?: unknown }).agentId)
-      : undefined;
+  const agentIdRaw = normalizeOptionalString(params.agentId);
   let agentId: string;
   try {
     agentId = agentIdRaw

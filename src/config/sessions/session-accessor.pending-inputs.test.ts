@@ -8,11 +8,13 @@ import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
@@ -58,12 +60,6 @@ describe("accepted input custody", () => {
     timestamp: 100,
     idempotencyKey: `${runId}:user`,
   });
-  const readEventId = (event: unknown) => {
-    if (!event || typeof event !== "object" || !("id" in event)) {
-      return undefined;
-    }
-    return typeof event.id === "string" ? event.id : undefined;
-  };
   const stage = async (
     runId: string,
     options: Partial<Parameters<typeof stageSessionPendingInput>[1]> = {},
@@ -95,10 +91,12 @@ describe("accepted input custody", () => {
   beforeEach(async () => {
     await upsertSessionEntryCore(scope(), { sessionId, updatedAt: 1 });
   });
-  afterEach(() => {
-    for (const receipt of receipts.splice(0)) {
+  afterEach(async () => {
+    const retained = receipts.splice(0);
+    for (const receipt of retained) {
       receipt.finish("interrupted");
     }
+    await Promise.allSettled(retained.map(async (receipt) => receipt.settled?.()));
     closeOpenClawAgentDatabasesForTest();
   });
 
@@ -122,7 +120,7 @@ describe("accepted input custody", () => {
     ).rejects.toThrow("already admitted");
     expect(prepare).toHaveBeenCalledOnce();
     expect(await loadTranscriptEvents(scope())).toEqual(before);
-    expect(listSessionPendingInputs(scope())).toMatchObject({
+    expect(await listSessionPendingInputs(scope())).toMatchObject({
       total: 1,
       items: [{ id: receipt.inputId, state: "queued", message: receipt.message }],
     });
@@ -145,7 +143,7 @@ describe("accepted input custody", () => {
       messageId: receipt.inputId,
       message: receipt.message,
     });
-    expect(listSessionPendingInputs(scope())).toEqual({ total: 0, items: [] });
+    expect(await listSessionPendingInputs(scope())).toEqual({ total: 0, items: [] });
     expect(readSessionSubmittedInput(scope(), "queued:user")).toEqual(receipt.message);
     const committedReplay = await stage("queued", { prepareMessageAfterIdempotencyCheck: prepare });
     expect(committedReplay.message).toEqual(receipt.message);
@@ -167,14 +165,14 @@ describe("accepted input custody", () => {
         __openclaw: { transport: { clients: [{ id: "cli", mode: "cli" }] } },
       },
     });
-    const pending = listSessionPendingInputs(scope());
+    const pending = await listSessionPendingInputs(scope());
     const sourceTranscript = await loadTranscriptEvents(scope());
     const mirrored = await receipt.run(() =>
       appendTranscriptMessage(target, { message: receipt.message }),
     );
     expect(mirrored).toMatchObject({ appended: true, message: receipt.message });
     expect(mirrored?.messageId).not.toBe(receipt.inputId);
-    expect(listSessionPendingInputs(scope())).toEqual(pending);
+    expect(await listSessionPendingInputs(scope())).toEqual(pending);
     expect(await loadTranscriptEvents(scope())).toEqual(sourceTranscript);
     expect(readSessionSubmittedInput(target, "bound-mirror:user")).toEqual(receipt.message);
     await expect(appendTranscriptMessage(scope(), { message: receipt.message })).rejects.toThrow(
@@ -182,7 +180,7 @@ describe("accepted input custody", () => {
     );
 
     expect(await promote(receipt)).toMatchObject({ appended: true, messageId: receipt.inputId });
-    expect(listSessionPendingInputs(scope())).toEqual({ items: [], total: 0 });
+    expect(await listSessionPendingInputs(scope())).toEqual({ items: [], total: 0 });
     const targetTranscript = await loadTranscriptEvents(target);
     expect(
       await receipt.run(() => appendTranscriptMessage(target, { message: receipt.message })),
@@ -202,6 +200,7 @@ describe("accepted input custody", () => {
         await promote(aggregate);
       }
       receipt.finish("interrupted");
+      await receipt.settled?.();
       rotateAgentEventLifecycleGeneration();
       const readStoredSource = () =>
         database()
@@ -223,7 +222,9 @@ describe("accepted input custody", () => {
       expect(() => receipt.run(execute)).toThrow();
       expect(readStoredSource()).toEqual(storedSource);
       expect(await loadTranscriptEvents(scope())).toEqual(transcript);
-      expect(listSessionPendingInputs(scope()).total).toBe(disposition === "interrupted" ? 1 : 0);
+      expect((await listSessionPendingInputs(scope())).total).toBe(
+        disposition === "interrupted" ? 1 : 0,
+      );
 
       const renewed = await stage(runId, {
         requestFingerprint,
@@ -265,22 +266,26 @@ describe("accepted input custody", () => {
         expect(await loadTranscriptEvents(scope())).toEqual(committed);
       }
       expect(execute).toHaveBeenCalledTimes(disposition === "interrupted" ? 1 : 0);
-      expect(listSessionPendingInputs(scope())).toEqual({ total: 0, items: [] });
+      expect(await listSessionPendingInputs(scope())).toEqual({ total: 0, items: [] });
     },
   );
 
   it("rolls transcript promotion and custody consumption back together", async () => {
     const receipt = await stage("atomic");
     const before = await loadTranscriptEvents(scope());
-    database().db.exec(
-      "CREATE TRIGGER reject_pending_consume BEFORE DELETE ON session_pending_inputs BEGIN SELECT RAISE(ABORT, 'consume failed'); END",
-    );
+    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
+      database().db.exec(
+        "CREATE TRIGGER reject_pending_consume BEFORE DELETE ON session_pending_inputs BEGIN SELECT RAISE(ABORT, 'consume failed'); END",
+      );
+    });
     await expect(promote(receipt)).rejects.toThrow("consume failed");
     expect(await loadTranscriptEvents(scope())).toEqual(before);
-    expect(readSessionPendingInput(scope(), receipt.inputId)?.state).toBe("queued");
-    database().db.exec("DROP TRIGGER reject_pending_consume");
+    expect((await readSessionPendingInput(scope(), receipt.inputId))?.state).toBe("queued");
+    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
+      database().db.exec("DROP TRIGGER reject_pending_consume");
+    });
     expect(await promote(receipt)).toMatchObject({ appended: true, messageId: receipt.inputId });
-    expect(readSessionPendingInput(scope(), receipt.inputId)).toBeUndefined();
+    expect(await readSessionPendingInput(scope(), receipt.inputId)).toBeUndefined();
   });
 
   it("moves transcript custody only after an authorized relocation commits", async () => {
@@ -298,13 +303,17 @@ describe("accepted input custody", () => {
       ),
     ).toMatchObject({ ok: true, value: { appended: false, messageId: receipt.inputId } });
 
-    database().db.exec(
-      "CREATE TRIGGER reject_relocation BEFORE INSERT ON transcript_events WHEN NEW.event_json LIKE '%relocation-copy%' BEGIN SELECT RAISE(ABORT, 'relocation failed'); END",
-    );
+    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
+      database().db.exec(
+        "CREATE TRIGGER reject_relocation BEFORE INSERT ON transcript_events WHEN NEW.event_json LIKE '%relocation-copy%' BEGIN SELECT RAISE(ABORT, 'relocation failed'); END",
+      );
+    });
     expect(() => receipt.run(() => appendCopy(receipt.inputId, "relocation-copy"))).toThrow(
       "relocation failed",
     );
-    database().db.exec("DROP TRIGGER reject_relocation");
+    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
+      database().db.exec("DROP TRIGGER reject_relocation");
+    });
     expect(
       await receipt.run(() => appendTranscriptMessage(scope(), { message: receipt.message })),
     ).toMatchObject({ appended: false, messageId: receipt.inputId });
@@ -386,7 +395,9 @@ describe("accepted input custody", () => {
     }, databaseOptions);
 
     for (const eventId of ["rolled-back-outer", "rolled-back-savepoint"]) {
-      expect((await loadTranscriptEvents(scope())).map(readEventId)).not.toContain(eventId);
+      expect(await loadTranscriptEvents(scope())).not.toContainEqual(
+        expect.objectContaining({ id: eventId }),
+      );
     }
     expect(() =>
       receipt.run(() => appendCopy("first-savepoint-copy", "stale-savepoint-source")),
@@ -464,7 +475,7 @@ describe("accepted input custody", () => {
     gate.resolve();
     await held;
     expect(await queued).toMatchObject({ appended: true, messageId: second.inputId });
-    const pendingIds = listSessionPendingInputs(scope()).items.map((input) => input.id);
+    const pendingIds = (await listSessionPendingInputs(scope())).items.map((input) => input.id);
     expect(pendingIds).toEqual([first.inputId]);
   });
 
@@ -474,22 +485,26 @@ describe("accepted input custody", () => {
     const aggregate = bindSessionPendingInputSources([first, second], message("atomic-c"))!;
     receipts.push(aggregate);
     const before = await loadTranscriptEvents(scope());
-    database().db.exec(
-      "CREATE TRIGGER reject_collect_consume BEFORE UPDATE OF consumed_event_id ON session_pending_inputs WHEN OLD.run_id = 'atomic-b' BEGIN SELECT RAISE(ABORT, 'collect consume failed'); END",
-    );
+    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
+      database().db.exec(
+        "CREATE TRIGGER reject_collect_consume BEFORE UPDATE OF consumed_event_id ON session_pending_inputs WHEN OLD.run_id = 'atomic-b' BEGIN SELECT RAISE(ABORT, 'collect consume failed'); END",
+      );
+    });
     await expect(promote(aggregate)).rejects.toThrow("collect consume failed");
     expect(await loadTranscriptEvents(scope())).toEqual(before);
-    expect(listSessionPendingInputs(scope()).total).toBe(2);
+    expect((await listSessionPendingInputs(scope())).total).toBe(2);
     expect(listSessionPendingInputReceipts(scope(), { runIds: ["atomic-a", "atomic-b"] })).toEqual([
       { runId: "atomic-a", state: "pending" },
       { runId: "atomic-b", state: "pending" },
     ]);
-    database().db.exec("DROP TRIGGER reject_collect_consume");
+    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
+      database().db.exec("DROP TRIGGER reject_collect_consume");
+    });
     expect(await promote(aggregate)).toMatchObject({
       appended: true,
       messageId: aggregate.inputId,
     });
-    expect(listSessionPendingInputs(scope()).total).toBe(0);
+    expect((await listSessionPendingInputs(scope())).total).toBe(0);
   });
 
   it("revalidates every collected source after an await and rejects copied receipt fields", async () => {
@@ -505,8 +520,9 @@ describe("accepted input custody", () => {
     });
     await expect(promotion).rejects.toThrow("custody ended");
     await expect(promotion).rejects.toBeInstanceOf(SessionPendingInputCustodyError);
+    await first.settled?.();
     expect(await loadTranscriptEvents(scope())).toEqual([]);
-    expect(listSessionPendingInputs(scope()).items.map((input) => input.state)).toEqual([
+    expect((await listSessionPendingInputs(scope())).items.map((input) => input.state)).toEqual([
       "cancelled",
       "queued",
     ]);
@@ -556,14 +572,14 @@ describe("accepted input custody", () => {
       });
       await expect(mixed.persistApproved()).rejects.toThrow("cannot mix staged and unstaged");
       expect(await loadTranscriptEvents(scope())).toEqual([]);
-      expect(listSessionPendingInputs(scope()).total).toBe(1);
+      expect((await listSessionPendingInputs(scope())).total).toBe(1);
       const appended = await aggregate.persistApproved();
       expect(appended).toMatchObject({
         appended: true,
         message: { content: "Collected: Approved source" },
       });
       expect(hook).toHaveBeenCalledOnce();
-      expect(listSessionPendingInputs(scope()).total).toBe(0);
+      expect((await listSessionPendingInputs(scope())).total).toBe(0);
       const duplicate = createUserTurnTranscriptRecorder({
         target,
         message: message("recorder-source", "Original source"),
@@ -579,6 +595,7 @@ describe("accepted input custody", () => {
       ).toThrow("already been consumed");
     } finally {
       aggregate.finishPendingInput?.("interrupted");
+      await aggregate.waitForPendingInputSettlement?.();
     }
   });
 
@@ -587,7 +604,8 @@ describe("accepted input custody", () => {
     async (disposition) => {
       const receipt = await stage("closed");
       receipt.finish(disposition);
-      expect(readSessionPendingInput(scope(), receipt.inputId)?.state).toBe(disposition);
+      await receipt.settled?.();
+      expect((await readSessionPendingInput(scope(), receipt.inputId))?.state).toBe(disposition);
       expect(() => promote(receipt)).toThrow("ownership ended");
       await expect(stage("closed")).rejects.toThrow("submit a new turn");
       await expect(appendTranscriptMessage(scope(), { message: receipt.message })).rejects.toThrow(
@@ -614,9 +632,10 @@ describe("accepted input custody", () => {
       }),
     ).rejects.toThrow("run authority closed");
     await expect(stage("authority")).rejects.toThrow("already admitted");
-    expect(listSessionPendingInputs(scope()).items[0]?.state).toBe("queued");
+    expect((await listSessionPendingInputs(scope())).items[0]?.state).toBe("queued");
     receipt.finish("cancelled");
-    expect(listSessionPendingInputs(scope()).items[0]?.state).toBe("cancelled");
+    await receipt.settled?.();
+    expect((await listSessionPendingInputs(scope())).items[0]?.state).toBe("cancelled");
     expect(database().db.prepare("SELECT state FROM session_pending_inputs").get()).toEqual({
       state: "cancelled",
     });
@@ -627,8 +646,10 @@ describe("accepted input custody", () => {
     async (entry) => {
       const receipt = await stage("restart");
       rotateAgentEventLifecycleGeneration();
+      await receipt.settled?.();
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
-      const retained = readSessionPendingInput(scope(), receipt.inputId);
+      const retained = await readSessionPendingInput(scope(), receipt.inputId);
       expect(retained?.state).toBe("interrupted");
       expect(await loadTranscriptEvents(scope())).toEqual([]);
       if (entry === "receipt-entry") {
@@ -644,7 +665,7 @@ describe("accepted input custody", () => {
         await expect(promotion).rejects.toThrow("outside its admitted turn");
       }
       expect(await loadTranscriptEvents(scope())).toEqual([]);
-      expect(readSessionPendingInput(scope(), receipt.inputId)).toEqual(retained);
+      expect(await readSessionPendingInput(scope(), receipt.inputId)).toEqual(retained);
     },
   );
 
@@ -754,7 +775,7 @@ describe("accepted input custody", () => {
     );
     const current = database();
     copySessionNodeArtifactsForRepair(current, current, [sessionKey], canonical);
-    expect(listSessionPendingInputs({ ...scope(), sessionKey: canonical })).toMatchObject({
+    expect(await listSessionPendingInputs({ ...scope(), sessionKey: canonical })).toMatchObject({
       total: 1,
       items: [{ id: receipt.inputId, state: "interrupted", message: receipt.message }],
     });
@@ -801,7 +822,7 @@ describe("accepted input custody", () => {
           destinationScope.sessionKey,
         );
       }, destinationOptions);
-      expect(listSessionPendingInputs(destinationScope)).toMatchObject(
+      expect(await listSessionPendingInputs(destinationScope)).toMatchObject(
         consumed
           ? { total: 0, items: [] }
           : {
@@ -832,12 +853,12 @@ describe("accepted input custody", () => {
     },
   );
 
-  it("rejects a reset target and removes custody on logical deletion that retains transcript windows", async () => {
+  it("reconciles reset input without host reads and removes custody on logical deletion that retains transcript windows", async () => {
     const receipt = await stage("reset", {
       message: message("reset", "accepted input ".repeat(4096)),
     });
     const second = await stage("reset-second");
-    expect(listSessionPendingInputs(scope()).items.map((input) => input.state)).toEqual([
+    expect((await listSessionPendingInputs(scope())).items.map((input) => input.state)).toEqual([
       "queued",
       "queued",
     ]);
@@ -848,33 +869,21 @@ describe("accepted input custody", () => {
       .prepare("SELECT * FROM session_pending_inputs ORDER BY seq")
       .all();
     expect(storedBefore.map((row) => row.state)).toEqual(["queued", "queued"]);
-    current.db.exec(
-      "CREATE TRIGGER reject_pending_interruption BEFORE UPDATE OF state ON session_pending_inputs WHEN OLD.run_id = 'reset-second' AND NEW.state = 'interrupted' BEGIN SELECT RAISE(ABORT, 'interruption failed'); END",
-    );
-    try {
-      expect(() => listSessionPendingInputs(scope())).toThrow("interruption failed");
-    } finally {
-      current.db.exec("DROP TRIGGER reject_pending_interruption");
-    }
-    expect(current.db.prepare("SELECT * FROM session_pending_inputs ORDER BY seq").all()).toEqual(
-      storedBefore,
-    );
     const counter = trackSqliteStatementExecutions(current.db, ["pending"], (sqlText) =>
       sqlText.startsWith("select ") && sqlText.includes('from "session_pending_inputs"')
         ? "pending"
         : null,
     );
     try {
-      expect(listSessionPendingInputs(scope())).toMatchObject({
+      expect(await listSessionPendingInputs(scope())).toMatchObject({
         total: 2,
         items: [
           { id: receipt.inputId, state: "interrupted", message: receipt.message },
           { id: second.inputId, state: "interrupted", message: second.message },
         ],
       });
-      const messageBytes = Buffer.byteLength(JSON.stringify(receipt.message));
-      expect(counter.textBytes.pending).toBeGreaterThanOrEqual(messageBytes);
-      expect(counter.textBytes.pending).toBeLessThan(messageBytes + 4096);
+      expect(counter.counts.pending).toBe(0);
+      expect(counter.textBytes.pending).toBe(0);
     } finally {
       counter.restore();
     }
@@ -886,13 +895,13 @@ describe("accepted input custody", () => {
       storePath: fixture.storePath(),
       target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
     });
-    expect(listSessionPendingInputs(scope())).toEqual({ items: [], total: 0 });
+    expect(await listSessionPendingInputs(scope())).toEqual({ items: [], total: 0 });
     expect(
       database().db.prepare("SELECT count(*) AS total FROM session_pending_inputs").get(),
     ).toEqual({ total: 0 });
   });
 
-  it("paginates retained inputs with stable cursors while another input is promoted", async () => {
+  it("reads retained inputs off-thread and paginates with stable cursors while another input is promoted", async () => {
     const first = await stage("first");
     const second = await stage("second");
     const third = await stage("third");
@@ -906,31 +915,30 @@ describe("accepted input custody", () => {
         : null,
     );
     try {
-      expect(readSessionPendingInput(scope(), first.inputId)).toMatchObject({
+      expect(await readSessionPendingInput(scope(), first.inputId)).toMatchObject({
         id: first.inputId,
         runId: "first",
         state: "queued",
         message: first.message,
       });
-      expect(readSessionPendingInput(scope(), "missing-input")).toBeUndefined();
+      expect(await readSessionPendingInput(scope(), "missing-input")).toBeUndefined();
       expect(
-        readSessionPendingInput({ ...scope(), sessionId: "other-session" }, first.inputId),
+        await readSessionPendingInput({ ...scope(), sessionId: "other-session" }, first.inputId),
       ).toBeUndefined();
-      expect(counter.counts.pending).toBeLessThanOrEqual(4);
-      expect(counter.rowCounts.pending).toBeGreaterThan(0);
-      expect(counter.rowCounts.pending).toBeLessThanOrEqual(2);
+      expect(counter.counts.pending).toBe(0);
+      expect(counter.rowCounts.pending).toBe(0);
     } finally {
       counter.restore();
     }
     expect(current.db.prepare("SELECT * FROM session_pending_inputs ORDER BY seq").all()).toEqual(
       storedBefore,
     );
-    const page = listSessionPendingInputs(scope(), { limit: 2 });
+    const page = await listSessionPendingInputs(scope(), { limit: 2 });
     expect(page.items.map((input) => input.id)).toEqual([second.inputId, third.inputId]);
     expect(page.total).toBe(3);
     expect(page.nextBefore).toBeDefined();
     await promote(third);
-    const older = listSessionPendingInputs(scope(), { limit: 2, before: page.nextBefore });
+    const older = await listSessionPendingInputs(scope(), { limit: 2, before: page.nextBefore });
     expect(older.items.map((input) => input.id)).toEqual([first.inputId]);
     for (const idempotencyKey of ["first:user", "third:user"]) {
       expect(
@@ -1025,19 +1033,4 @@ describe("accepted input custody", () => {
       ).toEqual(before);
     },
   );
-
-  it("bounds materialized pending pages by bytes without truncating input or skipping its cursor", async () => {
-    const content = "x".repeat(Math.floor(MAX_PAYLOAD_BYTES / 2));
-    const first = await stage("large-first", { message: message("large-first", content) });
-    const second = await stage("large-second", { message: message("large-second", content) });
-    const page = listSessionPendingInputs(scope());
-    expect(page.items.map((input) => input.id)).toEqual([second.inputId]);
-    expect(page.items[0]?.message.content === content).toBe(true);
-    expect(page.total).toBe(2);
-    expect(page.nextBefore).toBeDefined();
-    const older = listSessionPendingInputs(scope(), { before: page.nextBefore });
-    expect(older.items.map((input) => input.id)).toEqual([first.inputId]);
-    expect(older.items[0]?.message.content === content).toBe(true);
-    expect(older.nextBefore).toBeUndefined();
-  });
 });

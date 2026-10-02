@@ -11,6 +11,7 @@ import {
   validatePublicationAdmissionBinding,
   validatePublicationSourceBinding,
 } from "./full-release-publication-contract.mjs";
+import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { hasRequiredCrossOsSuites } from "./lib/cross-os-release-checks/suite-filter.mjs";
 import { candidateArtifactJsonFromBinding } from "./lib/full-release-candidate-reuse.mjs";
 import {
@@ -21,10 +22,6 @@ import { changelogEntryPath, isReleaseChangelogPath } from "./lib/release-change
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
 export { MAX_RELEASE_ARTIFACT_BYTES, serializeReleaseArtifact };
-
-export function releaseAdvisoryJobs() {
-  return [];
-}
 
 function validateReleaseAdvisoryJobs(value) {
   const expected = [];
@@ -59,31 +56,35 @@ export function validateReleaseManifestAdvisoryJobs(manifest) {
   return validateReleaseAdvisoryJobs(manifest.advisoryJobs);
 }
 
+export function releaseManifestChildEvidence(child) {
+  return {
+    runId: child.runId,
+    plannedRunAttempt: child.plannedRunAttempt,
+    effectiveRunAttempt: child.runAttempt,
+    observedRunAttempts: child.observedRunAttempts,
+    compositeJobsSha256: child.compositeJobsSha256,
+    dispatchActor: child.dispatchActor,
+    triggeringActor: child.triggeringActor,
+    repository: child.repository,
+    jobs: child.timing.jobs.map(
+      ({ name, status, conclusion, acceptedRunAttempt, startedAt, completedAt, url }) => ({
+        name,
+        status,
+        conclusion,
+        acceptedRunAttempt,
+        startedAt,
+        completedAt,
+        url,
+      }),
+    ),
+  };
+}
+
 export function buildReleaseValidationManifest({ plan, drain, context }) {
   const childEvidence = Object.fromEntries(
     Object.entries(drain?.children ?? {}).map(([key, child]) => [
       key,
-      {
-        runId: child.runId,
-        plannedRunAttempt: child.plannedRunAttempt,
-        effectiveRunAttempt: child.runAttempt,
-        observedRunAttempts: child.observedRunAttempts,
-        compositeJobsSha256: child.compositeJobsSha256,
-        dispatchActor: child.dispatchActor,
-        triggeringActor: child.triggeringActor,
-        repository: child.repository,
-        jobs: child.timing.jobs.map(
-          ({ name, status, conclusion, acceptedRunAttempt, startedAt, completedAt, url }) => ({
-            name,
-            status,
-            conclusion,
-            acceptedRunAttempt,
-            startedAt,
-            completedAt,
-            url,
-          }),
-        ),
-      },
+      releaseManifestChildEvidence(child),
     ]),
   );
   const current = {
@@ -99,9 +100,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
     candidateBinding: plan.candidate,
     publicationArtifacts: context.publicationArtifacts ?? { npmPreflight: null, docker: null },
     publishInputs: context.publishInputs,
-    advisoryJobs: releaseAdvisoryJobs(
-      Object.entries(childEvidence).map(([key, child]) => Object.assign({}, child, { key })),
-    ),
+    advisoryJobs: [],
     childEvidence,
     executionPlanSha256: plan.sha256,
     sourceParentRunAttempt: Number(plan.parentRunAttempt),
@@ -303,6 +302,9 @@ const REVIEWED_TELEGRAM_WAIVERS = new Map([
   // 01d71319 (FRV 36534008742, jobs 109299525565 and rerun 109316259401) and Telegram
   // QA 4/25 on 56fb8872 and e61efb6c (job 109279074202).
   ["2026.9.7-owner-approved", ["telegram", "matrix"]],
+  // The release owner approved the same Telegram and Matrix QA-live scope for 2026.9.8
+  // on 2026-10-02. Every other stable-release gate remains blocking.
+  ["2026.9.8-owner-approved", ["telegram", "matrix"]],
 ]);
 const HARD_GH_TRANSPORT_PATTERN =
   /HTTP (?:400|401|403|404|410|422)\b|Bad credentials|authentication required|not authenticated|gh auth login|unknown (?:command|flag)|Usage: gh\b|ENOENT|EACCES/iu;
@@ -544,21 +546,6 @@ function positiveInteger(value) {
   return Number.isSafeInteger(normalized) && normalized > 0 ? normalized : undefined;
 }
 
-function canonicalValue(value) {
-  if (Array.isArray(value)) {
-    return value.map(canonicalValue);
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value)
-        .filter(([, entry]) => entry !== undefined)
-        .toSorted(([left], [right]) => left.localeCompare(right))
-        .map(([key, entry]) => [key, canonicalValue(entry)]),
-    );
-  }
-  return value;
-}
-
 function booleanValue(value) {
   return value === true || value === "true";
 }
@@ -778,7 +765,7 @@ function jsonSha256(value) {
 
 export function releaseCompositeJobsSha256(value) {
   const { effectiveRunAttempt, jobs, plannedRunAttempt } = value;
-  return jsonSha256(canonicalValue({ effectiveRunAttempt, jobs, plannedRunAttempt }));
+  return jsonSha256(sortJsonValueKeys({ effectiveRunAttempt, jobs, plannedRunAttempt }));
 }
 
 export function composeReleaseAttemptJobs(attempts, expected = {}) {
@@ -1199,39 +1186,21 @@ function executionPlanDigestPayload(plan) {
   const coverage = Object.hasOwn(plan, "coveragePolicy")
     ? { targetVersion: plan.targetVersion, coveragePolicy: plan.coveragePolicy }
     : {};
-  if (!Object.hasOwn(plan, "attemptEvidenceVersion")) {
-    return {
-      ...source,
-      ...publication,
-      ...waiver,
-      blockers: plan.blockers,
-      children: plan.children,
-      errors: plan.errors,
-      evidenceReuse: plan.evidenceReuse,
-      gates: plan.gates,
-      kind: plan.kind,
-      parentRunAttempt: plan.parentRunAttempt,
-      parentRunId: plan.parentRunId,
-      releaseProfile: plan.releaseProfile,
-      rerunGroup: plan.rerunGroup,
-      targetSha: plan.targetSha,
-      trustedWorkflow: plan.trustedWorkflow,
-      version: plan.version,
-      workflowRef: plan.workflowRef,
-      workflowSha: plan.workflowSha,
-    };
-  }
+  const attemptAware = Object.hasOwn(plan, "attemptEvidenceVersion");
   return {
     ...source,
     ...publication,
     ...waiver,
-    ...coverage,
-    ...(plan.childReuse !== undefined ? { childReuse: plan.childReuse } : {}),
-    ...(Object.hasOwn(plan, "knownFlakyJobs") ? { knownFlakyJobs: plan.knownFlakyJobs } : {}),
-    attemptEvidenceVersion: plan.attemptEvidenceVersion,
+    ...(attemptAware
+      ? {
+          ...coverage,
+          ...(plan.childReuse !== undefined ? { childReuse: plan.childReuse } : {}),
+          ...(Object.hasOwn(plan, "knownFlakyJobs") ? { knownFlakyJobs: plan.knownFlakyJobs } : {}),
+          attemptEvidenceVersion: plan.attemptEvidenceVersion,
+        }
+      : {}),
     blockers: plan.blockers,
-    candidate: plan.candidate,
-    candidateRequest: plan.candidateRequest,
+    ...(attemptAware ? { candidate: plan.candidate, candidateRequest: plan.candidateRequest } : {}),
     children: plan.children,
     errors: plan.errors,
     evidenceReuse: plan.evidenceReuse,
@@ -1240,7 +1209,7 @@ function executionPlanDigestPayload(plan) {
     parentRunAttempt: plan.parentRunAttempt,
     parentRunId: plan.parentRunId,
     releaseProfile: plan.releaseProfile,
-    repository: plan.repository,
+    ...(attemptAware ? { repository: plan.repository } : {}),
     rerunGroup: plan.rerunGroup,
     targetSha: plan.targetSha,
     trustedWorkflow: plan.trustedWorkflow,
@@ -1570,18 +1539,6 @@ export function terminalPolicyPass(child) {
   return child.status === "completed" && child.conclusion === "success" && failures.length === 0;
 }
 
-// These consumers bind their producer's artifact to the current run attempt, so a
-// failed-jobs rerun that leaves the green producer behind stays red (#161317).
-const ATTEMPT_BOUND_RELEASE_PRODUCERS = Object.freeze([
-  Object.freeze({
-    producer: "install_smoke_release_checks / installer_smoke_candidate_payload",
-    consumers: Object.freeze([
-      "install_smoke_release_checks / installer_smoke_nonroot_image",
-      "install_smoke_release_checks / installer_smoke_nonroot",
-    ]),
-  }),
-]);
-
 /** Choose the single GitHub rerun request that can repair a terminal child's blocking jobs. */
 export function planReleaseChildRerun({ childKey, jobs }) {
   const failed = jobs
@@ -1591,15 +1548,19 @@ export function planReleaseChildRerun({ childKey, jobs }) {
   if (failed.length === 0) {
     throw new Error(`${childKey} has no blocking failed job to rerun`);
   }
-  for (const { producer, consumers } of ATTEMPT_BOUND_RELEASE_PRODUCERS) {
-    const producerJob = jobs.find((job) => job.name === producer);
-    if (
-      producerJob?.status === "completed" &&
-      producerJob.conclusion === "success" &&
-      consumers.some((name) => failed.includes(name))
-    ) {
-      return { failed, mode: "producer", producer };
-    }
+  // These consumers bind their producer's artifact to the current run attempt, so a
+  // failed-jobs rerun that leaves the green producer behind stays red (#161317).
+  const producer = "install_smoke_release_checks / installer_smoke_candidate_payload";
+  const producerJob = jobs.find((job) => job.name === producer);
+  if (
+    producerJob?.status === "completed" &&
+    producerJob.conclusion === "success" &&
+    [
+      "install_smoke_release_checks / installer_smoke_nonroot_image",
+      "install_smoke_release_checks / installer_smoke_nonroot",
+    ].some((name) => failed.includes(name))
+  ) {
+    return { failed, mode: "producer", producer };
   }
   return { failed, mode: "failed-jobs" };
 }
@@ -1708,7 +1669,7 @@ export function classifyReleaseSnapshot({
     .toSorted((left, right) => String(left.primaryAt).localeCompare(String(right.primaryAt), "en"));
   return {
     activeRunIds,
-    advisoryJobs: releaseAdvisoryJobs(selected),
+    advisoryJobs: [],
     blockerCount: rawBlockers.length,
     blockerIndex: blockerIndex(rawBlockers),
     blockers,
@@ -2206,15 +2167,7 @@ export function validateReleaseStateArtifact(payload, expected, expectedMode) {
   return {
     ...payload,
     activeRunIds,
-    advisoryJobs: validateReleaseAdvisoryJobs(
-      payload.advisoryJobs,
-      Object.entries(children).map(([key, child]) =>
-        Object.assign({}, child, {
-          key,
-          jobs: child.timing.jobs,
-        }),
-      ),
-    ),
+    advisoryJobs: validateReleaseAdvisoryJobs(payload.advisoryJobs),
     blockerCount: machineEvidence ? payload.blockerCount : null,
     blockerIndex: completeBlockerIndex,
     blockers,
@@ -2240,26 +2193,10 @@ export function releasePlanGateFailures(gates) {
 }
 
 function releaseStateChildEvidence(child) {
-  return canonicalValue({
-    compositeJobsSha256: child.compositeJobsSha256,
+  return sortJsonValueKeys({
+    ...releaseManifestChildEvidence(child),
     conclusion: child.conclusion,
-    dispatchActor: child.dispatchActor,
-    effectiveRunAttempt: child.runAttempt,
-    jobs: child.timing.jobs.map((job) => ({
-      acceptedRunAttempt: job.acceptedRunAttempt,
-      completedAt: job.completedAt,
-      conclusion: job.conclusion,
-      name: job.name,
-      startedAt: job.startedAt,
-      status: job.status,
-      url: job.url,
-    })),
-    observedRunAttempts: child.observedRunAttempts,
-    plannedRunAttempt: child.plannedRunAttempt,
-    repository: child.repository,
-    runId: child.runId,
     status: child.status,
-    triggeringActor: child.triggeringActor,
     workflow: child.workflow,
     workflowRef: child.workflowRef,
     workflowSha: child.workflowSha,
@@ -2362,8 +2299,6 @@ function verifyStateStructure(state, executionPlan, label) {
     extraBlockers: executionPlan.blockers,
     extraErrors: executionPlan.errors,
     localFailures: releasePlanGateFailures(executionPlan.gates),
-    releaseProfile: executionPlan.releaseProfile,
-    workflowRef: executionPlan.workflowRef,
   });
   if (JSON.stringify(state.activeRunIds) !== JSON.stringify(baseline.activeRunIds)) {
     throw new Error(`${label} activeRunIds differs from canonical release policy`);

@@ -1,4 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { describe, expect, it, vi } from "vitest";
 import { useTlonMonitorFixture } from "./monitor.test-harness.js";
@@ -269,7 +270,7 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
         throw new Error("post unavailable");
       }
       if (row.revokeDuringLookup) {
-        settingsManagerMock.onChange.mock.calls[0]?.[0]({
+        settingsManagerMock.startSubscription.mock.calls[0]?.[0]({
           channelRules: { [channelNest]: { mode: "restricted", allowedShips: [] } },
         });
       }
@@ -296,6 +297,7 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
       };
     };
     const monitor = monitorTlonProvider({
+      scheduler: createTestPluginServiceScheduler(),
       abortSignal: controller.signal,
       runtime,
       accountId: row.accountPolicy !== undefined ? "secondary" : "default",
@@ -336,7 +338,7 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
       if (row.pauseAt) {
         await paused.promise;
         expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
-        settingsManagerMock.onChange.mock.calls[0]?.[0]({
+        settingsManagerMock.startSubscription.mock.calls[0]?.[0]({
           channelRules: {
             [channelNest]: {
               mode: row.lateAllowedShips === undefined ? "open" : "restricted",

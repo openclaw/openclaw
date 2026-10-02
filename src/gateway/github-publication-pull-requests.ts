@@ -101,32 +101,6 @@ function parseGitHubPublicationPullRequests(raw: string): GitHubPublicationPullR
   });
 }
 
-function resolveGitHubPublicationPullRequest(
-  candidates: readonly GitHubPublicationPullRequest[],
-  params: {
-    accountId: number;
-    headCommit: string;
-    branch: string;
-    baseBranch: string;
-    marker: string;
-  },
-): GitHubPublicationPullRequest | undefined {
-  const exact = candidates.filter(
-    (candidate) =>
-      candidate.userId === params.accountId &&
-      candidate.headSha === params.headCommit &&
-      candidate.headRef === params.branch &&
-      candidate.baseRef === params.baseBranch,
-  );
-  const open = exact.find((candidate) => candidate.state === "open");
-  return (
-    open ??
-    exact.find(
-      (candidate) => candidate.state === "closed" && candidate.body.includes(params.marker),
-    )
-  );
-}
-
 export async function findGitHubPublicationPullRequest(
   params: GitHubPublicationPullRequestLookup & {
     headCommit: string;
@@ -134,13 +108,18 @@ export async function findGitHubPublicationPullRequest(
   },
 ): Promise<string | undefined> {
   const { identity, candidates } = await loadGitHubPublicationPullRequests(params);
-  const found = resolveGitHubPublicationPullRequest(candidates, {
-    accountId: identity.account.accountId,
-    headCommit: params.headCommit,
-    branch: params.branch,
-    baseBranch: params.baseBranch,
-    marker: params.marker,
-  });
+  const exact = candidates.filter(
+    (candidate) =>
+      candidate.userId === identity.account.accountId &&
+      candidate.headSha === params.headCommit &&
+      candidate.headRef === params.branch &&
+      candidate.baseRef === params.baseBranch,
+  );
+  const found =
+    exact.find((candidate) => candidate.state === "open") ??
+    exact.find(
+      (candidate) => candidate.state === "closed" && candidate.body.includes(params.marker),
+    );
   if (found) {
     params.recordObserved?.(found.url);
     if (found.state === "closed") {

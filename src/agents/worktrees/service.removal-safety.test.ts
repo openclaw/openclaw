@@ -6,8 +6,10 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as checkoutGitOwner from "./checkout-git-config.js";
+import * as checkoutInspection from "./checkout-inspection.js";
 import * as gitOwner from "./git.js";
 import { getRegistryWorktree } from "./registry.js";
+import { acquireWorktreeRunLease } from "./run-lease.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixture,
@@ -114,6 +116,40 @@ describe("managed removal custody", () => {
     await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
     expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.outcome).toBe("retained-dirty");
     expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("hidden change\n");
+  });
+
+  it("releases lossless removal custody without recording an outcome after caller revocation", async () => {
+    const created = await materialize("revoked-lossless");
+    await fs.writeFile(path.join(created.path, "README.md"), "retained change\n");
+    const inspect = checkoutInspection.inspectManagedWorktreeCheckout;
+    const revoked = new Error("caller authority revoked after inspection");
+    let current = true;
+    vi.spyOn(checkoutInspection, "inspectManagedWorktreeCheckout").mockImplementationOnce(
+      async (...args) => {
+        const result = await inspect(...args);
+        current = false;
+        return result;
+      },
+    );
+
+    await expect(
+      service.removeIfLossless(created.id, {
+        commitGuard: () => {
+          if (!current) {
+            throw revoked;
+          }
+        },
+      }),
+    ).rejects.toBe(revoked);
+    const record = getRegistryWorktree(env, created.id);
+    expect(record?.removedAt).toBeUndefined();
+    expect(record?.snapshotRef).toBeUndefined();
+    expect(record?.runEndCleanup).toBeUndefined();
+    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe(
+      "retained change\n",
+    );
+    const lease = await acquireWorktreeRunLease(created.id, { env });
+    await lease.release();
   });
 
   it("preserves an advanced tip even if upstream also advances after snapshot", async () => {

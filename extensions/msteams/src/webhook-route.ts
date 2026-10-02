@@ -10,7 +10,7 @@ export function resolveMSTeamsLegacyWebhook(
   config: Pick<MSTeamsConfig, "legacyWebhook"> | undefined,
 ) {
   const listener = config?.legacyWebhook;
-  return listener === false ? undefined : (listener ?? { port: 3978 });
+  return listener || undefined;
 }
 
 export function resolveMSTeamsWebhookPathIssue({
@@ -40,7 +40,7 @@ export function resolveMSTeamsWebhookPathIssue({
   }
   return (
     `Microsoft Teams webhook path ${path} ${reason}. ` +
-    `Set channels.msteams.webhook.path to /api/messages and update the Azure Bot messaging endpoint or reverse-proxy upstream to Gateway port ${resolveGatewayPort(cfg, env)}/api/messages; verify delivery before setting channels.msteams.legacyWebhook=false.` +
+    `Set channels.msteams.webhook.path to /api/messages and update the Azure Bot messaging endpoint or reverse-proxy upstream to Gateway port ${resolveGatewayPort(cfg, env)}/api/messages; verify delivery before removing channels.msteams.legacyWebhook.` +
     (legacy
       ? ` Compatibility port ${legacy.port} continues serving the current path.`
       : " The compatibility listener is disabled, so this path cannot receive Teams callbacks.")

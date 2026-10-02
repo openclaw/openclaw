@@ -1,4 +1,3 @@
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   bodyHash as hashMessageBody,
   composeInbound,
@@ -10,8 +9,6 @@ import {
   InvalidDeliveryReceiptError,
   parseHandleEpoch,
   PipelineError,
-  verifyReceipt,
-  type AuditEntry,
   type AuditStore,
   type GuardAdapter,
   type ReplayStore,
@@ -27,65 +24,8 @@ import {
 import { reefMessageTextHash } from "./rejection-resend.js";
 import { ReefDeliveredStore, ReviewApprovalStore } from "./state.js";
 import { ReefInboxEntryParkedError, ReefTransportClient } from "./transport.js";
-import {
-  REEF_OUTBOUND_DELIVERY_MAX_ENTRIES,
-  REEF_OUTBOUND_DELIVERY_TTL_MS,
-  type ReefTrustStore,
-} from "./trust-store.js";
+import type { ReefTrustStore } from "./trust-store.js";
 import type { InboxEntry, ReefDeliveryRejection, ReefIngressMessage, ReefKeys } from "./types.js";
-
-interface LegacyDeliveryCandidate {
-  to: string;
-  bodyHash: string;
-  expiresAt: number;
-}
-
-function buildLegacyDeliveryIndex(
-  entries: readonly AuditEntry[],
-): Map<string, LegacyDeliveryCandidate> {
-  const oldest = Math.floor((Date.now() - REEF_OUTBOUND_DELIVERY_TTL_MS) / 1_000);
-  const sealed = new Map<string, number>();
-  const confirmed = new Set<string>();
-  const candidates = new Map<string, LegacyDeliveryCandidate>();
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const entry = entries[index]!;
-    const payload = asOptionalRecord(entry.event.payload);
-    if (entry.event.type === "confirm_delivery") {
-      if (entry.event.ts < oldest) {
-        continue;
-      }
-      const receipt = asOptionalRecord(payload?.receipt);
-      if (typeof receipt?.id === "string") {
-        confirmed.add(receipt.id);
-        sealed.delete(receipt.id);
-      }
-    } else if (entry.event.type === "envelope" && typeof payload?.id === "string") {
-      if (entry.event.ts >= oldest && !confirmed.has(payload.id)) {
-        sealed.set(payload.id, entry.event.ts);
-      }
-    } else if (entry.event.type === "proposal") {
-      const sealedAt = typeof payload?.id === "string" ? sealed.get(payload.id) : undefined;
-      if (
-        typeof payload?.id !== "string" ||
-        typeof payload.to !== "string" ||
-        typeof payload.bodyHash !== "string" ||
-        sealedAt === undefined
-      ) {
-        continue;
-      }
-      sealed.delete(payload.id);
-      candidates.set(payload.id, {
-        to: payload.to,
-        bodyHash: payload.bodyHash,
-        expiresAt: sealedAt * 1_000 + REEF_OUTBOUND_DELIVERY_TTL_MS,
-      });
-      if (candidates.size === REEF_OUTBOUND_DELIVERY_MAX_ENTRIES) {
-        break;
-      }
-    }
-  }
-  return candidates;
-}
 
 /** Reserves a protocol-valid id before recipient-visible Reef delivery starts. */
 export const prepareReefMessageId = createMonotonicUlidFactory();
@@ -118,7 +58,6 @@ export function isPermanentReefOutboundRejection(error: unknown): boolean {
 }
 
 export class ReefMessageFlow {
-  private legacyDeliveryIndex?: Promise<Map<string, LegacyDeliveryCandidate>>;
   // Entry ids whose last processing outcome parked (pending review, guard
   // outage): their re-polls skip the duplicate durable read observation.
   private readonly parkedReadIds = new Set<string>();
@@ -248,12 +187,9 @@ export class ReefMessageFlow {
     if (!receipt) {
       return undefined;
     }
-    let delivery = this.options.trust.outboundDelivery(entry.peer, entry.id);
+    const delivery = this.options.trust.outboundDelivery(entry.peer, entry.id);
     if (!delivery) {
-      delivery = await this.recoverLegacyDelivery(entry);
-      if (!delivery) {
-        return this.quarantineReceipt(entry);
-      }
+      return this.quarantineReceipt(entry);
     }
     try {
       await confirmDelivery(receipt, delivery.recipient.ed25519PublicKey, this.options.audit, {
@@ -261,7 +197,6 @@ export class ReefMessageFlow {
         bodyHash: delivery.bodyHash,
         ...(delivery.rejection ? { status: "rejected" as const } : {}),
       });
-      await this.forgetLegacyCandidate(entry.id);
       if (!matchesReefPeerIdentity(this.options.trust.get(entry.peer), delivery.recipient)) {
         this.options.trust.discardOutboundDelivery(entry.peer, entry.id, delivery);
         return undefined;
@@ -316,65 +251,6 @@ export class ReefMessageFlow {
         throw error;
       }
       return this.quarantineReceipt(entry);
-    }
-  }
-
-  private async recoverLegacyDelivery(
-    entry: InboxEntry,
-  ): Promise<ReturnType<ReefTrustStore["outboundDelivery"]>> {
-    const receipt = entry.receipt;
-    const friend = this.options.trust.get(entry.peer);
-    if (!receipt || receipt.id !== entry.id || !friend || friend.safetyNumberChanged) {
-      return undefined;
-    }
-    if (!verifyReceipt(receipt, friend.ed25519PublicKey)) {
-      return undefined;
-    }
-    const candidates = await this.loadLegacyDeliveryIndex();
-    const candidate = candidates.get(entry.id);
-    if (candidate && candidate.expiresAt <= Date.now()) {
-      candidates.delete(entry.id);
-      return undefined;
-    }
-    if (
-      !candidate ||
-      candidate.to !== formatHandleEpoch(entry.peer, friend.keyEpoch) ||
-      candidate.bodyHash !== receipt.bodyHash
-    ) {
-      return undefined;
-    }
-    // Upgrade bridge: envelopes sent before delivery bindings shipped can
-    // still return receipts. Never grant automatic resend from recovered state.
-    // Remove after that release is older than both relay-retention windows.
-    this.options.trust.recordOutboundDelivery(
-      entry.peer,
-      entry.id,
-      {
-        bodyHash: receipt.bodyHash,
-        recipient: reefPeerIdentity(friend),
-      },
-      { resendDisabled: true },
-    );
-    candidates.delete(entry.id);
-    return this.options.trust.outboundDelivery(entry.peer, entry.id);
-  }
-
-  private loadLegacyDeliveryIndex(): Promise<Map<string, LegacyDeliveryCandidate>> {
-    if (!this.legacyDeliveryIndex) {
-      const pending = this.options.audit.entries().then(buildLegacyDeliveryIndex);
-      this.legacyDeliveryIndex = pending;
-      void pending.catch(() => {
-        if (this.legacyDeliveryIndex === pending) {
-          this.legacyDeliveryIndex = undefined;
-        }
-      });
-    }
-    return this.legacyDeliveryIndex;
-  }
-
-  private async forgetLegacyCandidate(id: string): Promise<void> {
-    if (this.legacyDeliveryIndex) {
-      (await this.legacyDeliveryIndex).delete(id);
     }
   }
 

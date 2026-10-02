@@ -29,8 +29,6 @@ type ResolvedMountPath = SandboxResolvedPath & {
   writable: boolean;
 };
 
-type FsSafeRoot = Awaited<ReturnType<typeof fsRoot>>;
-
 export function createOpenShellFsBridge(params: {
   sandbox: OpenShellFsBridgeContext;
   backend: OpenShellMirrorBackend;
@@ -142,7 +140,10 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowFinalSymlinkForUnlink: false,
     });
     await this.backend.mkdirpRemotePath(target.containerPath, params.signal);
-    await mkdirLocalRootPath(target);
+    const relativePath = relativeToRoot(target, target.hostPath);
+    if (relativePath) {
+      await (await fsRoot(target.mountHostRoot)).mkdir(relativePath);
+    }
   }
 
   async remove(params: Parameters<SandboxFsBridge["remove"]>[0]): Promise<void> {
@@ -184,7 +185,14 @@ class OpenShellFsBridge implements SandboxFsBridge {
       toHostPath: to.hostPath,
     });
     await this.backend.renameRemotePath(from.containerPath, to.containerPath, params.signal);
-    await moveLocalRootPath({ from, to });
+    const root = await fsRoot(from.mountHostRoot);
+    const fromRelativePath = relativeToRoot(from, from.hostPath);
+    const toRelativePath = relativeToRoot(to, to.hostPath);
+    const parentPath = path.dirname(toRelativePath);
+    if (parentPath !== "." && parentPath !== "") {
+      await root.mkdir(parentPath);
+    }
+    await root.move(fromRelativePath, toRelativePath, { overwrite: true });
   }
 
   async stat(params: Parameters<SandboxFsBridge["stat"]>[0]): Promise<SandboxFsStat | null> {
@@ -397,15 +405,6 @@ function expectResolvedContainerTarget(
   return target;
 }
 
-async function mkdirLocalRootPath(target: ResolvedMountPath): Promise<void> {
-  const relativePath = relativeToRoot(target, target.hostPath);
-  if (!relativePath) {
-    return;
-  }
-  const root = await fsRoot(target.mountHostRoot);
-  await root.mkdir(relativePath);
-}
-
 async function removeLocalRootPath(params: {
   target: ResolvedMountPath;
   recursive?: boolean;
@@ -438,25 +437,6 @@ async function removeLocalRootPath(params: {
     }
     throw err;
   }
-}
-
-async function moveLocalRootPath(params: {
-  from: ResolvedMountPath;
-  to: ResolvedMountPath;
-}): Promise<void> {
-  const root = await fsRoot(params.from.mountHostRoot);
-  const fromRelativePath = relativeToRoot(params.from, params.from.hostPath);
-  const toRelativePath = relativeToRoot(params.to, params.to.hostPath);
-  await mkdirParentPath(root, toRelativePath);
-  await root.move(fromRelativePath, toRelativePath, { overwrite: true });
-}
-
-async function mkdirParentPath(root: FsSafeRoot, relativePath: string): Promise<void> {
-  const parentPath = path.dirname(relativePath);
-  if (parentPath === "." || parentPath === "") {
-    return;
-  }
-  await root.mkdir(parentPath);
 }
 
 function relativeToRoot(target: ResolvedMountPath, hostPath: string): string {

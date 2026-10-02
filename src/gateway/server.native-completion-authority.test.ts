@@ -270,7 +270,7 @@ describe("native completion final-effect authority", () => {
         expect(inputKeys).toEqual(
           expect.arrayContaining(allowed.map((run) => `${run.idempotencyKey}:user`)),
         );
-        expect(listSessionPendingInputs(pair.requesterScope).total).toBe(0);
+        expect((await listSessionPendingInputs(pair.requesterScope)).total).toBe(0);
         const stored = loadSubagentRegistryFromSqlite();
         for (const [index, run] of pair.runs.entries()) {
           // Exact source identity also catches borrowing when both sources remain live.
@@ -357,7 +357,7 @@ describe("native completion final-effect authority", () => {
           expect(context.dedupe.get(`agent:${completion.idempotencyKey}`)).toMatchObject({
             ok: true,
           });
-          expect(listSessionPendingInputs(completion.sessionScope).total).toBe(0);
+          expect((await listSessionPendingInputs(completion.sessionScope)).total).toBe(0);
           expect(sessionAccessor.loadTranscriptEventsSync(completion.sessionScope)).toContainEqual(
             expect.objectContaining({
               type: "message",
@@ -371,7 +371,7 @@ describe("native completion final-effect authority", () => {
           expect(result.delivered).toBe(false);
           expect(execution).not.toHaveBeenCalled();
           expect(agentCommandMock).not.toHaveBeenCalled();
-          expect(listSessionPendingInputs(completion.sessionScope).total).toBe(0);
+          expect((await listSessionPendingInputs(completion.sessionScope)).total).toBe(0);
           expect(sessionAccessor.loadTranscriptEventsSync(completion.sessionScope)).toEqual(before);
           expect(context.dedupe.get(`agent:${completion.idempotencyKey}`)).toBeUndefined();
         }
@@ -425,11 +425,11 @@ describe("native completion final-effect authority", () => {
       const sessionManager = SessionManager.open(completion.sessionScope);
       guardSessionManager(sessionManager);
       if (boundary === "automatic compaction") {
-        appendHistory(
+        await appendHistory(
           sessionManager,
           createAssistant(testModel, [{ type: "text", text: "Previous result" }]),
         );
-        appendHistory(
+        await appendHistory(
           sessionManager,
           createAssistant(testModel, [{ type: "text", text: "Latest result" }]),
         );
@@ -561,7 +561,7 @@ describe("native completion final-effect authority", () => {
           expect(inject).not.toHaveBeenCalled();
           expect(session.getSteeringMessages()).toEqual([]);
           expect(sessionAccessor.loadTranscriptEventsSync(completion.sessionScope)).toEqual(before);
-          expect(listSessionPendingInputs(completion.sessionScope).total).toBe(0);
+          expect((await listSessionPendingInputs(completion.sessionScope)).total).toBe(0);
         }
         if (boundary === "automatic compaction") {
           expect(prepared.subscription.isCompacting()).toBe(false);

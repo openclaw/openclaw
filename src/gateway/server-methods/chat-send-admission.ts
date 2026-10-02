@@ -211,7 +211,8 @@ export async function admitChatSend(
   let runInterruptTarget: ReturnType<typeof replyRunRegistry.resolveCurrentInterruptTarget>;
   let reservationSuperseded = false;
   let supersedingResult: DedupeEntry | undefined;
-  const commitChatWorkAdmission = () => {
+  let preparedGoalEntry: Awaited<ReturnType<typeof prepareChatSendSessionEntry>> | undefined;
+  const commitChatWorkAdmission = async (): Promise<void> => {
     params.assertCurrent?.();
     const retainedRequestConflict = resolveChatSendRequestConflict(params);
     if (retainedRequestConflict) {
@@ -328,12 +329,17 @@ export async function admitChatSend(
     // Retain compaction lineage before attachment/context preparation can outlive this owner.
     expectedActiveReplyOperation = replyRunRegistry.get(activeRunScopeKey);
     if (request.goalOperation?.action === "start" && !latestEntry && !requestedSessionId) {
-      const prepared = prepareChatSendSessionEntry({
-        cfg: latestSession.cfg,
-        client,
-        agentId,
-        getRuntimeConfig: context.getRuntimeConfig,
-      });
+      if (!preparedGoalEntry) {
+        preparedGoalEntry = await prepareChatSendSessionEntry({
+          cfg: latestSession.cfg,
+          client,
+          agentId,
+          getRuntimeConfig: context.getRuntimeConfig,
+        });
+        // Preparation only read facts; re-enter all current reservation and authority checks once.
+        return commitChatWorkAdmission();
+      }
+      const prepared = preparedGoalEntry;
       initialSessionEntry = prepared.entry;
       assertInitialSkillSelection = prepared.assertSkillSelection;
       admittedSessionId = initialSessionEntry.sessionId;
@@ -633,6 +639,7 @@ export async function admitChatSend(
   const retainedWork = createChatSendWorkAdmission({
     admission: acquiredGatewayWorkAdmission,
     releaseCallerAuthority,
+    releaseGatewayRootContinuation,
     logGateway: context.logGateway,
   });
   // Prepared inbound media has no transcript reference until the user turn
@@ -644,7 +651,6 @@ export async function admitChatSend(
   const cleanupAdmittedRun: typeof activeRunAbort.cleanup = () => {
     activeRunAbort.cleanup();
     retainedWork.release();
-    releaseGatewayRootContinuation();
     discardAbandonedPreparedMedia?.();
     discardAbandonedPreparedMedia = undefined;
   };
@@ -700,6 +706,7 @@ export async function admitChatSend(
       messageInjectionTarget,
       originatingRoute,
       rejectSessionRoutingChanged,
+      releaseSourceWorkAdmission: retainedWork.release,
       retainGatewayWorkAdmission: retainedWork.retain,
       setPendingInputCleanup: retainedWork.setPendingInputCleanup,
       assertClientUploadAllowed: uploadAdmission.assertClientUploadAllowed,

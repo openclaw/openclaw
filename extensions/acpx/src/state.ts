@@ -1,4 +1,3 @@
-// ACPX plugin state keys shared by runtime and doctor migration.
 import {
   asFiniteNumber,
   asOptionalObjectRecord,
@@ -7,12 +6,10 @@ import {
 
 export const ACPX_PROCESS_LEASE_NAMESPACE = "process-leases";
 export const ACPX_PROCESS_LEASE_MAX_ENTRIES = 4096;
-export const ACPX_LEGACY_PROCESS_LEASE_FILE = "process-leases.json";
 
 export const ACPX_GATEWAY_INSTANCE_NAMESPACE = "gateway-instance";
 export const ACPX_GATEWAY_INSTANCE_KEY = "current";
 export const ACPX_GATEWAY_INSTANCE_MAX_ENTRIES = 1;
-export const ACPX_LEGACY_GATEWAY_INSTANCE_FILE = "gateway-instance-id";
 
 export type AcpxGatewayInstanceRecord = {
   instanceId: string;

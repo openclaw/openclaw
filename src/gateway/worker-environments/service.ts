@@ -697,8 +697,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     prepareComputer: options.prepareComputer,
     startInference: turnRpc.startInference,
     cancelInference: turnRpc.cancelInference,
-    cancelInferenceForSession: turnRpc.cancelInferenceForSession,
-    hasInferenceForSession: turnRpc.hasInferenceForSession,
     resolveSshIdentity: environmentAccess.resolveSshIdentity,
     attachSession: credentialBroker.attachSession,
     takeMintedCredential: credentialBroker.takeMintedCredential,
@@ -725,11 +723,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     start,
     stop,
   };
-  registerWorkerInferenceSessionControl(service, {
-    reserveDrain: inference.reserveSessionDrain,
-    captureCancel: inference.captureSessionCancellation,
-    resolveTarget: inference.resolveSessionTargetForRunId,
-  });
+  registerWorkerInferenceSessionControl(service, inference);
   return service;
 }
 

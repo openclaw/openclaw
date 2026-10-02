@@ -57,6 +57,23 @@ it("reuses built dirty inputs but rejects changed production, dependencies and m
     await write("package.json", '{"name":"openclaw"}');
     await write("src/index.ts", "export const value = 1;\n");
     await write("src/index.test.ts", "original fixture\n");
+    const testUtilities = ["src/index.test-utils.ts", "src/index.test-utils.tsx"];
+    for (const file of testUtilities) {
+      await write(file, "original fixture\n");
+    }
+    const runtimeSupport = [
+      "src/test-utils.ts",
+      "src/runtime.test-support.ts",
+      "src/runtime.test-harness.ts",
+      "src/test-api.ts",
+    ];
+    for (const file of runtimeSupport) {
+      await write(file, "export const value = 1;\n");
+    }
+    await write(
+      "src/runtime-entry.ts",
+      runtimeSupport.map((file) => `import "./${path.basename(file, ".ts")}.js";`).join("\n"),
+    );
     await write("src/stable.ts", "export const stable = 1;\n");
     await write("pnpm-lock.yaml", "original lockfile\n");
     for (const args of [
@@ -128,6 +145,22 @@ it("reuses built dirty inputs but rejects changed production, dependencies and m
     await fs.unlink(path.join(cwd, "deployment.json"));
     await write("src/index.test.ts", "corrected fixture\n");
     expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(false);
+    for (const file of testUtilities) {
+      await write(file, "corrected fixture\n");
+      expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(
+        false,
+      );
+    }
+    for (const file of runtimeSupport) {
+      await write(file, "export const value = 2;\n");
+      expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).reason).toBe(
+        "build_inputs_changed",
+      );
+      await write(file, "export const value = 1;\n");
+      expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(
+        false,
+      );
+    }
     await fs.rename(path.join(cwd, "src/index.ts"), path.join(cwd, "src/renamed.ts"));
     expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(true);
     await fs.rename(path.join(cwd, "src/renamed.ts"), path.join(cwd, "src/index.ts"));

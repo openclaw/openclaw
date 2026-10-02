@@ -1,4 +1,6 @@
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import { withFileLock } from "../infra/file-lock.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { runSqliteReadOnlyOperation } from "../infra/sqlite-readonly-worker.js";
@@ -25,6 +27,35 @@ import {
 } from "./auth-profiles/sqlite.js";
 import type { PersistedPluginModelCatalog } from "./plugin-model-catalog.read-operation.js";
 import type { PluginModelCatalogCredentialOperations } from "./plugin-model-catalog.worker.js";
+
+/** A clean read must follow publication settlement, including another process's uncommitted row. */
+export async function withPluginModelCatalogPublicationLocks<T>(
+  databasePaths: readonly string[],
+  operation: () => Promise<T>,
+): Promise<T> {
+  const paths = [...new Set(databasePaths.map(resolvePathViaExistingAncestorSync))].toSorted();
+  const enter = async (index: number): Promise<T> => {
+    const databasePath = paths[index];
+    return databasePath
+      ? await withFileLock(
+          `${databasePath}.plugin-model-catalog`,
+          {
+            retries: {
+              retries: 20,
+              factor: 2,
+              minTimeout: 100,
+              maxTimeout: 10_000,
+              randomize: true,
+            },
+            stale: 180_000,
+            staleRecovery: "remove-if-definitely-stale",
+          },
+          () => enter(index + 1),
+        )
+      : await operation();
+  };
+  return await enter(0);
+}
 
 /** The canonical executor owns preparation, publication, and custody settlement. */
 export async function withPluginModelCatalogWorker<T>(

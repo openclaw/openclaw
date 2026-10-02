@@ -15,6 +15,7 @@ import {
   createPluginNativeAdmission,
   type PluginNativeRecovery,
 } from "./plugin-native-admission.js";
+import { createPluginNativeImportPattern } from "./plugin-native-resolution.js";
 import {
   capturePluginPackageMetadata,
   capturePluginDependencies,
@@ -48,6 +49,7 @@ export function capturePluginGenerationArtifact(
   execute?: <T>(run: () => T) => T,
   moduleSource?: (filename: string) => string,
   nativeRecovery?: PluginNativeRecovery,
+  dependencyLookupBoundary?: Parameters<typeof createPluginDependencyResolver>[0],
 ) {
   const sourceCapture = createPluginSourceCapture(execute);
   const directory = sourceCapture.directory;
@@ -83,7 +85,7 @@ export function capturePluginGenerationArtifact(
     return acquired;
   };
   const moduleCaptures = new Map<string, PluginModuleCapture>();
-  const resolveDependency = createPluginDependencyResolver();
+  const resolveDependency = createPluginDependencyResolver(dependencyLookupBoundary);
   // Callers canonicalize roots; already-captured packages survive removal of their original files.
   const copyPackage = (
     root: string,
@@ -116,17 +118,16 @@ export function capturePluginGenerationArtifact(
       parentName.startsWith("@") ? parentName : "",
       path.basename(boundary),
     );
-    const capturedBoundary = destination;
     sourceAliases[root] = destination;
     receipt.marker(`${packageId}\0`);
     const owner: PluginPackageCapture = {
       destination,
-      capturedRoot: capturedBoundary,
+      capturedRoot: destination,
       sourceRoot: boundary,
       links: new Set<string>(),
       state: "metadata",
       captureTarget(filename) {
-        const source = path.join(boundary, path.relative(capturedBoundary, filename));
+        const source = path.join(boundary, path.relative(destination, filename));
         if (
           !capturedPaths.has(source) &&
           !packageMap.hasMissingTarget(source) &&
@@ -198,10 +199,10 @@ export function capturePluginGenerationArtifact(
       // Preserve real nested installs; synthetic per-file node_modules confuse native addon roots.
       // Installed peers also need sibling paths for native assets read directly from disk.
       const lookupDirectory = inPackage(boundary, dependency.lookupDirectory)
-        ? path.join(capturedBoundary, path.relative(boundary, dependency.lookupDirectory))
+        ? path.join(destination, path.relative(boundary, dependency.lookupDirectory))
         : path.join(dependency.lookupDirectory, "node_modules") === sourceModuleRoot
           ? path.dirname(moduleRoot)
-          : capturedBoundary;
+          : destination;
       const link = path.join(lookupDirectory, "node_modules", name);
       packages.get(dependency.root)!.links.add(link);
       if (!fs.existsSync(link)) {
@@ -491,12 +492,13 @@ export function capturePluginGenerationArtifact(
           return dependencyPrepared ? { retryNative: true } : undefined;
         }
         if (dependencyPrepared === "package-map") {
-          const filename = resolvePluginPackageMapTarget(specifier, target, conditions);
-          if (!filename) {
+          const selected = resolvePluginPackageMapTarget(specifier, target, conditions);
+          if (!selected) {
             return undefined;
           }
-          if (inPackage(capturedBoundary, filename)) {
-            const original = path.join(boundary, path.relative(capturedBoundary, filename));
+          const filename = fileURLToPath(selected);
+          if (inPackage(destination, filename)) {
+            const original = path.join(boundary, path.relative(destination, filename));
             if (packageMap.hasMissingTarget(original)) {
               return undefined;
             }
@@ -525,12 +527,12 @@ export function capturePluginGenerationArtifact(
         }
         return { target: capturedPluginModuleUrl(captured, specifier, conditions) };
       };
-      const nativeScope = getNativeScope(source, scope?.manifest);
       const moduleCapture: PluginModuleCapture = {
+        isNativeImportPattern: createPluginNativeImportPattern(scope?.manifest.imports),
         isRequireReference: (specifier) =>
           observed.has(`require\0${specifier}`) && !observed.has(`import\0${specifier}`),
         prepareDependency,
-        nativeScope,
+        nativeScope: getNativeScope(source, scope?.manifest),
         capture: captureModule,
       };
       moduleCaptures.set(target, moduleCapture);
@@ -627,12 +629,8 @@ export function capturePluginGenerationArtifact(
         nativeAdmission.reconcileSourceInputs(inputs);
       },
       sourceForCaptured: (file: string) => originalSources.get(path.resolve(file)),
-      isRequireReference: (importer: string, specifier: string) =>
-        moduleCaptures.get(importer)?.isRequireReference(specifier) ?? false,
-      isRequirePreview: (importer: string, specifier: string) => {
-        const imports = moduleCaptures.get(importer)?.staticImports;
-        return imports !== undefined && !imports.has(specifier);
-      },
+      moduleFacts: (importer: string): Readonly<PluginModuleCapture> | undefined =>
+        moduleCaptures.get(importer),
       boundaryRoot: directory,
       // The receipt attests the initial snapshot; first-demand inputs extend only its identity ledger.
       sourceDigest: initialReceipt.sourceDigest,

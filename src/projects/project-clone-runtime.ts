@@ -9,6 +9,7 @@ import {
 } from "../infra/git-exec.js";
 import { withGitNetworkRetry, type GitOperationStarter } from "../infra/git-network-retry.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { withGitProcessOperation } from "../process/spawn-diagnostics.js";
 
 const PROJECT_CLONE_TIMEOUT_MS = 10 * 60_000;
 type ProjectCloneOptions = {
@@ -139,15 +140,17 @@ export async function cloneProjectCheckout(
       startRun: options.startRun,
     },
     async (timeoutMs) => {
-      const attempt = await runCommandWithTimeout(
-        ["git", "clone", "--no-recurse-submodules", "--", input.url, input.target],
-        {
-          env: commandEnv,
-          timeoutMs,
-          signal: options.signal,
-          killProcessTree: true,
-          maxOutputBytes: 256 * 1024,
-        },
+      const attempt = await withGitProcessOperation("project.clone", () =>
+        runCommandWithTimeout(
+          ["git", "clone", "--no-recurse-submodules", "--", input.url, input.target],
+          {
+            env: commandEnv,
+            timeoutMs,
+            signal: options.signal,
+            killProcessTree: true,
+            maxOutputBytes: 256 * 1024,
+          },
+        ),
       );
       if (attempt.code !== 0 || attempt.termination !== "exit") {
         await fs.rm(input.target, { recursive: true, force: true }).catch(() => {});
@@ -331,6 +334,7 @@ function runProjectCheckoutGit(
     input.target,
     ["-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", ...args],
     {
+      operation: "project.clone",
       env: {
         ...cloneCommandEnv(input.url, options.token, options.env ?? process.env),
         ...(options.objectDirectory ? { GIT_OBJECT_DIRECTORY: options.objectDirectory } : {}),

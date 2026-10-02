@@ -9,6 +9,20 @@ export async function readSessionTranscriptHydrationRequest(
   channel: WorkerTaskChannel | undefined,
   control: WorkerTaskControl,
 ): Promise<SessionTranscriptWorkerValues[SessionTranscriptHydrationWorkerRequest["kind"]]> {
+  if (request.kind === "transcript-maintenance") {
+    const { withOpenClawAgentDatabaseReadOnly } =
+      await import("../../state/openclaw-agent-db-readonly.js");
+    const { readSessionTranscriptMaintenance } =
+      await import("./session-transcript-maintenance-read.js");
+    const result = withOpenClawAgentDatabaseReadOnly(
+      (database) => readSessionTranscriptMaintenance(database, request.target, request.request),
+      { ...request.database, env: request.target.env },
+    );
+    if (!result.found) {
+      throw new Error("Session transcript is unavailable for maintenance planning");
+    }
+    return result.value;
+  }
   const { readOpenClawDatabaseQuarantineFailure } =
     await import("../../state/openclaw-quarantine-store.js");
   const quarantine = readOpenClawDatabaseQuarantineFailure("agent", request.database.path, {

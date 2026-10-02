@@ -43,6 +43,9 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: state.runCommandWithTimeout,
 }));
 
+const { runCommandWithTimeout: runRealCommandWithTimeout } =
+  await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+
 let ensureControlUiAssetsBuilt: typeof import("./control-ui-assets.js").ensureControlUiAssetsBuilt;
 let inspectControlUiRootAssets: typeof import("./control-ui-assets.js").inspectControlUiRootAssets;
 let resolveControlUiAssetHealth: typeof import("./control-ui-assets.js").resolveControlUiAssetHealth;
@@ -315,9 +318,7 @@ if (process.exitCode === 0) {
 }
 `,
     );
-    const { runCommandWithTimeout } =
-      await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
-    state.runCommandWithTimeout.mockImplementationOnce(runCommandWithTimeout);
+    state.runCommandWithTimeout.mockImplementationOnce(runRealCommandWithTimeout);
 
     const result = await ensureControlUiAssetsBuilt(undefined, { root });
 

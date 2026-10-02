@@ -8,7 +8,7 @@ import {
   type ApplicationContextProvider,
 } from "../../../test-helpers/application-context.ts";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
-import type { ModelSetupRouteData } from "../model-setup-page.ts";
+import type { ModelSetupRouteData } from "../first-run-setup.ts";
 import "../model-setup-page.ts";
 import type { ModelSetupPageState } from "../state.ts";
 

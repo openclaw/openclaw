@@ -2782,6 +2782,7 @@ type Workflow = {
     schedule?: Array<{ cron?: string }>;
     workflow_call?: {
       inputs?: Record<string, unknown>;
+      secrets?: Record<string, unknown>;
     };
     workflow_dispatch?: {
       inputs?: Record<string, unknown>;
@@ -8381,6 +8382,18 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(JSON.stringify(npm12Job)).not.toContain("secrets.");
   });
 
+  it("checks the installed package tree budget immediately after npm 12 installation", () => {
+    const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh");
+    const install = workflowStep(job, "Run install.sh with npm 12");
+    const budget = workflowStep(job, "Check installed package tree budget");
+    const steps = job.steps ?? [];
+    expect(steps.indexOf(budget)).toBe(steps.indexOf(install) + 1);
+    expect(budget.shell).toBe("bash");
+    expect(budget.run).toBe(
+      'set -euo pipefail\nnode scripts/check-openclaw-installed-package-budget.mts "$RUNNER_TEMP/openclaw-npm12-prefix/lib/node_modules/openclaw"\n',
+    );
+  });
+
   it("binds npm 12 installation to the supplied prerelease dependency artifact", () => {
     const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh");
     const validate = workflowStep(job, "Validate prerelease plugin registry artifact identity");
@@ -10631,7 +10644,17 @@ describe("package artifact reuse", () => {
     expect(dockerRows).toContainEqual(
       expect.objectContaining({ suite_id: "live-gateway-docker", timeout_minutes: 40 }),
     );
-    expect(workflow).toContain("suite_id: native-live-extensions-a-k");
+    expect(
+      workflowMatrixEntry(
+        LIVE_E2E_WORKFLOW,
+        "validate_live_media_provider_suites",
+        "native-live-extensions-a-k",
+      ),
+    ).toMatchObject({
+      command:
+        "OPENCLAW_LIVE_ANTHROPIC_COMPACTION=1 node .release-harness/scripts/test-live-shard.mjs native-live-extensions-a-k",
+      profiles: "full",
+    });
     expect(workflow).toContain("suite_id: native-live-extensions-l-n");
     expect(workflow).toContain("suite_id: native-live-extensions-moonshot");
     expect(workflow).toContain("suite_id: native-live-extensions-openai");
@@ -11198,15 +11221,30 @@ describe("package artifact reuse", () => {
     expect(
       workflowJob(SCHEDULED_LIVE_CHECKS_WORKFLOW, "weekly_upgrade_survivors").secrets,
     ).toBeUndefined();
+    for (const key of ["KIE_API_KEY", "NOVITA_API_KEY", "PIXVERSE_API_KEY"]) {
+      expect(readWorkflow(LIVE_E2E_WORKFLOW).on?.workflow_call?.secrets?.[key]).toEqual({
+        required: false,
+      });
+      for (const job of [
+        workflowJob(RELEASE_CHECKS_WORKFLOW, "live_repo_e2e_release_checks"),
+        workflowJob(SCHEDULED_LIVE_CHECKS_WORKFLOW, "live_and_openwebui_checks"),
+      ]) {
+        expect(job.secrets, key).toMatchObject({ [key]: "${{ secrets." + key + " }}" });
+      }
+      expect(
+        workflowJob(LIVE_E2E_WORKFLOW, "validate_live_media_provider_suites").env?.[key],
+        key,
+      ).toBe("${{ secrets." + key + " }}");
+    }
     const hydrationHome = tempDirs.make("live-auth-hydration-");
     const hydrated = spawnSync(
       "bash",
       [
         "-euc",
         `bash "$1" "$2"
-unset DEEPSEEK_API_KEY DEEPINFRA_API_KEY
+unset DEEPSEEK_API_KEY DEEPINFRA_API_KEY KIE_API_KEY NOVITA_API_KEY PIXVERSE_API_KEY
 source "$2"
-printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
+printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY" "$KIE_API_KEY" "$NOVITA_API_KEY" "$PIXVERSE_API_KEY"`,
         "hydrate-live-auth",
         CI_HYDRATE_LIVE_AUTH_SCRIPT,
         resolve(hydrationHome, "live.profile"),
@@ -11219,11 +11257,16 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
           HOME: hydrationHome,
           DEEPSEEK_API_KEY: "deepseek-sentinel",
           DEEPINFRA_API_KEY: "deepinfra-sentinel",
+          KIE_API_KEY: "kie-sentinel",
+          NOVITA_API_KEY: "novita-sentinel",
+          PIXVERSE_API_KEY: "pixverse-sentinel",
         },
       },
     );
     expect(hydrated.status, hydrated.stderr).toBe(0);
-    expect(hydrated.stdout).toBe("deepseek-sentinel\ndeepinfra-sentinel\n");
+    expect(hydrated.stdout).toBe(
+      "deepseek-sentinel\ndeepinfra-sentinel\nkie-sentinel\nnovita-sentinel\npixverse-sentinel\n",
+    );
     expect(reusableWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
     expect(packageAcceptanceWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
     expectTextToIncludeAll(reusableWorkflow, [

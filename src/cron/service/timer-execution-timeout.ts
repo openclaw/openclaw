@@ -60,6 +60,13 @@ export type TimedCronRunOutcome = CronJobExecutionResult & {
   runReceipt?: CronRunReceiptHandle;
   runReceiptContext?: OpenClawStateWorkerContext;
   receiptSettlementDisposition?: CronRunReceiptSettlementDisposition;
+  request?: {
+    executionJob: CronJob;
+    preserveCadence: boolean;
+    scheduleOwnershipAtMs: number;
+    runId?: string;
+    terminalTracker?: { emitted: boolean };
+  };
   startedAt: number;
   endedAt: number;
 };

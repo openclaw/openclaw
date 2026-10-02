@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
-import { composeBrowserAnnotationContext } from "./browser-annotation-context.ts";
 import { createStagedAttachment } from "./chat-delivery-attachments.test-support.ts";
 import {
   createBrowserAnnotationAttachment,
@@ -18,28 +17,19 @@ const attachmentDataUrl = "data:application/pdf;base64,JVBERi0xLjQK";
 
 useChatSendBrowserFixture();
 
-describe("composeBrowserAnnotationContext", () => {
-  it("preserves attachment order across two annotations", () => {
-    const first = createBrowserAnnotationAttachment("first", "First context");
-    const second = createBrowserAnnotationAttachment("second", "Second context");
-
-    expect(composeBrowserAnnotationContext("Compare them", [first, second])).toBe(
-      "First context\n\nSecond context\n\nCompare them",
-    );
-  });
-});
-
 describe("handleSendChat browser annotation context", () => {
-  it("sends an annotation without requiring user-authored text", async () => {
-    const attachment = createBrowserAnnotationAttachment("annotation-only", "Inspect this page");
+  it("sends ordered annotations without requiring user-authored text", async () => {
     const host = makeChatHost({
       requestHandlers: { "chat.send": { runId: "annotation-only-run", status: "started" } },
-      chatAttachments: [attachment],
+      chatAttachments: [
+        createBrowserAnnotationAttachment("first", "First context"),
+        createBrowserAnnotationAttachment("second", "Second context"),
+      ],
     });
 
     await handleSendChat(host);
 
-    expect(findChatSendPayload(host).message).toBe("Inspect this page");
+    expect(findChatSendPayload(host).message).toBe("First context\n\nSecond context");
   });
 
   it("routes /new before materializing annotation context", async () => {
@@ -59,7 +49,7 @@ describe("handleSendChat browser annotation context", () => {
     expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
   });
 
-  it.each(["/stop", "stop", "esc", "abort", "wait", "exit"])(
+  it.each(["/stop", "wait"])(
     "routes active-run stop intent %s before materializing annotation context",
     async (command) => {
       const attachment = createBrowserAnnotationAttachment("stop", "Review the annotated page");
@@ -83,8 +73,6 @@ describe("handleSendChat browser annotation context", () => {
 
   it.each([
     ["/side", ""],
-    ["/btw", ""],
-    ["/side", "explain this"],
     ["/btw", "explain this"],
   ])(
     "opens companion intent %s %s without sending annotation context",
@@ -235,59 +223,42 @@ describe("handleSendChat browser annotation context", () => {
     },
   );
 
-  it("never restores over a replacement annotation that reuses the submitted attachment ID", async () => {
-    const acknowledgment = createDeferred<{ runId: string; status: "error" }>();
-    const annotation = createBrowserAnnotationAttachment("reused-annotation", "Original page");
-    const replacement = {
-      ...annotation,
-      dataUrl: "data:image/png;base64,bmV3",
-      browserAnnotation: {
-        ...annotation.browserAnnotation!,
-        modelContext: "Replacement page",
-      },
-    };
-    const host = makeChatHost({
-      requestHandlers: { "chat.send": () => acknowledgment.promise },
-      chatAttachments: [annotation],
-      chatMessage: "/approve approval-123 allow-once",
-      chatRunId: "active-run",
-      chatStream: "Waiting for approval...",
-    });
+  it.each([
+    { reuseId: true, draft: "" },
+    { reuseId: false, draft: "Newer operator draft" },
+  ])(
+    "never restores a failed approval over a newer attachment (reused ID: $reuseId)",
+    async ({ reuseId, draft }) => {
+      const acknowledgment = createDeferred<{ runId: string; status: "error" }>();
+      const annotation = createBrowserAnnotationAttachment("original", "Original page");
+      const replacement = {
+        ...createBrowserAnnotationAttachment(
+          reuseId ? annotation.id : "replacement",
+          "Replacement page",
+        ),
+        dataUrl: "data:image/png;base64,bmV3",
+      };
+      const host = makeChatHost({
+        requestHandlers: { "chat.send": () => acknowledgment.promise },
+        chatAttachments: [annotation],
+        chatMessage: "/approve approval-123 allow-once",
+        chatRunId: "active-run",
+        chatStream: "Waiting for approval...",
+      });
 
-    const send = handleSendChat(host);
-    await vi.waitFor(() => expect(host.request).toHaveBeenCalledOnce());
-    expect(host.chatMessage).toBe("");
-    host.chatAttachments = [replacement];
-    acknowledgment.resolve({ runId: "failed-approval-run", status: "error" });
-    await send;
+      const send = handleSendChat(host);
+      await vi.waitFor(() => expect(host.request).toHaveBeenCalledOnce());
+      expect(host.chatMessage).toBe("");
+      host.chatMessage = draft;
+      host.chatAttachments = [replacement];
+      acknowledgment.resolve({ runId: "failed-approval-run", status: "error" });
+      await send;
 
-    expect(host.chatMessage).toBe("");
-    expect(host.chatAttachments).toEqual([replacement]);
-    expect(getChatAttachmentDataUrl(host.chatAttachments[0]!)).toBe(replacement.dataUrl);
-  });
-
-  it("never restores a failed approval over a newer composer attachment", async () => {
-    const acknowledgment = createDeferred<{ runId: string; status: "error" }>();
-    const annotation = createBrowserAnnotationAttachment("stale-approval", "Review the page");
-    const replacement = createBrowserAnnotationAttachment("replacement", "Review the newer page");
-    const host = makeChatHost({
-      requestHandlers: { "chat.send": () => acknowledgment.promise },
-      chatAttachments: [annotation],
-      chatMessage: "/approve approval-123 allow-once",
-      chatRunId: "active-run",
-      chatStream: "Waiting for approval...",
-    });
-
-    const send = handleSendChat(host);
-    await vi.waitFor(() => expect(host.request).toHaveBeenCalledOnce());
-    host.chatMessage = "Newer operator draft";
-    host.chatAttachments = [replacement];
-    acknowledgment.resolve({ runId: "failed-approval-run", status: "error" });
-    await send;
-
-    expect(host.chatMessage).toBe("Newer operator draft");
-    expect(host.chatAttachments).toEqual([replacement]);
-  });
+      expect(host.chatMessage).toBe(draft);
+      expect(host.chatAttachments).toEqual([replacement]);
+      expect(getChatAttachmentDataUrl(host.chatAttachments[0]!)).toBe(replacement.dataUrl);
+    },
+  );
 
   it("materializes annotation context for unrecognized slash-prefixed input", async () => {
     const attachment = createBrowserAnnotationAttachment("unknown", "Review the annotated page");

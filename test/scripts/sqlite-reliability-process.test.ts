@@ -32,26 +32,6 @@ describe("SQLite reliability worker messages", () => {
     vi.useRealTimers();
   });
 
-  it("listens before sending, ignores other messages, and preserves other listeners", async () => {
-    const child = new ChildProcess();
-    const observed: unknown[] = [];
-    const observe = (message: unknown) => observed.push(message);
-    child.on("message", observe);
-    const ready = waitForReady(child, {
-      action: () => {
-        child.emit("message", "unrelated");
-        expect(child.listenerCount("message")).toBe(2);
-        child.emit("message", "ready");
-      },
-    });
-
-    await expect(ready).resolves.toBe("ready");
-    expect(observed).toEqual(["unrelated", "ready"]);
-    expect(child.listeners("message")).toEqual([observe]);
-    child.off("message", observe);
-    expectWaitCleanedUp(child);
-  });
-
   it("rejects child errors without replacing the original error", async () => {
     const child = new ChildProcess();
     const error = new Error("IPC failed");
@@ -75,25 +55,23 @@ describe("SQLite reliability worker messages", () => {
     expectWaitCleanedUp(child);
   });
 
-  it.each([30_000, 120_000])(
-    "honors a %i ms timeout and reads final diagnostics",
-    async (timeoutMs) => {
-      const child = new ChildProcess();
-      let stderr = "before";
-      const ready = waitForReady(child, {
-        timeoutMs,
-        timeoutMessage: () => `timeout: ${stderr}`,
-      });
-      const rejected = expect(ready).rejects.toThrow("timeout: last stderr");
-      await vi.advanceTimersByTimeAsync(timeoutMs - 1);
-      expect(child.listenerCount("message")).toBe(1);
-      stderr = "last stderr";
-      await vi.advanceTimersByTimeAsync(1);
+  it("honors the configured timeout and reads final diagnostics", async () => {
+    const timeoutMs = 120_000;
+    const child = new ChildProcess();
+    let stderr = "before";
+    const ready = waitForReady(child, {
+      timeoutMs,
+      timeoutMessage: () => `timeout: ${stderr}`,
+    });
+    const rejected = expect(ready).rejects.toThrow("timeout: last stderr");
+    await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+    expect(child.listenerCount("message")).toBe(1);
+    stderr = "last stderr";
+    await vi.advanceTimersByTimeAsync(1);
 
-      await rejected;
-      expectWaitCleanedUp(child);
-    },
-  );
+    await rejected;
+    expectWaitCleanedUp(child);
+  });
 
   it.each(["action", "matches"] as const)("cleans up when %s throws", async (source) => {
     const child = new ChildProcess();
@@ -123,19 +101,28 @@ describe("SQLite reliability worker messages", () => {
     expectWaitCleanedUp(child);
   });
 
-  it("returns the requested writer payload from a synchronous action reply", async () => {
+  it("waits for the synchronous writer reply while preserving other listeners", async () => {
     const child = new ChildProcess();
+    const observed: unknown[] = [];
+    const observe = (message: unknown) => observed.push(message);
+    child.on("message", observe);
+    const payload = { kind: "result", batchesCommitted: 2, rowsCommitted: 16 };
     const result = await waitForWriterMessage(
       { child, stderr: [], stopped: false },
       "result",
       () => {
         child.emit("message", { kind: "ready" });
-        child.emit("message", { kind: "result", batchesCommitted: 2, rowsCommitted: 16 });
+        expect(child.listenerCount("message")).toBe(2);
+        child.emit("message", payload);
       },
     );
 
     expect(result.batchesCommitted).toBe(2);
     expect(result.rowsCommitted).toBe(16);
+    expect(result).toBe(payload);
+    expect(observed).toEqual([{ kind: "ready" }, payload]);
+    expect(child.listeners("message")).toEqual([observe]);
+    child.off("message", observe);
     expectWaitCleanedUp(child);
   });
 });

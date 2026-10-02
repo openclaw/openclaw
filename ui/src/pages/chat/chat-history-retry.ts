@@ -1,4 +1,5 @@
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -8,6 +9,17 @@ const MAX_RETRY_MS = 5_000;
 export const CHAT_HISTORY_RETRY_WINDOW_MS = 60_000;
 
 type RetryableChatReadError = GatewayRequestError | GatewayProtocolRequestTimeoutError;
+
+export function isAgentDatabaseInspectionPendingError(error: unknown): boolean {
+  const details =
+    error instanceof GatewayRequestError ? asOptionalRecord(error.details) : undefined;
+  return (
+    error instanceof GatewayRequestError &&
+    error.gatewayCode === "UNAVAILABLE" &&
+    error.retryable &&
+    details?.code === "agent-database-inspection-pending"
+  );
+}
 
 /** Reads are replayable; subscription acquisition first settles its coordinator's compensation. */
 export function isRetryableChatReadError(
@@ -33,6 +45,9 @@ export function isRetryableChatReadError(
 }
 
 export function formatChatHistoryLoadError(error: unknown): string {
+  if (isAgentDatabaseInspectionPendingError(error)) {
+    return t("chat.agentDatabaseWarming");
+  }
   return error instanceof GatewayProtocolRequestTimeoutError
     ? t("chat.historyRequestTimedOut")
     : formatUiError(error);

@@ -276,7 +276,7 @@ it("commits aliased worker membership and participant facts before publishing, a
       updatedAt: 1,
       createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
     };
-    await upsertSessionEntryCore(scope, entry);
+    replaceSessionEntrySync(scope, entry);
     const expectedEntry = {
       sessionId: entry.sessionId,
       createdActor: entry.createdActor,

@@ -111,7 +111,9 @@ it.each(["standalone reset", "shared runtime projection"] as const)(
       }
       const before = process.listenerCount(event);
       let lease: Awaited<ReturnType<typeof acquireAgentRunPreparedModelRuntime>> | undefined;
-      let service: import("./types.js").OpenClawPluginService | undefined;
+      let service:
+        | Parameters<import("./types.js").OpenClawPluginApi["registerService"]>[0]
+        | undefined;
       let peer: typeof lease;
       try {
         lease = await acquireAgentRunPreparedModelRuntime({

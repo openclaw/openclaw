@@ -316,7 +316,13 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     });
   }
 
-  recordDynamicToolCall(params: { callId: string; tool: string; arguments?: JsonValue }): void {
+  recordDynamicToolCall(params: {
+    callId: string;
+    namespace?: string | null;
+    tool: string;
+    arguments?: JsonValue;
+  }): void {
+    this.toolSearchEvidenceProjection?.recordDynamicToolCall(params);
     this.toolTranscriptProjection.recordDynamicToolCall(params);
   }
 
@@ -338,6 +344,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       details?: unknown;
     },
   ): void {
+    this.toolSearchEvidenceProjection?.recordDynamicToolResult(params);
     this.toolProgressProjection.recordDynamicToolResult(params);
     const source = this.options.resolveDynamicToolResultContentSource?.(params.tool);
     this.toolTranscriptProjection.recordDynamicToolResult(params, source);
@@ -668,6 +675,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     if (item.role === "assistant" && extractRawAssistantText(item)) {
       this.eventProjection.markSafetyBufferingAssistantStarted();
     }
+    this.toolSearchEvidenceProjection?.recordRawResponseItem(item);
     this.toolTranscriptProjection.recordRawNativeToolItem(item);
     // Project protocol state before media persistence yields. Notifications may overlap,
     // so delayed image I/O must not consume assistant-echo state from a newer item.

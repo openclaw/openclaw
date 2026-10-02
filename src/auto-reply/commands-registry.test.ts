@@ -181,6 +181,35 @@ function requireCommandArgMenu(
 }
 
 describe("commands registry", () => {
+  it("keeps builtin command keys and native/text aliases unique and valid", () => {
+    const commands = listChatCommands();
+    const keys = commands.map((command) => command.key);
+    const nativeNames = commands.flatMap((command) =>
+      command.nativeName ? [command.nativeName, ...(command.nativeAliases ?? [])] : [],
+    );
+    const textAliases = commands.flatMap((command) => command.textAliases);
+    for (const names of [keys, nativeNames, textAliases]) {
+      expect(new Set(names.map((name) => name.toLowerCase())).size).toBe(names.length);
+      expect(names.every((name) => name.length > 0 && name === name.trim())).toBe(true);
+    }
+    expect(textAliases.every((alias) => alias.startsWith("/"))).toBe(true);
+    for (const command of commands) {
+      if (command.scope === "text") {
+        expect(command.nativeName).toBeUndefined();
+        expect(command.nativeAliases ?? []).toHaveLength(0);
+        expect(command.textAliases.length).toBeGreaterThan(0);
+      } else {
+        expect(command.nativeName).toBeTruthy();
+      }
+      if (command.scope === "native") {
+        expect(command.textAliases).toHaveLength(0);
+      }
+      expect(
+        command.nativeProviders?.every((id) => id.length > 0 && id === id.trim()) ?? true,
+      ).toBe(true);
+    }
+  });
+
   it("builds command text with args", () => {
     expect(buildCommandTextFromArgs(requireChatCommand("status"))).toBe("/status");
     expect(buildCommandTextFromArgs(requireChatCommand("model"), { raw: "gpt-5" })).toBe(

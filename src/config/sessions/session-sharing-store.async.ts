@@ -127,6 +127,7 @@ export async function runSessionCollaborationWrite<
             } catch (error) {
               if (
                 mutationDispatched &&
+                !capturedCommand.type.startsWith("suggestion.") &&
                 !published &&
                 (resultReceived ||
                   collectNestedErrorCandidates(error).some(

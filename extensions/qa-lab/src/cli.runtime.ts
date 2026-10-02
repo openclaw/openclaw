@@ -3,7 +3,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isCrablineServerChannel, OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { parseBooleanValue, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildQaAgenticParityComparison,
@@ -68,6 +67,7 @@ import {
   removeQaCredentialSet,
   type QaCredentialRecord,
 } from "./qa-credentials-admin.runtime.js";
+import { parseQaCredentialPositiveIntegerEnv } from "./qa-credentials-common.runtime.js";
 import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
 import {
   normalizeQaTransportId,
@@ -191,21 +191,6 @@ function normalizeQaSuiteChannelDriver(
     return parsed.data;
   }
   throw new Error(`--channel-driver must be one of qa-channel, crabline, or live, got "${input}".`);
-}
-
-function resolveQaManualLaneModels(opts: {
-  providerMode: QaProviderMode;
-  primaryModel?: string;
-  alternateModel?: string;
-}) {
-  // `qa manual --model` is a one-model probe unless the operator also supplies
-  // `--alt-model`; materialize that contract before shared pair resolution.
-  const explicitPrimaryModel = opts.primaryModel?.trim();
-  return resolveQaRuntimeModelPair({
-    ...opts,
-    primaryModel: explicitPrimaryModel,
-    alternateModel: opts.alternateModel?.trim() || explicitPrimaryModel,
-  });
 }
 
 function parseQaThinkingLevel(
@@ -519,13 +504,7 @@ function parseQaModelSpecs(label: string, entries: readonly string[] | undefined
       const value = part.slice(separatorIndex + 1).trim();
       switch (key) {
         case "thinking": {
-          const thinkingDefault = parseQaThinkingLevel(`${label} thinking`, value);
-          if (!thinkingDefault) {
-            throw new Error(
-              `${label} thinking must be one of off, minimal, low, medium, high, xhigh, adaptive, max`,
-            );
-          }
-          options.thinkingDefault = thinkingDefault;
+          options.thinkingDefault = parseQaThinkingLevel(`${label} thinking`, value);
           break;
         }
         case "fast":
@@ -566,20 +545,12 @@ async function runInterruptibleServer(label: string, server: InterruptibleServer
   await new Promise(() => {});
 }
 
-function resolveQaCredentialPayloadFileMaxBytes(env: NodeJS.ProcessEnv = process.env) {
-  const raw = env[QA_CREDENTIAL_PAYLOAD_MAX_BYTES_ENV]?.trim();
-  if (!raw) {
-    return DEFAULT_QA_CREDENTIAL_PAYLOAD_MAX_BYTES;
-  }
-  const parsed = parseStrictPositiveInteger(raw);
-  if (parsed === undefined) {
-    throw new Error(`${QA_CREDENTIAL_PAYLOAD_MAX_BYTES_ENV} must be a positive integer.`);
-  }
-  return parsed;
-}
-
 async function readQaCredentialPayloadFile(filePath: string) {
-  const maxBytes = resolveQaCredentialPayloadFileMaxBytes();
+  const maxBytes = parseQaCredentialPositiveIntegerEnv({
+    env: process.env,
+    key: QA_CREDENTIAL_PAYLOAD_MAX_BYTES_ENV,
+    fallback: DEFAULT_QA_CREDENTIAL_PAYLOAD_MAX_BYTES,
+  });
   const stat = await fs.stat(filePath);
   if (!stat.isFile()) {
     throw new Error("Payload file must be a regular JSON file.");
@@ -1434,10 +1405,12 @@ export async function runQaManualLaneCommand(opts: {
     opts.providerMode === undefined
       ? DEFAULT_QA_LIVE_PROVIDER_MODE
       : normalizeQaProviderMode(opts.providerMode);
-  const models = resolveQaManualLaneModels({
+  // `--model` is a one-model probe unless the operator also supplies `--alt-model`.
+  const primaryModel = opts.primaryModel?.trim();
+  const models = resolveQaRuntimeModelPair({
     providerMode,
-    primaryModel: opts.primaryModel,
-    alternateModel: opts.alternateModel,
+    primaryModel,
+    alternateModel: opts.alternateModel?.trim() || primaryModel,
   });
   const result = await runQaManualLane({
     repoRoot,

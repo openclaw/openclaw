@@ -14,6 +14,8 @@ import {
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { updateStatusHandlers } from "./update-status.js";
 
+vi.mock("../../version.js", () => ({ VERSION: "2026.9.7" }));
+
 const history = vi.hoisted(() => vi.fn(async () => ({ activeRun: undefined, lastRun: undefined })));
 const install = vi.hoisted(() => vi.fn());
 vi.mock("../../infra/update-run-ledger.js", () => ({
@@ -149,6 +151,45 @@ it("uses local identity for a configless cold start without fetching", async () 
   expect(install).toHaveBeenCalledExactlyOnceWith(false, expect.any(AbortSignal));
 });
 
+it("reports exhausted Git discovery without retrying from status reads and clears it on refresh", async () => {
+  install.mockResolvedValueOnce({
+    root: "/openclaw",
+    installReceipt: null,
+    status: {
+      root: "/openclaw",
+      installKind: "unknown",
+      packageManager: "unknown",
+      error: { status: "failed", message: "Git discovery timed out", timeoutMs: 120_000 },
+    },
+  });
+  await lifecycle.initialize();
+  const config = { update: { channel: "dev" as const, checkOnStart: false } };
+  setUpdateScheduleCache({
+    next: {
+      channel: "dev",
+      autoEnabled: false,
+      install: { kind: "git", git: { status: "current" } },
+    },
+  });
+  for (let read = 0; read < 2; read++) {
+    expect((await status(config)).schedule.install).toEqual({
+      kind: "unknown",
+      git: { status: "unavailable", reason: "git-unavailable" },
+    });
+  }
+  expect(install).toHaveBeenCalledOnce();
+  install.mockResolvedValueOnce({
+    root: "/openclaw",
+    installReceipt: null,
+    status: { root: "/openclaw", installKind: "package", packageManager: "npm" },
+  });
+  expect((await status(config, { refreshCheckout: true })).schedule.install).toEqual({
+    kind: "package",
+  });
+  expect((await lifecycle.initialize()).status.installKind).toBe("package");
+  expect(install).toHaveBeenCalledTimes(2);
+});
+
 it.each(["replace", "remove"])("uses current channel after history lookup (%s)", async (change) => {
   let config: OpenClawConfig = { update: { channel: "dev", auto: { enabled: false } } };
   setUpdateScheduleCache({
@@ -279,4 +320,66 @@ it("omits app-owned install and stale package targets from the protocol schedule
 
   expect(result.schedule).toEqual({ channel: "dev", autoEnabled: false });
   expect(result.updateAvailable).toBeNull();
+});
+
+it("reports a refreshed immutable preparation without enabling activation or retaining package targets", async () => {
+  const immutable = {
+    root: "/opt/openclaw",
+    currentSha: "a".repeat(40),
+    currentPath: `/opt/openclaw/releases/${"a".repeat(40)}`,
+  };
+  const discovered = {
+    root: immutable.currentPath,
+    installReceipt: null,
+    status: {
+      root: immutable.currentPath,
+      installKind: "immutable",
+      packageManager: "unknown",
+      immutable,
+    },
+  };
+  install.mockResolvedValue(discovered);
+  await lifecycle.initialize();
+  setUpdateScheduleCache({
+    next: {
+      channel: "stable",
+      autoEnabled: true,
+      install: { kind: "package" },
+      target: { kind: "package", version: "99.0.0" },
+    },
+  });
+  const prepared = {
+    sha: "b".repeat(40),
+    path: `/opt/openclaw/releases/${"b".repeat(40)}`,
+    buildDigest: "c".repeat(64),
+    preparedAtMs: 123,
+  };
+  install.mockResolvedValue({
+    ...discovered,
+    status: { ...discovered.status, immutable: { ...immutable, prepared } },
+  });
+
+  const result = await status(
+    { update: { channel: "stable", auto: { enabled: true } } },
+    { refreshCheckout: true },
+  );
+
+  expect(result.schedule).toEqual({
+    channel: "stable",
+    autoEnabled: false,
+    install: { kind: "immutable", immutable: { ...immutable, prepared } },
+  });
+  expect(result.updateAvailable).toBeNull();
+  expect((await lifecycle.initialize()).status.immutable?.prepared).toEqual(prepared);
+
+  install.mockResolvedValue({
+    root: immutable.currentPath,
+    installReceipt: null,
+    status: { root: immutable.currentPath, installKind: "unknown", packageManager: "unknown" },
+  });
+  const unowned = await status(
+    { update: { channel: "stable", auto: { enabled: false } } },
+    { refreshCheckout: true },
+  );
+  expect(unowned.schedule.install).toEqual({ kind: "unknown" });
 });

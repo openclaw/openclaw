@@ -90,6 +90,12 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
       step: text(step.name),
       status: failed ? "failed" : "completed",
       exitCode: step.exitCode,
+      termination: step.termination,
+      signal: step.signal,
+      stderrTail:
+        failed && step.termination === "signal" && step.stderrTail
+          ? truncateUtf16Safe(step.stderrTail, 8192)
+          : undefined,
       // A completed retry replaces diagnostics from the previous attempt with the same ID.
       failureFacts:
         step.failureFacts?.length && !step.advisory ? step.failureFacts.slice(0, 5) : undefined,

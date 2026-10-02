@@ -15,6 +15,7 @@ import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
+import { errorShapeFromError } from "../error-shape.js";
 import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
@@ -63,7 +64,8 @@ export function respondChatSendAdmissionError(
   error: unknown,
   respond: GatewayRequestHandlerOptions["respond"],
 ): void {
-  if (error instanceof Error && error.message === "goal-session-busy") {
+  const reason = error instanceof Error ? error.message : undefined;
+  if (reason === "goal-session-busy") {
     respond(
       false,
       undefined,
@@ -75,27 +77,24 @@ export function respondChatSendAdmissionError(
     );
     return;
   }
-  if (error instanceof Error && error.message === SESSION_ROUTING_CHANGED_ERROR_REASON) {
+  if (reason === SESSION_ROUTING_CHANGED_ERROR_REASON) {
     respondChatSessionRoutingChanged(respond);
     return;
   }
-  if (error instanceof Error && error.message === ACTIVE_LEAF_CHANGED_ERROR_REASON) {
+  if (
+    reason === ACTIVE_LEAF_CHANGED_ERROR_REASON ||
+    reason === SESSION_SETTINGS_CHANGED_ERROR_REASON
+  ) {
     respond(
       false,
       undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "active branch changed; review and retry", {
-        details: { reason: ACTIVE_LEAF_CHANGED_ERROR_REASON },
-      }),
-    );
-    return;
-  }
-  if (error instanceof Error && error.message === SESSION_SETTINGS_CHANGED_ERROR_REASON) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "Session settings changed before send. Retry.", {
-        details: { reason: SESSION_SETTINGS_CHANGED_ERROR_REASON },
-      }),
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        reason === ACTIVE_LEAF_CHANGED_ERROR_REASON
+          ? "active branch changed; review and retry"
+          : "Session settings changed before send. Retry.",
+        { details: { reason } },
+      ),
     );
     return;
   }
@@ -111,7 +110,11 @@ export function respondChatSendAdmissionError(
     );
     return;
   }
-  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(error)));
+  respond(
+    false,
+    undefined,
+    errorShapeFromError(ErrorCodes.INVALID_REQUEST, error, { message: formatForLog(error) }),
+  );
 }
 
 export type ChatSendPreAdmissionParams = {

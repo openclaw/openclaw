@@ -1534,6 +1534,66 @@ describe("openclaw agent database", () => {
     }
   });
 
+  it.each([
+    { version: 1, searchCache: "none" },
+    { version: 6, searchCache: "none" },
+    { version: 7, searchCache: "none" },
+    { version: 8, searchCache: "files" },
+    { version: 8, searchCache: "fts" },
+  ])(
+    "refuses unreleased version $version session tables with $searchCache cache without changing the database",
+    ({ version, searchCache }) => {
+      const stateDir = createTempStateDir();
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "worker-1", env });
+      seedVersion1MemoryAgentDatabase(databasePath);
+      const { DatabaseSync } = requireNodeSqlite();
+      const database = new DatabaseSync(databasePath);
+      try {
+        database.exec(`
+        CREATE TABLE sessions (
+          session_id TEXT PRIMARY KEY,
+          session_key TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        INSERT INTO sessions VALUES ('retained-session', 'agent:worker-1:main', 1, 2);
+        PRAGMA user_version = ${version};
+        UPDATE schema_meta SET schema_version = ${version} WHERE meta_key = 'primary';
+      `);
+        if (searchCache === "files") {
+          database.exec("CREATE TABLE session_transcript_files (session_key TEXT, mtime INTEGER);");
+        } else if (searchCache === "fts") {
+          database.exec(
+            "CREATE VIRTUAL TABLE session_transcript_fts USING fts5(text, session_key UNINDEXED);",
+          );
+        }
+      } finally {
+        database.close();
+      }
+      const before = fs.readFileSync(databasePath);
+      const candidate = new DatabaseSync(databasePath);
+      try {
+        expect(() =>
+          ensureOpenClawAgentDatabaseSchema(candidate, { agentId: "worker-1", env }),
+        ).toThrow(`contains an unreleased session schema (version ${version})`);
+        expect(candidate.prepare("SELECT * FROM sessions").all()).toEqual([
+          {
+            session_id: "retained-session",
+            session_key: "agent:worker-1:main",
+            created_at: 1,
+            updated_at: 2,
+          },
+        ]);
+        expect(readSqliteNumberPragma(candidate, "user_version")).toBe(version);
+      } finally {
+        candidate.close();
+      }
+      expect(fs.readFileSync(databasePath)).toEqual(before);
+      expect(fs.existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
+    },
+  );
+
   it("migrates version 8 tables to STRICT without losing agent state", async () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -2870,58 +2930,6 @@ describe("openclaw agent database", () => {
     },
   );
 
-  it("backfills per-entry status while migrating a v6 agent database", async () => {
-    const stateDir = createTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = materializeV13WorkerAgentDatabase(stateDir);
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const legacy = new DatabaseSync(databasePath);
-    try {
-      legacy
-        .prepare(
-          `INSERT INTO sessions (
-             session_id, session_key, session_scope, created_at, updated_at, status
-           ) VALUES (?, ?, 'conversation', ?, ?, ?)`,
-        )
-        .run("shared-session", "agent:worker-1:running", 10, 10, "done");
-      legacy
-        .prepare(
-          `INSERT INTO session_entries (
-             session_key, session_id, entry_json, updated_at, status
-           ) VALUES (?, ?, ?, ?, ?)`,
-        )
-        .run(
-          "agent:worker-1:running",
-          "shared-session",
-          JSON.stringify({ sessionId: "shared-session", status: "running", updatedAt: 10 }),
-          10,
-          "running",
-        );
-      legacy.exec(`
-        DROP INDEX idx_agent_session_entries_status;
-        ALTER TABLE session_entries DROP COLUMN status;
-        PRAGMA user_version = 6;
-        UPDATE schema_meta SET schema_version = 6 WHERE meta_key = 'primary';
-      `);
-    } finally {
-      legacy.close();
-    }
-
-    const migrated = await migrateAndOpenLegacyAgentDatabaseForTest({ agentId: "worker-1", env });
-    expect(
-      migrated.db
-        .prepare("SELECT status FROM session_nodes WHERE session_key = ?")
-        .get("agent:worker-1:running"),
-    ).toEqual({ status: "running" });
-    expect(
-      migrated.db
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?")
-        .get("idx_agent_session_nodes_status"),
-    ).toEqual({ name: "idx_agent_session_nodes_status" });
-    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-  });
-
   it("refuses physical transcript index corruption until explicit Doctor repair", async () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -3521,157 +3529,6 @@ describe("openclaw agent database", () => {
     }
   });
 
-  it("adds transcript watermarks and session provenance to v4 session tables", async () => {
-    const stateDir = createTempStateDir();
-    const databasePath = materializeV13WorkerAgentDatabase(stateDir);
-    const { DatabaseSync } = requireNodeSqlite();
-    const db = new DatabaseSync(databasePath);
-    db.exec(`
-      ALTER TABLE sessions DROP COLUMN transcript_updated_at;
-      ALTER TABLE sessions DROP COLUMN transcript_observed_at;
-      ALTER TABLE sessions DROP COLUMN session_entry_provenance;
-      ALTER TABLE sessions DROP COLUMN acp_owned;
-      ALTER TABLE sessions DROP COLUMN plugin_owner_id;
-      ALTER TABLE sessions DROP COLUMN hook_external_content_source;
-      DELETE FROM schema_meta;
-      INSERT INTO schema_meta
-        (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
-      VALUES ('primary', 'agent', 4, 'worker-1', NULL, 1, 1);
-      INSERT INTO sessions
-        (session_id, session_key, created_at, updated_at)
-      VALUES ('session-1', 'agent:worker-1:main', 10, 20);
-      INSERT INTO sessions
-        (session_id, session_key, created_at, updated_at)
-      VALUES ('session-2', 'agent:worker-1:other', 10, 20);
-      INSERT INTO session_entries
-        (session_key, session_id, entry_json, updated_at)
-      VALUES (
-        'agent:worker-1:main',
-        'session-1',
-        '{"sessionId":"session-1","pluginOwnerId":"history-owner","hookExternalContentSource":"webhook","acp":{"backend":"acpx"}}',
-        20
-      );
-      INSERT INTO transcript_events
-        (session_id, seq, event_json, created_at)
-      VALUES ('session-1', 0, '{"type":"custom"}', 1);
-      PRAGMA user_version = 4;
-    `);
-    db.close();
-
-    const database = await migrateAndOpenLegacyAgentDatabaseForTest({
-      agentId: "worker-1",
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-    const columns = database.db.prepare("PRAGMA table_info(session_windows)").all() as Array<{
-      name?: unknown;
-    }>;
-
-    expect(columns.map((column) => column.name)).toEqual(
-      expect.arrayContaining([
-        "transcript_observed_at",
-        "transcript_updated_at",
-        "session_entry_provenance",
-        "acp_owned",
-        "plugin_owner_id",
-        "hook_external_content_source",
-      ]),
-    );
-    expect(
-      database.db
-        .prepare(
-          "SELECT transcript_observed_at, transcript_updated_at FROM session_windows WHERE session_id = ?",
-        )
-        .get("session-1"),
-    ).toEqual({
-      transcript_observed_at: 20,
-      transcript_updated_at: 1,
-    });
-    expect(
-      database.db
-        .prepare(
-          "SELECT transcript_observed_at, transcript_updated_at FROM session_windows WHERE session_id = ?",
-        )
-        .get("session-2"),
-    ).toEqual({
-      transcript_observed_at: null,
-      transcript_updated_at: null,
-    });
-    expect(
-      database.db
-        .prepare(
-          "SELECT session_entry_provenance, acp_owned, plugin_owner_id, hook_external_content_source FROM session_windows WHERE session_id = ?",
-        )
-        .get("session-1"),
-    ).toEqual({
-      session_entry_provenance: 1,
-      acp_owned: 1,
-      plugin_owner_id: "history-owner",
-      hook_external_content_source: "webhook",
-    });
-    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-  });
-
-  it("adds transcript provenance when upgrading the v7 status schema", async () => {
-    const stateDir = createTempStateDir();
-    const databasePath = materializeV13WorkerAgentDatabase(stateDir);
-    const { DatabaseSync } = requireNodeSqlite();
-    const db = new DatabaseSync(databasePath);
-    db.exec(`
-      ALTER TABLE sessions DROP COLUMN session_entry_provenance;
-      ALTER TABLE sessions DROP COLUMN acp_owned;
-      ALTER TABLE sessions DROP COLUMN plugin_owner_id;
-      ALTER TABLE sessions DROP COLUMN hook_external_content_source;
-      ALTER TABLE conversations DROP COLUMN delivery_target;
-      DELETE FROM schema_meta;
-      INSERT INTO schema_meta
-        (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
-      VALUES ('primary', 'agent', 7, 'worker-1', NULL, 1, 1);
-      INSERT INTO sessions
-        (session_id, session_key, created_at, updated_at, status)
-      VALUES ('session-1', 'agent:worker-1:main', 10, 20, 'done');
-      INSERT INTO session_entries
-        (session_key, session_id, entry_json, updated_at, status)
-      VALUES (
-        'agent:worker-1:main',
-        'session-1',
-        '{"sessionId":"session-1","pluginOwnerId":"history-owner","acp":{"backend":"acpx"},"chatType":"direct","deliveryContext":{"channel":"reef","accountId":"default","to":"reef:peer-a"}}',
-        20,
-        'done'
-      );
-      PRAGMA user_version = 7;
-    `);
-    db.close();
-
-    const database = await migrateAndOpenLegacyAgentDatabaseForTest({
-      agentId: "worker-1",
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-    expect(
-      database.db
-        .prepare("SELECT session_entry_provenance, acp_owned, plugin_owner_id FROM session_windows")
-        .get(),
-    ).toEqual({
-      session_entry_provenance: 1,
-      acp_owned: 1,
-      plugin_owner_id: "history-owner",
-    });
-    expect(
-      database.db
-        .prepare(
-          `SELECT sc.role, c.channel, c.peer_id, c.delivery_target
-           FROM session_conversations AS sc
-           JOIN conversations AS c ON c.conversation_id = sc.conversation_id`,
-        )
-        .get(),
-    ).toEqual({
-      role: "primary",
-      channel: "reef",
-      peer_id: "peer-a",
-      delivery_target: "reef:peer-a",
-    });
-    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-  });
-
   it("adds the active transcript projection when upgrading v9 databases", async () => {
     const stateDir = createTempStateDir();
     const databasePath = materializeV13WorkerAgentDatabase(stateDir);
@@ -3771,127 +3628,6 @@ describe("openclaw agent database", () => {
     }
 
     expect(inspectOpenClawAgentDatabaseOwner(databasePath)).toEqual({ status: "unreadable" });
-  });
-
-  it("migrates compact v1 session tables before applying normalized indexes", async () => {
-    const stateDir = createTempStateDir();
-    const databasePath = path.join(
-      stateDir,
-      "agents",
-      "worker-1",
-      "agent",
-      "openclaw-agent.sqlite",
-    );
-    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-    const { DatabaseSync } = requireNodeSqlite();
-    const db = new DatabaseSync(databasePath);
-    db.exec(`
-      CREATE TABLE schema_meta (
-        meta_key TEXT NOT NULL PRIMARY KEY,
-        role TEXT NOT NULL,
-        schema_version INTEGER NOT NULL,
-        agent_id TEXT,
-        app_version TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      INSERT INTO schema_meta
-        (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
-      VALUES ('primary', 'agent', 1, 'worker-1', NULL, 1, 1);
-      CREATE TABLE sessions (
-        session_id TEXT NOT NULL PRIMARY KEY,
-        session_key TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      INSERT INTO sessions (session_id, session_key, created_at, updated_at)
-      VALUES ('session-1', 'agent:worker-1:main', 10, 20);
-      CREATE TABLE session_entries (
-        session_key TEXT NOT NULL PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        entry_json TEXT NOT NULL,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-      );
-      INSERT INTO session_entries (session_key, session_id, entry_json, updated_at)
-      VALUES (
-        'agent:worker-1:group:example',
-        'session-1',
-        '{"sessionId":"session-1","updatedAt":20,"startedAt":11,"endedAt":19,"status":"done","chatType":"group","channel":"discord","deliveryContext":{"accountId":"acct-1"},"modelProvider":"openai","model":"gpt-5.5","agentHarnessId":"codex","parentSessionKey":"agent:worker-1:parent","spawnedBy":"agent:worker-1:spawner","displayName":"Example group"}',
-        20
-      );
-      CREATE TABLE memory_index_state (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        revision INTEGER NOT NULL
-      );
-      INSERT INTO memory_index_state (id, revision) VALUES (1, 1);
-      PRAGMA user_version = 1;
-    `);
-    db.close();
-
-    const database = await migrateAndOpenLegacyAgentDatabaseForTest({
-      agentId: "worker-1",
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-
-    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-    const session = database.db
-      .prepare(
-        `
-          SELECT
-            account_id,
-            agent_harness_id,
-            channel,
-            chat_type,
-            display_name,
-            ended_at,
-            model,
-            model_provider,
-            parent_session_key,
-            session_scope,
-            spawned_by,
-            started_at,
-            status
-          FROM session_windows
-          WHERE session_id = ?
-        `,
-      )
-      .get("session-1");
-    expect(session).toEqual({
-      account_id: "acct-1",
-      agent_harness_id: "codex",
-      channel: "discord",
-      chat_type: "group",
-      display_name: "Example group",
-      ended_at: 19,
-      model: "gpt-5.5",
-      model_provider: "openai",
-      parent_session_key: "agent:worker-1:parent",
-      session_scope: "group",
-      spawned_by: "agent:worker-1:spawner",
-      started_at: 11,
-      status: "done",
-    });
-    const route = database.db
-      .prepare("SELECT current_session_id, updated_at FROM session_nodes WHERE session_key = ?")
-      .get("agent:worker-1:group:example");
-    expect(route).toEqual({
-      current_session_id: "session-1",
-      updated_at: 20,
-    });
-    const sessionForeignKeys = database.db
-      .prepare("PRAGMA foreign_key_list(session_windows)")
-      .all() as
-      | Array<{ from?: unknown; on_delete?: unknown; table?: unknown; to?: unknown }>
-      | undefined;
-    expect(sessionForeignKeys).toContainEqual(
-      expect.objectContaining({
-        from: "primary_conversation_id",
-        on_delete: "SET NULL",
-        table: "conversations",
-        to: "conversation_id",
-      }),
-    );
   });
 
   it("rejects stale schema_meta indexes before writable initialization", () => {

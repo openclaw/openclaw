@@ -268,6 +268,7 @@ export async function handleAgentExecutionError(params: {
       : undefined;
   const externalRunFailureReply =
     !params.shouldSurfaceToControlUi ||
+    externalRunFailureCandidate?.isGenericRunnerFailure === false ||
     externalRunFailureCandidate?.presentation ||
     renderFailoverCodeUserCopy(failoverFacts.code)
       ? externalRunFailureCandidate

@@ -8,17 +8,8 @@ export async function recordSkillProposalEvaluation(
   params: RecordSkillProposalEvaluationInput & { store?: SkillWorkshopStoreOptions },
 ) {
   assertProposalId(params.proposalId);
-  return executeSkillWorkshopOperation(
-    "workshop.proposal.evaluate",
-    {
-      proposalId: params.proposalId,
-      expectedProposedVersion: params.expectedProposedVersion,
-      expectedRevisionHash: params.expectedRevisionHash,
-      evaluation: params.evaluation,
-      event: params.event,
-    },
-    params.store,
-  );
+  const { store, ...input } = params;
+  return executeSkillWorkshopOperation("workshop.proposal.evaluate", input, store);
 }
 
 export async function readSkillProposalEvents(

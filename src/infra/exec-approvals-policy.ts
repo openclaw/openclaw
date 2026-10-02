@@ -46,36 +46,12 @@ const DEFAULT_EXEC_APPROVAL_DECISIONS = [
 const OPTIONAL_EXEC_APPROVAL_DECISIONS = [
   "allow-always",
 ] as const satisfies readonly ExecApprovalDecision[];
-const OPTIONAL_EXEC_APPROVAL_DECISION_SET: ReadonlySet<string> = new Set(
-  OPTIONAL_EXEC_APPROVAL_DECISIONS,
-);
-
-function isOptionalExecApprovalDecision(
-  decision: string,
-): decision is ExecApprovalUnavailableDecision {
-  return OPTIONAL_EXEC_APPROVAL_DECISION_SET.has(decision);
-}
-
-function collectExecApprovalUnavailableDecisionSet(
-  decisions?: readonly string[] | readonly ExecApprovalUnavailableDecision[] | null,
-): ReadonlySet<ExecApprovalUnavailableDecision> {
-  const unavailable = new Set<ExecApprovalUnavailableDecision>();
-  if (!Array.isArray(decisions)) {
-    return unavailable;
-  }
-  for (const decision of decisions) {
-    if (isOptionalExecApprovalDecision(decision)) {
-      unavailable.add(decision);
-    }
-  }
-  return unavailable;
-}
-
 export function normalizeExecApprovalUnavailableDecisions(
   decisions?: readonly string[] | readonly ExecApprovalUnavailableDecision[] | null,
 ): readonly ExecApprovalUnavailableDecision[] {
-  const unavailable = collectExecApprovalUnavailableDecisionSet(decisions);
-  return OPTIONAL_EXEC_APPROVAL_DECISIONS.filter((decision) => unavailable.has(decision));
+  return OPTIONAL_EXEC_APPROVAL_DECISIONS.filter(
+    (decision) => Array.isArray(decisions) && decisions.includes(decision),
+  );
 }
 
 export function resolveExecApprovalAllowedDecisions(params?: {
@@ -102,13 +78,11 @@ export function resolveExecApprovalRequestAllowedDecisions(params?: {
   unavailableDecisions?: readonly ExecApprovalUnavailableDecision[] | readonly string[] | null;
 }): readonly ExecApprovalDecision[] {
   const policyDecisions = resolveExecApprovalAllowedDecisions({ ask: params?.ask });
-  const unavailableDecisions = collectExecApprovalUnavailableDecisionSet(
-    params?.unavailableDecisions,
+  const unavailableDecisions = new Set<string>(
+    normalizeExecApprovalUnavailableDecisions(params?.unavailableDecisions),
   );
   if (unavailableDecisions.size === 0) {
     return policyDecisions;
   }
-  return policyDecisions.filter(
-    (decision) => !isOptionalExecApprovalDecision(decision) || !unavailableDecisions.has(decision),
-  );
+  return policyDecisions.filter((decision) => !unavailableDecisions.has(decision));
 }

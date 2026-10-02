@@ -185,13 +185,13 @@ describe("worker turn launcher failure recovery", () => {
     });
     try {
       await teardownStarted.promise;
-      const reconciling = placements.startReconcile({
+      const reconciling = await placements.startReconcile({
         sessionId: SESSION_ID,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
         expectedGeneration: active.generation + 1,
       });
-      placements.fail({
+      await placements.fail({
         sessionId: SESSION_ID,
         expectedGeneration: reconciling.generation,
         recoveryError: "recovered elsewhere",
@@ -273,7 +273,7 @@ describe("worker turn launcher failure recovery", () => {
         runId: `move-${executionMode}-run`,
         owner: placementTurnOwner(active),
       });
-      const draining = placements.startDrain({
+      const draining = await placements.startDrain({
         sessionId: active.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
@@ -344,8 +344,8 @@ describe("worker turn launcher failure recovery", () => {
 
   it("fails impossible replay before handoff and keeps the active placement reusable", async () => {
     await seedActivePlacement();
-    const manager = openSessionManager();
-    manager.appendMessage(
+    const manager = await openSessionManager();
+    await manager.appendMessageAsync(
       makeAgentAssistantMessage({
         content: [{ type: "toolCall", id: "call-replay", name: "read", arguments: {} }],
         model: "gpt-test",
@@ -362,7 +362,7 @@ describe("worker turn launcher failure recovery", () => {
         timestamp: 1,
       }),
     );
-    manager.appendMessage({
+    await manager.appendMessageAsync({
       role: "toolResult",
       toolCallId: "call-replay",
       toolName: "read",

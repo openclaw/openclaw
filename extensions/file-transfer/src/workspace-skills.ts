@@ -1,11 +1,18 @@
 import path from "node:path";
 import type { AgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
+import { createNodeSkillLifecycle } from "./workspace-skill-lifecycle.js";
 import { runNodeWorkspaceWorker, type NodeWorkspaceWorkerOptions } from "./workspace-worker.js";
 
 type SkillsAccess = Required<
   Pick<
     AgentWorkspaceAccess,
-    "loadSkills" | "watchSkills" | "skillResources" | "installSkillDependencies"
+    | "loadSkills"
+    | "watchSkills"
+    | "skillResources"
+    | "installSkillDependencies"
+    | "applySkillRoot"
+    | "recordSkillSourceInstall"
+    | "clawHubSkills"
   >
 >;
 
@@ -58,6 +65,7 @@ export function createNodeWorkspaceSkills(options: NodeWorkspaceWorkerOptions): 
     );
   }
   return {
+    ...createNodeSkillLifecycle(options),
     loadSkills: (request) => call("discovery", mapSources(request)),
     async watchSkills(request, onChange, signal) {
       await runNodeWorkspaceWorker(

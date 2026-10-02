@@ -1,4 +1,5 @@
 import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import type { MemoryFlushToolRunContext } from "../../agents/agent-tools.memory-flush.types.js";
 import { createAssistantErrorTranscript } from "../../agents/assistant-error-transcript.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
@@ -9,6 +10,8 @@ import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
+import type { MemoryFlushPlan } from "../../plugins/registry-contribution-types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 
 export async function seedMemoryAccountingTranscript(
@@ -56,6 +59,25 @@ export async function seedMemoryAccountingTranscript(
   for (let index = 0; index < customTail; index += 1) {
     transcript.appendCustomEntry("fixture-tail", { index });
   }
+}
+
+type FileFlushPlan = Extract<MemoryFlushPlan, { relativePath: string }>;
+
+/** File-arm fixture shared by the runner's flush scenarios. */
+export function createMemoryFlushPlan(): FileFlushPlan {
+  return {
+    softThresholdTokens: 4_000,
+    forceFlushTranscriptBytes: 1_000_000_000,
+    reserveTokensFloor: 20_000,
+    prompt: "Pre-compaction memory flush.\nNO_REPLY",
+    systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+    relativePath: "memory/2023-11-14.md",
+  };
+}
+
+/** Override a file-arm fixture without admitting incompatible tools-arm fields. */
+export function createModifiedMemoryFlushPlan(overrides: Partial<FileFlushPlan>): MemoryFlushPlan {
+  return { ...createMemoryFlushPlan(), ...overrides };
 }
 
 export type ModelFallbackParams = {
@@ -151,6 +173,13 @@ export function createMemoryRunEntryMockImplementation(deps: {
 }
 
 export type EmbeddedAgentParams = {
+  sessionId?: string;
+  sessionKey?: string;
+  sessionPersistence?: "detached";
+  senderIsOwner?: boolean;
+  sandboxSessionKey?: string;
+  memoryAudience?: MemoryAudience;
+  memoryFlushTools?: MemoryFlushToolRunContext;
   preparedRunAdmission?: PreparedAgentRunAdmission;
   sessionManager?: SessionManager;
   provider?: string;

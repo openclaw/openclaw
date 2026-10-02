@@ -14,6 +14,7 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { ProviderModelAuthSourceClassification } from "../provider-model-auth-source-plan.js";
 import type { AgentTool } from "../runtime/index.js";
+import type { TranscriptPolicy } from "../transcript-policy.types.js";
 
 /** Runtime transport selected for one model attempt. */
 export type AgentRuntimeTransport = "sse" | "websocket" | "websocket-cached" | "auto";
@@ -110,30 +111,6 @@ type AgentRuntimeSystemPromptContributionContext = {
 type AgentRuntimeFollowupFallbackRouteResult = {
   route?: "origin" | "dispatcher" | "drop";
   reason?: string;
-};
-
-/** Tool-call id sanitizer mode for provider transcript policy. */
-type AgentRuntimeToolCallIdMode = "strict" | "strict9";
-
-/** Provider transcript sanitation, repair, and validation policy. */
-type AgentRuntimeTranscriptPolicy = {
-  sanitizeMode: "full" | "images-only";
-  sanitizeToolCallIds: boolean;
-  toolCallIdMode?: AgentRuntimeToolCallIdMode;
-  duplicateToolCallIdStyle?: "openai";
-  preserveNativeAnthropicToolUseIds: boolean;
-  repairToolUseResultPairing: boolean;
-  preserveSignatures: boolean;
-  sanitizeThoughtSignatures?: {
-    allowBase64Only?: boolean;
-    includeCamelCase?: boolean;
-  };
-  dropThinkingBlocks: boolean;
-  dropReasoningFromHistory?: boolean;
-  applyGoogleTurnOrdering: boolean;
-  validateGeminiTurns: boolean;
-  validateAnthropicTurns: boolean;
-  allowSyntheticToolResults: boolean;
 };
 
 /** Runtime hook that classifies run results for model fallback. */
@@ -282,8 +259,10 @@ export type AgentRuntimePlan = {
   prompt: AgentRuntimePromptPlan;
   tools: AgentRuntimeToolPlan;
   transcript: {
-    policy: AgentRuntimeTranscriptPolicy;
-    resolvePolicy(params?: AgentRuntimeModelOverrides): AgentRuntimeTranscriptPolicy;
+    policy: TranscriptPolicy;
+    resolvePolicy(
+      params?: AgentRuntimeModelOverrides & { directApiKey?: boolean },
+    ): TranscriptPolicy;
   };
   delivery: AgentRuntimeDeliveryPlan;
   outcome: { classifyRunResult: AgentRuntimeOutcomeClassifier };

@@ -304,42 +304,27 @@ function formatNativeGoal(response: JsonValue | undefined): string {
   ].join("\n");
 }
 
-export async function stopConversationTurn(
+export async function controlConversationTurn(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
-): Promise<string> {
-  const authority = await resolvePreparedCodexCommandAuthority(deps, ctx);
-  const { target, binding } = authority;
-  if (!target) {
-    return "Cannot stop Codex because this command did not include a stable binding identity.";
-  }
-  return (
-    await deps.stopCodexConversationTurn({
-      identity: target.identity,
-      binding,
-      assertCurrent: authority.assertMutationCurrent,
-    })
-  ).message;
-}
-
-export async function steerConversationTurn(
-  deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
+  command: "stop" | "steer",
   message: string,
 ): Promise<string> {
   const authority = await resolvePreparedCodexCommandAuthority(deps, ctx);
   const { target, binding } = authority;
   if (!target) {
-    return "Cannot steer Codex because this command did not include a stable binding identity.";
+    return `Cannot ${command} Codex because this command did not include a stable binding identity.`;
   }
-  return (
-    await deps.steerCodexConversationTurn({
-      identity: target.identity,
-      binding,
-      message,
-      assertCurrent: authority.assertMutationCurrent,
-    })
-  ).message;
+  const params = {
+    identity: target.identity,
+    binding,
+    assertCurrent: authority.assertMutationCurrent,
+  };
+  const result =
+    command === "stop"
+      ? await deps.stopCodexConversationTurn(params)
+      : await deps.steerCodexConversationTurn({ ...params, message });
+  return result.message;
 }
 
 export async function setConversationModel(

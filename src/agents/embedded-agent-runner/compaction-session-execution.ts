@@ -45,7 +45,6 @@ import { normalizeUsage, type UsageLike } from "../usage.js";
 import { resolveCompactionFailure } from "./compact-reasons.js";
 import {
   containsRealConversationMessages,
-  normalizeObservedTokenCount,
   summarizeCompactionMessages,
 } from "./compaction-diagnostics.js";
 import { dedupeDuplicateUserMessagesForCompaction } from "./compaction-duplicate-user-messages.js";
@@ -64,6 +63,7 @@ import { buildEmbeddedExtensionFactories } from "./extensions.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { log } from "./logger.js";
 import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js";
+import { declarePromptHistoryRewrite } from "./prompt-cache-observability.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
@@ -72,7 +72,11 @@ import { estimateLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import { applySystemPromptToSession } from "./system-prompt.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
-import { mapThinkingLevel, mapThinkingLevelForProvider } from "./utils.js";
+import {
+  mapThinkingLevel,
+  mapThinkingLevelForProvider,
+  normalizeContextTokenBudget,
+} from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 
 export async function executePreparedCompactionSession(runtime: PreparedCompactionRuntime) {
@@ -116,7 +120,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
   try {
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
     const accountingRecorder = readCompactionAccountingRecorder(params.contextEngineRuntimeContext);
-    const recordCompaction = accountingRecorder?.recordCompaction;
     const memoryTranscript = accountingRecorder?.memoryTranscript;
     const sessionTarget =
       memoryTranscript?.sessionTarget ??
@@ -129,6 +132,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         sessionKey: params.sessionKey,
         sessionTarget: params.sessionTarget,
       }));
+    const recordCompaction =
+      accountingRecorder?.recordCompaction ??
+      (() => declarePromptHistoryRewrite({ ...sessionTarget, reason: "compaction" }));
     const assertActive =
       memoryTranscript?.assertActive ?? captureOwnedTranscriptWriteAssertion(sessionTarget);
     assertActive();
@@ -151,6 +157,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       missingToolResultText: responsesApi ? "aborted" : undefined,
       allowedToolNames,
       withCompactionPersistence: params.transcriptByteCompactionPersistence,
+      withCompactionPersistenceAsync: params.transcriptByteCompactionPersistenceAsync,
     });
     compactionSessionManager = sessionManager;
     const recordUsage = accountingRecorder?.recordUsage
@@ -269,14 +276,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         );
         session = createdSession.session;
         session[agentSessionSetContextReplacementHook](
-          recordCompaction
-            ? (tokensAfter, tokensBefore) =>
-                recordCompaction({
-                  tokensBefore,
-                  tokensAfter,
-                  compactionKind: "context-engine",
-                })
-            : undefined,
+          (tokensAfter, tokensBefore) =>
+            recordCompaction({ tokensBefore, tokensAfter, compactionKind: "context-engine" }),
           assertActive,
         );
         session.setActiveToolsByName(sessionToolAllowlist);
@@ -408,7 +409,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           session.agent.state.messages = limited;
         }
         const hookRunner = getGlobalHookRunner();
-        const observedTokenCount = normalizeObservedTokenCount(params.currentTokenCount);
+        const observedTokenCount = normalizeContextTokenBudget(params.currentTokenCount);
         const beforeHookMetrics = buildBeforeCompactionHookMetrics({
           originalMessages,
           currentMessages: session.messages,
@@ -474,7 +475,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               enabled: compactionReplayEnabled,
             },
           });
-          recordCompaction?.({
+          recordCompaction({
             tokensBefore,
             tokensAfter: serverTokensAfter,
             compactionKind: "server-endpoint",
@@ -573,6 +574,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             sessionKey: params.sessionKey,
             sessionId: params.sessionId,
             agentId: sessionAgentId,
+            memoryAudience: params.memoryAudience,
+            sandboxed: sandbox?.enabled === true,
             sessionFile: activeSessionFile,
             assertActive,
           });

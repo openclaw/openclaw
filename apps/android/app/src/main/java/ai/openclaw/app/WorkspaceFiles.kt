@@ -34,8 +34,6 @@ data class GatewayWorkspaceFile(
   val content: String,
 )
 
-private fun JsonElement?.asLongOrNull(): Long? = (this as? JsonPrimitive)?.longOrNull
-
 internal fun parseWorkspaceListing(root: JsonElement): GatewayWorkspaceListing? {
   val obj = root.asObjectOrNull() ?: return null
   val entries =
@@ -50,15 +48,15 @@ internal fun parseWorkspaceListing(root: JsonElement): GatewayWorkspaceListing? 
         path = path,
         name = name,
         isDirectory = entry["kind"].asStringOrNull() == "directory",
-        size = entry["size"].asLongOrNull(),
-        updatedAtMs = entry["updatedAtMs"].asLongOrNull(),
+        size = (entry["size"] as? JsonPrimitive)?.longOrNull,
+        updatedAtMs = (entry["updatedAtMs"] as? JsonPrimitive)?.longOrNull,
       )
     } ?: emptyList()
   return GatewayWorkspaceListing(
     path = obj["path"].asStringOrNull().orEmpty(),
     entries = entries,
-    totalEntries = obj["totalEntries"].asLongOrNull()?.toInt() ?: entries.size,
-    offset = obj["offset"].asLongOrNull()?.toInt() ?: 0,
+    totalEntries = (obj["totalEntries"] as? JsonPrimitive)?.longOrNull?.toInt() ?: entries.size,
+    offset = (obj["offset"] as? JsonPrimitive)?.longOrNull?.toInt() ?: 0,
   )
 }
 
@@ -73,7 +71,7 @@ internal fun parseWorkspaceFile(root: JsonElement): GatewayWorkspaceFile? {
         .asStringOrNull()
         .orEmpty()
         .ifEmpty { path.substringAfterLast('/') },
-    size = file["size"].asLongOrNull() ?: 0L,
+    size = (file["size"] as? JsonPrimitive)?.longOrNull ?: 0L,
     mimeType = file["mimeType"].asStringOrNull().orEmpty().ifEmpty { "text/plain" },
     isBase64 = file["encoding"].asStringOrNull() == "base64",
     content = file["content"].asStringOrNull().orEmpty(),

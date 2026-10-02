@@ -14,6 +14,7 @@ import {
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
 } from "../gateway/operator-scopes.js";
+import { normalizeGitHubLogin } from "../utils/github-login.js";
 import {
   isValidPortalIngressDomain,
   portalIngressConflictsWithOrigin,
@@ -393,8 +394,14 @@ export const GatewayConfigSchema = z
     /** Optional profile-bound operator roles; omitted preserves legacy authorization. */
     roles: z
       .strictObject({
-        /** Required validated default for profiles without a valid assigned role. */
+        /** Required default for profiles without a valid explicit or GitHub login assignment. */
         default: GatewayOperatorRoleNameSchema,
+        assignments: z
+          .strictObject({
+            /** Case-insensitive GitHub login assignments; explicit profile assignments win. */
+            byGithubLogin: z.record(z.string(), GatewayOperatorRoleNameSchema).optional(),
+          })
+          .optional(),
         /** Closed capability bundles indexed by administrator-selected role names. */
         definitions: z
           .record(GatewayOperatorRoleNameSchema, GatewayOperatorRoleDefinitionSchema)
@@ -410,6 +417,26 @@ export const GatewayConfigSchema = z
             message: "gateway.roles.default must name a configured role definition",
             path: ["default"],
           });
+        }
+        const githubLogins = new Set<string>();
+        for (const [login, role] of Object.entries(roles.assignments?.byGithubLogin ?? {})) {
+          const normalizedLogin = normalizeGitHubLogin(login)?.toLowerCase();
+          const path = ["assignments", "byGithubLogin", login];
+          if (!normalizedLogin) {
+            ctx.addIssue({ code: "custom", message: "Invalid GitHub login", path });
+          } else if (githubLogins.has(normalizedLogin)) {
+            ctx.addIssue({ code: "custom", message: "Duplicate GitHub login", path });
+          } else {
+            githubLogins.add(normalizedLogin);
+          }
+          if (!Object.hasOwn(roles.definitions, role)) {
+            ctx.addIssue({
+              code: "custom",
+              message:
+                "gateway.roles.assignments.byGithubLogin must name a configured role definition",
+              path,
+            });
+          }
         }
       })
       .optional(),

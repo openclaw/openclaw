@@ -18,7 +18,7 @@ export function isChannelConfigured(
 ): boolean {
   // Treat explicit persisted config as configured before consulting channel-specific env/state
   // probes; user-authored config should win over inferred setup state.
-  if (hasMeaningfulChannelConfigShallow(resolveChannelConfigRecord(cfg, channelId))) {
+  if (hasMeaningfulChannelConfigShallow(resolveChannelConfigRecord(cfg, channelId), channelId)) {
     return true;
   }
   // Declared bootstrap metadata owns negative results too. Runtime credential

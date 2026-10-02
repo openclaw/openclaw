@@ -219,7 +219,7 @@ test("sessions.recover settles its active placement before archiving a real sess
         ...request,
         authorize,
         beforeDrain,
-        begin: () => {
+        begin: async () => {
           placement = recoveryWorkerPlacement({
             sessionId: sourceSessionId,
             sessionKey: sourceKey,
@@ -339,7 +339,7 @@ test.each(["before-interrupt", "before-drain"] as const)(
           })
         : undefined;
     releaseAdmission = () => admission?.release();
-    const begin = vi.fn(() => ({ ...placement, state: "draining" as const }));
+    const begin = vi.fn(async () => ({ ...placement, state: "draining" as const }));
     const reclaim = vi.fn(async () => {
       throw new Error("ineligible worker must not be reclaimed");
     });
@@ -839,7 +839,7 @@ test("sessions.recover revalidates participation at the recovery writer commit",
 
   const mutationEntered = createDeferredCore();
   const releaseMutation = createDeferredCore();
-  const heldMutation = runExclusiveSessionLifecycleMutation({
+  const heldMutation = runExclusiveSessionLifecycleMutation("recover", {
     scope: scope.storePath,
     identities: [sourceKey, sourceSessionId],
     run: async () => {

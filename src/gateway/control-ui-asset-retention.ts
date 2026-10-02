@@ -13,14 +13,14 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseControlUiAssetManifest } from "./control-ui-asset-manifest-parse.js";
 import {
   CONTROL_UI_ASSET_MANIFEST_FILENAME,
+  CONTROL_UI_RETAINED_ASSET_MAX_BYTES,
   hashControlUiAssetManifestEntries,
+  isControlUiRetainedAssetPath,
   type ControlUiAssetManifest,
   type ControlUiAssetManifestEntry,
 } from "./control-ui-asset-manifest.js";
-import { isControlUiPrecompressedAssetExtension } from "./control-ui-static.js";
 
 const CONTROL_UI_RETAINED_GENERATION_LIMIT = 3;
-const CONTROL_UI_RETAINED_ASSET_MAX_BYTES = 96 * 1024 * 1024;
 
 const CONTROL_UI_GENERATION_PATTERN = /^[a-f0-9]{64}$/u;
 const CONTROL_UI_STAGING_PATTERN = /^\.staging-[0-9]+-[a-f0-9-]+$/u;
@@ -171,14 +171,9 @@ async function readAssetManifest(
   return manifest;
 }
 
-// Older documents request only identity URLs: bundled .br/.gz sidecars are not addressable,
-// and a missing retained sidecar is served as identity bytes. Omitting them keeps a prior
-// generation within the byte budget; the retained manifest names its own generation.
 function selectRetainedAssets(manifest: ControlUiAssetManifest): ControlUiAssetManifest {
-  const assets = manifest.assets.filter(
-    (asset) =>
-      !isControlUiPrecompressedAssetExtension(path.posix.extname(asset.path).toLowerCase()),
-  );
+  const assets = manifest.assets.filter((asset) => isControlUiRetainedAssetPath(asset.path));
+  // The retained manifest names its own generation.
   return { ...manifest, generation: hashControlUiAssetManifestEntries(assets), assets };
 }
 

@@ -20,21 +20,12 @@ function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function parseJsonCommand(command, args, onAttempt = null, options = {}) {
+function parseJsonCommand(args, onAttempt = null) {
   let lastError;
   for (let attempt = 0; attempt <= GH_JSON_RETRY_DELAYS_MS.length; attempt += 1) {
     try {
       onAttempt?.();
-      const stdout =
-        command === "gh"
-          ? execPlainGh(args, {
-              encoding: "utf8",
-              ...options,
-            })
-          : execFileSync(command, args, {
-              encoding: "utf8",
-              ...options,
-            });
+      const stdout = execPlainGh(args, { encoding: "utf8" });
       return JSON.parse(stdout);
     } catch (error) {
       lastError = error;
@@ -272,7 +263,6 @@ function loadRunJobs(runId, runAttempt = null) {
   let requestCount = 0;
   for (let page = 1; page <= RUN_JOBS_MAX_PAGES; page += 1) {
     const payload = parseJsonCommand(
-      "gh",
       [
         "api",
         "-X",
@@ -297,7 +287,7 @@ function loadRunJobs(runId, runAttempt = null) {
 }
 
 function loadRun(runId) {
-  const run = parseJsonCommand("gh", [
+  const run = parseJsonCommand([
     "run",
     "view",
     runId,
@@ -329,7 +319,6 @@ function listTrendCiRuns(cutoffMs) {
   let requestCount = 0;
   for (let page = 1; page <= TREND_RUNS_MAX_PAGES; page += 1) {
     const payload = parseJsonCommand(
-      "gh",
       [
         "api",
         "-X",
@@ -644,15 +633,12 @@ export function summarizeTrendTimings(runs, options) {
   const runSummaries = baselineRuns
     .map(summarizeTrendRun)
     .toSorted((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
-  const baselineSummaries = runSummaries.filter((run) =>
-    inWindow(run, baselineFromMs, generatedAtMs),
-  );
   const priorSummaries = runSummaries.filter((run) => inWindow(run, priorFromMs, comparisonFromMs));
   const comparisonSummaries = runSummaries.filter((run) =>
     inWindow(run, comparisonFromMs, generatedAtMs),
   );
   const cohorts = {
-    baseline: summarizeTrendCohort(baselineRuns, baselineSummaries),
+    baseline: summarizeTrendCohort(baselineRuns, runSummaries),
     comparison: summarizeTrendCohort(comparisonRuns, comparisonSummaries),
     prior: summarizeTrendCohort(priorRuns, priorSummaries),
   };
@@ -977,12 +963,7 @@ function selectTrendDetailCandidates(runs, generatedAtMs, compareDurationMs, lim
       priorIndex += 1;
     }
   }
-  return [
-    ...selected,
-    ...comparison.slice(comparisonIndex),
-    ...prior.slice(priorIndex),
-    ...older,
-  ].slice(0, limit);
+  return [...selected, ...older].slice(0, limit);
 }
 
 function runTrendReport(options) {

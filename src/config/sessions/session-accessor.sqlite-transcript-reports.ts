@@ -48,15 +48,15 @@ import {
   appendSelectedTranscriptReportInTransaction,
   prepareCustomTranscriptReport,
   prepareTranscriptReportSelection,
-  type CustomMessageReport,
-  type AbortedSessionTranscriptPartial,
-  type AbortedSessionTranscriptPartialResult,
-  type TranscriptReport,
 } from "./session-accessor.sqlite-transcript-reports.kernel.js";
 import type {
+  CustomMessageReport,
+  AbortedSessionTranscriptPartial,
+  AbortedSessionTranscriptPartialResult,
+  TranscriptReport,
   TranscriptReportWorkerOperations,
-  TranscriptReportWorkerTarget,
-} from "./session-accessor.sqlite-transcript-reports.worker.js";
+} from "./session-accessor.sqlite-transcript-reports.types.js";
+import type { TranscriptReportWorkerTarget } from "./session-accessor.sqlite-transcript-reports.worker.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
 import type { SessionEntryCurrentCheck } from "./session-entry-current.types.js";

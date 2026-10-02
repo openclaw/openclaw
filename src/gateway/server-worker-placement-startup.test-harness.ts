@@ -37,7 +37,7 @@ const moveDestinationMocks = vi.hoisted(() => ({
       assertCurrent: () => {},
       assertBindingCurrent: () => {},
       config: {},
-      entry: {},
+      entry: { sessionId: "session-recovery", updatedAt: 0 },
       target: {
         agentId: "main",
         canonicalKey: "agent:main:move-source",

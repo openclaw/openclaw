@@ -222,7 +222,7 @@ test.each([
       );
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       const transcriptScope = { agentId: "main", sessionKey: key, sessionId, storePath };
-      const pending = listSessionPendingInputs(transcriptScope);
+      const pending = await listSessionPendingInputs(transcriptScope);
       if (image) {
         expect(
           loadTranscriptEventsSync(transcriptScope).filter(
@@ -265,7 +265,7 @@ test.each([
         transcript.filter((event) => asNullableRecord(event?.message)?.role === "user"),
       ).toHaveLength(1);
       expect(transcript.at(-1)).toMatchObject({ message: { idempotencyKey: `${runId}:user` } });
-      expect(listSessionPendingInputs(transcriptScope)).toEqual({ items: [], total: 0 });
+      expect(await listSessionPendingInputs(transcriptScope)).toEqual({ items: [], total: 0 });
       if (image) {
         expect(transcript.at(-1)?.id).toBe(pending.items[0]?.id);
         const persistedMessage = expectDefined(

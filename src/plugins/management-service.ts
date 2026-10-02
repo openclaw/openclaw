@@ -10,7 +10,10 @@ import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-met
 import { resolveIsConfigReadOnly } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
-import { fetchClawHubPluginVersionCategories } from "../infra/clawhub-plugin-catalog.js";
+import {
+  fetchClawHubPluginDetail,
+  fetchClawHubPluginVersionCategories,
+} from "../infra/clawhub-plugin-catalog.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
 import { resolvePendingPluginCapabilityReview } from "./capability-consent.js";
 import {
@@ -20,6 +23,7 @@ import {
   resolvePluginInstallRecordTrust,
   resolvePluginPackageDeclaredSurface,
 } from "./capability-summary.js";
+import { projectClawHubPluginInspection } from "./catalog-discovery.js";
 import { normalizeCatalogIconUrl } from "./catalog-icon-registry.js";
 import {
   appendPluginControlPlaneWorkspaceDiagnostic,
@@ -535,10 +539,23 @@ export const listManagedPlugins = withManagedPluginCache(
 export const inspectManagedPlugin = withManagedPluginCache(
   async (params: {
     config: OpenClawConfig;
-    pluginId: string;
+    pluginId?: string;
+    clawhub?: { packageName: string; version?: string };
     env?: NodeJS.ProcessEnv;
   }): Promise<PluginsInspectResult> => {
     const env = params.env ?? process.env;
+    if (params.clawhub) {
+      const [remote, local] = await Promise.all([
+        fetchClawHubPluginDetail(params.clawhub),
+        listManagedPlugins({ config: params.config, env }),
+      ]);
+      return projectClawHubPluginInspection({ remote, local, config: params.config });
+    }
+    if (!params.pluginId) {
+      throw new ManagedPluginLifecycleError("A plugin inspection identity is required.", {
+        kind: "invalid-request",
+      });
+    }
     const metadata = resolveManagedPluginMetadata(params.config, env);
     const pluginId = metadata.normalizePluginId(params.pluginId);
     const record = metadata.index.plugins.find((candidate) => candidate.pluginId === pluginId);

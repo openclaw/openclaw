@@ -171,7 +171,7 @@ describe("human mention directory", () => {
         } else if (change === "session visibility") {
           await f.setSession({ visibility: "draft" });
         } else {
-          f.inbox.dispose();
+          await f.inbox.dispose();
         }
         held.release();
         expect(await pending).toMatchObject({ ok: false, error: { code } });

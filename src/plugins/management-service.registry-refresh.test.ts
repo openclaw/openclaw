@@ -71,7 +71,7 @@ vi.mock("./registry-refresh.js", () => ({
 }));
 
 vi.mock("./slot-selection.js", () => ({
-  applySlotSelectionForPlugin: (config: unknown) => ({ config, warnings: [] }),
+  applySlotSelectionForPlugin: (config: unknown) => config,
 }));
 
 const { clearManagedPluginCatalogCache } = await import("./management-catalog.js");

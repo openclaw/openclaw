@@ -71,11 +71,9 @@ function isSilentReplyJsonText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
 ): boolean {
-  if (!text) {
-    return false;
-  }
-  const trimmed = text.trim();
+  const trimmed = text?.trim();
   if (
+    !trimmed ||
     !trimmed.includes(token) ||
     !(
       (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
@@ -172,10 +170,7 @@ function isReasoningPrefixedSilentReplyText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
 ): boolean {
-  if (!text) {
-    return false;
-  }
-  const trimmed = text.trim();
+  const trimmed = text?.trim();
   if (!trimmed) {
     return false;
   }

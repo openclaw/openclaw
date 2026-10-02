@@ -774,7 +774,7 @@ export async function runGatewayLoop(params: {
       const drainBudget = resolveGatewayShutdownDrainBudget({
         budget,
         action,
-        forceRestart: Boolean(restartIntent?.force || restartIntent?.drainBudgetExhausted),
+        forceRestart: restartIntent?.force === true,
         restartWithoutSupervisor,
         acceptedAtMs: acceptedRequest.acceptedAtMs,
         requestedRestartDrainTimeoutMs: isRestart

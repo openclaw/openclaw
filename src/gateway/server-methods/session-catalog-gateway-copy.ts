@@ -19,8 +19,8 @@ import {
 } from "../../security/external-content.js";
 import { recordSessionStateEvent } from "../../sessions/session-state-events.js";
 import { createGatewaySession } from "../session-create-service.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { buildModelsListResult } from "./models-list-result.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const GATEWAY_COPY_MODEL_LABEL_MAX_CHARS = 384;

@@ -3,11 +3,9 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
   buildProviderReplayFamilyHooks,
   modelCostsEqual,
   NATIVE_ANTHROPIC_REPLAY_HOOKS,
-  OPENAI_COMPATIBLE_REPLAY_HOOKS,
   PASSTHROUGH_GEMINI_REPLAY_HOOKS,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeMythos5ModelIdentity,
@@ -314,7 +312,7 @@ describe("buildProviderReplayFamilyHooks", () => {
           expect(policy).not.toHaveProperty(key);
         }
       }
-      expect(Boolean(hooks.sanitizeReplayHistory)).toBe(testCase.hasSanitizeReplayHistory);
+      expect(Boolean(hooks.sanitizeReplayHistoryAsync)).toBe(testCase.hasSanitizeReplayHistory);
       expect(hooks.resolveReasoningOutputMode?.(testCase.ctx as never)).toBe(
         testCase.reasoningMode,
       );
@@ -326,7 +324,7 @@ describe("buildProviderReplayFamilyHooks", () => {
       family: "google-gemini",
     });
 
-    const sanitized = await hooks.sanitizeReplayHistory?.({
+    const sanitized = await hooks.sanitizeReplayHistoryAsync?.({
       provider: "google",
       modelApi: "google-generative-ai",
       modelId: "gemini-3.1-pro-preview",
@@ -339,7 +337,10 @@ describe("buildProviderReplayFamilyHooks", () => {
       ],
       sessionState: {
         getCustomEntries: () => [],
-        appendCustomEntry: () => {},
+        appendCustomEntry: () => {
+          throw new Error("legacy persistence used");
+        },
+        appendCustomEntryAsync: async () => "bootstrap",
       },
     } as never);
 
@@ -365,7 +366,7 @@ describe("buildProviderReplayFamilyHooks", () => {
 
   it("exposes canonical replay hooks for reused provider families", () => {
     expectFields(
-      OPENAI_COMPATIBLE_REPLAY_HOOKS.buildReplayPolicy?.({
+      buildProviderReplayFamilyHooks({ family: "openai-compatible" }).buildReplayPolicy?.({
         provider: "xai",
         modelApi: "openai-completions",
         modelId: "google/gemma-4-26b-a4b-it",
@@ -414,7 +415,7 @@ describe("buildProviderReplayFamilyHooks", () => {
     );
 
     expectFields(
-      ANTHROPIC_BY_MODEL_REPLAY_HOOKS.buildReplayPolicy?.({
+      buildProviderReplayFamilyHooks({ family: "anthropic-by-model" }).buildReplayPolicy?.({
         provider: "amazon-bedrock",
         modelApi: "bedrock-converse-stream",
         modelId: "claude-sonnet-4-6",

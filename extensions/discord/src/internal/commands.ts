@@ -95,7 +95,6 @@ export abstract class BaseCommand {
   ];
   permission?: bigint | bigint[];
   components?: BaseMessageInteractiveComponent[];
-  guildIds?: string[];
   abstract serializeOptions(): unknown[] | undefined;
   serialize(): RESTPostAPIApplicationCommandsJSONBody {
     return clean({

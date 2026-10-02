@@ -213,6 +213,51 @@ export function normalizeUpdateFailureFacts(
   return facts.slice(0, 5).map((fact) => createUpdateFailureFact(fact, env));
 }
 
+export function createUpdateCanaryFailureFacts(params: {
+  phase: string;
+  name: string;
+  signal: NodeJS.Signals | null;
+  timedOut: boolean;
+  exitWarning?: string;
+  failureMessage: string;
+  diagnostic?: string;
+  findings?: UpdateFailureFact[];
+  env: NodeJS.ProcessEnv;
+}): UpdateFailureFact[] {
+  const { phase, signal, timedOut, exitWarning, failureMessage, diagnostic, findings, env } =
+    params;
+  if (signal) {
+    return [
+      createUpdateFailureFact(
+        {
+          check: phase,
+          code: "signal",
+          message: `${phase === "doctor" ? "Checking data migrations" : params.name}: terminated by ${signal}`,
+        },
+        env,
+      ),
+      ...(findings ?? []).slice(0, 4),
+    ];
+  }
+  return findings?.length
+    ? findings
+    : [
+        createUpdateFailureFact(
+          {
+            check: phase,
+            code:
+              timedOut && !exitWarning
+                ? "candidate-checks-timeout"
+                : phase === "doctor" || phase === "lint"
+                  ? "doctor-failed"
+                  : `candidate-${phase}-failed`,
+            message: timedOut ? failureMessage : (diagnostic ?? failureMessage),
+          },
+          env,
+        ),
+      ];
+}
+
 /** Config validation issues are more specific than the CLI's failure envelope. */
 export function parseConfigFailureFacts(
   stdout: string,

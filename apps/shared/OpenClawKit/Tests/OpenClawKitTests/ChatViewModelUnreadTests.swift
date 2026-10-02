@@ -461,6 +461,7 @@ struct ChatViewModelUnreadTests {
             modelID: "fixture-next",
             modelProvider: "fixture",
             sessionKey: vm.sessionKey,
+            agentID: "main",
             syncSelection: false)
         #expect(owner.project(manager).first?.sessionId == "thread")
         #expect(owner.project(manager).first?.label == "After")
@@ -549,6 +550,7 @@ struct ChatViewModelUnreadTests {
             modelID: "after",
             modelProvider: "fixture",
             sessionKey: vm.sessionKey,
+            agentID: "main",
             syncSelection: false)
         await gate.release()
         await refresh.value

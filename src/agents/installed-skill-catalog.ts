@@ -1,6 +1,7 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { readCodeModeSkill, type CodeModeSkill } from "./code-mode-skills.js";
+import { getTextLexicalIndex } from "./tool-search-index.js";
 import { buildLexicalIndex, scoreLexical, tokenizeDocument } from "./tool-search-ranking.js";
 import { ToolInputError } from "./tools/common.js";
 
@@ -21,15 +22,6 @@ const MAX_BODY_SKILLS = 1_024;
 const MAX_BODY_BYTES = 16 * 1024;
 const MAX_INDEX_BODY_BYTES = 4 * 1024 * 1024;
 const READ_CONCURRENCY = 4;
-
-function buildMetadataIndex(skills: readonly InstalledSkill[]) {
-  return buildLexicalIndex(
-    skills.map((skill) => ({
-      value: skill,
-      terms: tokenizeDocument(`${skill.name} ${skill.description}`),
-    })),
-  );
-}
 
 function assertCatalogCurrent(skills: readonly InstalledSkill[], signal?: AbortSignal) {
   signal?.throwIfAborted();
@@ -99,7 +91,6 @@ async function buildIndex(
   assertCatalogCurrent(skills, signal);
   assertBodyReadable(canReadInstructions);
   return {
-    metadata: buildMetadataIndex(skills),
     bodies: buildLexicalIndex(documents),
     coverage: {
       bodyIndexed: documents.length,
@@ -211,10 +202,10 @@ export async function searchInstalledSkills(
   const terms = [...new Set(tokenizeDocument(needle))].map((term) => ({ term, weight: 1 }));
   const scores = new Map<InstalledSkill, number>();
   for (const { value, score } of scoreLexical(
-    index?.metadata ?? buildMetadataIndex(skills),
+    getTextLexicalIndex(skills.map((skill) => `${skill.name} ${skill.description}`)),
     terms,
   )) {
-    scores.set(value, score * 2);
+    scores.set(skills[value]!, score * 2);
   }
   if (includeBodies && index) {
     assertBodyReadable(canReadInstructions);

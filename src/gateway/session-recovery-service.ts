@@ -209,7 +209,7 @@ export async function reconcileOrphanedGatewaySessionRecovery(params: {
     return undefined;
   }
   using source = await prepareRecoverySource(params);
-  return await runExclusiveSessionLifecycleMutation({
+  return await runExclusiveSessionLifecycleMutation("recovery-mark", {
     scope: target.storePath,
     identities,
     run: async () => {
@@ -401,7 +401,7 @@ export async function recoverGatewaySession(params: {
   const commitRecovery = async () => {
     let release = () => {};
     try {
-      const prepared = await runExclusiveSessionLifecycleMutation({
+      const prepared = await runExclusiveSessionLifecycleMutation("recovery-drain", {
         scope: sourceTarget.storePath,
         identities: sourceIdentities,
         run: async () => {
@@ -451,7 +451,7 @@ export async function recoverGatewaySession(params: {
           return current.ok ? { ok: false as const, error: stopFailure(error) } : current;
         }
       }
-      return await runExclusiveSessionLifecycleMutation({
+      return await runExclusiveSessionLifecycleMutation("recover", {
         targets: [
           { scope: sourceTarget.storePath, identities: sourceIdentities },
           {

@@ -47,11 +47,6 @@ export async function repairLegacyCronOwnersBeforeConfigWrite(params: {
   if (!ownerless) {
     return [];
   }
-  if (state?.legacyImportCount) {
-    throw createCronOwnerWriteRefusalError(
-      'Doctor has not finished importing the legacy cron store. Resolve its migration warning, then rerun "openclaw doctor --fix"; the legacy owner must remain in config until import succeeds.',
-    );
-  }
   if (
     !listAgentEntries(params.nextConfig).some(
       (entry) => normalizeAgentId(entry.id) === normalizeAgentId(legacyOwner),

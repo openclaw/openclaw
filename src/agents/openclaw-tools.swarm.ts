@@ -25,6 +25,7 @@ export type SwarmCollectorToolContext = {
  */
 export type SwarmCollectorAdmission = {
   childSessionKey?: string;
+  childAgentId?: string;
   admittedRunId?: string;
 };
 
@@ -57,7 +58,7 @@ export function resolveSwarmCollectorToolContext(
   if (!admittedRunId) {
     return undefined;
   }
-  const entry = findSwarmCollectorSession(admission.childSessionKey);
+  const entry = findSwarmCollectorSession(admission.childSessionKey, admission.childAgentId);
   if (entry?.collect !== true || !ownsAdmittedCollectorRun(entry, admittedRunId)) {
     return undefined;
   }
@@ -134,7 +135,7 @@ export function createOpenClawSwarmToolGroups(params: {
   const collectorEntry =
     params.swarmCollector && params.swarmOutputSchema
       ? ((params.runId ? getSubagentRunByRunId(params.runId) : undefined) ??
-        findSwarmCollectorSession(childSessionKey))
+        findSwarmCollectorSession(childSessionKey, params.effectiveRequesterAgentId))
       : undefined;
   // Key the result by the registry record's run id, which is what the collector
   // reader consumes, rather than the caller-supplied run id (absent on the http
@@ -149,7 +150,11 @@ export function createOpenClawSwarmToolGroups(params: {
             initialState: collectorEntry?.structuredOutput,
             onStateChange: (state) => {
               return recordSwarmStructuredOutput(
-                { runId: structuredOutputRunId, childSessionKey },
+                {
+                  runId: structuredOutputRunId,
+                  childSessionKey,
+                  childAgentId: params.effectiveRequesterAgentId,
+                },
                 state,
                 params.assertCollectorWriteAuthority,
               );

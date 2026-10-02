@@ -90,8 +90,7 @@ export function createSessionPlacementFactsReader(
         moves: new Map([...moves].filter(([id]) => sessionIds.includes(id))),
         pendingResults: new Map(),
         workspaceJournalOwnerSessionIds: new Set(),
-        workspaceResultReconcilingSessionIds:
-          placements.getWorkspaceResultReconcilingSessionIds?.(sessionIds) ?? new Set(),
+        workspaceResultReconcilingSessionIds: new Set(),
         workspaceRecoveryPendingSessionIds: new Set(),
         environments,
       };

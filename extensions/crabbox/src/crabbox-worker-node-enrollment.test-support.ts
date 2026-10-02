@@ -97,7 +97,7 @@ if (args[0] === "--version") {
   console.log("OpenClaw 2026.8.1");
 } else if (args[0] === "plugins" && args[1] === "enable") {
   fs.appendFileSync(path.join(state, "activation.jsonl"), JSON.stringify({ runtimePublished: fs.existsSync(path.join(state, "runtime")) }) + "\\n");
-  if (${JSON.stringify(build)} === "activation-failed") process.exit(1);
+  if (${JSON.stringify(build)} === "activation-failed") { console.error("plugin dependency missing"); process.exit(1); }
   for (const id of args.slice(2)) {
     if (${JSON.stringify(build)} === "verbose-activation") process.stdout.write("x".repeat(700_000));
     fs.appendFileSync(path.join(state, "enabled"), id + "\\n");

@@ -173,6 +173,17 @@ function createPublicationBackend(
         }
       }
     };
+    const write = <T>(run: () => T): MemoryPublicationResult<T> =>
+      transact((hooks) =>
+        runSqliteImmediateTransactionSync(
+          db,
+          () => {
+            hooks.onBegin();
+            return run();
+          },
+          { withCommit: hooks.withCommit },
+        ),
+      );
     return {
       assertSettled() {
         assertTransactionUsable(db);
@@ -230,33 +241,19 @@ function createPublicationBackend(
           if (countMemoryEmbeddingCache(db) <= command.input.maxEntries) {
             return { ok: true, value: false };
           }
-          return transact((hooks) =>
-            runSqliteImmediateTransactionSync(
-              db,
-              () => {
-                hooks.onBegin();
-                pruneMemoryEmbeddingCache(db, command.input.maxEntries);
-                return true;
-              },
-              { withCommit: hooks.withCommit },
-            ),
-          );
+          return write(() => {
+            pruneMemoryEmbeddingCache(db, command.input.maxEntries);
+            return true;
+          });
         }
         if (command.type === "cache.clear") {
-          return transact((hooks) =>
-            runSqliteImmediateTransactionSync(
-              db,
-              () => {
-                hooks.onBegin();
-                if (readMemoryDatabaseRevision(db) !== command.input.expectedRevision) {
-                  return false;
-                }
-                clearMemoryEmbeddingCacheIdentities(db, command.input.identities);
-                return true;
-              },
-              { withCommit: hooks.withCommit },
-            ),
-          );
+          return write(() => {
+            if (readMemoryDatabaseRevision(db) !== command.input.expectedRevision) {
+              return false;
+            }
+            clearMemoryEmbeddingCacheIdentities(db, command.input.identities);
+            return true;
+          });
         }
         if (command.type === "cache.write") {
           if (
@@ -270,38 +267,31 @@ function createPublicationBackend(
           }
           const header = staged.header;
           return finish(
-            transact((hooks) =>
-              runSqliteImmediateTransactionSync(
-                db,
-                () => {
-                  hooks.onBegin();
-                  if (readMemoryDatabaseRevision(db) !== command.input.expectedRevision) {
-                    return false;
-                  }
-                  const eligible = new Map<string, boolean>();
-                  function* entries() {
-                    for (const json of readStagedJson(db)) {
-                      // SAFETY: The paired cache producer owns these sealed records.
-                      const entry = JSON.parse(json) as MemoryEmbeddingCacheEntry;
-                      if (entry.sessionId) {
-                        let current = eligible.get(entry.sessionId);
-                        if (current === undefined) {
-                          current = !hasMemorySessionTombstone(db, header.agentId, entry.sessionId);
-                          eligible.set(entry.sessionId, current);
-                        }
-                        if (!current) {
-                          continue;
-                        }
-                      }
-                      yield entry;
+            write(() => {
+              if (readMemoryDatabaseRevision(db) !== command.input.expectedRevision) {
+                return false;
+              }
+              const eligible = new Map<string, boolean>();
+              function* entries() {
+                for (const json of readStagedJson(db)) {
+                  // SAFETY: The paired cache producer owns these sealed records.
+                  const entry = JSON.parse(json) as MemoryEmbeddingCacheEntry;
+                  if (entry.sessionId) {
+                    let current = eligible.get(entry.sessionId);
+                    if (current === undefined) {
+                      current = !hasMemorySessionTombstone(db, header.agentId, entry.sessionId);
+                      eligible.set(entry.sessionId, current);
+                    }
+                    if (!current) {
+                      continue;
                     }
                   }
-                  upsertMemoryEmbeddingCache({ ...header, db, enabled: true, entries });
-                  return true;
-                },
-                { withCommit: hooks.withCommit },
-              ),
-            ),
+                  yield entry;
+                }
+              }
+              upsertMemoryEmbeddingCache({ ...header, db, enabled: true, entries });
+              return true;
+            }),
           );
         }
         const extensionPath = command.input.state.extensionPath;
@@ -326,17 +316,8 @@ function createPublicationBackend(
           });
         }
         if (command.type === "source.delete") {
-          return transact((hooks) =>
-            runSqliteImmediateTransactionSync(
-              db,
-              () => {
-                hooks.onBegin();
-                return new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(
-                  command.input,
-                );
-              },
-              { withCommit: hooks.withCommit },
-            ),
+          return write(() =>
+            new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(command.input),
           );
         }
         if (
@@ -349,29 +330,22 @@ function createPublicationBackend(
           throw new Error("Memory publication input was not sealed");
         }
         const header = staged.header;
-        const outcome = transact((hooks) =>
-          runSqliteImmediateTransactionSync(
-            db,
-            () => {
-              hooks.onBegin();
-              if (
-                header.source === "sessions" &&
-                hasMemorySessionTombstone(db, header.agentId, header.sessionId)
-              ) {
-                throw new Error(
-                  "A session was forgotten while memory indexing was running; retry the memory index.",
-                );
-              }
-              const beforeRevision = readMemoryDatabaseRevision(db);
-              new MemorySourceIndexKernel(db, command.input.state).replaceRows(
-                header,
-                readStagedRows(db),
-              );
-              return { beforeRevision, databaseRevision: readMemoryDatabaseRevision(db) };
-            },
-            { withCommit: hooks.withCommit },
-          ),
-        );
+        const outcome = write(() => {
+          if (
+            header.source === "sessions" &&
+            hasMemorySessionTombstone(db, header.agentId, header.sessionId)
+          ) {
+            throw new Error(
+              "A session was forgotten while memory indexing was running; retry the memory index.",
+            );
+          }
+          const beforeRevision = readMemoryDatabaseRevision(db);
+          new MemorySourceIndexKernel(db, command.input.state).replaceRows(
+            header,
+            readStagedRows(db),
+          );
+          return { beforeRevision, databaseRevision: readMemoryDatabaseRevision(db) };
+        });
         return finish(outcome);
       },
       close() {

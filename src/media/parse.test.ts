@@ -45,8 +45,13 @@ describe("splitMediaFromOutput", () => {
     expectParsedMediaOutputCase(input, { mediaUrls: undefined });
   }
 
-  function expectRejectedRemoteMediaUrlCase(input: string) {
+  function expectUnrecognizedMediaTextCase(input: string) {
     expectParsedMediaOutputCase(input, { mediaUrls: undefined, text: input });
+  }
+
+  function expectPolicyRejectedMediaUrlCase(input: string) {
+    expectParsedMediaOutputCase(input, { mediaUrls: undefined, text: "" });
+    expect(splitMediaFromOutput(input).rejectedMediaCount).toBe(1);
   }
 
   it.each([
@@ -96,7 +101,7 @@ describe("splitMediaFromOutput", () => {
     "media://inbound/image.png?token=value",
     "media://inbound/",
   ])("does not extract an invalid inbound URI: %s", (source) => {
-    expectRejectedRemoteMediaUrlCase(`MEDIA:${source}`);
+    expectPolicyRejectedMediaUrlCase(`MEDIA:${source}`);
   });
 
   it.each([",", '"', "'", "\\", ")", "}", "]", "`"])(
@@ -114,7 +119,7 @@ describe("splitMediaFromOutput", () => {
   it("does not shorten a rejected quoted URL into an accepted media reference", () => {
     const prefix = "https://example.com/video.mp4?token=";
     const mediaUrl = `${prefix}${"a".repeat(4096 - prefix.length)},`;
-    expectRejectedRemoteMediaUrlCase(`MEDIA:"${mediaUrl}"`);
+    expectPolicyRejectedMediaUrlCase(`MEDIA:"${mediaUrl}"`);
   });
 
   const nativeFilePath = path.resolve("media", "café 100% image.png");
@@ -218,6 +223,27 @@ describe("splitMediaFromOutput", () => {
     expectParsedMediaOutputCase(input, { mediaUrls: [...mediaUrls] });
   });
 
+  it.each([
+    ['MEDIA:["/tmp/a.png","/tmp/b.png"]', ["/tmp/a.png", "/tmp/b.png"]],
+    ['MEDIA: ["/tmp/a.png", "/tmp/b.png"]', ["/tmp/a.png", "/tmp/b.png"]],
+    ['MEDIA:["/tmp/a.png","/tmp/b.png","/tmp/c.png"]', ["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]],
+    ['MEDIA:["first.png","second.png"]', ["first.png", "second.png"]],
+    [
+      'MEDIA:["/tmp/first image.png","/tmp/second image.png"]',
+      ["/tmp/first image.png", "/tmp/second image.png"],
+    ],
+    ['MEDIA:["/tmp/render,final.png","/tmp/b.png"]', ["/tmp/render,final.png", "/tmp/b.png"]],
+    ['MEDIA:["/tmp/a.png"]', ["/tmp/a.png"]],
+  ] as const)("attaches every reference a serialized JSON array states: %s", (input, mediaUrls) => {
+    // A reply that pastes a serialized array onto the directive states its references with the same quote
+    // pairs as the quoted comma list above, so each member is a reference of its own. Only the compact
+    // spelling was read: the leading `[` made the list scan report "no list", and `cleanCandidate`'s
+    // serialized-JSON salvage then cut the payload at the last extension before a comma-delimited quote, so
+    // `MEDIA:["/tmp/a.png","/tmp/b.png"]` attached one file and dropped the rest with no failure recorded,
+    // while the same array written with a space after each comma attached both.
+    expectParsedMediaOutputCase(input, { mediaUrls: [...mediaUrls] });
+  });
+
   it("separates every quoted member of a list, bare filenames included", () => {
     // A bare filename is a reference on its own — `MEDIA:"second.png"` attaches it — so quoting two of them
     // states two references, not one. Validating a member as if it were unquoted dropped it, and the
@@ -245,6 +271,60 @@ describe("splitMediaFromOutput", () => {
     });
   });
 
+  it("separates quoted references that a comma divides", () => {
+    // A comma already reads as list punctuation on an unquoted line: `cleanCandidate` trims it from a
+    // reference's tail, so `MEDIA:/tmp/first.png, /tmp/second.png` gives two attachments. Quoting each
+    // reference moves that comma outside the quote pair, where the list scan gave it no meaning, so the
+    // pair fell back to the whole-payload reading and attached one
+    // `/tmp/first image.png", "/tmp/second image.png` — the two attachments that the space-separated list
+    // of the same references produces.
+    expectParsedMediaOutputCase("MEDIA:/tmp/first.png, /tmp/second.png", {
+      mediaUrls: ["/tmp/first.png", "/tmp/second.png"],
+    });
+    for (const [input, mediaUrls] of [
+      [
+        'MEDIA:"/tmp/first image.png", "/tmp/second image.png"',
+        ["/tmp/first image.png", "/tmp/second image.png"],
+      ],
+      ['MEDIA:"/tmp/a.png","/tmp/b.png"', ["/tmp/a.png", "/tmp/b.png"]],
+      ['MEDIA:"/tmp/first.png", "second.png"', ["/tmp/first.png", "second.png"]],
+      ["MEDIA:'/tmp/a.png', '/tmp/b.png'", ["/tmp/a.png", "/tmp/b.png"]],
+      ['MEDIA:"/tmp/a.png", "b.png", "c.png"', ["/tmp/a.png", "b.png", "c.png"]],
+    ] as const) {
+      expectParsedMediaOutputCase(input, { mediaUrls: [...mediaUrls] });
+    }
+    // A member that is not a reference of its own stays visible text rather than joining its neighbour,
+    // which is what the space-separated list already does.
+    expectParsedMediaOutputCase('MEDIA:"/tmp/first.png", "second"', {
+      mediaUrls: ["/tmp/first.png"],
+      text: '"second"',
+    });
+    // A comma inside one quoted reference stays part of its value, not a separator.
+    expectAcceptedMediaPathCase("/tmp/Hello, World.png", 'MEDIA:"/tmp/Hello, World.png"');
+    // Prose behind the comma is a token no quote pair bounds, so no list forms and `main`'s reading of the
+    // payload stands.
+    expectParsedMediaOutputCase('MEDIA:"/tmp/first.png", the picture above', {
+      mediaUrls: ["/tmp/first.png"],
+    });
+    // A comma divides references only when the next reference is quoted behind it. Here the character
+    // before the comma is an apostrophe belonging to the directory name (`Students', 2024`), and `main`
+    // delivers both of these references, so the first one has to run to its real closing quote rather than
+    // end at that apostrophe and leave an unquoted fragment that welds the pair into one path.
+    expectParsedMediaOutputCase("MEDIA:'/tmp/Students', 2024/album.png' '/tmp/second.png'", {
+      mediaUrls: ["/tmp/Students', 2024/album.png", "/tmp/second.png"],
+    });
+    // With a quoted reference behind it the same comma is list punctuation, as this form's unquoted and
+    // space-separated siblings already read it.
+    expectParsedMediaOutputCase("MEDIA:'/tmp/Students', 2024/album.png', '/tmp/second.png'", {
+      mediaUrls: ["/tmp/Students', 2024/album.png", "/tmp/second.png"],
+    });
+    // One reference needs no following quote, so an apostrophe before a comma stays inside its value.
+    expectAcceptedMediaPathCase(
+      "/tmp/Students', 2024/album.png",
+      "MEDIA:'/tmp/Students', 2024/album.png'",
+    );
+  });
+
   it.each([
     'MEDIA:"first.png," "second.png,"',
     "MEDIA:'first.png,' 'second.png,'",
@@ -256,7 +336,7 @@ describe("splitMediaFromOutput", () => {
     // `MEDIA:"first.png," "second.png,"` attached `first.png," "second.png`, while the recorded base
     // rejects the payload and keeps the line as visible text. The weld needed an extension on the last
     // member, which is what these three shapes carry.
-    expectRejectedRemoteMediaUrlCase(input);
+    expectUnrecognizedMediaTextCase(input);
   });
 
   it("keeps a quoted list whose every member is rejected as text", () => {
@@ -267,7 +347,7 @@ describe("splitMediaFromOutput", () => {
       'MEDIA:"first" "second"',
       "MEDIA:'first.png,' 'second'",
     ] as const) {
-      expectRejectedRemoteMediaUrlCase(input);
+      expectUnrecognizedMediaTextCase(input);
     }
     // An accepted member beside a rejected one is untouched: it is the only member that ever reaches
     // the accepted path, and the reject stays text.
@@ -279,12 +359,10 @@ describe("splitMediaFromOutput", () => {
       mediaUrls: ["first.png"],
       text: '"second.png,"',
     });
-    // A list that yields no reference makes the same strip-or-keep decision `main` makes, on the same
-    // string: the outer quote pair comes off first, so a payload whose remaining text reads as a path is
-    // stripped and one that reads as a rejected remote URL stays visible.
+    // Policy-rejected paths and URLs are removed without promoting the remaining words to media.
     expectRejectedMediaPathCase('MEDIA:"../../a" "../../b"');
-    expectRejectedRemoteMediaUrlCase('MEDIA:"http://evil.example/x.png" "y.png,"');
-    expectRejectedRemoteMediaUrlCase('MEDIA:"http://evil.example/x.png" "y"');
+    expectPolicyRejectedMediaUrlCase('MEDIA:"http://evil.example/x.png" "y.png,"');
+    expectPolicyRejectedMediaUrlCase('MEDIA:"http://evil.example/x.png" "y"');
   });
 
   it("keeps a quoted reference whole when its own value contains that quote", () => {
@@ -502,7 +580,7 @@ describe("splitMediaFromOutput", () => {
       "MEDIA:C:\\Users\\First Last\\workspace\\shot.png https://127.0.0.1/secret.png",
       {
         mediaUrls: ["C:\\Users\\First Last\\workspace\\shot.png"],
-        text: "https://127.0.0.1/secret.png",
+        text: "",
       },
     );
   });
@@ -524,8 +602,9 @@ describe("splitMediaFromOutput", () => {
     "MEDIA:https://metadata.google.internal../a.png",
     "MEDIA:https://example..com/a.png",
     "MEDIA:https://media.local/a.png",
+    "MEDIA:https://user:synthetic-password@example.com/a.png",
   ] as const)("rejects unsafe remote media URL: %s", (input) => {
-    expectRejectedRemoteMediaUrlCase(input);
+    expectPolicyRejectedMediaUrlCase(input);
   });
 
   it.each([
@@ -884,6 +963,78 @@ describe("splitMediaFromOutput", () => {
       extractMarkdownImages,
     );
   });
+
+  it.each(["\n", "\r\n", "\r"])("separates MEDIA directives across %j line endings", (newline) => {
+    const result = splitMediaFromOutput(
+      `MEDIA:/tmp/first.png${newline}MEDIA:/tmp/second.png${newline}Caption${newline}End`,
+    );
+    expect(result.mediaUrls).toEqual(["/tmp/first.png", "/tmp/second.png"]);
+    expect(result.text).toBe(`Caption${newline}End`);
+    expect(result.segments).toEqual([
+      { type: "media", url: "/tmp/first.png" },
+      { type: "media", url: "/tmp/second.png" },
+      { type: "text", text: `Caption${newline}End` },
+    ]);
+  });
+
+  it.each(["\n", "\r\n", "\r"])("keeps fenced MEDIA literal across %j line endings", (newline) => {
+    const code = ["```txt", "MEDIA:/tmp/literal.png", "  value  ", "```"].join(newline);
+    const result = splitMediaFromOutput(`${code}${newline}MEDIA:/tmp/real.png${newline}`, {
+      preserveTrailingWhitespace: true,
+    });
+    expect(result.mediaUrls).toEqual(["/tmp/real.png"]);
+    expect(result.text).toBe(`${code}${newline}`);
+    expect(result.segments).toEqual([
+      { type: "text", text: `${code}${newline}` },
+      { type: "media", url: "/tmp/real.png" },
+    ]);
+  });
+
+  it("keeps mixed source separators around MEDIA directives", () => {
+    const caption = "Caption\r\n```txt\nMEDIA:/tmp/literal.png\r  value  \r\n```";
+    const result = splitMediaFromOutput(`MEDIA:/tmp/real.png\r${caption}`, {
+      preserveTrailingWhitespace: true,
+    });
+    expect(result.mediaUrls).toEqual(["/tmp/real.png"]);
+    expect(result.text).toBe(caption);
+    expect(result.segments).toEqual([
+      { type: "media", url: "/tmp/real.png" },
+      { type: "text", text: caption },
+    ]);
+  });
+
+  it.each([
+    ["\n", "\r"],
+    ["\n", "\r\n"],
+    ["\r", "\n"],
+    ["\r", "\r\n"],
+    ["\r\n", "\n"],
+    ["\r\n", "\r"],
+  ])(
+    "keeps the caption separator %j before a removed MEDIA line ending in %j",
+    (captionEnd, mediaEnd) => {
+      const result = splitMediaFromOutput(`Caption${captionEnd}MEDIA:/tmp/real.png${mediaEnd}`, {
+        preserveTrailingWhitespace: true,
+      });
+      expect(result.mediaUrls).toEqual(["/tmp/real.png"]);
+      expect(result.text).toBe(`Caption${captionEnd}`);
+      expect(result.segments).toEqual([
+        { type: "text", text: `Caption${captionEnd}` },
+        { type: "media", url: "/tmp/real.png" },
+      ]);
+
+      const stripped = splitMediaFromOutput(
+        `MEDIA:/tmp/real.png\nCaption${captionEnd}MEDIA:../blocked.png${mediaEnd}Tail`,
+        { preserveTrailingWhitespace: true },
+      );
+      expect(stripped.mediaUrls).toEqual(["/tmp/real.png"]);
+      expect(stripped.text).toBe(`Caption${captionEnd}Tail`);
+      expect(stripped.segments).toEqual([
+        { type: "media", url: "/tmp/real.png" },
+        { type: "text", text: `Caption${captionEnd}Tail` },
+      ]);
+    },
+  );
 
   it.each([
     "![x](file:///etc/passwd)",

@@ -90,7 +90,7 @@ describe("ACP accepted cancellation ownership", () => {
           ]),
         );
         expect(
-          listSessionStateEventsSince(state.target.sessionKey, "codex", 0, 200).events,
+          (await listSessionStateEventsSince(state.target.sessionKey, "codex", 0, 200)).events,
         ).toMatchObject([
           { kind: "run_failed", runId: "snapshot-0", payload: { outcome: "cancelled" } },
           { kind: "run_failed", runId: "snapshot-1", payload: { outcome: "cancelled" } },
@@ -136,7 +136,7 @@ describe("ACP accepted cancellation ownership", () => {
         expect(activeSignal?.aborted).toBe(false);
         expect(state.cancel).not.toHaveBeenCalled();
         expect(
-          listSessionStateEventsSince(state.target.sessionKey, "codex", 0, 200).events,
+          (await listSessionStateEventsSince(state.target.sessionKey, "codex", 0, 200)).events,
         ).toEqual([]);
       } finally {
         release.resolve();
@@ -144,7 +144,7 @@ describe("ACP accepted cancellation ownership", () => {
       }
       expect(state.runTurn).toHaveBeenCalledOnce();
       expect(
-        listSessionStateEventsSince(state.target.sessionKey, "codex", 0, 200).events,
+        (await listSessionStateEventsSince(state.target.sessionKey, "codex", 0, 200)).events,
       ).toMatchObject([{ kind: "run_completed", runId: "same-id" }]);
     });
   });

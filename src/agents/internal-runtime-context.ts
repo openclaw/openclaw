@@ -3,7 +3,16 @@
  * Protects runtime-generated prompt blocks from user text and removes old
  * context formats before replaying or comparing messages.
  */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { getOpenClawSystemUpdateKind } from "../../packages/agent-core/src/operator-messages.js";
 import { escapeRegExp } from "../shared/regexp.js";
+
+export {
+  SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
+  getOpenClawSystemUpdateKind,
+  isOpenClawSystemUpdateMessage,
+  orderSystemUpdateMessages,
+} from "../../packages/agent-core/src/operator-messages.js";
 
 /** Opening delimiter for protected OpenClaw runtime context blocks. */
 export const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
@@ -253,12 +262,11 @@ export function hasInternalRuntimeContext(text: string): boolean {
 
 /** Identifies hidden runtime context independently of its queue or transcript owner. */
 export function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const candidate = message as { role?: unknown; customType?: unknown };
+  const candidate = asOptionalRecord(message);
   return (
-    candidate.role === "custom" && candidate.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE
+    candidate?.role === "custom" &&
+    (candidate.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE ||
+      getOpenClawSystemUpdateKind(message) === "runtime-context")
   );
 }
 
@@ -288,9 +296,15 @@ export function resolvePendingRuntimeContextReplay<T>(params: {
           isUserMessage(message) && message.idempotencyKey === params.persistedUserIdempotencyKey,
       )
     : -1;
-  const replayPersistedCarrier =
-    persistedUserIndex >= 0 &&
-    isOpenClawRuntimeContextCustomMessage(params.messages[persistedUserIndex + 1]);
+  let replayPersistedCarrier = false;
+  const replayStart = persistedUserIndex >= 0 ? persistedUserIndex + 1 : params.messages.length;
+  for (let index = replayStart; index < params.messages.length; index++) {
+    const message = params.messages[index];
+    if (!message || typeof message !== "object" || Reflect.get(message, "role") !== "custom") {
+      break;
+    }
+    replayPersistedCarrier ||= isOpenClawRuntimeContextCustomMessage(message);
+  }
   return {
     persistedUserIndex,
     replayPersistedCarrier,

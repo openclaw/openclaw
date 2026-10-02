@@ -313,7 +313,6 @@ async function openPackageDistFsRootIfPresent(
 ): Promise<PackageDistFsRoot | null> {
   const packageFs = await openFsRoot(packageRoot, {
     hardlinks: "allow",
-    nonBlockingRead: true,
     symlinks: "reject",
   });
   let distStats;
@@ -343,7 +342,6 @@ async function readPackageDistJsonIfExists<T>(
     return await packageFs.readJson<T>(relativePath, {
       hardlinks: "allow",
       maxBytes: 16 * 1024 * 1024,
-      nonBlockingRead: true,
       symlinks: "reject",
     });
   } catch (error) {
@@ -374,7 +372,6 @@ export async function collectPackageDistContentInventory(
       fsLimit(async () => {
         await using opened = await packageFs.open(relativePath, {
           hardlinks: "allow",
-          nonBlockingRead: true,
           symlinks: "reject",
         });
         return createPackageDistContentInventoryEntry(

@@ -15,11 +15,10 @@ import { subagentRunRowVersion, type SubagentRunSqliteRow } from "./subagent-reg
 
 type SubagentRunsTable = OpenClawStateKyselyDatabase["subagent_runs"];
 type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
-export type BoundSubagentRunRecord = SubagentRunSqliteRow;
 
 export type SubagentRegistryWrite = {
   writeId: string;
-  values: readonly BoundSubagentRunRecord[];
+  values: readonly SubagentRunSqliteRow[];
   deleteRunIds: readonly string[];
   versions: readonly { runId: string; version: string | null }[];
   terminalEvents?: readonly Pick<
@@ -67,7 +66,7 @@ export function hasParentStoreColumns(db: DatabaseSync): boolean {
 /** Upserts a prebound run on the exact supplied shared-state handle. */
 export function upsertSubagentRunRowInDatabase(
   database: OpenClawStateDatabase,
-  row: BoundSubagentRunRecord,
+  row: SubagentRunSqliteRow,
 ): void {
   if (!hasParentStoreColumns(database.db)) {
     ensureColumn(database.db, "subagent_runs", "requester_store_path TEXT");
@@ -99,7 +98,7 @@ export function deleteSubagentRunRowInDatabase(
 }
 
 function subagentRunRecordToSqliteUpdate(
-  values: BoundSubagentRunRecord,
+  values: SubagentRunSqliteRow,
 ): Updateable<SubagentRunsTable> {
   const { run_id: _runId, ...update } = values;
   return update;
@@ -108,7 +107,7 @@ function subagentRunRecordToSqliteUpdate(
 /** Applies selected row changes inside the caller's transaction. */
 export function writeSubagentRunValuesInDatabase(
   database: OpenClawStateDatabase,
-  values: readonly BoundSubagentRunRecord[],
+  values: readonly SubagentRunSqliteRow[],
   deleteRunIds: readonly string[],
 ): void {
   const { db } = database;

@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { appendExecTimeoutRetryGuidance } from "../agents/bash-tools.exec-output.js";
 import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -240,6 +241,30 @@ it.each([
     expect(reply).toHaveBeenCalledOnce();
     expect(await readProjectionMessages(scenario)).toHaveLength(1);
   }, options);
+});
+
+it("publishes a timeout completion that printed nothing, with its retry guidance", async () => {
+  await withProjectionScenario(async (scenario) => {
+    enqueueSystemEvent(
+      appendExecTimeoutRetryGuidance(
+        "Exec failed (timeout-proof, signal SIGTERM)",
+        "overall-timeout",
+      ),
+      { sessionKey: scenario.sessionKey, contextKey: "exec:timeout-proof" },
+    );
+    const reply = vi
+      .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
+      .mockResolvedValue(completionPayload("TIMEOUT_REPORTED"));
+    // The wake maybeNotifyOnExit requests for this event must not be retired as stale.
+    expect((await runProjectionWake(scenario, reply)).status).toBe("ran");
+    const prompt = reply.mock.calls[0]?.[0].Body;
+    expect(prompt).toContain(
+      "Exec failed (timeout-proof, signal SIGTERM) without captured stdout/stderr.",
+    );
+    expect(prompt).toContain("Verify the resulting state before retrying");
+    expect(await readProjectionMessages(scenario)).toHaveLength(1);
+    expect(peekSystemEventEntries(scenario.sessionKey)).toEqual([]);
+  });
 });
 
 it.each([

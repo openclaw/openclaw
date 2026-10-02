@@ -145,14 +145,14 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     fixture.sessionRuntimeState.currentTurnImageFailureCount = 1;
     await runEmbeddedAttemptSettledPhase(fixture.input);
 
-    expect(fixture.sessionManager.appendMessage).toHaveBeenCalledWith(
+    expect(fixture.sessionManager.appendMessageAsync).toHaveBeenCalledWith(
       expect.objectContaining({
         customType: "openclaw.system-note",
         display: true,
         content: expect.stringMatching(/1.*image contents.*unavailable.*resend.*not claim/is),
       }),
     );
-    expect(fixture.sessionManager.appendMessage.mock.calls[0]?.[0]).not.toHaveProperty(
+    expect(fixture.sessionManager.appendMessageAsync.mock.calls[0]?.[0]).not.toHaveProperty(
       "excludeFromContext",
     );
     expect(mocks.completeResult).toHaveBeenCalledWith(

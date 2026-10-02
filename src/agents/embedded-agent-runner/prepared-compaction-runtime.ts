@@ -58,7 +58,7 @@ import {
   filterRuntimeCompatibleTools,
 } from "../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../tool-schema-quarantine.js";
-import { prepareWatchedSessionsPrompt } from "../watched-sessions-prompt.js";
+import { prepareWatchedSessionsPromptAsync } from "../watched-sessions-prompt.js";
 import { resolveCompactionContextTokenBudget } from "./compaction-runtime-context.js";
 import type { DirectCompactionPreparation } from "./direct-compaction-preparation.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
@@ -522,13 +522,14 @@ export async function buildPreparedCompactionRuntime(
     });
     // Match live-turn policy gates so restricted endpoint compaction cannot disclose
     // private ambient sections through its model-visible developer prompt.
-    const preparedWatchedSessions = prepareWatchedSessionsPrompt({
+    const preparedWatchedSessions = await prepareWatchedSessionsPromptAsync({
       enabled: promptMode === "full",
       config: params.config,
       sessionKey: params.sessionKey,
       sandboxed: sandboxInfo?.enabled === true,
       toolNames: promptTools.map((tool) => tool.name),
       capabilityToolNames: promptAllowedToolNames,
+      assertCurrent: () => params.abortSignal?.throwIfAborted(),
     });
     const activeProjectKeys = params.preparedModelRuntime?.activeProjectKeys ?? [];
     const buildSystemPromptText = () => {

@@ -17,6 +17,9 @@ import {
 } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import type { SessionBranchSummary } from "./session-accessor.types.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
+import type { SessionBranchSummaryReadResult } from "./session-history-read.types.js";
+
+export type { SessionBranchSummaryReadResult } from "./session-history-read.types.js";
 
 const SESSION_BRANCH_CACHE_MAX_ENTRIES = 64;
 
@@ -33,10 +36,6 @@ export type SessionBranchSummaryReadRequest = {
   sessionId: string;
   lifecycleRevision?: string;
 };
-export type SessionBranchSummaryReadResult =
-  | ({ status: "ok"; branches: SessionBranchSummary[] } & SessionTranscriptWatermark)
-  | { status: "missing-session" | "failed" };
-
 // Host and worker isolates share this policy, each retaining only their compact derived results.
 const sessionBranchCache = new Map<string, SessionBranchCacheEntry>();
 

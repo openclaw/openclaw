@@ -2,6 +2,7 @@ import { readPackageVersion } from "../../infra/package-json.js";
 import { planLegacyStateMigrationsReadOnly } from "../../infra/state-migrations.doctor.js";
 import { refuseLegacyStateMigrationPlan } from "../../infra/state-migrations.plan.js";
 import { defaultRuntime } from "../../runtime.js";
+import { ExpectedCliError } from "../failure-output.js";
 import { resolveUpdateRoot } from "./shared.js";
 
 type UpdateMigrationPlanCommandOptions = {
@@ -12,7 +13,8 @@ type UpdateMigrationPlanCommandOptions = {
 
 function requireSnapshotPath(value: string, flag: string): string {
   if (!value.trim()) {
-    throw new Error(`${flag} must not be blank`);
+    const message = `${flag} must not be blank`;
+    throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
   }
   return value;
 }

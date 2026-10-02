@@ -53,11 +53,14 @@ import {
   type AgentDatabaseAdmissionRestriction,
 } from "./openclaw-agent-execution-domain.js";
 import { createIncognitoAgentDatabaseBackend } from "./openclaw-agent-execution-incognito.worker.js";
+import { createAgentDatabaseMaintenanceOwner } from "./openclaw-agent-execution-maintenance.js";
 import {
   loadAgentTranscriptOperations,
   loadAgentReplacementOperations,
   loadAgentRestartRecoveryOperations,
   loadAgentEntryReadOperations,
+  loadAgentEntryPatchOperations,
+  loadAgentCompoundOperations,
   loadAgentTrajectoryOperations,
   loadAgentArchiveOperations,
   loadAgentAcpOperations,
@@ -141,22 +144,17 @@ function openAgentDatabaseBackend(
         input.expectedIdentity.birthtime,
       );
     }
-    if (admittedFileIdentity.startsWith("path:")) {
+    const pathOnly = admittedFileIdentity.startsWith("path:");
+    if (pathOnly || input.creatingIdentity) {
       const current = readDatabasePathIdentitySync(input.databasePath);
       if (
-        current.key !== admittedFileIdentity ||
+        (pathOnly && current.key !== admittedFileIdentity) ||
         (input.creatingIdentity && current.canonicalPath !== input.creatingIdentity.canonicalPath)
       ) {
         throw new Error("Agent database target changed before creating open");
       }
-    } else {
-      if (
-        input.creatingIdentity &&
-        readDatabasePathIdentitySync(input.databasePath).canonicalPath !==
-          input.creatingIdentity.canonicalPath
-      ) {
-        throw new Error("Agent database target changed before creating open");
-      }
+    }
+    if (!pathOnly) {
       assertExistingDatabaseIdentity(
         input.databasePath,
         admittedFileIdentity,
@@ -183,7 +181,6 @@ function openAgentDatabaseBackend(
     }
     return attachment.startupJournal;
   };
-  // This request-local flag is installed only for the synchronous native command below.
   const readDeletionJournal = () =>
     readAgentDeletionJournalStatusInDatabase(
       expectDefined(shared, "Agent execution shared-state owner").db,
@@ -352,12 +349,24 @@ function openAgentDatabaseBackend(
       { operationLabel },
     );
   };
+  const maintenance = createAgentDatabaseMaintenanceOwner({
+    databaseOptions: options,
+    assertFileIdentity,
+    openWriter,
+    admit,
+  });
+  const loadMaintenanceOperations = async () => maintenance.operations;
   const registry = createWorkerOperationRegistry<
     RegisteredAgentWorkerOperations,
     AgentWorkerOperationContext,
     keyof RegisteredAgentWorkerOperations
   >({
     "session.entry.read": loadAgentEntryReadOperations,
+    "session.entry.patch.prepare": loadAgentEntryPatchOperations,
+    "session.entry.patch.commit": loadAgentEntryPatchOperations,
+    "session.turn.prepare": loadAgentCompoundOperations,
+    "session.turn.commit": loadAgentCompoundOperations,
+    "session.lifecycle.reset": loadAgentCompoundOperations,
     "trajectory.events.append": loadAgentTrajectoryOperations,
     "session.archives.preparePublication": loadAgentArchiveOperations,
     "session.archives.recordPublication": loadAgentArchiveOperations,
@@ -370,10 +379,16 @@ function openAgentDatabaseBackend(
     "conversation.delivery.begin": loadConversationDeliveryOperations,
     "conversation.delivery.transition": loadConversationDeliveryOperations,
     "session.pendingInputs.withdraw": loadAgentPendingInputOperations,
+    "session.pendingInputs.read": loadAgentPendingInputOperations,
+    "session.pendingInputs.mutate": loadAgentPendingInputOperations,
+    "session.pendingInputs.interruptHistory": loadAgentPendingInputOperations,
     "session.archivePruning.deletePublished": loadAgentArchivePruningOperations,
     "session.archivePruning.pruneRetention": loadAgentArchivePruningOperations,
     "session.archivePruning.removeLegacy": loadAgentArchivePruningOperations,
     "session.archivePruning.reclaimPages": loadAgentArchivePruningOperations,
+    "session.maintenance.prepare": loadMaintenanceOperations,
+    "session.maintenance.metadata": loadMaintenanceOperations,
+    "session.maintenance.release": loadMaintenanceOperations,
     "usageCache.writeRollup": loadUsageCacheOperations,
     "usageCache.prune": loadUsageCacheOperations,
     "usageCache.acquireLock": loadUsageCacheOperations,
@@ -438,7 +453,14 @@ function openAgentDatabaseBackend(
   return {
     ...createAgentDatabaseExecutionCloser(() => {
       closed = true;
-      return { database, identity, closeDomain: () => domain.close(), releaseBorrow, sharedBorrow };
+      return {
+        database,
+        identity,
+        releasePreparations: maintenance.getPreparationReleases(),
+        closeDomain: () => domain.close(),
+        releaseBorrow,
+        sharedBorrow,
+      };
     }),
     prepare(command) {
       if (
@@ -450,6 +472,12 @@ function openAgentDatabaseBackend(
         return domain.prepare(command);
       }
       const preparing = registry.prepare(command.type);
+      if (
+        command.type === "session.maintenance.prepare" ||
+        command.type === "session.maintenance.metadata"
+      ) {
+        return Promise.all([preparing, maintenance.prepare()]).then(() => {});
+      }
       if (command.type === "session.entries.replace" && command.input.initializeTranscript) {
         return Promise.all([preparing, prepareAgentTranscript()]).then(() => {});
       }
@@ -468,6 +496,9 @@ function openAgentDatabaseBackend(
       }
     },
     [SQLITE_WORKER_OPERATION_CLEANUP](command) {
+      if (command.type === "session.maintenance.metadata") {
+        maintenance.cleanup(command.input);
+      }
       if (command.type === "database.domain.publish") {
         startupJournalRequested = publicationStartupJournal ?? false;
         try {

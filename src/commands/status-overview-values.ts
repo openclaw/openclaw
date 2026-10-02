@@ -1,6 +1,6 @@
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { HostDesktopStatus } from "../gateway/desktop/host-source.js";
-import { formatKTokens } from "./status.format.js";
+import { formatTokenCount } from "../utils/token-format.js";
 
 export function formatHostDesktopStatus(status?: HostDesktopStatus): string {
   if (!status || status.state === "disabled") {
@@ -90,7 +90,7 @@ export function buildStatusPluginCompatibilityValue(params: {
 
 export function buildStatusSessionsOverviewValue(params: { sessions: SummarySessionsLike }) {
   const defaultCtx = params.sessions.defaults.contextTokens
-    ? ` (${formatKTokens(params.sessions.defaults.contextTokens)} ctx)`
+    ? ` (${formatTokenCount(params.sessions.defaults.contextTokens)} ctx)`
     : "";
   const storeLabel =
     params.sessions.paths.length > 1

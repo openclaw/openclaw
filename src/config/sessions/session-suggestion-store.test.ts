@@ -7,10 +7,10 @@ import {
   addSessionSuggestion,
   claimSessionSuggestionDispatch,
   finalizeSessionSuggestionClaim,
-  listSessionSuggestions,
   releaseSessionSuggestionDispatch,
   SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
 } from "./session-suggestion-store.js";
+import { listSessionSuggestions } from "./session-suggestion-store.read.js";
 
 const MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR = 20;
 const MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS = 200;
@@ -45,7 +45,7 @@ describe("session suggestion store", () => {
     const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
     await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
 
-    expect(listSessionSuggestions(scope)).toEqual([]);
+    expect(await listSessionSuggestions(scope)).toEqual([]);
     addSessionSuggestion(scope, {
       id: "b",
       authorId: "bob",
@@ -62,8 +62,17 @@ describe("session suggestion store", () => {
       expectedSessionId: "session-a",
     });
 
-    expect(listSessionSuggestions(scope).map((item) => item.id)).toEqual(["a", "b"]);
-    expect(listSessionSuggestions(scope, { authorId: "alice" })).toEqual([
+    expect((await listSessionSuggestions(scope)).map((item) => item.id)).toEqual(["a", "b"]);
+    expect(
+      (
+        await listSessionSuggestions({
+          sessionKey: "main",
+          storePath: openOpenClawAgentDatabase(scope).path,
+          env,
+        })
+      ).map((item) => item.id),
+    ).toEqual(["a", "b"]);
+    expect(await listSessionSuggestions(scope, { authorId: "alice" })).toEqual([
       expect.objectContaining({ text: "  first\n" }),
     ]);
     expect(
@@ -82,9 +91,9 @@ describe("session suggestion store", () => {
         expectedSessionId: "session-a",
       }),
     ).toBeNull();
-    expect(listSessionSuggestions(scope, { pendingOnly: true }).map((item) => item.id)).toEqual([
-      "b",
-    ]);
+    expect(
+      (await listSessionSuggestions(scope, { pendingOnly: true })).map((item) => item.id),
+    ).toEqual(["b"]);
   });
 
   it("does not recreate a missing canonical suggestions table", async () => {
@@ -95,7 +104,9 @@ describe("session suggestion store", () => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     database.db.exec("DROP TABLE session_suggestions;");
 
-    expect(() => listSessionSuggestions(scope)).toThrow(/no such table: session_suggestions/);
+    await expect(listSessionSuggestions(scope)).rejects.toThrow(
+      "Session metadata unavailable (table-missing: session_suggestions)",
+    );
     expect(
       database.db
         .prepare(
@@ -125,7 +136,7 @@ describe("session suggestion store", () => {
     ).toThrow(/session changed/);
 
     await upsertSessionEntryCore(scope, { sessionId: "session-b", updatedAt: 2 });
-    expect(listSessionSuggestions(scope)).toEqual([]);
+    expect(await listSessionSuggestions(scope)).toEqual([]);
   });
 
   it("skips suggestion identity checks only when the expected instance is omitted", async () => {
@@ -244,7 +255,7 @@ describe("session suggestion store", () => {
     });
     expect(() => add("author-0")).toThrow("author pending suggestion limit reached");
     expect(() => add("author-1")).not.toThrow();
-    expect(listSessionSuggestions(scope, { pendingOnly: true })).toHaveLength(100);
+    expect(await listSessionSuggestions(scope, { pendingOnly: true })).toHaveLength(100);
   });
 
   it("prunes old resolved suggestions on subsequent writes", async () => {
@@ -268,7 +279,7 @@ describe("session suggestion store", () => {
         expectedSessionId: "session-a",
       });
     }
-    const rows = listSessionSuggestions(scope);
+    const rows = await listSessionSuggestions(scope);
     expect(rows.filter((row) => row.state !== "pending")).toHaveLength(
       MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS,
     );

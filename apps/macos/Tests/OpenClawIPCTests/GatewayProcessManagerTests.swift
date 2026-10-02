@@ -500,6 +500,21 @@ struct GatewayProcessManagerTests {
         }
     }
 
+    private func writeManagedLaunchAgent(port: Int = 29871) throws {
+        let runtime = AppProfile.current.stateDirectoryURL().appendingPathComponent("runtime/build-one")
+        let plist = GatewayLaunchAgentManager.plistURL(
+            homeDirectory: LaunchAgentPlist.homeDirectoryURL, profile: .current)
+        try FileManager.default.createDirectory(
+            at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let arguments = [
+            runtime.appendingPathComponent("bin/bun").path,
+            runtime.appendingPathComponent("lib/node_modules/openclaw/openclaw.mjs").path,
+            "gateway", "--port", String(port),
+        ]
+        try PropertyListSerialization.data(
+            fromPropertyList: ["ProgramArguments": arguments], format: .xml, options: 0).write(to: plist)
+    }
+
     private func makeGatewayReadinessFixture(
         url: URL,
         clock: any Clock<Duration> = ContinuousClock(),
@@ -828,6 +843,8 @@ struct GatewayProcessManagerTests {
 
             if definition == "absent" {
                 #expect(manager.status == .stopped)
+                #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .contains { $0.first == "uninstall" })
                 #expect(AppDefaults.standard.object(forKey: GatewayLaunchAgentManager.resumeCommandKey) == nil)
                 return
             }
@@ -1200,6 +1217,8 @@ struct GatewayProcessManagerTests {
             AppDefaults.standard.set(GatewayHosting.service.rawValue, forKey: GatewayHosting.defaultsKey)
             defer { AppDefaults.standard.set(previousHosting, forKey: GatewayHosting.defaultsKey) }
             let manager = self.manager
+            try self.writeManagedLaunchAgent()
+            defer { manager.retainedServiceCLI = nil }
             manager.hostingChangeInProgress = true
             defer { manager.hostingChangeInProgress = false }
             manager.desiredActive = false
@@ -1228,6 +1247,8 @@ struct GatewayProcessManagerTests {
         let finishResolution = AsyncTestGate()
         defer { finishResolution.open() }
         try await self.withLaunchAgentEnvironment {
+            try self.writeManagedLaunchAgent()
+            defer { self.manager.retainedServiceCLI = nil }
             let defaults = AppDefaults.standard
             let previousHosting = defaults.object(forKey: GatewayHosting.defaultsKey)
             defaults.set(GatewayHosting.service.rawValue, forKey: GatewayHosting.defaultsKey)
@@ -1435,6 +1456,8 @@ struct GatewayProcessManagerTests {
             }
         }) {
             let manager = self.manager
+            try self.writeManagedLaunchAgent()
+            defer { manager.retainedServiceCLI = nil }
             manager.desiredActive = true
             manager.stop()
             await uninstallStarted.wait()
@@ -1589,6 +1612,8 @@ struct GatewayProcessManagerTests {
             commandDelayNanoseconds: 100_000_000)
         {
             let manager = self.manager
+            try self.writeManagedLaunchAgent(port: firstPort)
+            defer { manager.retainedServiceCLI = nil }
             manager.desiredActive = true
             let first = Task { @MainActor in
                 await manager._testEnableLaunchAgentIfNeeded(
@@ -1608,7 +1633,7 @@ struct GatewayProcessManagerTests {
 
             manager.stop()
             _ = await (first.value, second.value)
-            try? await Task.sleep(nanoseconds: 150_000_000)
+            await manager.waitForStartupAttempt()
 
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             let installPorts = calls.compactMap { arguments -> String? in
@@ -1629,31 +1654,42 @@ struct GatewayProcessManagerTests {
 
     @Test func `restart waits for an in-progress disable`() async throws {
         let port = 19098
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let plist = GatewayLaunchAgentManager.plistURL(homeDirectory: home, profile: .current)
         try await self.withLaunchAgentEnvironment(
+            homeDirectory: home,
             statusPayload: #"{"ok":true,"service":{"loaded":false}}"#,
-            commandDelayNanoseconds: 100_000_000)
-        {
-            let manager = self.manager
-            manager.desiredActive = true
-            manager.stop()
-            await self.waitForCondition {
-                GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-                    .contains(where: { $0.first == "uninstall" })
-            }
-            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-                .contains(where: { $0.first == "uninstall" }))
+            commandDelayNanoseconds: 100_000_000,
+            commandHook: { arguments in
+                if arguments.first == "uninstall" { try? FileManager.default.removeItem(at: plist) }
+            }, {
+                let manager = self.manager
+                try self.writeManagedLaunchAgent(port: port)
+                defer { manager.retainedServiceCLI = nil }
+                manager.desiredActive = true
+                manager.stop()
+                await self.waitForCondition {
+                    GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                        .contains(where: { $0.first == "uninstall" })
+                }
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .contains(where: { $0.first == "uninstall" }))
 
-            manager._testBeginGatewayStartGeneration()
-            _ = await manager._testEnableLaunchAgentIfNeeded(
-                port: port)
+                manager._testBeginGatewayStartGeneration()
+                _ = await manager._testEnableLaunchAgentIfNeeded(
+                    port: port)
 
-            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-            #expect(calls.map(\.first) == ["uninstall", "status", "install"])
-        }
+                let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                #expect(calls.map(\.first) == ["uninstall", "status", "install"])
+            })
     }
 
     @Test func `restart waits for disable before attaching`() async throws {
         let port = 19099
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let plist = GatewayLaunchAgentManager.plistURL(homeDirectory: home, profile: .current)
         let url = try #require(URL(string: "ws://example.invalid"))
         let finishDisable = AsyncTestGate()
         let events = AsyncStream<String>.makeStream()
@@ -1667,16 +1703,19 @@ struct GatewayProcessManagerTests {
         }
         let descriptor = self.gatewayDescriptor(pid: 4242)
 
-        try await self.withLaunchAgentEnvironment(commandHook: { arguments in
+        try await self.withLaunchAgentEnvironment(homeDirectory: home, commandHook: { arguments in
             guard arguments == ["uninstall"] else { return }
             events.continuation.yield("disable-started")
             await finishDisable.wait()
+            try? FileManager.default.removeItem(at: plist)
             events.continuation.yield("disable-finished")
         }) {
+            try self.writeManagedLaunchAgent(port: port)
             manager.desiredActive = true
             await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
             defer {
                 manager.desiredActive = false
+                manager.retainedServiceCLI = nil
                 manager._testSetLaunchAgentDisableWaitHook(nil)
             }
             manager._testSetLaunchAgentDisableWaitHook {
@@ -1721,12 +1760,11 @@ struct GatewayProcessManagerTests {
     @Test func `remote mode still removes the local launch agent`() async throws {
         try await self.withLaunchAgentEnvironment(mode: "remote") {
             let manager = self.manager
+            try self.writeManagedLaunchAgent()
+            defer { manager.retainedServiceCLI = nil }
             manager.desiredActive = true
             manager.stop()
-            await self.waitForCondition {
-                GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-                    .contains(where: { $0.first == "uninstall" })
-            }
+            await manager.waitForStartupAttempt()
 
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             #expect(calls.filter { $0.first == "uninstall" }.count == 1)
@@ -1870,6 +1908,8 @@ struct GatewayProcessManagerTests {
     @Test func `newer inactive lifecycle retains the pending disable`() async throws {
         try await self.withLaunchAgentEnvironment(commandDelayNanoseconds: 100_000_000) {
             let manager = self.manager
+            try self.writeManagedLaunchAgent()
+            defer { manager.retainedServiceCLI = nil }
             manager.desiredActive = true
             manager.stop()
             manager.stop()
@@ -1877,7 +1917,7 @@ struct GatewayProcessManagerTests {
                 GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                     .contains(where: { $0.first == "uninstall" })
             }
-            try? await Task.sleep(nanoseconds: 150_000_000)
+            await manager.waitForStartupAttempt()
 
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             #expect(calls.filter { $0.first == "uninstall" }.count == 1)

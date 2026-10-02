@@ -53,9 +53,11 @@ import {
   createHostThawRecovery,
   type HostThawChannelRestartOutcome,
 } from "./host-thaw-recovery.js";
-import { chatAbortMarkerTimestampMs } from "./server-chat-state.js";
-import type { ChatRunState } from "./server-chat-state.js";
-import type { ChatRunEntry } from "./server-chat.js";
+import {
+  chatAbortMarkerTimestampMs,
+  type ChatRunEntry,
+  type ChatRunState,
+} from "./server-chat-state.js";
 import {
   DEDUPE_MAX,
   DEDUPE_TTL_MS,
@@ -486,15 +488,17 @@ export function startGatewayMaintenanceTimers(params: {
         continue;
       }
       if (record.abortMarker !== undefined) {
-        if (now - chatAbortMarkerTimestampMs(record.abortMarker) > ABORTED_RUN_TTL_MS) {
-          params.chatRunState.deleteAbortMarker(runId);
-          params.chatRunState.clearRun(runId);
+        if (now - chatAbortMarkerTimestampMs(record.abortMarker) <= ABORTED_RUN_TTL_MS) {
+          continue;
         }
+        params.chatRunState.deleteAbortMarker(runId);
+      } else if (now - record.lastActivityAt <= ABORTED_RUN_TTL_MS) {
         continue;
       }
-      if (now - record.lastActivityAt > ABORTED_RUN_TTL_MS) {
-        params.chatRunState.clearRun(runId);
+      while (params.chatRunState.registry.shift(runId)) {
+        // No execution or delivery owner remains to consume these registrations.
       }
+      params.chatRunState.clearRun(runId);
     }
     // Sweep stale agent run contexts (orphaned when lifecycle end/error is missed).
     sweepStaleRunContexts();

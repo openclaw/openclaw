@@ -35,7 +35,7 @@ import {
   resolveCanonicalGatewaySessionStoreKey,
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
-import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
+import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -186,7 +186,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       let compactionNoopReason: string | undefined;
       let blockedByActiveRun = false;
       let blockedByQueuedWork = false;
-      await runExclusiveSessionLifecycleMutation({
+      await runExclusiveSessionLifecycleMutation("compact", {
         scope: storePath,
         identities: lifecycleIdentities,
         kind: "compaction",
@@ -216,7 +216,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
           }
           blockedByActiveRun =
             isCompetingSessionWorkAdmissionActive(storePath, lifecycleIdentities) ||
-            (asWorkerInferenceControl(context.workerEnvironmentService)?.hasInferenceForSession(
+            (getWorkerInferenceSessionControl(context.workerEnvironmentService)?.hasSession(
               sessionId,
             ) ??
               false) ||

@@ -362,6 +362,9 @@ export const PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE = "PROVIDER_FAILURE_WITH_OU
 /** Pre-dispatch argument rejection; callers still enforce output and effect guards. */
 export const MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE = "malformed_tool_call_arguments";
 
+export const DEFAULT_MISSING_TOOL_RESULT_TEXT =
+  "Tool call interrupted before a result was recorded; its outcome is unknown. Retry only if the operation is read-only or idempotent. If it may have had side effects, verify the current state first instead of repeating it.";
+
 /** User turn in a text-model conversation. */
 export interface UserMessage {
   role: "user";
@@ -375,6 +378,8 @@ export interface UserMessage {
   runtimeContextCarrier?: boolean;
   /** Explicit replay-policy retention decision; absent preserves model-derived behavior. */
   runtimeContextCarrierRetained?: boolean;
+  /** Operator-authored text projected to system authority on capable routes. */
+  operatorMessage?: { turnScoped: boolean };
 }
 
 /** Assistant turn, including provider identity and final stop state. */

@@ -13,6 +13,7 @@ import type {
   SkillWorkshopRunOptions,
 } from "../../../skills/workshop/types.js";
 import type { ModelFallbackAvailability } from "../../agent-scope.js";
+import type { MemoryFlushToolRunContext } from "../../agent-tools.memory-flush.types.js";
 import type { AssistantErrorTranscript } from "../../assistant-error-transcript.js";
 import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
@@ -64,6 +65,8 @@ type ReasoningStreamPayload = Pick<
 };
 
 export type RunEmbeddedAgentParams = {
+  /** Host-minted parent audience inherited by a trusted internal child run. */
+  memoryAudience?: import("../../../plugins/memory-provider-types.js").MemoryAudience;
   /** Detached runs may read session identity but never write its durable transcript or metadata. */
   sessionPersistence?: "durable" | "detached";
   /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */
@@ -86,6 +89,8 @@ export type RunEmbeddedAgentParams = {
   scheduledRuntimeAuthorityRecoveryRequired?: boolean;
   /** Relative workspace path that memory-triggered writes are allowed to append to. */
   memoryFlushWritePath?: string;
+  /** Provider-owned persistence surface for a tools-arm memory flush. */
+  memoryFlushTools?: MemoryFlushToolRunContext;
   /** Sticky source-turn taint inherited by an internal maintenance run. */
   initialTurnTainted?: boolean;
   /** Delivery target for topic/thread routing. */

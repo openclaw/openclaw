@@ -145,7 +145,7 @@ export class PaletteSessionDraft implements ReactiveController {
     if (!attachmentDraft) {
       return undefined;
     }
-    const readSignal = attachmentDraft.readSignal;
+    const readSignal = attachmentDraft.reads.readSignal;
     return {
       uploadConfig: this.read().context?.config,
       attachments: attachmentDraft.attachments,
@@ -156,7 +156,7 @@ export class PaletteSessionDraft implements ReactiveController {
       disabled: this.messageLocked,
       getAttachments: () => attachmentDraft.attachments,
       readSignal,
-      onPendingReadsChange: (delta) => attachmentDraft.updatePending(readSignal, delta),
+      onPendingReadsChange: (delta) => attachmentDraft.reads.updatePending(readSignal, delta),
       onAttachmentsChange: (attachments) => {
         if (
           readSignal.aborted ||
@@ -274,7 +274,7 @@ export class PaletteSessionDraft implements ReactiveController {
     ) {
       submission.attachmentDraft.reset({ release: true });
     } else {
-      submission?.attachmentDraft.abortReads();
+      submission?.attachmentDraft.reads.abortReads();
     }
     this.settings.close();
     this.draft?.browser.close();
@@ -328,7 +328,7 @@ export class PaletteSessionDraft implements ReactiveController {
     const attachmentDraft = draft.submission.attachmentDraft;
     if (
       this.coldSubmitReadSignal &&
-      (this.coldSubmitReadSignal.aborted || attachmentDraft.pendingReads === 0)
+      (this.coldSubmitReadSignal.aborted || attachmentDraft.reads.pendingReads === 0)
     ) {
       const ready =
         !this.coldSubmitReadSignal.aborted &&

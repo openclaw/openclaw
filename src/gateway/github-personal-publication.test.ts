@@ -500,7 +500,7 @@ describe("personal publication authority and recovery", () => {
             runId: "pending-run",
             owner: { kind: "worker", environmentId: "remote", ownerEpoch: 1 },
           });
-          placements.markWorkspaceResultPending(claim);
+          await placements.markWorkspaceResultPending(claim);
         }
       }
       await expect(

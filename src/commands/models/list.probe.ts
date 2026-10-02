@@ -826,11 +826,7 @@ async function probeTarget(params: {
     );
     const terminalError = extractAgentRunTerminalError(runResult);
     if (terminalError) {
-      const described = describeFailoverError(new Error(terminalError));
-      return buildResult(
-        mapFailoverReasonToProbeStatus(described.reason),
-        redactAuthProbeError(described.message),
-      );
+      throw new Error(terminalError);
     }
     if (!agentRunHasVisibleReply(runResult)) {
       return buildResult("format", "The model did not return a visible probe response.");
@@ -1036,10 +1032,6 @@ export async function runAuthProbes(params: {
       results: [...plan.results, ...results],
     };
   });
-}
-
-export function formatProbeLatency(latencyMs?: number | null) {
-  return formatMs(latencyMs);
 }
 
 export function sortProbeResults(results: AuthProbeResult[]): AuthProbeResult[] {

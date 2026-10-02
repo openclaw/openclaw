@@ -14,7 +14,6 @@ import {
  * Tool handlers stay thin: schemas validate public inputs and the bridge owns
  * Gateway readiness, routing, event queueing, and approval resolution.
  */
-/** Return protocol capabilities advertised when Claude channel mode is enabled. */
 export function getChannelMcpCapabilities(claudeChannelMode: "off" | "on" | "auto") {
   if (claudeChannelMode === "off") {
     return undefined;

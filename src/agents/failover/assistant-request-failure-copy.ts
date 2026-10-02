@@ -10,6 +10,7 @@ import { isContextOverflowErrorFromTables } from "./context-overflow-tables.js";
 import {
   isServerErrorMessage,
   isSessionTranscriptValidationErrorMessage,
+  resolveExecutionApprovalFailureMessage,
 } from "./message-patterns.js";
 import { extractFailoverSignalDetails } from "./signal-details.js";
 import type { FailoverReason } from "./signal.js";
@@ -50,6 +51,14 @@ const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
     "OpenClaw couldn't save your conversation. Check the storage on the computer running OpenClaw before continuing.",
   transcript_writer_fenced:
     "This conversation changed while OpenClaw was working. Check its latest messages before continuing.",
+};
+
+const RUNTIME_COORDINATION_FAILURE_CODE_COPY: Readonly<Record<string, string>> = {
+  codex_node_disconnected: "Codex execution node disconnected. Start a fresh attempt.",
+  node_runner_update_required:
+    "The device worker requires an update before it can host sessions. Run `openclaw update`, reconnect it, then run `openclaw node restart` on a headless node before trying again.",
+  "runner-offline":
+    "The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.",
 };
 
 const ASSISTANT_REQUEST_FAILURE_COPY = {
@@ -106,6 +115,12 @@ export function renderAssistantRequestFailureCopy(
   return `⚠️ OpenClaw couldn't finish this reply. ${ERROR_DETAILS_HINT}`;
 }
 
+/** Render already-classified coordination facts without loading provider runtime. */
+export function renderRuntimeCoordinationFailureCopy(code: string | undefined): string | undefined {
+  const copy = code ? RUNTIME_COORDINATION_FAILURE_CODE_COPY[code] : undefined;
+  return copy ? `⚠️ ${copy}` : undefined;
+}
+
 /** Surface bounded rejection facts without arbitrary provider-controlled text. */
 export function renderFormatErrorCopy(raw: string): string {
   const trimmed = raw.trim();
@@ -160,6 +175,12 @@ export function renderRecordedAssistantFailureCopy(message: {
   errorCode?: unknown;
   errorType?: unknown;
 }): string | undefined {
+  const approvalMessage = resolveExecutionApprovalFailureMessage(
+    typeof message.errorMessage === "string" ? message.errorMessage : undefined,
+  );
+  if (approvalMessage) {
+    return `⚠️ ${approvalMessage}`;
+  }
   const formatCopy = renderAssistantFormatFailureCopy(message);
   if (formatCopy) {
     return formatCopy;

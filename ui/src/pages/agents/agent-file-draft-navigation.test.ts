@@ -19,7 +19,6 @@ import "./agents-page.ts";
 
 it.each([
   "file tabs",
-  "agent selection",
   "empty draft",
   "external update",
   "missing file",

@@ -65,6 +65,7 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
       tailscaleCleanup: null,
       stopChannel: vi.fn(async () => undefined),
       pluginServices: null,
+      stopScheduler: vi.fn(async () => {}),
       disposeAllBundleLspRuntimes: mocks.disposeAllBundleLspRuntimes,
       drainRetainedOpenAiEmbeddingProviders: mocks.drainRetainedEmbeddingProviders,
       stopGmailWatcher: mocks.stopGmailWatcher,

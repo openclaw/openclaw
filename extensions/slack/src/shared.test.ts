@@ -3,15 +3,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { slackSetupPlugin } from "./channel.setup.js";
 import { setSlackChannelAllowlist } from "./setup-shared.js";
-import { createSlackPluginBase, slackConfigAdapter } from "./shared.js";
+import { slackPluginBase as plugin, slackConfigAdapter } from "./shared.js";
 
-describe("createSlackPluginBase", () => {
+describe("slackPluginBase", () => {
   it("owns Slack native command name overrides", () => {
-    const plugin = createSlackPluginBase({
-      setupContract: {} as never,
-      setupWizard: {} as never,
-    });
-
     expect(
       plugin.commands?.resolveNativeCommandName?.({
         commandKey: "status",
@@ -33,11 +28,6 @@ describe("createSlackPluginBase", () => {
   });
 
   it("exposes security checks on the setup surface", () => {
-    const plugin = createSlackPluginBase({
-      setupContract: {} as never,
-      setupWizard: {} as never,
-    });
-
     expect(plugin.security?.resolveDmPolicy).toBeTypeOf("function");
     expect(plugin.security?.collectWarnings).toBeTypeOf("function");
     expect(plugin.security?.collectAuditFindings).toBeTypeOf("function");

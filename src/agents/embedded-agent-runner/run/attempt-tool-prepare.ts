@@ -15,6 +15,7 @@ import {
   createOpenClawCodingToolsInternal,
   resolveToolLoopDetectionConfig,
 } from "../../agent-tools.js";
+import { assertMemoryFlushPersistenceToolAvailable } from "../../agent-tools.memory-flush.js";
 import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
@@ -161,7 +162,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const cronCreatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef = {};
   const inheritedToolAllowlist: string[] = [];
-  const runCleanups: Array<(reason: string) => Promise<void>> = [];
   const generationCleanups: Array<(reason: string) => Promise<void>> = [];
   const retiringGenerations = new Set<Promise<void>>();
   let retiredCleanupFailed = false;
@@ -294,6 +294,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             computerTransport,
             pairedNodeComputerUse,
             conversationRecall: attempt.conversationRecall,
+            memoryAudience: attempt.memoryAudience,
             oneShotCliRun: attempt.oneShotCliRun,
             toolSearchCatalogRef,
             codeModeSkills,
@@ -368,6 +369,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     const toolsRaw = attempt.forceRestartSafeTools
       ? constructedToolsRaw.filter((tool) => isAgentToolRestartSafe(tool, restartSafetyOptions))
       : constructedToolsRaw;
+    assertMemoryFlushPersistenceToolAvailable(toolsRaw, attempt.memoryFlushTools);
     if (attempt.forceRestartSafeTools) {
       log.info(
         `restart-safe recovery tool policy retained ${toolsRaw.length}/${constructedToolsRaw.length} concrete tools`,
@@ -391,7 +393,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       recordAgentCleanupFailure();
     }
   };
-  runCleanups.push(releaseTools);
 
   // Until preparation returns, the attempt cannot own these registered resources.
   try {
@@ -449,7 +450,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       localModelLeanPreserveToolNames,
       replaySafetyOptions,
       runtimeCapabilityProfile,
-      runCleanups,
+      releaseTools,
       toolSearchCatalogRef,
       toolSurfaceRuntime,
       toolSearchConfig,

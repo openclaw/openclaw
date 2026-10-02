@@ -46,6 +46,7 @@ import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { safeMediaAttachmentHref } from "./components/chat-attachment-href.ts";
 import {
   openSessionWorkspacePreview,
+  getSessionWorkspace,
   clearSessionWorkspacePreviews,
 } from "./components/chat-session-workspace-state.ts";
 import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
@@ -594,7 +595,14 @@ export function createPageState(
         ? (fitSidebarLayout(opened, availableWidth) ?? opened)
         : opened;
     if (fileTab && content) {
-      openSessionWorkspacePreview(state, fileTab.id, fileTab.label, content);
+      const preview = openSessionWorkspacePreview(state, fileTab.id, fileTab.label, content);
+      if (content.kind === "mcp-app" && preview.content.kind === "mcp-app") {
+        // A second app link changes host context on the retained instance.
+        preview.content = content;
+        preview.label = fileTab.label;
+        const workspace = getSessionWorkspace(state);
+        workspace.previews = [...workspace.previews];
+      }
     } else {
       state.sidebarContent = content;
     }

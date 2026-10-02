@@ -253,7 +253,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
 
   protected override willUpdate(changedProperties: PropertyValues<this>) {
     if (this.emptyGroups.reconcile() && this.sidebarMenus.sessionSortMenuPosition) {
-      this.sidebarMenus.closeSessionSortMenu();
+      this.sidebarMenus.closePositionedMenu("sessionSort");
     }
     super.willUpdate(changedProperties);
   }

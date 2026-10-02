@@ -26,7 +26,6 @@ import { buildAfterTurnRuntimeContextFromUsage } from "./attempt-prompt-helpers.
 import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 import type { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import { resolveTerminalMessageEntryId } from "./attempt-terminal-anchor.js";
-import { shouldPersistCompletedBootstrapTurn } from "./attempt-thread-helpers.js";
 import {
   resolveAttemptTrajectoryTerminal,
   resolveTerminalAssistantTexts,
@@ -283,13 +282,13 @@ export async function completeEmbeddedAttemptAfterTurn(
 
   const shouldPersistBootstrapCompletion = () => {
     const lifecycleState = projectAgentRunAttemptTerminal(executionState.terminal);
-    return shouldPersistCompletedBootstrapTurn({
-      shouldRecordCompletedBootstrapTurn,
-      promptError,
-      aborted: lifecycleState.aborted,
-      timedOutDuringCompaction: lifecycleState.timedOutDuringCompaction,
-      compactionOccurredThisAttempt,
-    });
+    return (
+      shouldRecordCompletedBootstrapTurn &&
+      !promptError &&
+      !lifecycleState.aborted &&
+      !lifecycleState.timedOutDuringCompaction &&
+      !compactionOccurredThisAttempt
+    );
   };
   if (!beforeAgentFinalizeRevisionReason && shouldPersistBootstrapCompletion()) {
     await withOwnedTranscriptWrite(() =>

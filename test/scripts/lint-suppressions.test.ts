@@ -212,10 +212,13 @@ describe("production lint suppressions", () => {
         "src/agents/auth-profiles/oauth-refresh-peers.ts|preserve-caught-error|1",
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|3",
         "src/agents/provider-http-errors.ts|preserve-caught-error|1",
-        "src/agents/sessions/session-manager-persistence.ts|unicorn/prefer-structured-clone|1",
+        // Canonical entries must honor toJSON and omit non-JSON values exactly as persistence does.
+        "src/agents/sessions/session-manager-persistence-entry.ts|unicorn/prefer-structured-clone|1",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/channels/plugins/types.plugin.ts|typescript/no-explicit-any|1",
+        // Account defaults and heterogeneous registries erase plugin-specific callback families;
+        // unknown rejects concrete account/probe/audit callbacks. Gateway versions remain checked.
+        "src/channels/plugins/types.plugin.ts|typescript/no-explicit-any|2",
         "src/cli/cli-utils.ts|typescript/no-unnecessary-type-parameters|1",
         "src/cli/command-options.ts|typescript/no-unnecessary-type-parameters|1",
         "src/cli/plugins-cli-test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
@@ -247,6 +250,8 @@ describe("production lint suppressions", () => {
         "src/plugin-sdk/test-helpers/subagent-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/lazy-service-module.ts|typescript/no-unnecessary-type-parameters|1",
+        // Reflect.apply supplies the wrapped callable as Function.prototype.bind's receiver.
+        "src/plugins/plugin-instance-bindings.ts|typescript/unbound-method|1",
         "src/plugins/plugin-instance-owned-values.ts|eslint/no-constructor-return|1",
         "src/plugins/plugin-instance-owned-values.ts|typescript/no-extraneous-class|1",
         "src/plugins/plugin-return-value.ts|typescript/prefer-promise-reject-errors|1",
@@ -254,6 +259,9 @@ describe("production lint suppressions", () => {
         "src/plugins/plugin-return-value.ts|unicorn/no-thenable|1",
         "src/plugins/provider-auth-persistence.ts|preserve-caught-error|2",
         "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|3",
+        // Admission records original factory identities; executable views bind their receivers.
+        "src/plugins/registry-registrars-memory.ts|typescript/unbound-method|1",
+        "src/plugins/registry-registrars-providers.ts|typescript/unbound-method|1",
         "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/trusted-tool-policy.ts|typescript/no-unnecessary-type-parameters|1",
         "src/secrets/egress-proxy/proxy-server.ts|no-warning-comments|1",

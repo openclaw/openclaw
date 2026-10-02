@@ -1,4 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Client } from "../internal/client.js";
@@ -11,16 +12,11 @@ const { registerVoiceClientSpy, waitForRegistration, stopPresenceListener } = vi
 vi.mock("../internal/voice.js", () => ({
   VoicePlugin: class VoicePlugin {
     id = "voice";
-    registerClient(client: {
-      getPlugin: (id: string) => unknown;
-      registerListener: (listener: object) => object;
-      unregisterListener: (listener: object) => boolean;
-    }) {
+    registerClient(client: Pick<Client, "getPlugin">) {
       registerVoiceClientSpy(client);
       if (!client.getPlugin("gateway")) {
         throw new Error("gateway plugin missing");
       }
-      client.registerListener({ type: "voice-listener" });
     }
   },
 }));
@@ -91,6 +87,7 @@ describe("Discord provider startup", () => {
     overrides: Partial<Parameters<typeof createDiscordMonitorClient>[0]> = {},
   ) {
     return createDiscordMonitorClient({
+      scheduler: createTestPluginServiceScheduler(),
       accountId: "default",
       applicationId: "app-1",
       token: "token-1",
@@ -109,7 +106,6 @@ describe("Discord provider startup", () => {
           start: vi.fn(),
           stop: vi.fn(),
           refresh: vi.fn(),
-          runNow: vi.fn(),
         }) as never,
       isDisallowedIntentsError: () => false,
       ...overrides,
@@ -133,7 +129,7 @@ describe("Discord provider startup", () => {
     registration.resolve();
     const result = await pending;
     expect(registerVoiceClientSpy).toHaveBeenCalledOnce();
-    expect(result.client.listeners.map((listener) => listener.type)).toContain("voice-listener");
+    expect(registerVoiceClientSpy).toHaveBeenCalledWith(result.client);
     expect(createGatewaySupervisor).toHaveBeenCalledOnce();
     expect(result.gatewaySupervisor).toBe(gatewaySupervisor);
   });
@@ -143,7 +139,6 @@ describe("Discord provider startup", () => {
     const { client } = await createMonitorClient({ restFetch });
     expect(client.options.requestOptions).toEqual({
       timeout: DISCORD_REST_TIMEOUT_MS,
-      maxQueueSize: 1000,
       fetch: restFetch,
     });
   });

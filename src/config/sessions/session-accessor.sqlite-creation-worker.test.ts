@@ -4,6 +4,7 @@ import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   ensureSessionGroupCatalog,
@@ -23,6 +24,7 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
@@ -51,9 +53,57 @@ import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcrip
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 
-it("creates with prepared label facts, header and atomic owner without host data SQL, then registers under the captured environment", async () => {
+it.each([false, true])(
+  "prepares a new custom-store suffix only while absent (appeared=%s)",
+  async (appeared) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = state.statePath("custom", "sessions.json");
+      const basePath = path.join(path.dirname(storePath), "openclaw-agent.sqlite");
+      const suffixPath = path.join(path.dirname(storePath), "openclaw-agent.ops.sqlite");
+      const templatePath = state.statePath("ops-template.sqlite");
+      openOpenClawAgentDatabase({ agentId: "main", path: basePath });
+      openOpenClawAgentDatabase({ agentId: "ops", path: templatePath });
+      await closeOpenClawAgentDatabasesAsync();
+      const existingBytes = await fs.readFile(templatePath);
+      const ready = createDeferred();
+      await using preparation = prepareSessionEntryMutationDatabases(
+        [
+          {
+            scope: { agentId: "ops", storePath, sessionKey: "agent:ops:new" },
+            assertCurrent: () => {},
+          },
+        ],
+        ready.promise,
+      );
+      try {
+        if (appeared) {
+          await fs.copyFile(templatePath, suffixPath);
+        }
+      } finally {
+        ready.resolve();
+      }
+      if (appeared) {
+        await expect(preparation.preparations[0]).rejects.toThrow(
+          "lost its originally captured database target",
+        );
+        expect((await fs.readFile(suffixPath)).equals(existingBytes)).toBe(true);
+      } else {
+        const prepared = await preparation.preparations[0];
+        expect(prepared?.execution).toBeDefined();
+        prepared?.assertCurrent();
+        expect((await fs.stat(suffixPath)).isFile()).toBe(true);
+      }
+    });
+  },
+);
+
+it("creates through an admitted store alias with prepared facts and atomic ownership", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const databaseIdentity = readOpenClawAgentDatabaseIdentity(database).identity;
+    if (typeof databaseIdentity !== "string") {
+      throw new Error("Expected a durable session database identity");
+    }
     const key = "agent:main:creation-worker";
     using post = vi.spyOn(Worker.prototype, "postMessage");
     const alias = state.path("agent-alias");
@@ -125,12 +175,21 @@ it("creates with prepared label facts, header and atomic owner without host data
         {
           label: "available",
           bindCreation: (operation) => {
+            expect(() =>
+              assertSessionEntryCreationPublication(operation, {
+                agentId: "main",
+                sessionKey: key,
+                paths: new Set([storePath]),
+                databaseIdentity: "file:0:0",
+              }),
+            ).toThrow("Session creation publication owner is no longer current");
             prepared.bindCreation(operation);
             assertCreation = () =>
               assertSessionEntryCreationPublication(operation, {
                 agentId: "main",
                 sessionKey: key,
                 paths: new Set([database.path]),
+                databaseIdentity: `file:${databaseIdentity}`,
               });
             assertCreation();
           },

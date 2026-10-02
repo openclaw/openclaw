@@ -38,5 +38,5 @@ export type MentionInbox = {
   ) => Result<MentionsListResult, ErrorShape>;
   recordCommittedInput: (input: MentionCommittedInput) => void;
   invalidate: (sessionKey?: string) => void;
-  dispose: () => void;
+  dispose: () => Promise<void>;
 };

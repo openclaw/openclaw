@@ -257,11 +257,7 @@ openclaw-pending-session-create {
   gap: 8px;
 }
 
-.chat-cloud-disk-space-notice p {
-  margin: 0;
-  color: var(--muted);
-}
-
+.chat-cloud-disk-space-notice p,
 .chat-workspace-conflict-notice__content p,
 .chat-workspace-conflict-event p {
   margin: 0;
@@ -1223,7 +1219,8 @@ openclaw-chat-video-player {
   outline-offset: -2px;
 }
 
-.chat-audio-player__toggle {
+.chat-audio-player__toggle,
+.chat-audio-player__volume {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1233,9 +1230,12 @@ openclaw-chat-video-player {
   padding: 0;
   border: 0;
   border-radius: 999px;
+  cursor: var(--cursor-action);
+}
+
+.chat-audio-player__toggle {
   color: var(--primary-foreground);
   background: var(--primary);
-  cursor: var(--cursor-action);
   transition: background-color 120ms ease;
 }
 
@@ -1243,7 +1243,8 @@ openclaw-chat-video-player {
   background: var(--primary-hover);
 }
 
-.chat-audio-player__toggle:focus-visible {
+.chat-audio-player__toggle:focus-visible,
+.chat-audio-player__volume:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
@@ -1351,18 +1352,8 @@ openclaw-chat-video-player {
 }
 
 .chat-audio-player__volume {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  flex: none;
-  padding: 0;
-  border: 0;
-  border-radius: 999px;
   color: var(--muted);
   background: transparent;
-  cursor: var(--cursor-action);
   transition:
     color 120ms ease,
     background-color 120ms ease;
@@ -1371,11 +1362,6 @@ openclaw-chat-video-player {
 .chat-audio-player__volume:hover {
   color: var(--text-strong);
   background: color-mix(in srgb, var(--text) 10%, transparent);
-}
-
-.chat-audio-player__volume:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
 }
 
 .chat-audio-player__volume svg {
@@ -1449,7 +1435,8 @@ openclaw-chat-video-player {
 }
 
 /* Right-click reply context menu */
-.chat-reply-context-menu {
+.chat-reply-context-menu,
+.chat-selection-popup {
   position: fixed;
   z-index: 9999;
   padding: var(--menu-padding);
@@ -1457,61 +1444,50 @@ openclaw-chat-video-player {
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
+}
+
+.chat-reply-context-menu {
   min-width: 160px;
   animation: menu-in 140ms var(--ease-out);
 }
 
-.chat-reply-context-menu button {
+.chat-reply-context-menu button,
+.chat-selection-popup button {
   display: flex;
   align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 12px;
   border: none;
   background: none;
   color: var(--text);
   min-height: var(--menu-item-height);
   border-radius: var(--menu-item-radius);
+}
+
+.chat-reply-context-menu button {
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
   text-align: left;
 }
 
 .chat-reply-context-menu button:hover,
-.chat-reply-context-menu button:focus-visible {
+.chat-reply-context-menu button:focus-visible,
+.chat-selection-popup button:hover,
+.chat-selection-popup button:focus-visible {
   background: var(--bg-hover);
   outline: none;
 }
 
 .chat-selection-popup {
-  position: fixed;
-  z-index: 9999;
   display: flex;
   gap: 2px;
-  padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
   animation: fade-in 0.12s var(--ease-out);
 }
 
 .chat-selection-popup button {
-  display: flex;
-  align-items: center;
   gap: 6px;
   padding: 6px 10px;
-  border: none;
-  background: none;
-  color: var(--text);
-  min-height: var(--menu-item-height);
-  border-radius: var(--menu-item-radius);
   font-size: 12px;
   white-space: nowrap;
-}
-
-.chat-selection-popup button:hover,
-.chat-selection-popup button:focus-visible {
-  background: var(--bg-hover);
-  outline: none;
 }
 
 /* The conversation's top-right gutter, owned by one column so its members
@@ -2531,7 +2507,8 @@ button.chat-pr__diff {
   overflow-wrap: anywhere;
 }
 
-.chat-ci__automation-retry {
+.chat-ci__automation-retry,
+.chat-ci__retry {
   flex: 0 0 auto;
   padding: 4px 8px;
   border: 1px solid var(--border);
@@ -2546,7 +2523,8 @@ button.chat-pr__diff {
   background: var(--bg-hover);
 }
 
-.chat-ci__automation-retry:disabled {
+.chat-ci__automation-retry:disabled,
+.chat-ci__retry:disabled {
   opacity: 0.5;
 }
 
@@ -2770,21 +2748,6 @@ openclaw-chat-ci-details {
 .chat-ci__notice > span {
   flex: 1;
   min-width: 0;
-}
-
-.chat-ci__retry {
-  flex: 0 0 auto;
-  padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text);
-  cursor: var(--cursor-action);
-  font: inherit;
-}
-
-.chat-ci__retry:disabled {
-  opacity: 0.5;
 }
 
 @media (max-width: 560px) {

@@ -67,6 +67,7 @@ import {
   readSubagentOutput,
   readSubagentTimeoutProgress,
 } from "./subagent-announce-output.js";
+import type { PreparedAnnounceResult } from "./subagent-announce-result.js";
 import {
   callSubagentLifecycleGateway,
   dispatchGatewayMethodInProcess,
@@ -114,25 +115,20 @@ export function hasUsableSessionEntry(entry: unknown): entry is Record<string, u
 }
 
 function stripAndClassifyReply(text: string): string | null {
-  let result = text;
-  let didStrip = false;
-  const hasLeadingSilentToken = startsWithSilentToken(result, SILENT_REPLY_TOKEN);
-  if (hasLeadingSilentToken) {
-    result = stripLeadingSilentToken(result, SILENT_REPLY_TOKEN);
-    didStrip = true;
+  const hasLeadingSilentToken = startsWithSilentToken(text, SILENT_REPLY_TOKEN);
+  if (!hasLeadingSilentToken && !text.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())) {
+    return text;
   }
-  if (hasLeadingSilentToken || result.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())) {
-    result = stripSilentToken(result, SILENT_REPLY_TOKEN);
-    didStrip = true;
-  }
-  if (didStrip && (!result.trim() || isSilentReplyText(result, SILENT_REPLY_TOKEN))) {
-    return null;
-  }
-  return result;
+  const result = stripSilentToken(
+    hasLeadingSilentToken ? stripLeadingSilentToken(text, SILENT_REPLY_TOKEN) : text,
+    SILENT_REPLY_TOKEN,
+  );
+  return !result || isSilentReplyText(result, SILENT_REPLY_TOKEN) ? null : result;
 }
 
 type SubagentAnnounceFlowParams = {
   childSessionKey: string;
+  childAgentId?: string;
   childRunId: string;
   runTimeoutSeconds?: number;
   requesterSessionKey: string;
@@ -196,11 +192,11 @@ async function runSubagentAnnounceFlowBound(
     childSessionEffectsAllowed() &&
     (await params.prepareChildSessionEffects?.()) !== false &&
     childSessionEffectsAllowed();
-  let isOwnResultCurrent: (() => boolean) | undefined;
+  let ownResult: PreparedAnnounceResult | undefined;
   let isChildResultsCurrent = () => true;
   const completionDeliveryAllowed = () =>
     params.isCompletionDeliveryAllowed?.() !== false &&
-    (isOwnResultCurrent?.() ?? true) &&
+    (ownResult?.isCurrent() ?? true) &&
     isChildResultsCurrent();
   let childSessionId: string | undefined;
   let childSessionLifecycleRevision: string | undefined;
@@ -264,7 +260,10 @@ async function runSubagentAnnounceFlowBound(
       if (
         params.completionTarget !== "parent" &&
         requesterDepth >= 1 &&
-        shouldIgnorePostCompletionAnnounceForSession(targetRequesterSessionKey)
+        shouldIgnorePostCompletionAnnounceForSession(
+          targetRequesterSessionKey,
+          targetRequesterAgentId,
+        )
       ) {
         return "delivered";
       }
@@ -364,9 +363,8 @@ async function runSubagentAnnounceFlowBound(
 
     const childRun = subagentRuns.get(params.childRunId);
     if (childRun?.childSessionKey === params.childSessionKey && completionDeliveryAllowed()) {
-      const prepared = await readSubagentRunAnnounceResult(childRun);
-      reply = prepared.text;
-      isOwnResultCurrent = prepared.isCurrent;
+      ownResult = await readSubagentRunAnnounceResult(childRun);
+      reply = ownResult.text;
     }
 
     if (params.terminalReply?.disposition === "silent") {
@@ -437,7 +435,7 @@ async function runSubagentAnnounceFlowBound(
     }
 
     const childSessionCurrent = await prepareChildSessionEffects();
-    if (!isOwnResultCurrent && (!childSessionCurrent || !childSessionEffectsAllowed())) {
+    if (!ownResult && (!childSessionCurrent || !childSessionEffectsAllowed())) {
       reply = params.roundOneReply ?? params.fallbackReply;
       if (
         expectsCompletionMessage &&
@@ -468,10 +466,13 @@ async function runSubagentAnnounceFlowBound(
 
     let requesterIsSubagent = requesterIsInternalSession();
     if (requesterIsSubagent) {
-      if (!isSubagentSessionRunActive(targetRequesterSessionKey)) {
+      if (!isSubagentSessionRunActive(targetRequesterSessionKey, targetRequesterAgentId)) {
         if (
           params.completionTarget !== "parent" &&
-          shouldIgnorePostCompletionAnnounceForSession(targetRequesterSessionKey)
+          shouldIgnorePostCompletionAnnounceForSession(
+            targetRequesterSessionKey,
+            targetRequesterAgentId,
+          )
         ) {
           return "delivered";
         }
@@ -483,7 +484,10 @@ async function runSubagentAnnounceFlowBound(
             shouldDeleteChildSession = false;
             return "retryable";
           }
-          const fallback = resolveRequesterForChildSession(targetRequesterSessionKey);
+          const fallback = resolveRequesterForChildSession(
+            targetRequesterSessionKey,
+            targetRequesterAgentId,
+          );
           if (!fallback?.requesterSessionKey) {
             shouldDeleteChildSession = false;
             return "retryable";

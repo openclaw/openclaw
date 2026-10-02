@@ -683,6 +683,8 @@ describe("Crabbox profile warm images", () => {
       "--tailscale=false",
       "--class",
       "standard",
+      "--target",
+      "linux",
       "--ttl",
       "24h",
       "--idle-timeout",

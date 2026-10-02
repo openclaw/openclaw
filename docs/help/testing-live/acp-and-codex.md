@@ -161,6 +161,22 @@ Docker recipe:
 pnpm test:docker:live-codex-harness
 ```
 
+The Docker lane uses a seccomp profile based on Docker's default policy with
+the namespace setup operations required by Codex's native Bubblewrap sandbox.
+It keeps `no-new-privileges` enabled and checks native sandbox startup before
+making provider requests. The runner's kernel and AppArmor policy must also
+permit nested sandbox setup. On disposable CI/Testbox runners with AppArmor,
+the lane loads a temporary profile for its own container and removes it after
+the container exits. It preserves Docker's other restrictions and does not
+change the default profile or kernel settings. Loading requires an available
+`apparmor_parser` and noninteractive permission to load profiles.
+
+The subagent probe also enables Codex's V2 native children by default. Explicit
+`OPENCLAW_CODEX_APP_SERVER_ARGS` overrides are forwarded unchanged; disabling the
+subagent probe leaves the native argument defaults unchanged. Manual compaction
+configurations supply explicit native arguments that take precedence over this
+environment default.
+
 Restart and history stress:
 
 ```bash

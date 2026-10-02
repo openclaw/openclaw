@@ -714,7 +714,7 @@ describe("sessions.changed coalescing", () => {
         prepared.resolve();
         await flushPendingSessionsChangedEvents(context);
         detach();
-        connection.mentionInbox.dispose();
+        await connection.mentionInbox.dispose();
         projection.dispose();
       }
     });

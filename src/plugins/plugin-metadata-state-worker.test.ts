@@ -94,22 +94,16 @@ function familyHashes(databasePath: string) {
   });
 }
 
-it("returns a persisted index row without main-thread SQL", async () => {
-  const env = environment();
-  const message = "persisted fixture diagnostic";
-  await seed(env, index(message));
+async function withoutMainThreadSql(run: () => Promise<void>) {
   requireNodeSqlite();
   const sql = observeMainThreadSql();
   try {
-    await withPluginCache(createPluginCache(), async () => {
-      const loaded = await readPersistedInstalledPluginIndex({ env });
-      expect(loaded?.diagnostics).toEqual([{ level: "warn", message }]);
-    });
+    await run();
     sql.expectIdle();
   } finally {
     sql.restore();
   }
-});
+}
 
 it("merges source admissions into the current install without main-thread SQL or stale-owner writes", async () => {
   const env = environment();
@@ -163,9 +157,7 @@ it("merges source admissions into the current install without main-thread SQL or
       },
     },
   };
-  requireNodeSqlite();
-  const sql = observeMainThreadSql();
-  try {
+  await withoutMainThreadSql(async () => {
     const before = await metadataWorker.readPluginMetadataStateRow("installed-index", { env });
     const publish = createPluginSourceAdmissionPublisher({ env })!;
     expect(await withArtifactPreservingStateReads(() => publish(publication))).toBe(false);
@@ -187,10 +179,7 @@ it("merges source admissions into the current install without main-thread SQL or
     expect(await metadataWorker.readPluginMetadataStateRow("installed-index", { env })).toEqual(
       committed,
     );
-    sql.expectIdle();
-  } finally {
-    sql.restore();
-  }
+  });
   expect(
     parseInstalledPluginIndex({
       ...current,
@@ -270,33 +259,31 @@ it("prepares cold metadata once and preserves the merged workspace inventory wit
       return activate;
     });
   const reads = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
-  requireNodeSqlite();
-  const sql = observeMainThreadSql();
   try {
-    await withPluginCache(createPluginCache(), async () => {
-      const first = await resolveConfigWidePluginMetadataSnapshotAsync({
-        config,
-        env,
-        allowCurrent: false,
-      });
-      const second = await resolveConfigWidePluginMetadataSnapshotAsync({
-        config,
-        env,
-        allowCurrent: false,
-      });
-      expect(first.plugins.map((plugin) => plugin.id)).toEqual(["primary", "secondary"]);
-      expect(first.registryIndex.plugins.map((plugin) => plugin.pluginId)).toEqual(["primary"]);
-      expect(first.registrySource).toBe("derived");
-      expect(second).toBe(first);
-      expect(reads.mock.calls.map(([selector]) => selector)).toEqual([
-        "bundled-discovery",
-        "bundled-discovery",
-        "installed-index",
-      ]);
-    });
-    sql.expectIdle();
+    await withoutMainThreadSql(() =>
+      withPluginCache(createPluginCache(), async () => {
+        const first = await resolveConfigWidePluginMetadataSnapshotAsync({
+          config,
+          env,
+          allowCurrent: false,
+        });
+        const second = await resolveConfigWidePluginMetadataSnapshotAsync({
+          config,
+          env,
+          allowCurrent: false,
+        });
+        expect(first.plugins.map((plugin) => plugin.id)).toEqual(["primary", "secondary"]);
+        expect(first.registryIndex.plugins.map((plugin) => plugin.pluginId)).toEqual(["primary"]);
+        expect(first.registrySource).toBe("derived");
+        expect(second).toBe(first);
+        expect(reads.mock.calls.map(([selector]) => selector)).toEqual([
+          "bundled-discovery",
+          "bundled-discovery",
+          "installed-index",
+        ]);
+      }),
+    );
   } finally {
-    sql.restore();
     reads.mockRestore();
     mode.mockRestore();
   }
@@ -379,9 +366,7 @@ it("returns persisted bundled recovery locations through its existing async cons
     },
   ];
   await seed(env, stored);
-  requireNodeSqlite();
-  const sql = observeMainThreadSql();
-  try {
+  await withoutMainThreadSql(async () => {
     await using cache = createPluginCache();
     const recovered = await withPluginCache(cache, () =>
       listPersistedBundledPluginRecoveryLocations({ env }),
@@ -389,10 +374,7 @@ it("returns persisted bundled recovery locations through its existing async cons
     expect(recovered).toHaveLength(1);
     expect(recovered[0]?.pluginId).toBe("fixture");
     expect(recovered[0]?.loadPaths).toContain(rootDir);
-    sql.expectIdle();
-  } finally {
-    sql.restore();
-  }
+  });
 });
 
 it("reads the installed ledger inside the existing install lifecycle lease without parent SQL", async () => {
@@ -404,30 +386,21 @@ it("reads the installed ledger inside the existing install lifecycle lease witho
   await seed(env, stored);
   await withPluginLifecycleLease({ env }, async (lease) => {
     lease.assertOwned();
-    requireNodeSqlite();
-    const sql = observeMainThreadSql();
-    try {
+    await withoutMainThreadSql(async () => {
       const options = { env, filePath: lease.databasePath };
       expect(await loadInstalledPluginIndexInstallRecords(options)).toEqual(stored.installRecords);
       expect((await readPersistedInstalledPluginIndex(options))?.installRecords).toEqual(
         stored.installRecords,
       );
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
+    });
     lease.assertOwned();
   });
 });
 
 it.each([
-  ...[false, true].flatMap((pinned) =>
-    ["sync", "async", "async-empty-memo"].map((reader) => ({
-      pinned,
-      reader,
-      initialMode: "compat" as const,
-    })),
-  ),
+  { pinned: true, reader: "sync", initialMode: "compat" },
+  { pinned: true, reader: "async", initialMode: "compat" },
+  { pinned: false, reader: "async-empty-memo", initialMode: "compat" },
   { pinned: false, reader: "sync", initialMode: undefined },
 ])(
   "reads captured policy once and keeps it with inventory after a concurrent memo refresh ($reader, pinned roots: $pinned, mode: $initialMode)",

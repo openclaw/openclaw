@@ -384,16 +384,12 @@ export function useSideQuestionTestSetup() {
     ]);
 
     readCodexAppServerBindingMock.mockReturnValue({
-      schemaVersion: 1,
       threadId: "parent-thread",
-      sessionFile: "/tmp/session-1.jsonl",
       cwd: "/tmp/workspace",
       authProfileId: "openai:work",
       model: "gpt-5.5",
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
-      createdAt: new Date(0).toISOString(),
-      updatedAt: new Date(0).toISOString(),
     });
     isCodexAppServerNativeAuthProfileMock.mockReturnValue(true);
     getSharedCodexAppServerClientMock.mockResolvedValue(createFakeClient());

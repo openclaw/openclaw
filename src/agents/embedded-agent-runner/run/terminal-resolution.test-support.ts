@@ -10,8 +10,9 @@ import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
 import { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
 
 export type TerminalInput = Parameters<typeof resolveEmbeddedRunTerminal>[0];
-type TerminalInputOverrides = Omit<Partial<TerminalInput>, "runParams"> & {
+type TerminalInputOverrides = Omit<Partial<TerminalInput>, "runParams" | "retryState"> & {
   runParams?: Partial<TerminalInput["runParams"]>;
+  retryState?: Partial<TerminalInput["retryState"]>;
 };
 
 export function emptyAssistant(overrides: Parameters<typeof buildEmbeddedRunnerAssistant>[0] = {}) {
@@ -44,7 +45,6 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
   } satisfies TerminalInput["runParams"];
   const base = {
     runParams,
-    retryState: createEmbeddedRunTerminalRetryState(),
     attempt,
     attemptAssistant: resolveCurrentAttemptAssistant(attempt),
     activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
@@ -65,8 +65,6 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
     },
     attemptToolSummary: undefined,
     failureSignal: undefined,
-    maxReasoningOnlyRetryAttempts: 2,
-    maxEmptyResponseRetryAttempts: 1,
     attemptCompactionCount: 0,
     replayState: { ...attempt.replayMetadata, replayInvalid: false },
     activePromptPersisted: true,
@@ -97,11 +95,15 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
     pluginHarnessOwnsAuthBootstrap: false,
     reportedModelRef: { provider: "openai", model: "gpt-5.6-luna" },
     traceAttempts: [],
-    traceAttemptUsesFallback: () => false,
     thinkLevel: "off",
     contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-  } satisfies TerminalInput;
-  return { ...base, ...overrides, runParams };
+  } satisfies Omit<TerminalInput, "retryState">;
+  return {
+    ...base,
+    ...overrides,
+    runParams,
+    retryState: { ...createEmbeddedRunTerminalRetryState(), ...overrides.retryState },
+  };
 }
 
 export async function resolveTerminalText(

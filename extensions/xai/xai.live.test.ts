@@ -617,9 +617,11 @@ describeLive("xai plugin live", () => {
         "server-VAD audio barge-in",
         () => {
           const serverBargeInEvents = new Set(serverEvents.slice(bargeInServerEventStart));
+          // xAI does not consistently echo `conversation.item.truncated`; the
+          // outbound truncate plus cleared playback and continued response prove
+          // the user-visible interruption contract without depending on that ack.
           return (
             serverBargeInEvents.has("input_audio_buffer.speech_started") &&
-            serverBargeInEvents.has("conversation.item.truncated") &&
             clientEvents.slice(bargeInClientEventStart).includes("conversation.item.truncate") &&
             clearAudioReasons.includes("barge-in")
           );

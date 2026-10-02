@@ -24,6 +24,7 @@ const hasAnyAuthProfileStoreSource = vi.hoisted(() => vi.fn(() => true));
 const hasAuthProfileStoreSourceForProvider = vi.hoisted(() => vi.fn(() => true));
 const isConfiguredAwsSdkAuthProfileForProvider = vi.hoisted(() => vi.fn(() => false));
 const getActiveMemorySearchManagerCore = vi.hoisted(() => vi.fn());
+const getActiveMemoryProviderCore = vi.hoisted(() => vi.fn());
 const resolveActiveMemoryBackendConfig = vi.hoisted(() => vi.fn());
 const noteWorkspaceMemoryHealth = vi.hoisted(() => vi.fn(async () => undefined));
 const inspectConfiguredEmbeddingProviderSetup = vi.hoisted(() => vi.fn());
@@ -93,6 +94,7 @@ vi.mock("../agents/auth-profiles.js", () => ({
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
+  getActiveMemoryProviderCore,
   getActiveMemorySearchManagerCore,
   resolveActiveMemoryBackendConfig,
 }));
@@ -126,24 +128,13 @@ import {
   noteMemorySearchHealth,
   collectMemorySearchHealthFindings,
 } from "./doctor-memory-search.js";
+import {
+  createDoctorNoteAssertions,
+  registerProviderRuntimeDoctorTest,
+} from "./doctor-memory-search.provider-runtime.test-support.js";
 
-function firstNoteMessage(): string {
-  return String(note.mock.calls[0]?.[0] ?? "");
-}
-
-function expectFirstNoteContains(...values: string[]) {
-  const message = firstNoteMessage();
-  for (const value of values) {
-    expect(message).toContain(value);
-  }
-}
-
-function expectFirstNoteExcludes(...values: string[]) {
-  const message = firstNoteMessage();
-  for (const value of values) {
-    expect(message).not.toContain(value);
-  }
-}
+const { firstNoteMessage, expectFirstNoteContains, expectFirstNoteExcludes } =
+  createDoctorNoteAssertions(note);
 
 describe("noteMemorySearchHealth", () => {
   const cfg = {} as OpenClawConfig;
@@ -264,6 +255,7 @@ describe("noteMemorySearchHealth", () => {
     isConfiguredAwsSdkAuthProfileForProvider.mockReset();
     isConfiguredAwsSdkAuthProfileForProvider.mockReturnValue(false);
     getActiveMemorySearchManagerCore.mockReset();
+    getActiveMemoryProviderCore.mockReset();
     getMissingLocalMemoryEmbeddingProviderMessage.mockClear();
     inspectConfiguredEmbeddingProviderSetup.mockReset();
     inspectConfiguredEmbeddingProviderSetup.mockResolvedValue(null);
@@ -338,6 +330,13 @@ describe("noteMemorySearchHealth", () => {
         message: "No active memory plugin is registered for the current config.",
       },
     ]);
+  });
+
+  registerProviderRuntimeDoctorTest({
+    cfg,
+    stubMemorySearchConfig,
+    noteMemorySearchHealth,
+    expectFirstNoteContains,
   });
 
   it.each([false, true])(

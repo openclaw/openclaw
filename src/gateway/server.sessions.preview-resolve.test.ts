@@ -76,6 +76,7 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
     },
   };
   const sessionId = "aggregate-work-global";
+  const backfilled = observeSessionRowBackfill(["global"]);
   await writeSessionStore({
     agentId: "work",
     storePath: workStorePath,
@@ -88,7 +89,6 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
     storePath: workStorePath,
     messages: [{ role: "user", content: "Work global conversation" }],
   });
-  const backfilled = observeSessionRowBackfill(["global"]);
   const { ws } = await openClient();
   try {
     await backfilled;

@@ -7,6 +7,7 @@ import {
   createLegacyWebhookListenerDoctorContract,
   defineChannelAliasMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { resolveMSTeamsCredentials } from "./src/token-config.js";
 
 const webhookMigration = createLegacyWebhookListenerDoctorContract({
   channelKey: "msteams",
@@ -14,7 +15,9 @@ const webhookMigration = createLegacyWebhookListenerDoctorContract({
   webhookKey: "webhook",
   portKey: "port",
   hostKey: null,
+  preserveAuthoredActivation: true,
 });
+export const { historicalWebhookListener } = webhookMigration;
 
 const streamingAliasMigration = defineChannelAliasMigration({
   channelId: "msteams",
@@ -34,8 +37,16 @@ export function normalizeCompatibilityConfig({
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
   const webhook = webhookMigration.normalizeCompatibilityConfig({ cfg });
-  return streamingAliasMigration.normalizeChannelConfig({
-    cfg: webhook.config,
-    changes: webhook.changes,
-  });
+  return {
+    ...streamingAliasMigration.normalizeChannelConfig({
+      cfg: webhook.config,
+      changes: webhook.changes,
+    }),
+    historicalWebhookAccountIds:
+      cfg.channels?.msteams === undefined && !resolveMSTeamsCredentials()
+        ? null
+        : cfg.channels?.msteams?.enabled === false
+          ? []
+          : [undefined],
+  };
 }

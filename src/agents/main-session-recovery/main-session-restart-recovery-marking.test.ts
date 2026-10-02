@@ -222,7 +222,17 @@ it("recovers an orphan after its owner releases retained run metadata", async ()
 
 it("marks healthy startup orphans while leaving a refused secondary database untouched", async () => {
   await withOpenClawTestState({ label: "recovery-admission" }, async (state) => {
-    const cfg = { agents: { entries: { main: { default: true }, cleaner: {} } } };
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          heartbeat: { agentId: "main" },
+          systemAgent: { agentId: "main" },
+        },
+        entries: { main: { workspace: state.statePath("workspace") }, cleaner: {} },
+      },
+      talk: { agentId: "main" },
+    };
     for (const agentId of ["main", "cleaner"]) {
       await replaceSessionEntry(
         { agentId, sessionKey: `agent:${agentId}:main` },

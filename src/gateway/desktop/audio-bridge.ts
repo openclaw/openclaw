@@ -48,7 +48,6 @@ export function mintDesktopAudioObserver(params: {
     close,
     isCurrent,
     attach(ws) {
-      let generation = 0;
       let captureAbort: AbortController | undefined;
       let transition: Promise<void> | undefined;
       let pending: (() => Promise<void>) | undefined;
@@ -76,7 +75,6 @@ export function mintDesktopAudioObserver(params: {
         }
       };
       const stop = () => {
-        generation += 1;
         pending = undefined;
         captureAbort?.abort();
         captureAbort = undefined;
@@ -121,14 +119,10 @@ export function mintDesktopAudioObserver(params: {
           sendState("stopped");
           return;
         }
-        const currentGeneration = generation;
         const controller = new AbortController();
         captureAbort = controller;
         const current = () =>
-          isCurrent() &&
-          currentGeneration === generation &&
-          !controller.signal.aborted &&
-          ws.readyState === WebSocket.OPEN;
+          isCurrent() && !controller.signal.aborted && ws.readyState === WebSocket.OPEN;
         // Serialize capture teardown and startup so repeated clicks never overlap recorders.
         schedule(async () => {
           if (!(await ready.promise) || !current()) {

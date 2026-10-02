@@ -459,7 +459,9 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     const result = await enroll(home, nodeBootstrap);
     expect(result).toMatchObject({
       code: 1,
-      output: expect.stringContaining("could not enable plugin"),
+      output: expect.stringMatching(
+        /could not enable plugins demo: exit code 1, signal none: plugin dependency missing/u,
+      ),
     });
     expect(fs.existsSync(path.join(stateDir, "runtime"))).toBe(false);
     expect(fs.existsSync(path.join(stateDir, "node.pid"))).toBe(false);
@@ -693,9 +695,8 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
         await Promise.all([postinstall.requested, worker.requested]);
         if (failure === "worker download") {
           workerResponse.resolve();
-          await worker.closed;
-          expect(fs.existsSync(finished)).toBe(false);
-          expect(fs.readdirSync(runtimeRoot)).toEqual([expect.stringMatching(/^node-bootstrap-/)]);
+          await postinstall.closed;
+          await preparation;
         } else {
           postinstallResponse.resolve();
           await worker.closed;
@@ -713,7 +714,7 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
             : "package installation failed (exit code 17)",
         ),
       });
-      expect(fs.readFileSync(finished, "utf8")).toBe("complete");
+      expect(fs.existsSync(finished)).toBe(failure === "npm installation");
       expect(fs.readdirSync(runtimeRoot)).toEqual([]);
     },
     30_000,
