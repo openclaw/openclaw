@@ -12,7 +12,7 @@ import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js"
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createAgent } from "./agent-create.js";
-import * as workspace from "./workspace.js";
+import * as workspaceModule from "./workspace.js";
 import {
   DEFAULT_IDENTITY_FILENAME,
   ensureAgentWorkspace,
@@ -109,7 +109,7 @@ it("records operator and agent creation provenance after roster commits", async 
   const admission = workerAdmission.createSqliteWorkerOperationAdmission;
   const ensureWorkspace = ensureAgentWorkspace;
   const preparation = vi
-    .spyOn(workspace, "ensureAgentWorkspace")
+    .spyOn(workspaceModule, "ensureAgentWorkspace")
     .mockImplementation(async (params) => {
       const snapshot = vi.spyOn(snapshots, "runSqliteReadOnlyWorkerSync").mockImplementation(() => {
         throw new Error("Workspace creation must not spawn synchronous SQLite snapshots");

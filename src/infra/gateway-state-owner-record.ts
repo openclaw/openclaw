@@ -23,7 +23,7 @@ export const StateDatabaseAdmissionPendingError = resolveGlobalSingleton(
 export function assertPersistedStateDatabaseAccessAllowed(params: {
   databasePath: string;
   ownerPath: string;
-  assertMaintenance(): void;
+  assertMaintenance: () => void;
 }): void {
   const { databasePath, ownerPath, assertMaintenance } = params;
   const unavailable = `OpenClaw state ownership at ${databasePath} could not be verified; retry after maintenance finishes.`;
