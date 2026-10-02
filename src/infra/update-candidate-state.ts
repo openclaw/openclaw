@@ -288,22 +288,6 @@ export async function readUpdateCandidateStateInventoryInProcess(
     onProgress?: (progress: UpdateStateInspectionProgress) => void;
   },
 ): Promise<z.infer<typeof UpdateCandidateSnapshotInventorySchema>> {
-  const [
-    { assertNoRetiredStateFiles },
-    { listRetiredDeliveryQueueFiles },
-    { legacyInstalledPluginIndexUnsupportedMessage, resolveLegacyInstalledPluginIndexStorePath },
-  ] = await Promise.all([
-    import("./state-migrations.retired-files.js"),
-    import("./state-migrations.retired-delivery-files.js"),
-    import("../plugins/installed-plugin-index-store-path.js"),
-  ]);
-  // Published updaters run this inventory before stopping the Gateway; the private
-  // SQLite rehearsal does not copy these retired JSON sources.
-  assertNoRetiredStateFiles("JSON delivery queues", listRetiredDeliveryQueueFiles(input.stateDir));
-  const legacyIndexPath = resolveLegacyInstalledPluginIndexStorePath({ stateDir: input.stateDir });
-  if (await fileExists(legacyIndexPath)) {
-    throw new Error(legacyInstalledPluginIndexUnsupportedMessage(legacyIndexPath));
-  }
   await fs.mkdir(input.targetStateDir, { recursive: true, mode: 0o700 });
   const planPath = path.join(input.targetStateDir, UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME);
   await fs.writeFile(planPath, "", { mode: 0o600, flag: "wx" });

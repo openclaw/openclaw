@@ -12,6 +12,7 @@ import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import { listRetiredCronStateFiles } from "../../infra/state-migrations.retired-cron-files.js";
+import { listRetiredDeliveryQueueFiles } from "../../infra/state-migrations.retired-delivery-files.js";
 import {
   assertNoRetiredStateFiles,
   RetiredStateFormatError,
@@ -27,6 +28,7 @@ import {
 } from "../../infra/update-run-schema.js";
 import { redactSupportDiagnosticLine } from "../../logging/diagnostic-support-redaction.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../plugins/installed-plugin-index-record-reader.js";
+import { resolveLegacyInstalledPluginIndexStorePath } from "../../plugins/installed-plugin-index-store-path.js";
 import { defaultRuntime } from "../../runtime.js";
 import { parsePackageOpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
@@ -159,6 +161,14 @@ async function inspectUpdateAdmission(
           try {
             // The saved partition reads SQLite; admit its schema before inspecting live files
             // that published updaters omit from their later rehearsal snapshots.
+            const stateDir = resolveStateDir(databaseContext.env);
+            assertNoRetiredStateFiles(
+              "JSON delivery queues",
+              listRetiredDeliveryQueueFiles(stateDir),
+            );
+            assertNoRetiredStateFiles("Plugin install index", [
+              resolveLegacyInstalledPluginIndexStorePath({ stateDir }),
+            ]);
             assertNoRetiredStateFiles(
               "Cron state",
               await listRetiredCronStateFiles(

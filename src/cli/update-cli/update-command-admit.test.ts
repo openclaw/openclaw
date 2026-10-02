@@ -141,52 +141,64 @@ afterEach(() => {
 });
 
 describe("candidate update admission", () => {
-  it("refuses a dangling cron history directory link before activation", async () => {
-    const runs = path.join(path.dirname(configPath), "cron", "runs");
-    fs.mkdirSync(path.dirname(runs), { recursive: true });
-    fs.symlinkSync(path.join(home, "missing-history"), runs, "junction");
-    const originalTarget = fs.readlinkSync(runs);
-    const before = snapshotFiles();
+  it.each(["cron/runs", "delivery-queue", "session-delivery-queue/failed"])(
+    "refuses a dangling %s directory link before activation",
+    async (relative) => {
+      const sourcePath = path.join(path.dirname(configPath), relative);
+      fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+      fs.symlinkSync(path.join(home, "missing-history"), sourcePath, "junction");
+      const originalTarget = fs.readlinkSync(sourcePath);
+      const before = snapshotFiles();
 
-    await updateAdmitCommand(contextPath);
+      await updateAdmitCommand(contextPath);
 
-    expect(process.exitCode).toBe(3);
-    expect(readVerdict()).toMatchObject({
-      verdict: "refuse",
-      reasons: [expect.objectContaining({ code: "retired-state-format" })],
-    });
-    expect(stderr).toBe("");
-    expect(snapshotFiles()).toEqual(before);
-    expect(fs.readlinkSync(runs)).toBe(originalTarget);
-  });
+      expect(process.exitCode).toBe(3);
+      expect(readVerdict()).toMatchObject({
+        verdict: "refuse",
+        reasons: [expect.objectContaining({ code: "retired-state-format" })],
+      });
+      expect(stderr).toBe("");
+      expect(snapshotFiles()).toEqual(before);
+      expect(fs.readlinkSync(sourcePath)).toBe(originalTarget);
+    },
+  );
 
-  it("refuses an uninspectable cron history path instead of permitting admission fallback", async () => {
-    const runs = path.join(path.dirname(configPath), "cron", "runs");
-    fs.mkdirSync(path.dirname(runs), { recursive: true });
-    fs.writeFileSync(runs, "retained operator data\n");
-    const before = snapshotFiles();
+  it.each(["cron/runs", "delivery-queue", "session-delivery-queue/failed"])(
+    "refuses an uninspectable %s path instead of permitting admission fallback",
+    async (relative) => {
+      const sourcePath = path.join(path.dirname(configPath), relative);
+      fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+      fs.writeFileSync(sourcePath, "retained operator data\n");
+      const before = snapshotFiles();
 
-    await updateAdmitCommand(contextPath);
+      await updateAdmitCommand(contextPath);
 
-    expect(process.exitCode).toBe(3);
-    expect(readVerdict()).toMatchObject({
-      verdict: "refuse",
-      reasons: [
-        expect.objectContaining({
-          code: "retired-state-format",
-          message: expect.stringContaining("Cannot inspect potentially retired state"),
-        }),
-      ],
-    });
-    expect(stderr).toBe("");
-    expect(snapshotFiles()).toEqual(before);
-  });
+      expect(process.exitCode).toBe(3);
+      expect(readVerdict()).toMatchObject({
+        verdict: "refuse",
+        reasons: [
+          expect.objectContaining({
+            code: "retired-state-format",
+            message: expect.stringContaining("Cannot inspect potentially retired state"),
+          }),
+        ],
+      });
+      expect(stderr).toBe("");
+      expect(snapshotFiles()).toEqual(before);
+    },
+  );
 
   it.each([
     "cron/jobs.json",
     "cron/jobs-state.json",
     "cron/runs/retained.jsonl",
     "custom-cron/jobs.json",
+    "delivery-queue/pending.json",
+    "delivery-queue/failed/failed.json",
+    "session-delivery-queue/pending.json",
+    "session-delivery-queue/failed/failed.json",
+    "delivery-queue/sent.delivered",
+    "plugins/installs.json",
   ])(
     "refuses retired %s before a published updater can activate the candidate",
     async (relative) => {

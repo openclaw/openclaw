@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isMissingPathError } from "./errno.js";
+import { hasErrnoCode } from "./errno.js";
+import { createRetiredStateInspectionError } from "./state-migrations.retired-files.js";
 import { resolveLegacyMigrationSourcePath } from "./state-migrations.source-path.js";
 
 export function listRetiredDeliveryQueueFiles(stateDir: string): string[] {
@@ -10,10 +11,17 @@ export function listRetiredDeliveryQueueFiles(stateDir: string): string[] {
       try {
         entries = fs.readdirSync(directory, { withFileTypes: true });
       } catch (error) {
-        if (isMissingPathError(error)) {
-          return [];
+        if (hasErrnoCode(error, "ENOENT")) {
+          try {
+            fs.lstatSync(directory);
+          } catch (inspectionError) {
+            if (hasErrnoCode(inspectionError, "ENOENT")) {
+              return [];
+            }
+            throw createRetiredStateInspectionError(directory, inspectionError);
+          }
         }
-        throw error;
+        throw createRetiredStateInspectionError(directory, error);
       }
       return entries
         .filter((entry) => {
