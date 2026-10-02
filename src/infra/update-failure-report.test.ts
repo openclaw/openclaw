@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { VERSION } from "../version.js";
 import type { GithubIssueSubmitHooks, PreparedGithubIssue } from "./github-issue.js";
 import {
@@ -21,7 +21,7 @@ import {
 } from "./update-failure-report.test-support.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useStateDatabaseTempDirs();
 
 type PreparedReport = Awaited<ReturnType<typeof prepareUpdateFailureReport>>;
 
