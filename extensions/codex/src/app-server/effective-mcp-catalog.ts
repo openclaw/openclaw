@@ -35,6 +35,7 @@ function catalogTool(params: {
     toolName: params.toolName,
     ...(title ? { title } : {}),
     ...(description ? { description } : {}),
+    inputSchema: (asOptionalRecord(raw?.inputSchema) ?? { type: "object" }) as never,
     ...metadata,
     ...(Array.isArray(ui?.visibility)
       ? {

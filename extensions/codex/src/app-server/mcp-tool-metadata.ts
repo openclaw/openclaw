@@ -32,7 +32,6 @@ export function projectCodexMcpToolMetadata(toolName: string, raw: unknown) {
     title:
       normalizeOptionalString(tool?.title) ??
       normalizeOptionalString(asOptionalRecord(tool?.annotations)?.title),
-    inputSchema: (asOptionalRecord(tool?.inputSchema) ?? { type: "object" }) as never,
     fallbackDescription: normalizeOptionalString(tool?.description) ?? toolName,
     appExtensions: readMcpAppToolExtensions(tool ?? {}),
     codexAnnotations: normalizeMcpCodexToolAnnotations(tool?.annotations),

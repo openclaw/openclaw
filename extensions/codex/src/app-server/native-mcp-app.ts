@@ -165,6 +165,7 @@ export function createNativeMcpRuntime(params: {
               serverName: status.name,
               safeServerName: status.name,
               toolName: String(tool.name),
+              inputSchema: (asOptionalRecord(tool.inputSchema) ?? { type: "object" }) as never,
             },
             projectCodexMcpToolMetadata(String(tool.name), tool),
             uiVisibility ? { uiVisibility } : {},
