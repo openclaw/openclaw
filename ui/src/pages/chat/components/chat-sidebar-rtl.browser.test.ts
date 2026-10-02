@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
-import "./chat-sidebar.ts";
+import "./chat-detail-panel.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 

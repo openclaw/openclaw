@@ -17,7 +17,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { replaceConfigFile } from "../config/config.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import { applyImplicitAgentRosterDefaults } from "../config/implicit-agent-roster.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { IdentityConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -69,8 +69,9 @@ export async function agentsSetIdentityCommand(
   if (!writeSnapshot) {
     return;
   }
-  const cfg = migratePersistedImplicitMainRoster(writeSnapshot.snapshot.sourceConfig)
-    .config as OpenClawConfig;
+  const cfg = applyImplicitAgentRosterDefaults(
+    writeSnapshot.snapshot.sourceConfig,
+  ) as OpenClawConfig;
 
   const nameRaw = normalizeOptionalString(opts.name);
   const emojiRaw = normalizeOptionalString(opts.emoji);

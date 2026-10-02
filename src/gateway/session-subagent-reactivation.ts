@@ -100,6 +100,7 @@ export async function reactivateCompletedSubagentSession(params: {
       : await runtime.replaceSubagentRunAfterSteerCore({
           previousRunId: source.runId,
           nextRunId: runId,
+          preserveCompletedRun: true,
           runTimeoutSeconds: source.runTimeoutSeconds ?? 0,
           ...(hasTask ? { task } : {}),
           assertCurrent: assertOriginalOwnerCurrent,

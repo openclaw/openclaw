@@ -184,6 +184,8 @@ async function runOwnedUpdateCommand(phase, commandArgv, timeoutMs, cwd = params
             }
             return;
           }
+          const triageCommandIndex = Array.isArray(message.commandArgv) &&
+            message.commandArgv[1] === "--no-install" ? 3 : 2;
           if (
             params.action === "triage" &&
             message.type === "triage-ready" &&
@@ -228,10 +230,11 @@ async function runOwnedUpdateCommand(phase, commandArgv, timeoutMs, cwd = params
             !stagedContinuation && !continuation && !continuationCancelled &&
             Object.keys(message).length === 4 &&
             Array.isArray(message.commandArgv) &&
-            (message.commandArgv.length === 3 ||
-              (message.commandArgv.length === 5 && message.commandArgv[3] === "--update-result")) &&
+            (message.commandArgv.length === triageCommandIndex + 1 ||
+              (message.commandArgv.length === triageCommandIndex + 3 &&
+                message.commandArgv[triageCommandIndex + 1] === "--update-result")) &&
             message.commandArgv.every((arg) => typeof arg === "string" && arg.length < 4096) &&
-            message.commandArgv[2] === "triage" &&
+            message.commandArgv[triageCommandIndex] === "triage" &&
             validTriageFailure(message.failure) &&
             message.failure.kind === "update" &&
             params.serviceRecovery?.kind === "systemd" &&

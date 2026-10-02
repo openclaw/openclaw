@@ -79,11 +79,42 @@ Maintainer decisions accepted for this staged migration:
   session throws an actionable error naming the async replacement. Durable
   targets keep working until the removal major.
 
-P2 adds session facts, creation, and authority; P3 adds side-data adapters;
+### Incognito session facts and authority (P2, inactive)
+
+The actor now admits exact session reads and creation through its original FIFO
+writer queue. Creation reuses the canonical entry and transcript-header kernels
+in one synchronous worker transaction. Existing-only capture and missing entry
+reads never create a store or row. Reads run with SQLite `query_only` on the
+retained memory connection; they do not open a second connection or repeat
+schema admission.
+
+Host facts retain only committed sharing metadata, membership, revisions, and
+the original expiry. Full entries belong to their read result. Actor-bound
+claims reject replaced session generations and closed or lost actors; they
+never follow a sentinel to a successor. Pending or uncertain publications
+cannot authorize other work. The host reconciles the native commit receipt
+inside the FIFO interval, even if result delivery fails, and never replays a
+creation to recover its reply.
+
+Transaction and immediate pre-commit grants recheck live caller authority.
+Grant callbacks consume bounded worker facts synchronously; same-actor requests
+from a grant are refused immediately to prevent deadlocks. Staged postimages
+remain private to the grant and do not become general sharing permission.
+Read disclosure rechecks authority after worker settlement.
+
+Private-row and deadline adapters accept captured source assertions instead of
+requiring a connection. The execution owner's separate, inactive topology view
+lists only its live actors in the captured state root. Production discovery,
+private reads, and expiry acquisition still use the host owner until P7; no
+configuration flag selects between writers. Actor deadlines remain 24 hours
+from the original creation time and are never renewed by reads or repeated
+creation. Deletion and transcript lifecycle routing remain later stages.
+
+P3 adds side-data adapters;
 P4 migrates transcript mutation and lifecycle; P5 adds history and compute
 routing; P6 completes ACP and the shared-owner audit. P7 switches all reachable
 callers together and deletes the host incognito routes. The existing 24-hour,
-nonrenewing session deadline and restart loss remain unchanged. P1 has no update
+nonrenewing session deadline and restart loss remain unchanged. P1 and P2 have no update
 behavior, schema change, migration, or operator action because it is inactive.
 
 ### Existing worker flows
@@ -94,9 +125,19 @@ failed lock waits therefore identify the domain operation without logging its
 input. Explicit labels take precedence; native callers outside a command scope
 must supply their own label for the same attribution.
 
+Slow agent transaction diagnostics retain their hold and lock-wait labels and
+include prepared session identifiers and counts. History snapshots report active
+events, active messages, and the reader operation; append diagnostics distinguish
+event type and message role. Diagnostics do not query additional rows or log
+transcript content.
+
 Move an existing domain operation across its worker boundary instead of creating
 a second store, generic SQL service, or cache manager. Read-only operations use the
-existing read-only worker scope and the relevant domain reader. Shared-state
+existing read-only worker scope and the relevant domain reader. Typed domain
+handlers register with the scoped transport; it owns bounded result transfer,
+cancellation, and child cleanup. Catalog preparation captures these worker-read
+facts before registry publication, while catalog writes retain the agent executor.
+Shared-state
 fixed reads and session transcript/history reads retain
 their established adapters and cleanup owners. A Promise around synchronous SQL,
 or `withOpenClawAgentDatabaseReadOnly` alone, does not move execution off thread.
@@ -123,6 +164,20 @@ authority, physical database identity, and read lifecycle checks remain in place
 Writes, schema transitions, lease grants, and all generic SQLite broker jobs
 retain immediate fresh ownership verification, including their transaction and
 commit grants. Schemas, retained data, and update behavior are unchanged.
+
+Restart-tombstone recovery clones the source transcript and records its archived
+successor in one transaction through the canonical agent writer. Transcript reads,
+decoding, inserts, and metadata changes stay in the worker even for large histories.
+The host retains FIFO admission, rechecks live recovery authority before native
+transaction and commit grants, and installs committed sharing and identity facts
+before releasing the writer. Incognito and maintenance scopes retain their native
+owner. Schemas, recovery atomicity, durability, and update behavior are unchanged.
+
+Full-transcript recovery checkpoints, usage aggregation, and MCP App reconstruction
+use the admitted history worker. Selectors return compact facts and retain one
+snapshot, including both MCP reconstruction passes. Process-held incognito
+databases retain their native owner. There is no synchronous fallback when the
+worker is busy and no retained summary cache.
 
 Legacy session-entry patches yield while waiting for a competing SQLite writer.
 Each `BEGIN IMMEDIATE` attempt uses a zero busy timeout and can retry within the
@@ -932,6 +987,17 @@ succeeds. Incognito sessions retain facts from their existing in-memory writer
 lifetime. The requester evaluates these facts with the current role and profile
 aliases before and after policy callbacks.
 
+Session owner assignments and suggestion add, claim, release, and finalization use
+the existing collaboration writer. Queued requests recheck their original target,
+current caller, and committed sharing policy at transaction and commit admission.
+Suggestion dispatch carries that authority into chat input acceptance. A rejected
+request releases its exact claim; accepted input retains settlement custody after
+a later profile change, while subsequent effects still require the original host.
+Edit and dismiss resolutions retain caller authority through finalization. These
+guards reuse committed in-memory facts for process-held incognito sessions without
+adding native SQL reads. Stored formats, schemas, retention, and update behavior
+are unchanged.
+
 For writes, shared-state domain operations registered by
 `src/state/openclaw-state-worker-runtime.ts` reuse the broker and publish results
 through their original store/projection owner.
@@ -1050,13 +1116,20 @@ event still commits before the runtime advances; bulk transcript imports reuse
 their transaction-local append cursor. Root checks read metadata without saved
 prompt payloads. No cross-transaction root cache is introduced.
 
+Runtime custom messages, prompt cache markers, bootstrap completion and prompt-error
+markers, and nested tool activity use the same awaited writer. The manager captures
+custom payloads before queueing, rechecks its current parent at admission, and adopts
+the committed version before publishing the result. Non-user asynchronous message
+appends use this worker; user-input custody and transaction-local callbacks retain
+their native transaction contract.
+
 Runtime report navigation and writes use the same broker's agent database owner.
 Custom report selectors consume prepared facts on the host, and the worker
 compares the transcript version before appending. Only a definite version conflict
 repeats selection; uncertain writes are never replayed. Startup orphan repair
 retains its native transaction so session settlement and the report remain atomic.
-Process-held incognito databases, user-input custody, custom-message writes, and
-the shipped synchronous SessionManager SDK remain separate migration work.
+Process-held incognito databases, user-input custody, compaction, provider replay,
+and the shipped synchronous SessionManager SDK remain separate migration work.
 Schemas, stored bytes, retention, and update behavior are unchanged.
 
 Channel identity administration, profile display and avatar edits, role assignments, email linking, and

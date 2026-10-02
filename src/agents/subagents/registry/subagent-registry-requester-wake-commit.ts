@@ -5,7 +5,7 @@ import type {
   PendingRequesterSettleWakeCommit,
   SubagentLifecycleWakeContext,
 } from "./subagent-registry-lifecycle-context.js";
-import { maskLifecycleIdentifier } from "./subagent-registry-lifecycle-delivery.js";
+import { maskLifecycleIdentifier } from "./subagent-registry-lifecycle-log.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
   mutateSubagentRuns,
@@ -249,8 +249,8 @@ export function commitRequesterInitialTransfer(
         (entry) =>
           context.pendingRequesterSettleWakeCommits.get(getSubagentRunRuntimeKey(entry)) !==
             pending ||
-          !isRequesterCompletionCohortCurrent(entry, entries, (key, matches) =>
-            context.options.getLatestRunForChildSession(key, matches),
+          !isRequesterCompletionCohortCurrent(entry, (key, matches, childAgentId) =>
+            context.options.getLatestRunForChildSession(key, matches, childAgentId),
           ),
       )
     ) {
@@ -594,8 +594,8 @@ export function commitRequesterWake(
         !isDeepStrictEqual(captureRequesterSettleRunIdentity(live), owner.identity) ||
         !isDeepStrictEqual(live.killIntent, owner.killIntent) ||
         !isDeepStrictEqual(live.killReconciliation, owner.killReconciliation) ||
-        !isRequesterCompletionCohortCurrent(live, pending.entries, (key, matches) =>
-          context.options.getLatestRunForChildSession(key, matches),
+        !isRequesterCompletionCohortCurrent(live, (key, matches, childAgentId) =>
+          context.options.getLatestRunForChildSession(key, matches, childAgentId),
         )
       ) {
         return false;

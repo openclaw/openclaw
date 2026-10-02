@@ -215,11 +215,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   const currentCompletionRows = (rows: SubagentRunRecord[]) =>
     frozenBatchRunIds?.length
       ? rows.filter((entry) =>
-          isRequesterCompletionCohortCurrent(
-            entry,
-            settledBatch,
-            getLatestLiveSubagentRunByChildSessionKey,
-          ),
+          isRequesterCompletionCohortCurrent(entry, getLatestLiveSubagentRunByChildSessionKey),
         )
       : dedupeLatestChildCompletionRows(
           filterCurrentDirectChildCompletionRows(rows, {
@@ -320,7 +316,13 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         : (getLatestLiveSubagentRunByChildSessionKey(
             requesterSessionKey,
             (entry) => entry.pauseReason === "sessions_yield",
-          ) ?? getLatestLiveSubagentRunByChildSessionKey(requesterSessionKey));
+            requesterAgentId,
+          ) ??
+          getLatestLiveSubagentRunByChildSessionKey(
+            requesterSessionKey,
+            undefined,
+            requesterAgentId,
+          ));
     const requesterRun = getRequesterRun();
     const isRequesterRunCurrent = captureRequesterRunOwner(requesterRun);
     const isBatchDeliveryClosed = () => {

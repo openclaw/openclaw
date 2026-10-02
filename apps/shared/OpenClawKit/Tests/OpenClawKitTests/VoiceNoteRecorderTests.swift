@@ -5,6 +5,7 @@ import XCTest
 @MainActor
 private final class FakeVoiceNoteAudioCapture: VoiceNoteAudioCapture {
     var permissionGranted = true
+    var permissionRequest: (() async -> Bool)?
     var duration: TimeInterval = 12.5
     var startError: Error?
     var startCount = 0
@@ -14,7 +15,8 @@ private final class FakeVoiceNoteAudioCapture: VoiceNoteAudioCapture {
     var failureHandler: (@MainActor () -> Void)?
 
     func requestPermission() async -> Bool {
-        self.permissionGranted
+        if let permissionRequest { return await permissionRequest() }
+        return self.permissionGranted
     }
 
     func start(url: URL) throws {
@@ -162,6 +164,51 @@ final class VoiceNoteRecorderTests: XCTestCase {
         }
         XCTAssertTrue(message.contains("Microphone access"))
         XCTAssertEqual(capture.startCount, 0)
+    }
+
+    @MainActor
+    func testPermissionResultsCannotReviveCancelledRecordingAttempts() async throws {
+        for restart in [false, true] {
+            for granted in [false, true] {
+                let capture = FakeVoiceNoteAudioCapture()
+                let recorder = OpenClawVoiceNoteRecorder(capture: capture)
+                defer { recorder.cancel() }
+                var activeChanges: [Bool] = []
+                recorder.onRecordingActiveChanged = { activeChanges.append($0) }
+                let (requests, arrivals) = AsyncStream<CheckedContinuation<Bool, Never>>.makeStream()
+                capture.permissionRequest = {
+                    await withCheckedContinuation { arrivals.yield($0) }
+                }
+                var iterator = requests.makeAsyncIterator()
+                let firstStart = Task { await recorder.start() }
+                let firstRequest = await iterator.next()
+                let firstPermission = try XCTUnwrap(firstRequest)
+                recorder.cancel()
+
+                var secondStart: Task<Bool, Never>?
+                var secondPermission: CheckedContinuation<Bool, Never>?
+                if restart {
+                    secondStart = Task { await recorder.start() }
+                    secondPermission = await iterator.next()
+                }
+
+                firstPermission.resume(returning: granted)
+                let firstStarted = await firstStart.value
+                XCTAssertFalse(firstStarted, "restart=\(restart), granted=\(granted)")
+                XCTAssertEqual(recorder.state, restart ? .requestingPermission : .idle)
+                XCTAssertEqual(capture.startCount, 0)
+                XCTAssertTrue(activeChanges.isEmpty)
+
+                if let secondStart {
+                    secondPermission?.resume(returning: true)
+                    let secondStarted = await secondStart.value
+                    XCTAssertTrue(secondStarted)
+                    XCTAssertTrue(recorder.isRecording)
+                    XCTAssertEqual(capture.startCount, 1)
+                    XCTAssertEqual(activeChanges, [true])
+                }
+            }
+        }
     }
 
     @MainActor

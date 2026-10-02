@@ -86,7 +86,9 @@ export function createTelegramCallbackMessageActions(params: {
       if (errStr.includes("no text in the message")) {
         try {
           await deleteCallbackMessage();
-        } catch {}
+        } catch {
+          await editCallbackButtons([]).catch(() => {});
+        }
         await replyToCallbackChat(text, editParams);
       } else if (!errStr.includes("message is not modified")) {
         throw editErr;

@@ -167,17 +167,11 @@ describe("sessions_spawn lifecycle", () => {
     const child = ctx.getChild();
     assert(child.runId);
     assert(child.sessionKey);
-    vi.useFakeTimers();
-    try {
-      emitAgentEvent({
-        runId: child.runId,
-        stream: "lifecycle",
-        data: { phase: "end", startedAt: 1234, endedAt: 2345 },
-      });
-      await vi.runAllTimersAsync();
-    } finally {
-      vi.useRealTimers();
-    }
+    emitAgentEvent({
+      runId: child.runId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 1234, endedAt: 2345 },
+    });
     await waitForSessionsSpawnEvent(
       "lifecycle cleanup",
       () =>

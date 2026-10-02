@@ -154,6 +154,7 @@ export function deferAbortedPartialPersistence(
               sessionKey: snapshot.value.sessionKey,
               agentId: snapshot.value.agentId,
               errorMessage: warning,
+              stopReason: "aborted-partial-persistence-failed",
             });
           } catch (error) {
             // Delivery failure cannot retain a finished producer's successor fence.

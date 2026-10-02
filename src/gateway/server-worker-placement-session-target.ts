@@ -165,6 +165,7 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
     cfg: params.getConfig(),
     key: params.sessionKey,
     agentId: params.agentId,
+    preserveQualifiedAddress: true,
     clone: false,
     exactRead: true,
   });
@@ -242,6 +243,7 @@ export async function resolveWorkerPlacementSessionTarget<
       cfg: OpenClawConfig;
       key: string;
       agentId: string;
+      preserveQualifiedAddress: true;
       clone: false;
       exactRead: true;
     }) => Target;
@@ -264,6 +266,7 @@ export async function resolveWorkerPlacementSessionTarget<
     cfg: params.config,
     key: params.sessionKey,
     agentId: params.agentId,
+    preserveQualifiedAddress: true,
     clone: false,
     exactRead: true,
   });
@@ -299,6 +302,7 @@ export async function resolveWorkerPlacementSessionTarget<
       cfg: config,
       key: params.sessionKey,
       agentId: params.agentId,
+      preserveQualifiedAddress: true,
       clone: false,
       exactRead: true,
     });

@@ -27,11 +27,27 @@ vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn,
 }));
-vi.mock("../process/exec.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../process/exec.js")>()),
-  runCommandWithTimeout: vi.fn(),
-  runExec: vi.fn(),
-}));
+vi.mock("../process/exec.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../process/exec.js")>();
+  const { createUpdateUtf8CommandTransportFixture } =
+    await import("./update-cli/update-command-transport.test-support.js");
+  const transport = {
+    run: vi.fn<typeof actual.runCommandWithTimeout>(),
+    exec: vi.fn<typeof actual.runExec>(),
+    hostCwd: process.cwd(),
+    hostEnv: { ...process.env },
+    npmPrefix: "",
+  };
+  return {
+    ...actual,
+    runCommandWithTimeout: transport.run,
+    runExec: transport.exec,
+    runUtf8CommandWithTimeout: await createUpdateUtf8CommandTransportFixture(
+      transport,
+      actual.runUtf8CommandWithTimeout,
+    ),
+  };
+});
 vi.mock("../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: runtimeCapture,

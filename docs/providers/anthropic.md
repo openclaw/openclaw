@@ -787,7 +787,11 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     ```json5
     {
       agents: {
+        ownership: "explicit",
         defaults: {
+          heartbeat: { agentId: "research" },
+          systemAgent: { agentId: "research" },
+          authInheritance: { agentId: "research" },
           model: { primary: "anthropic/claude-opus-4-6" },
           models: {
             "anthropic/claude-opus-4-6": {
@@ -796,10 +800,11 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
           },
         },
         entries: {
-          research: { default: true },
+          research: { workspace: "~/.openclaw/workspace" },
           alerts: { params: { cacheRetention: "none" } },
         },
       },
+      talk: { agentId: "research" },
     }
     ```
 

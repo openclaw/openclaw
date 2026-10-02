@@ -524,7 +524,7 @@ async function runSweepSample(childCount: number): Promise<Sample> {
     resumeRequesterSettleWake: () => {},
     startSubagentAnnounceCleanupFlow: () => true,
     completeCleanupBookkeeping: async () => {},
-    isEndedHookOwnerCurrent: (runId, entry) =>
+    isCleanupOwnerCurrent: (runId, entry) =>
       isSameSubagentRunOwner(runs.get(runId), entry) || !runs.has(runId),
     sessionEffectsHostCurrent: (entry) => entry.execution.suppressSessionEffects !== true,
     shouldSuppressSessionEffects: async (entry) => entry.execution.suppressSessionEffects === true,

@@ -693,7 +693,7 @@ extension AppState {
         self.remoteTokenUnsupported = unsupported
     }
 
-    private static func updatedRemoteGatewayConfig(
+    static func updatedRemoteGatewayConfig(
         current: [String: Any],
         draft: RemoteGatewayConfigDraft) -> (remote: [String: Any], changed: Bool)
     {
@@ -944,7 +944,7 @@ extension AppState {
     func applyConfigOverrides(_ root: [String: Any]) {
         let gatewayFingerprint = Self.gatewayRoutingFingerprint(root)
         if gatewayFingerprint != self.lastObservedGatewayFingerprint {
-            self.advanceGatewayRoutingGeneration()
+            self.gatewayRoutingGeneration &+= 1
             self.lastObservedGatewayFingerprint = gatewayFingerprint
         }
         let previousSelection = self.gatewaySelectionSnapshot()
@@ -1211,7 +1211,7 @@ extension AppState {
 
     private func syncGatewayConfigIfNeeded() {
         guard !self.isApplyingGatewayConfig else { return }
-        self.advanceGatewayRoutingGeneration()
+        self.gatewayRoutingGeneration &+= 1
         guard self.gatewayConfigSyncIsEnabled, !self.isInitializing else { return }
         self.setGatewayConfigSyncState(.pending)
 
@@ -1238,15 +1238,11 @@ extension AppState {
     private func setGatewayConfigSyncState(_ state: GatewayConfigSyncState) {
         guard self.gatewayConfigSyncState != state else { return }
         self.gatewayConfigSyncState = state
-        self.advanceGatewayRoutingGeneration()
+        self.gatewayRoutingGeneration &+= 1
         guard !self.isPreview, state != .pending else { return }
         // Failed persistence must retire the old endpoint; recovery must publish
         // the newly canonical route. Requests also re-check this state directly.
         Task { await GatewayEndpointStore.shared.refresh() }
-    }
-
-    private func advanceGatewayRoutingGeneration() {
-        self.gatewayRoutingGeneration &+= 1
     }
 
     static func gatewayDraftCanPersist(_ draft: GatewayConfigSyncDraft) -> Bool {
@@ -1592,15 +1588,6 @@ extension AppState {
 #if DEBUG
 @MainActor
 extension AppState {
-    static func _testUpdatedRemoteGatewayConfig(
-        current: [String: Any],
-        draft: RemoteGatewayConfigDraft) -> [String: Any]
-    {
-        self.updatedRemoteGatewayConfig(
-            current: current,
-            draft: draft).remote
-    }
-
     func _testEnableGatewayConfigSync() {
         self.gatewayConfigSyncEnabledForTesting = true
     }

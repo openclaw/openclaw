@@ -6,7 +6,7 @@ import {
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { SubagentRegistryMutationRejectedError } from "./subagent-registry-persistence.js";
-import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
+import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
 import type {
   RestartRecoveryParams,
   RestartRecoveryResult,
@@ -16,7 +16,10 @@ import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run
 
 export function createInterruptedRecoveryCoordinator(params: {
   runs: Map<string, SubagentRunRecord>;
-  getRunsForChildSession: (childSessionKey: string) => Iterable<SubagentRunRecord>;
+  getRunsForChildSession: (
+    childSessionKey: string,
+    childAgentId?: string,
+  ) => Iterable<SubagentRunRecord>;
   getGatewayRuntime: () => GatewayRecoveryRuntime | undefined;
   finalizeRun: ReturnType<
     typeof createSubagentRegistryCompletionRuntime
@@ -41,7 +44,7 @@ export function createInterruptedRecoveryCoordinator(params: {
   const observe = () => {
     unsubscribe ??= sessionChanges.subscribe((change) => {
       if ("sessionKey" in change) {
-        for (const entry of params.getRunsForChildSession(change.sessionKey)) {
+        for (const entry of params.getRunsForChildSession(change.sessionKey, change.agentId)) {
           invalidate(entry);
         }
       } else {
@@ -72,9 +75,9 @@ export function createInterruptedRecoveryCoordinator(params: {
       isSameSubagentRunOwner(current, entry) &&
       recoveryFacts(current).every((fact, index) => fact === expected[index]) &&
       isSameSubagentRunOwner(
-        getLatestSubagentRunByChildSessionKeyFromRuns(
-          params.getRunsForChildSession(entry.childSessionKey),
-          entry.childSessionKey,
+        getLatestSubagentRunForChild(
+          params.getRunsForChildSession(entry.childSessionKey, entry.childAgentId),
+          entry,
         ),
         entry,
       )

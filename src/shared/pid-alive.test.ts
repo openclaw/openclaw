@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   getFileLockProcessStartTime,
+  getProcessInstanceStartTime,
   getProcessStartTime,
   isPidAlive,
   isPidDefinitelyDead,
@@ -213,6 +214,7 @@ describe("process start times", () => {
     await withMockedPlatform("linux", async () => {
       expect(getProcessStartTime(process.pid)).toBe(98765);
       expect(getProcessStartTime(42)).toBe(55555);
+      expect(getProcessInstanceStartTime(42)).toBe(55555);
       expect(getProcessStartTime(43)).toBeNull();
       expect(getProcessStartTime(44)).toBe(66666);
       expect(getProcessStartTime(45)).toBeNull();
@@ -266,6 +268,7 @@ describe("process start times", () => {
     return withMockedPlatform("win32", async () => {
       expect(getProcessStartTime(42)).toBeNull();
       expect(getFileLockProcessStartTime(42)).toBe(1_752_000_000_123);
+      expect(getProcessInstanceStartTime(42)).toBeNull();
     });
   });
 

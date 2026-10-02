@@ -703,10 +703,9 @@ final class WatchDirectNode {
     private static func loadConfiguration() -> WatchGatewayConfiguration? {
         guard let raw = GenericPasswordKeychainStore.loadString(
             service: keychainService,
-            account: keychainAccount),
-            let data = raw.data(using: .utf8)
+            account: keychainAccount)
         else { return nil }
-        return try? JSONDecoder().decode(WatchGatewayConfiguration.self, from: data)
+        return try? JSONDecoder().decode(WatchGatewayConfiguration.self, from: Data(raw.utf8))
     }
 
     private static func saveConfiguration(_ configuration: WatchGatewayConfiguration) -> Bool {

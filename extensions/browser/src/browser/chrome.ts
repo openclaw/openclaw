@@ -708,7 +708,6 @@ export type RunningChrome = {
   exe: BrowserExecutable;
   userDataDir: string;
   cdpPort: number;
-  startedAt: number;
   proc: ChildProcess;
   headless?: boolean;
   headlessSource?: ManagedBrowserHeadlessSource;
@@ -1114,13 +1113,11 @@ export async function launchOpenClawChrome(
     };
   };
 
-  const startedAt = Date.now();
   const runningForProcess = (proc: ChildProcess, pid: number): RunningChrome => ({
     pid,
     exe,
     userDataDir,
     cdpPort: profile.cdpPort,
-    startedAt,
     proc,
     headless: headlessMode.headless,
     headlessSource: headlessMode.source,

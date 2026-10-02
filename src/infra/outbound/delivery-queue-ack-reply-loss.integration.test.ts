@@ -15,9 +15,9 @@ import {
   drainMatrixReconnect,
   matrixOutboundForQueueTest,
 } from "./deliver.queue-integration.test-support.js";
-import { holdAcknowledgementReply } from "./delivery-queue-ack.worker.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-namespaces.js";
 import * as queueStorage from "./delivery-queue-storage.js";
+import { holdAcknowledgementReply } from "./delivery-queue-worker-reply.test-support.js";
 import { installDeliveryQueueTmpDirHooks } from "./delivery-queue.test-helpers.js";
 
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;

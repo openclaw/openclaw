@@ -2598,7 +2598,7 @@ struct ChatViewModelTests {
             transport: TestChatTransport(historyResponses: [], listQuestionsHook: { await gate.wait() }))
         viewModel.upsertQuestion(chatQuestionRecord(id: "old-owner"))
         let card = viewModel.questionCards[0]
-        card.toggleOption(questionID: "choice", label: "One")
+        card.toggleOption(questionID: "choice", value: "One")
         let refresh = Task { await viewModel.refreshQuestions() }
         try await waitUntil("pending question refresh before retirement") { await gate.isWaiting }
         viewModel.detachTransport()
@@ -2625,7 +2625,7 @@ struct ChatViewModelTests {
         viewModel.input = "Keep this attachment draft"
         viewModel.upsertQuestion(chatQuestionRecord(id: "retired-account"))
         let card = viewModel.questionCards[0]
-        card.toggleOption(questionID: "choice", label: "One")
+        card.toggleOption(questionID: "choice", value: "One")
         viewModel.retireQuestionAuthority()
         viewModel.upsertQuestion(chatQuestionRecord(id: "late-event"))
         await viewModel.submitQuestion(card)

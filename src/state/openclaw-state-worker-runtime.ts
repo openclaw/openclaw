@@ -3,7 +3,6 @@ import { writeSandboxRegistry } from "../agents/sandbox/registry-write.worker.js
 import { persistSubagentRunChangesInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
 import { replaceWorkspaceAttestationInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
-import { upsertConfigSnapshotAuditRecordInDatabase } from "../config/config-journal-snapshot.kernel.js";
 import {
   patchConfigHealthEntryInDatabase,
   readConfigHealthSnapshotInDatabase,
@@ -16,7 +15,6 @@ import {
 import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication.kernel.js";
 import { mutateSessionGroupCatalogInDatabase } from "../gateway/session-group-catalog.kernel.js";
 import * as deviceAuth from "../infra/device-auth-store.kernel.js";
-import { createSqliteAuditRecordKernel } from "../infra/sqlite-audit-record.kernel.js";
 import {
   readStableSqliteFileGeneration,
   sameSqliteFileGeneration,
@@ -269,18 +267,6 @@ export function executeSharedStateCommand(
     return runOpenClawStateWriteTransaction(({ db }) => {
       return patchConfigHealthEntryInDatabase(db, configPath, patch, expected, updatedAtMs);
     }, writeOptions);
-  }
-  if (command.type === "diagnostic.register") {
-    const { scope, maxEntries, record } = command.input;
-    return runOpenClawStateWriteTransaction(({ db }) => {
-      createSqliteAuditRecordKernel(db, { scope, maxEntries }).register(record);
-    }, writeOptions);
-  }
-  if (command.type === "config.snapshot.upsert") {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => upsertConfigSnapshotAuditRecordInDatabase(db, command.input),
-      writeOptions,
-    );
   }
   throw new Error("Unknown shared-state SQLite command");
 }

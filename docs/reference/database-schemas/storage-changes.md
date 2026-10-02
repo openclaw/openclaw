@@ -472,6 +472,14 @@ outcomes fence affected rows until canonical restore; they never authorize repla
 The digest requires no new column, schema migration, or updater behavior, and also
 detects writes from older processes that cannot maintain a new revision column.
 
+An ordinary follow-up to a completed child creates a new task and execution while
+retaining the completed row's pending parent delivery and receipt. The same row
+transaction fences the predecessor's session effects; its exact execution and
+requester custody still own announcement retries. Each turn reads its own transcript
+result and uses its own announcement idempotency key. Paused continuation and steer
+replacement retain their same-task adoption semantics. No schema migration or
+updater change is required.
+
 Provisional cancellation claims keep registration pending until their owner releases
 or confirms them. Existing persistence notifications wake the wait; work cancellation,
 Gateway drain, and database retirement dispose its subscriptions. A released claim
@@ -1053,9 +1061,12 @@ Gateway user-preference RPCs and Talk appearance reads resolve merged profile ID
 and access preferences in the shared-state worker. Preference writes keep profile
 resolution, quota validation, and mutation in one synchronous write transaction;
 Gateway replies and changed events follow completion. Profile merge and consent
-updates retain their connection-bound kernels. Push preference and notification
-callers still use the synchronous facade until their preparation and publication
-owners migrate together.
+updates retain their connection-bound kernels. Web Push browser settings use the
+same preference workers while holding subscription snapshot custody through
+preference completion. Request and profile authority are rechecked after awaits
+and at transaction and commit admission; replies and preference-change events
+follow guarded completion. Device subscription mutations keep their deferred
+start after snapshot preparation.
 
 Fleet registry reads use a separate read-only worker and remain noncreating;
 listing cells does not join Gateway writable lifecycle admission. The existing

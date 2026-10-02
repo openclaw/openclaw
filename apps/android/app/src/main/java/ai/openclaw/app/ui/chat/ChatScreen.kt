@@ -740,7 +740,6 @@ internal fun ChatScreen(
     pendingRunCount,
     thinkingLevel,
   ) {
-    if (!healthOk) return@LaunchedEffect
     val pending =
       resolvePendingAssistantAutoSend(
         pending = pendingAssistantAutoSend,
@@ -824,14 +823,7 @@ internal fun ChatScreen(
           }
         }
       if (!viewModel.isCurrentChatComposerOwner(ownerSnapshot)) return@withChatShareDraftLease
-      if (
-        !canCommitStagedChatShare(
-          stagedId = share.id,
-          currentHead = viewModel.chatShareDraftForOwner(ownerSnapshot, mainSessionKey),
-          ownerSnapshot = ownerSnapshot,
-          currentOwner = ownerSnapshot,
-        )
-      ) {
+      if (viewModel.chatShareDraftForOwner(ownerSnapshot, mainSessionKey)?.id != share.id) {
         return@withChatShareDraftLease
       }
       // A non-resumed Activity must not acknowledge into its hidden composer; the next visible
@@ -3703,12 +3695,7 @@ private fun ChatEffortSliderTrack(
   optionCount: Int,
   enabled: Boolean,
 ) {
-  val activeFraction =
-    if (optionCount > 1) {
-      (state.value / (optionCount - 1)).coerceIn(0f, 1f)
-    } else {
-      0f
-    }
+  val activeFraction = (state.value / (optionCount - 1)).coerceIn(0f, 1f)
   val inactiveColor = ClawTheme.colors.text.copy(alpha = if (enabled) 0.07f else 0.04f)
   val activeColor = ClawTheme.colors.text.copy(alpha = if (enabled) 0.18f else 0.08f)
   val dotColor = ClawTheme.colors.text.copy(alpha = if (enabled) 0.28f else 0.12f)

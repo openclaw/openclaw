@@ -1,5 +1,6 @@
 /** Bounded native Windows process snapshots; callers own interpretation and control. */
 import { spawnSync } from "node:child_process";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
 import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
@@ -65,12 +66,7 @@ export function readWindowsProcessSnapshot(
   if (processSnapshot.error || processSnapshot.status !== 0) {
     return null;
   }
-  let parsedSnapshot: unknown;
-  try {
-    parsedSnapshot = JSON.parse(processSnapshot.stdout.trim() || "[]");
-  } catch {
-    return null;
-  }
+  const parsedSnapshot = safeParseJson(processSnapshot.stdout.trim() || "[]");
   const entries = (Array.isArray(parsedSnapshot) ? parsedSnapshot : [parsedSnapshot]).filter(
     (entry): entry is WindowsProcessSnapshotEntry => typeof entry === "object" && entry !== null,
   );

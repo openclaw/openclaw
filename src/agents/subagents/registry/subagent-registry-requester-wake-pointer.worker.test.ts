@@ -16,7 +16,7 @@ import {
 import { withSubagentRunReadSnapshot } from "./subagent-registry-state.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 
-vi.mock("./subagent-registry-lifecycle-delivery.js", () => ({
+vi.mock("./subagent-registry-lifecycle-log.js", () => ({
   maskLifecycleIdentifier: () => "synthetic",
 }));
 

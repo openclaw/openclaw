@@ -136,9 +136,9 @@ describe("candidate node runtime compatibility", () => {
       stderr: "",
     });
     await withTestDir({ prefix: "openclaw-node-compat-runtime-" }, async (directory) => {
-      const compatible = assertNodeRuntimeUpdateCompatible(
-        await createCompatibilityFixture(directory),
-      );
+      const fixture = await createCompatibilityFixture(directory);
+      await fs.rm(fixture.statePath);
+      const compatible = assertNodeRuntimeUpdateCompatible(fixture);
       await (accepted
         ? expect(compatible).resolves.toBeUndefined()
         : expect(compatible).rejects.toThrow("No system Node was found."));
@@ -153,9 +153,13 @@ describe("candidate node database compatibility", () => {
       const before = await fs.readFile(fixture.statePath);
       let copiedPath = "";
       mocks.command.mockImplementation(async (argv: string[]) => {
-        expect(argv[1]).toBe(path.join(fixture.packageRoot, "openclaw.mjs"));
-        expect(argv.slice(2, 4)).toEqual(["database", "preflight"]);
-        copiedPath = argv[4] ?? "";
+        const entryIndex = argv.indexOf(path.join(fixture.packageRoot, "openclaw.mjs"));
+        expect(argv.slice(0, entryIndex)).toEqual([
+          process.execPath,
+          ...(process.versions.bun ? ["--no-install"] : []),
+        ]);
+        expect(argv.slice(entryIndex + 1, entryIndex + 3)).toEqual(["database", "preflight"]);
+        copiedPath = argv[entryIndex + 3] ?? "";
         expect(copiedPath).not.toBe(fixture.statePath);
         const snapshot = new (requireNodeSqlite().DatabaseSync)(copiedPath, { readOnly: true });
         try {
@@ -200,7 +204,8 @@ describe("candidate node database compatibility", () => {
         const before = snapshotPreflightSourceManifest(fixture.stateDir);
         const copiedPaths: string[] = [];
         mocks.command.mockImplementation(async (argv: string[]) => {
-          const copiedPath = argv[4] ?? "";
+          const commandIndex = argv.indexOf("database");
+          const copiedPath = argv[commandIndex + 2] ?? "";
           copiedPaths.push(copiedPath);
           for (const suffix of ["-wal", "-shm", "-journal"]) {
             await expect(fs.access(`${copiedPath}${suffix}`)).rejects.toMatchObject({
@@ -222,7 +227,7 @@ describe("candidate node database compatibility", () => {
             code: 0,
             stdout: JSON.stringify({
               schema:
-                argv[3] === "preflight"
+                argv[commandIndex + 1] === "preflight"
                   ? "openclaw.state-schema-preflight.v1"
                   : "openclaw.agent-schema-preflight.v1",
               status: "exact",
@@ -256,7 +261,7 @@ describe("candidate node database compatibility", () => {
         const before = await fs.readFile(fixture.statePath);
         let copiedPath = "";
         mocks.command.mockImplementation(async (argv: string[]) => {
-          copiedPath = argv[4] ?? "";
+          copiedPath = argv[argv.indexOf("database") + 2] ?? "";
           return {
             code,
             stdout: JSON.stringify({

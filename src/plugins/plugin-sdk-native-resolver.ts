@@ -275,13 +275,13 @@ function resolveAliasTargetForParentUrl(
     return undefined;
   }
   try {
-    return resolveAliasTargetForParentPath(request, fileURLToPath(parentUrl));
+    return resolvePluginNativeAliasForParent(request, fileURLToPath(parentUrl));
   } catch {
     return undefined;
   }
 }
 
-function resolveAliasTargetForParentPath(
+export function resolvePluginNativeAliasForParent(
   request: string,
   parentFilename: string | undefined,
 ): string | undefined {
@@ -367,7 +367,7 @@ function installResolver(): void {
         builder.onResolve(
           { filter: BUN_NATIVE_ALIAS_FILTER, namespace: "file" },
           ({ path: request, importer }) => {
-            const target = resolveAliasTargetForParentPath(request, importer);
+            const target = resolvePluginNativeAliasForParent(request, importer);
             return target ? { path: target, namespace: "file" } : undefined;
           },
         );
@@ -381,7 +381,7 @@ function installResolver(): void {
     return;
   }
   moduleWithResolver[nodeResolveFilenameProperty] = ((request, parent, isMain, options) =>
-    resolveAliasTargetForParentPath(request, parent?.filename) ??
+    resolvePluginNativeAliasForParent(request, parent?.filename) ??
     previousResolveFilename(request, parent, isMain, options)) satisfies ResolveFilename;
   moduleWithResolver.registerHooks?.({
     resolve(specifier, context, nextResolve) {

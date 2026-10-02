@@ -8,6 +8,7 @@ import { withTimeout } from "../../../infra/fs-safe.js";
 import type { SqliteWorkerCommand } from "../../../infra/sqlite-worker-contract.js";
 import type { OpenClawStateWorkerOperations } from "../../../state/openclaw-state-worker-contract.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
+import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import type { AdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
@@ -21,7 +22,10 @@ type BoundParent = Awaited<ReturnType<typeof createSpawnBoundaryParent>>;
 type GatewayRuntime = ReturnType<typeof createGatewayInstanceRuntime>;
 
 export function registerOperatorSpawnRollbackCases(options: {
-  createBoundParent: (authority?: AdmittedRunOperatorAuthority) => Promise<BoundParent>;
+  createBoundParent: (
+    authority?: AdmittedRunOperatorAuthority,
+    guestProfileId?: string,
+  ) => Promise<BoundParent>;
   createBoundGateway: (bound: BoundParent) => Promise<{
     context: GatewayRequestContext;
     runtime: GatewayRuntime;
@@ -34,11 +38,23 @@ export function registerOperatorSpawnRollbackCases(options: {
   throwBoundFailures: (failures: unknown[]) => void;
   runEmbeddedAgent: Mock<typeof import("../../embedded-agent.js").runEmbeddedAgent>;
 }) {
-  it.each(["preparation", "accepted registration"] as const)(
-    "rolls back an ordinary operator spawn after revoked-source %s failure",
-    async (phase) => {
-      const source = createSpawnOperatorSource();
-      const bound = await options.createBoundParent(source.authority);
+  it.each([
+    { phase: "preparation", scope: "operator.write" },
+    { phase: "accepted registration", scope: "operator.write" },
+    { phase: "accepted registration", scope: "operator.sessions.write" },
+  ] as const)(
+    "rolls back a $scope spawn after revoked-source $phase failure",
+    async ({ phase, scope: operatorScope }) => {
+      const source = createSpawnOperatorSource(
+        operatorScope === "operator.sessions.write"
+          ? ensureProfileForEmail("rollback-guest@example.test").id
+          : "spawn-operator",
+        [operatorScope],
+      );
+      const bound = await options.createBoundParent(
+        source.authority,
+        operatorScope === "operator.sessions.write" ? source.authority.profileId : undefined,
+      );
       const { context, runtime } = await options.createBoundGateway(bound);
       let childSessionKey: string | undefined;
       let childRunId: string | undefined;

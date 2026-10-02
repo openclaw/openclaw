@@ -58,7 +58,7 @@ describe("chat history registry projection", () => {
     async (sessionScope) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const cfg = {
-          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          agents: { ownership: "explicit", entries: { main: {}, work: {} } },
           session: { scope: sessionScope, mainKey: "home" },
         } satisfies OpenClawConfig;
         await state.writeConfig(cfg);

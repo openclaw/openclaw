@@ -2,7 +2,7 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../../agents/agent-scope-config.js";
 import { createCronOwnerWriteRefusalError } from "../../../config/io.cron-owner-refusal.js";
-import { migratePersistedImplicitMainRoster } from "../../../config/legacy.roster.js";
+import { resolveLegacyAgentRosterOwner } from "../../../config/legacy.roster.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import { resolveCronJobsStorePathFromConfig } from "../../../cron/store/paths.js";
@@ -22,7 +22,7 @@ export async function repairLegacyCronOwnersBeforeConfigWrite(params: {
   const env = params.env ?? process.env;
   const source = params.snapshot.sourceConfigBeforeMigrations ?? params.snapshot.sourceConfig;
   const legacyOwner = [params.snapshot.sourceConfigBeforeMigrations, params.snapshot.parsed]
-    .map((raw) => migratePersistedImplicitMainRoster(raw, { env }).retainedLegacyDefaultAgentId)
+    .map(resolveLegacyAgentRosterOwner)
     .find((owner) => owner !== undefined);
   if (!legacyOwner) {
     return [];

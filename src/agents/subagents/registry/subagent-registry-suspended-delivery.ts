@@ -96,8 +96,8 @@ export async function discardSuspendedPendingFinalDelivery(params: {
     childSessionKey: entry.childSessionKey,
     requesterSessionKey: entry.requesterSessionKey,
   });
-  if (entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep) {
-    await safeRemoveAttachmentsDir(entry, isCurrent);
+  if ((entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep) && isHookCurrent()) {
+    await safeRemoveAttachmentsDir(entry, isHookCurrent);
   }
   assertCurrent();
   if (

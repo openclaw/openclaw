@@ -1158,6 +1158,7 @@ const nodeTestShards = targetNodeTestShards
               "src/agents/sessions/tools/index.test.ts",
               "src/agents/sessions/tools/grep.byte-path.test.ts",
               "src/agents/filesystem-tools-output-contract.test.ts",
+              "test/scripts/check-database-worker-ratchet.test.ts",
             ].some((test) => matchesGlob(test, pattern)),
           );
         }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import {
   resolveAgentWorkspaceDir,
   tryResolveLegacyCompatibilityAgentId,
@@ -20,16 +20,13 @@ describe("legacy inherited auth ownership", () => {
   it.each(["main", "ops"])(
     "keeps migrated %s data separate from a different recorded runtime default",
     (legacyId) => {
-      const migrated = migratePersistedImplicitMainRoster(
-        {
-          agents: {
-            defaults: { workspace: "/srv/shared", systemAgent: { agentId: "research" } },
-            entries: { [legacyId]: { default: true }, research: {} },
-          },
-          session: { store: "/srv/sessions.json" },
+      const migrated = createCanonicalAgentConfigFixture({
+        agents: {
+          defaults: { workspace: "/srv/shared", systemAgent: { agentId: "research" } },
+          entries: { [legacyId]: { default: true }, research: {} },
         },
-        { materializeWorkspace: true },
-      ).config as OpenClawConfig;
+        session: { store: "/srv/sessions.json" },
+      }).config as OpenClawConfig;
       migrated.agents!.ownership = "explicit";
       const reloaded = structuredClone(migrated);
 

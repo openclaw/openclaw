@@ -2,39 +2,11 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type { ConversationKind } from "./conversation-identity.js";
-import {
-  parseStoredConversationRouteContext,
-  type ConversationRouteContext,
-} from "./conversation-route-context.js";
+import type { ConversationReadQuery, ConversationRecord } from "./conversation-registry.types.js";
+import { parseStoredConversationRouteContext } from "./conversation-route-context.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 
 const CONVERSATION_REF_PATTERN = /^conv_[a-f0-9]{32}$/u;
-
-export type ConversationRecord = {
-  conversationRef: string;
-  channel: string;
-  accountId: string;
-  kind: ConversationKind;
-  peerId: string;
-  target: string;
-  parentConversationRef?: string;
-  threadId?: string;
-  nativeChannelId?: string;
-  nativeDirectUserId?: string;
-  label?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  role?: "participant" | "primary" | "related";
-  /** True when this address has been linked to a session in this agent store. */
-  observedFromSession?: true;
-  /** Exact contextual facts from the authoritative inbound route. */
-  routeContext?: ConversationRouteContext;
-  /** True when authoritative ingress observed empty or populated route context. */
-  routeContextObserved?: true;
-  firstSeenAt: number;
-  lastSeenAt: number;
-};
 
 function normalizeConversationRef(value: string): string {
   const normalized = value.trim().toLowerCase();
@@ -123,14 +95,7 @@ function mapConversationRow(row: {
 
 export function selectConversationRowsFromDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
-  options: {
-    channel?: string;
-    conversationRef?: string;
-    limit?: number;
-    primarySession?: { sessionId: string; sessionKey: string };
-    currentBindingOnly?: boolean;
-    currentSession?: { sessionKey: string; sessionId: string };
-  } = {},
+  options: ConversationReadQuery = {},
 ): ConversationRecord[] {
   const db = getNodeSqliteKysely<
     Pick<
