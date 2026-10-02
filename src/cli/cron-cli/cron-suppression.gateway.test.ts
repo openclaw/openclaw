@@ -126,6 +126,7 @@ describe("cron CLI delivery suppression readback", () => {
           const sessionKey = `agent:main:cron:${job.id}:run:${sessionId}`;
           const now = Date.now();
           const dispatch = await dispatchCronDelivery({
+            runId: "suppression-occurrence",
             cfg: {},
             cfgWithAgentDefaults: {},
             deps: {},

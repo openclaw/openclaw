@@ -382,6 +382,7 @@ export async function finalizeCronRun(params: {
   params.markCronRunSessionCleanupHandled();
   const { dispatchCronDelivery, resolveCronDeliveryBestEffort } = await loadCronDeliveryRuntime();
   const deliveryResult = await dispatchCronDelivery({
+    runId: prepared.runId,
     cfg: prepared.input.cfg,
     cfgWithAgentDefaults: prepared.cfgWithAgentDefaults,
     deps: prepared.input.deps,

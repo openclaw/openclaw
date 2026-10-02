@@ -78,6 +78,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
   ] as const)("keeps a cron fallback active until outer $0 settlement", async (outcome) => {
     const sessionKey = "agent:main:cron:lifecycle-fallback";
     const sessionId = "cron-lifecycle-fallback";
+    let occurrenceRunId = "";
     const usesContinuation =
       outcome === "continuation-failure" || outcome === "post-execution-abort";
     const initialSessionEntry = makeCronSessionEntry({ sessionId });
@@ -216,6 +217,12 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
     });
     runEmbeddedAgentMock.mockImplementation(async (runParams: RunEmbeddedAgentParams) => {
       const first = attemptIndex++ === 0;
+      if (first) {
+        occurrenceRunId = runParams.runId;
+        expect(occurrenceRunId).not.toBe(sessionId);
+      } else {
+        expect(runParams.runId).toBe(occurrenceRunId);
+      }
       if (retriesInterimAck && attemptIndex > 2) {
         throw retryPreparationFailure
           ? retryPreparationError
@@ -402,7 +409,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
       expect(
         persist.mock.calls.filter(([params]) => params.event.data?.phase === "error"),
       ).toHaveLength(0);
-      expect(getAgentRunContextOwnership(sessionId)?.clearRequested).toBe(false);
+      expect(getAgentRunContextOwnership(occurrenceRunId)?.clearRequested).toBe(false);
       expect(clearTrackedActiveRun).not.toHaveBeenCalled();
       if (cancelled) {
         controller.abort();
@@ -453,8 +460,8 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
           activityClears: clearTrackedActiveRun.mock.calls.length,
         }).toEqual({ terminalWrites: 1, activityClears: 1 });
         expect(clearTrackedActiveRun).toHaveBeenCalledExactlyOnceWith({
-          runId: sessionId,
-          clientRunId: sessionId,
+          runId: occurrenceRunId,
+          clientRunId: occurrenceRunId,
           sessionKey,
         });
       }
@@ -472,7 +479,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         [
           "chat",
           expect.objectContaining({
-            runId: sessionId,
+            runId: occurrenceRunId,
             state,
             ...(outcome === "cli-timeout" ? { stopReason: "timeout", errorKind: "timeout" } : {}),
           }),

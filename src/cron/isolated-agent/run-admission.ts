@@ -41,6 +41,7 @@ export function prepareCronPromptRunAdmission(params: {
   cfg: OpenClawConfig;
   agentId: string;
   runId: string;
+  sessionId: string;
   sessionKey: string;
   jobId: string;
   channelRequester?: CronAuthenticatedChannelRequester;
@@ -84,7 +85,7 @@ export function prepareCronPromptRunAdmission(params: {
           agentId: params.agentId,
           runId,
           sessionKey: params.sessionKey,
-          sessionId: params.runId,
+          sessionId: params.sessionId,
           requesterAccountId:
             scheduledToolPolicy.mode === "account" ? scheduledToolPolicy.ownerAccountId : undefined,
           scheduled: {

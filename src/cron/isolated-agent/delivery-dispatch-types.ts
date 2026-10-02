@@ -12,6 +12,7 @@ import type { RunCronAgentTurnResult } from "./run.types.js";
 export type SuccessfulCronDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
 
 export type DispatchCronDeliveryParams = {
+  runId: string;
   cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
   deps: CliDeps;

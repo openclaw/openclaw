@@ -469,6 +469,52 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     });
   });
 
+  it("keeps named session history while giving each occurrence its own delivery run", async () => {
+    await useRealCronSessionState();
+    await withTempHome(async (home) => {
+      const sessionKey = "agent:main:retained-steward";
+      const storePath = await writeSessionStoreEntries(home, {
+        [sessionKey]: { sessionId: "retained-session", updatedAt: Date.now(), systemSent: true },
+      });
+      runEmbeddedAgentMock.mockImplementation(async (input: Record<string, unknown>) => ({
+        payloads: [{ text: "A useful source-backed result" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: input.sessionId, provider: "p", model: "m" },
+        },
+      }));
+      const job = {
+        ...makeJob(DEFAULT_AGENT_TURN_PAYLOAD),
+        sessionTarget: "session:retained-steward" as const,
+        delivery: { mode: "announce" as const, channel: "telegram", to: "42" },
+      };
+      const occurrences: Array<{ runId: unknown; sessionId: unknown }> = [];
+      for (let index = 0; index < 2; index++) {
+        const result = await runCronIsolatedAgentTurn({
+          cfg: makeCfg(home, storePath),
+          deps: makeDeps(),
+          job,
+          message: DEFAULT_MESSAGE,
+          sessionKey,
+          lane: "cron",
+        });
+        expect(result.status).toBe("ok");
+        const execution = runEmbeddedAgentMock.mock.calls.at(-1)?.[0];
+        expect(execution).toBeDefined();
+        expect(execution?.runId).not.toBe(execution?.sessionId);
+        expect(dispatchCronDeliveryMock.mock.calls.at(-1)?.[0]).toMatchObject({
+          runId: execution?.runId,
+          sessionId: execution?.sessionId,
+        });
+        occurrences.push({ runId: execution?.runId, sessionId: execution?.sessionId });
+      }
+      expect(occurrences[0]?.sessionId).toBe("retained-session");
+      expect(occurrences[1]?.sessionId).toBe(occurrences[0]?.sessionId);
+      expect(occurrences[0]?.runId).toEqual(expect.any(String));
+      expect(occurrences[1]?.runId).not.toBe(occurrences[0]?.runId);
+    });
+  });
+
   it("preserves an existing cron session label", async () => {
     await useRealCronSessionState();
     await withTempHome(async (home) => {

@@ -1039,6 +1039,7 @@ describe("session.message websocket events", () => {
       };
       const liveEventPromise = waitForSessionMessageEvent(webWs, sessionKey);
       const dispatched = await dispatchCronDelivery({
+        runId: "message-occurrence",
         cfg: { session: { store: storePath } },
         cfgWithAgentDefaults: { session: { store: storePath } },
         deps: {},
