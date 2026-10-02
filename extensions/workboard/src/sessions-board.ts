@@ -44,6 +44,7 @@ export type WorkboardSessionsBoardService = OpenClawPluginService &
 type Owner = Operations & { cancel: () => void; stop: () => Promise<void> };
 type CachedFacts = { sessionId: string; facts: WorkboardSessionFacts; readAt: number };
 const FACTS_MAX_AGE_MS = 10 * 60_000;
+const FACTS_PR_RETRY_MS = 60_000;
 const FACTS_BATCH_SIZE = 40;
 
 function activeState() {
@@ -176,14 +177,14 @@ function createOwner(
       cache.set(sessionKey, { ...previous, readAt: -Infinity });
     }
     if (timer) {
-      clearTimeout(timer);
+      return;
     }
     timer = setTimeout(() => {
       timer = undefined;
       if (!stopped && isCurrent()) {
         params.store.announceChangeEpoch();
       }
-    }, 250);
+    }, 5_000);
     timer.unref?.();
   });
   const read = async (
@@ -201,8 +202,8 @@ function createOwner(
         row.key !== board.sessions.agentSessionKey &&
         (!cached ||
           cached.sessionId !== row.sessionId ||
-          now() - cached.readAt >= FACTS_MAX_AGE_MS ||
-          cached.facts.pullRequestsUnavailable)
+          now() - cached.readAt >=
+            (cached.facts.pullRequestsUnavailable ? FACTS_PR_RETRY_MS : FACTS_MAX_AGE_MS))
       );
     });
     const unavailable = new Set<string>();
@@ -285,7 +286,9 @@ function createOwner(
       factsFailureLogged = false;
     }
     if (sessions.some((session) => session.pullRequestsUnavailable)) {
-      warnings.push("Some pull-request information is unavailable. Refresh to retry.");
+      warnings.push(
+        "Some pull-request information is unavailable. Reread after one minute to retry.",
+      );
     }
     return {
       board,

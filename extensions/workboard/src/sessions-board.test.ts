@@ -244,7 +244,7 @@ describe("Sessions board rules and live facts", () => {
         const changed = vi.spyOn(store, "announceChangeEpoch");
         expect(readSessionFacts).not.toHaveBeenCalled();
         emit(facts("one").key);
-        await vi.advanceTimersByTimeAsync(250);
+        await vi.advanceTimersByTimeAsync(5_000);
         expect(changed).not.toHaveBeenCalled();
         await service.read(BOARD_ID);
         await store.upsertBoard({ id: "second", kind: "sessions" });
@@ -253,10 +253,16 @@ describe("Sessions board rules and live facts", () => {
         changed.mockClear();
         state.facts = [facts("one", { run: "active" }), facts("two")];
         emit(facts("one").key);
-        await vi.advanceTimersByTimeAsync(200);
-        emit(facts("one").key);
-        emit("agent:main:not-cached");
-        await vi.advanceTimersByTimeAsync(249);
+        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({ columnId: "focus" });
+        state.facts = [
+          facts("one", { run: "active", label: "Updated during burst" }),
+          facts("two"),
+        ];
+        for (let event = 1; event < 100; event += 1) {
+          await vi.advanceTimersByTimeAsync(40);
+          emit(event === 99 ? "agent:main:not-cached" : facts("one").key);
+        }
+        await vi.advanceTimersByTimeAsync(1_039);
         expect(changed).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
         expect(changed).toHaveBeenCalledOnce();
@@ -264,29 +270,43 @@ describe("Sessions board rules and live facts", () => {
         expect(readSessionFacts.mock.calls.map(([input]) => input.sessionKeys)).toEqual([
           [facts("one").key, facts("two").key],
           [facts("one").key],
+          [facts("one").key],
         ]);
-        expect(read.sessions[0]).toMatchObject({ columnId: "focus" });
+        expect(read.sessions[0]).toMatchObject({
+          columnId: "focus",
+          label: "Updated during burst",
+        });
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(changed).toHaveBeenCalledOnce();
         emit(facts("two").key);
         await service.stop();
-        await vi.advanceTimersByTimeAsync(250);
+        await vi.advanceTimersByTimeAsync(5_000);
         expect(unsubscribe).toHaveBeenCalledOnce();
         expect(changed).toHaveBeenCalledOnce();
       },
     );
   });
 
-  it("announces newly appended sessions on an empty board and retries unavailable PR facts", async () => {
+  it("announces new sessions on an empty board and retries unavailable PR facts after one minute", async () => {
     await withService({ facts: [] }, async ({ service, store, state, emit, readSessionFacts }) => {
       expect((await service.read(BOARD_ID)).sessions).toEqual([]);
       const changed = vi.spyOn(store, "announceChangeEpoch");
       state.roster = state.facts = [facts("new", { pullRequestsUnavailable: true })];
       emit(facts("new").key);
-      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(changed).toHaveBeenCalledOnce();
       expect((await service.read(BOARD_ID)).warning).toContain(
         "pull-request information is unavailable",
       );
+      const readAt = Date.now();
       state.facts = [facts("new", { pullRequests: [{ number: 1, state: "open" }] })];
+      expect((await service.read(BOARD_ID)).warning).toContain(
+        "pull-request information is unavailable",
+      );
+      vi.setSystemTime(readAt + 59_999);
+      await service.read(BOARD_ID);
+      expect(readSessionFacts).toHaveBeenCalledOnce();
+      vi.setSystemTime(readAt + 60_000);
       expect((await service.read(BOARD_ID)).warning).toBeUndefined();
       expect(readSessionFacts).toHaveBeenCalledTimes(2);
     });
