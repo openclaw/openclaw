@@ -17,6 +17,7 @@ import type {
   createSqliteWorkerTransferOwner,
   createSqliteWorkerTransferReceiver,
 } from "./sqlite-worker-transfer.js";
+import type { WorkerRetirementReason } from "./worker-cpu.js";
 export type RequestBody = SqliteWorkerRequest extends infer Request
   ? Request extends SqliteWorkerRequest
     ? Omit<Request, "id">
@@ -27,7 +28,10 @@ export type Job = {
   signal?: AbortSignal;
   maintenanceScope?: OpenClawDatabaseMaintenanceScope;
   createAdmission?: SqliteWorkerAdmissionFactory;
-  operationAdmission?: { admission: SqliteWorkerOperationAdmission; releaseService(): void };
+  operationAdmission?: {
+    admission: SqliteWorkerOperationAdmission;
+    releaseService(): void;
+  };
   settleNative?: (settlement: SqliteWorkerOperationSettlement) => void;
   nativeDispatched?: boolean;
   requestPosted?: boolean;
@@ -62,6 +66,8 @@ export type Slot = {
   exit: Promise<void>;
   exited: boolean;
   pendingOpens: number;
+  /** Owner-declared exit cause; forwarded so stability bundles stop reporting every exit. */
+  retirementReason?: WorkerRetirementReason;
 };
 export type Actor = {
   target?: SqliteWorkerEphemeralTarget;

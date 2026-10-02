@@ -5,19 +5,33 @@ import { createSqliteWorkerLifecycle } from "./sqlite-worker-broker-lifecycle.js
 import type { Actor } from "./sqlite-worker-broker.types.js";
 
 const createCpuTrackedWorker = vi.hoisted(() => vi.fn());
-vi.mock("./worker-cpu.js", () => ({ createCpuTrackedWorker }));
+const markWorkerRetirement = vi.hoisted(() => vi.fn());
+const loggerError = vi.hoisted(() => vi.fn());
+vi.mock("./worker-cpu.js", () => ({
+  createCpuTrackedWorker,
+  markWorkerRetirement,
+}));
+vi.mock("../logging/logger.js", () => ({
+  getChildLogger: () => ({ error: loggerError, warn: vi.fn() }),
+}));
 vi.mock("./bun-sqlite-library.js", () => ({
   ensureSqliteLibrarySelected: () => {},
 }));
 
 beforeEach(() => {
   createCpuTrackedWorker.mockReset();
+  markWorkerRetirement.mockReset();
+  loggerError.mockReset();
 });
 
 describe("SQLite worker slots", () => {
   // Bun resolves a `file:` preload by stripping "file://", so tsx's URL breaks on Windows.
   it.each([
-    { runtime: "Node", bun: undefined, execArgv: ["--import", import.meta.resolve("tsx/esm")] },
+    {
+      runtime: "Node",
+      bun: undefined,
+      execArgv: ["--import", import.meta.resolve("tsx/esm")],
+    },
     { runtime: "Bun", bun: "1.4.3", execArgv: [] },
   ])("gives $runtime source workers only the TypeScript loader they need", ({ bun, execArgv }) => {
     const versions = Object.getOwnPropertyDescriptor(process, "versions");
@@ -143,4 +157,71 @@ describe("SQLite worker slots", () => {
       expect(actors.size).toBe(0);
     },
   );
+
+  it("attributes an owner-initiated retirement instead of the default exit reason", async () => {
+    const terminating = createDeferredCore();
+    const worker = Object.assign(new EventEmitter(), {
+      unref: vi.fn(),
+      terminate: vi.fn(() => {
+        terminating.resolve();
+        return Promise.resolve(0);
+      }),
+    });
+    createCpuTrackedWorker.mockReturnValueOnce(worker);
+    const lifecycle = createSqliteWorkerLifecycle({
+      explicitSqliteCloseReleasesNativeResources: true,
+      actors: new Map(),
+      slots: new Set(),
+      stores: new Map(),
+      enqueueClose: vi.fn(),
+      fail: () => terminating.resolve(),
+    });
+    const slot = lifecycle.createSlot(
+      {
+        carrierUrl: new URL("file:///openclaw/dist/sqlite-store.worker.js"),
+        moduleUrl: new URL("file:///openclaw/dist/device-auth-store.sqlite.js"),
+        databasePath: "/state/openclaw.sqlite",
+        input: Buffer.alloc(0),
+        existingOnly: false,
+      },
+      false,
+      () => ({ fail: vi.fn(), finish: vi.fn(), dispatch: vi.fn() }),
+    );
+    const retiring = lifecycle.retire(slot);
+    await terminating.promise;
+    worker.emit("exit", 0);
+    await retiring;
+    // The owner drained the slot, so the retirement reads "closed", not a crash.
+    expect(markWorkerRetirement).toHaveBeenCalledWith(worker, "closed");
+  });
+
+  it("records an unclaimed non-zero exit as a failure with its code logged", async () => {
+    const worker = Object.assign(new EventEmitter(), {
+      unref: vi.fn(),
+      terminate: vi.fn(() => Promise.resolve(0)),
+    });
+    createCpuTrackedWorker.mockReturnValueOnce(worker);
+    const lifecycle = createSqliteWorkerLifecycle({
+      explicitSqliteCloseReleasesNativeResources: true,
+      actors: new Map(),
+      slots: new Set(),
+      stores: new Map(),
+      enqueueClose: vi.fn(),
+      fail: vi.fn(),
+    });
+    lifecycle.createSlot(
+      {
+        carrierUrl: new URL("file:///openclaw/dist/sqlite-store.worker.js"),
+        moduleUrl: new URL("file:///openclaw/dist/device-auth-store.sqlite.js"),
+        databasePath: "/state/openclaw.sqlite",
+        input: Buffer.alloc(0),
+        existingOnly: false,
+      },
+      false,
+      () => ({ fail: vi.fn(), finish: vi.fn(), dispatch: vi.fn() }),
+    );
+    worker.emit("exit", 134);
+    expect(markWorkerRetirement).toHaveBeenCalledWith(worker, "failure");
+    expect(loggerError).toHaveBeenCalledWith("SQLite worker exited unexpectedly with code 134");
+  });
 });

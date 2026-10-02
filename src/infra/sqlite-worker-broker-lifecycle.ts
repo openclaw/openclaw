@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { getChildLogger } from "../logging/logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
@@ -20,9 +21,33 @@ import type {
   PreparedSqliteWorkerOpen,
 } from "./sqlite-worker-broker.types.js";
 import { SqliteWorkerError, type SqliteWorkerReply } from "./sqlite-worker-contract.js";
-import { createCpuTrackedWorker } from "./worker-cpu.js";
+import {
+  createCpuTrackedWorker,
+  markWorkerRetirement,
+  type WorkerRetirementReason,
+} from "./worker-cpu.js";
 
 const runOutsideCaller = AsyncLocalStorage.snapshot();
+
+/** Records the owner's reason before native exit; the first claim wins. */
+function markSlotRetirement(slot: Slot, reason: WorkerRetirementReason): void {
+  slot.retirementReason ??= reason;
+}
+
+/** An unclaimed non-zero exit is the only case where the cause is otherwise unknowable. */
+function logSqliteWorkerUnexpectedExit(code: number): void {
+  getChildLogger({ subsystem: "infra/sqlite-worker" }).error(
+    `SQLite worker exited unexpectedly with code ${code}`,
+  );
+}
+
+/** Worker error events previously settled jobs silently; surface the cause once. */
+function logSqliteWorkerFailure(kind: "error" | "messageerror", error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  getChildLogger({ subsystem: "infra/sqlite-worker" }).error(
+    `SQLite worker reported a ${kind}: ${message}`,
+  );
+}
 
 /** The broker retains these maps; this owner drains clients before native close custody. */
 export function createSqliteWorkerLifecycle({
@@ -121,10 +146,24 @@ export function createSqliteWorkerLifecycle({
     const replyOwner = createReplyOwner(slot);
     slots.add(slot);
     worker.on("message", (reply: SqliteWorkerReply) => slot.receiveReply(reply));
-    worker.on("error", (error) => fail(slot, error));
-    worker.on("messageerror", (error) => fail(slot, error));
+    worker.on("error", (error) => {
+      markSlotRetirement(slot, "failure");
+      logSqliteWorkerFailure("error", error);
+      fail(slot, error);
+    });
+    worker.on("messageerror", (error) => {
+      markSlotRetirement(slot, "failure");
+      logSqliteWorkerFailure("messageerror", error);
+      fail(slot, error);
+    });
     worker.once("exit", (code) => {
       slot.exited = true;
+      const unexpected = !slot.retirementReason && code !== 0;
+      if (unexpected) {
+        logSqliteWorkerUnexpectedExit(code);
+      }
+      // Preserve the owner-declared cause; an unclaimed non-zero exit is a crash.
+      markWorkerRetirement(worker, slot.retirementReason ?? (unexpected ? "failure" : "exit"));
       fail(slot, new Error(`SQLite worker exited with code ${code}`));
       for (const actor of slot.actors) {
         actor.backendClosed = true;
@@ -212,7 +251,9 @@ export function createSqliteWorkerLifecycle({
         }
       }
       if (errors.length) {
-        throw new AggregateError(errors, "SQLite actor retirement failed", { cause: errors[0] });
+        throw new AggregateError(errors, "SQLite actor retirement failed", {
+          cause: errors[0],
+        });
       }
     })().finally(() => {
       actor.retirement = undefined;
@@ -286,6 +327,9 @@ export function createSqliteWorkerLifecycle({
     slot.retiring ??= (async () => {
       const errors: unknown[] = [];
       if (!slot.exited) {
+        // Owner-initiated drain: record the cause before terminate() so the exit is not
+        // indistinguishable from a crash in the stability bundle.
+        markSlotRetirement(slot, "closed");
         try {
           await slot.worker.terminate();
         } catch (error) {
