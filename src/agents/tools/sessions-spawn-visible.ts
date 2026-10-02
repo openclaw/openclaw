@@ -97,6 +97,41 @@ function summarizeSessionsSpawnError(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === "string" ? error : "error";
 }
 
+function correctedVisibleSpawnCall(raw: Record<string, unknown>): string {
+  const corrected = Object.fromEntries(
+    [
+      "task",
+      "user",
+      "taskName",
+      "label",
+      "agentId",
+      "model",
+      "runTimeoutSeconds",
+      "cwd",
+      "expectsCompletionMessage",
+      "sandbox",
+      "context",
+      "placement",
+      "group",
+      "projectId",
+      "projectGitUrl",
+      "worktree",
+      "worktreeName",
+      "worktreeBaseRef",
+    ]
+      .filter((key) => raw[key] !== undefined)
+      .map((key) => [key, raw[key]]),
+  );
+  if (
+    readToolStringParam(raw, "worktreeName") ||
+    readToolStringParam(raw, "worktreeBaseRef") ||
+    (isRecord(raw.placement) && raw.placement.kind === "profile")
+  ) {
+    corrected.worktree = true;
+  }
+  return `sessions_spawn(${JSON.stringify({ ...corrected, runtime: "subagent", visible: true })})`;
+}
+
 export async function maybeSpawnVisibleSession(params: {
   raw: Record<string, unknown>;
   task: string;
@@ -114,8 +149,7 @@ export async function maybeSpawnVisibleSession(params: {
   const requestedPlacement = params.raw.placement;
   if (
     requestedPlacement !== undefined &&
-    (!Value.Check(SessionsSpawnPlacementSchema, requestedPlacement) ||
-      (requestedPlacement.kind === "profile" && (params.raw.visible !== true || !worktree)))
+    !Value.Check(SessionsSpawnPlacementSchema, requestedPlacement)
   ) {
     throw new ToolInputError(
       'Omit placement for local execution or use {kind: "local"} with no cloud selectors. ' +
@@ -123,6 +157,11 @@ export async function maybeSpawnVisibleSession(params: {
     );
   }
   const placement = requestedPlacement?.kind === "profile" ? requestedPlacement : undefined;
+  if (placement && (params.raw.visible !== true || !worktree)) {
+    throw new ToolInputError(
+      `Cloud placement requires visible=true and worktree=true. Corrected call: ${correctedVisibleSpawnCall(params.raw)}`,
+    );
+  }
   const worktreeName = readToolStringParam(params.raw, "worktreeName");
   const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
   const group = readToolStringParam(params.raw, "group");
@@ -131,19 +170,25 @@ export async function maybeSpawnVisibleSession(params: {
   if (params.raw.visible !== true) {
     const visibleOnlyParams = [
       ["group", group],
-      ["projectId", projectId],
       ["projectGitUrl", projectGitUrl],
-      ["worktree", worktree],
-      ["worktreeName", worktreeName],
-      ["worktreeBaseRef", worktreeBaseRef],
     ] as const;
     const providedVisibleOnlyParams = visibleOnlyParams
-      .filter(([, value]) => value !== undefined && value !== false)
+      .filter(([, value]) => value !== undefined)
       .map(([name]) => name);
     if (providedVisibleOnlyParams.length > 0) {
       throw new ToolInputError(
         `Parameters require visible=true: ${providedVisibleOnlyParams.join(", ")}. ` +
-          'Omit these options for hidden subagent or ACP runs. For a visible session, use visible=true with runtime="subagent"; omit mode, thread, thinking, lightContext, attachments, attachAs, swarm options, and ACP-only streamTo/resumeSessionId. Worktree names/base refs also require worktree=true.',
+          `Omit these options to keep the hidden runtime. Corrected visible call: ${correctedVisibleSpawnCall(params.raw)}`,
+      );
+    }
+    if (params.runtime === "acp" && (projectId || worktree || worktreeName || worktreeBaseRef)) {
+      throw new ToolInputError(
+        'Managed worktree parameters are unavailable with runtime="acp". Use runtime="subagent" with worktree=true, or omit projectId, worktree, worktreeName, and worktreeBaseRef for ACP.',
+      );
+    }
+    if (!worktree && (projectId || worktreeName || worktreeBaseRef)) {
+      throw new ToolInputError(
+        "Hidden native subagents require worktree=true with projectId, worktreeName, or worktreeBaseRef.",
       );
     }
     return undefined;

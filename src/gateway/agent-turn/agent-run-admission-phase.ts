@@ -40,6 +40,7 @@ import {
   readGatewayDedupeEntry,
   setGatewayDedupeEntries,
 } from "./agent-dedupe.js";
+import { canPrepareAgentSessionWorktree } from "./agent-handler-helpers.js";
 import { resolveAgentRunAdmissionModel } from "./agent-run-admission-model.js";
 import {
   createAgentRunAdmissionRevalidator,
@@ -47,6 +48,7 @@ import {
 } from "./agent-run-admission-revalidation.js";
 import type {
   PrepareAgentRunDispatchParams,
+  PreparedAgentRunModelRuntime,
   PreparedAgentRunDispatch,
 } from "./agent-run-admission-types.js";
 import { admitAgentRestartRecovery } from "./agent-run-recovery-admission.js";
@@ -323,6 +325,7 @@ export async function prepareAgentRunDispatch(
     cleanupPreaccept,
   });
   let replyDispatchRuntime: PreparedReplyDispatchRuntime;
+  let preparedModelRuntime: PreparedAgentRunModelRuntime;
   try {
     const publishedRuntime = await loadPublishedGatewayReplyDispatchRuntime({
       agentId: params.activeSessionAgentId,
@@ -336,35 +339,42 @@ export async function prepareAgentRunDispatch(
       throw new Error(`published reply runtime missing for ${params.activeSessionAgentId}`);
     }
     replyDispatchRuntime = publishedRuntime;
-    preparedModelRuntimeLease = await acquireAgentRunPreparedModelRuntime(
-      {
-        config: replyDispatchRuntime.config,
-        agentId: replyDispatchRuntime.agentId,
-        agentDir: replyDispatchRuntime.agentDir,
-        allowGatewaySubagentBinding: true,
-        workspaceDir: workspaceOverride ?? replyDispatchRuntime.workspaceDir,
-        runtimePluginSelections: [
-          {
-            provider: resolvedRuntime.provider,
-            modelId: resolvedRuntime.model,
-            runtime: resolvedRuntime.harness,
-          },
-        ],
-      },
-      {
-        catalogMode: "static",
-        pluginGeneration: replyDispatchRuntime.pluginGeneration,
-        abortSignal: activeRunAbort.controller.signal,
-      },
-    );
-    const runtimeAdmission = revalidateAdmission();
-    if (runtimeAdmission !== true) {
-      return runtimeAdmission;
+    const acquireRuntime = (workspaceDir: string | undefined) =>
+      acquireAgentRunPreparedModelRuntime(
+        {
+          config: replyDispatchRuntime.config,
+          agentId: replyDispatchRuntime.agentId,
+          agentDir: replyDispatchRuntime.agentDir,
+          allowGatewaySubagentBinding: true,
+          workspaceDir: workspaceDir ?? replyDispatchRuntime.workspaceDir,
+          runtimePluginSelections: [
+            {
+              provider: resolvedRuntime.provider,
+              modelId: resolvedRuntime.model,
+              runtime: resolvedRuntime.harness,
+            },
+          ],
+        },
+        {
+          catalogMode: "static",
+          pluginGeneration: replyDispatchRuntime.pluginGeneration,
+          abortSignal: activeRunAbort.controller.signal,
+        },
+      );
+    if (canPrepareAgentSessionWorktree(params.resolvedSessionKey, params.sessionEntry)) {
+      preparedModelRuntime = { acquireWorkspaceModelRuntime: acquireRuntime };
+    } else {
+      preparedModelRuntimeLease = await acquireRuntime(workspaceOverride);
+      preparedModelRuntime = { preparedModelRuntimeLease };
+      const runtimeAdmission = revalidateAdmission();
+      if (runtimeAdmission !== true) {
+        return runtimeAdmission;
+      }
+      replyDispatchRuntime = Object.freeze({
+        ...replyDispatchRuntime,
+        pluginGeneration: preparedModelRuntimeLease.pluginGeneration,
+      });
     }
-    replyDispatchRuntime = Object.freeze({
-      ...replyDispatchRuntime,
-      pluginGeneration: preparedModelRuntimeLease.pluginGeneration,
-    });
   } catch (err) {
     const failedAdmission = revalidateAdmission();
     if (failedAdmission !== true) {
@@ -645,7 +655,7 @@ export async function prepareAgentRunDispatch(
       resolvedThreadId,
       reactivateSubagent,
       followupCompletion,
-      preparedModelRuntimeLease,
+      ...preparedModelRuntime,
       replyDispatchRuntime,
       unpersistedOffloadedRefs: userTurn.recorder ? [] : params.offloadedRefs,
       userTurn,

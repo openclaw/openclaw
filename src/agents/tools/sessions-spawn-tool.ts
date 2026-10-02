@@ -70,7 +70,7 @@ import {
   maybeSpawnVisibleSession,
   type SessionsSpawnToolOptions,
 } from "./sessions-spawn-visible.js";
-import { VISIBLE_SESSIONS_SPAWN_SCHEMA } from "./sessions-spawn-visible.schema.js";
+import { SESSIONS_SPAWN_SESSION_SCHEMA } from "./sessions-spawn-visible.schema.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
@@ -168,7 +168,7 @@ function createSessionsSpawnToolSchema(params: {
     ),
     runtime: optionalStringEnum(
       params.acpAvailable ? SESSIONS_SPAWN_RUNTIMES : (["subagent"] as const),
-      { description: 'Runtime; visible=true requires "subagent".' },
+      { description: 'Runtime; visible=true and managed worktrees require "subagent".' },
     ),
     agentId: Type.Optional(Type.String()),
     model: Type.Optional(Type.String()),
@@ -204,7 +204,8 @@ function createSessionsSpawnToolSchema(params: {
         : '"run" one-shot. Visible sessions accept omitted/default "run" and remain persistent.',
     }),
     cleanup: optionalStringEnum(["delete", "keep"] as const, {
-      description: "Hidden session cleanup; visible=true always keeps the session.",
+      description:
+        "Hidden session cleanup; delete snapshots and removes its managed worktree through session cleanup. visible=true always keeps the session.",
     }),
     expectsCompletionMessage: Type.Optional(
       Type.Boolean({
@@ -250,7 +251,7 @@ function createSessionsSpawnToolSchema(params: {
           ),
         }
       : {}),
-    ...VISIBLE_SESSIONS_SPAWN_SCHEMA,
+    ...SESSIONS_SPAWN_SESSION_SCHEMA,
 
     attachments: Type.Optional(
       Type.Array(
@@ -601,6 +602,10 @@ export function createSessionsSpawnTool(
         const result = await spawnSubagentDirect(
           {
             ...spawnParams,
+            projectId: readToolStringParam(params, "projectId"),
+            worktree: params.worktree === true,
+            worktreeName: readToolStringParam(params, "worktreeName"),
+            worktreeBaseRef: readToolStringParam(params, "worktreeBaseRef"),
             collect: hasCollectParam ? collect : undefined,
             outputSchema:
               params.outputSchema && typeof params.outputSchema === "object"
