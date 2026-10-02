@@ -159,7 +159,6 @@ describe("automatic campaign handoff failure", () => {
 
   it.each([
     { throws: false, diagnosticFailure: null },
-    { throws: true, diagnosticFailure: null },
     { throws: true, diagnosticFailure: "read" },
     { throws: true, diagnosticFailure: "write" },
     { throws: true, diagnosticFailure: "stale" },

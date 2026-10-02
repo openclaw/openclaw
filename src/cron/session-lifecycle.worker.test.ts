@@ -11,9 +11,11 @@ import {
 } from "../agents/media-generation-activity.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import "../agents/subagents/registry/subagent-registry-maintenance.js";
+import {
+  saveSubagentRegistryChangesToSqlite,
+  saveSubagentRegistryToSqlite,
+} from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryChangesToSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.test-support.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import {
   loadSessionEntry,

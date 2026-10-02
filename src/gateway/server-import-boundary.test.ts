@@ -177,7 +177,7 @@ describe("gateway startup import boundaries", () => {
     expect(serverImpl).not.toContain('from "./server-methods.js"');
     expect(serverImpl).not.toContain('from "./config-reload.js"');
     expect(serverImpl).not.toMatch(
-      /import\s+\{[^}]*resolveSessionKeyForRun[^}]*\}\s+from "\.\/server-session-key\.js"/s,
+      /import\s+\{[^}]*resolveSessionForRun[^}]*\}\s+from "\.\/server-session-key\.js"/s,
     );
     expect(readSource("src/gateway/server-runtime-subscriptions.ts")).toContain(
       'import("./server-session-key.js")',

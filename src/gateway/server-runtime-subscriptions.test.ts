@@ -63,7 +63,7 @@ const auditTestState = vi.hoisted(() => ({
 const agentEventHandlerMocks = vi.hoisted(() => ({
   create: vi.fn(),
   persistLifecycle: vi.fn(async () => {}),
-  resolveSessionKey: vi.fn(() => "agent:main:main"),
+  resolveSession: vi.fn(() => ({ sessionKey: "agent:main:main", agentId: "main" })),
 }));
 const transcriptBroadcastMocks = vi.hoisted(() => ({
   useActualHandler: false,
@@ -141,7 +141,7 @@ vi.mock("./session-lifecycle-state.js", () => ({
 }));
 
 vi.mock("./server-session-key.js", () => ({
-  resolveSessionKeyForRun: agentEventHandlerMocks.resolveSessionKey,
+  resolveSessionForRun: agentEventHandlerMocks.resolveSession,
 }));
 
 vi.mock("./session-transcript-readers.js", async (importOriginal) => {
@@ -191,7 +191,7 @@ describe("startGatewayEventSubscriptions", () => {
     transcriptBroadcastMocks.readMessageById.mockReset();
     runtimeConfigState.value = {};
     agentEventHandlerMocks.persistLifecycle.mockReset().mockResolvedValue(undefined);
-    agentEventHandlerMocks.resolveSessionKey.mockClear();
+    agentEventHandlerMocks.resolveSession.mockClear();
     agentEventHandlerMocks.create.mockReset().mockImplementation(() => {
       throw new Error("server-chat lazy load failure");
     });
@@ -322,6 +322,10 @@ describe("startGatewayEventSubscriptions", () => {
     if (!claimId) {
       throw new Error("expected terminal event claim");
     }
+    agentEventHandlerMocks.resolveSession.mockReturnValueOnce({
+      sessionKey: "global",
+      agentId: "research",
+    });
     agentEventHandlerMocks.persistLifecycle.mockRejectedValue(new Error("terminal write rejected"));
     unsubs = startGatewayEventSubscriptions(createParams());
 
@@ -337,9 +341,13 @@ describe("startGatewayEventSubscriptions", () => {
 
     await waitForFast(() => expect(warn).toHaveBeenCalledTimes(2));
     expect(agentEventHandlerMocks.persistLifecycle).toHaveBeenCalledWith(
-      expect.objectContaining({ assertCommitAllowed: expect.any(Function) }),
+      expect.objectContaining({
+        sessionKey: "global",
+        agentId: "research",
+        assertCommitAllowed: expect.any(Function),
+      }),
     );
-    expect(agentEventHandlerMocks.resolveSessionKey).toHaveBeenCalledWith(runId, {
+    expect(agentEventHandlerMocks.resolveSession).toHaveBeenCalledWith(runId, {
       agentId: undefined,
       projection: undefined,
     });

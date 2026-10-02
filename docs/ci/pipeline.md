@@ -190,11 +190,14 @@ test-project planner to find their owners. The runtime owner admits only qualifi
 configs, exact files, and partitions; ambiguous selections retain Node. No tests
 are removed from the selected inventory.
 
-Worktree removal recovery (`src/agents/worktrees/service.removal-recovery.test.ts`)
-also supports Bun when it is the entire exact selection in `agents-support`.
-Mixed and broad PR selections retain their original Node invocation. Dual-runtime
-validation keeps that complete Node selection and adds only the qualified recovery
-file when the original include patterns select it.
+Worktree removal recovery (`src/agents/worktrees/service.removal-recovery.test.ts`),
+plugin CommonJS interoperability (`src/plugins/plugin-module-generation.interop.test.ts`),
+oxlint configuration (`test/scripts/oxlint-config.test.ts`), and update timeout
+diagnostics (`test/scripts/upgrade-survivor-timeout-diagnostics.test.ts`) also
+support Bun when qualified files make up the entire exact selection in their
+existing scoped owner. Mixed and broad PR selections retain their original Node
+invocation. Dual-runtime validation keeps that complete Node selection and adds
+only the qualified files selected by the original include patterns.
 
 The gateway-client leaf config also supports Bun. Its existing ordered
 gateway-core/gateway-client stripes run the core portion on Node and the client
@@ -267,12 +270,16 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `fc90aa4d9c5dac37f7a63a04f8bd2e25df930c60` with WebKit
+The pinned build pairs Bun `b3684189fe1f3592dfc5f9774060b405a243d9a6` with WebKit
 `fb1167ebf2cb9edc1f6771a2c11771b024693ae0` in prerelease
-`openclaw-v1.4.3-20261001-fc90aa4d9c-webkit-fb1167ebf2`.
-WebKit is unchanged from the previous `17c9ecf9eb` pin. The build adds fixes for
-compile-cache idle wakeups, `v8.queryObjects`, idempotent native readable
-`ref`/`unref`, the default `module-sync` condition, and `process.once` wrapper identity.
+`openclaw-v1.4.3-20261002-b3684189fe-webkit-fb1167ebf2`.
+WebKit is unchanged from the previous `fc90aa4d9c` pin. The build fixes post-script
+`--` argument separators, hidden CommonJS data exports, and truncated large writes
+through native standard I/O pipes. It also switches Darwin file watches to kqueue;
+that change does not affect Linux CI.
+It retains fixes for compile-cache idle wakeups, `v8.queryObjects`, idempotent
+native readable `ref`/`unref`, the default `module-sync` condition, and
+`process.once` wrapper identity.
 It retains the upstream Bun sync through `4b02e1031d` and fixes for thread-safe
 function ownership, shared-environment deletion, and a module-key crash.
 The shared provider-catalog retention test is qualified on this build and runs
@@ -756,7 +763,7 @@ automation account, and SecOps-owned-path cases before declaring enforcement act
 3. `build-artifacts` and the locale checks overlap with the fast Linux lanes. Control UI and native app source PRs exclude generated locale snapshots/resources; their serialized refresh workflows repair and auto-merge isolated generated PRs in the background. Source CI still blocks stale source inventories and unsafe localization calls. Generated PRs, manual CI, and release prep enforce full translated/platform-generated parity. Canonical `release/YYYY.M.PATCH` branches may include release-prep locale repairs with the other generated release output.
 4. Baseline ratchets and selected Node test shards start independently after preflight. Node rows consume the manifest, not ratchet outputs. `ci-gate` still requires every selected ratchet to pass, and the PR failure monitor still cancels remaining work after a ratchet failure. Frozen targets retain their existing ratchet selection.
 5. Current plans with guards run `check:coercion-helpers` there once; fast-only plans retain its standalone row. Other platform and runtime lanes fan out independently: `checks-fast-core` (including startup corpus), `checks-fast-contracts-plugins`, `checks-fast-contracts-channels`, `checks-windows`, `macos-node`, `macos-swift`, `ios-build`, the screenshot shards, and `android`.
-6. For canonical-repository PRs selecting Node rows, `pr-fail-fast` watches the first attempt and classifies failures before cancelling eligible same-repository work. Fork PR monitoring is read-only and never requests cancellation; unknown failures remain blocking through normal lane results. Only that job has `actions: write`. It starts after preflight and observes failures while the installed check planner queues or runs. Clean completion combines preflight's other job counts with the planner's exact admitted check count, published by its successful `CI check job count v1: N` step. It rechecks the current PR head, auto-merge setting, and newer runs before cancellation. Canonical PR reruns let every Node matrix leg finish so inherited main failures cannot cancel the remaining proof needed for an explicit admin landing. Native matrix fail-fast applies only to PRs whose workflow repository is not `openclaw/openclaw`, on any attempt. The monitor checks out trusted base-revision scripts. It adds one 4-vCPU Blacksmith registration per eligible same-repository PR, or uses hosted Ubuntu for fork PRs and under the outage override. The hybrid hosted admission owner reserves that fork row before spending the unchanged 45-row optional-offload budget. Main, manual runs, and retries do not start it. Observation ends before the monitor's job limit; ordinary lane verification still owns the result when no failure was observed. Partial reruns ignore monitor causes and results retained from earlier attempts.
+6. For canonical-repository PRs selecting Node rows, `pr-fail-fast` watches the first attempt and classifies failures before cancelling eligible same-repository work. Fork PR monitoring is read-only and never requests cancellation; unknown failures remain blocking through normal lane results. Only that job has `actions: write`. It starts after preflight and observes failures while the installed check planner queues or runs. Clean completion combines preflight's other job counts with the planner's exact admitted check count, published by its successful `CI check job count v1: N` step. It rechecks the current PR head, auto-merge setting, and newer runs before cancellation. The preflight-owned `ci:no-fail-fast` label fact disables both this monitor and native matrix fail-fast for that run. Add the label before triggering the run; label changes alone do not start CI. Canonical PR reruns let every Node matrix leg finish so inherited main failures cannot cancel the remaining proof needed for an explicit admin landing. Native matrix fail-fast applies only to unlabeled PRs whose workflow repository is not `openclaw/openclaw`, on any attempt. The monitor checks out trusted base-revision scripts. It adds one 4-vCPU Blacksmith registration per eligible same-repository PR, or uses hosted Ubuntu for fork PRs and under the outage override. The hybrid hosted admission owner reserves that fork row before spending the unchanged 45-row optional-offload budget. Main, manual runs, and retries do not start it. Observation ends before the monitor's job limit; ordinary lane verification still owns the result when no failure was observed. Partial reruns ignore monitor causes and results retained from earlier attempts.
 7. `openclaw/ci-gate` waits for every selected lane. Preflight and security must succeed; downstream jobs may skip only when unselected by the manifest and existing event, runner, and compatibility conditions. An unexpected selected skip or any failed or canceled downstream job fails the aggregate. Failure-triggered cancellation preserves the originating job's identity and runs the gate to report failure, including a cancellation request with an uncertain response. The existing critical-path route already keeps trusted hybrid first attempts on the 4-vCPU Blacksmith class. A first-attempt same-repository failure also uses that class under the default or explicit Blacksmith profile so hosted assignment cannot consume the cancellation grace period. Retries and the GitHub outage override retain hosted aggregation. A superseded run without a recorded failure cause skips final reporting and releases its concurrency slot as before.
 
 Bot-authored, same-repository PRs containing only generated native locale data

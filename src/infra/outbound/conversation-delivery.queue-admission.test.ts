@@ -14,6 +14,7 @@ import {
   resolveConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
 import { resolveConversationRouteFingerprint } from "../../config/sessions/conversation-route-fingerprint.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   conversation,
   holdConversationWriterForTest,
@@ -85,10 +86,14 @@ describe("conversation completion through the real delivery queue", () => {
     return registry;
   }
 
-  async function createConversationOperation(operationId: string, message: string) {
+  async function createConversationOperation(
+    operationId: string,
+    message: string,
+    config: OpenClawConfig = {},
+  ) {
     const stateDir = fixtures.tmpDir();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const scope = resolveConversationRegistryScope({ agentId: "main", config: {} });
+    const scope = resolveConversationRegistryScope({ agentId: "main", config });
     onTestFinished(async () => {
       await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
     });
@@ -302,24 +307,14 @@ describe("conversation completion through the real delivery queue", () => {
   it.each(["omitted-default", "legacy-marker"] as const)(
     "resumes created operation custody with a retained %s completion locator",
     async (locator) => {
-      const stateDir = fixtures.tmpDir();
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const legacyMarker = path.join(stateDir, "custom", "sessions.json");
+      const legacyMarker = path.join(fixtures.tmpDir(), "custom", "sessions.json");
       const config = locator === "legacy-marker" ? { session: { store: legacyMarker } } : {};
-      const scope = resolveConversationRegistryScope({ agentId: "main", config });
-      onTestFinished(async () => {
-        await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
-      });
-      registerConversationAddresses(scope, [
-        { ...conversation, deliveryTarget: conversation.target },
-      ]);
       const operationId = "retained-created-operation";
-      await beginConversationDeliveryOperation(scope, {
+      const { stateDir, scope } = await createConversationOperation(
         operationId,
-        operationKind: "send",
-        conversationRef: conversation.conversationRef,
-        message: "retained intent",
-      });
+        "retained intent",
+        config,
+      );
       const completion = {
         kind: "conversation" as const,
         agentId: "main",
@@ -371,21 +366,8 @@ describe("conversation completion through the real delivery queue", () => {
   it.each(["logical-agent", "physical-owner", "physical-path"] as const)(
     "rejects changed %s before completion mutates the operation",
     async (changed) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", fixtures.tmpDir());
-      const scope = resolveConversationRegistryScope({ agentId: "main", config: {} });
-      onTestFinished(async () => {
-        await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
-      });
-      registerConversationAddresses(scope, [
-        { ...conversation, deliveryTarget: conversation.target },
-      ]);
       const operationId = "mismatched-completion";
-      await beginConversationDeliveryOperation(scope, {
-        operationId,
-        operationKind: "send",
-        conversationRef: conversation.conversationRef,
-        message: "captured owner",
-      });
+      const { scope } = await createConversationOperation(operationId, "captured owner");
       const target = captureConversationDeliveryTarget(scope);
       if (changed === "logical-agent") {
         target.agentId = "other";

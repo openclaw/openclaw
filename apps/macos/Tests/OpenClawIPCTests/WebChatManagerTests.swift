@@ -71,12 +71,24 @@ extension WebChatManagerTests {
                 methods.withValue { $0.append(method) }
                 let payload = switch method {
                 case "users.self": #"{"profile":{"id":"me","emails":[]}}"#
-                case "users.list": #"{"profiles":[{"id":"me","emails":[]},{"id":"ada","emails":[],"displayName":"Ada"}]}"#
-                case "worktrees.list": #"{"worktrees":[{"id":"copy","name":"copy","repoFingerprint":"repo","repoRoot":"/work/repo","path":"/work/copy","branch":"launch","baseRef":"main","ownerKind":"session","createdAt":1,"lastActiveAt":2}]}"#
+                case "users.list":
+                    #"""
+                    {"profiles":[{"id":"me","emails":[]},{"id":"ada","emails":[],"displayName":"Ada"}]}
+                    """#
+                case "worktrees.list":
+                    #"""
+                    {"worktrees":[{"id":"copy","name":"copy","repoFingerprint":"repo","repoRoot":"/work/repo",\#
+                    "path":"/work/copy","branch":"launch","baseRef":"main","ownerKind":"session",\#
+                    "createdAt":1,"lastActiveAt":2}]}
+                    """#
                 case "sessions.groups.defaults": #"{"defaults":[{"name":"Research","cwd":"/work/repo","worktree":true}]}"#
                 case "worktrees.branches": #"{"branches":[],"repositoryStatus":"git"}"#
                 case "fs.listDir": #"{"path":"/work","home":"/work","entries":[]}"#
-                case "chat.history": #"{"sessionId":"launch-id","messages":[{"role":"user","content":[{"type":"text","text":"Ready to launch"}]}]}"#
+                case "chat.history":
+                    #"""
+                    {"sessionId":"launch-id","messages":[{"role":"user","content":[{"type":"text",\#
+                    "text":"Ready to launch"}]}]}
+                    """#
                 default: #"{"ok":true}"#
                 }
                 socket.emitReceiveSuccess(.data(Data(
@@ -123,17 +135,22 @@ extension WebChatManagerTests {
             let connection = try #require(commands.sessionMenuActions.connection)
             #expect(connection.allows("sessions.patch"))
             let vm = OpenClawChatViewModel(
-                sessionKey: "agent:research:launch", transport: transport,
+                sessionKey: "agent:research:launch",
+                transport: transport,
                 modelPickerStore: ChatModelPickerStore(defaults: defaults))
             defer { vm.detachTransport() }
             let row = try JSONDecoder().decode(
                 OpenClawChatSessionEntry.self,
-                from: Data(
-                    #"{"key":"agent:research:launch","sessionId":"launch-id","label":"Launch plan","pinned":true,"hiddenFromInvolvingMe":false,"worktree":{"id":"copy"},"owner":{"actor":{"type":"human","id":"ada"}}}"#
-                        .utf8))
+                from: Data(#"""
+                {"key":"agent:research:launch","sessionId":"launch-id","label":"Launch plan","pinned":true,\#
+                "hiddenFromInvolvingMe":false,"worktree":{"id":"copy"},"owner":{"actor":{"type":"human","id":"ada"}}}
+                """#.utf8))
             let sidebar = ChatSessionSidebar(
-                viewModel: vm, query: .constant(""), groups: .constant([]),
-                previews: ChatSessionSidebarPreviews(), menuActions: commands.sessionMenuActions)
+                viewModel: vm,
+                query: .constant(""),
+                groups: .constant([]),
+                previews: ChatSessionSidebarPreviews(),
+                menuActions: commands.sessionMenuActions)
             func makeMenu() -> NSMenu {
                 let menu = NSHostingMenu(rootView: sidebar.contextMenu(for: row, isChild: false))
                 menu.update()
@@ -145,7 +162,7 @@ extension WebChatManagerTests {
             // Admission starts the owner's prefetch; native menu contents need no appearance task.
             await commands.sessionMenuActions.refreshTask?.value
             let menu = makeMenu()
-            for title in ["Assign to…", "Copy", "Open in"] {
+            for title in ["Snooze", "Assign to…", "Copy", "Open in"] {
                 let item = try #require(menu.items.first { $0.title == title })
                 let submenu = try #require(item.submenu)
                 submenu.update()

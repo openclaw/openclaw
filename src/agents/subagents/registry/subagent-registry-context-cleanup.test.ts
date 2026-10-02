@@ -19,6 +19,7 @@ import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpe
 import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
 import { resetSubagentRegistryRuntimeLoadersForTests } from "./subagent-registry-deps.js";
+import * as registryPersistence from "./subagent-registry-persistence.js";
 
 vi.mock("../../../config/config.js", { spy: true });
 vi.mock("../../../context-engine/registry.js", { spy: true });
@@ -67,8 +68,6 @@ describe("subagent registry context cleanup", () => {
     vi.mocked(removeInternalSessionEffectsSession).mockReturnValueOnce(gate.promise);
     let current = true;
     const cleanup = createSubagentRegistryContextCleanup({
-      persist: vi.fn(),
-      persistAsyncOrThrow: vi.fn(async () => {}),
       isEndedHookOwnerCurrent: () => current,
       warn: vi.fn(),
     });
@@ -127,8 +126,6 @@ describe("subagent registry context cleanup", () => {
       return engine;
     });
     const cleanup = createSubagentRegistryContextCleanup({
-      persist: vi.fn(),
-      persistAsyncOrThrow: vi.fn(async () => {}),
       isEndedHookOwnerCurrent: () => false,
       warn: vi.fn(),
     });
@@ -182,10 +179,8 @@ describe("subagent registry context cleanup", () => {
       throw error;
     });
     const warn = vi.fn();
-    const persist = vi.fn();
+    const persist = vi.spyOn(registryPersistence, "mutateSubagentRuns");
     const cleanup = createSubagentRegistryContextCleanup({
-      persist,
-      persistAsyncOrThrow: vi.fn(async () => {}),
       isEndedHookOwnerCurrent: () => true,
       warn,
     });
@@ -199,5 +194,6 @@ describe("subagent registry context cleanup", () => {
     });
     expect(entry.endedHookEmittedAt).toBeUndefined();
     expect(persist).not.toHaveBeenCalled();
+    persist.mockRestore();
   });
 });

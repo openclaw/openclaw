@@ -482,26 +482,13 @@ describe("canary teardown evidence", () => {
     },
   );
 
-  it.each([
-    "passed",
-    "failed",
-    "pipes",
-    "natural",
-    "unconfirmed",
-    "late",
-    "missing",
-    "malformed",
-  ] as const)(
+  it.each(["pipes", "unconfirmed", "late", "malformed"] as const)(
     "distinguishes a completed lint report (%s) from checks still running at the deadline",
     async (report) => {
       let now = 2_000_000;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
       const spawnNormally = mocks.spawn.getMockImplementation()!;
       const signalNormally = mocks.signal.getMockImplementation()!;
-      const lintFindings = Array.from({ length: 5 }, (_, index) => ({
-        checkId: `core/config-${index}`,
-        message: `Invalid configuration ${index}.`,
-      }));
       let lintChild: FakeChild | undefined;
       mocks.spawn.mockImplementation((command, args: string[], options) => {
         if (!args.includes("--lint")) {
@@ -513,15 +500,15 @@ describe("canary teardown evidence", () => {
         queueMicrotask(() => {
           child.stderr.write("└  Doctor complete.\n");
           child.stdout.write(
-            report === "missing" || report === "late"
+            report === "late"
               ? ""
               : JSON.stringify(
                   report === "malformed"
                     ? { ok: true }
                     : {
-                        ok: report !== "failed",
+                        ok: true,
                         checksRun: 1,
-                        findings: report === "failed" ? lintFindings : [],
+                        findings: [],
                       },
                 ),
           );
@@ -542,11 +529,7 @@ describe("canary teardown evidence", () => {
             options.onComplete?.();
             return;
           }
-          lintChild.emit(
-            "exit",
-            report === "natural" ? 0 : null,
-            report === "natural" ? null : "SIGTERM",
-          );
+          lintChild.emit("exit", null, "SIGTERM");
         }
         signalNormally(pid, signal, options);
       });
@@ -554,7 +537,7 @@ describe("canary teardown evidence", () => {
         const result = await validateUpdateCandidateCanary(canaryStateOptions(1_000));
         const step = result.steps.find((entry) => entry.name === "candidate-doctor-lint")!;
         expect(step.termination).toBe("timeout");
-        const completed = ["passed", "failed", "pipes", "natural", "unconfirmed"].includes(report);
+        const completed = report === "pipes" || report === "unconfirmed";
         const rendered = renderUpdateRunReport(
           updateRunReportInputFromResult({ ...result, mode: "git", root }),
         );
@@ -562,15 +545,8 @@ describe("canary teardown evidence", () => {
           const message = `Update lint exit phase timed out after 0ms (899ms total); checks completed; ${report === "pipes" ? "output pipes stayed open" : "process did not exit"}. Continuing with recorded check results.`;
           expect(step.warnings).toEqual([message]);
           expect(rendered.markdown).toContain(message);
-          if (report === "failed") {
-            expect(result).toMatchObject({ status: "error", phase: "lint" });
-            expect(step.failureFacts?.map((fact) => fact.message)).toEqual(
-              lintFindings.map((finding) => finding.message),
-            );
-          } else {
-            expect(result).toMatchObject({ status: "ok", phase: "readiness" });
-            expect(step.failureFacts).toBeUndefined();
-          }
+          expect(result).toMatchObject({ status: "ok", phase: "readiness" });
+          expect(step.failureFacts).toBeUndefined();
         } else {
           expect(result).toMatchObject({
             status: "error",

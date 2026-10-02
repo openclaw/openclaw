@@ -47,12 +47,15 @@ vi.mock("../agents/runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
   return { loadAgentRuntimePluginRegistryHandle: createEmptyPluginRegistry };
 });
-vi.mock("../agents/subagents/registry/subagent-registry-state.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../agents/subagents/registry/subagent-registry-state.js")
-  >()),
-  restoreSubagentRunsFromDisk: () => 0,
-}));
+vi.mock(
+  "../agents/subagents/registry/subagent-registry-persistence.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../agents/subagents/registry/subagent-registry-persistence.js")
+    >()),
+    restoreSubagentRunsFromDisk: async () => 0,
+  }),
+);
 
 export function useQueuedCollectorFixture() {
   const parentKey = "agent:main:dashboard:queued-projection";
@@ -73,7 +76,7 @@ export function useQueuedCollectorFixture() {
   beforeEach(async () => {
     resetGatewayWorkAdmission();
     schedulerTesting.reset();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     resetAgentEventsForTest({ preserveListeners: true });
     state = await createOpenClawTestState({ label: "queued-collector-projection" });
     state.applyEnv();
@@ -144,7 +147,7 @@ export function useQueuedCollectorFixture() {
       clearAgentRunContext(runId);
     }
     launchSignals.clear();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     spawnTesting.setDepsForTest();
     resetAgentEventsForTest({ preserveListeners: true });
     resetGatewayWorkAdmission();

@@ -214,12 +214,13 @@ describe("theme RPC", () => {
     const requester = client(requesterProfileId);
     const other = { ...client(otherProfileId), connId: "other-browser" };
     const broadcastToConnIds = vi.fn();
-    const definition = createThemeDefinitionFixture({
+    const branding = {
       mascot: "none",
       workingPhrases: ["Building", "Compiling"],
       critters: ["penguin", "fedora"],
       avatarHat: "fedora",
-    });
+    } satisfies Parameters<typeof createThemeDefinitionFixture>[0];
+    const definition = createThemeDefinitionFixture(branding);
     expect(
       await invoke(
         "themes.import",
@@ -243,10 +244,7 @@ describe("theme RPC", () => {
         theme: {
           id: "user/xenovessel",
           source: "user",
-          mascot: "none",
-          workingPhrases: ["Building", "Compiling"],
-          critters: ["penguin", "fedora"],
-          avatarHat: "fedora",
+          ...branding,
         },
         definition,
         application: "saved",
@@ -272,12 +270,7 @@ describe("theme RPC", () => {
     expect(await invoke("themes.get", { id: "user/xenovessel" })).toMatchObject({
       ok: true,
       payload: {
-        theme: {
-          mascot: "none",
-          workingPhrases: ["Building", "Compiling"],
-          critters: ["penguin", "fedora"],
-          avatarHat: "fedora",
-        },
+        theme: branding,
         definition,
       },
     });
@@ -287,10 +280,7 @@ describe("theme RPC", () => {
         themes: expect.arrayContaining([
           expect.objectContaining({
             id: "user/xenovessel",
-            mascot: "none",
-            workingPhrases: ["Building", "Compiling"],
-            critters: ["penguin", "fedora"],
-            avatarHat: "fedora",
+            ...branding,
           }),
         ]),
       },

@@ -63,7 +63,7 @@ describe("sessions_spawn lifecycle", () => {
       messages: { queue: {} },
       agents: { defaults: { subagents: { runTimeoutSeconds: 1 } } },
     });
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     hookRunnerMocks.runSubagentSpawned.mockClear();
     hookRunnerMocks.runSubagentProgress.mockClear();
     hookRunnerMocks.runSubagentEnded.mockClear();
@@ -78,7 +78,7 @@ describe("sessions_spawn lifecycle", () => {
     resetSessionsSpawnAnnounceFlowOverride();
     resetSessionsSpawnHookRunnerOverride();
     resetSessionsSpawnConfigOverride();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     await bundleMcpRuntimeTesting.resetSessionMcpRuntimeManager();
     await scheduler.stop();
   });

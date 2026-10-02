@@ -289,7 +289,6 @@ extensions/discord/src/monitor/message-handler.preflight-helpers.ts	5
 extensions/discord/src/monitor/message-handler.preflight.ts	2
 extensions/discord/src/monitor/message-handler.process.ts	1
 extensions/discord/src/monitor/message-text.ts	3
-extensions/discord/src/monitor/model-picker-preferences-migrations.ts	5
 extensions/discord/src/monitor/model-picker-preferences.ts	1
 extensions/discord/src/monitor/model-picker.state.ts	3
 extensions/discord/src/monitor/native-command-reply.ts	2
@@ -2146,7 +2145,6 @@ src/gateway/live-agent-probes.ts	1
 src/gateway/local-request-context.ts	2
 src/gateway/managed-image-attachments.ts	2
 src/gateway/mcp-app-operations.ts	1
-src/gateway/mcp-app-reconstruction.ts	1
 src/gateway/mcp-http.handlers.ts	4
 src/gateway/mcp-http.schema.ts	2
 src/gateway/node-browser-proxy-policy.ts	1
@@ -2396,7 +2394,7 @@ src/infra/restart-handoff.ts	1
 src/infra/restart-sentinel.ts	1
 src/infra/restart-stale-pids.ts	2
 src/infra/retry-policy.ts	3
-src/infra/session-cost-usage-collection.ts	3
+src/infra/session-cost-usage-collection.ts	2
 src/infra/session-cost-usage-pricing.ts	4
 src/infra/session-cost-usage-reporting.ts	5
 src/infra/session-sqlite-migration-readers.ts	2

@@ -1,11 +1,10 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import type {
   GithubIssueSubmitHooks,
   GithubIssueReconcileHooks,
@@ -25,13 +24,7 @@ import { prepareUpdateFailureReport, submitUpdateFailureReport } from "./update-
 import { mockCreatedIssue, mockFallbackIssue } from "./update-failure-report.test-support.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const tempDirs = useStateDatabaseTempDirs();
 
 type PreparedReport = Awaited<ReturnType<typeof prepareUpdateFailureReport>>;
 

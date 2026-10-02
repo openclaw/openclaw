@@ -11,6 +11,7 @@ import type {
   FollowupSuccessor,
 } from "../../agents/subagents/completion/session-followup-completion.types.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry-read.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
@@ -35,13 +36,14 @@ export async function prepareGatewaySubagentRun(params: {
   runId: string;
   getAdmittedSessionId: () => string;
   assertResumeAdmissionCurrent: () => SessionEntry | undefined;
+  onParentResumeAdopted?: (entry: SubagentRunRecord) => void;
   context: Pick<AgentTurnContext, "resolveGatewayContext"> & {
     logGateway: Pick<AgentTurnContext["logGateway"], "warn">;
   };
 }): Promise<{
   pluginSubagent: boolean;
   reactivateSubagent: boolean;
-  adoptParentResume?: () => string;
+  adoptParentResume?: () => Promise<string>;
   followupCompletion?: FollowupCompletionOwner;
   followupSuccessor?: FollowupSuccessor;
 }> {
@@ -73,6 +75,7 @@ export async function prepareGatewaySubagentRun(params: {
         runId: params.runId,
         task: params.request.message,
         assertAdmissionCurrent: params.assertResumeAdmissionCurrent,
+        onAdopted: params.onParentResumeAdopted,
         gatewayContextResolver: params.context.resolveGatewayContext,
       }),
     };

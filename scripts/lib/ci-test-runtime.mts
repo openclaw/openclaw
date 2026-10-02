@@ -77,8 +77,33 @@ const bunCompatibleConfigs = new Set([
   "test/vitest/vitest.extension-memory.config.ts",
   gatewayClientConfig,
 ]);
-// Measured whole-file admission; the rest of agents-support retains Node.
-const bunCompatibleAgentSupportFiles = ["src/agents/worktrees/service.removal-recovery.test.ts"];
+// Whole-file qualification keeps mixed and broad scoped-owner envelopes on Node.
+const bunCompatibleScopedOwners = new Map([
+  [
+    agentVitestProjectOwners.support.config,
+    {
+      dir: agentVitestProjectOwners.support.dir,
+      files: ["src/agents/worktrees/service.removal-recovery.test.ts"],
+    },
+  ],
+  [
+    "test/vitest/vitest.plugins.config.ts",
+    {
+      dir: "src/plugins",
+      files: ["src/plugins/plugin-module-generation.interop.test.ts"],
+    },
+  ],
+  [
+    "test/vitest/vitest.tooling.config.ts",
+    {
+      dir: "",
+      files: [
+        "test/scripts/oxlint-config.test.ts",
+        "test/scripts/upgrade-survivor-timeout-diagnostics.test.ts",
+      ],
+    },
+  ],
+]);
 const embeddedRunOwner = agentVitestProjectOwners.embeddedRun;
 // src/state/openclaw-state-lease.retention.test.ts stays with its default Node owner:
 // cold fs-safe native initialization roots the caller's ALS through custom_gc.
@@ -350,13 +375,15 @@ export function resolveCiTestRuntimeSelections(
     if (plans.every((plan) => bunCompatibleConfigs.has(plan.config))) {
       return completeBun();
     }
+    const config = plans[0]!.config;
+    const scopedOwner = bunCompatibleScopedOwners.get(config);
     if (
-      plans.every((plan) => plan.config === agentVitestProjectOwners.support.config) &&
-      selection.targets.every((file) => bunCompatibleAgentSupportFiles.includes(file))
+      scopedOwner &&
+      plans.every((plan) => plan.config === config) &&
+      selection.targets.every((file) => scopedOwner.files.includes(file))
     ) {
       return completeBun();
     }
-    const config = plans[0]!.config;
     const partition = runtimePartitions.get(config);
     if (
       !partition ||
@@ -408,13 +435,13 @@ export function resolveCiTestRuntimeSelections(
   if (bunCompatibleConfigs.has(config)) {
     return completeBun();
   }
-  if (config === agentVitestProjectOwners.support.config) {
-    const owner = agentVitestProjectOwners.support;
+  const scopedOwner = bunCompatibleScopedOwners.get(config);
+  if (scopedOwner) {
     const includePatterns = selection.includePatterns?.length ? selection.includePatterns : null;
-    const qualifiedPatterns = relativizeScopedPatterns(bunCompatibleAgentSupportFiles, owner.dir);
+    const qualifiedPatterns = relativizeScopedPatterns(scopedOwner.files, scopedOwner.dir);
     if (
       includePatterns &&
-      relativizeScopedPatterns(includePatterns, owner.dir).every((pattern) =>
+      relativizeScopedPatterns(includePatterns, scopedOwner.dir).every((pattern) =>
         qualifiedPatterns.includes(pattern),
       )
     ) {
@@ -422,8 +449,15 @@ export function resolveCiTestRuntimeSelections(
     }
     const bunFiles =
       policy === "dual"
-        ? bunCompatibleAgentSupportFiles.filter((file) =>
-            matchesVitestCliSelection(file, owner.include, [], owner.dir, {}, includePatterns),
+        ? scopedOwner.files.filter((file) =>
+            matchesVitestCliSelection(
+              file,
+              scopedOwner.files,
+              [],
+              scopedOwner.dir,
+              {},
+              includePatterns,
+            ),
           )
         : [];
     return bunFiles.length ? [...node, { runtime: "bun", includePatterns: bunFiles }] : node;

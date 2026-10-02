@@ -1477,6 +1477,22 @@ describe("openclaw agent database", () => {
       INSERT INTO trajectory_runtime_events VALUES
         (1, 'legacy-session', 'run-1', 1, '{"type":"runtime"}', 20);`,
     },
+    {
+      table: "memory_index_sources",
+      schema: `CREATE TABLE memory_index_sources (
+        source_kind TEXT NOT NULL DEFAULT 'memory',
+        source_key TEXT NOT NULL,
+        path TEXT,
+        session_id TEXT,
+        hash TEXT NOT NULL,
+        mtime INTEGER NOT NULL,
+        size INTEGER NOT NULL,
+        PRIMARY KEY (source_kind, source_key),
+        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
+      INSERT INTO memory_index_sources VALUES
+        ('memory', 'notes', 'notes.md', NULL, 'retained-hash', 10, 20);`,
+    },
   ])("refuses pre-July $table without discarding its rows", async ({ table, schema }) => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -3809,35 +3825,6 @@ describe("openclaw agent database", () => {
         revision INTEGER NOT NULL
       );
       INSERT INTO memory_index_state (id, revision) VALUES (1, 1);
-      CREATE TABLE memory_index_sources (
-        source_kind TEXT NOT NULL DEFAULT 'memory',
-        source_key TEXT NOT NULL,
-        path TEXT,
-        session_id TEXT,
-        hash TEXT NOT NULL,
-        mtime INTEGER NOT NULL,
-        size INTEGER NOT NULL,
-        PRIMARY KEY (source_kind, source_key),
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-      );
-      CREATE TABLE memory_index_chunks (
-        id TEXT PRIMARY KEY,
-        source_kind TEXT NOT NULL DEFAULT 'memory',
-        source_key TEXT NOT NULL,
-        path TEXT NOT NULL,
-        session_id TEXT,
-        start_line INTEGER NOT NULL,
-        end_line INTEGER NOT NULL,
-        hash TEXT NOT NULL,
-        model TEXT NOT NULL,
-        text TEXT NOT NULL,
-        embedding BLOB NOT NULL,
-        embedding_dims INTEGER,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (source_kind, source_key)
-          REFERENCES memory_index_sources(source_kind, source_key) ON DELETE CASCADE,
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-      );
       PRAGMA user_version = 1;
     `);
     db.close();
@@ -3905,19 +3892,6 @@ describe("openclaw agent database", () => {
         to: "conversation_id",
       }),
     );
-    const memoryIndexSourceColumns = database.db
-      .prepare("PRAGMA table_info(memory_index_sources)")
-      .all() as Array<{ name?: unknown }>;
-    // Canonical memory-source identity keeps stable integer ids so FTS rowids
-    // survive VACUUM (main's v2 shape, folded into the flip schema).
-    expect(memoryIndexSourceColumns.map((column) => column.name)).toEqual([
-      "id",
-      "path",
-      "source",
-      "hash",
-      "mtime",
-      "size",
-    ]);
   });
 
   it("rejects stale schema_meta indexes before writable initialization", () => {

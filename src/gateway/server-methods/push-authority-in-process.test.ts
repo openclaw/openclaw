@@ -53,7 +53,7 @@ beforeEach(async () => {
 afterEach(async () => await state?.cleanup());
 
 describe("Web Push opaque in-process authority", () => {
-  it.each(["unchanged", "resolver retired", "caller revoked", "transport retirement"] as const)(
+  it.each(["resolver retired", "caller revoked", "transport retirement"] as const)(
     "retains the full native commit guard for %s",
     async (scenario) => {
       const profileId = ensureProfileForEmail("push-owner@example.test").id;

@@ -415,6 +415,7 @@ describe("chat pane embedded panels", () => {
             chat,
             content: content!,
             host: state,
+            requestUpdate: vi.fn(),
           }),
           mount,
         );

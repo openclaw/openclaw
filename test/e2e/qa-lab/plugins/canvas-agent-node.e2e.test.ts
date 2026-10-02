@@ -13,8 +13,11 @@ import { startGatewayServer } from "../../../../src/gateway/server.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getGatewayE2ePortBlock,
 } from "../../../../src/gateway/test-helpers.e2e.js";
+import {
+  acquireGatewayE2ePortBlock,
+  startClaimedGateway,
+} from "../../../../src/gateway/test-helpers.listener.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -105,7 +108,10 @@ describe("Canvas agent tool over a paired macOS node", () => {
           OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
         },
       });
-      const port = await getGatewayE2ePortBlock();
+      const portClaim = await acquireGatewayE2ePortBlock();
+      const { port } = portClaim;
+      // Released here until the started Gateway owns the claim.
+      let unstartedPortClaim: typeof portClaim | undefined = portClaim;
       const gatewayToken = "qa-canvas-agent-node-token";
       const config: OpenClawConfig = {
         gateway: {
@@ -162,12 +168,15 @@ describe("Canvas agent tool over a paired macOS node", () => {
           "default",
           state.workspaceDir,
         );
-        gateway = await startGatewayServer(port, {
-          bind: "loopback",
-          auth: { mode: "token", token: gatewayToken },
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
-        });
+        unstartedPortClaim = undefined;
+        gateway = await startClaimedGateway(portClaim, () =>
+          startGatewayServer(port, {
+            bind: "loopback",
+            auth: { mode: "token", token: gatewayToken },
+            controlUiEnabled: false,
+            sidecarStartup: "defer",
+          }),
+        );
         const operatorIdentity = loadOrCreateDeviceIdentity({
           path: path.join(state.home, "canvas-operator.sqlite"),
         });
@@ -295,6 +304,7 @@ describe("Canvas agent tool over a paired macOS node", () => {
         if (gateway) {
           await gateway.close({ reason: "canvas agent node proof complete" });
         }
+        await unstartedPortClaim?.release();
         restoreActivePluginRegistrySnapshot(previousPluginRegistry);
         await state.cleanup();
       }

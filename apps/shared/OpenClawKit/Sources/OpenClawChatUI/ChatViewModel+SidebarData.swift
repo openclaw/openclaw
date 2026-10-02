@@ -100,7 +100,7 @@ extension OpenClawChatViewModel {
     {
         guard let sidebarData, sidebarData.scopeRevision == scopeRevision, let receipt, let target,
               receipt.matches(target) else { return false }
-        sidebarData.confirmFields(receipt, target: target, field: .unread)
+        sidebarData.confirmFields(receipt, target: target, fields: [.unread])
         if let row = sidebarData.row(key: target.key, agentID: target.agentId), let unread = row.unread {
             self.unreadPatchGuard.confirmReceipt(key: self.sessionMutationIdentity(
                 for: row.key, listedKey: row.key, agentID: row.agentId), unread: unread)

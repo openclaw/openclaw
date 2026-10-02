@@ -36,29 +36,15 @@ function expectSafeProjection(projected: string): void {
 }
 
 describe("Windows extended-length candidate state projection", () => {
-  it("rebases a plain in-root locator under the candidate root", () => {
-    const source = path.join(STATE_ROOT, AGENT_RELATIVE);
-    const projected = resolveUpdateCandidateStatePath(STATE_ROOT, CANARY_ROOT, source);
-    expect(projected).toBe(path.join(CANARY_ROOT, AGENT_RELATIVE));
-    expect(path.relative(CANARY_ROOT, projected)).toBe(AGENT_RELATIVE);
-    expectSafeProjection(projected);
-  });
-
-  it("rebases an extended-length in-root locator without embedding the namespace prefix", () => {
-    const plain = path.join(STATE_ROOT, AGENT_RELATIVE);
-    const projected = resolveUpdateCandidateStatePath(STATE_ROOT, CANARY_ROOT, namespaced(plain));
-    expect(projected).toBe(path.join(CANARY_ROOT, AGENT_RELATIVE));
-    expect(path.relative(CANARY_ROOT, projected)).toBe(AGENT_RELATIVE);
-    expectSafeProjection(projected);
-  });
-
   it("gives plain and extended-length spellings one projection identity", () => {
     const plain = path.join(STATE_ROOT, AGENT_RELATIVE);
+    const target = path.join(CANARY_ROOT, AGENT_RELATIVE);
     expect(resolveUpdateCandidateStateIdentity(STATE_ROOT, namespaced(plain))).toBe(plain);
     expect(resolveUpdateCandidateStateIdentity(STATE_ROOT, plain)).toBe(plain);
     expect(resolveUpdateCandidateStatePath(STATE_ROOT, CANARY_ROOT, namespaced(plain))).toBe(
-      resolveUpdateCandidateStatePath(STATE_ROOT, CANARY_ROOT, plain),
+      target,
     );
+    expect(resolveUpdateCandidateStatePath(STATE_ROOT, CANARY_ROOT, plain)).toBe(target);
   });
 
   it("keeps an extended-length external locator on one hashed projection identity", () => {

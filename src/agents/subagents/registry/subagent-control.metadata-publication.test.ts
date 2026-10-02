@@ -23,12 +23,10 @@ import * as controlSession from "./subagent-control-session.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import * as registryState from "./subagent-registry-state.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 
 const fixture = useSubagentControlFixture();
-const nativeState = await vi.importActual<typeof registryState>("./subagent-registry-state.js");
 
 it.for([
   { replacement: false, competingIdle: false, publication: "tombstone" },
@@ -39,9 +37,6 @@ it.for([
 ])(
   "joins a pending session publication before cancellation $publication (replacement=$replacement, competing idle=$competingIdle)",
   async ({ replacement, competingIdle, publication }, { signal }) => {
-    vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
-      nativeState.persistSubagentRunsToDiskAsyncOrThrow,
-    );
     const parentKey = "agent:main:main";
     const childKey = "agent:main:subagent:pending-kill-publication";
     const runId = "pending-kill-publication";
@@ -343,9 +338,6 @@ it.for([
 );
 
 it("joins a pending session publication before a collector terminal commit", async ({ signal }) => {
-  vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
-    nativeState.persistSubagentRunsToDiskAsyncOrThrow,
-  );
   const parentKey = "agent:main:main";
   const childKey = "agent:main:subagent:pending-collector-publication";
   const runId = "pending-collector-publication";

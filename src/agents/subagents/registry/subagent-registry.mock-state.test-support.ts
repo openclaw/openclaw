@@ -20,11 +20,8 @@ import type {
   SessionIdentityMutationListener,
 } from "../../../sessions/session-lifecycle-events.js";
 import { notifyListeners, registerListener } from "../../../shared/listeners.js";
-import type {
-  persistSubagentRunsToDisk,
-  persistSubagentRunsToDiskOrThrow,
-  restoreSubagentRunsFromDisk,
-} from "./subagent-registry-state.js";
+import type { MockSubagentRegistryRows } from "../../subagent-test-fixtures.test-helpers.js";
+import type { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const noop = () => {};
@@ -122,8 +119,7 @@ export function createSubagentRegistryMockState() {
       notifyListeners(sessionIdentityMutationListeners, mutation),
     ),
     clearSubagentRunsReadCacheForTest: vi.fn(),
-    persistSubagentRunsToDisk: vi.fn<typeof persistSubagentRunsToDisk>(),
-    persistSubagentRunsToDiskOrThrow: vi.fn<typeof persistSubagentRunsToDiskOrThrow>(),
+    persistRegistryRows: vi.fn<MockSubagentRegistryRows>(),
     restoreSubagentRunsFromDisk: vi.fn<typeof restoreSubagentRunsFromDisk>(async () => 0),
     getSubagentRunsSnapshotForRead: vi.fn(
       (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) =>

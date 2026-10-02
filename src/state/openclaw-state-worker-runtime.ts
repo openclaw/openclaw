@@ -1,6 +1,6 @@
 import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.worker.js";
 import { writeSandboxRegistry } from "../agents/sandbox/registry-write.worker.js";
-import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
+import { persistSubagentRunChangesInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
 import { replaceWorkspaceAttestationInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
 import { upsertConfigSnapshotAuditRecordInDatabase } from "../config/config-journal-snapshot.kernel.js";
@@ -21,13 +21,11 @@ import {
   readStableSqliteFileGeneration,
   sameSqliteFileGeneration,
 } from "../infra/sqlite-file-generation.js";
-import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { persistInterruptedUpdateObservation } from "../infra/update-run-interruption-store.js";
 import { recordUpdateRunMutationInWorker } from "../infra/update-run-mutation.worker.js";
 import { reconcileUpdateRunCandidatesInWorker } from "../infra/update-run-reconciliation.worker.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { writeSecretStoreEntryForConfigRefInDatabase } from "../secrets/store/secret-store-config-ref.kernel.js";
 import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
 import { executeSessionStateCommand } from "../sessions/session-state-events.worker.js";
@@ -60,8 +58,6 @@ import type {
 } from "./openclaw-state-worker-contract.js";
 import { stateWorkerRegistry } from "./openclaw-state-worker-registry.js";
 import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
-
-const log = createSubsystemLogger("state/worker");
 
 export { openUpdateRunWriter } from "../infra/update-run-mutation.worker.js";
 
@@ -260,24 +256,7 @@ export function executeSharedStateCommand(
     return executeSessionStateCommand(command, writeOptions);
   }
   if (command.type === "subagents.persistChanges") {
-    const { writeId, values, deleteRunIds } = command.input;
-    let committed = false;
-    try {
-      runOpenClawStateWriteTransaction((writer) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
-        writeSubagentRunValuesInDatabase(writer, values, deleteRunIds);
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: writeId });
-        deferSqlitePostCommitPublication(writer.db, () => {
-          committed = true;
-        });
-      }, writeOptions);
-    } catch (error) {
-      if (!committed) {
-        throw error;
-      }
-      log.warn("Subagent registry write committed before cleanup failed", { error });
-    }
-    return { writeId };
+    return persistSubagentRunChangesInWorker(command.input, writeOptions);
   }
   if (command.type === "backup.recordOutcome") {
     return runOpenClawStateWriteTransaction(

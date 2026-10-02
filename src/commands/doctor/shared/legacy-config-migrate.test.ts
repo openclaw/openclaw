@@ -490,51 +490,6 @@ describe("profile configured tool section migrate", () => {
   });
 });
 
-describe("legacy agent model timeout migrate", () => {
-  it("removes ignored timeoutMs from agent and subagent model selection config", () => {
-    const res = migrateLegacyConfigForTest({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.5",
-            fallbacks: ["anthropic/claude-sonnet-4-6"],
-            timeoutMs: 30_000,
-          },
-          subagents: { model: { primary: "openai/gpt-5.4", timeoutMs: 10_000 } },
-          imageGenerationModel: {
-            primary: "openrouter/openai/gpt-5.4-image-2",
-            timeoutMs: 180_000,
-          },
-          pdfModel: { primary: "openai/gpt-5.5", timeoutMs: 45_000 },
-        },
-        list: [
-          {
-            id: "worker",
-            model: { primary: "openai/gpt-5.4", timeoutMs: 20_000 },
-            subagents: { model: { primary: "openai/gpt-5.4-mini", timeoutMs: 5_000 } },
-          },
-        ],
-      },
-    });
-    expect(res.config?.agents?.defaults?.model).toEqual({
-      primary: "openai/gpt-5.5",
-      fallbacks: ["anthropic/claude-sonnet-4-6"],
-    });
-    expect(res.config?.agents?.defaults?.subagents?.model).toEqual({ primary: "openai/gpt-5.4" });
-    expect(res.config?.agents?.defaults?.mediaModels).toEqual({
-      image: { primary: "openrouter/openai/gpt-5.4-image-2", timeoutMs: 180_000 },
-    });
-    expect(res.config?.agents?.defaults?.pdfModel).toEqual({
-      primary: "openai/gpt-5.5",
-      timeoutMs: 45_000,
-    });
-    expect(res.config?.agents?.list?.[0]?.model).toEqual({ primary: "openai/gpt-5.4" });
-    expect(res.config?.agents?.list?.[0]?.subagents?.model).toEqual({
-      primary: "openai/gpt-5.4-mini",
-    });
-  });
-});
-
 describe("legacy session maintenance migrate", () => {
   it("removes deprecated session.maintenance.rotateBytes", () => {
     const res = migrateLegacyConfigForTest({
