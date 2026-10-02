@@ -15,7 +15,12 @@ function initialBlankDocument(tab) {
  * Owns access mode, durable browser-session pauses, and revocation epochs.
  * Every authority-bearing caller captures an epoch and checks through here.
  */
-export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGroupColor }) {
+export function createTabAccessPolicy({
+  chromeApi = chrome,
+  isSelectedTab,
+  addSelectedTab,
+  getGroupColor,
+}) {
   const deniedTabIds = new Set();
   // Only createTab below mints these records. Group membership and Tab snapshots
   // cannot recreate initial-document ownership after navigation or worker restart.
@@ -34,7 +39,9 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
   let initialized = null;
   let storageChain = Promise.resolve();
   const addTabToGroup = (tabId, created) =>
-    addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, created });
+    addSelectedTab
+      ? addSelectedTab(tabId, created)
+      : addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, created });
 
   const documents = createTabDocumentProvenance({
     access: {
@@ -607,7 +614,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       throw new Error(`tab ${tabId} is paused for OpenClaw`);
     }
     if (state.reason === "not-selected") {
-      throw new Error(`tab ${tabId} is not in the OpenClaw tab group`);
+      throw new Error(`tab ${tabId} is not shared with OpenClaw`);
     }
     if (state.reason === "incognito") {
       throw new Error(`tab ${tabId} is incognito and unavailable to OpenClaw`);

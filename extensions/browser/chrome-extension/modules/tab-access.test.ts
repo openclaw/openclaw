@@ -161,7 +161,7 @@ describe("tab access policy", () => {
     expect((await harness.policy.listAccessibleTabs()).map((tab) => tab.id)).toEqual([1, 2]);
 
     harness.policy.setMode("selected");
-    await expect(harness.policy.requireTab(1)).rejects.toThrow("not in the OpenClaw tab group");
+    await expect(harness.policy.requireTab(1)).rejects.toThrow("not shared with OpenClaw");
     await expect(harness.policy.requireTab(2)).resolves.toMatchObject({ id: 2 });
   });
 
@@ -226,7 +226,7 @@ describe("tab access policy", () => {
     await expect(harness.policy.listAccessibleTabs()).resolves.toEqual([]);
     harness.policy.setMode("selected");
     harness.policy.endTransition();
-    await expect(harness.policy.requireTab(1)).rejects.toThrow("not in the OpenClaw tab group");
+    await expect(harness.policy.requireTab(1)).rejects.toThrow("not shared with OpenClaw");
   });
 
   it("scopes revocation barriers to one tab while keeping captured authority fail closed", async () => {

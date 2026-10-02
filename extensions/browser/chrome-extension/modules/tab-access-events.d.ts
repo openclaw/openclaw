@@ -63,5 +63,6 @@ export function registerTabAccessEvents(options: {
   detachDebugger(tabId: number): Promise<void>;
   pauseTab(tabId: number): void | Promise<void>;
   removeTabFromOpenClawGroup(tabId: number): void | Promise<void>;
+  replaceTabInSelectedScope?(addedTabId: number, removedTabId: number): boolean | Promise<boolean>;
   runAccessMutation(task: () => void | Promise<void>): Promise<void>;
 }): void;

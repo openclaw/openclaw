@@ -12,8 +12,8 @@ import { openAuthenticatedRelaySocket } from "./modules/relay-connection.js";
 // Thin transport between the OpenClaw extension relay (loopback WebSocket) and
 // chrome.debugger. All CDP target synthesis lives server-side in the relay
 // bridge; this worker owns tab eligibility/access and forwards allowed frames.
-// The OpenClaw tab group is the ACL in selected mode and an ownership marker
-// in all-tabs mode.
+// Selected mode uses the OpenClaw tab group until the user explicitly switches
+// to compatibility sharing for browsers with incomplete tab-group support.
 import {
   ACCESS_MODE_SELECTED,
   createPairingConfigStore,
@@ -22,7 +22,7 @@ import {
   toRelayTabInfo,
 } from "./modules/relay-core.js";
 import { createRelayDebugger } from "./modules/relay-debugger.js";
-import { isTabSelected } from "./modules/relay-tab-groups.js";
+import { createSelectedTabsController } from "./modules/selected-tabs.js";
 import { registerTabAccessEvents } from "./modules/tab-access-events.js";
 import { createTabAccessPolicy } from "./modules/tab-access.js";
 
@@ -58,8 +58,12 @@ let retiredCopilotCustodyBlocked = true;
 let tabsSyncTimer = null;
 let accessMutationChain = Promise.resolve();
 const pairingConfigStore = createPairingConfigStore(chrome.storage.local);
+const selectedTabs = createSelectedTabsController({
+  getGroupColor: async () => (await getConfig()).groupColor,
+});
 const tabAccessPolicy = createTabAccessPolicy({
-  isSelectedTab: isTabSelected,
+  isSelectedTab: (tab) => selectedTabs.isSelected(tab),
+  addSelectedTab: (tabId, created) => selectedTabs.add(tabId, created),
   getGroupColor: async () => (await getConfig()).groupColor,
 });
 const relayDebugger = createRelayDebugger({ policy: tabAccessPolicy, requireAutomationAllowed });
@@ -164,13 +168,9 @@ async function focusWindowForTab(tab) {
   }
 }
 
-async function removeTabFromOpenClawGroup(tabId) {
-  try {
-    await chrome.tabs.ungroup([tabId]);
-  } catch {
-    // tab may already be gone
-  }
-}
+const removeTabFromSelectedScope = (tabId) => selectedTabs.remove(tabId);
+const replaceTabInSelectedScope = (addedTabId, removedTabId) =>
+  selectedTabs.replaceTab(addedTabId, removedTabId);
 
 function scheduleTabsSync() {
   if (tabsSyncTimer) {
@@ -602,8 +602,12 @@ const handlePopupMessage = createPopupMessageHandler({
   connectRelay,
   setBadge,
   detachDebugger,
-  removeTabFromOpenClawGroup,
-  addTabToOpenClawGroup: (tabId) => tabAccessPolicy.addTabToGroup(tabId),
+  isTabSelected: (tab) => selectedTabs.isSelected(tab),
+  isSelectedScopeExplicit: () => selectedTabs.isExplicit(),
+  removeTabFromSelectedScope,
+  addTabToSelectedScope: (tabId) => selectedTabs.add(tabId),
+  replaceSelectedScope: (tabId) => selectedTabs.replaceWith(tabId),
+  resetSelectedScope: () => selectedTabs.reset(),
   scheduleTabsSync,
   pauseTab,
 });
@@ -622,7 +626,8 @@ registerTabAccessEvents({
   scheduleTabsSync,
   detachDebugger,
   pauseTab,
-  removeTabFromOpenClawGroup,
+  removeTabFromOpenClawGroup: removeTabFromSelectedScope,
+  replaceTabInSelectedScope,
   runAccessMutation,
 });
 

@@ -1,12 +1,31 @@
 import { OPENCLAW_TAB_GROUP_TITLE } from "./relay-core.js";
 
+const TAB_GROUP_LOOKUP_TIMEOUT_MS = 1_000;
+
+async function boundedGroupLookup(operation) {
+  let timer;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("Chrome tab-group lookup timed out")),
+          TAB_GROUP_LOOKUP_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function isTabSelected(tab) {
   const groupId = tab?.groupId;
   if (!Number.isInteger(groupId) || groupId < 0) {
     return false;
   }
   try {
-    const group = await chrome.tabGroups.get(groupId);
+    const group = await boundedGroupLookup(chrome.tabGroups.get(groupId));
     return group.title === OPENCLAW_TAB_GROUP_TITLE;
   } catch {
     return false;
