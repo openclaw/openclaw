@@ -45,7 +45,7 @@ Separately, the **`node:sqlite` TEXT decoder** in Node 22.23.x, 24.15.0, 25.9.0,
 
 ## Platform consequences
 
-Official Node 24+ binaries require **macOS 13.5+**, so macOS 11 through 13.4 no longer support the Node-based CLI or Gateway. The companion app has separate [macOS requirements](/platforms/macos).
+Official Node 24+ macOS binaries are built for **macOS 13.5+**, the oldest release Node supports. macOS does not block them on older releases, and the CLI and Gateway have been observed running on macOS 12 with official Node 24. OpenClaw does not test or support macOS 11 through 13.4, so features that ship their own native binaries can still fail there. The companion app has separate [macOS requirements](/platforms/macos).
 
 Supported Node lines have no official **Linux ARMv7** builds. Use a 64-bit operating system on compatible ARM hardware, or another supported host.
 
