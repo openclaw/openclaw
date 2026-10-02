@@ -5,6 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { hashConfigRaw } from "../../config/io.read-helpers.js";
+import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import {
   createDeferredConfiguredPluginRepairDoctorResult,
@@ -13,15 +15,30 @@ import {
   writeUpdatePostInstallDoctorResult,
   type UpdatePostInstallDoctorResult,
 } from "../../infra/update-doctor-result.js";
+import {
+  createManagedHandoffLeaseDatabase,
+  leaseQueries,
+} from "../../infra/update-managed-service-handoff-database.js";
+import { parseManagedHandoffLeasePayload } from "../../infra/update-managed-service-handoff-schema.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { isChildProcessTreeAlive } from "../../process/child-process-tree.js";
+import {
+  settleCommandProcessGroups,
+  type CommandProcessIdentity,
+} from "../../process/command-process-custody.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import * as processRunner from "../../process/exec.js";
+import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { waitForPidToExit } from "../../test-utils/process-tree.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { runUpdateDoctorProcess } from "./update-command-doctor-child.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
+import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import { settleUpdateDoctorMaintenance } from "./update-command-maintenance.js";
 import { runPackageUpdateDoctor } from "./update-command-package.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -83,6 +100,40 @@ function doctorOptions(
       ...guards,
     }),
   };
+}
+
+function readHandoffClaims() {
+  const read = createManagedHandoffLeaseDatabase(
+    path.join(root, "tmp", "managed-update-handoffs.sqlite"),
+  );
+  return read(
+    false,
+    (db) =>
+      executeSqliteQuerySync(db, leaseQueries(db).selectFrom("managed_update_handoffs").selectAll())
+        .rows,
+  );
+}
+
+function readCommandClaims() {
+  return readHandoffClaims().filter((row) => {
+    const payload = parseManagedHandoffLeasePayload(row.payload_json);
+    return payload?.version === 2 && payload.action.kind === "update" && payload.action.custody;
+  });
+}
+
+function expectRetainedCommandClaims(writerPid: number, roots: string[]) {
+  const claims = readCommandClaims();
+  expect(claims).toHaveLength(roots.length);
+  expect(claims.map((claim) => claim.install_root.split("/.openclaw-update-child-")[0])).toEqual(
+    expect.arrayContaining(roots),
+  );
+  for (const claim of claims) {
+    expect(parseManagedHandoffLeasePayload(claim.payload_json)).toMatchObject({
+      version: 2,
+      executor: { pid: writerPid },
+      action: { kind: "update", custody: "bound" },
+    });
+  }
 }
 
 it.each([
@@ -279,10 +330,11 @@ it.each([
   },
 );
 
-it("preserves before-input failure after owned child cleanup without input", async () => {
+it("preserves before-input failure after proving the delegated grant was withheld", async () => {
   const runId = randomUUID();
   const runUtf8 = processRunner.runUtf8CommandWithTimeout;
   let childPid: number | undefined;
+  const steps: UpdateStepResult[] = [];
   const work = withUpdateCommandExecutor(runId, async (executor) => {
     const fence = await executor.enter(root, { serviceRoot });
     const opts: UpdateCommandOptions = { run: { runId, env, executorFence: fence } };
@@ -308,12 +360,15 @@ it("preserves before-input failure after owned child cleanup without input", asy
         );
       },
     );
-    await runPackageUpdateDoctor(doctorOptions(runId, fence, guards));
+    await runPackageUpdateDoctor({ ...doctorOptions(runId, fence, guards), results: steps });
   });
-  await expect(work).rejects.toMatchObject({
+  const failure = await work.catch((error: unknown) => error);
+  expect(hasCommandProcessCleanupError(failure)).toBe(false);
+  expect(failure).toMatchObject({
     message: "injected before-input failure after live child binding",
     cleanup: process.platform === "win32" ? "forced" : "cooperative",
   });
+  expect(steps.filter((step) => step.name === "doctor process settlement")).toEqual([]);
   expect(childPid).toBeTypeOf("number");
   if (childPid !== undefined) {
     expect(await waitForPidToExit(childPid)).toBe(true);
@@ -321,3 +376,352 @@ it("preserves before-input failure after owned child cleanup without input", asy
   expect(fs.existsSync(received)).toBe(false);
   expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
 });
+
+it("does not treat standalone input withholding as a delegated no-writer proof", async () => {
+  const original = new Error("Standalone input refused");
+  let pid: number | undefined;
+  const steps: UpdateStepResult[] = [];
+  const failure = await runUpdateDoctorProcess(
+    { runId: randomUUID(), root, onProcessSettlement: (step) => steps.push(step) },
+    [
+      process.execPath,
+      "-e",
+      "process.stdin.on('data', x => require('node:fs').appendFileSync(process.argv[1], x)); process.stdin.resume();",
+      received,
+    ],
+    {
+      cwd: root,
+      input: "must not be delivered",
+      timeoutMs: 5_000,
+      env: {
+        ...env,
+        [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: path.join(root, "standalone-result.json"),
+      },
+      beforeInput: (spawnedPid) => {
+        pid = spawnedPid;
+        throw original;
+      },
+    },
+  ).catch((error: unknown) => error);
+  assert(pid);
+  expect(hasCommandProcessCleanupError(failure)).toBe(true);
+  expect(failure).toMatchObject({ cause: original });
+  expect(steps).toContainEqual(
+    expect.objectContaining({
+      name: "doctor process settlement",
+      exitCode: 1,
+      failureFacts: [
+        expect.objectContaining({
+          code: "doctor-processes-unsettled",
+          message: expect.stringContaining(String(pid)),
+        }),
+      ],
+    }),
+  );
+  expect(await waitForPidToExit(pid)).toBe(true);
+  expect(fs.existsSync(received)).toBe(false);
+  expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
+});
+
+it.skipIf(process.platform === "win32").each([true, false])(
+  "settles a CPU-bound Doctor at its deadline or records unresolved writer identity (identity=%s)",
+  async (identityAvailable) => {
+    const runId = randomUUID();
+    const runUtf8 = processRunner.runUtf8CommandWithTimeout;
+    let childPid: number | undefined;
+    let writer: CommandProcessIdentity | undefined;
+    const steps: UpdateStepResult[] = [];
+    const reportingError = new Error("settlement progress could not be recorded");
+    let reportedFailure: unknown;
+    try {
+      const execution = withUpdateCommandExecutor(runId, async (executor) => {
+        const fence = await executor.enter(root, { serviceRoot });
+        const guards = createUpdateCommandExecutionGuards(
+          { run: { runId, env, executorFence: fence } },
+          root,
+        );
+        vi.spyOn(processRunner, "runUtf8CommandWithTimeout").mockImplementation(
+          async (_argv, options) => {
+            assert(typeof options !== "number");
+            const result = await runUtf8(busyDoctorWriterArgv(identityAvailable), {
+              ...options,
+              beforeInput(pid, argv) {
+                childPid = pid;
+                options.beforeInput?.(pid, argv);
+              },
+            });
+            expect(result, result.stderr).toMatchObject({
+              termination: "timeout",
+              cleanup: "forced",
+              signal: "SIGKILL",
+            });
+            const pid = Number(/Doctor busy (\d+)/.exec(result.stdout)?.[1]);
+            assert(pid > 0, result.stderr);
+            writer = { pid, startedAt: getProcessInstanceStartTime(pid) };
+            return result;
+          },
+        );
+        const step = await runPackageUpdateDoctor({
+          ...doctorOptions(runId, fence, guards),
+          results: steps,
+          progress: {
+            onStepComplete: (step) => {
+              if (identityAvailable || step.name !== "doctor process settlement") {
+                return;
+              }
+              const reporting = Promise.resolve().then(() => {
+                throw reportingError;
+              });
+              // Observe the expected rejection without changing the Promise returned to its owner.
+              void reporting.catch(() => {});
+              return reporting;
+            },
+          },
+        }).catch((error: unknown) => {
+          reportedFailure = error;
+          throw error;
+        });
+        expect(step).toMatchObject({
+          termination: "timeout",
+          signal: "SIGKILL",
+          stdoutTail: expect.stringContaining("Doctor busy"),
+          failureFacts: [expect.objectContaining({ code: "timeout" })],
+        });
+        assert(childPid);
+        expect(isChildProcessTreeAlive({ pid: childPid })).toBe(false);
+        assert(writer);
+        expect(isChildProcessTreeAlive(writer)).toBe(false);
+        expect(steps).toContainEqual(
+          expect.objectContaining({
+            name: "doctor process settlement",
+            exitCode: 0,
+            advisory: expect.objectContaining({
+              message: expect.stringContaining("openclaw update repair"),
+            }),
+          }),
+        );
+        fence.assertCurrent();
+      });
+      if (identityAvailable) {
+        await execution;
+        expect(readCommandClaims()).toEqual([]);
+      } else {
+        const failure = await execution.catch((error: unknown) => error);
+        assert(reportedFailure instanceof AggregateError);
+        expect(reportedFailure.message).toBe("Doctor settlement recording failed");
+        expect(reportedFailure.cause).toBe(reportingError);
+        expect(reportedFailure.errors).toContain(reportingError);
+        expect(reportedFailure.errors.some(hasCommandProcessCleanupError)).toBe(true);
+        expect(hasCommandProcessCleanupError(failure)).toBe(true);
+        assert(writer);
+        expect(isChildProcessTreeAlive(writer)).toBe(true);
+        expectRetainedCommandClaims(writer.pid, [root, serviceRoot]);
+        expect(steps).toContainEqual(
+          expect.objectContaining({
+            name: "doctor process settlement",
+            exitCode: 1,
+            failureFacts: [
+              expect.objectContaining({
+                code: "doctor-processes-unsettled",
+                message: expect.stringContaining(String(writer.pid)),
+              }),
+            ],
+          }),
+        );
+      }
+    } finally {
+      if (writer) {
+        expect(await settleCommandProcessGroups([writer])).toMatchObject({ settled: true });
+      }
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32").each([
+  { identityAvailable: true, frozen: false },
+  { identityAvailable: false, frozen: false },
+  { identityAvailable: true, frozen: true },
+])(
+  "settles standalone Doctor writers after output capture rejects (identity=$identityAvailable, frozen=$frozen)",
+  async ({ identityAvailable, frozen }) => {
+    const original = new Error("Doctor output observer failed");
+    if (frozen) {
+      Object.freeze(original);
+    }
+    const steps: UpdateStepResult[] = [];
+    let output = "";
+    let writer: CommandProcessIdentity | undefined;
+    let doctorPid: number | undefined;
+    try {
+      const error = await runUpdateDoctorProcess(
+        { runId: randomUUID(), root, onProcessSettlement: (step) => steps.push(step) },
+        busyDoctorWriterArgv(identityAvailable),
+        {
+          cwd: root,
+          input: "",
+          timeoutMs: 5_000,
+          env: {
+            ...env,
+            [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: path.join(root, "doctor-result.json"),
+          },
+          beforeInput: (pid) => {
+            doctorPid = pid;
+          },
+          onOutputChunk: (chunk, stream) => {
+            if (stream !== "stdout") {
+              return;
+            }
+            output += chunk.toString();
+            const match = /Doctor busy (\d+)/.exec(output);
+            if (match) {
+              const pid = Number(match[1]);
+              writer = { pid, startedAt: getProcessInstanceStartTime(pid) };
+              throw original;
+            }
+          },
+        },
+      ).catch((cause: unknown) => cause);
+      assert(doctorPid);
+      assert(writer, output);
+      expect(isChildProcessTreeAlive({ pid: doctorPid })).toBe(false);
+      expect(isChildProcessTreeAlive(writer)).toBe(!identityAvailable);
+      expect(hasCommandProcessCleanupError(error)).toBe(!identityAvailable);
+      if (identityAvailable) {
+        expect(readCommandClaims()).toEqual([]);
+        expect(readHandoffClaims().find((claim) => claim.install_root === root)).toBeUndefined();
+      } else {
+        expectRetainedCommandClaims(writer.pid, [root]);
+        const anchor = readHandoffClaims().find((claim) => claim.install_root === root);
+        assert(anchor);
+        expect(anchor.owner).toMatch(/^doctor:/);
+        expect(parseManagedHandoffLeasePayload(anchor.payload_json)).toMatchObject({
+          version: 2,
+          helper: { pid: doctorPid },
+          executor: { pid: doctorPid },
+          action: { kind: "update" },
+        });
+      }
+      if (identityAvailable) {
+        if (frozen) {
+          expect(error).toMatchObject({ message: original.message, cause: original });
+        } else {
+          expect(error).toBe(original);
+        }
+        expect(steps).toContainEqual(
+          expect.objectContaining({
+            name: "doctor process settlement",
+            exitCode: 0,
+            advisory: expect.objectContaining({
+              message: expect.stringContaining("openclaw update repair"),
+            }),
+          }),
+        );
+      } else {
+        expect(error).toMatchObject({ cause: original });
+        expect(steps).toContainEqual(
+          expect.objectContaining({
+            name: "doctor process settlement",
+            exitCode: 1,
+            failureFacts: [
+              expect.objectContaining({
+                code: "doctor-processes-unsettled",
+                message: expect.stringContaining(String(writer.pid)),
+              }),
+            ],
+          }),
+        );
+      }
+      const restore = vi.fn(async () => {});
+      await settleUpdateDoctorMaintenance(
+        { error },
+        restore,
+        async () => {},
+        "Doctor recovery failed",
+      );
+      expect(restore).toHaveBeenCalledTimes(identityAvailable ? 1 : 0);
+    } finally {
+      if (writer) {
+        expect(await settleCommandProcessGroups([writer])).toMatchObject({ settled: true });
+      }
+    }
+  },
+);
+
+it("does not invent unsettled writers when the Doctor executable never starts", async () => {
+  const resultPath = path.join(root, "doctor-not-started.json");
+  const steps: UpdateStepResult[] = [];
+  const error = await runUpdateDoctorProcess(
+    { runId: randomUUID(), root, onProcessSettlement: (step) => steps.push(step) },
+    [path.join(root, "missing-doctor-executable")],
+    {
+      cwd: root,
+      timeoutMs: 1_000,
+      env: { ...env, [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: resultPath },
+    },
+  ).catch((cause: unknown) => cause);
+  expect(error).toMatchObject({ code: "ENOENT" });
+  expect(hasCommandProcessCleanupError(error)).toBe(false);
+  expect(steps).toEqual([]);
+  expect(fs.existsSync(`${resultPath}.processes`)).toBe(false);
+});
+
+function busyDoctorWriterArgv(identityAvailable: boolean): string[] {
+  const custodyModule = resolveRuntimeWorkerUrl({
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../infra/update-doctor-process-custody",
+    distWorkerPath: "infra/update-doctor-process-custody.js",
+  });
+  const spawnModule = resolveRuntimeWorkerUrl({
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../process/exec-spawn",
+    distWorkerPath: "process/exec-spawn.js",
+  });
+  const executorModule = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor);
+  return [
+    process.execPath,
+    ...(custodyModule.pathname.endsWith(".ts")
+      ? ["--import", new URL("../../../scripts/tsx.mjs", import.meta.url).href]
+      : []),
+    "--input-type=module",
+    "-e",
+    `
+                import { once } from 'node:events';
+                import { writeSync } from 'node:fs';
+                import { retainUpdateDoctorProcesses } from ${JSON.stringify(custodyModule.href)};
+                import { withCommandProcessScope, spawnCommand } from ${JSON.stringify(spawnModule.href)};
+                process.on('SIGTERM', () => {});
+                  let input = '';
+                  process.stdin.setEncoding('utf8');
+                  process.stdin.on('data', chunk => { input += chunk; });
+                  process.stdin.resume();
+                  process.stdin.on('end', async () => {
+                    const run = async (fence, commandAuthority) => {
+                    const custody = await retainUpdateDoctorProcesses(fence?.assertCurrent, commandAuthority);
+                    const reserve = custody.reserve;
+                    if (!${identityAvailable}) custody.reserve = (...args) => {
+                      const slot = reserve(...args);
+                      return { ...slot, spawned: ({ pid }) => slot.spawned({ pid, startedAt: null }) };
+                    };
+                    await withCommandProcessScope(async () => {
+                    const probe = await spawnCommand([${JSON.stringify(path.join(root, "missing-doctor-probe"))}],
+                      { stdio: 'ignore', reject: false });
+                    if (probe.code !== 'ENOENT') throw new Error('Expected a failed Doctor probe');
+                    const child = spawnCommand([process.execPath, '-e',
+                      "process.on('SIGTERM', () => {}); process.stdout.write('ready'); for (;;) {}"
+                    ], { stdio: ['ignore', 'pipe', 'ignore'], buffer: false, reject: false });
+                    await once(child.stdout, 'data');
+                    writeSync(1, 'Doctor busy ' + child.pid + '\\n');
+                    for (;;) {}
+                    }, undefined, custody);
+                    };
+                    if (input) {
+                      const { withDelegatedUpdateCommandExecutor } = await import(${JSON.stringify(executorModule.href)});
+                      const doctor = JSON.parse(input);
+                      await withDelegatedUpdateCommandExecutor(doctor.executor, doctor.runId, doctor.root, run);
+                    } else {
+                      await run();
+                    }
+                });
+              `,
+  ];
+}

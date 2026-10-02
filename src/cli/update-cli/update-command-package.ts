@@ -1,5 +1,4 @@
 import path from "node:path";
-import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveInstallWorkTimeoutMs } from "../../infra/install-mode-options.js";
@@ -14,11 +13,9 @@ import {
   markPackagePostInstallDoctorAdvisory,
 } from "../../infra/package-update-verification-step.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import {
   formatUpdateDoctorConfigWriteRefusal,
   getUpdateDoctorConfigFailureReason,
-  type UpdateDoctorConfigChange,
 } from "../../infra/update-doctor-config.js";
 import {
   consumeUpdatePostInstallDoctorResult,
@@ -38,9 +35,10 @@ import {
   verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
-import type { UpdateRequester } from "../../infra/update-requester-authority.js";
-import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
-import { normalizeFallbackFailureReason } from "../../infra/update-runner-command.js";
+import {
+  normalizeFallbackFailureReason,
+  reportUpdateStepCompletion,
+} from "../../infra/update-runner-command.js";
 import {
   buildUpdateDoctorEnv,
   resolveUpdateDoctorExecutionPolicy,
@@ -69,14 +67,9 @@ import {
 } from "./update-command-config-snapshot.js";
 import { recordUpdateDatabaseWrites } from "./update-command-database-receipts.js";
 import { withUpdateDoctorChild } from "./update-command-doctor-child.js";
+import type { PackageDoctorContext } from "./update-command-doctor-context.js";
+import { readPackageUpdateIdentity } from "./update-command-package-identity.js";
 import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
-export async function readPackageUpdateIdentity(root: string) {
-  const [version, buildId] = await Promise.all([
-    readPackageVersion(root),
-    readBuiltGatewayBuildId(root),
-  ]);
-  return { version, ...(buildId ? { buildId } : {}) };
-}
 
 type PackageDoctorOptions = {
   root: string;
@@ -88,52 +81,8 @@ type PackageDoctorOptions = {
   invocationCwd?: string;
   nodeRunner?: string;
   onConfigSnapshot?: (snapshot: UpdateConfigSnapshot) => void;
-  getDoctorContext?: () =>
-    | {
-        runId: string;
-        executorFence: UpdateRecoveryFence;
-        requester?: Readonly<UpdateRequester>;
-        inputHash: string;
-        changes: UpdateDoctorConfigChange[];
-        databaseBackup?: UpdateDatabaseBackup;
-        assertCurrent: () => void;
-        assertBoundChildCurrent: () => void;
-        onStateHandoff?: () => void;
-      }
-    | undefined;
+  getDoctorContext?: () => PackageDoctorContext | undefined;
 };
-
-export function preparePackageDoctorContext(params: {
-  capable: boolean;
-  runId?: string;
-  executorFence?: UpdateRecoveryFence;
-  requester?: Readonly<UpdateRequester>;
-  inputHash?: string | null;
-  changes: UpdateDoctorConfigChange[];
-  databaseBackup?: UpdateDatabaseBackup;
-  assertCurrent: () => void;
-  assertBoundChildCurrent: () => void;
-  onStateHandoff?: () => void;
-}) {
-  params.assertCurrent();
-  if (!params.capable) {
-    return undefined;
-  }
-  if (!params.runId || !params.executorFence || params.inputHash === undefined) {
-    throw new Error("Validated Doctor requires its live update executor and captured config hash.");
-  }
-  return {
-    runId: params.runId,
-    executorFence: params.executorFence,
-    requester: params.requester,
-    inputHash: params.inputHash ?? hashConfigRaw(null),
-    changes: params.changes,
-    databaseBackup: params.databaseBackup,
-    assertCurrent: params.assertCurrent,
-    assertBoundChildCurrent: params.assertBoundChildCurrent,
-    onStateHandoff: params.onStateHandoff,
-  };
-}
 
 export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   const context = params.getDoctorContext?.();
@@ -344,6 +293,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     return doctorStep;
   };
   const completedSteps: UpdateStepResult[] = [];
+  let processSettlement: UpdateStepResult | undefined;
   const runDoctor = (runCommand?: Parameters<typeof runUpdateStep>[0]["runCommand"]) =>
     runUpdateStep({
       name: `${CLI_NAME} doctor`,
@@ -371,7 +321,13 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
         ? await withUpdateDoctorChild(
             {
               root: params.root,
-              context: { ...context, assertRequesterCurrent: context.assertBoundChildCurrent },
+              context: {
+                ...context,
+                assertRequesterCurrent: context.assertBoundChildCurrent,
+                onProcessSettlement: (step) => {
+                  processSettlement = step;
+                },
+              },
               input: {
                 configInputHash: context.inputHash,
                 repair: doctorPolicy.fix,
@@ -397,12 +353,32 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
       if (!recorded) {
         throw outcome.error;
       }
-      return await completeDoctorStep(recorded, doctorResult, outcome);
+      outcome = { step: await completeDoctorStep(recorded, doctorResult, outcome) };
+    } else {
+      outcome = { step: await completeDoctorStep(outcome.step, doctorResult) };
     }
-    return await completeDoctorStep(outcome.step, doctorResult);
-  } finally {
-    params.results?.push(...completedSteps);
+  } catch (error) {
+    outcome = { error };
   }
+  try {
+    params.results?.push(...(processSettlement ? [processSettlement] : []), ...completedSteps);
+    if (processSettlement) {
+      await params.progress?.onStepComplete?.({ ...processSettlement, index: 0, total: 0 });
+      assertCurrent?.();
+      context?.assertCurrent();
+    }
+  } catch (error) {
+    if ("error" in outcome) {
+      throw new AggregateError([outcome.error, error], "Doctor settlement recording failed", {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  if ("error" in outcome) {
+    throw outcome.error;
+  }
+  return outcome.step;
 }
 
 /** Keep package staging open until its source owner publishes the validated checkout. */
@@ -622,6 +598,7 @@ export async function runPackageInstallUpdate(
     });
 
   const before = pkgRoot ? await readPackageUpdateIdentity(pkgRoot) : { version: null };
+  const doctorSettlements: UpdateStepResult[] = [];
 
   const packageUpdate = await runGlobalPackageUpdateSteps({
     localOverrides: {
@@ -656,8 +633,15 @@ export async function runPackageInstallUpdate(
         ...stepParams,
         progress: params.progress,
       }),
-    postVerifyStep: (root, results) =>
-      runPackageUpdateDoctor({ ...resolveDoctorOptions(), root, results }),
+    postVerifyStep: async (root, results) => {
+      try {
+        return await runPackageUpdateDoctor({ ...resolveDoctorOptions(), root, results });
+      } finally {
+        doctorSettlements.push(
+          ...(results?.filter((result) => result.name === "doctor process settlement") ?? []),
+        );
+      }
+    },
   });
 
   const afterBuildId = packageUpdate.activePackageRoot
@@ -683,7 +667,7 @@ export async function runPackageInstallUpdate(
       version: packageUpdate.afterVersion,
       ...(afterBuildId ? { buildId: afterBuildId } : {}),
     },
-    steps: packageUpdate.steps,
+    steps: [...packageUpdate.steps, ...doctorSettlements],
     failedStep: packageUpdate.failedStep ?? undefined,
     recovery: packageUpdate.recovery,
     localOverrides: packageUpdate.localOverrides,

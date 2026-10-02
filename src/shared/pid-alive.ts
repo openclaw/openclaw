@@ -15,7 +15,9 @@ let darwinNative:
     }
   | undefined;
 
-function readDarwinNativeIdentity(pid: number): { parentPid: number; startedAt: number } | null {
+function readDarwinNativeIdentity(
+  pid: number,
+): { parentPid: number; startedAt: number; microseconds: number } | null {
   if (
     process.platform !== "darwin" ||
     // Koffi calls segfault the x86_64 worker under Rosetta, where release packaging
@@ -43,17 +45,18 @@ function readDarwinNativeIdentity(pid: number): { parentPid: number; startedAt: 
     }
     const parentPid = bytes.readUInt32LE(16);
     const seconds = bytes.readBigUInt64LE(120);
+    const microseconds = bytes.readBigUInt64LE(128);
     if (
       bytes.readUInt32LE(12) !== pid ||
       parentPid > 0x7fffffff ||
       seconds === 0n ||
       seconds > BigInt(Number.MAX_SAFE_INTEGER) ||
-      bytes.readBigUInt64LE(128) >= 1_000_000n
+      microseconds >= 1_000_000n
     ) {
       return null;
     }
     // Published Darwin leases use ps lstart's epoch seconds, not microseconds.
-    return { parentPid, startedAt: Number(seconds) };
+    return { parentPid, startedAt: Number(seconds), microseconds: Number(microseconds) };
   } catch {
     // Missing native packages and denied queries retain the existing bounded ps path.
     return null;
@@ -192,7 +195,7 @@ export function readDarwinProcessIdentity(
   const started = performance.now();
   const native = readDarwinNativeIdentity(pid);
   if (native) {
-    return native;
+    return { parentPid: native.parentPid, startedAt: native.startedAt };
   }
   const remainingMs =
     timeoutMs === undefined
@@ -263,6 +266,23 @@ export function getProcessStartTime(pid: number): number | null {
   } catch {
     return null;
   }
+}
+
+/** Custody recovery needs native birth precision rather than the shipped lease timestamp format. */
+export function getProcessInstanceStartTime(pid: number): number | null {
+  if (!isValidPid(pid)) {
+    return null;
+  }
+  if (process.platform === "linux") {
+    const startedAt = getProcessStartTime(pid);
+    return Number.isSafeInteger(startedAt) ? startedAt : null;
+  }
+  const native = readDarwinNativeIdentity(pid);
+  if (!native) {
+    return null;
+  }
+  const startedAt = native.startedAt * 1_000_000 + native.microseconds;
+  return Number.isSafeInteger(startedAt) ? startedAt : null;
 }
 
 /** Read a cross-platform process identity for filesystem lock ownership. */

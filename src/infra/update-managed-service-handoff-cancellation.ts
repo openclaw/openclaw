@@ -1,6 +1,7 @@
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
+import { managedCommandCustody } from "./update-managed-service-handoff-children.js";
 import {
   createManagedHandoffLeaseDatabase,
   leaseQueries,
@@ -18,6 +19,7 @@ import {
   type ManagedHandoffOriginalAdmission,
 } from "./update-managed-service-handoff-original-owner.js";
 import type { createManagedHandoffProcessIdentityReader } from "./update-managed-service-handoff-process.js";
+import type { createManagedHandoffLeaseRows } from "./update-managed-service-handoff-rows.js";
 import { parseManagedHandoffLeasePayload } from "./update-managed-service-handoff-schema.js";
 
 type CancellationDependencies = {
@@ -29,6 +31,7 @@ type CancellationDependencies = {
   storedCurrent: (lease: ManagedHandoffParent, db: HandoffDatabase) => boolean;
   childAliases: (key: string, db: HandoffDatabase) => string[];
   canRelease: (lease: ManagedHandoffLease) => boolean;
+  row: ReturnType<typeof createManagedHandoffLeaseRows>["row"];
   handle: (root: string, value: LeaseRow) => ManagedHandoffLease;
   updateRow: (
     db: HandoffDatabase,
@@ -50,6 +53,7 @@ export function createManagedHandoffCancellation(deps: CancellationDependencies)
     storedCurrent,
     childAliases,
     canRelease,
+    row,
     handle,
     updateRow,
     deleteRow,
@@ -114,21 +118,50 @@ export function createManagedHandoffCancellation(deps: CancellationDependencies)
           .where("install_root", "<", prefix + "\uffff"),
       ).rows;
     };
+    const nativeCommand = (child: ManagedHandoffLease, db: HandoffDatabase) => {
+      // Pending spawns still need their live root generation to publish a late PID binding.
+      if (
+        managedCommandCustody(child) !== "bound" ||
+        !/\/\.openclaw-update-child-[a-f0-9-]{36}-command$/.test(child.key)
+      ) {
+        return false;
+      }
+      const aliases = childAliases(child.key, db);
+      if (!aliases.includes(child.key)) {
+        return false;
+      }
+      return aliases.every((key) => {
+        const entry = row(db, key);
+        if (!entry) {
+          return false;
+        }
+        const peer = handle(key, entry);
+        return (
+          peer.version === 2 &&
+          peer.owner === child.owner &&
+          isDeepStrictEqual(peer.action, child.action) &&
+          isDeepStrictEqual(peer.helper, child.helper) &&
+          isDeepStrictEqual(peer.executor, child.executor)
+        );
+      });
+    };
     const transitioned = withDatabase(true, (db) =>
       transact(db, () => {
         if (!mutationCurrent(lease, db) || (retained && !mutationCurrent(retained, db))) {
           return null;
         }
         const originalChildren = descendants(db, lease);
-        // Old admitted receivers cannot safely race cancellation with nested
-        // admission. Only marked original lineage and its known mirrors qualify.
+        // Raw commands do not poll cancellation. Their native claims survive the
+        // root fence until physical joins and complete alias retirement finish.
         if (
           originalChildren.some((entry) => {
             const child = handle(entry.install_root, entry);
             return (
               child.version !== 2 ||
               child.action.kind !== "update" ||
-              child.action.mutationProtocol !== "original-cancellation-v1"
+              (managedCommandCustody(child)
+                ? !nativeCommand(child, db)
+                : child.action.mutationProtocol !== "original-cancellation-v1")
             );
           })
         ) {
@@ -142,6 +175,7 @@ export function createManagedHandoffCancellation(deps: CancellationDependencies)
             return (
               child.version !== 2 ||
               child.action.kind !== "update" ||
+              (managedCommandCustody(child) && !nativeCommand(child, db)) ||
               !childAliases(child.key, db).some((key) => originalKeys.has(key))
             );
           })

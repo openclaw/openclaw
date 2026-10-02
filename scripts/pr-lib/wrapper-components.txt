@@ -842,6 +842,7 @@ src/infra/update-failure-facts.ts
 src/infra/update-failure-public-identifiers.ts
 src/infra/update-managed-service-handoff-boot.ts
 src/infra/update-managed-service-handoff-cancellation.ts
+src/infra/update-managed-service-handoff-children.ts
 src/infra/update-managed-service-handoff-cleanup.ts
 src/infra/update-managed-service-handoff-database.ts
 src/infra/update-managed-service-handoff-lease.ts

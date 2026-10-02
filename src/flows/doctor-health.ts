@@ -14,6 +14,7 @@ import { isUpdateDoctorLintPass } from "../commands/doctor/shared/update-phase.j
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { formatUpdateDoctorConfigChange } from "../infra/update-doctor-config.js";
+import { retainUpdateDoctorProcesses } from "../infra/update-doctor-process-custody.js";
 import {
   captureUpdateDoctorConfigWrites,
   DoctorMaintenanceRefusalError,
@@ -31,6 +32,7 @@ import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginLoadDiagnostics } from "../plugins/load-diagnostics.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
+import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
@@ -57,46 +59,53 @@ export async function runDoctorHealthFlow(
   writeAuthority?: UpdateDoctorWriteAuthority,
   databasePreflight?: DoctorDatabasePreflight,
 ) {
-  let preparedPreflight = databasePreflight;
-  if (process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" && !writeAuthority?.postCoreSchemaRepair) {
-    const { guardUpdateDoctorSchemaUpgrade, rehearseDeferredUpdateDoctorSchema } =
-      await import("../commands/doctor-update-schema-guard.js");
-    preparedPreflight =
-      (await guardUpdateDoctorSchemaUpgrade({
-        schemas: preparedPreflight,
-        runtime,
-        json: options.json,
-      })) ?? preparedPreflight;
-    if (preparedPreflight?.updateSchemaRehearsal) {
-      await rehearseDeferredUpdateDoctorSchema(preparedPreflight, runtime);
-      return;
-    }
-  }
-  const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
-  return withPluginLoadDiagnostics((diagnostics) =>
-    resultPath
-      ? captureUpdateDoctorConfigWrites(
-          resolveConfigPath(),
-          (capture) =>
-            runDoctorHealthFlowWithResult(
-              runtime,
-              options,
-              preparedPreflight,
-              diagnostics,
-              { resultPath, capture },
-              writeAuthority,
-            ),
-          writeAuthority,
-        )
-      : runDoctorHealthFlowWithResult(
-          runtime,
-          options,
-          preparedPreflight,
-          diagnostics,
-          undefined,
-          writeAuthority,
-        ),
+  using custody = await retainUpdateDoctorProcesses(
+    writeAuthority?.assertCurrent,
+    writeAuthority?.commandAuthority,
   );
+  const run = () => {
+    let preparedPreflight = databasePreflight;
+    if (process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" && !writeAuthority?.postCoreSchemaRepair) {
+      const { guardUpdateDoctorSchemaUpgrade, rehearseDeferredUpdateDoctorSchema } =
+        await import("../commands/doctor-update-schema-guard.js");
+      preparedPreflight =
+        (await guardUpdateDoctorSchemaUpgrade({
+          schemas: preparedPreflight,
+          runtime,
+          json: options.json,
+        })) ?? preparedPreflight;
+      if (preparedPreflight?.updateSchemaRehearsal) {
+        await rehearseDeferredUpdateDoctorSchema(preparedPreflight, runtime);
+        return;
+      }
+    }
+    const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
+    return withPluginLoadDiagnostics((diagnostics) =>
+      resultPath
+        ? captureUpdateDoctorConfigWrites(
+            resolveConfigPath(),
+            (capture) =>
+              runDoctorHealthFlowWithResult(
+                runtime,
+                options,
+                preparedPreflight,
+                diagnostics,
+                { resultPath, capture },
+                writeAuthority,
+              ),
+            writeAuthority,
+          )
+        : runDoctorHealthFlowWithResult(
+            runtime,
+            options,
+            preparedPreflight,
+            diagnostics,
+            undefined,
+            writeAuthority,
+          ),
+    );
+  };
+  return await (custody ? withCommandProcessScope(run, undefined, custody) : run());
 }
 
 async function runDoctorHealthFlowWithResult(

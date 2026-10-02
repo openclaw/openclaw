@@ -89,6 +89,7 @@ const PUBLIC_CODES = new Set<string>([
   "SQLITE_FULL",
   "command-failed",
   "doctor-failed",
+  "doctor-processes-unsettled",
   "agent-database-lease-active",
   "global-install-failed",
   "unexpected-error",

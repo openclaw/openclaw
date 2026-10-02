@@ -168,6 +168,7 @@ export type DoctorConfigCapture = {
 export type UpdateDoctorWriteAuthority = {
   inputHash: string;
   assertCurrent: () => void;
+  commandAuthority?: import("./update-managed-command-custody.js").ManagedCommandProcessAuthority;
   postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
   databaseGenerations?: UpdateDatabaseGenerations;
 };

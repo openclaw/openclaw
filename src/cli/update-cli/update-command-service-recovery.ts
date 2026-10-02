@@ -167,6 +167,26 @@ export function formatPostUpdateGatewayRecoveryInstructions(
   return lines;
 }
 
+export function refuseUnsettledDoctorRecovery(
+  result: UpdateRunResult,
+  root: string,
+  assertCurrent: () => void,
+): boolean {
+  // A failed or foreign receipt cannot inherit an earlier settlement or rollback refusal.
+  const settlement = result.steps.findLast((step) => step.name === "doctor process settlement");
+  if (
+    settlement &&
+    (settlement.exitCode !== 0 ||
+      settlement.command !== "settle doctor process groups" ||
+      settlement.cwd !== root)
+  ) {
+    assertCurrent();
+    result.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+    return true;
+  }
+  return false;
+}
+
 export async function admitMigratedGatewayRecovery(
   params: Pick<
     FinishUpdateParams,
@@ -180,12 +200,19 @@ export async function admitMigratedGatewayRecovery(
   result: UpdateRunResult,
   assertCurrent: () => void,
 ): Promise<boolean> {
+  const root = result.root ?? params.root;
+  if (refuseUnsettledDoctorRecovery(result, root, assertCurrent)) {
+    return false;
+  }
+  const settlement = result.steps.findLast((step) => step.name === "doctor process settlement");
+  const databaseRollback = result.steps.findLast((step) => step.name === "database rollback");
   if (
     result.reason !== "state-migrated-no-rollback" ||
     params.originalManagedServiceRuntime ||
     !params.shouldRestart ||
     !params.preManagedServiceStop?.stopped ||
-    !result.steps.some((step) => step.name === "database rollback" && step.exitCode !== 0) ||
+    databaseRollback?.exitCode === 0 ||
+    (!settlement && !databaseRollback) ||
     (result.recovery?.serviceRestartSafe === false &&
       result.recovery.reason === "source-rollback-failed")
   ) {
@@ -193,7 +220,6 @@ export async function admitMigratedGatewayRecovery(
   }
   assertCurrent();
   await params.packageTransaction?.assertRollbackSafe?.();
-  const root = result.root ?? params.root;
   const version = await readPackageVersion(root);
   const buildId = await readBuiltGatewayBuildId(root);
   assertCurrent();

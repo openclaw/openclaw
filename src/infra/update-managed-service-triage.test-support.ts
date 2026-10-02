@@ -168,7 +168,18 @@ fs.readFileSync = function(file, ...args) {
       common +
       `
 const args = process.argv.slice(2);
+if (args.length === 2 && args[0] === '--system' && args[1] === 'is-system-running') {
+  event('system-manager-probe', {state:'running'});
+  process.stdout.write('running\\n');
+  return;
+}
 const action = args.find(x => ['show','start','stop','restart','reset-failed'].includes(x));
+if (!action) {
+  event('unexpected-native', {command:'systemctl',args});
+  console.error('Unexpected synthetic systemctl invocation: '+JSON.stringify(args));
+  process.exitCode=97;
+  return;
+}
 const name = args[args.indexOf(action)+1];
 const scope = JSON.parse(fs.readFileSync(scopeFile,'utf8'));
 let primary = JSON.parse(fs.readFileSync(primaryFile,'utf8'));

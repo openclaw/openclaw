@@ -11,6 +11,12 @@ import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
 import { createManagedHandoffCancellation } from "./update-managed-service-handoff-cancellation.js";
 import {
+  createManagedHandoffChildReader,
+  managedCommandAllowsBinding,
+  managedCommandCustody,
+  managedCommandUnsettled,
+} from "./update-managed-service-handoff-children.js";
+import {
   createManagedHandoffLeaseDatabase,
   leaseQueries,
 } from "./update-managed-service-handoff-database.js";
@@ -33,7 +39,7 @@ import {
 } from "./update-managed-service-handoff-original-owner.js";
 import { createManagedHandoffProcessIdentityReader } from "./update-managed-service-handoff-process.js";
 import {
-  observeManagedHandoffOriginalReclamation,
+  observeManagedHandoffReclamation,
   readManagedHandoffAdmissionLease as admissionLease,
 } from "./update-managed-service-handoff-reclamation.js";
 import { assertNoRetainedSourceBorrower } from "./update-managed-service-handoff-retained-custody.js";
@@ -115,42 +121,20 @@ export function createManagedHandoffLeaseStore(
   function transact<T>(db: HandoffDatabase, operation: () => T): T {
     return withDatabase.transact(db, operation, { logger });
   }
-  function hasUnsettledChildren(
-    lease: ManagedHandoffParent,
-    connection?: HandoffDatabase,
-  ): boolean {
-    if (lease.version === 3 || lease.version === 4) {
-      return true;
-    }
-    const prefix = `${lease.key}/.openclaw-update-child-`;
-    const inspect = (db: HandoffDatabase) => {
-      const children = executeSqliteQuerySync(
-        db,
-        leaseQueries(db)
-          .selectFrom("managed_update_handoffs")
-          .select(["install_root", "owner", "payload_json", "updated_at"])
-          .where("install_root", ">=", prefix)
-          .where("install_root", "<", prefix + "\uffff"),
-      ).rows;
-      return children.some((entry) => {
-        const child = handle(entry.install_root, entry);
-        return (
-          child.version === 3 ||
-          child.version === 4 ||
-          processState(child.helper) !== "dead" ||
-          processState(child.executor) !== "dead" ||
-          (process.platform !== "win32" && isChildProcessTreeAlive(child.executor))
-        );
-      });
-    };
-    return connection ? inspect(connection) : withDatabase(false, inspect);
-  }
+  const { hasUnsettledChildren, readCommandChildren } = createManagedHandoffChildReader({
+    withDatabase,
+    handle,
+    processState,
+  });
   function reclaimable(lease: ManagedHandoffLease, db?: HandoffDatabase) {
     // No process/boot liveness observation is a join receipt.
     if (lease.version === 3 || lease.version === 4 || hasOriginalUpdateExecutorCustody(lease)) {
       return false;
     }
     const action = lease.action;
+    if (managedCommandCustody(lease)) {
+      return !managedCommandUnsettled(lease) && !hasUnsettledChildren(lease, db);
+    }
     if (action.kind === "triage" && action.lifetime.kind === "foreground") {
       const boot = bootIdentity();
       if (
@@ -181,17 +165,26 @@ export function createManagedHandoffLeaseStore(
     legacyParent?: BorrowedLegacyHandoffParent,
     originalParent?: ManagedHandoffParent,
   ): LeaseAcquisition {
+    const custody = managedCommandCustody(parseManagedHandoffLeasePayload(payload));
+    if (custody && (custody !== "reserved" || !root.includes("/.openclaw-update-child-"))) {
+      throw new Error("Managed command custody requires a child reservation");
+    }
     const run = (db: HandoffDatabase): LeaseAcquisition => {
       // Probe liveness before taking the write lock; commit only if both observations still match.
       const observed = row(db, root);
       const destination = admissionLease(root, observed, handle, processState);
       const canReplace =
         !destination || (destination.owner !== owner && reclaimable(destination, db));
-      const reclaimOriginalPair = observeManagedHandoffOriginalReclamation(
-        canReplace ? (destination ?? undefined) : undefined,
-        db,
-        { handle, deleteRow, reclaimable, hasUnsettledChildren },
-      );
+      const reclaim = canReplace
+        ? observeManagedHandoffReclamation(root, destination ?? undefined, db, {
+            handle,
+            deleteRow,
+            reclaimable,
+            hasUnsettledChildren,
+            readCommandChildren,
+            processState,
+          })
+        : undefined;
       return transact(db, () => {
         if (originalParent && !mutationCurrent(originalParent, db)) {
           return { kind: "busy", owner: originalParent.owner };
@@ -226,9 +219,11 @@ export function createManagedHandoffLeaseStore(
               return { kind: "busy", owner: legacyParent.owner };
             }
           } else if (
-            !parent ||
-            !mutationCurrent(handle(parentKey, parent), db) ||
-            handle(parentKey, parent).version === 3
+            parent
+              ? !(custody && isRetiredManagedHandoffLeasePayload(parent.payload_json)) &&
+                (!mutationCurrent(handle(parentKey, parent), db) ||
+                  handle(parentKey, parent).version === 3)
+              : custody !== "reserved"
           ) {
             return { kind: "busy", owner: parent?.owner ?? owner };
           }
@@ -243,10 +238,10 @@ export function createManagedHandoffLeaseStore(
           throw new Error("managed handoff lease changed during admission");
         }
         const previous = destination ?? readBorrowedLegacyHandoffParent(root, observed);
-        if (!canReplace || (previous && hasUnsettledChildren(previous, db))) {
+        if (!canReplace || hasUnsettledChildren(previous ?? root, db)) {
           return { kind: "busy", owner: previous?.owner ?? owner };
         }
-        if (!reclaimOriginalPair()) {
+        if (!reclaim?.()) {
           return { kind: "busy", owner: destination?.owner ?? owner };
         }
         if (observed) {
@@ -303,6 +298,7 @@ export function createManagedHandoffLeaseStore(
     storedCurrent,
     childAliases,
     canRelease,
+    row,
     handle,
     updateRow,
     deleteRow,
@@ -340,7 +336,8 @@ export function createManagedHandoffLeaseStore(
     if (
       lease.version === 3 ||
       lease.version === 4 ||
-      hasOriginalUpdateExecutorCustody(lease, action)
+      hasOriginalUpdateExecutorCustody(lease, action) ||
+      !managedCommandAllowsBinding(lease, action, executor)
     ) {
       return null;
     }
@@ -411,6 +408,7 @@ export function createManagedHandoffLeaseStore(
         (lease) =>
           lease.version !== 2 ||
           lease.action.kind !== "update" ||
+          managedCommandCustody(lease) === "bound" ||
           !lease.key.includes("/.openclaw-update-child-") ||
           !owns(lease) ||
           !isDeepStrictEqual(lease.helper, lease.executor),
@@ -418,10 +416,19 @@ export function createManagedHandoffLeaseStore(
     ) {
       return null;
     }
+    const custody = managedCommandCustody(leases[0]!);
+    if (
+      leases.some((lease) => managedCommandCustody(lease) !== custody) ||
+      (custody && pid === process.pid)
+    ) {
+      return null;
+    }
     const executor = processIdentity(pid, argv);
     return withDatabase(true, (db) =>
       transact(db, () => {
-        if (leases.some((lease) => !storedCurrent(lease, db) || hasUnsettledChildren(lease, db))) {
+        if (
+          leases.some((lease) => !mutationCurrent(lease, db) || hasUnsettledChildren(lease, db))
+        ) {
           return null;
         }
         return leases.map((lease) => {
@@ -429,7 +436,7 @@ export function createManagedHandoffLeaseStore(
             version: 2,
             helper: lease.helper,
             executor,
-            action: lease.action,
+            action: custody ? { ...lease.action, custody: "bound" } : lease.action,
           });
           const updatedAt = Math.max(Date.now(), lease.updatedAt + 1);
           if (!updateRow(db, lease, { payload_json: payload, updated_at: updatedAt })) {
@@ -451,6 +458,7 @@ export function createManagedHandoffLeaseStore(
   ): LeaseAcquisition | null {
     if (
       lease.version !== 2 ||
+      managedCommandCustody(lease) ||
       (lease.action.kind === "update" &&
         lease.action.mutationProtocol === "original-cancellation-v1") ||
       hasUnsettledChildren(lease) ||
@@ -535,7 +543,7 @@ export function createManagedHandoffLeaseStore(
     }
     return cas(active, { ...active.action, phase });
   }
-  function canRelease(lease: ManagedHandoffLease) {
+  function canRelease(lease: ManagedHandoffLease, settledReservation = false) {
     if (
       lease.version === 4 ||
       hasOriginalUpdateExecutorCustody(lease) ||
@@ -549,6 +557,11 @@ export function createManagedHandoffLeaseStore(
       return false;
     }
     const localHelper = lease.helper.pid === process.pid && processState(lease.helper) === "live";
+    if (managedCommandCustody(lease)) {
+      return managedCommandCustody(lease) === "reserved"
+        ? localHelper && settledReservation
+        : !managedCommandUnsettled(lease);
+    }
     const action = lease.action;
     const executorClosed =
       lease.executor.pid === process.pid || processState(lease.executor) === "dead";
@@ -560,11 +573,11 @@ export function createManagedHandoffLeaseStore(
           : nativeClosed(action.lifetime)
       : reclaimable(lease);
   }
-  function releaseAll(leases: ManagedHandoffLease[]) {
+  function releaseAll(leases: ManagedHandoffLease[], settledReservation = false) {
     if (
       !leases.length ||
       new Set(leases.map((lease) => lease.key)).size !== leases.length ||
-      leases.some((lease) => !canRelease(lease))
+      leases.some((lease) => !canRelease(lease, settledReservation))
     ) {
       return false;
     }
@@ -576,7 +589,8 @@ export function createManagedHandoffLeaseStore(
               hasUnsettledChildren(lease, db) ||
               (lease.version === 2 &&
                 lease.action.kind === "update" &&
-                lease.action.mutationProtocol === "original-cancellation-v1" &&
+                (lease.action.mutationProtocol === "original-cancellation-v1" ||
+                  managedCommandCustody(lease) === "bound") &&
                 [...childAliases(lease.key, db), ...readOriginalUpdateDependents(lease, db)].some(
                   (key) => !leases.some((paired) => paired.key === key),
                 )) ||
@@ -685,16 +699,19 @@ export function createManagedHandoffLeaseStore(
     bind,
     bindUpdateChildren,
     cancelUpdate,
-    releaseAll,
+    releaseAll: (leases: ManagedHandoffLease[]) => releaseAll(leases),
     retarget,
     activate,
     owns,
     hasUnsettledChildren,
+    readCommandChildren,
     acceptParentBoundExecutor,
     current,
     readGeneration,
     settle,
     release: (lease: ManagedHandoffLease) => releaseAll([lease]),
+    releaseCommandReservation: (lease: ManagedHandoffLease) =>
+      managedCommandCustody(lease) === "reserved" && releaseAll([lease], true),
     assertSourceUnborrowed,
     stopNative,
     isInNativeScope,

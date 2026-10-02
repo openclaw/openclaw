@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { createServer, type Socket } from "node:net";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { execFileUtf8 } from "../../daemon/exec-file.js";
 import * as futureConfig from "../../daemon/future-config-guard.js";
@@ -18,6 +21,7 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
+import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import {
@@ -114,109 +118,144 @@ function owned(
 }
 
 describe.skipIf(process.platform === "win32")("retained POSIX native restart", () => {
-  it.each(["native drain", "readiness failure"] as const)(
+  it.for(["native drain", "readiness failure"] as const)(
     "restarts retained A with a real child and keeps both owners until %s",
-    async (outcome) => {
+    async (outcome, { signal }) => {
       const effect = path.join(a, "effect");
-      const proceed = path.join(a, "proceed");
       const started = createDeferred();
       const definition = path.join(a, "unit");
       fs.writeFileSync(definition, "original Node A and service definition");
       let pid = 0;
-      const readinessError = new Error("fixture readiness observer failed");
-      // Observe outside native custody so a readiness failure can release the child
-      // before the authority owner joins its still-pending command.
-      const observer = fs.watch(a, () => {
-        try {
-          if (!fs.existsSync(effect)) {
-            return;
-          }
-          pid = Number(fs.readFileSync(effect, "utf8"));
-          observer.close();
-          if (outcome === "readiness failure") {
-            started.reject(readinessError);
-          } else {
-            started.resolve();
-          }
-        } catch (error) {
-          started.reject(error);
-        }
-      });
-      observer.on("error", started.reject);
-      const native = vi
-        .spyOn(systemdExec, "execSystemctlUser")
-        .mockImplementation(async (_env, args, _timeout, assertCurrent) => {
-          assertCurrent?.();
-          assertGatewayServiceUpdateCurrent();
-          if (args[0] === "reset-failed") {
-            return success;
-          }
-          expect(args).toEqual(["restart", "fixture-A.service"]);
-          return await execFileUtf8(process.execPath, [
-            "-e",
-            `
-      const fs = require("node:fs");
-      let drained = false;
-      const finish = () => {
-        if (drained || !fs.existsSync(${JSON.stringify(proceed)})) return;
-        drained = true;
-        watcher.close();
-        process.stdout.write("drained");
-      };
-      const watcher = fs.watch(${JSON.stringify(a)}, finish);
-      fs.writeFileSync(${JSON.stringify(effect + ".tmp")}, String(process.pid));
-      fs.renameSync(${JSON.stringify(effect + ".tmp")}, ${JSON.stringify(effect)});
-      finish();
-    `,
-          ]);
-        });
       let complete = false;
-      const work = owned(async (run) => {
-        const onGatewayStartAttempted = vi.fn();
-        await expect(
-          commands.restartRetainedUpdateGatewayService({
-            ...request(run),
-            onGatewayStartAttempted,
+      let work: Promise<void> | undefined;
+      let connection: Socket | undefined;
+      let reader: ReturnType<typeof createInterface> | undefined;
+      let releaseRequested = false;
+      const readinessError = new Error("fixture readiness observer failed");
+      const releaseChild = () => {
+        releaseRequested = true;
+        if (connection && !connection.writableEnded) {
+          connection.end("release\n");
+        }
+      };
+      // Directory notifications can coalesce. Keep readiness and release outside
+      // native custody so a failed observer can still unblock the owned child.
+      const listener = await reserveTestPortListener({
+        offsets: [0],
+        signal,
+        createListener: () =>
+          createServer((socket) => {
+            connection = socket;
+            socket.on("error", started.reject);
+            reader = createInterface({ input: socket });
+            reader.once("line", (line) => {
+              try {
+                pid = Number(fs.readFileSync(effect, "utf8"));
+                expect(Number(line)).toBe(pid);
+                if (outcome === "readiness failure") {
+                  started.reject(readinessError);
+                } else {
+                  started.resolve();
+                }
+              } catch (error) {
+                started.reject(error);
+              }
+            });
+            if (releaseRequested) {
+              releaseChild();
+            }
           }),
-        ).resolves.toEqual({
-          outcome: "completed",
-        });
-        expect(onGatewayStartAttempted).toHaveBeenCalledOnce();
-      }).then(() => {
-        complete = true;
       });
-      const exercise = async () => {
-        try {
-          await Promise.race([started.promise, work]);
+      listener.listener.on("error", started.reject);
+      await runQaGatewayFixture(
+        async () => {
+          const native = vi
+            .spyOn(systemdExec, "execSystemctlUser")
+            .mockImplementation(async (_env, args, _timeout, assertCurrent) => {
+              assertCurrent?.();
+              assertGatewayServiceUpdateCurrent();
+              if (args[0] === "reset-failed") {
+                return success;
+              }
+              expect(args).toEqual(["restart", "fixture-A.service"]);
+              return await execFileUtf8(process.execPath, [
+                "-e",
+                `
+      const fs = require("node:fs");
+      const socket = require("node:net").connect(${listener.claim.port}, "127.0.0.1", () => {
+        fs.writeFileSync(${JSON.stringify(effect + ".tmp")}, String(process.pid));
+        fs.renameSync(${JSON.stringify(effect + ".tmp")}, ${JSON.stringify(effect)});
+        socket.write(String(process.pid) + "\\n");
+      });
+      const lines = require("node:readline").createInterface({ input: socket });
+      lines.once("line", (line) => {
+        if (line !== "release") throw new Error("Unexpected fixture release");
+        lines.close();
+        process.stdout.write("drained");
+        socket.end();
+      });
+    `,
+              ]);
+            });
+          const running = owned(async (run) => {
+            const onGatewayStartAttempted = vi.fn();
+            await expect(
+              commands.restartRetainedUpdateGatewayService({
+                ...request(run),
+                onGatewayStartAttempted,
+                signal,
+              }),
+            ).resolves.toEqual({
+              outcome: "completed",
+            });
+            expect(onGatewayStartAttempted).toHaveBeenCalledOnce();
+          }).then(() => {
+            complete = true;
+          });
+          work = running;
+          const exercise = async () => {
+            try {
+              await withinTest(Promise.race([started.promise, running]), signal);
+              expect(pid).toBeGreaterThan(0);
+              expect(pid).not.toBe(process.pid);
+              expect(complete).toBe(false);
+              const store = createManagedHandoffLeaseStore();
+              for (const root of [a, b]) {
+                expect(store.acquire(root, randomUUID(), { kind: "update" }).kind).toBe("busy");
+              }
+              expect(store.read(c)).toEqual({ kind: "absent" });
+              releaseChild();
+              await running;
+            } finally {
+              releaseChild();
+              await running.catch(() => undefined);
+            }
+          };
+          if (outcome === "readiness failure") {
+            await expect(exercise()).rejects.toBe(readinessError);
+          } else {
+            await exercise();
+          }
           expect(pid).toBeGreaterThan(0);
-          expect(pid).not.toBe(process.pid);
-          expect(complete).toBe(false);
+          expect(complete).toBe(true);
+          expect(native.mock.calls.map((call) => call[1][0])).toEqual(["reset-failed", "restart"]);
+          expect(fs.readFileSync(definition, "utf8")).toBe(
+            "original Node A and service definition",
+          );
           const store = createManagedHandoffLeaseStore();
           for (const root of [a, b]) {
-            expect(store.acquire(root, randomUUID(), { kind: "update" }).kind).toBe("busy");
+            expect(store.read(root)).toEqual({ kind: "absent" });
           }
-          expect(store.read(c)).toEqual({ kind: "absent" });
-          fs.writeFileSync(proceed, "");
-          await work;
-        } finally {
-          observer.close();
-          fs.writeFileSync(proceed, "");
-          await work.catch(() => undefined);
-        }
-      };
-      if (outcome === "readiness failure") {
-        await expect(exercise()).rejects.toBe(readinessError);
-      } else {
-        await exercise();
-      }
-      expect(pid).toBeGreaterThan(0);
-      expect(complete).toBe(true);
-      expect(native.mock.calls.map((call) => call[1][0])).toEqual(["reset-failed", "restart"]);
-      expect(fs.readFileSync(definition, "utf8")).toBe("original Node A and service definition");
-      const store = createManagedHandoffLeaseStore();
-      for (const root of [a, b]) {
-        expect(store.read(root)).toEqual({ kind: "absent" });
-      }
+        },
+        async () => {
+          releaseChild();
+          await work?.catch(() => undefined);
+          reader?.close();
+          connection?.destroy();
+          await listener.releaseListener();
+        },
+        () => listener.claim.release(),
+      );
     },
   );
 

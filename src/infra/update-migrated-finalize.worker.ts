@@ -288,7 +288,7 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
     input.executor,
     input.runId,
     input.root,
-    async (fence) => {
+    async (fence, commandAuthority) => {
       const requester = input.requester?.authorizationSource?.startsWith("profile:")
         ? await createManagedUpdateRequesterContinuationAuthority(input.requester, {
             runId: input.runId,
@@ -356,6 +356,7 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
         {
           inputHash: input.configInputHash,
           assertCurrent,
+          commandAuthority,
           ...(input.databaseGenerations ? { databaseGenerations: input.databaseGenerations } : {}),
           ...(input.postCoreSchemaRepair === true
             ? { postCoreSchemaRepair: { runId: input.runId, assertCurrent } }

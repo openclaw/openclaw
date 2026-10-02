@@ -16,6 +16,7 @@ import * as serviceMembership from "../../daemon/service-process-membership.js";
 import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as schemas from "../../infra/update-candidate-state.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import {
@@ -31,6 +32,7 @@ import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../../test-utils/port-claims.js";
+import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 
 const { executionParams, mocks } = await import("./update-command-execution.test-support.js");
@@ -117,6 +119,14 @@ const readiness = await import("./update-command-readiness.js");
 const { runUpdateFinalizationDoctorInFreshProcess } =
   await import("./update-command-fresh-doctor.js");
 const { withOwnedManagedUpdateEnv } = await import("./update-command-service-env.js");
+const gatewayLockUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.gatewayLock);
+const databaseGenerationsUrl = resolveRuntimeWorkerUrl(
+  updateExecutorNativeEntrypoints.databaseGenerations,
+);
+const sourceLoader = gatewayLockUrl.pathname.endsWith(".ts")
+  ? `process.env.TSX_TSCONFIG_PATH=${JSON.stringify(fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)))};
+     await import(${JSON.stringify(new URL("../../../scripts/tsx.mjs", import.meta.url).href)});`
+  : "";
 
 afterEach(async () => {
   if (service) {
@@ -266,9 +276,8 @@ it.each([
     const files = ${JSON.stringify([shared, agent])};
     const manifest=JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8'));
     const acquireCustody = async (role, port) => {
-      process.env.TSX_TSCONFIG_PATH=${JSON.stringify(fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)))};
-      await import(${JSON.stringify(new URL("../../../scripts/tsx.mjs", import.meta.url).href)});
-      const {acquireGatewayLock}=await import(${JSON.stringify(new URL("../../infra/gateway-lock.ts", import.meta.url).href)});
+      ${sourceLoader}
+      const {acquireGatewayLock}=await import(${JSON.stringify(gatewayLockUrl.href)});
       const owner=await acquireGatewayLock({env:process.env,role,port,allowInTests:true,timeoutMs:0});
       assert(owner);
       return owner;
@@ -285,9 +294,8 @@ it.each([
       const input=JSON.parse(fs.readFileSync(0,'utf8'));
       assert(input.executor && input.runId && input.root);
       assert.equal(fs.realpathSync(input.root),fs.realpathSync(new URL('../',import.meta.url)));
-      process.env.TSX_TSCONFIG_PATH=${JSON.stringify(fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)))};
-      await import(${JSON.stringify(new URL("../../../scripts/tsx.mjs", import.meta.url).href)});
-      const {readUpdateDatabaseGenerations}=await import(${JSON.stringify(new URL("../../infra/update-database-generations.ts", import.meta.url).href)});
+      ${sourceLoader}
+      const {readUpdateDatabaseGenerations}=await import(${JSON.stringify(databaseGenerationsUrl.href)});
       const custody=await acquireCustody('sqlite-maintenance');
       try {
         const expected=input.databaseGenerations;
@@ -601,7 +609,7 @@ it.each([
           root: packageRoot,
           opts,
           databaseBackup,
-          onDatabaseWriteStep: (step) => executionResult?.steps.push(step),
+          onDoctorStep: (step) => executionResult?.steps.push(step),
           yes: true,
           json: true,
           nodeRunner: process.execPath,
