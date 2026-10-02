@@ -274,15 +274,9 @@ describe("cron tool", () => {
       },
     );
     expect(callGatewayMock).toHaveBeenCalledTimes(2);
-    expect(callGatewayMock.mock.calls.map(([call]) => call)).toEqual([
-      {
-        method: "cron.list",
-        params: { includeDisabled: true, compact: true, limit: 200, offset: 0 },
-      },
-      {
-        method: "cron.list",
-        params: { includeDisabled: true, compact: true, limit: 200, offset: 200 },
-      },
+    expect(callGatewayMock.mock.calls.map(([call]) => call.params)).toMatchObject([
+      { includeDisabled: true, compact: true, limit: 200, offset: 0 },
+      { includeDisabled: true, compact: true, limit: 200, offset: 200 },
     ]);
     expect(result.details).toEqual({
       ...selfInventory,
@@ -342,7 +336,7 @@ describe("cron tool", () => {
     );
 
     const params = expectSingleGatewayCallMethod("cron.list");
-    expect(params).toEqual({
+    expect(params).toMatchObject({
       includeDisabled: false,
       compact: true,
     });
@@ -362,7 +356,7 @@ describe("cron tool", () => {
     });
 
     const params = expectSingleGatewayCallMethod("cron.list");
-    expect(params).toEqual({
+    expect(params).toMatchObject({
       includeDisabled: true,
       compact: true,
       agentId: "worker",

@@ -424,6 +424,7 @@ describe("cron protocol validators", () => {
         agentId: "ops",
         compact: true,
         includeDeliveryPreviews: false,
+        includeVisibility: true,
       },
     ]);
     expectCases(validateCronListParams, false, [

@@ -9,6 +9,7 @@ import { createCronStoreHarness, createNoopLogger } from "../../cron/service.tes
 import type { CronJob } from "../../cron/types.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { compactCronListJob } from "../../gateway/server-methods/cron-list-projection.js";
+import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { applyCodeModeCatalog } from "../code-mode.js";
 import {
@@ -52,6 +53,14 @@ const page = {
   nextOffset: null,
 };
 const list = { ...page, jobs: [compactJob], snapshotRevision: "inventory-revision" };
+const restrictedList = {
+  ...list,
+  visibility: {
+    mode: "caller" as const,
+    restricted: true as const,
+    warning: "Automation list is restricted to the caller-visible inventory.",
+  },
+};
 const deliveryPreview = { label: "Current conversation", detail: "No external delivery" };
 const createJob = {
   name: job.name,
@@ -169,6 +178,29 @@ describe("automations output contract", () => {
     ).toEqual([]);
   });
 
+  it("retries list calls without visibility opt-in on older Gateways", async () => {
+    const gatewayCall = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "invalid cron.list params: unexpected property 'includeVisibility'",
+        }),
+      )
+      .mockResolvedValueOnce(list);
+    const tool = createCronTool(undefined, { callGatewayTool: gatewayCall });
+    const result = await tool.execute("call-list-legacy-gateway", { action: "list" });
+
+    expect(gatewayCall.mock.calls.map((call) => call[2])).toEqual([
+      { includeDisabled: false, compact: true, includeVisibility: true },
+      { includeDisabled: false, compact: true },
+    ]);
+    expect(result.details).not.toHaveProperty("visibility");
+    expect(
+      Value.Errors(expectDefined(tool.outputSchema, "automations output schema"), result.details),
+    ).toEqual([]);
+  });
+
   it("still runs on a shipped Gateway that rejects the run wait", async () => {
     const gatewayCall = vi
       .fn()
@@ -195,11 +227,54 @@ describe("automations output contract", () => {
     ).toEqual([]);
   });
 
+  it.each(["caller", "role"] as const)(
+    "accepts %s-restricted inventories through the real tool output contract",
+    async (mode) => {
+      const tool = createCronTool(undefined, {
+        callGatewayTool: vi.fn().mockResolvedValue({
+          ...restrictedList,
+          visibility: { ...restrictedList.visibility, mode },
+        }),
+      });
+      const result = await tool.execute("call-list-" + mode, { action: "list" });
+      expect(
+        Value.Errors(expectDefined(tool.outputSchema, "automations output schema"), result.details),
+      ).toEqual([]);
+    },
+  );
+
+  it("describes self-scoped status, inventory, and paced proposals", async () => {
+    const runId = "automation-output-run";
+    claimAgentRunContext(runId, {
+      sessionKey: `agent:main:cron:${job.id}`,
+      cronRunsByJobId: new Map([[job.id, { pacingEnabled: true }]]),
+    });
+    onTestFinished(() => clearAgentRunContext(runId));
+    const tool = createCronTool(
+      { selfRemoveOnlyJobId: job.id, runId },
+      {
+        callGatewayTool: vi
+          .fn()
+          .mockResolvedValueOnce({ enabled: true, jobs: 10 })
+          .mockResolvedValueOnce(list),
+      },
+    );
+    const schema = expectDefined(tool.outputSchema, "automations output schema");
+    const status = await tool.execute("call-status", { action: "status" });
+    expect(status.details).toEqual({ enabled: true });
+    const inventory = await tool.execute("call-list", { action: "list" });
+    expect(inventory.details).not.toHaveProperty("snapshotRevision");
+    const proposal = await tool.execute("call-next", { action: "next_check", in: "30m" });
+    for (const result of [status, inventory, proposal]) {
+      expect(Value.Errors(schema, result.details)).toEqual([]);
+    }
+  });
+
   it("composes action results through generated declarations and JavaScript", async () => {
     onTestFinished(resetCodeModeTestState);
     const h = createCodeModeHarness();
     const replies: Record<string, unknown> = {
-      "cron.list": list,
+      "cron.list": restrictedList,
       "cron.status": { enabled: true, jobs: 1 },
       "cron.get": job,
       "cron.runs": history,
@@ -224,6 +299,7 @@ async function consume() {
   const listed = await automations({ action: "list" });
   const names = listed.jobs.map(job => job.name);
   const next = listed.nextOffset;
+  const visibilityMode = listed.visibility?.mode;
   const status = await automations({ action: "status" });
   const enabled = status.enabled;
   const jobCount = status.jobs;
@@ -231,7 +307,7 @@ async function consume() {
   const name = details.name;
   const runs = await automations({ action: "runs", jobId: details.id });
   const summaries = runs.entries.map(entry => entry.summary);
-  return { names, next, enabled, jobCount, name, summaries };
+  return { names, next, visibilityMode, enabled, jobCount, name, summaries };
 }
 `;
     const fileName = "/automations-consumer.ts";
@@ -279,6 +355,7 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
       value: {
         names: [job.name],
         next: null,
+        visibilityMode: "caller",
         enabled: true,
         jobCount: 1,
         name: job.name,
