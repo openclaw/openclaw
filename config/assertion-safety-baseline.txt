@@ -126,7 +126,7 @@ extensions/codex/src/app-server/attempt-notifications.ts	1
 extensions/codex/src/app-server/attempt-startup.ts	1
 extensions/codex/src/app-server/auth-bridge.ts	1
 extensions/codex/src/app-server/client-runtime.ts	1
-extensions/codex/src/app-server/client.ts	3
+extensions/codex/src/app-server/client.ts	2
 extensions/codex/src/app-server/compact.ts	1
 extensions/codex/src/app-server/computer-use-cache.ts	1
 extensions/codex/src/app-server/context-engine-projection.ts	1
