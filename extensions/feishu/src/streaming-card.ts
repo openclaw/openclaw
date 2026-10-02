@@ -16,7 +16,6 @@ import { requestFeishuApi } from "./comment-shared.js";
 import { readFeishuJsonResponse } from "./json-response.js";
 import { resolveFeishuCardTemplate } from "./native-card.js";
 import type { CardHeaderConfig } from "./send.js";
-import { resolveStreamingCardSendMode } from "./streaming-card-send-mode.js";
 import type { FeishuDomain } from "./types.js";
 
 type Credentials = {
@@ -361,38 +360,30 @@ export class FeishuStreamingSession {
     // reliably routes streaming cards into Feishu topics, whereas
     // message.create with root_id may silently ignore root_id for card
     // references (card_id format).
-    let sendRes;
     const sendOptions = options ?? {};
-    const sendMode = resolveStreamingCardSendMode(sendOptions);
-    if (sendMode === "reply") {
-      sendRes = await requestFeishuApi(
-        () =>
-          this.client.im.message.reply({
-            path: { message_id: sendOptions.replyToMessageId! },
-            data: {
-              msg_type: "interactive",
-              content: cardContent,
-              ...(sendOptions.replyInThread ? { reply_in_thread: true } : {}),
-            },
-          }),
-        "Send card failed",
-      );
-    } else {
-      sendRes = await requestFeishuApi(
-        () =>
-          this.client.im.message.create({
-            params: { receive_id_type: receiveIdType },
-            data: {
-              receive_id: receiveId,
-              msg_type: "interactive",
-              content: cardContent,
-              // The SDK omits root_id from its types, but Feishu accepts it at runtime.
-              ...(sendMode === "root_create" ? { root_id: sendOptions.rootId } : {}),
-            },
-          }),
-        "Send card failed",
-      );
-    }
+    const sendRes = await requestFeishuApi(
+      () =>
+        sendOptions.replyToMessageId
+          ? this.client.im.message.reply({
+              path: { message_id: sendOptions.replyToMessageId },
+              data: {
+                msg_type: "interactive",
+                content: cardContent,
+                ...(sendOptions.replyInThread ? { reply_in_thread: true } : {}),
+              },
+            })
+          : this.client.im.message.create({
+              params: { receive_id_type: receiveIdType },
+              data: {
+                receive_id: receiveId,
+                msg_type: "interactive",
+                content: cardContent,
+                // The SDK omits root_id from its types, but Feishu accepts it at runtime.
+                ...(sendOptions.rootId ? { root_id: sendOptions.rootId } : {}),
+              },
+            }),
+      "Send card failed",
+    );
     if (sendRes.code !== 0) {
       throw new Error(`Send card failed: ${sendRes.msg}`);
     }
