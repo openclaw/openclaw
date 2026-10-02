@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { ok } from "@openclaw/normalization-core/result";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
 import { applyClawHubSkillUninstall } from "../skills/lifecycle/clawhub-uninstall.js";
@@ -407,11 +407,82 @@ describe("Claw package removal", () => {
     expect(store.claimPackageRef).toHaveBeenLastCalledWith(
       expect.objectContaining({ ref: "audit" }),
       "complete",
-      expect.anything(),
+      expect.objectContaining({
+        lease: { assertCurrent: expect.any(Function), release: expect.any(Function) },
+      }),
     );
   });
 
-  it.each(["discovery", "uninstall"])(
+  it.each(["resolved", "rejected"])(
+    "waits for the package claim before uninstalling when persistence is %s",
+    async (outcome) => {
+      const ref = packageRef();
+      const store = packageRefStore(ref);
+      const started = createDeferred();
+      const resume = createDeferred();
+      const failure = new Error("Package claim was refused.");
+      const uninstallPlugin = vi.fn<NonNullable<PackageRemovalDeps["uninstallPlugin"]>>(async () =>
+        ok({
+          pluginId: "audit",
+          requestedPluginId: "audit",
+          pluginIds: ["audit"],
+          removed: [],
+          warnings: [],
+        }),
+      );
+      const removing = applyClawPackageRemovals(
+        [
+          {
+            packageRef: ref,
+            workspace: install.workspace,
+            action: "uninstall",
+            affectedClawAgentIds: [],
+            pluginId: "audit",
+          },
+        ],
+        {
+          deps: {
+            ...store,
+            claimPackageRef: async (claimed, status) => {
+              if (status === "pending") {
+                started.resolve();
+                await resume.promise;
+                if (outcome === "rejected") {
+                  throw failure;
+                }
+              }
+              return store.claimPackageRef(claimed, status);
+            },
+            resolvePlugin: vi.fn().mockResolvedValue(installedPlugin()),
+            uninstallPlugin,
+          },
+        },
+      );
+      try {
+        await awaitGateBeforeSettlement(
+          started.promise,
+          removing,
+          "Removal settled before reaching its package claim.",
+        );
+        expect(uninstallPlugin).not.toHaveBeenCalled();
+        expect(store.readPackageRefs()).toEqual([ref]);
+      } finally {
+        resume.resolve();
+      }
+
+      await expect(removing).resolves.toMatchObject({
+        packages: [
+          outcome === "resolved"
+            ? { action: "uninstalled" }
+            : { action: "error", reason: failure.message },
+        ],
+      });
+      expect(uninstallPlugin).toHaveBeenCalledTimes(outcome === "resolved" ? 1 : 0);
+      expect(store.readPackageRefs()).toEqual([ref]);
+    },
+  );
+
+  it.each(["claim", "discovery", "uninstall"])(
     "refuses package mutations when parent deletion ends during %s",
     async (stage) => {
       const ref = packageRef();
@@ -428,6 +499,16 @@ describe("Claw package removal", () => {
         },
         deps: {
           ...store,
+          claimPackageRef: async (
+            claimed: PersistedClawPackageRef,
+            status: PersistedClawPackageRef["status"],
+          ) => {
+            if (stage === "claim") {
+              started.resolve();
+              await resume.promise;
+            }
+            return store.claimPackageRef(claimed, status);
+          },
           resolvePlugin: vi.fn(async () => {
             if (stage === "discovery") {
               started.resolve();
@@ -476,7 +557,11 @@ describe("Claw package removal", () => {
         options,
       );
       try {
-        await started.promise;
+        await awaitGateBeforeSettlement(
+          started.promise,
+          removing,
+          `Removal settled before its ${stage} authority checkpoint.`,
+        );
         active = false;
       } finally {
         resume.resolve();

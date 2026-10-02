@@ -611,9 +611,10 @@ the bounded delta. The main thread retains display/profile projection, byte
 budgets, and fresh sharing checks against the originally admitted sources. A
 failed visibility lookup joins worker retirement before its partial facts return;
 the host observes that failure only if projection reaches the lookup before a
-history reset. Pending inputs and receipts, retained
-transcript-session keys, and SSE inline subagent visibility reads remain migration
-debt. Process-held incognito databases and the existing
+history reset. SSE inline appends prepare source/run visibility in the same worker,
+retaining their numeric message sequence and rechecking source custody and stream
+authority before publication. Pending inputs and receipts and retained
+transcript-session keys remain migration debt. Process-held incognito databases and the existing
 CLI-import history path still need their owner/lifetime migration; they are not
 new synchronous exceptions or fallbacks for a failed durable worker read.
 

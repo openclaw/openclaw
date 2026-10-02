@@ -22,7 +22,7 @@ import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { minimatch } from "minimatch";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { parse } from "yaml";
+import { isAlias, parse, parseDocument, visit } from "yaml";
 import {
   buildChildEnv,
   resolveShardPlans,
@@ -2632,6 +2632,24 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     expect(git(selected, "diff", "--name-only", base, "HEAD")).toBe("change.txt");
   });
 
+  it("keeps action manifests within the runner's anchor-free YAML grammar", () => {
+    const files = globSync([".github/actions/**/action.yml", ".github/actions/**/action.yaml"]);
+    expect(files.length).toBeGreaterThan(0);
+    const unsupported: string[] = [];
+    for (const file of files) {
+      const document = parseDocument(readFileSync(file, "utf8"));
+      expect(document.errors, file).toEqual([]);
+      visit(document, {
+        Node(_key, node) {
+          if (isAlias(node) || node.anchor) {
+            unsupported.push(file);
+          }
+        },
+      });
+    }
+    expect(unsupported).toEqual([]);
+  });
+
   it("keeps setup cache access explicit and isolates every cache write", () => {
     const setupActionPaths = [
       ".github/actions/setup-node-env/action.yml",
@@ -2785,6 +2803,30 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           const authority = `${jobCondition ?? ""} ${step.if ?? ""}`;
           expect(authority).toContain("github.repository == 'openclaw/openclaw'");
           expect(authority).toContain("github.event_name == 'workflow_dispatch'");
+          continue;
+        }
+        if (step.with?.path === ".artifacts/ci-sdk-declarations/sdk.json.gz") {
+          expect(file).toBe(".github/actions/sdk-declarations/action.yml");
+          const action = parse(readFileSync(file, "utf8"));
+          const pack = action.runs.steps.find(
+            (candidate: WorkflowStep) => candidate.id === "main-pack",
+          );
+          expect(step.if).toBe(pack.if);
+          for (const requirement of [
+            "success()",
+            "inputs.mode == 'save-main'",
+            "steps.identity.outputs.enabled == 'true'",
+            "github.repository == 'openclaw/openclaw'",
+            "github.ref == 'refs/heads/main'",
+            "inputs.candidate-trust == 'main'",
+            "inputs.cache-write-allowed == 'true'",
+            "inputs.cache-mode != 'off'",
+            "inputs.frozen-target != 'true'",
+            "inputs.compatibility-target != 'true'",
+            "inputs.release-gate != 'true'",
+          ]) {
+            expect(step.if).toContain(requirement);
+          }
           continue;
         }
         const condition = String(step.if);
@@ -5989,18 +6031,19 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(buildChecks.run).toContain(
       "startup_builder=(node scripts/ensure-cli-startup-build.mjs)",
     );
+    expect(additionalChecks.run).toBe("bash .ci-harness/scripts/ci-additional-checks.sh");
     expect(qaBuild.run.match(/pnpm build qaRuntime/gu)).toHaveLength(1);
     expect(qaBuild.run).not.toContain("package-openclaw-for-docker");
-    expect(additionalChecks.run).toContain(
+    expect(readTrackedText("scripts/ci-additional-checks.sh")).toContain(
       "boundary_runner=(node --import tsx scripts/run-additional-boundary-checks.mts)",
     );
-    expect(additionalChecks.run).toContain(
+    expect(readTrackedText("scripts/ci-additional-checks.sh")).toContain(
       "boundary_runner=(node scripts/run-additional-boundary-checks.mjs)",
     );
-    expect(additionalChecks.run).not.toContain(
+    expect(readTrackedText("scripts/ci-additional-checks.sh")).not.toContain(
       "if [ ! -f scripts/check-session-accessor-boundary.mts ]",
     );
-    expect(additionalChecks.run).not.toContain(
+    expect(readTrackedText("scripts/ci-additional-checks.sh")).not.toContain(
       "if [ ! -f scripts/check-session-transcript-reader-boundary.mts ]",
     );
     const checkLint = workflow.jobs["check-shard"].steps.find(

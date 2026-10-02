@@ -28,7 +28,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
-import { repoName } from "../../lib/session-display.ts";
+import { pathDisplayName } from "../../lib/path-display.ts";
 import {
   resolveSessionPreferredFaceForKey,
   sessionNavigationTarget,
@@ -385,8 +385,8 @@ class WorktreesPage extends OpenClawLightDomElement {
     return renderSettingsRow({
       title: record.name,
       description: html`
-        <span title=${record.repoRoot}>${repoName(record.repoRoot)}</span> · ${record.branch} ·
-        ${this.renderOwner(record)} · ${formatRelativeTimestamp(record.lastActiveAt)}
+        <span title=${record.repoRoot}>${pathDisplayName(record.repoRoot)}</span> · ${record.branch}
+        · ${this.renderOwner(record)} · ${formatRelativeTimestamp(record.lastActiveAt)}
       `,
       control: html`
         ${

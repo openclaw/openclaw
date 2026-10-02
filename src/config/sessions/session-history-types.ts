@@ -154,6 +154,10 @@ export type SessionHistoryWorkerRequest =
         options: SessionTranscriptBoundedMessageTailOptions;
       };
     }
+  | {
+      kind: "inline-visibility";
+      params: { target: SessionTranscriptReadScope; lookup: SessionHistorySubagentLookup };
+    }
   | { kind: "reactions"; params: { target: SessionTranscriptReadScope } }
   | {
       kind: "conversation-binding";
@@ -227,6 +231,7 @@ export type SessionHistoryWorkerRequest =
 export type SessionHistoryWorkerResult =
   | { kind: "active-accounting"; result: SessionTranscriptAccountingSnapshot }
   | { kind: "bounded-tail"; result: SessionTranscriptBoundedMessageTailPage }
+  | { kind: "inline-visibility"; subagentCoordination: SessionHistorySubagentFacts }
   | { kind: "reactions"; result: Record<string, StoredMessageReactionSummary[]> }
   | { kind: "conversation-binding"; result: SessionConversationBinding | null }
   | { kind: "artifacts"; result: SessionArtifactReadResult }

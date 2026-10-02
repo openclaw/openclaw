@@ -467,7 +467,8 @@ function resolveBoundaryTsStampPath(extensionId: string, rootDir = repoRoot) {
   return resolve(rootDir, BOUNDARY_CACHE_ROOT, "compile", `${extensionId}.json`);
 }
 async function runCompileCheck(extensionIds: string[], selectedPreparation: boolean) {
-  if (extensionIds.length === 0) {
+  const sharedSdk = process.env.OPENCLAW_CI_SHARED_SDK === "1";
+  if (extensionIds.length === 0 && !sharedSdk) {
     return {
       prepElapsedMs: 0,
       compileCount: 0,
@@ -484,12 +485,25 @@ async function runCompileCheck(extensionIds: string[], selectedPreparation: bool
     "plugin-sdk boundary prep",
     [
       ...prepareBoundaryArtifactsArgs,
-      ...(selectedPreparation ? [`--extensions=${JSON.stringify(extensionIds)}`] : []),
+      ...(extensionIds.length === 0
+        ? ["--mode=package-boundary"]
+        : selectedPreparation
+          ? [`--extensions=${JSON.stringify(extensionIds)}`]
+          : []),
     ],
     420_000,
   );
   process.stdout.write(preparation.stdout);
   const prepElapsedMs = Date.now() - prepStartedAt;
+  if (extensionIds.length === 0) {
+    return {
+      prepElapsedMs,
+      compileCount: 0,
+      skippedCompileCount: 0,
+      compileElapsedMs: 0,
+      compileTimings: [],
+    };
+  }
   const compileStartedAt = Date.now();
   const availableParallelism = os.availableParallelism();
   const concurrency = resolveCompileConcurrency(process.env, availableParallelism);

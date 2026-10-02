@@ -173,6 +173,7 @@ it.each([
   ["tsx", "--foreign-runtime-option", "watch", "service.js"],
   ["node", "--foreign-runtime-option", "service.js"],
   ["node", "--max-semi-space-size=16", "service.js"],
+  ["node", "--max-semi-space-size", "16", "service.js"],
   ["node", "--test-reporter=spec", "--test", "service.js"],
   ["node", "--test-reporter", "dot", "--test", "service.js"],
   ["node", "--test-reporter=tap", "--test", "service.js"],
