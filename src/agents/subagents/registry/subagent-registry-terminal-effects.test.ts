@@ -66,6 +66,7 @@ it.for(["queued", "pre-commit"] as const)(
         ownersByEntry: new Map(),
       },
     );
+    const retireSupersededRun = vi.spyOn(controller.options, "retireSupersededRun");
     const announce = vi
       .spyOn(controller, "startSubagentAnnounceCleanupFlow")
       .mockReturnValue(false);
@@ -111,7 +112,7 @@ it.for(["queued", "pre-commit"] as const)(
       await pendingWrite;
       await expect(completion).resolves.toBeUndefined();
 
-      expect(controller.options.retireSupersededRun).toHaveBeenCalledExactlyOnceWith(
+      expect(retireSupersededRun).toHaveBeenCalledExactlyOnceWith(
         entry.runId,
         readLifecycleRun(entry),
       );
