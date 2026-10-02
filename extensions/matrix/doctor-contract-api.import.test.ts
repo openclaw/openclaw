@@ -8,7 +8,7 @@ vi.mock("matrix-js-sdk/lib/matrix.js", () => {
   throw new Error("Matrix SDK loaded by a Doctor migration");
 });
 vi.mock("fake-indexeddb", () => {
-  throw new Error("IndexedDB runtime loaded without a legacy snapshot");
+  throw new Error("IndexedDB runtime loaded by a Doctor migration");
 });
 vi.mock("openclaw/plugin-sdk/doctor-repair-runtime", () => {
   throw new Error("Schema repair runtime loaded without an account database");
@@ -24,28 +24,32 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("refuses retired JSON state without changing it or inspecting token-root archives", async () => {
   const stateDir = tempDirs.make("matrix-retired-state-");
+  const filenames = [
+    "thread-bindings.json",
+    "startup-verification.json",
+    "recovery-key.json",
+    "legacy-crypto-migration.json",
+    "crypto-idb-snapshot.json",
+    "storage-meta.json",
+    "inbound-dedupe.json",
+  ];
+  const matrixRoot = path.join(stateDir, "matrix");
   const sources = [
-    path.join(stateDir, "matrix", "accounts", "default", "thread-bindings.json"),
+    matrixRoot,
+    path.join(matrixRoot, "accounts", "default"),
+    path.join(matrixRoot, "accounts", "ops", "matrix.example.org__bot", "0123456789abcdef"),
+  ].flatMap((root) => filenames.map((filename) => path.join(root, filename)));
+  const archives = filenames.map((filename) =>
     path.join(
-      stateDir,
-      "matrix",
+      matrixRoot,
       "accounts",
       "ops",
       "matrix.example.org__bot",
-      "0123456789abcdef",
-      "startup-verification.json",
+      "sync-cache-backup",
+      filename,
     ),
-  ];
-  const archive = path.join(
-    stateDir,
-    "matrix",
-    "accounts",
-    "ops",
-    "matrix.example.org__bot",
-    "sync-cache-backup",
-    "thread-bindings.json",
   );
-  for (const file of [...sources, archive]) {
+  for (const file of [...sources, ...archives]) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, '{"retained":true}\n');
   }
@@ -67,10 +71,12 @@ it("refuses retired JSON state without changing it or inspecting token-root arch
     for (const file of sources) {
       await expect(result).rejects.toThrow(file);
     }
-    await expect(result).rejects.not.toThrow(archive);
+    for (const archive of archives) {
+      await expect(result).rejects.not.toThrow(archive);
+    }
   }
   expect(openPluginStateKeyedStore).not.toHaveBeenCalled();
-  for (const file of [...sources, archive]) {
+  for (const file of [...sources, ...archives]) {
     expect(fs.readFileSync(file, "utf8")).toBe('{"retained":true}\n');
   }
 });
@@ -88,12 +94,7 @@ it("completes absent legacy-state checks without loading client runtimes", async
     oauthDir: path.join(stateDir, "oauth"),
     context: { openPluginStateKeyedStore },
   };
-  for (const id of [
-    "matrix-account-sqlite-schema",
-    "matrix-storage-meta-json-to-plugin-state",
-    "matrix-sync-cache-json-to-plugin-state",
-    "matrix-legacy-crypto-migration-json-to-plugin-state",
-  ]) {
+  for (const id of ["matrix-account-sqlite-schema", "matrix-sync-cache-json-to-plugin-state"]) {
     const migration = stateMigrations.find((entry) => entry.id === id);
     if (!migration) {
       throw new Error(`Missing migration: ${id}`);
