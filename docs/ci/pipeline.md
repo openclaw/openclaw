@@ -668,8 +668,10 @@ If the PR head changes before or during evaluation, the obsolete run stops
 successfully without publishing approval for the replacement commit. The new
 head's automatic event owns its evaluation. Closing an unmerged PR, making it a
 draft, or changing its target also stops the obsolete evaluation successfully.
-Identity and permission changes and real evaluation errors still fail; a lifecycle
-change does not hide an earlier guard error.
+GitHub disabling maintainer edits as a PR closes does not prevent this clean stop
+or completion of merged review evidence. Permission changes on open PRs, other
+identity changes, and real evaluation errors still fail; a lifecycle change does
+not hide an earlier guard error. Cleanup and merge admission retain strict checks.
 
 A merge of the scheduled revision lets the security evaluation finish, including
 when enforcement starts after the merge. Both guards retain their findings in
