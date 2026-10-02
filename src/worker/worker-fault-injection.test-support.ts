@@ -35,7 +35,7 @@ import {
 } from "../gateway/worker-environments/placement-worker-gate.js";
 import * as workerEnv from "../gateway/worker-environments/service.js";
 import * as envStore from "../gateway/worker-environments/store.js";
-import { createWorkerTranscriptCommitStore } from "../gateway/worker-environments/transcript-commit-store.js";
+import { createWorkerTranscriptCommitStore } from "../gateway/worker-environments/transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "../gateway/worker-environments/transcript-commit.js";
 import { onAgentRuntimeEvent } from "../infra/agent-events.js";
 import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";

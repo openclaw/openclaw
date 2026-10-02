@@ -39,7 +39,7 @@ import {
   getWorkerTurnExecutionIdentityCapability,
   runWorkerTurnAdmissionContinuation,
 } from "./placement-turn-claim-events.js";
-import { createWorkerTranscriptCommitStore } from "./transcript-commit-store.js";
+import { createWorkerTranscriptCommitStore } from "./transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {

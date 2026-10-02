@@ -511,6 +511,19 @@ including when ordinary reply delivery fails. Local forced completion and final
 cleanup join the same pending release. Restart recovery, schemas, persisted
 fields, and update behavior are unchanged.
 
+Worker transcript replay-ledger begin, completion, and exact discard use typed
+`placementTranscript` commands in the existing shared-state registry. The
+placement mutation owner captures physical store identity before yielding,
+rechecks live host authority at transaction and commit admission, and returns
+acknowledged receipts through the existing keyed session queue. Pending records
+commit before agent transcript effects; terminal results commit before the RPC
+reply. Lost replies use native commit receipts, never write replay. Unknown
+outcomes retain pending recovery. Only the invocation holding a fresh claim may
+discard after a known rollback, using its original store and exact row identity
+even if request authority has since ended. Database close joins accepted work.
+The agent transcript writer, schema, stored bytes, retention, and update behavior
+are unchanged.
+
 Staged workspace-result pointers also commit through that placement worker. The
 same transaction checks the pending-result claim, immutable staged ref, and exact
 repository session owner, with live caller guards rechecked at admission and
