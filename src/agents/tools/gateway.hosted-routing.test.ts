@@ -43,7 +43,10 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import { resolveSkillWorkshopApprovalForFinalParams } from "../agent-tools.before-tool-call.approval.js";
-import { getGatewayToolCallerIdentity, withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
 import { runWithGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import { runWithGatewaySessionSpawnParentExecutionIdentity } from "./gateway-session-spawn-execution-identity.js";
 import { callGatewayTool, resolveMessageActionAgentRuntimeIdentityToken } from "./gateway.js";
@@ -279,7 +282,6 @@ describe("Gateway tool identity and hosted routing", () => {
       },
     );
   });
-
 
   it("dispatches hosted screen commands with the admitted UI identity", async () => {
     await runHosted(async (caller) => {

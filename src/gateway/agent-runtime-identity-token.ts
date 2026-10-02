@@ -273,7 +273,11 @@ function parsePayload(value: unknown, nowMs: number): AgentRuntimeIdentityTokenP
 
 export type AgentRuntimeIdentityTokenParams = Omit<
   AgentRuntimeIdentity,
-  "kind" | "delegatedAuthority" | "executionIdentity" | "cronSelfManagementContext"
+  | "kind"
+  | "delegatedAuthority"
+  | "executionIdentity"
+  | "cronSelfManagementContext"
+  | "fullPermission"
 > & {
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   cronSelfManagementJobId?: string;
