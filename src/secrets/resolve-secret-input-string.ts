@@ -2,7 +2,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeSecretInputString,
-  resolveSecretInputRef,
+  parseSecretRef,
   type SecretRef,
 } from "../config/types.secrets.js";
 import { resolveSecretRefString } from "./resolve.js";
@@ -28,10 +28,7 @@ export async function materializeSecretInput(params: {
   onResolveRefError?: (error: unknown, ref: SecretRef) => never;
 }): Promise<string | undefined> {
   const normalize = params.normalize ?? normalizeSecretInputString;
-  const { ref } = resolveSecretInputRef({
-    value: params.value,
-    defaults: params.defaults ?? params.config.secrets?.defaults,
-  });
+  const ref = parseSecretRef(params.value, params.defaults ?? params.config.secrets?.defaults);
   if (!ref) {
     return normalize(params.value);
   }

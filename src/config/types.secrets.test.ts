@@ -54,7 +54,7 @@ describe("collectEnvSecretRefIds", () => {
         nested: [{ token: "$DISCORD_BOT_TOKEN" }],
         ignored: { source: "file", provider: "default", id: "/run/secret" },
       }),
-    ).toEqual(new Set(["OPENAI_API_KEY", "LEGACY_API_KEY", "DISCORD_BOT_TOKEN"]));
+    ).toEqual(new Set(["OPENAI_API_KEY", "DISCORD_BOT_TOKEN"]));
   });
 });
 

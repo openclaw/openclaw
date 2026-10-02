@@ -1,7 +1,7 @@
 /** Shared secrets runtime resolver context, assignments, and warning helpers. */
 import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SecretRef } from "../config/types.secrets.js";
+import { isLegacySecretRefWithoutProvider, type SecretRef } from "../config/types.secrets.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { secretRefKey } from "./ref-contract.js";
 import type { SecretRefResolveCache } from "./resolve-types.js";
@@ -165,6 +165,9 @@ export function collectSecretInputAssignment(params: {
   apply: (value: unknown) => void;
   applyUnavailable?: () => void;
 }): void {
+  if (params.active !== false && isLegacySecretRefWithoutProvider(params.value)) {
+    throw new Error(`${params.path}: SecretRef requires a provider; run openclaw doctor --fix.`);
+  }
   const ref = resolveConfigSecretRef({
     config: params.context.sourceConfig,
     path: params.path,

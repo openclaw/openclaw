@@ -47,11 +47,37 @@ describe("provider auth write compatibility", () => {
     const root = tempDirs.make("openclaw-provider-auth-callback-");
     const agentDir = path.join(root, "agents", "work", "agent");
     fs.mkdirSync(agentDir, { recursive: true });
+    const legacy: AuthProfileStore = { version: 1, profiles: {} };
+    Object.assign(legacy.profiles, {
+      "sample:saved": {
+        type: "token",
+        provider: "sample",
+        tokenRef: { source: "env", id: "SYNTHETIC_SAVED_TOKEN" },
+      },
+    });
+    saveAuthProfileStore(legacy, agentDir);
+    expect(loadPersistedAuthProfileStore(agentDir)?.profiles["sample:saved"]).toEqual({
+      type: "token",
+      provider: "sample",
+      tokenRef: { source: "env", provider: "default", id: "SYNTHETIC_SAVED_TOKEN" },
+    });
     const updater = vi.fn((store: AuthProfileStore) => {
       store.profiles["sample:new"] = { type: "api_key", provider: "sample", key: "synthetic-key" };
+      Object.assign(store.profiles, {
+        "sample:ref": {
+          type: "api_key",
+          provider: "sample",
+          keyRef: { source: "env", id: "SYNTHETIC_AUTH_KEY" },
+        },
+        "sample:token": {
+          type: "token",
+          provider: "sample",
+          tokenRef: { source: "env", id: "SYNTHETIC_AUTH_TOKEN" },
+        },
+      });
       return true;
     });
-    await updateAuthProfileStoreWithLock({ agentDir, updater });
+    const updated = await updateAuthProfileStoreWithLock({ agentDir, updater });
     expect(updater).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ version: 1, profiles: expect.any(Object) }),
     );
@@ -60,6 +86,18 @@ describe("provider auth write compatibility", () => {
       provider: "sample",
       key: "synthetic-key",
     });
+    for (const store of [updated, loadPersistedAuthProfileStore(agentDir)]) {
+      expect(store?.profiles["sample:ref"]).toEqual({
+        type: "api_key",
+        provider: "sample",
+        keyRef: { source: "env", provider: "default", id: "SYNTHETIC_AUTH_KEY" },
+      });
+      expect(store?.profiles["sample:token"]).toEqual({
+        type: "token",
+        provider: "sample",
+        tokenRef: { source: "env", provider: "default", id: "SYNTHETIC_AUTH_TOKEN" },
+      });
+    }
   });
 
   it.each([

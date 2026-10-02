@@ -102,6 +102,10 @@ export function normalizeLegacyCredentialFields(
         : undefined;
   if (fields) {
     const [valueField, refField] = fields;
+    const explicitRef = coerceSecretRef(entry[refField]);
+    if (explicitRef) {
+      entry[refField] = explicitRef;
+    }
     const value = entry[valueField];
     const ref = isRecord(value) ? coerceSecretRef(value) : null;
     if (ref && !coerceSecretRef(entry[refField])) {

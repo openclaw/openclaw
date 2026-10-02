@@ -277,6 +277,36 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toStrictEqual([]);
   });
 
+  it.each(["env", "file", "exec", "store"] as const)(
+    "adds the configured %s provider only to registered SecretRef fields",
+    (source) => {
+      const id = source === "file" ? "/SYNTHETIC_KEY" : "SYNTHETIC_KEY";
+      const original = legacyConfig({
+        secrets: { defaults: { [source]: "configured" } },
+        models: {
+          providers: {
+            example: {
+              apiKey: { source, id },
+              models: [],
+              baseUrl: "https://example.test/v1",
+            },
+          },
+        },
+        plugins: { entries: { opaque: { config: { metadata: { source, id: "SYNTHETIC_KEY" } } } } },
+      });
+      const before = structuredClone(original);
+      const result = normalizeCompatibilityConfigValues(original);
+      expect(result.config.models?.providers?.example?.apiKey).toEqual({
+        source,
+        provider: "configured",
+        id,
+      });
+      expect(result.config.plugins?.entries?.opaque).toEqual(original.plugins?.entries?.opaque);
+      expect(original).toEqual(before);
+      expect(normalizeCompatibilityConfigValues(result.config).changes).toEqual([]);
+    },
+  );
+
   it.each(["whatsapp", "discord", "telegram", "slack", "signal", "mattermost"])(
     "preserves the existing %s account set and shared policy",
     (channelId) => {

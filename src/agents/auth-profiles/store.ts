@@ -16,6 +16,7 @@ import { readUserModelAuthProfile } from "../../state/user-model-accounts.js";
 import { isRecord, resolveUserPath } from "../../utils.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
+import { normalizeAuthProfileSecretRefs } from "./credential-normalize.js";
 import {
   copyCanonicalAuthProfileCredentialObservations,
   observeCanonicalAuthProfileCredentials,
@@ -998,6 +999,9 @@ export function createAuthProfileStoreRuntime(
     persistedStores: PersistedAuthProfileStores;
   }): AuthProfileStore {
     const localStore = cloneAuthProfileStore(removePersonalAuthProfileReferences(params.store));
+    for (const [profileId, credential] of Object.entries(localStore.profiles)) {
+      localStore.profiles[profileId] = normalizeAuthProfileSecretRefs(credential);
+    }
     let externalProfiles: RuntimeExternalOAuthProfile[] | undefined;
     const getExternalProfiles = (): RuntimeExternalOAuthProfile[] =>
       (externalProfiles ??= listRuntimeExternalAuthProfiles({

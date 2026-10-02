@@ -3,13 +3,13 @@ import fs from "node:fs";
 import nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDoctorConfigSnapshot } from "../commands/doctor-config-snapshot.test-helpers.js";
+import { migrateLegacySecretInputs } from "../commands/doctor/shared/legacy-secret-inputs.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_SECRETREF_ENV_MARKER_PREFIX } from "../config/types.secrets.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
 import { fetchNpmPackageTargetStatus } from "../infra/update-check-package-target.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
-import { migrateLegacySecretRefEnvMarkers } from "../secrets/legacy-secretref-env-marker.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
@@ -3510,7 +3510,7 @@ describe("doctor health contributions", () => {
         },
       },
     } as OpenClawConfig;
-    const migrated = migrateLegacySecretRefEnvMarkers(legacyConfig);
+    const migrated = migrateLegacySecretInputs(legacyConfig);
     expect(migrated.changes).toEqual([
       `Moved models.providers.clawrouter.apiKey ${legacyMarker} marker → structured env SecretRef.`,
     ]);
@@ -3539,7 +3539,7 @@ describe("doctor health contributions", () => {
     ctx.configResult.shouldWriteConfig = false;
     await writeConfigContribution.run(ctx);
 
-    expect(migrateLegacySecretRefEnvMarkers(ctx.cfg).changes).toEqual([]);
+    expect(migrateLegacySecretInputs(ctx.cfg).changes).toEqual([]);
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 

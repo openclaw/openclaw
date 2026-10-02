@@ -1,11 +1,28 @@
+import { coerceSecretRef } from "../../config/types.secrets.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import type { AuthProfileCredential } from "./types.js";
+
+/** Public SDK write ingress retains its legacy input contract and publishes canonical refs. */
+export function normalizeAuthProfileSecretRefs(
+  credential: AuthProfileCredential,
+): AuthProfileCredential {
+  if (credential.type === "api_key") {
+    const keyRef = coerceSecretRef(credential.keyRef);
+    return keyRef && keyRef !== credential.keyRef ? { ...credential, keyRef } : credential;
+  }
+  if (credential.type === "token") {
+    const tokenRef = coerceSecretRef(credential.tokenRef);
+    return tokenRef && tokenRef !== credential.tokenRef ? { ...credential, tokenRef } : credential;
+  }
+  return credential;
+}
 
 // Upsert paths normalize literal secret strings but preserve SecretRef-backed
 // credentials for the secret resolver.
 export function normalizeAuthProfileCredential(
   credential: AuthProfileCredential,
 ): AuthProfileCredential {
+  credential = normalizeAuthProfileSecretRefs(credential);
   if (credential.type === "api_key") {
     if (typeof credential.key !== "string") {
       return credential;

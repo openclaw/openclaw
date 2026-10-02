@@ -5,7 +5,11 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { coerceSecretRef } from "../../config/types.secrets.js";
+import {
+  coerceSecretRef,
+  isLegacySecretRefWithoutProvider,
+  parseSecretRef,
+} from "../../config/types.secrets.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { asBoolean } from "../../utils/boolean.js";
 import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
@@ -137,7 +141,7 @@ function normalizeRawCredentialEntry(
   };
   if (entry.type === "api_key") {
     const key = readNonBlankString(entry.key);
-    const keyRef = coerceSecretRef(entry.keyRef);
+    const keyRef = parseSecretRef(entry.keyRef);
     const metadata = normalizeCredentialMetadata(entry.metadata);
     if (keyRef) {
       // Canonical refs can alias frozen cached rows; runtime stores remain mutable.
@@ -150,7 +154,7 @@ function normalizeRawCredentialEntry(
     }
   } else if (entry.type === "token") {
     const token = readNonBlankString(entry.token);
-    const tokenRef = coerceSecretRef(entry.tokenRef);
+    const tokenRef = parseSecretRef(entry.tokenRef);
     if (token !== undefined) {
       normalized.token = token;
     }
@@ -265,6 +269,8 @@ export function coercePersistedAuthProfileStore(raw: unknown): AuthProfileStore 
       normalizeProviderId(value.provider) &&
       (!Object.hasOwn(value, "type") ||
         value.type === "apiKey" ||
+        (declaredType === "api_key" && isLegacySecretRefWithoutProvider(value.keyRef)) ||
+        (declaredType === "token" && isLegacySecretRefWithoutProvider(value.tokenRef)) ||
         (declaredType === "api_key" &&
           !coerceSecretRef(value.keyRef) &&
           ((isRecord(value.key) && coerceSecretRef(value.key) !== null) ||

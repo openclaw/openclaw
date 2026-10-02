@@ -61,13 +61,13 @@ import {
 } from "./runtime-state.js";
 
 describe("secret store references", () => {
-  it("finds canonical and provider-defaulted store refs without matching other sources", () => {
+  it("finds canonical store refs without interpreting providerless or other-source values", () => {
     const config = {
       secrets: { defaults: { store: "default" } },
       models: {
         providers: {
           one: {
-            apiKey: { source: "store", id: "TEAM_API_KEY" },
+            apiKey: { source: "store", provider: "default", id: "TEAM_API_KEY" },
             models: [],
           },
         },
@@ -76,6 +76,19 @@ describe("secret store references", () => {
     expect(
       collectSecretStoreRefKeysInSnapshot({ sourceConfig: config, authStores: [] }, "TEAM_API_KEY"),
     ).toEqual(new Set(["store:default:TEAM_API_KEY"]));
+    expect(
+      collectSecretStoreRefKeysInSnapshot(
+        {
+          sourceConfig: {
+            plugins: {
+              entries: { sample: { config: { apiKey: { source: "store", id: "TEAM_API_KEY" } } } },
+            },
+          },
+          authStores: [],
+        },
+        "TEAM_API_KEY",
+      ),
+    ).toEqual(new Set());
     expect(
       collectSecretStoreRefKeysInSnapshot(
         {

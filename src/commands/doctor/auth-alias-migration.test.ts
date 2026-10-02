@@ -207,7 +207,10 @@ describe("Doctor stored auth alias migration", () => {
       await withOpenClawTestState(
         { label: "auth-credential-fields", layout: "home" },
         async (fixture) => {
-          const cfg: OpenClawConfig = { plugins: { enabled: false } };
+          const cfg: OpenClawConfig = {
+            plugins: { enabled: false },
+            secrets: { defaults: { env: "configured-env" } },
+          };
           const ref = { source: "env", provider: "default", id: "SYNTHETIC_AUTH_KEY" };
           const original = {
             version: 1,
@@ -254,6 +257,17 @@ describe("Doctor stored auth alias migration", () => {
               },
               "example:type": { type: "apiKey", provider: "example", apiKey: "synthetic-type-key" },
               "example:ref": { type: "api_key", provider: "example", key: ref },
+              "example:providerless-key": {
+                type: "api_key",
+                provider: "example",
+                keyRef: { source: "env", id: "SYNTHETIC_AUTH_KEY" },
+                extension: "preserved",
+              },
+              "example:providerless-token": {
+                type: "token",
+                provider: "example",
+                tokenRef: { source: "env", id: "SYNTHETIC_AUTH_KEY" },
+              },
               "example:api-ref": { type: "api_key", provider: "example", key: null, apiKey: ref },
               "example:empty": {
                 type: "api_key",
@@ -344,6 +358,13 @@ describe("Doctor stored auth alias migration", () => {
               },
               "example:type": { type: "api_key", provider: "example", key: "synthetic-type-key" },
               "example:ref": { type: "api_key", provider: "example", keyRef: ref },
+              "example:providerless-key": {
+                type: "api_key",
+                provider: "example",
+                keyRef: ref,
+                extension: "preserved",
+              },
+              "example:providerless-token": { type: "token", provider: "example", tokenRef: ref },
               "example:api-ref": { type: "api_key", provider: "example", keyRef: ref },
               "example:empty": { type: "api_key", provider: "example", key: "synthetic-fallback" },
               "example:token": {
