@@ -190,31 +190,22 @@ export function createMemoryWikiSourceSyncStateStore(
         for (const syncKey of plan.deleteKeys) {
           await store.delete(resolveStateEntryKey(vaultRootKey, syncKey));
         }
-        for (const syncKey of plan.upsertKeys) {
-          const entry = state.entries[syncKey];
-          if (!entry) {
-            throw new Error(`Missing tracked Memory Wiki source sync entry: ${syncKey}`);
+      } else {
+        state = normalizeSourceSyncState(state);
+        const nextKeys = new Set(
+          Object.keys(state.entries).map((syncKey) => resolveStateEntryKey(vaultRootKey, syncKey)),
+        );
+        for (const row of await store.entries()) {
+          if (row.value.vaultRootKey === vaultRootKey && !nextKeys.has(row.key)) {
+            await store.delete(row.key);
           }
-          await store.register(resolveStateEntryKey(vaultRootKey, syncKey), {
-            ...entry,
-            vaultRootKey,
-            syncKey,
-          });
-        }
-        return;
-      }
-      const normalized = normalizeSourceSyncState(state);
-      const nextKeys = new Set(
-        Object.keys(normalized.entries).map((syncKey) =>
-          resolveStateEntryKey(vaultRootKey, syncKey),
-        ),
-      );
-      for (const row of await store.entries()) {
-        if (row.value.vaultRootKey === vaultRootKey && !nextKeys.has(row.key)) {
-          await store.delete(row.key);
         }
       }
-      for (const [syncKey, entry] of Object.entries(normalized.entries)) {
+      for (const syncKey of plan?.upsertKeys ?? Object.keys(state.entries)) {
+        const entry = state.entries[syncKey];
+        if (!entry) {
+          throw new Error(`Missing tracked Memory Wiki source sync entry: ${syncKey}`);
+        }
         await store.register(resolveStateEntryKey(vaultRootKey, syncKey), {
           ...entry,
           vaultRootKey,

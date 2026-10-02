@@ -17,7 +17,6 @@ import {
   resolveMemoryWikiImportRunsDir,
 } from "./src/import-runs-state.js";
 import { createMemoryWikiSourceSyncStateStore } from "./src/source-sync-state.js";
-export { legacyConfigRules, normalizeCompatibilityConfig } from "./src/config-compat.js";
 
 const LEGACY_MEMORY_WIKI_COMPILED_CACHE_PATHS = [
   ".openclaw-wiki/cache/agent-digest.json",
