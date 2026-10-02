@@ -175,6 +175,8 @@ describe("Codex tool response fidelity", () => {
     { order: "after", status: "completed", isError: false },
     { order: "before", status: "failed", isError: true },
     { order: "after", status: "failed", isError: true },
+    { order: "before", status: "interrupted", isError: true },
+    { order: "after", status: "interrupted", isError: true },
   ])(
     "uses the native collaboration $status outcome when output arrives $order completion",
     async ({ order, status, isError }) => {
