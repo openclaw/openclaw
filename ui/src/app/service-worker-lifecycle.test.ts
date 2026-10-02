@@ -291,6 +291,7 @@ describe("Control UI service worker notification scope", () => {
 
       expect(notification.title).toBe(payload.title);
       expect(notification.options.body).toBe(payload.body);
+      expect(notification.options.silent).toBe(false);
       expect(notification.options.data.url).toBe(target ?? scope);
       expect(notification.options.data.explicitUrl).toBe(target !== null);
 
@@ -342,6 +343,29 @@ describe("Control UI service worker notification scope", () => {
 
     expect(requested.options).toMatchObject({ tag, renotify: false });
     expect(terminal.options).toMatchObject({ tag, renotify: false });
+  });
+
+  it("requests audible delivery on macOS without making replacements alert", async () => {
+    // macOS defaults Web Push sound to off, so the worker must explicitly ask
+    // for it; the same shared options must keep same-tag replacements quiet.
+    const worker = createNotificationServiceWorker(nestedScope, []);
+    const tag = "openclaw-approval-exec:sound";
+
+    const initial = await worker.dispatchPush({
+      title: "OpenClaw",
+      body: "Attention notification",
+      tag,
+      renotify: false,
+    });
+    const replacement = await worker.dispatchPush({
+      title: "OpenClaw",
+      body: "Replacement notification",
+      tag,
+      renotify: false,
+    });
+
+    expect(initial.options).toMatchObject({ silent: false, renotify: false });
+    expect(replacement.options).toMatchObject({ silent: false, renotify: false });
   });
 
   it.each([
@@ -446,6 +470,7 @@ type ServiceWorkerNotificationOptions = {
   badge: string;
   tag: string;
   renotify: boolean;
+  silent: boolean;
   data: { url: string; explicitUrl: boolean };
 };
 
