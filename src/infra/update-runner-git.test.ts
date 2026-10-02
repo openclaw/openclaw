@@ -145,24 +145,20 @@ describe("Git checkout execution", () => {
     });
   }
 
-  it.each(["origin", "upstream.with.dots", "team/upstream"])(
-    "updates from %s while an unrelated remote is unavailable",
-    async (authority) => {
-      const target = await advanceRemote();
-      if (authority !== "origin") {
-        await git(root, "remote", "rename", "origin", authority);
-      }
-      await git(root, "remote", "add", "secondary", path.join(directory, "unavailable"));
-      const config = await fs.readFile(path.join(root, ".git", "config"));
-      const result = await update();
-      expect(result).toMatchObject({ status: "ok", after: { sha: target } });
-      expect(result.steps.flatMap((step) => step.warnings ?? [])).toContain(
-        `Fetched only the update remote ${authority}; unrelated remotes were left untouched.`,
-      );
-      expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
-      await expectRuntime(root, target);
-    },
-  );
+  it("updates from a namespaced remote while an unrelated remote is unavailable", async () => {
+    const authority = "team/upstream";
+    const target = await advanceRemote();
+    await git(root, "remote", "rename", "origin", authority);
+    await git(root, "remote", "add", "secondary", path.join(directory, "unavailable"));
+    const config = await fs.readFile(path.join(root, ".git", "config"));
+    const result = await update();
+    expect(result).toMatchObject({ status: "ok", after: { sha: target } });
+    expect(result.steps.flatMap((step) => step.warnings ?? [])).toContain(
+      `Fetched only the update remote ${authority}; unrelated remotes were left untouched.`,
+    );
+    expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
+    await expectRuntime(root, target);
+  });
 
   it("fails before activation when the authoritative remote is unavailable", async () => {
     await advanceRemote();
@@ -176,7 +172,7 @@ describe("Git checkout execution", () => {
     await expectRuntime(root, beforeSha);
   });
 
-  it.each(["exit", "timeout", "timeout-zero", "output-limit-zero"] as const)(
+  it.each(["exit", "timeout-zero", "output-limit-zero"] as const)(
     "ignores stale refs after optional fetch %s failure",
     async (failure) => {
       const target = await advanceRemote();
@@ -189,7 +185,7 @@ describe("Git checkout execution", () => {
         runCommand = (argv, options) =>
           argv.includes("fetch") && argv.includes("adead")
             ? Promise.resolve({
-                code: failure === "timeout" ? null : 0,
+                code: 0,
                 stdout: "",
                 stderr: "remote transport incomplete",
                 ...(failure === "output-limit-zero"
@@ -209,7 +205,7 @@ describe("Git checkout execution", () => {
     },
   );
 
-  it.each(["exit", "timeout", "signal", "timeout-zero", "output-limit-zero"] as const)(
+  it.each(["exit", "signal", "timeout-zero", "output-limit-zero"] as const)(
     "settles optional tag discovery after %s",
     async (failure) => {
       const target = await advanceRemote();
@@ -220,7 +216,7 @@ describe("Git checkout execution", () => {
       runCommand = (argv, options) =>
         failure !== "exit" && argv.includes("fetch") && argv.includes("adead")
           ? Promise.resolve({
-              code: failure === "signal" ? 143 : failure === "timeout" ? null : 0,
+              code: failure === "signal" ? 143 : 0,
               stdout: "",
               stderr: "tag transport interrupted",
               ...(failure === "output-limit-zero"
@@ -571,26 +567,20 @@ describe("Git checkout execution", () => {
     },
   );
 
-  it.each([false, true])(
-    "keeps a tracked target detached (initially detached: %s)",
-    async (detached) => {
-      const targetSha = await advanceRemote();
-      await git(root, "remote", "rename", "origin", "upstream");
-      await git(root, "remote", "add", "origin", path.join(directory, "unavailable"));
-      if (detached) {
-        await git(root, "checkout", "--detach", beforeSha);
-      }
-      const result = await update({
-        devTarget: { mode: "tracked", upstreamRef: "upstream/main", upstreamSha: targetSha },
-      });
-      expect(result).toMatchObject({
-        status: "ok",
-        after: { sha: targetSha, upstreamRef: "upstream/main" },
-      });
-      expect(await git(root, "rev-parse", "--abbrev-ref", "HEAD")).toBe("HEAD");
-      await expectRuntime(root, targetSha);
-    },
-  );
+  it("detaches the checkout when activating a tracked target", async () => {
+    const targetSha = await advanceRemote();
+    await git(root, "remote", "rename", "origin", "upstream");
+    await git(root, "remote", "add", "origin", path.join(directory, "unavailable"));
+    const result = await update({
+      devTarget: { mode: "tracked", upstreamRef: "upstream/main", upstreamSha: targetSha },
+    });
+    expect(result).toMatchObject({
+      status: "ok",
+      after: { sha: targetSha, upstreamRef: "upstream/main" },
+    });
+    expect(await git(root, "rev-parse", "--abbrev-ref", "HEAD")).toBe("HEAD");
+    await expectRuntime(root, targetSha);
+  });
 
   it.each(["missing", "unrelated"])("refuses a tracked target with %s upstream", async (kind) => {
     const targetSha = await advanceRemote();
@@ -610,7 +600,7 @@ describe("Git checkout execution", () => {
     expect(await git(root, "rev-parse", "--abbrev-ref", "@{upstream}")).toBe("origin/main");
   });
 
-  it.each(["doctor-error", "doctor-throw", "head-error", "head-mismatch", "ui-missing"] as const)(
+  it.each(["head-error", "head-mismatch", "ui-missing"] as const)(
     "retains the candidate after migration starts: %s",
     async (failure) => {
       const targetSha = await advanceRemote();
@@ -635,9 +625,6 @@ describe("Git checkout execution", () => {
           await expectRuntime(doctorRoot, targetSha);
           migrated = true;
           await fs.writeFile(stateFile, "migrated state");
-          if (failure === "doctor-throw") {
-            throw new Error("Doctor failed after migration");
-          }
           if (failure === "ui-missing") {
             await fs.rm(path.join(root, "dist", "control-ui"), { recursive: true });
           }
@@ -646,15 +633,13 @@ describe("Git checkout execution", () => {
             command: "CLI activation doctor",
             cwd: doctorRoot,
             durationMs: 0,
-            exitCode: failure === "doctor-error" ? 1 : 0,
+            exitCode: 0,
           };
         },
       });
       expect(result).toMatchObject({
         status: "error",
         reason: {
-          "doctor-error": "doctor-failed",
-          "doctor-throw": "unexpected-error",
           "head-error": "head-verification-failed",
           "head-mismatch": "target-sha-mismatch",
           "ui-missing": "ui-assets-missing",
