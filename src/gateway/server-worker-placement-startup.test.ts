@@ -31,6 +31,7 @@ function placementStoreDefaults(
   readPlacements: () => ReadonlyArray<{ sessionId: string }> = () => [],
 ) {
   return {
+    registerTurnClaimClosedHandler: vi.fn(() => vi.fn()),
     readChangeSnapshot: async () => readPlacements(),
     readProjection: async () => ({
       placements: new Map(readPlacements().map((placement) => [placement.sessionId, placement])),
@@ -507,6 +508,8 @@ describe("worker placement startup health lifetime", () => {
   });
 
   it("publishes shutdown before enrollment cancellation and drains guarded recovery", async () => {
+    resetGatewayWorkAdmission();
+    const unregisterTurnClaimClosed = vi.fn();
     type ReconcileGuard = (
       environmentId: string,
       reconcileCore: () => Promise<void>,
@@ -567,6 +570,7 @@ describe("worker placement startup health lifetime", () => {
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
         ...placementStoreDefaults(() => [placement]),
+        registerTurnClaimClosedHandler: vi.fn(() => unregisterTurnClaimClosed),
         get: () => placement,
         list: () => [placement],
       } as never,
@@ -578,8 +582,8 @@ describe("worker placement startup health lifetime", () => {
     const dispatchOptions = runtimeFactoryMocks.createDispatch.mock.calls.at(-1)?.[0] as {
       isShuttingDown?: () => boolean;
     };
-    resetGatewayWorkAdmission();
     try {
+      expect(unregisterTurnClaimClosed).not.toHaveBeenCalled();
       expect(dispatchOptions.isShuttingDown?.()).toBe(false);
       environmentStopping = true;
       expect(dispatchOptions.isShuttingDown?.()).toBe(true);
@@ -589,6 +593,7 @@ describe("worker placement startup health lifetime", () => {
       expect(fence).not.toBeNull();
       expect(dispatchOptions.isShuttingDown?.()).toBe(false);
       markGatewayRestartDraining();
+      expect(unregisterTurnClaimClosed).toHaveBeenCalledOnce();
       expect(dispatchOptions.isShuttingDown?.()).toBe(true);
       resetGatewayWorkAdmission();
       expect(dispatchOptions.isShuttingDown?.()).toBe(false);
@@ -619,6 +624,7 @@ describe("worker placement startup health lifetime", () => {
 
     releaseRecovery.resolve();
     await Promise.all([guardedRecovery, stopping]);
+    expect(unregisterTurnClaimClosed).toHaveBeenCalledOnce();
     expect(events).toEqual([
       "recovery:start",
       "enrollment:cancel",
@@ -650,6 +656,7 @@ describe("worker placement startup recovery authority", () => {
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
+        registerTurnClaimClosedHandler: vi.fn(() => vi.fn()),
         workspaceResultInstanceId: () => "gateway-test",
         get: () => placement,
       } as never,

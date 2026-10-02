@@ -25,7 +25,9 @@ type Backend = Parameters<typeof fixture>[0];
 
 async function prepareExistingPullRequest(backend: Backend) {
   const f = await fixture(backend);
-  const first = await f.coordinator.requestForSession(f.request("first-publication", f.publisher));
+  const first = await f.coordinator.requestForSession(
+    await f.reviewedRequest("first-publication", f.publisher),
+  );
   if (first.status !== "published") {
     throw new Error("The original fixture publication did not complete.");
   }
@@ -80,6 +82,7 @@ describe("shared GitHub publication reconciliation", () => {
         state: "closed",
         body: `<!-- openclaw-publication:earlier-closed-${index} -->`,
       }));
+      const reviewed = await f.reviewedRequest("paged-update", f.publisher);
       let revoked = false;
       let recoveryLookup = false;
       let acceptedWrites: string[] | undefined;
@@ -106,7 +109,7 @@ describe("shared GitHub publication reconciliation", () => {
         return response;
       });
 
-      const result = await f.coordinator.requestForSession(f.request("paged-update", f.publisher));
+      const result = await f.coordinator.requestForSession(reviewed);
 
       expect(
         hostScans.mock.calls
@@ -144,6 +147,8 @@ describe("shared GitHub publication reconciliation", () => {
       let pushed = false;
       let readbackAvailable = false;
       let unavailableLookups = 0;
+      const idempotencyKey = "interrupted-existing-pr-update";
+      const reviewed = await f.reviewedRequest(idempotencyKey, f.publisher);
       mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
         if (argv.includes("state=all")) {
           if (pushed && !readbackAvailable) {
@@ -160,8 +165,7 @@ describe("shared GitHub publication reconciliation", () => {
         return response;
       });
 
-      const idempotencyKey = "interrupted-existing-pr-update";
-      const pending = f.coordinator.requestForSession(f.request(idempotencyKey, f.publisher));
+      const pending = f.coordinator.requestForSession(reviewed);
       let requestId: string;
       if (backend === "local") {
         await expect(pending).rejects.toBeInstanceOf(GitHubPublicationRecoveryPendingError);

@@ -13,6 +13,7 @@ import { handleGatewayRequest } from "../server-methods.js";
 import {
   publisher,
   receipt,
+  sessionId,
   sessionKey,
   withReadFixture,
 } from "./sessions-github-read.test-support.js";
@@ -84,6 +85,9 @@ describe("registered guest publication target discovery", () => {
         shared: null,
         pendingPersonal: null,
         latestShared: receipt,
+        reviews: [],
+        reviewAvailable: false,
+        reviewRequired: false,
       });
       expect(
         (
@@ -111,6 +115,9 @@ describe("registered guest publication target discovery", () => {
         shared: publisher,
         pendingPersonal: null,
         latestShared: receipt,
+        reviews: [],
+        reviewAvailable: true,
+        reviewRequired: false,
       });
       expect(fixture.personalConnectionStatus).not.toHaveBeenCalled();
       expect(fixture.requestForSession).not.toHaveBeenCalled();
@@ -123,7 +130,13 @@ describe("registered guest publication target discovery", () => {
       const unavailable = await fixture.invoke("sessions.github.options", { sessionKey });
       expect(unavailable).toHaveBeenCalledWith(
         true,
-        expect.objectContaining({ shared: null, latestShared: receipt }),
+        expect.objectContaining({
+          shared: null,
+          latestShared: receipt,
+          reviews: [],
+          reviewAvailable: false,
+          reviewRequired: false,
+        }),
       );
       vi.spyOn(managedWorktrees, "resolveRepositoryIdentity").mockRejectedValueOnce(
         new Error("Repository read unavailable"),
@@ -206,6 +219,9 @@ describe("registered guest publication target discovery", () => {
           shared: url.includes("github.com") ? publisher : null,
           pendingPersonal: null,
           latestShared: receipt,
+          reviews: [],
+          reviewAvailable: url.includes("github.com"),
+          reviewRequired: false,
         });
         expect(localLookup).not.toHaveBeenCalled();
         expect(fixture.requestForSession).not.toHaveBeenCalled();
@@ -236,8 +252,19 @@ describe("registered guest publication target discovery", () => {
             respond,
           });
         }
-        expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ shared: publisher }));
-        expect(target).not.toHaveBeenCalled();
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            shared: publisher,
+            reviews: [],
+            reviewAvailable: false,
+            reviewRequired: false,
+          }),
+        );
+        expect(target).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ agentId: "main", sessionId, sessionKey }),
+          expect.any(Function),
+        );
       });
     },
   );

@@ -48,9 +48,16 @@ const mocks = vi.hoisted(() => ({
   prepareAttribution: vi.fn(),
   updateIndex: vi.fn(),
   refreshIdentity: vi.fn(),
+  prepareReadWorkspace: vi.fn(),
 }));
 
 export const githubPublicationTestMocks = () => mocks;
+
+vi.mock("./worker-environments/repository-git-pack.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./worker-environments/repository-git-pack.js")>();
+  return { ...actual, prepareRepositoryWorkerReadWorkspace: mocks.prepareReadWorkspace };
+});
 
 vi.mock("../agents/github-tool-identity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agents/github-tool-identity.js")>();
@@ -451,6 +458,7 @@ export function installGitHubPublicationTestHarness(
     }));
     mocks.getConfigSnapshot.mockReset().mockReturnValue(null);
     mocks.refreshIdentity.mockReset().mockResolvedValue(undefined);
+    mocks.prepareReadWorkspace.mockReset();
     mocks.matchesIdentity.mockReset().mockReturnValue(true);
     mocks.prepareIdentity.mockReset().mockResolvedValue({
       source: "system-configured",
@@ -496,6 +504,18 @@ export function installGitHubPublicationTestHarness(
         commands.push(argv);
         commandCalls.push({ argv, input: options?.input });
         const command = argv.join(" ");
+        if (
+          command === "gh api --hostname github.com --method GET repos/openclaw/openclaw --jq {id}"
+        ) {
+          return commandResult('{"id":1001}');
+        }
+        if (command.includes("repos/openclaw/openclaw/git/matching-refs/heads/")) {
+          return commandResult(
+            JSON.stringify(
+              remotePublished ? [{ ref: `refs/heads/${BRANCH}`, object: { sha: NEW_HEAD } }] : [],
+            ),
+          );
+        }
         if (command === "git symbolic-ref --quiet --short HEAD") {
           return commandResult(`${BRANCH}\n`);
         }

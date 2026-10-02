@@ -23,6 +23,38 @@ afterEach(() => {
 });
 
 describe("GitHub publication transcript reporting", () => {
+  it("keeps a delayed review request out of a replacement transcript generation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const identity = {
+        agentId: "main",
+        sessionKey: "agent:main:review",
+        sessionId: "review-generation",
+      };
+      await upsertSessionEntryCore(identity, {
+        sessionId: identity.sessionId,
+        updatedAt: 1,
+        lifecycleRevision: "current-generation",
+      });
+      const markReported = vi.fn(async () => {});
+      const report = createGitHubPublicationTranscriptReporter(() => import("./session-utils.js"), {
+        markReported,
+      });
+      const result = {
+        requestId: "review-request",
+        status: "requested" as const,
+        message: "Review requested.",
+      };
+      for (const lifecycleRevision of [null, "previous-generation"]) {
+        await expect(report({ ...identity, lifecycleRevision, result })).rejects.toThrow(
+          "generation changed",
+        );
+      }
+      expect(markReported).not.toHaveBeenCalled();
+      expect(await loadTranscriptEvents(identity)).toEqual([]);
+      await report({ ...identity, lifecycleRevision: "current-generation", result });
+      expect(markReported).toHaveBeenCalledWith(result.requestId);
+    });
+  });
   it.each(
     [
       {
@@ -156,7 +188,7 @@ describe("GitHub publication transcript reporting", () => {
         expect(encoded?.count).toBe(encoding === "compressed" ? 3 + beforeTail.length : 0);
         const reporter = createGitHubPublicationTranscriptReporter(
           () => import("./session-utils.js"),
-          { markReported: vi.fn() },
+          { markReported: vi.fn(async () => {}) },
         );
         await reporter({ ...identity, result });
         const reports = (await loadTranscriptEvents(identity)).filter(
@@ -186,7 +218,7 @@ describe("GitHub publication transcript reporting", () => {
           { type: "provider_event", id: "opaque", parentId: null },
         ];
         await replaceTranscriptEvents(identity, events);
-        const markReported = vi.fn();
+        const markReported = vi.fn(async () => {});
         const reporter = createGitHubPublicationTranscriptReporter(
           () => import("./session-utils.js"),
           { markReported },
@@ -232,7 +264,7 @@ describe("GitHub publication transcript reporting", () => {
       database.db.exec(
         "CREATE TRIGGER reject_report BEFORE INSERT ON transcript_events WHEN json_extract(NEW.event_json, '$.type') = 'message' BEGIN SELECT RAISE(ABORT, 'report insert failed'); END",
       );
-      const markReported = vi.fn(() => {
+      const markReported = vi.fn(async () => {
         const reader = new DatabaseSync(database.path, { readOnly: true });
         try {
           expect(
@@ -254,6 +286,13 @@ describe("GitHub publication transcript reporting", () => {
       database.db.exec("DROP TRIGGER reject_report");
       await reporter({ ...identity, result });
       expect(markReported).toHaveBeenCalledOnce();
+      markReported.mockRejectedValueOnce(new Error("receipt acknowledgement failed"));
+      await expect(reporter({ ...identity, result })).rejects.toThrow(
+        "receipt acknowledgement failed",
+      );
+      await reporter({ ...identity, result });
+      expect(markReported).toHaveBeenCalledTimes(3);
+      expect(await loadTranscriptEvents(identity)).toHaveLength(2);
     });
   });
   it("reports on the active branch while preserving large unrelated evidence", async () => {
@@ -309,7 +348,7 @@ describe("GitHub publication transcript reporting", () => {
           .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
           .all(identity.sessionId);
       const before = readEvidence();
-      const markReported = vi.fn();
+      const markReported = vi.fn(async () => {});
       const reporter = createGitHubPublicationTranscriptReporter(
         () => import("./session-utils.js"),
         { markReported },
@@ -360,7 +399,7 @@ describe("GitHub publication transcript reporting", () => {
         const sessionKey = "agent:main:main";
         const sessionId = "publication-transcript";
         await upsertSessionEntryCore({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
-        const markReported = vi.fn();
+        const markReported = vi.fn(async () => {});
         const reporter = createGitHubPublicationTranscriptReporter(
           async () => {
             const runtime = await import("./session-utils.js");

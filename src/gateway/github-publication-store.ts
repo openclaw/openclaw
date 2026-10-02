@@ -37,6 +37,66 @@ type GitHubPublicationDatabase = Pick<
   | "github_publication_session_lifecycles"
   | "worker_session_placements"
 >;
+export function sameGitHubPublicationClaim(
+  row: GitHubPublicationRow,
+  claim: WorkerSessionTurnClaim,
+): boolean {
+  return (
+    row.claim_id === claim.claimId &&
+    row.run_id === claim.runId &&
+    row.placement_generation === claim.placementGeneration &&
+    row.environment_id === (claim.owner.environmentId ?? null) &&
+    row.owner_epoch === (claim.owner.ownerEpoch ?? null)
+  );
+}
+
+export function assertStoredGitHubPublicationClaim(
+  db: Parameters<typeof getNodeSqliteKysely>[0],
+  request: {
+    claim: WorkerSessionTurnClaim;
+    sessionKey: string;
+    agentId: string;
+  },
+): void {
+  const row = executeSqliteQuerySync(
+    db,
+    githubPublicationDatabase(db)
+      .selectFrom("worker_session_placements")
+      .select([
+        "agent_id",
+        "session_key",
+        "state",
+        "environment_id",
+        "active_owner_epoch",
+        "turn_claim_owner",
+        "turn_claim_id",
+        "turn_claim_run_id",
+        "turn_claim_generation",
+        "turn_claim_owner_epoch",
+      ])
+      .where("session_id", "=", request.claim.sessionId),
+  ).rows[0];
+  const ownerMatches =
+    request.claim.owner.kind === "worker"
+      ? row?.turn_claim_owner === "worker" &&
+        row.environment_id === request.claim.owner.environmentId &&
+        row.active_owner_epoch === request.claim.owner.ownerEpoch &&
+        row.turn_claim_owner_epoch === request.claim.owner.ownerEpoch
+      : row?.turn_claim_owner === "local";
+  if (
+    !row ||
+    (row.state !== "active" && row.state !== "draining" && row.state !== "local") ||
+    row.agent_id !== request.agentId ||
+    row.session_key !== request.sessionKey ||
+    row.turn_claim_id !== request.claim.claimId ||
+    row.turn_claim_run_id !== request.claim.runId ||
+    row.turn_claim_generation !== request.claim.placementGeneration ||
+    !ownerMatches
+  ) {
+    throw new Error("GitHub publication turn authority changed before recording.");
+  }
+}
+
 type PublicationFailureCode = Extract<SessionGitHubPublicationResult, { status: "failed" }>["code"];
 
 const PUBLICATION_FAILURE_CODES = new Set<string>([
@@ -220,7 +280,7 @@ export function matchesGitHubPublicationIdentityRow(
 }
 
 /** Insert/replay shared intent inside the caller's admission transaction. */
-export function insertGitHubPublicationRequest(
+export function insertGitHubPublicationRequestInDatabase(
   db: Parameters<typeof getNodeSqliteKysely>[0],
   input: {
     request: {
@@ -235,7 +295,6 @@ export function insertGitHubPublicationRequest(
     sessionId: string;
     lifecycleRevision: string | null;
     requester: GitHubPublicationRequesterSnapshot;
-    assertCurrent: () => void;
     now: number;
     worktree: { id: string; repoFingerprint: string; branch: string };
     identity: Pick<PreparedGitHubPublicationIdentity, "source" | "profileId" | "account">;
@@ -243,7 +302,6 @@ export function insertGitHubPublicationRequest(
     snapshot?: { sourceHeadCommit: string; sourceIndexTree: string; workspaceTree: string };
   },
 ): GitHubPublicationRow {
-  input.assertCurrent();
   const { request, identity, worktree, claim, snapshot } = input;
   const query = githubPublicationDatabase(db);
   const inserted = executeSqliteQuerySync(
@@ -321,7 +379,6 @@ export function insertGitHubPublicationRequest(
       throw new Error("GitHub publication requester changed; use a new idempotency key.");
     }
   }
-  input.assertCurrent();
   if (inserted.numAffectedRows === 1n) {
     deferSharedGitHubPublicationChanged(db, stored);
   }

@@ -54,6 +54,7 @@ const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
   "sessions.patchMany",
   "sessions.fork",
   "sessions.recover",
+  "sessions.github.requestReview",
   "sessions.send",
   "sessions.steer",
   "sessions.abort",

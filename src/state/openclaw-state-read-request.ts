@@ -129,6 +129,7 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
     return structuredClone(command);
   }
   if (
+    command.type === "publicationReview.read" ||
     command.type === "acpSessions.metadata" ||
     command.type === "githubPublication.knownPullRequestUrls" ||
     command.type === "githubRepository.knownPullRequestUrls" ||
@@ -247,7 +248,10 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "cron.quarantine") {
     return bytes + Buffer.byteLength(command.storeKey, "utf8");
   }
-  if (command.type === "githubPublication.sharedObservation") {
+  if (
+    command.type === "githubPublication.sharedObservation" ||
+    command.type === "publicationReview.read"
+  ) {
     return bytes + Buffer.byteLength(JSON.stringify(command.input), "utf8");
   }
   if (command.type === "sessionRepositoryWorkspaces.find") {

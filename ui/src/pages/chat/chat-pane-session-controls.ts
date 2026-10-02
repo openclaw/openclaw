@@ -118,6 +118,13 @@ export function readChatPublicationAccess(
 ) {
   const canMutate = !session.archived && !participationBlocked;
   return {
+    canRequestReview:
+      canMutate &&
+      readSessionMethodAccess(snapshot, {
+        method: "sessions.github.requestReview",
+        requiredScope: "operator.sessions.write",
+        session,
+      }).allowed,
     canPublishShared:
       canMutate &&
       readSessionMethodAccess(snapshot, {

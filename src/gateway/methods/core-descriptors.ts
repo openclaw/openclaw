@@ -683,4 +683,12 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["backup.status", "backup", "operator.read", "2026.9"],
   ["storage.locations.list", "storage", "operator.read", "2026.9"],
   ["storage.locations.probe", "storage", "operator.read", "2026.9"],
+  [
+    "sessions.github.requestReview",
+    "sessions-github",
+    "operator.sessions.write",
+    "2026.9",
+    CONTROL_PLANE_WRITE,
+  ],
+  ["sessions.github.review", "sessions-github", "operator.write", "2026.9", CONTROL_PLANE_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

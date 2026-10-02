@@ -70,7 +70,6 @@ async function withPublisherAccess(
 describe("shared GitHub publication requester alias bindings", () => {
   installGitHubPublicationTestHarness({
     creatorEmail: "publication-guest@example.test",
-    sandbox: "required",
     realWorktree: true,
   });
 

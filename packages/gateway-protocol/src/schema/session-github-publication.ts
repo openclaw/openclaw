@@ -39,6 +39,35 @@ export const GitHubPublicationTitleSchema = Type.String({
 });
 export const GitHubPublicationBodySchema = Type.String({ minLength: 1, maxLength: 8 * 1024 });
 
+export const GitHubPublicationReviewReferenceSchema = closedObject({
+  reviewId: PersonalGitHubGenerationSchema,
+  digest: Type.String({ minLength: 64, maxLength: 64, pattern: "^[a-f0-9]+$" }),
+});
+
+export const SessionGitHubRequestReviewParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  idempotencyKey: Type.String({ minLength: 1, maxLength: 128 }),
+});
+
+export const SessionGitHubReviewParamsSchema = Type.Union([
+  closedObject({
+    ...SessionGitHubRequestReviewParamsSchema.properties,
+    action: Type.Literal("prepare"),
+    requestedReviewId: Type.Optional(PersonalGitHubGenerationSchema),
+    title: Type.Optional(GitHubPublicationTitleSchema),
+    body: Type.Optional(GitHubPublicationBodySchema),
+    selection: Type.Optional(GitHubPublicationSelectionSchema),
+  }),
+  closedObject({
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+    action: Type.Literal("diff"),
+    ...GitHubPublicationReviewReferenceSchema.properties,
+    offset: Type.Integer({ minimum: 0 }),
+  }),
+]);
+
 export const SessionGitHubPublishParamsSchema = closedObject({
   sessionKey: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
@@ -46,6 +75,7 @@ export const SessionGitHubPublishParamsSchema = closedObject({
   title: Type.Optional(GitHubPublicationTitleSchema),
   body: Type.Optional(GitHubPublicationBodySchema),
   selection: Type.Optional(GitHubPublicationSelectionSchema),
+  review: Type.Optional(GitHubPublicationReviewReferenceSchema),
 });
 
 const SessionGitHubPublicationBaseSchema = {
@@ -112,6 +142,48 @@ export const SessionGitHubPublicationResultSchema = Type.Union([
   SessionGitHubPublicationNeedsConfirmationSchema,
 ]);
 
+export const SessionGitHubReviewResultSchema = closedObject({
+  reviewId: PersonalGitHubGenerationSchema,
+  requestedReviewId: Type.Union([PersonalGitHubGenerationSchema, Type.Null()]),
+  digest: Type.Union([Type.String({ minLength: 64, maxLength: 64 }), Type.Null()]),
+  status: Type.Union([
+    Type.Literal("requested"),
+    Type.Literal("ready"),
+    Type.Literal("stale"),
+    Type.Literal("needs_confirmation"),
+    Type.Literal("published"),
+    Type.Literal("failed"),
+  ]),
+  message: NonEmptyString,
+  target: Type.Optional(
+    closedObject({
+      pushRepository: NonEmptyString,
+      repository: NonEmptyString,
+      branch: NonEmptyString,
+      baseBranch: NonEmptyString,
+      baseCommit: NonEmptyString,
+      remoteHeadCommit: Type.Union([NonEmptyString, Type.Null()]),
+      sourceHeadCommit: NonEmptyString,
+      sourceIndexTree: NonEmptyString,
+      workspaceTree: NonEmptyString,
+    }),
+  ),
+  publisher: Type.Optional(GitHubPublicationPublisherSchema),
+  title: Type.Optional(Type.Union([GitHubPublicationTitleSchema, Type.Null()])),
+  body: Type.Optional(Type.Union([GitHubPublicationBodySchema, Type.Null()])),
+  diffLength: Type.Integer({ minimum: 0 }),
+  publication: Type.Optional(SessionGitHubPublicationResultSchema),
+});
+
+export const SessionGitHubReviewDiffResultSchema = closedObject({
+  ...GitHubPublicationReviewReferenceSchema.properties,
+  offset: Type.Integer({ minimum: 0 }),
+  nextOffset: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+  totalCharacters: Type.Integer({ minimum: 0 }),
+  complete: Type.Boolean(),
+  text: Type.String({ maxLength: 4096 }),
+});
+
 export const SessionGitHubOptionsParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
@@ -130,6 +202,7 @@ export const SessionGitHubConfirmParamsSchema = closedObject({
   generation: PersonalGitHubGenerationSchema,
   account: PersonalGitHubAccountSchema,
   requestDigest: Type.String({ minLength: 64, maxLength: 64, pattern: "^[a-f0-9]+$" }),
+  review: Type.Optional(GitHubPublicationReviewReferenceSchema),
 });
 export const SessionGitHubStatusResultSchema = closedObject({
   result: SessionGitHubPublicationResultSchema,
@@ -155,7 +228,17 @@ export const SessionGitHubOptionsResultSchema = closedObject({
   shared: Type.Union([SharedGitHubPublicationPublisherSchema, Type.Null()]),
   pendingPersonal: Type.Union([SessionGitHubStatusResultSchema, Type.Null()]),
   latestShared: Type.Union([SessionGitHubStatusResultSchema, Type.Null()]),
+  reviewRequired: Type.Optional(Type.Boolean()),
+  reviewAvailable: Type.Optional(Type.Boolean()),
+  reviews: Type.Optional(Type.Array(SessionGitHubReviewResultSchema, { maxItems: 20 })),
 });
+
+export type GitHubPublicationReviewReference = Static<
+  typeof GitHubPublicationReviewReferenceSchema
+>;
+export type SessionGitHubReviewParams = Static<typeof SessionGitHubReviewParamsSchema>;
+export type SessionGitHubReviewResult = Static<typeof SessionGitHubReviewResultSchema>;
+export type SessionGitHubReviewDiffResult = Static<typeof SessionGitHubReviewDiffResultSchema>;
 
 export type GitHubPublicationPublisher = Static<typeof GitHubPublicationPublisherSchema>;
 export type GitHubPublicationSelection = Static<typeof GitHubPublicationSelectionSchema>;

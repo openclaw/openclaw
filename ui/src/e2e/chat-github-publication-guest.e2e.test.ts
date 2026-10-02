@@ -25,6 +25,9 @@ const options = {
   shared: publisher,
   pendingPersonal: null,
   latestShared: null,
+  reviewRequired: true,
+  reviewAvailable: true,
+  reviews: [],
 } satisfies GitHubPublicationOptions;
 const historyText = "The visitor's change is ready for publication.";
 
@@ -83,7 +86,9 @@ async function installGuestGateway(
       { role: "user", content: [{ type: "text", text: "Prepare a small documentation change." }] },
       { role: "assistant", content: [{ type: "text", text: historyText }] },
     ],
-    methodResponses: { "sessions.github.options": { ...options, shared } },
+    methodResponses: {
+      "sessions.github.options": { ...options, shared, reviewAvailable: hasWorkspace },
+    },
   });
 }
 
@@ -135,6 +140,24 @@ suite.define(() => {
         await screenshot(page, "01-guest-restricted.png");
       }
       await expectNoPersonalActions(page);
+      const requested = {
+        reviewId: "8c698e8a-bdc7-4927-a0f2-73a842c2d7b8",
+        requestedReviewId: null,
+        digest: null,
+        status: "requested",
+        message:
+          "Review requested. A maintainer can review and publish these changes in this conversation.",
+        diffLength: 0,
+      };
+      await gateway.setMethodResponse("sessions.github.requestReview", requested);
+      await page.getByRole("button", { name: "Request maintainer review", exact: true }).click();
+      await gateway.waitForRequest("sessions.github.requestReview");
+      await expect
+        .poll(() =>
+          page.getByRole("button", { name: "Review requested", exact: true }).isDisabled(),
+        )
+        .toBe(true);
+      expect(await gateway.getRequests("sessions.github.review")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
       await gateway.setMethodResponse("sessions.github.status", receipt);
       await gateway.setMethodResponse("sessions.github.options", {

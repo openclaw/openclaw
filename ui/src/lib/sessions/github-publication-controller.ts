@@ -7,14 +7,18 @@ import type {
   SessionGitHubOptionsResultSchema,
   SessionGitHubPublicationResult,
   SessionGitHubStatusResult,
+  SessionGitHubReviewResult,
+  SessionGitHubReviewDiffResult,
 } from "../../../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../format-error.ts";
 import { generateUUID } from "../uuid.ts";
 
 export type GitHubPublicationOptions = Static<typeof SessionGitHubOptionsResultSchema>;
 type GitHubPublicationPresentation = {
   canPublishShared: boolean;
+  canRequestReview?: boolean;
   canPublishPersonal: boolean;
   personalReady: boolean;
   isPresented: () => boolean;
@@ -39,7 +43,7 @@ export type GitHubPublicationPresentationBinding = {
   detach: () => void;
   readonly result: SessionGitHubPublicationResult | null;
 };
-type GitHubPublicationActivity = "read" | "publish" | "confirm";
+type GitHubPublicationActivity = "read" | "publish" | "confirm" | "review";
 
 export type GitHubPublicationView = {
   activity: GitHubPublicationActivity | null;
@@ -57,6 +61,12 @@ export type GitHubPublicationView = {
   onConfirm?: () => void;
   onRefresh: () => void;
   onNewAction?: () => void;
+  review?: SessionGitHubReviewResult | null;
+  reviewDiff?: string | null;
+  onRequestReview?: () => void;
+  onPrepareReview?: () => void;
+  onReadReview?: (review: SessionGitHubReviewResult) => void;
+  onConfirmReview?: () => void;
 };
 
 function terminal(result: SessionGitHubPublicationResult | null): boolean {
@@ -93,6 +103,10 @@ export class GitHubPublicationController {
   private error: string | null = null;
   private reviewedRequestId: string | null = null;
   private refreshPending = false;
+  private review: SessionGitHubReviewResult | null = null;
+  private reviewDiff: string | null = null;
+  private reviewKey: string | null = null;
+  private requestReviewKey: string | null = null;
 
   constructor(private readonly owner: PublicationOwner) {}
 
@@ -116,10 +130,17 @@ export class GitHubPublicationController {
     this.error = null;
     this.reviewedRequestId = null;
     this.refreshPending = false;
+    this.review = null;
+    this.reviewDiff = null;
+    this.reviewKey = null;
+    this.requestReviewKey = null;
   }
 
   private resetPresentation(): void {
-    const reviewed = terminal(this.result) ? this.result!.requestId : this.reviewedRequestId;
+    const reviewed =
+      terminal(this.result) || this.review?.status === "stale"
+        ? (this.result?.requestId ?? this.reviewedRequestId)
+        : this.reviewedRequestId;
     this.reset();
     this.reviewedRequestId = reviewed;
   }
@@ -246,6 +267,9 @@ export class GitHubPublicationController {
           ? { source, expected: options.shared }
           : null
         : personalGitHubPublicationSelection(options);
+    this.review = null;
+    this.reviewDiff = null;
+    this.reviewKey = null;
     this.version += 1;
     this.changed();
   }
@@ -320,7 +344,12 @@ export class GitHubPublicationController {
       this.refreshPending = false;
       if (this.result && !terminal(this.result)) {
         await this.readStatus(scope, current, this.result.requestId);
-        return;
+        if (!current()) {
+          return;
+        }
+        if (!this.options?.reviewRequired && !this.options?.reviews?.length) {
+          return;
+        }
       }
       const sharedAttempt = this.attempt?.selection.source === "shared" ? this.attempt : null;
       const options = await scope.client.request<GitHubPublicationOptions>(
@@ -334,6 +363,23 @@ export class GitHubPublicationController {
         return;
       }
       this.options = options;
+      if (this.review) {
+        const observed = options.reviews?.find(
+          (review) =>
+            review.reviewId === this.review!.reviewId ||
+            review.requestedReviewId === this.review!.reviewId,
+        );
+        if (observed) {
+          if (
+            observed.digest !== this.review.digest ||
+            observed.status === "stale" ||
+            observed.status === "failed"
+          ) {
+            this.reviewDiff = null;
+          }
+          this.review = observed;
+        }
+      }
       if (
         this.result?.status === "failed" &&
         this.result.publisher?.source !== "personal" &&
@@ -384,7 +430,166 @@ export class GitHubPublicationController {
       }
     });
   }
+  private async requestReview(presentation: Presentation): Promise<void> {
+    if (!presentation.scope?.canRequestReview) {
+      return;
+    }
+    await this.run(presentation, "review", async (owner, current) => {
+      if (this.review && ["published", "failed", "stale"].includes(this.review.status)) {
+        this.requestReviewKey = null;
+      }
+      this.requestReviewKey ??= generateUUID();
+      const review = await owner.client.request<SessionGitHubReviewResult>(
+        "sessions.github.requestReview",
+        {
+          ...owner.target,
+          idempotencyKey: this.requestReviewKey,
+        },
+      );
+      if (current()) {
+        this.review = review;
+        this.options = this.options
+          ? {
+              ...this.options,
+              reviews: [
+                review,
+                ...(this.options.reviews ?? []).filter((item) => item.reviewId !== review.reviewId),
+              ].slice(0, 20),
+            }
+          : null;
+      }
+    });
+  }
+
+  private async loadReviewDiff(
+    owner: PublicationOwner,
+    current: () => boolean,
+    review: SessionGitHubReviewResult,
+  ): Promise<void> {
+    if (!review.digest) {
+      return;
+    }
+    const chunks: string[] = [];
+    let offset = 0;
+    while (current()) {
+      const page: SessionGitHubReviewDiffResult =
+        await owner.client.request<SessionGitHubReviewDiffResult>("sessions.github.review", {
+          ...owner.target,
+          action: "diff",
+          reviewId: review.reviewId,
+          digest: review.digest,
+          offset,
+        });
+      if (!current()) {
+        return;
+      }
+      if (
+        page.reviewId !== review.reviewId ||
+        page.digest !== review.digest ||
+        page.offset !== offset ||
+        page.totalCharacters !== review.diffLength ||
+        page.text.length > 4096 ||
+        page.totalCharacters > 256 * 1024
+      ) {
+        throw new Error(t("githubPublication.reviewChanged"));
+      }
+      chunks.push(page.text);
+      const end = offset + page.text.length;
+      if (page.complete) {
+        if (page.nextOffset !== null || end !== page.totalCharacters) {
+          throw new Error(t("githubPublication.reviewIncomplete"));
+        }
+        if (this.review?.reviewId !== review.reviewId) {
+          this.confirmation = null;
+        }
+        this.review = review;
+        this.reviewDiff = chunks.join("");
+        return;
+      }
+      if (page.nextOffset !== end || end <= offset) {
+        throw new Error(t("githubPublication.reviewIncomplete"));
+      }
+      offset = end;
+    }
+  }
+
+  private async prepareReview(presentation: Presentation): Promise<void> {
+    const selection =
+      this.selection ??
+      (!this.options?.shared ? personalGitHubPublicationSelection(this.options) : null);
+    if (!selection || !this.canPublish(presentation, selection.source) || this.locked) {
+      return;
+    }
+    await this.run(presentation, "review", async (owner, current) => {
+      this.reviewKey ??= generateUUID();
+      const requested = this.options?.reviews?.find((item) => item.status === "requested");
+      const review = await owner.client.request<SessionGitHubReviewResult>(
+        "sessions.github.review",
+        {
+          ...owner.target,
+          action: "prepare",
+          idempotencyKey: this.reviewKey,
+          selection,
+          ...(requested ? { requestedReviewId: requested.reviewId } : {}),
+        },
+      );
+      if (!current()) {
+        return;
+      }
+      this.review = review;
+      this.reviewDiff = null;
+      await this.loadReviewDiff(owner, current, review);
+    });
+  }
+
+  private async confirmReview(presentation: Presentation): Promise<void> {
+    const review = this.review;
+    if (
+      !review?.digest ||
+      this.reviewDiff === null ||
+      !review.publisher ||
+      (review.status !== "ready" && review.status !== "needs_confirmation") ||
+      !this.canPublish(presentation, review.publisher.source === "personal" ? "personal" : "shared")
+    ) {
+      return;
+    }
+    if (review.publisher.source === "personal" && this.confirmation) {
+      await this.confirm(presentation);
+      return;
+    }
+    await this.run(presentation, "confirm", async (owner, current) => {
+      this.owner.reserve();
+      const result = await owner.client.request<SessionGitHubPublicationResult>(
+        "sessions.github.publish",
+        {
+          ...owner.target,
+          idempotencyKey: `review:${review.reviewId}`,
+          review: { reviewId: review.reviewId, digest: review.digest },
+        },
+      );
+      if (!current()) {
+        return;
+      }
+      this.applyResult(result);
+      this.review = {
+        ...review,
+        publication: result,
+        status:
+          result.status === "published" || result.status === "failed"
+            ? result.status
+            : "needs_confirmation",
+      };
+      if (result.status === "needs_confirmation") {
+        await this.readStatus(owner, current, result.requestId);
+      }
+    });
+  }
+
   private async publish(presentation: Presentation): Promise<void> {
+    if (this.options?.reviewRequired && !this.attempt) {
+      await this.prepareReview(presentation);
+      return;
+    }
     // With no shared account, the labeled Publish as button is the explicit
     // personal choice. Discovery itself still never selects personal credentials.
     if (!this.selection && this.options && !this.options.shared) {
@@ -456,6 +661,9 @@ export class GitHubPublicationController {
           generation: confirmation.generation,
           account: confirmation.account,
           requestDigest: confirmation.requestDigest,
+          ...(this.review?.digest && this.reviewDiff !== null
+            ? { review: { reviewId: this.review.reviewId, digest: this.review.digest } }
+            : {}),
         },
       );
       if (current()) {
@@ -474,10 +682,12 @@ export class GitHubPublicationController {
     }
     const version = this.version;
     const selection = this.attempt?.selection ?? this.selection;
-    const canPublish = this.canPublish(
-      presentation,
-      selection?.source ?? (this.options?.shared ? "shared" : "personal"),
-    );
+    const canPublish =
+      this.canPublish(
+        presentation,
+        selection?.source ?? (this.options?.shared ? "shared" : "personal"),
+      ) &&
+      (!this.options?.reviewRequired || this.options.reviewAvailable === true);
     // Each callback belongs to the displayed operation state, not whichever
     // publication or confirmation happens to occupy this session later.
     const invoke = (action: () => void) => {
@@ -487,6 +697,42 @@ export class GitHubPublicationController {
     };
     return {
       activity: this.activity,
+      review: this.review,
+      reviewDiff: this.reviewDiff,
+      onRequestReview:
+        scope.canRequestReview &&
+        this.options?.reviewAvailable &&
+        !scope.canPublishShared &&
+        !scope.canPublishPersonal
+          ? () => invoke(() => void this.requestReview(presentation))
+          : undefined,
+      onPrepareReview:
+        canPublish && !this.locked
+          ? () =>
+              invoke(() => {
+                if (this.review?.digest) {
+                  this.reviewKey = null;
+                }
+                void this.prepareReview(presentation);
+              })
+          : undefined,
+      onReadReview: canPublish
+        ? (review) =>
+            invoke(
+              () =>
+                void this.run(presentation, "review", async (owner, current) => {
+                  this.reviewDiff = null;
+                  await this.loadReviewDiff(owner, current, review);
+                }),
+            )
+        : undefined,
+      onConfirmReview:
+        canPublish &&
+        this.review?.digest &&
+        this.reviewDiff !== null &&
+        (this.review.status === "ready" || this.review.status === "needs_confirmation")
+          ? () => invoke(() => void this.confirmReview(presentation))
+          : undefined,
       canPublishShared: scope.canPublishShared,
       canPublishPersonal: scope.canPublishPersonal,
       locked: this.locked,
@@ -505,21 +751,24 @@ export class GitHubPublicationController {
           ? () => invoke(() => void this.publish(presentation))
           : undefined,
       onConfirm:
-        scope.canPublishPersonal && this.confirmation
+        scope.canPublishPersonal &&
+        this.confirmation &&
+        (!this.options?.reviewRequired || (this.review?.digest && this.reviewDiff !== null))
           ? () => invoke(() => void this.confirm(presentation))
           : undefined,
       onRefresh: () => invoke(() => void this.refresh(presentation)),
       // Acknowledgement releases local custody; publication and confirmation remain write-gated.
-      onNewAction: terminal(this.result)
-        ? () =>
-            invoke(() => {
-              if (this.busy) {
-                return;
-              }
-              this.resetPresentation();
-              void this.refresh(presentation);
-            })
-        : undefined,
+      onNewAction:
+        terminal(this.result) || this.review?.status === "stale"
+          ? () =>
+              invoke(() => {
+                if (this.busy) {
+                  return;
+                }
+                this.resetPresentation();
+                void this.refresh(presentation);
+              })
+          : undefined,
     };
   }
 }

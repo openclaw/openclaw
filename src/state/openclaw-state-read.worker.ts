@@ -26,6 +26,7 @@ import {
   isCronStateReadCommand,
   readCronStateCommandInDatabase,
 } from "../cron/store/read-command.js";
+import { readGitHubPublicationReviewsInDatabase } from "../gateway/github-publication-review-store.worker.js";
 import {
   readSharedGitHubPublicationRequestInDatabase,
   readSharedRepositoryGitHubPublicationInDatabase,
@@ -513,6 +514,12 @@ serveOwnedWorkerTasks(
                   workspaceDir: command.workspaceDir,
                   database: { db, path: input.databasePath },
                 }),
+              };
+            }
+            if (command.type === "publicationReview.read") {
+              return {
+                type: command.type,
+                rows: readGitHubPublicationReviewsInDatabase(db, command.input),
               };
             }
             if (command.type === "githubPublication.lifecycle") {

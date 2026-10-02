@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, type Mock } from "vitest";
+import { expect, vi, type Mock } from "vitest";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
@@ -28,8 +28,8 @@ export async function createRepositoryPublicationFixture(
   session = { sessionId: SESSION_ID, sessionKey: SESSION_KEY },
   baseFiles: Record<string, string> = {},
 ) {
-  // Only the mock GitHub service accesses this object store. The broker still
-  // rejects every Git command and receives only the normalized checkpoint.
+  // Execution consumes normalized checkpoints. Review alone may reconstruct
+  // verified objects in disposable Gateway scratch to display the exact diff.
   const remote = await fs.mkdtemp(path.join(root, "fixture-github-"));
   const git = (args: string[], input?: string | Buffer) =>
     execFileSync("git", args, {
@@ -82,6 +82,20 @@ export async function createRepositoryPublicationFixture(
     ["commit-tree", baseTree, ...(baseParent ? ["-p", baseParent] : [])],
     "fixture base\n",
   );
+  git(["update-ref", "refs/heads/main", baseCommit]);
+  const reviewWorkspaces = new Set<string>();
+  mocks.prepareReadWorkspace.mockImplementation(async (input) => {
+    input.assertCurrent();
+    input.signal.throwIfAborted();
+    expect(input.baseCommit).toBe(baseCommit);
+    const cwd = path.join(input.temporaryRoot, "repository");
+    git(["clone", "--quiet", "--no-checkout", "--", remote, cwd]);
+    reviewWorkspaces.add(cwd);
+    input.assertCurrent();
+    return cwd;
+  });
+  const { runCommandBuffered } =
+    await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
   const sourceRef = typeof requestedRef === "string" ? requestedRef : requestedRef && baseCommit;
   const store = getSessionRepositoryWorkspaceStore();
   let workspace = await store.create({
@@ -203,165 +217,189 @@ export async function createRepositoryPublicationFixture(
     { sha: string; tree: { sha: string }; parents: Array<{ sha: string }>; message: string }
   >();
   const casRequests: Array<{ beforeOid: string; afterOid: string; force: boolean }> = [];
-  mocks.runCommand.mockImplementation(async (args: string[], options: { input?: string } = {}) => {
-    // The whole broker path must work with no Git repository on the Gateway.
-    if (args[0] !== "gh") {
-      throw new Error("Publication attempted a Gateway Git command");
-    }
-    const endpoint =
-      args.find((arg) => arg.startsWith("repos/")) ?? (args.includes("graphql") ? "graphql" : "");
-    const body = options.input ? JSON.parse(options.input) : undefined;
-    if (endpoint === "repos/owner/repository") {
-      return commandResult(
-        JSON.stringify({ fork: false, default_branch: "main", node_id: "repository-node" }),
-      );
-    }
-    if (endpoint.endsWith("/git/commits/" + baseCommit)) {
-      return commandResult(JSON.stringify({ sha: baseCommit, tree: { sha: baseTree } }));
-    }
-    if (endpoint.endsWith("/git/commits/" + runtime.baseHead)) {
-      return commandResult(
-        JSON.stringify({ sha: runtime.baseHead, tree: { sha: runtime.baseHeadTree } }),
-      );
-    }
-    if (endpoint.endsWith("/git/commits/" + runtime.mergeBase)) {
-      return commandResult(
-        JSON.stringify({ sha: runtime.mergeBase, tree: { sha: runtime.mergeBaseTree } }),
-      );
-    }
-    if (endpoint.includes("/git/commits/")) {
-      return commandResult(JSON.stringify(commits.get(endpoint.split("/").at(-1)!)));
-    }
-    if (
-      endpoint.includes("/git/matching-refs/") &&
-      decodeURIComponent(endpoint.split("/git/matching-refs/heads/")[1]!) !== workspace.branch
-    ) {
-      return commandResult(
-        JSON.stringify(
-          requestedRef === "topic"
-            ? [{ ref: "refs/heads/topic", object: { sha: baseCommit } }]
-            : [],
-        ),
-      );
-    }
-    if (endpoint.includes("/git/matching-refs/")) {
-      const result = commandResult(
-        JSON.stringify(
-          runtime.head
-            ? [{ ref: "refs/heads/" + workspace.branch, object: { sha: runtime.head } }]
-            : [],
-        ),
-      );
-      runtime.afterHeadObservation();
-      return result;
-    }
-    if (endpoint.includes("/git/ref/heads/")) {
-      return commandResult(
-        JSON.stringify({
-          ref: "refs/heads/" + decodeURIComponent(endpoint.split("/git/ref/heads/")[1]!),
-          object: { sha: runtime.baseHead },
-        }),
-      );
-    }
-    if (endpoint.includes("/compare/")) {
-      const source = endpoint.split("/compare/")[1]!.split("...")[0]!;
-      expect(endpoint).toContain("..." + runtime.baseHead);
-      if (source !== baseCommit) {
+  mocks.runCommand.mockImplementation(
+    async (args: string[], options: Parameters<typeof runCommandBuffered>[1] = {}) => {
+      if (args[0] !== "gh") {
+        if (options.cwd && reviewWorkspaces.has(options.cwd)) {
+          if (args.includes("fetch")) {
+            return commandResult();
+          }
+          return await runCommandBuffered(args, {
+            ...options,
+            env: {
+              ...options.env,
+              GH_TOKEN: undefined,
+              GITHUB_TOKEN: undefined,
+              GH_CONFIG_DIR: undefined,
+              GIT_CONFIG_GLOBAL: os.devNull,
+              GIT_CONFIG_SYSTEM: os.devNull,
+            },
+          });
+        }
+        throw new Error("Publication attempted a Gateway Git command");
+      }
+      const endpoint =
+        args.find((arg) => arg.startsWith("repos/")) ?? (args.includes("graphql") ? "graphql" : "");
+      const body = options.input ? JSON.parse(options.input.toString()) : undefined;
+      if (endpoint === "repos/owner/repository") {
         return commandResult(
-          JSON.stringify({ sha: git(["merge-base", source, runtime.baseHead]) }),
+          JSON.stringify({
+            id: 1002,
+            fork: false,
+            default_branch: "main",
+            node_id: "repository-node",
+          }),
         );
       }
-      return commandResult(
-        JSON.stringify({ sha: runtime.commonHistory ? runtime.mergeBase : null }),
-      );
-    }
-    if (endpoint.endsWith("/git/blobs")) {
-      expect(body.encoding).toBe("base64");
-      const bytes = Buffer.from(body.content, "base64");
-      const sha = git(["hash-object", "-w", "--stdin"], bytes);
-      runtime.uploaded.set(sha, bytes);
-      return commandResult(JSON.stringify({ sha }));
-    }
-    if (endpoint.includes("/git/trees/")) {
-      const sha = endpoint.split("/").at(-1)!;
-      const tree = git(["ls-tree", "-z", sha])
-        .split("\0")
-        .filter(Boolean)
-        .map((record) => {
-          const separator = record.indexOf("\t");
-          const [mode, type, object] = record.slice(0, separator).split(" ");
-          return { path: record.slice(separator + 1), mode, type, sha: object };
-        });
-      return commandResult(JSON.stringify({ sha, tree, truncated: false }));
-    }
-    if (endpoint.endsWith("/git/trees")) {
-      expect(body.base_tree).toBe(baseTree);
-      const sha = writeTree(baseTree, body.tree);
-      return commandResult(JSON.stringify({ sha }));
-    }
-    if (endpoint.endsWith("/git/commits")) {
-      expect(body.parents).toHaveLength(1);
-      expect(body.parents[0] === baseCommit || commits.has(body.parents[0])).toBe(true);
-      expect(body.message).toContain("OpenClaw-Publication:");
-      const sha = git(["commit-tree", body.tree, "-p", body.parents[0]], body.message);
-      const commit = {
-        sha,
-        tree: { sha: body.tree },
-        parents: body.parents.map((parentSha: string) => ({ sha: parentSha })),
-        message: body.message,
-      };
-      commits.set(sha, commit);
-      return commandResult(JSON.stringify(commit));
-    }
-    if (endpoint === "graphql") {
-      const update = body.variables.input.refUpdates[0];
-      casRequests.push(update);
-      expect(update.force).toBe(false);
-      expect(body.variables.input.repositoryId).toBe("repository-node");
-      expect(update.name).toBe("refs/heads/" + workspace.branch);
-      if (runtime.changeHeadDuringPush) {
-        runtime.head = "f".repeat(40);
+      if (endpoint.endsWith("/git/commits/" + baseCommit)) {
+        return commandResult(JSON.stringify({ sha: baseCommit, tree: { sha: baseTree } }));
       }
-      if (update.beforeOid !== (runtime.head ?? "0".repeat(40))) {
-        return commandResult(JSON.stringify({ errors: [{ message: "Ref lease failed" }] }), 1);
+      if (endpoint.endsWith("/git/commits/" + runtime.baseHead)) {
+        return commandResult(
+          JSON.stringify({ sha: runtime.baseHead, tree: { sha: runtime.baseHeadTree } }),
+        );
       }
-      runtime.head = update.afterOid;
-      if (runtime.pr) {
-        runtime.pr.headSha = runtime.head!;
+      if (endpoint.endsWith("/git/commits/" + runtime.mergeBase)) {
+        return commandResult(
+          JSON.stringify({ sha: runtime.mergeBase, tree: { sha: runtime.mergeBaseTree } }),
+        );
       }
-      runtime.effects.push("push");
-      runtime.afterPush();
-      if (runtime.interruptPush) {
-        runtime.interruptPush = false;
-        throw new Error("Synthetic lost ref response");
+      if (endpoint.includes("/git/commits/")) {
+        return commandResult(JSON.stringify(commits.get(endpoint.split("/").at(-1)!)));
       }
-      return commandResult(
-        JSON.stringify({
-          data: { updateRefs: { clientMutationId: body.variables.input.clientMutationId } },
-        }),
-      );
-    }
-    if (endpoint.endsWith("/pulls") && args.includes("state=all")) {
-      return commandResult(JSON.stringify(runtime.pr ? [runtime.pr] : []));
-    }
-    if (endpoint.endsWith("/pulls") && args.includes("POST")) {
-      runtime.effects.push("pull_request");
-      runtime.pr = {
-        url: repositoryPublicationTestUrl,
-        userId: runtime.accountId,
-        state: runtime.closePullRequest ? "closed" : "open",
-        body: body.body,
-        headSha: runtime.head!,
-        headRef: workspace.branch,
-        baseRef: body.base,
-      };
-      return commandResult(
-        JSON.stringify({ html_url: repositoryPublicationTestUrl }),
-        runtime.closePullRequest ? 1 : 0,
-      );
-    }
-    throw new Error("Unexpected GitHub endpoint " + endpoint);
-  });
+      if (
+        endpoint.includes("/git/matching-refs/") &&
+        decodeURIComponent(endpoint.split("/git/matching-refs/heads/")[1]!) !== workspace.branch
+      ) {
+        return commandResult(
+          JSON.stringify(
+            requestedRef === "topic"
+              ? [{ ref: "refs/heads/topic", object: { sha: baseCommit } }]
+              : [],
+          ),
+        );
+      }
+      if (endpoint.includes("/git/matching-refs/")) {
+        const result = commandResult(
+          JSON.stringify(
+            runtime.head
+              ? [{ ref: "refs/heads/" + workspace.branch, object: { sha: runtime.head } }]
+              : [],
+          ),
+        );
+        runtime.afterHeadObservation();
+        return result;
+      }
+      if (endpoint.includes("/git/ref/heads/")) {
+        return commandResult(
+          JSON.stringify({
+            ref: "refs/heads/" + decodeURIComponent(endpoint.split("/git/ref/heads/")[1]!),
+            ...(args[args.indexOf("--jq") + 1] === "{ref: .ref, sha: .object.sha}"
+              ? { sha: runtime.baseHead }
+              : { object: { sha: runtime.baseHead } }),
+          }),
+        );
+      }
+      if (endpoint.includes("/compare/")) {
+        const source = endpoint.split("/compare/")[1]!.split("...")[0]!;
+        expect(endpoint).toContain("..." + runtime.baseHead);
+        if (source !== baseCommit) {
+          return commandResult(
+            JSON.stringify({ sha: git(["merge-base", source, runtime.baseHead]) }),
+          );
+        }
+        return commandResult(
+          JSON.stringify({ sha: runtime.commonHistory ? runtime.mergeBase : null }),
+        );
+      }
+      if (endpoint.endsWith("/git/blobs")) {
+        expect(body.encoding).toBe("base64");
+        const bytes = Buffer.from(body.content, "base64");
+        const sha = git(["hash-object", "-w", "--stdin"], bytes);
+        runtime.uploaded.set(sha, bytes);
+        return commandResult(JSON.stringify({ sha }));
+      }
+      if (endpoint.includes("/git/trees/")) {
+        const sha = endpoint.split("/").at(-1)!;
+        const tree = git(["ls-tree", "-z", sha])
+          .split("\0")
+          .filter(Boolean)
+          .map((record) => {
+            const separator = record.indexOf("\t");
+            const [mode, type, object] = record.slice(0, separator).split(" ");
+            return { path: record.slice(separator + 1), mode, type, sha: object };
+          });
+        return commandResult(JSON.stringify({ sha, tree, truncated: false }));
+      }
+      if (endpoint.endsWith("/git/trees")) {
+        expect(body.base_tree).toBe(baseTree);
+        const sha = writeTree(baseTree, body.tree);
+        return commandResult(JSON.stringify({ sha }));
+      }
+      if (endpoint.endsWith("/git/commits")) {
+        expect(body.parents).toHaveLength(1);
+        expect(body.parents[0] === baseCommit || commits.has(body.parents[0])).toBe(true);
+        expect(body.message).toContain("OpenClaw-Publication:");
+        const sha = git(["commit-tree", body.tree, "-p", body.parents[0]], body.message);
+        const commit = {
+          sha,
+          tree: { sha: body.tree },
+          parents: body.parents.map((parentSha: string) => ({ sha: parentSha })),
+          message: body.message,
+        };
+        commits.set(sha, commit);
+        return commandResult(JSON.stringify(commit));
+      }
+      if (endpoint === "graphql") {
+        const update = body.variables.input.refUpdates[0];
+        casRequests.push(update);
+        expect(update.force).toBe(false);
+        expect(body.variables.input.repositoryId).toBe("repository-node");
+        expect(update.name).toBe("refs/heads/" + workspace.branch);
+        if (runtime.changeHeadDuringPush) {
+          runtime.head = "f".repeat(40);
+        }
+        if (update.beforeOid !== (runtime.head ?? "0".repeat(40))) {
+          return commandResult(JSON.stringify({ errors: [{ message: "Ref lease failed" }] }), 1);
+        }
+        runtime.head = update.afterOid;
+        if (runtime.pr) {
+          runtime.pr.headSha = runtime.head!;
+        }
+        runtime.effects.push("push");
+        runtime.afterPush();
+        if (runtime.interruptPush) {
+          runtime.interruptPush = false;
+          throw new Error("Synthetic lost ref response");
+        }
+        return commandResult(
+          JSON.stringify({
+            data: { updateRefs: { clientMutationId: body.variables.input.clientMutationId } },
+          }),
+        );
+      }
+      if (endpoint.endsWith("/pulls") && args.includes("state=all")) {
+        return commandResult(JSON.stringify(runtime.pr ? [runtime.pr] : []));
+      }
+      if (endpoint.endsWith("/pulls") && args.includes("POST")) {
+        runtime.effects.push("pull_request");
+        runtime.pr = {
+          url: repositoryPublicationTestUrl,
+          userId: runtime.accountId,
+          state: runtime.closePullRequest ? "closed" : "open",
+          body: body.body,
+          headSha: runtime.head!,
+          headRef: workspace.branch,
+          baseRef: body.base,
+        };
+        return commandResult(
+          JSON.stringify({ html_url: repositoryPublicationTestUrl }),
+          runtime.closePullRequest ? 1 : 0,
+        );
+      }
+      throw new Error("Unexpected GitHub endpoint " + endpoint);
+    },
+  );
   const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
   return {
     git,
@@ -371,6 +409,7 @@ export async function createRepositoryPublicationFixture(
     capture,
     first,
     casRequests,
+    reviewWorkspaces,
     workspace,
     placements,
     closeSession: async (kind: "archive" | "reset") => {

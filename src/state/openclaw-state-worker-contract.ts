@@ -15,6 +15,7 @@ import type {
 } from "../config/io.health-state.types.js";
 import type { SessionEntryCurrentSource } from "../config/sessions/session-entry-current.types.js";
 import type { CronStateWorkerOperations } from "../cron/store/worker-contract.js";
+import type { GitHubPublicationCommit } from "../gateway/github-publication-review-store.types.js";
 import type {
   RepositoryGitHubPublicationPendingQuery,
   RepositoryGitHubPublicationStatusRow,
@@ -116,7 +117,7 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
         receipts: GitHubSessionReceiptIdentities;
         sessionEntryCurrentSource?: SessionEntryCurrentSource;
       };
-      output: void;
+      output: GitHubPublicationCommit<void>;
     };
     "githubRepository.personalPending": {
       input: RepositoryGitHubPublicationPendingQuery;

@@ -7,6 +7,7 @@ import {
   createPersonalPublicationFixture,
   personalPublicationAccount as account,
 } from "./github-personal-publication.test-support.js";
+import { insertRepositoryPublicationFixture } from "./github-publication-store.test-support.js";
 import {
   SESSION_KEY,
   commands,
@@ -14,7 +15,6 @@ import {
 } from "./github-publication.test-support.js";
 import {
   claimRepositoryGitHubPublication,
-  insertRepositoryGitHubPublication,
   readPendingRepositoryGitHubPublication,
 } from "./github-repository-publication-store.js";
 import * as repositoryStore from "./github-repository-publication-store.js";
@@ -49,7 +49,7 @@ it.each([false, true])(
         status: "needs_confirmation",
         updated_at_ms: 1_000 + Math.floor((index - 1) / 2),
       });
-      insertRepositoryGitHubPublication(row, fixture.action.assertCurrent);
+      insertRepositoryPublicationFixture(row, fixture.action.assertCurrent);
       latest ??= row;
     }
     for (const [requestId, scope] of [
@@ -58,7 +58,7 @@ it.each([false, true])(
       ["other-agent", { agent_id: "other" }],
       ["finished", { status: "published" }],
     ] as const) {
-      insertRepositoryGitHubPublication(
+      insertRepositoryPublicationFixture(
         repositoryReceipt(workspace, {
           request_id: requestId,
           idempotency_key: requestId,
@@ -115,7 +115,7 @@ it("rechecks a terminal receipt when confirming an older pending read", async ()
     identity_login: account.login,
     status: "needs_confirmation",
   });
-  insertRepositoryGitHubPublication(row, fixture.action.assertCurrent);
+  insertRepositoryPublicationFixture(row, fixture.action.assertCurrent);
   const captured = expectDefined(
     await fixture.coordinator.personalPending(fixture.action, fixture.action),
     "original pending receipt",
@@ -199,7 +199,7 @@ it.each([false, true])(
     const fallback = vi.spyOn(personalStore, "readPersonalGitHubPublication");
     if (corrupt) {
       const workspace = await sharedRepositoryWorkspace();
-      insertRepositoryGitHubPublication(
+      insertRepositoryPublicationFixture(
         repositoryReceipt(workspace, {
           owner_profile_id: fixture.owner,
           connection_generation: fixture.generation,

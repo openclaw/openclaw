@@ -1,11 +1,11 @@
-// Budget deletion retains the logical owner while reusing the captured physical store.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { SQLInputValue } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+// Budget deletion retains the logical owner while reusing the captured physical store.
+import { insertRepositoryPublicationFixture } from "../../gateway/github-publication-store.test-support.js";
 import {
-  insertRepositoryGitHubPublication,
   readRepositoryGitHubPublication,
   repositoryGitHubPublicationDigest,
 } from "../../gateway/github-repository-publication-store.js";
@@ -133,7 +133,7 @@ function seedReceipt(agentId: string, sessionKey: string, sessionId: string): st
     reported_at_ms: null,
   };
   receipt.request_digest = repositoryGitHubPublicationDigest(receipt);
-  insertRepositoryGitHubPublication(receipt, () => {});
+  insertRepositoryPublicationFixture(receipt, () => {});
   expect(readRepositoryGitHubPublication(requestId)).toMatchObject({
     agent_id: agentId,
     session_key: sessionKey,

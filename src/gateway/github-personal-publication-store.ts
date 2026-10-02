@@ -54,8 +54,8 @@ export function personalGitHubRequestDigest(row: PersonalGitHubPublicationRow): 
     .digest("hex");
 }
 
-function assertOwner(owner: string): void {
-  if (resolvePersonalGitHubOwner(owner) !== owner) {
+function assertOwner(owner: string, db?: Parameters<typeof getNodeSqliteKysely>[0]): void {
+  if (resolvePersonalGitHubOwner(owner, db) !== owner) {
     throw new Error("My GitHub publication owner changed.");
   }
 }
@@ -124,27 +124,20 @@ export function personalGitHubPublicationStatus(
   };
 }
 
-export function insertPersonalGitHubPublication(
+export function insertPersonalGitHubPublicationInDatabase(
+  db: Parameters<typeof getNodeSqliteKysely>[0],
   row: PersonalGitHubPublicationRow,
   lifecycleRevision: string | null,
-  assertCurrent: () => void,
 ): PersonalGitHubPublicationRow {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      assertCurrent();
-      assertOwner(row.owner_profile_id);
-      ensurePersonalGitHubPublicationSchema(db);
-      executeSqliteQuerySync(db, query(db).insertInto(table).values(row));
-      insertGitHubPublicationSessionLifecycle(db, {
-        publicationKind: "personal",
-        requestId: row.request_id,
-        lifecycleRevision,
-      });
-      return row;
-    },
-    undefined,
-    { operationLabel: "github-personal-publication.request" },
-  );
+  assertOwner(row.owner_profile_id, db);
+  ensurePersonalGitHubPublicationSchema(db);
+  executeSqliteQuerySync(db, query(db).insertInto(table).values(row));
+  insertGitHubPublicationSessionLifecycle(db, {
+    publicationKind: "personal",
+    requestId: row.request_id,
+    lifecycleRevision,
+  });
+  return row;
 }
 
 /** One execution closure owns writes; a later socket must explicitly confirm before claiming. */

@@ -360,6 +360,7 @@ const runtimeConsumers = [
     "src/gateway/gateway-ssh-upload-signal.test.ts",
     "src/gateway/github-publication-requester-aliases.test.ts",
     "src/gateway/github-publication-requester.test.ts",
+    "src/gateway/github-publication-review.test.ts",
   ].map((file) => ({
     file,
     configs: [

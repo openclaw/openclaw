@@ -47,8 +47,10 @@ const expectedSystemRequester = {
     scopes: ["operator.admin"],
     grant: null,
   },
+  requiresReview: false,
   assertCurrent: expect.any(Function),
   assertInvocationCurrent: expect.any(Function),
+  retainForReview: expect.any(Function),
 };
 
 async function invoke(
@@ -128,6 +130,7 @@ describe("sessions.github.publish", () => {
         sessionKey: "agent:main:dashboard:task",
         agentId: "main",
         expectedRunId: "run-1",
+        preparedReview: undefined,
         requester: expectedSystemRequester,
       });
       expect(respond).toHaveBeenCalledWith(true, {
@@ -260,6 +263,7 @@ describe("sessions.github.publish", () => {
           sessionKey: "agent:main:main",
           idempotencyKey: "operator-publication-1",
           agentId: "main",
+          preparedReview: undefined,
           requester: {
             snapshot: {
               version: 1,
@@ -267,8 +271,10 @@ describe("sessions.github.publish", () => {
               scopes: ["operator.write"],
               grant: null,
             },
+            requiresReview: false,
             assertCurrent: expect.any(Function),
             assertInvocationCurrent: expect.any(Function),
+            retainForReview: expect.any(Function),
           },
         });
         expect(respond).toHaveBeenCalledWith(true, {
@@ -317,6 +323,7 @@ describe("sessions.github.publish", () => {
           sessionKey: "global",
           idempotencyKey: "global-publication",
           agentId: expectedAgent,
+          preparedReview: undefined,
           requester: expectedSystemRequester,
         });
       });
@@ -367,6 +374,7 @@ describe("sessions.github.publish", () => {
       idempotencyKey: "publication-revoked",
       agentId: "main",
       expectedRunId: "run-1",
+      preparedReview: undefined,
       requester,
     });
   });

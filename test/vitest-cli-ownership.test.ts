@@ -68,6 +68,7 @@ beforeAll(() => {
 
 it.each([
   ...[
+    "src/gateway/github-publication-review-store.test.ts",
     "src/gateway/link-understanding.product.test.ts",
     "src/gateway/server-methods/chat.abort-live-proof.test.ts",
     "src/gateway/server-methods/models-auth-api-key.integration.test.ts",

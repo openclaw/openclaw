@@ -7,6 +7,8 @@ import type { AuditWorkerOperations } from "../audit/audit-event-writer.worker.j
 import type { ChannelIngressWorkerOperations } from "../channels/message/ingress-queue.worker-contract.js";
 import type { DoctorWorkerOperations } from "../commands/doctor-state.worker.js";
 import type { FleetRegistryWriteOperations } from "../fleet/registry.worker-contract.js";
+import type { PublicationAdmissionWorkerOperations } from "../gateway/github-publication-admission.worker.js";
+import type { PublicationReviewWorkerOperations } from "../gateway/github-publication-review-store.worker.js";
 import type { ManagedImageRecordWorkerOperations } from "../gateway/managed-image-record-store.kernel.js";
 import type { OperatorApprovalWorkerOperations } from "../gateway/operator-approval-store.worker-contract.js";
 import type { DeliveryQueueWorkerOperations } from "../infra/delivery-queue.worker-contract.js";
@@ -34,7 +36,9 @@ import type { OnboardingRecommendationWriteOperations } from "./onboarding-recom
 import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
-export type RegisteredStateWorkerOperations = WebPushWorkerOperations &
+export type RegisteredStateWorkerOperations = PublicationAdmissionWorkerOperations &
+  PublicationReviewWorkerOperations &
+  WebPushWorkerOperations &
   ProjectRegistryWorkerOperations &
   ApnsRegistrationWorkerOperations &
   WorktreeWorkerOperations &
@@ -68,6 +72,14 @@ export type RegisteredStateWorkerOperations = WebPushWorkerOperations &
   UserProfileWorkerOperations;
 
 export const stateWorkerRegistry = createWorkerOperationRegistry<RegisteredStateWorkerOperations>({
+  publicationAdmission: () =>
+    import("../gateway/github-publication-admission.worker.js").then(
+      (m) => m.publicationAdmissionOperations,
+    ),
+  publicationReview: () =>
+    import("../gateway/github-publication-review-store.worker.js").then(
+      (m) => m.publicationReviewOperations,
+    ),
   projects: () =>
     import("../projects/project-registry.worker.js").then((m) => m.projectRegistryOperations),
   operatorApprovals: () =>

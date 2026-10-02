@@ -73,6 +73,16 @@ export function ensureGitHubPublicationSessionLifecycleSchema(database: Database
   ); // sqlite-allow-raw -- Canonical first-use DDL; bindings use Kysely.
 }
 
+/** First review request only; existing publication readers leave inert candidates untouched. */
+export function ensureGitHubPublicationReviewSchema(database: DatabaseSync): void {
+  database.exec(
+    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "github_publication_review_candidates", {
+      endMarker: "ON github_publication_review_candidates(session_id, created_at_ms, review_id);",
+      errorMessage: "GitHub publication review schema marker is missing.",
+    }),
+  ); // sqlite-allow-raw -- Canonical first-use DDL; review rows use Kysely.
+}
+
 /** Lazily install the additive secret store table and index on first write. */
 export function ensureSecretStoreSchema(database: DatabaseSync): void {
   database.exec(

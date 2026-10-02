@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import type { GitHubPublicationReviewRead } from "../gateway/github-publication-review-store.types.js";
 import type {
   OpenClawStateReadReply,
   OpenClawStateReadRequest,
@@ -8,6 +9,7 @@ const mock = vi.hoisted(() => ({
   handler: vi.fn<(input: unknown) => OpenClawStateReadReply>(),
   admit: vi.fn<() => void>(),
   query: vi.fn<() => []>(),
+  reviewQuery: vi.fn<(_db: object, _input: GitHubPublicationReviewRead) => []>(),
   settle: vi.fn<(operation: (source: { db: object }) => unknown) => unknown>(),
 }));
 vi.mock("../infra/worker-task-server.js", () => ({
@@ -21,6 +23,9 @@ vi.mock("../fleet/registry.kernel.js", () => ({
 }));
 vi.mock("./openclaw-agent-db-registry.read.js", () => ({
   readRegisteredAgentDatabaseRows: mock.query,
+}));
+vi.mock("../gateway/github-publication-review-store.worker.js", () => ({
+  readGitHubPublicationReviewsInDatabase: mock.reviewQuery,
 }));
 vi.mock("./openclaw-state-db-read-connection.js", () => ({
   closeRetainedOpenClawStateReadConnections: vi.fn(),
@@ -46,6 +51,7 @@ const request: OpenClawStateReadRequest = {
 beforeEach(() => {
   mock.admit.mockReset();
   mock.query.mockReset().mockReturnValue([]);
+  mock.reviewQuery.mockReset().mockReturnValue([]);
   mock.settle.mockReset().mockImplementation((operation) => {
     try {
       mock.admit();
@@ -54,6 +60,47 @@ beforeEach(() => {
       return { status: "unavailable", error };
     }
   });
+});
+
+const reviewSession = { agentId: "main", sessionKey: "agent:main:review", sessionId: "review" };
+const reviewReads: GitHubPublicationReviewRead[] = [
+  { kind: "row", selector: { reviewId: "review" } },
+  { kind: "row", selector: { publicationRequestId: "publication" } },
+  { kind: "find", sessionId: "review", profileId: "reviewer", idempotencyKey: "review" },
+  { kind: "session", session: reviewSession },
+  { kind: "session", session: { ...reviewSession, lifecycleRevision: null } },
+  { kind: "session", session: { ...reviewSession, lifecycleRevision: "generation" } },
+  { kind: "unreported" },
+];
+
+it.each(reviewReads)("admits and dispatches publication review read %j", (input) => {
+  expect(mock.handler({ ...request, command: { type: "publicationReview.read", input } })).toEqual({
+    ok: true,
+    type: "publicationReview.read",
+    sourceAdmitted: true,
+    rows: [],
+  });
+  expect(mock.admit).toHaveBeenCalledOnce();
+  expect(mock.reviewQuery).toHaveBeenCalledExactlyOnceWith({}, input);
+});
+
+it.each([
+  null,
+  { kind: "unknown" },
+  { kind: "row", selector: {} },
+  { kind: "row", selector: { reviewId: 42, publicationRequestId: "publication" } },
+  { kind: "row", selector: { publicationRequestId: 42 } },
+  { kind: "find", sessionId: "review", idempotencyKey: "review" },
+  { kind: "session", session: { ...reviewSession, lifecycleRevision: false } },
+])("refuses malformed publication review read %j before source admission", (input) => {
+  expect(
+    mock.handler({ ...request, command: { type: "publicationReview.read", input } }),
+  ).toMatchObject({
+    ok: false,
+    message: "Shared-state reader requires a captured state location and read command",
+  });
+  expect(mock.admit).not.toHaveBeenCalled();
+  expect(mock.reviewQuery).not.toHaveBeenCalled();
 });
 
 it.each(["success", "query-error", "schema-error"] as const)(

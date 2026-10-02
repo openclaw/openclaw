@@ -46,7 +46,8 @@ import {
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./session-utils.js";
 
-vi.mock("./github-publication-availability.js", () => ({
+vi.mock("./github-publication-availability.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./github-publication-availability.js")>()),
   prepareCurrentGitHubPublicationOptionsIdentity: vi.fn(async (agentId: string) => ({
     source: "system",
     account: { accountId: `account-${agentId}`, login: `synthetic-${agentId}` },
@@ -467,6 +468,9 @@ describe("global session lookup ownership", () => {
           personal: null,
           pendingPersonal: null,
           latestShared: null,
+          reviews: [],
+          reviewAvailable: false,
+          reviewRequired: false,
           shared: {
             source: "system",
             accountId: `account-${agentId}`,

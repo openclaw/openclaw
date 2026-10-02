@@ -28,7 +28,11 @@ import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
-import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
+import {
+  currentGitHubPublicationConfig,
+  prepareCurrentGitHubPublicationIdentity,
+} from "./github-publication-availability.js";
+import { prepareGitHubPublicationReviewConfirmation } from "./github-publication-review.js";
 import { readGitHubPublicationRequest } from "./github-publication-store.js";
 import {
   createGitHubPublicationRequesterFixture,
@@ -52,6 +56,7 @@ import {
   seedActivePlacement,
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import type { WorkerSessionTurnClaim } from "./worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
 const mocks = githubPublicationTestMocks();
@@ -98,7 +103,6 @@ async function createRequesterPolicySources(
     loadSessionEntryReadOnly({ agentId: "main", sessionKey: session.sessionKey }),
   ).toMatchObject({
     createdActor: { type: "human", source: "profile", id: guestProfile },
-    sandbox: "required",
   });
   const guestClient = createOperatorWsClient({ connId: guestProfile, scopes: guestScopes });
   guestClient.authenticatedUserProfile = {
@@ -205,6 +209,46 @@ export async function createRequesterPublicationFixture(
     title,
     requester,
   });
+  const currentReviewSession = () => {
+    const entry = loadSessionEntryReadOnly({ agentId: "main", sessionKey: session.sessionKey })!;
+    return { ...session, agentId: "main", lifecycleRevision: entry.lifecycleRevision ?? null };
+  };
+  const reviewedRequest = async (
+    key: string,
+    requester: Requester,
+    title = key,
+    claim?: WorkerSessionTurnClaim,
+  ) => {
+    const owner = currentReviewSession();
+    const row = await coordinator.prepareReview({
+      session: owner,
+      request: {
+        action: "prepare",
+        sessionKey: session.sessionKey,
+        agentId: "main",
+        idempotencyKey: `candidate:${key}`,
+        title,
+      },
+      requester,
+      expectedRunId: claim?.runId,
+      signal: new AbortController().signal,
+      prepareIdentity: async (assertCurrent) => {
+        const identity = await prepareCurrentGitHubPublicationIdentity("main");
+        assertCurrent();
+        return identity;
+      },
+    });
+    const preparedReview = await prepareGitHubPublicationReviewConfirmation(
+      { reviewId: row.review_id, digest: row.candidate_digest! },
+      owner,
+      requester,
+    );
+    return {
+      ...request(key, requester, title),
+      preparedReview,
+      ...(claim ? { expectedRunId: claim.runId } : {}),
+    };
+  };
   return {
     ...policy,
     backend,
@@ -213,6 +257,8 @@ export async function createRequesterPublicationFixture(
     placements,
     coordinator,
     request,
+    currentReviewSession,
+    reviewedRequest,
     restart() {
       return createTestGitHubPublicationCoordinator({
         placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),

@@ -20,6 +20,7 @@ import {
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
 } from "./github-publication.test-support.js";
+import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { preparePersonalGitHubSessionAction } from "./server-methods/github-personal-authorization.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
@@ -145,8 +146,10 @@ export async function createPersonalPublicationFixture() {
     }
     return await fallback(argv, options);
   });
+  const config: OpenClawConfig = {};
   const client: GatewayClient = {
     connId: "direct-human",
+    internal: { operatorAccessAuthority: resolveGatewayOperatorAccessAuthority(owner, config) },
     authenticatedUserProfile: {
       profileId: owner,
       displayName: null,
@@ -162,7 +165,6 @@ export async function createPersonalPublicationFixture() {
     },
   };
   const runtime = { live: true, verifiedAccount: account, client };
-  const config: OpenClawConfig = {};
   const context = {
     getRuntimeConfig: () => config,
     getClientConnIds: (filter?: (candidate: GatewayClient) => boolean) =>

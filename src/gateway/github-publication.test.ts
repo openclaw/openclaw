@@ -564,22 +564,29 @@ describe("Gateway GitHub publication", () => {
 
     const firstResult = first.requestForSession(request);
     const secondResult = second.requestForSession(request);
-    await vi.waitFor(() => expect(mocks.resolveRepository).toHaveBeenCalledOnce());
-    releaseRepository?.();
+    // Observe rejection before waiting for the mock, and join both calls even if an assertion fails.
+    const settled = Promise.allSettled([firstResult, secondResult]);
+    try {
+      await vi.waitFor(() => expect(mocks.resolveRepository).toHaveBeenCalledOnce());
+      releaseRepository?.();
 
-    await expect(Promise.all([firstResult, secondResult])).resolves.toEqual([
-      expect.objectContaining({ status: "published" }),
-      expect.objectContaining({ status: "published" }),
-    ]);
-    expect(commands.filter((argv) => argv.includes("commit-tree"))).toHaveLength(1);
-    const fetchIndex = commands.findIndex((argv) => argv.includes("fetch"));
-    const commitIndex = commands.findIndex((argv) => argv.includes("commit-tree"));
-    const updateRefIndex = commands.findIndex((argv) => argv.includes("update-ref"));
-    expect(fetchIndex).toBeGreaterThanOrEqual(0);
-    expect(commitIndex).toBeGreaterThan(fetchIndex);
-    expect(updateRefIndex).toBeGreaterThan(commitIndex);
-    expect(commands.filter((argv) => argv.includes("push"))).toHaveLength(1);
-    expect(commands.filter((argv) => argv[0] === "gh" && argv.includes("POST"))).toHaveLength(1);
+      await expect(Promise.all([firstResult, secondResult])).resolves.toEqual([
+        expect.objectContaining({ status: "published" }),
+        expect.objectContaining({ status: "published" }),
+      ]);
+      expect(commands.filter((argv) => argv.includes("commit-tree"))).toHaveLength(1);
+      const fetchIndex = commands.findIndex((argv) => argv.includes("fetch"));
+      const commitIndex = commands.findIndex((argv) => argv.includes("commit-tree"));
+      const updateRefIndex = commands.findIndex((argv) => argv.includes("update-ref"));
+      expect(fetchIndex).toBeGreaterThanOrEqual(0);
+      expect(commitIndex).toBeGreaterThan(fetchIndex);
+      expect(updateRefIndex).toBeGreaterThan(commitIndex);
+      expect(commands.filter((argv) => argv.includes("push"))).toHaveLength(1);
+      expect(commands.filter((argv) => argv[0] === "gh" && argv.includes("POST"))).toHaveLength(1);
+    } finally {
+      releaseRepository?.();
+      await settled;
+    }
   });
 
   it("rejects a stale turn claim after awaited identity verification", async () => {
@@ -1003,7 +1010,7 @@ describe("Gateway GitHub publication", () => {
       expect.stringContaining("GitHub publication result reporting deferred"),
     ]);
     expect(runtime.coordinator.read(requested.requestId)).toMatchObject({ status: "published" });
-    expect(runtime.coordinator.listUnreportedResults()).toHaveLength(1);
+    expect(await runtime.coordinator.listUnreportedResults()).toHaveLength(1);
     let events = await loadTranscriptEvents({
       agentId: REQUEST.agentId,
       sessionId: REQUEST.sessionId,
@@ -1030,7 +1037,7 @@ describe("Gateway GitHub publication", () => {
       sessionKey: REQUEST.sessionKey,
     });
     expect(publicationTranscriptMessages(events, requested.requestId)).toHaveLength(1);
-    expect(restarted.coordinator.listUnreportedResults()).toEqual([]);
+    expect(await restarted.coordinator.listUnreportedResults()).toEqual([]);
     expect(warnings).toHaveLength(1);
   });
 });

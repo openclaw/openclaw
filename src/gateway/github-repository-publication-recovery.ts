@@ -33,11 +33,11 @@ import type {
 } from "./worker-environments/placement-store.js";
 import { SessionWorkspaceReservationBusyError } from "./worker-environments/placement-workspace-reservation.js";
 
-export async function settleDeniedRepositoryGitHubPublication(params: {
+export async function reconcileRepositoryGitHubPublication(params: {
   execution: RepositoryGitHubPublicationExecution;
   assertCustody: () => void;
-  error: GitHubPublicationRequesterUnavailableError;
-}): Promise<SessionGitHubPublicationResult> {
+  error?: GitHubPublicationRequesterUnavailableError;
+}): Promise<SessionGitHubPublicationResult | undefined> {
   const { execution, assertCustody, error } = params;
   assertCustody();
   if (!execution.ownsExecution()) {
@@ -135,6 +135,9 @@ export async function settleDeniedRepositoryGitHubPublication(params: {
       );
     }
   }
+  if (!error) {
+    return undefined;
+  }
   return projectGitHubPublicationResult(
     execution.complete({
       requestId: row.request_id,
@@ -143,6 +146,14 @@ export async function settleDeniedRepositoryGitHubPublication(params: {
       message: error.message,
     }),
   );
+}
+
+export async function settleDeniedRepositoryGitHubPublication(params: {
+  execution: RepositoryGitHubPublicationExecution;
+  assertCustody: () => void;
+  error: GitHubPublicationRequesterUnavailableError;
+}): Promise<SessionGitHubPublicationResult> {
+  return (await reconcileRepositoryGitHubPublication(params))!;
 }
 
 export function matchesRepositoryGitHubPublicationClaim(

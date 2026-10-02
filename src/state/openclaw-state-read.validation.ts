@@ -182,6 +182,26 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         Array.isArray(input.command.profileIds) &&
         input.command.profileIds.every((id) => typeof id === "string")) ||
       input.command.type === "config.snapshot.read" ||
+      (input.command.type === "publicationReview.read" &&
+        isRecord(input.command.input) &&
+        (input.command.input.kind === "unreported" ||
+          (input.command.input.kind === "row" &&
+            isRecord(input.command.input.selector) &&
+            ("reviewId" in input.command.input.selector
+              ? typeof input.command.input.selector.reviewId === "string"
+              : typeof input.command.input.selector.publicationRequestId === "string")) ||
+          (input.command.input.kind === "find" &&
+            typeof input.command.input.sessionId === "string" &&
+            typeof input.command.input.profileId === "string" &&
+            typeof input.command.input.idempotencyKey === "string") ||
+          (input.command.input.kind === "session" &&
+            isRecord(input.command.input.session) &&
+            typeof input.command.input.session.agentId === "string" &&
+            typeof input.command.input.session.sessionKey === "string" &&
+            typeof input.command.input.session.sessionId === "string" &&
+            (input.command.input.session.lifecycleRevision === undefined ||
+              input.command.input.session.lifecycleRevision === null ||
+              typeof input.command.input.session.lifecycleRevision === "string")))) ||
       (input.command.type === "githubPublication.lifecycle" &&
         (input.command.publicationKind === "shared" ||
           input.command.publicationKind === "personal") &&

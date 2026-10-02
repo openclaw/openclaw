@@ -56,6 +56,15 @@ import {
   readKnownGitHubPublicationPullRequestUrls,
   recoverGitHubPublicationWorkspace,
 } from "./github-publication-recovery.js";
+import {
+  assertGitHubPublicationReviewIdentity,
+  assertGitHubPublicationReviewSnapshot,
+  type PreparedGitHubPublicationReview,
+} from "./github-publication-review-contract.js";
+import {
+  readGitHubPublicationReviewTarget,
+  assertGitHubPublicationReviewedTarget,
+} from "./github-publication-review-target.js";
 import { prepareGitHubPublicationTarget } from "./github-publication-target.js";
 import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
@@ -165,6 +174,7 @@ export async function reconcileGitHubPublication<Row extends PublicationRow>(par
 
 export async function executeGitHubPublication<Row extends PublicationRow>(params: {
   initial: Row;
+  review?: PreparedGitHubPublicationReview;
   identity?: GitHubPublicationIdentityOwner;
   target?: { pushRepository: string; repository: string; baseBranch: string };
   recordEffect?: (
@@ -216,13 +226,17 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     createGitHubPublicationExecutionIdentity({
       row: initial,
       identity: params.identity,
-      validateAuthority: params.validateAuthority,
+      validateAuthority: () => {
+        params.review?.assertCurrent();
+        return params.validateAuthority();
+      },
       assertWorkspace: () => {
         currentWorktree();
       },
     });
   const { step, run, require: command } = createGitHubPublicationCommandRunner(assertAuthority);
   try {
+    params.review?.assertCurrent();
     const { loaded, worktree } = currentWorktree();
     await custodyCommands.step(() => assertSafeGitPublicationWorkspace(worktree.path, runCommand));
     await recoverGitHubPublicationWorkspace(initial, custodyCommands.require, assertCustody);
@@ -233,6 +247,18 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     let sourceHeadCommit = row.source_head_commit;
     let sourceIndexTree = row.source_index_tree;
     let workspaceTree = row.workspace_tree;
+    if (params.review) {
+      if (!sourceHeadCommit || !sourceIndexTree || !workspaceTree) {
+        throw new GitHubPublicationWorkspaceChangedError(
+          "The reviewed snapshot is missing. Prepare a new candidate.",
+        );
+      }
+      assertGitHubPublicationReviewSnapshot(params.review, {
+        sourceHeadCommit,
+        sourceIndexTree,
+        workspaceTree,
+      });
+    }
     if (!sourceHeadCommit || !sourceIndexTree || !workspaceTree) {
       const snapshot = await captureGitHubPublicationWorkspaceSnapshot({
         cwd: worktree.path,
@@ -243,7 +269,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       sourceIndexTree = snapshot.sourceIndexTree;
       workspaceTree = snapshot.workspaceTree;
     }
-    if (row.identity_source === "personal") {
+    if (row.identity_source === "personal" || params.review) {
       // Recover the request-owned index first. Confirmation must then validate the
       // live workspace inside this execution so a proven mismatch becomes its retained result.
       let snapshot;
@@ -293,6 +319,27 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     const remoteBaseSha = parseGitHubPublicationBaseRef(
       remoteBaseResult.stdout.toString("utf8"),
       baseBranch,
+    );
+    const assertReviewedTarget = async (ownHead?: string) => {
+      if (!params.review) {
+        return;
+      }
+      const selectedIdentity = await refreshIdentity();
+      assertGitHubPublicationReviewIdentity(params.review, selectedIdentity);
+      const current = await readGitHubPublicationReviewTarget({
+        target: { pushRepository, repository, branch, baseBranch },
+        identity: selectedIdentity,
+        assertCurrent: assertAuthority,
+      });
+      assertGitHubPublicationReviewedTarget(params.review.candidate.target, current, ownHead);
+      if (remoteBaseSha !== params.review.candidate.target.baseCommit) {
+        throw new GitHubPublicationWorkspaceChangedError(
+          "The reviewed base moved. Prepare a new candidate.",
+        );
+      }
+    };
+    await assertReviewedTarget(
+      row.head_commit && row.head_commit !== sourceHeadCommit ? row.head_commit : undefined,
     );
     await step(() => assertSafeGitPublicationWorkspace(worktree.path, runCommand));
     identity = await refreshIdentity();
@@ -397,6 +444,13 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     // Observe ancestry before creating bookkeeping commits or installing the accepted index.
     // Fetch objects only: do not move local refs, FETCH_HEAD, or the working tree.
     const expectedRemoteHead = await step(observeRemoteHead);
+    if (
+      params.review &&
+      expectedRemoteHead !== (params.review.candidate.target.remoteHeadCommit ?? "") &&
+      !(markerPresent && expectedRemoteHead === headCommit)
+    ) {
+      throw new GitHubPublicationBranchChangedError();
+    }
     let remoteHead = expectedRemoteHead;
     if (remoteHead && remoteHead !== headCommit) {
       const fetched = await run(githubPublicationBaseFetchArgs(pushRepository, remoteHead), {
@@ -569,6 +623,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         throw new GitHubPublicationBranchChangedError();
       }
       assertAction();
+      await assertReviewedTarget(headCommit);
       params.recordEffect?.("push");
       effectDispatched = true;
       const pushed = await runCommand(pushArgs, {
@@ -618,6 +673,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       const body = `${description}${participantCredit}\n\n${pullRequestMarker}${footer}`;
       identity = await refreshIdentity();
       assertAction();
+      await assertReviewedTarget(headCommit);
       params.recordEffect?.("pull_request");
       pullRequestPending = true;
       effectDispatched = true;

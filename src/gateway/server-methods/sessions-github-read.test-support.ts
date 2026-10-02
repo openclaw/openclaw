@@ -2,6 +2,7 @@ import { vi } from "vitest";
 import type { SessionGitHubStatusResult } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -32,6 +33,7 @@ export async function withReadFixture(
     scopes?: string[];
     others?: "none" | "view";
     foreign?: boolean;
+    rolePolicy?: Pick<GatewayOperatorRoleDefinition, "sandbox" | "execution">;
   } = {},
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -43,6 +45,7 @@ export async function withReadFixture(
             definitions: {
               blocked: { scopes: [], sessions: { others: "none" }, agents: [] },
               guest: {
+                ...options.rolePolicy,
                 scopes: options.scopes,
                 sessions: { others: options.others ?? "view" },
                 agents: ["main"],

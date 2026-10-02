@@ -51,6 +51,50 @@ function expectWithoutHostSql(action: () => void) {
   }
 }
 
+it("keeps mutation-only authority separate from agent admission", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = { ...rolePolicyConfig([]), agents: { entries: { main: {} } } };
+    cfg.gateway!.roles!.default = "write";
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    const sessionKey = "agent:main:publication-mutation";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey },
+      {
+        sessionId: "mutation-session",
+        updatedAt: 1,
+        visibility: "draft",
+        createdActor: { type: "human", source: "profile", id: "requester" },
+      },
+    );
+    const read = await prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" });
+    try {
+      const params = { cfg, sessionKey, client: sharingPolicyClient({ user: "requester" }) };
+      const facts = read.readCurrent(cfg);
+      const prepared = {
+        policy: cfg.gateway!.roles!.definitions.write,
+        aliases: new Set(["requester"]),
+      };
+      expect(authorizePreparedSessionMutation(params, facts, prepared)).toMatchObject({
+        code: "FORBIDDEN",
+      });
+      expect(
+        authorizePreparedSessionMutation(params, facts, prepared, { intent: "mutation" }),
+      ).toBeNull();
+      expect(
+        authorizePreparedSessionMutation(
+          { ...params, client: sharingPolicyClient({ user: "other" }) },
+          facts,
+          { ...prepared, aliases: new Set(["other"]) },
+          { intent: "mutation" },
+        ),
+      ).toMatchObject({ code: "INVALID_REQUEST", message: "session is draft for this connection" });
+    } finally {
+      read.release();
+    }
+  });
+});
+
 it.each([false, true])(
   "retains missing incognito identity across first birth and rollback (warm: %s)",
   async (warm) => {

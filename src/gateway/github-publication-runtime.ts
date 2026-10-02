@@ -1,7 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requirePersonalGitHubPublicationConfirmation } from "./github-personal-publication-store.js";
-import { createGitHubPublicationTranscriptReporter } from "./github-publication-transcript.js";
+import {
+  createGitHubPublicationTranscriptReporter,
+  GitHubPublicationReviewGenerationChangedError,
+} from "./github-publication-transcript.js";
 import { createGitHubPublicationCoordinator } from "./github-publication.js";
 import type {
   WorkerSessionPlacementStore,
@@ -21,6 +24,23 @@ export function createGitHubPublicationRuntime(params: {
     try {
       await report(publication);
     } catch (error) {
+      if (
+        error instanceof GitHubPublicationReviewGenerationChangedError &&
+        publication.lifecycleRevision !== undefined
+      ) {
+        try {
+          await coordinator.retireReviewReport({
+            ...publication,
+            reviewId: publication.result.requestId,
+          });
+          return;
+        } catch (retirementError) {
+          params.warn(
+            `GitHub publication review retirement deferred for ${publication.sessionId}: ${formatErrorMessage(retirementError)}`,
+          );
+          return;
+        }
+      }
       params.warn(
         `GitHub publication result reporting deferred for ${publication.sessionId}: ${formatErrorMessage(error)}`,
       );
@@ -67,7 +87,7 @@ export function createGitHubPublicationRuntime(params: {
     } catch (error) {
       params.warn(`GitHub publication recovery deferred: ${formatErrorMessage(error)}`);
     }
-    for (const publication of coordinator.listUnreportedResults()) {
+    for (const publication of await coordinator.listUnreportedResults()) {
       await reportDeferred(publication);
     }
   };

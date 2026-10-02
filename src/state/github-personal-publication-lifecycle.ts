@@ -1,15 +1,16 @@
-import { assertSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.js";
 import { requestSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.worker.js";
 import type {
   SessionEntryCurrentCheck,
   SessionEntryCurrentSource,
 } from "../config/sessions/session-entry-current.types.js";
+import { runGitHubPublicationMutation } from "../gateway/github-publication-mutation.js";
+import type { GitHubPublicationCommit } from "../gateway/github-publication-review-store.types.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
+import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
 import type {
   GitHubSessionReceiptGeneration,
   GitHubSessionReceiptIdentities,
@@ -50,7 +51,7 @@ export async function preparePersonalGitHubSessionReceiptDeletion(params: {
       context.admission.assertCurrent();
       assertCurrent?.();
     };
-    await runOpenClawStateWorkerOperation(
+    await runGitHubPublicationMutation(
       context,
       (scope) =>
         scope.execute({
@@ -62,16 +63,8 @@ export async function preparePersonalGitHubSessionReceiptDeletion(params: {
             sessionEntryCurrentSource: sessionEntryCurrent?.source,
           },
         }),
-      {
-        assertCurrent: assertAdmission,
-        createAdmission: createSqliteWorkerWriteAdmission(
-          (request) => {
-            assertAdmission();
-            assertSessionEntryCurrentAdmission(request, sessionEntryCurrent);
-          },
-          [context.admission.databasePath],
-        ),
-      },
+      assertAdmission,
+      sessionEntryCurrent,
     );
   };
 }
@@ -109,23 +102,50 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
     receipts: GitHubSessionReceiptIdentities;
     sessionEntryCurrentSource?: SessionEntryCurrentSource;
   },
-): void {
+): GitHubPublicationCommit<void> {
   const tables = [
     "github_personal_publication_requests",
     "github_repository_publication_requests",
   ] as const;
-  const existing = tables.filter((table) => tableExists(database.db, table));
-  if (existing.length === 0 || params.sessionKeys.length === 0) {
-    return;
-  }
-  runOpenClawStateWriteTransaction(
+  return runOpenClawStateWriteTransaction(
     ({ db }) => {
+      const result: GitHubPublicationCommit<void> = {
+        kind: "github-publication",
+        value: undefined,
+        reviews: [],
+        sessions: [],
+      };
       requestSessionEntryCurrentAdmission(
         params.sessionEntryCurrentSource,
         { stage: "transaction", facts: undefined },
         { lookup: "logical" },
       );
+      const existing = tables.filter((table) => tableExists(db, table));
+      const hasReviews = tableExists(db, "github_publication_review_candidates");
       const query = getNodeSqliteKysely<DB>(db);
+      // Archive retains review history. Permanent deletion removes only captured
+      // incarnations, never a replacement conversation that reused the key.
+      if (hasReviews) {
+        for (const generation of params.generations) {
+          const deleted = executeSqliteQuerySync(
+            db,
+            query
+              .deleteFrom("github_publication_review_candidates")
+              .where("agent_id", "=", params.agentId)
+              .where("session_key", "=", generation.sessionKey)
+              .where("session_id", "=", generation.sessionId)
+              .where(
+                "lifecycle_revision",
+                generation.lifecycleRevision === null ? "is" : "=",
+                generation.lifecycleRevision,
+              )
+              .returning("review_id"),
+          ).rows;
+          result.reviews.push(
+            ...deleted.map((row) => ({ reviewId: row.review_id, row: undefined })),
+          );
+        }
+      }
       const hasLifecycles = tableExists(db, "github_publication_session_lifecycles");
       const current = readSessionReceiptDeletionIdentitiesInDatabase(database, params);
       for (const table of existing) {
@@ -201,9 +221,11 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
       }
       requestSessionEntryCurrentAdmission(
         params.sessionEntryCurrentSource,
-        { stage: "commit", facts: undefined },
+        { stage: "commit", facts: result },
         { lookup: "logical" },
       );
+      deferSqliteWorkerCommitReceipt(db, result);
+      return result;
     },
     { database },
     { operationLabel: "github-personal-publication.session-delete" },

@@ -65,6 +65,9 @@ describe.each(methods)("registered guest %s", (method) => {
                     shared: null,
                     pendingPersonal: null,
                     latestShared: receipt,
+                    reviews: [],
+                    reviewAvailable: false,
+                    reviewRequired: false,
                   }
                 : receipt,
             );

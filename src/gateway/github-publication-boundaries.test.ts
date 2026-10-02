@@ -878,13 +878,13 @@ describe("Gateway GitHub publication boundaries", () => {
     coordinator.deferOrphanedRequests();
 
     expect(coordinator.read(accepted.requestId)).toMatchObject({ status: "requested" });
-    expect(coordinator.listUnreportedResults()).toEqual([]);
+    expect(await coordinator.listUnreportedResults()).toEqual([]);
     expect(commands).toEqual([]);
 
     await coordinator.resumeSessionRequests();
 
     expect(coordinator.read(accepted.requestId)).toMatchObject({ status: "published" });
-    expect(coordinator.listUnreportedResults()).toEqual([
+    expect(await coordinator.listUnreportedResults()).toEqual([
       expect.objectContaining({ result: expect.objectContaining({ status: "published" }) }),
     ]);
   });

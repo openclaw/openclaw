@@ -3,8 +3,8 @@ import {
   claimGitHubPublicationExecution,
   createGitHubPublicationExecutionStore,
 } from "./github-publication-store.js";
+import { insertRepositoryPublicationFixture } from "./github-publication-store.test-support.js";
 import { installGitHubPublicationTestHarness } from "./github-publication.test-support.js";
-import { insertRepositoryGitHubPublication } from "./github-repository-publication-store.js";
 import {
   insertSharedWorktreeReceipt,
   sharedRepositoryWorkspace,
@@ -51,7 +51,7 @@ it("stops discovering a superseded failure without rewriting its receipt or exac
 
 it("retires covered repository-only failures with the same read-only contract", async () => {
   const workspace = await sharedRepositoryWorkspace();
-  const row = insertRepositoryGitHubPublication(
+  const row = insertRepositoryPublicationFixture(
     repositoryReceipt(workspace, {
       status: "failed",
       error_code: "unavailable",

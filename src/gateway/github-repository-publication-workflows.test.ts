@@ -83,7 +83,7 @@ describe("repository checkpoint workflow authority", () => {
           : { [workflow]: operation === "delete" ? null : definition + "# accepted change\n" },
       );
       expect(
-        await f.coordinator.requestForSession(f.request(operation, f.publisher)),
+        await f.coordinator.requestForSession(await f.reviewedRequest(operation, f.publisher)),
       ).toMatchObject({ status: "published" });
       expect(f.repository.runtime.effects).toEqual(["push", "pull_request"]);
     },
@@ -92,6 +92,7 @@ describe("repository checkpoint workflow authority", () => {
   it("rechecks publication authority after a blob response before writing the tree or branch", async () => {
     const f = await createFixture();
     await f.repository.capture("accepted code\n", "authority-change", { [workflow]: definition });
+    const reviewed = await f.reviewedRequest("authority-change", f.maintainer);
     const transport = mocks.runCommand.getMockImplementation()!;
     mocks.runCommand.mockImplementation(async (args, options) => {
       const result = await transport(args, options);
@@ -101,9 +102,10 @@ describe("repository checkpoint workflow authority", () => {
       }
       return result;
     });
-    expect(
-      await f.coordinator.requestForSession(f.request("authority-change", f.maintainer)),
-    ).toMatchObject({ status: "failed", code: "identity_changed" });
+    expect(await f.coordinator.requestForSession(reviewed)).toMatchObject({
+      status: "failed",
+      code: "identity_changed",
+    });
     expect(f.repository.runtime.uploaded.size).toBeGreaterThan(0);
     expect(f.repository.runtime.effects).toEqual([]);
     expect(writes().every(([args]) => args.some((arg: string) => arg.endsWith("/git/blobs")))).toBe(
@@ -114,6 +116,7 @@ describe("repository checkpoint workflow authority", () => {
   it("rechecks the publisher after recording the ref update effect", async () => {
     const f = await createFixture();
     await f.repository.capture("accepted code\n", "publisher-at-ref", { [workflow]: definition });
+    const reviewed = await f.reviewedRequest("publisher-at-ref", f.maintainer);
     const execute = repositoryPublicationExecutor.executeRepositoryGitHubPublication;
     let publisherRevoked = false;
     const intercepted = vi
@@ -135,9 +138,7 @@ describe("repository checkpoint workflow authority", () => {
       );
     onTestFinished(() => intercepted.mockRestore());
 
-    expect(
-      await f.coordinator.requestForSession(f.request("publisher-at-ref", f.maintainer)),
-    ).toMatchObject({ status: "requested" });
+    expect(await f.coordinator.requestForSession(reviewed)).toMatchObject({ status: "requested" });
     expect(publisherRevoked).toBe(true);
     expect(f.maintainer.assertCurrent).not.toThrow();
     expect(f.repository.runtime.uploaded.size).toBeGreaterThan(0);

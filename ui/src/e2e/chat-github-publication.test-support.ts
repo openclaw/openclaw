@@ -24,6 +24,8 @@ export const publicationMethods = [
   "chat.startup",
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   "sessions.github.publish",
+  "sessions.github.requestReview",
+  "sessions.github.review",
   "sessions.github.options",
   "sessions.github.status",
   "sessions.github.confirm",

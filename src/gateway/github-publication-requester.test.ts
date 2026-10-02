@@ -17,6 +17,7 @@ import {
 import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -35,7 +36,6 @@ import {
   publisherScopes,
   holdWorkerTurn,
   preparePublisherAccessPolicyFixture,
-  prepareVisitorPublicationFixture,
   requirePublisherAccessPolicy,
 } from "./github-publication-requester.test-support.js";
 import { readGitHubPublicationRequest } from "./github-publication-store.js";
@@ -60,29 +60,36 @@ const fixture = createRequesterPublicationFixture.bind(undefined, checkpoint);
 describe("shared GitHub publication requester authority", () => {
   installGitHubPublicationTestHarness({
     creatorEmail: "publication-guest@example.test",
-    sandbox: "required",
     realWorktree: true,
   });
 
-  it("denies an active Visitor's publication without changing its restricted role", async () => {
+  it("retains and releases a reviewed requester whose inherited authority has no signal", async () => {
     const f = await createRequesterPolicyFixture();
-    const visitors = await prepareVisitorPublicationFixture(f);
+    const { client, context, session } = f.publisherSource;
+    const source = (await captureGatewayOperatorRunAuthority({ client, context }))!;
+    onTestFinished(source.release);
+    const authority = createAdmittedRunOperatorAuthority({
+      ...source.authority,
+      signal: undefined,
+    });
+    const captured = await captureGitHubPublicationRequester(
+      {
+        client: { ...client, internal: { ...client.internal, operatorRunAuthority: authority } },
+        context,
+      },
+      session,
+    );
+    onTestFinished(captured.release);
+    const retained = captured.requester.retainForReview!();
     try {
-      await visitors.start();
-      await visitors.execute("visitor_invite", {
-        email: "publication-guest@example.test",
-        days: 1,
-      });
-      await expect(
-        createGitHubPublicationRequesterFixture({
-          profileId: f.guestProfile,
-          scopes: guestScopes,
-          ...f.guestSource.session,
-        }),
-      ).rejects.toThrow(GitHubPublicationRequesterUnavailableError);
-      expect(f.externalWrites).toEqual([]);
+      captured.release();
+      expect(retained.requester.assertCurrent).not.toThrow();
+      expect(retained.signal.aborted).toBe(false);
+      retained.release();
+      expect(retained.signal.aborted).toBe(true);
+      expect(retained.requester.assertCurrent).toThrow();
     } finally {
-      await visitors.close();
+      retained.release();
     }
   });
 

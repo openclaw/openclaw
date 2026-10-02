@@ -2528,6 +2528,32 @@ CREATE TABLE IF NOT EXISTS github_publication_session_lifecycles (
   PRIMARY KEY (publication_kind, request_id)
 ) STRICT;
 
+-- Review intent is inert. A separate current maintainer action links its immutable
+-- candidate to an accepted publication; ordinary publication recovery cannot admit it.
+CREATE TABLE IF NOT EXISTS github_publication_review_candidates (
+  review_id TEXT NOT NULL PRIMARY KEY CHECK (length(review_id) = 36),
+  requested_review_id TEXT,
+  idempotency_key TEXT NOT NULL CHECK (length(idempotency_key) BETWEEN 1 AND 128),
+  session_id TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  lifecycle_revision TEXT,
+  requester_profile_id TEXT NOT NULL,
+  requester_authority_json TEXT,
+  candidate_json TEXT,
+  candidate_digest TEXT CHECK (candidate_digest IS NULL OR length(candidate_digest) = 64),
+  publication_request_id TEXT UNIQUE,
+  stale_reason TEXT,
+  created_at_ms INTEGER NOT NULL,
+  reported_at_ms INTEGER,
+  UNIQUE (session_id, requester_profile_id, idempotency_key),
+  CHECK ((candidate_json IS NULL AND candidate_digest IS NULL AND requester_authority_json IS NULL
+      AND publication_request_id IS NULL)
+    OR (candidate_json IS NOT NULL AND candidate_digest IS NOT NULL AND requester_authority_json IS NOT NULL))
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_github_publication_review_session
+  ON github_publication_review_candidates(session_id, created_at_ms, review_id);
+
 -- One active, opaque admission credential per worker environment. Plaintext
 -- may be retried until delivery acknowledgement but never enters durable state.
 CREATE TABLE IF NOT EXISTS worker_environment_credentials (

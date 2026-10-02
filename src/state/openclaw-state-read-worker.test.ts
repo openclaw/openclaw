@@ -359,6 +359,7 @@ it("closes only the operation matching a state path while its sibling finishes n
 
 it.each([
   "githubPublication.sharedObservation",
+  "publicationReview.read",
   "fleet.get",
   "userProfiles.reconcile",
   "onboardingRecommendations.read",
@@ -393,23 +394,36 @@ it.each([
               },
             },
           }
-        : type === "updateRuns.get"
-          ? { type, runId: selector }
-          : type === "fleet.get"
-            ? { type, tenantId: selector }
-            : type === "userProfiles.reconcile"
-              ? { type, profileId: selector }
-              : type === "onboardingRecommendations.read"
-                ? { type, configKey: selector }
-                : type === "pluginBlob.lookup"
-                  ? { type, input: { pluginId: selector, namespace: selector, key: selector } }
-                  : type === "pluginBlob.entries"
-                    ? { type, input: { pluginId: selector, namespace: selector } }
-                    : type === "workspace.snapshot"
-                      ? { type, workspaceDir: selector }
-                      : type === "sandboxRegistry.get"
-                        ? { type, containerName: selector }
-                        : { type, backendId: selector, scopeKey: selector };
+        : type === "publicationReview.read"
+          ? {
+              type,
+              input: {
+                kind: "session" as const,
+                session: {
+                  agentId: selector,
+                  sessionKey: selector,
+                  sessionId: selector,
+                  lifecycleRevision: selector,
+                },
+              },
+            }
+          : type === "updateRuns.get"
+            ? { type, runId: selector }
+            : type === "fleet.get"
+              ? { type, tenantId: selector }
+              : type === "userProfiles.reconcile"
+                ? { type, profileId: selector }
+                : type === "onboardingRecommendations.read"
+                  ? { type, configKey: selector }
+                  : type === "pluginBlob.lookup"
+                    ? { type, input: { pluginId: selector, namespace: selector, key: selector } }
+                    : type === "pluginBlob.entries"
+                      ? { type, input: { pluginId: selector, namespace: selector } }
+                      : type === "workspace.snapshot"
+                        ? { type, workspaceDir: selector }
+                        : type === "sandboxRegistry.get"
+                          ? { type, containerName: selector }
+                          : { type, backendId: selector, scopeKey: selector };
     const expected = structuredClone(command);
     const dispatch = createDeferredCore();
     const task = queueTask(dispatch.promise);
@@ -430,6 +444,13 @@ it.each([
         id: "changed",
         branch: "changed",
         repoRoot: "changed",
+      });
+    } else if (command.type === "publicationReview.read") {
+      Object.assign(command.input.session, {
+        agentId: "changed",
+        sessionKey: "changed",
+        sessionId: "changed",
+        lifecycleRevision: "changed",
       });
     } else if (command.type === "updateRuns.get") {
       command.runId = "different run after admission";
@@ -457,42 +478,46 @@ it.each([
     const returned: OpenClawStateReadReply =
       type === "githubPublication.sharedObservation"
         ? { ok: true, type, sourceAdmitted: true, row: undefined }
-        : type === "updateRuns.get"
-          ? { ok: true, type, sourceAdmitted: true, run: undefined }
-          : type === "fleet.get"
-            ? { ok: true, type, sourceAdmitted: true, cell: undefined }
-            : type === "userProfiles.reconcile"
-              ? { ok: true, type, sourceAdmitted: true, profile: undefined, emailBindings: [] }
-              : type === "onboardingRecommendations.read"
-                ? { ok: true, type, sourceAdmitted: true, record: null }
-                : type === "pluginBlob.lookup"
-                  ? { ok: true, type, sourceAdmitted: true, value: undefined }
-                  : type === "pluginBlob.entries"
-                    ? { ok: true, type, sourceAdmitted: true, value: [] }
-                    : type === "sandboxRegistry.get"
-                      ? { ok: true, type, sourceAdmitted: true, entry: null }
-                      : type === "sandboxRegistry.runtimeIds"
-                        ? { ok: true, type, sourceAdmitted: true, runtimeIds: [] }
-                        : {
-                            ok: true,
-                            type,
-                            sourceAdmitted: true,
-                            snapshot: {
-                              identity: createWorkspaceStateIdentity(selector),
-                              setup: { version: 1 },
-                              setupExists: false,
-                            },
-                          };
+        : type === "publicationReview.read"
+          ? { ok: true, type, sourceAdmitted: true, rows: [] }
+          : type === "updateRuns.get"
+            ? { ok: true, type, sourceAdmitted: true, run: undefined }
+            : type === "fleet.get"
+              ? { ok: true, type, sourceAdmitted: true, cell: undefined }
+              : type === "userProfiles.reconcile"
+                ? { ok: true, type, sourceAdmitted: true, profile: undefined, emailBindings: [] }
+                : type === "onboardingRecommendations.read"
+                  ? { ok: true, type, sourceAdmitted: true, record: null }
+                  : type === "pluginBlob.lookup"
+                    ? { ok: true, type, sourceAdmitted: true, value: undefined }
+                    : type === "pluginBlob.entries"
+                      ? { ok: true, type, sourceAdmitted: true, value: [] }
+                      : type === "sandboxRegistry.get"
+                        ? { ok: true, type, sourceAdmitted: true, entry: null }
+                        : type === "sandboxRegistry.runtimeIds"
+                          ? { ok: true, type, sourceAdmitted: true, runtimeIds: [] }
+                          : {
+                              ok: true,
+                              type,
+                              sourceAdmitted: true,
+                              snapshot: {
+                                identity: createWorkspaceStateIdentity(selector),
+                                setup: { version: 1 },
+                                setupExists: false,
+                              },
+                            };
     try {
       expect(Number.isSafeInteger(submitted.inputBytes)).toBe(true);
       const selectorCount =
         type === "githubPublication.sharedObservation"
           ? 10
-          : type === "pluginBlob.lookup"
-            ? 3
-            : type === "pluginBlob.entries" || type === "sandboxRegistry.runtimeIds"
-              ? 2
-              : 1;
+          : type === "publicationReview.read"
+            ? 4
+            : type === "pluginBlob.lookup"
+              ? 3
+              : type === "pluginBlob.entries" || type === "sandboxRegistry.runtimeIds"
+                ? 2
+                : 1;
       expect(submitted.inputBytes).toBeGreaterThanOrEqual(
         Buffer.byteLength(selector) * selectorCount,
       );

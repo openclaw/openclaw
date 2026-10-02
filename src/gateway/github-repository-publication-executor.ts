@@ -26,6 +26,15 @@ import {
   runPublicationCommand,
 } from "./github-publication-git-transport.js";
 import { findGitHubPublicationPullRequest } from "./github-publication-pull-requests.js";
+import {
+  assertGitHubPublicationReviewIdentity,
+  assertGitHubPublicationReviewSnapshot,
+  type PreparedGitHubPublicationReview,
+} from "./github-publication-review-contract.js";
+import {
+  readGitHubPublicationReviewTarget,
+  assertGitHubPublicationReviewedTarget,
+} from "./github-publication-review-target.js";
 import { projectGitHubPublicationResult } from "./github-publication-store.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import {
@@ -123,6 +132,7 @@ export async function executeRepositoryGitHubPublication(params: {
   assertWorkspace: () => void;
   validateAuthority: () => boolean;
   identity?: GitHubPublicationIdentityOwner;
+  review?: PreparedGitHubPublicationReview;
 }) {
   const { execution, snapshot } = params;
   const row = execution.row;
@@ -130,11 +140,21 @@ export async function executeRepositoryGitHubPublication(params: {
     row,
     identity: params.identity,
     assertWorkspace: params.assertWorkspace,
-    validateAuthority: () => params.validateAuthority() && execution.ownsExecution(),
+    validateAuthority: () => {
+      params.review?.assertCurrent();
+      return params.validateAuthority() && execution.ownsExecution();
+    },
   });
   let dispatched = row.last_effect !== null;
   try {
     assertCurrent();
+    if (params.review) {
+      assertGitHubPublicationReviewSnapshot(params.review, {
+        sourceHeadCommit: snapshot.baseCommit,
+        sourceIndexTree: snapshot.baseTree,
+        workspaceTree: snapshot.workspaceTree,
+      });
+    }
     const { push_repository: pushRepository, repository, base_branch: baseBranch, branch } = row;
     if (
       !pushRepository ||
@@ -240,6 +260,25 @@ export async function executeRepositoryGitHubPublication(params: {
       return observed;
     };
     let remoteHead = await observeHead();
+    const assertReviewedTarget = async () => {
+      if (!params.review) {
+        return;
+      }
+      const selectedIdentity = await refreshIdentity();
+      assertGitHubPublicationReviewIdentity(params.review, selectedIdentity);
+      const current = await readGitHubPublicationReviewTarget({
+        target: { pushRepository, repository, branch, baseBranch },
+        identity: selectedIdentity,
+        assertCurrent,
+      });
+      assertGitHubPublicationReviewedTarget(params.review.candidate.target, current, headCommit);
+      if (remoteBase !== params.review.candidate.target.baseCommit) {
+        throw new GitHubPublicationWorkspaceChangedError(
+          "The reviewed base moved. Prepare a new candidate.",
+        );
+      }
+    };
+    await assertReviewedTarget();
     if (remoteHead !== row.previous_head_commit && (!headCommit || remoteHead !== headCommit)) {
       throw new GitHubPublicationBranchChangedError();
     }
@@ -319,6 +358,7 @@ export async function executeRepositoryGitHubPublication(params: {
         ),
       ];
       identity = await refreshIdentity();
+      await assertReviewedTarget();
       const uploaded = await runTasksWithConcurrency({
         limit: 4,
         errorMode: "stop",
@@ -380,6 +420,7 @@ export async function executeRepositoryGitHubPublication(params: {
     if (remoteHead !== headCommit) {
       identity = await refreshIdentity();
       assertAction();
+      await assertReviewedTarget();
       execution.recordEffect("push");
       dispatched = true;
       // GraphQL's beforeOid is an exact lease; REST's non-force update only checks ancestry.
@@ -441,6 +482,7 @@ export async function executeRepositoryGitHubPublication(params: {
           : "");
       identity = await refreshIdentity();
       assertAction();
+      await assertReviewedTarget();
       execution.recordEffect("pull_request");
       dispatched = true;
       const created = await runPublicationCommand(

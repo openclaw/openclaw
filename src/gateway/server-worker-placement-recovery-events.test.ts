@@ -180,6 +180,7 @@ async function withRecoveryRuntime(
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
+        registerTurnClaimClosedHandler: vi.fn(() => vi.fn()),
         workspaceResultInstanceId: () => "gateway-test",
         get: (sessionId: string) => placements.get(sessionId),
         list: () => [...placements.values()],

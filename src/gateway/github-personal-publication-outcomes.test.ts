@@ -175,7 +175,9 @@ describe("personal publication definitive outcomes", () => {
       const workspace = await createRealPublicationWorkspace(
         outcome === "closed-after-lost-create" ? "create" : "push",
       );
-      const initial = (await rpc("sessions.github.publish", request()))[1];
+      const initialResponse = await rpc("sessions.github.publish", request());
+      expect(initialResponse[0], JSON.stringify(initialResponse[2])).toBe(true);
+      const initial = initialResponse[1];
       expect(initial.status).toBe("needs_confirmation");
       const pending = status(initial.requestId);
       const confirm = {

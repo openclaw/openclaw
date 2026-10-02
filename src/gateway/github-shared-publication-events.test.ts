@@ -14,6 +14,7 @@ import {
   ensureGitHubPublicationStore,
   readGitHubPublicationRequest,
 } from "./github-publication-store.js";
+import { insertRepositoryPublicationFixture } from "./github-publication-store.test-support.js";
 import {
   BRANCH,
   NEW_HEAD,
@@ -29,7 +30,6 @@ import {
   deferRepositoryGitHubPublicationClaims,
   failRepositoryGitHubPublicationPreparation,
   failStaleRepositoryGitHubPublication,
-  insertRepositoryGitHubPublication,
   readRepositoryGitHubPublication,
 } from "./github-repository-publication-store.js";
 import {
@@ -183,8 +183,8 @@ describe("shared publication committed notifications", () => {
       source_index_tree: null,
       workspace_tree: null,
     });
-    let row = insertRepositoryGitHubPublication(unbound, () => {});
-    insertRepositoryGitHubPublication(unbound, () => {});
+    let row = insertRepositoryPublicationFixture(unbound, () => {});
+    insertRepositoryPublicationFixture(unbound, () => {});
     expect(observer).toHaveBeenCalledTimes(1);
     row = bindRepositoryGitHubPublicationCheckpoint(
       row,
@@ -234,7 +234,7 @@ describe("shared publication committed notifications", () => {
     const workspace = await sharedRepositoryWorkspace();
     const observer = vi.fn();
     using _ = { [Symbol.dispose]: onSessionLifecycleEvent(observer) };
-    const row = insertRepositoryGitHubPublication(
+    const row = insertRepositoryPublicationFixture(
       repositoryReceipt(workspace, {
         owner_profile_id: "private-person",
         connection_generation: "private-generation",
@@ -259,7 +259,7 @@ describe("shared publication committed notifications", () => {
 
   it("does not emit repository writes rolled back after claim/effect recording", async () => {
     const workspace = await sharedRepositoryWorkspace();
-    const row = insertRepositoryGitHubPublication(repositoryReceipt(workspace), () => {});
+    const row = insertRepositoryPublicationFixture(repositoryReceipt(workspace), () => {});
     const observer = vi.fn();
     using _ = { [Symbol.dispose]: onSessionLifecycleEvent(observer) };
     expect(() =>
@@ -292,18 +292,18 @@ describe("shared publication committed notifications", () => {
 
   it("notifies committed preparation failure, stale retirement, and deferred shared claims", async () => {
     const workspace = await sharedRepositoryWorkspace();
-    const first = insertRepositoryGitHubPublication(
+    const first = insertRepositoryPublicationFixture(
       repositoryReceipt(workspace, { checkpoint_ref: null, checkpoint_digest: null }),
       () => {},
     );
-    const second = insertRepositoryGitHubPublication(
+    const second = insertRepositoryPublicationFixture(
       repositoryReceipt(workspace, {
         request_id: "retired",
         idempotency_key: "retired",
       }),
       () => {},
     );
-    const third = insertRepositoryGitHubPublication(
+    const third = insertRepositoryPublicationFixture(
       repositoryReceipt(workspace, {
         request_id: "deferred",
         idempotency_key: "deferred",

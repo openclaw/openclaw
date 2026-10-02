@@ -112,7 +112,23 @@ function renderPublicationButton(publication: GitHubPublicationView) {
   const busy = activity !== null;
   const pendingLabel = t(activity === "read" ? "common.loading" : "chat.pullRequests.publishing");
   let action: { click: (() => void) | undefined; label: string; disabled: boolean };
-  if (result?.status === "failed") {
+  if (publication.onRequestReview) {
+    const requested =
+      publication.review?.status === "requested" ||
+      publication.review?.status === "ready" ||
+      publication.review?.status === "needs_confirmation";
+    action = {
+      click: publication.onRequestReview,
+      label: t(requested ? "githubPublication.reviewRequested" : "githubPublication.requestReview"),
+      disabled: busy || requested,
+    };
+  } else if (publication.onConfirmReview) {
+    action = {
+      click: publication.onConfirmReview,
+      label: t("githubPublication.confirmReview"),
+      disabled: busy,
+    };
+  } else if (result?.status === "failed" || publication.review?.status === "stale") {
     action = {
       click: publication.onNewAction,
       label: t(
@@ -145,7 +161,11 @@ function renderPublicationButton(publication: GitHubPublicationView) {
           ? t("chat.pullRequests.retryPublication")
           : !publication.selection && selection?.source === "personal"
             ? t("githubPublication.publishAs", { account: selection.account.login })
-            : t("chat.pullRequests.publishPr"),
+            : t(
+                publication.options?.reviewRequired
+                  ? "githubPublication.prepareReview"
+                  : "chat.pullRequests.publishPr",
+              ),
     };
   }
   // Accepted shared requests retain their status button even when no replay callback is available.
@@ -195,10 +215,24 @@ export function renderGitHubPublicationDetails(publication: GitHubPublicationVie
     !locked &&
     !busy &&
     (publication.canPublishShared || publication.canPublishPersonal);
-  if (!result && !confirmation && !error && !locked && !personalUnavailable && !noAccount) {
+  const reviews = options?.reviews ?? [];
+  const reviewUnavailable = options?.reviewRequired && !options.reviewAvailable;
+  if (
+    !result &&
+    !confirmation &&
+    !error &&
+    !locked &&
+    !personalUnavailable &&
+    !noAccount &&
+    !reviewUnavailable &&
+    !publication.review &&
+    reviews.length === 0
+  ) {
     return nothing;
   }
   return html`<div class="chat-pr__publication-outcome" data-state=${result?.status ?? "selection"}>
+    ${renderReview(publication)}
+    ${reviewUnavailable ? html`<span>${t("githubPublication.reviewUnavailable")}</span>` : nothing}
     ${result || locked || error ? renderPublicationAccount(publication) : nothing}
     ${noAccount ? html`<span>${t(options.personal === null ? "githubPublication.unidentified" : "githubPublication.connectHelp")}</span>` : nothing}
     ${
@@ -274,4 +308,114 @@ export function renderGitHubPublicationDetails(publication: GitHubPublicationVie
         : nothing
     }
   </div>`;
+}
+
+function renderReview(publication: GitHubPublicationView) {
+  const reviews = publication.options?.reviews ?? [];
+  const selected = publication.review;
+  const busy = publication.activity !== null;
+  return html`${reviews
+    .filter((review) => review.reviewId !== selected?.reviewId)
+    .map(
+      (review) => html` <div data-review-status=${review.status}>
+        <span role="status">${review.message}</span>
+        ${
+          review.digest &&
+          publication.onReadReview &&
+          (review.status === "ready" || review.status === "needs_confirmation")
+            ? html`<button
+                class="btn btn--sm"
+                type="button"
+                ?disabled=${busy}
+                @click=${() => publication.onReadReview?.(review)}
+              >
+                ${t("githubPublication.readReview")}
+              </button>`
+            : nothing
+        }
+        ${
+          review.status === "requested" && publication.onPrepareReview
+            ? html`<button
+                class="btn btn--sm"
+                type="button"
+                ?disabled=${busy}
+                @click=${publication.onPrepareReview}
+              >
+                ${t("githubPublication.prepareReview")}
+              </button>`
+            : nothing
+        }
+        ${review.publication?.status === "published" ? html`<a href=${review.publication.url} target="_blank" rel="noopener noreferrer">${t("chat.pullRequests.openPublishedPr")}</a>` : nothing}
+      </div>`,
+    )}
+  ${
+    selected
+      ? html`<div data-publication-review data-review-status=${selected.status}>
+          <strong>${t("githubPublication.reviewCandidate")}</strong>
+          <div role="status">${selected.message}</div>
+          ${
+            selected.target
+              ? html`
+                  <div>
+                    ${t("githubPublication.target", { repository: selected.target.repository, base: selected.target.baseBranch })}
+                  </div>
+                  <div>
+                    ${t("githubPublication.pushTarget", { repository: selected.target.pushRepository, branch: selected.target.branch })}
+                  </div>
+                  <div>
+                    ${selected.publisher ? t("githubPublication.publishAs", { account: selected.publisher.login }) : nothing}
+                  </div>
+                  ${selected.title ? html`<div>${t("githubPublication.reviewTitle")}: ${selected.title}</div>` : nothing}
+                  ${selected.body ? html`<pre class="code-block">${selected.body}</pre>` : nothing}
+                  <details>
+                    <summary>${t("githubPublication.snapshot")}</summary>
+                    <div>${t("githubPublication.reviewId")}: <code>${selected.reviewId}</code></div>
+                    <div>
+                      ${t("githubPublication.reviewDigest")}: <code>${selected.digest}</code>
+                    </div>
+                    <div>
+                      ${t("githubPublication.reviewBase")}:
+                      <code>${selected.target.baseCommit}</code>
+                    </div>
+                    <div>
+                      ${t("githubPublication.head")}:
+                      <code>${selected.target.sourceHeadCommit}</code>
+                    </div>
+                    <div>
+                      ${t("githubPublication.index")}:
+                      <code>${selected.target.sourceIndexTree}</code>
+                    </div>
+                    <div>
+                      ${t("githubPublication.workspace")}:
+                      <code>${selected.target.workspaceTree}</code>
+                    </div>
+                  </details>
+                `
+              : nothing
+          }
+          ${
+            publication.reviewDiff !== null && publication.reviewDiff !== undefined
+              ? html`
+                  <details open>
+                    <summary>${t("githubPublication.reviewDiff")}</summary>
+                    <pre class="code-block">
+${publication.reviewDiff || t("githubPublication.reviewEmpty")}</pre>
+                  </details>
+                  <div>${t("githubPublication.reviewConfirmHelp")}</div>
+                `
+              : selected.digest && publication.onReadReview
+                ? html`<button
+                    class="btn btn--sm"
+                    type="button"
+                    ?disabled=${busy}
+                    @click=${() => publication.onReadReview?.(selected)}
+                  >
+                    ${t("githubPublication.readReview")}
+                  </button>`
+                : nothing
+          }
+          ${publication.onPrepareReview ? html`<button class="btn btn--sm" type="button" ?disabled=${busy} @click=${publication.onPrepareReview}>${t("githubPublication.prepareReview")}</button>` : nothing}
+        </div>`
+      : nothing
+  }`;
 }

@@ -456,6 +456,10 @@ export const validateToolsGitHubAuthorizeCancelParams = compile(
 export const validateToolsGitHubAuthorizeCancelResult = compile(
   S.ToolsGitHubAuthorizeCancelResultSchema,
 );
+export const validateSessionGitHubRequestReviewParams = compile(
+  S.SessionGitHubRequestReviewParamsSchema,
+);
+export const validateSessionGitHubReviewParams = compile(S.SessionGitHubReviewParamsSchema);
 export const validateSessionGitHubPublishParams = compile(S.SessionGitHubPublishParamsSchema);
 export const validateSessionGitHubOptionsParams = compile(S.SessionGitHubOptionsParamsSchema);
 export const validateSessionGitHubStatusParams = compile(S.SessionGitHubStatusParamsSchema);

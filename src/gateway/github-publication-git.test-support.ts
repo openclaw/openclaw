@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
-import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import { deleteRegistryWorktree, insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type {
   commandResult as publicationCommandResult,
@@ -91,13 +91,15 @@ export async function createRealPublicationWorkspace({
   mocks.findWorktreeById.mockReturnValue(worktree);
   const loaded = mocks.loadSession(sessionKey);
   const entry = { ...loaded.entry, worktree: { ...loaded.entry.worktree, repoRoot: cwd } };
+  // Discovery reads the canonical registry even when execution uses the mocked loader.
+  deleteRegistryWorktree(process.env, worktree.id);
+  insertRegistryWorktree(process.env, {
+    ...worktree,
+    name: "publication",
+    createdAt: Date.now(),
+    lastActiveAt: Date.now(),
+  });
   if (realWorktree) {
-    insertRegistryWorktree(process.env, {
-      ...worktree,
-      name: "publication",
-      createdAt: Date.now(),
-      lastActiveAt: Date.now(),
-    });
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },
       { ...entry, updatedAt: Date.now() },
@@ -120,6 +122,15 @@ export async function createRealPublicationWorkspace({
   mocks.runCommand.mockImplementation(
     async (argv: string[], options?: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string }) => {
       if (argv[0] === "gh") {
+        if (
+          argv.some((arg) => arg.startsWith("repos/openclaw/openclaw/git/matching-refs/heads/"))
+        ) {
+          return commandResult(
+            JSON.stringify(
+              remoteHead ? [{ ref: `refs/heads/${branch}`, object: { sha: remoteHead } }] : [],
+            ),
+          );
+        }
         const commitPath = "repos/openclaw/openclaw/git/commits/";
         const commit = argv.find((arg) => arg.startsWith(commitPath))?.slice(commitPath.length);
         if (commit) {

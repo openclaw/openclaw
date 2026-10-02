@@ -2,13 +2,13 @@ import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { removeTempDirectoryAsync } from "../infra/sqlite-readonly-location-cleanup.js";
 import { createSqliteSnapshotStagingDirectory } from "../infra/sqlite-snapshot-staging.js";
-import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   callPersonalPublicationRpc,
   createPersonalPublicationFixture,
   personalPublicationAccount as account,
 } from "./github-personal-publication.test-support.js";
+import * as publicationAdmission from "./github-publication-admission.js";
 import {
   claimGitHubPublicationExecution,
   createGitHubPublicationExecutionStore,
@@ -83,29 +83,32 @@ describe("publication options after a retained-state upgrade", () => {
       });
 
       const controller = new AbortController();
-      ensurePersonalGitHubPublicationSchema(db);
-      db.function("stop_personal_upgrade_admission", () => {
-        controller.abort();
-        return 1;
-      });
-      db.exec(
-        "CREATE TEMP TRIGGER stop_personal_upgrade_admission AFTER INSERT ON github_personal_publication_requests BEGIN SELECT stop_personal_upgrade_admission(); END",
-      );
+      const insertPersonal = publicationAdmission.insertPersonalGitHubPublication;
+      const admission = vi
+        .spyOn(publicationAdmission, "insertPersonalGitHubPublication")
+        .mockImplementation(async (...args) => {
+          const row = await insertPersonal(...args);
+          controller.abort();
+          return row;
+        });
       const action = preparePersonalGitHubSessionAction(
         { client, context, signal: controller.signal },
         { sessionKey: SESSION_KEY },
       );
-      await expect(
-        coordinator.requestPersonalForSession(
-          {
-            sessionKey: SESSION_KEY,
-            idempotencyKey: "personal-after-upgrade",
-            selection: { source: "personal", generation, account },
-          },
-          action,
-        ),
-      ).rejects.toThrow("current");
-      db.exec("DROP TRIGGER stop_personal_upgrade_admission");
+      try {
+        await expect(
+          coordinator.requestPersonalForSession(
+            {
+              sessionKey: SESSION_KEY,
+              idempotencyKey: "personal-after-upgrade",
+              selection: { source: "personal", generation, account },
+            },
+            action,
+          ),
+        ).rejects.toThrow("current");
+      } finally {
+        admission.mockRestore();
+      }
       const recovered = await rpc("sessions.github.options");
       expect(recovered[0], JSON.stringify(recovered[2])).toBe(true);
       expect(recovered[1]).toMatchObject({

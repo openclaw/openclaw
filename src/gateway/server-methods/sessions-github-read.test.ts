@@ -48,6 +48,26 @@ afterEach(() => {
 });
 
 describe("publication receipt reads", () => {
+  it.each([
+    { policy: {}, required: false },
+    { policy: { sandbox: "required" as const }, required: true },
+    { policy: { execution: "foreground-only" as const }, required: true },
+  ])(
+    "reports current role review policy without restamping the session: %j",
+    async ({ policy, required }) => {
+      await withReadFixture(
+        async (fixture) => {
+          const respond = await fixture.invoke("sessions.github.options", { sessionKey });
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ reviewRequired: required }),
+          );
+        },
+        { personal: true, scopes: ["operator.read"], rolePolicy: policy },
+      );
+    },
+  );
+
   it("reuses native authentication for consecutive options requests and refreshes after invalidation", async () => {
     vi.mocked(publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity).mockRestore();
     vi.stubEnv("GH_TOKEN", undefined);
@@ -184,6 +204,9 @@ describe("publication receipt reads", () => {
         shared: publisher,
         pendingPersonal: null,
         latestShared: receipt,
+        reviews: [],
+        reviewAvailable: false,
+        reviewRequired: false,
       });
       expect(fixture.latestShared).toHaveBeenCalledWith(
         expect.objectContaining({ sessionKey, sessionId, agentId: "main" }),
@@ -381,6 +404,9 @@ describe("publication receipt reads", () => {
               shared: publisher,
               pendingPersonal,
               latestShared: receipt,
+              reviews: [],
+              reviewAvailable: false,
+              reviewRequired: false,
             });
             expect(fixture.latestShared).toHaveBeenCalledOnce();
           } else {

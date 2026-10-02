@@ -146,78 +146,66 @@ export function readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase(
   return [...known];
 }
 
-export function insertRepositoryGitHubPublication(
+export function insertRepositoryGitHubPublicationInDatabase(
+  db: Parameters<typeof getNodeSqliteKysely>[0],
   row: RepositoryGitHubPublicationRow,
-  assertCurrent: () => void,
 ) {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      assertCurrent();
-      ensureRepositoryGitHubPublicationSchema(db);
-      checked(row);
-      const inserted = executeSqliteQuerySync(
-        db,
-        query(db)
-          .insertInto(table)
-          .values(row)
-          .onConflict((conflict) => conflict.doNothing()),
-      );
-      const stored = executeSqliteQueryTakeFirstSync(
-        db,
-        query(db)
-          .selectFrom(table)
-          .selectAll()
-          .where("session_id", "=", row.session_id)
-          .where("idempotency_key", "=", row.idempotency_key)
-          .where(
-            "owner_profile_id",
-            row.owner_profile_id === null ? "is" : "=",
-            row.owner_profile_id,
-          ),
-      );
-      if (
-        !stored ||
-        (
-          [
-            "session_key",
-            "session_lifecycle_revision",
-            "agent_id",
-            "workspace_id",
-            "owner_profile_id",
-            "connection_generation",
-            "identity_source",
-            "identity_profile_id",
-            "identity_account_id",
-            "identity_login",
-            "title",
-            "body",
-            "claim_id",
-            "run_id",
-            "placement_generation",
-            "environment_id",
-            "owner_epoch",
-          ] satisfies (keyof RepositoryGitHubPublicationRow)[]
-        ).some((key) => stored[key] !== row[key])
-      ) {
-        throw new Error("GitHub publication idempotency key was reused.");
-      }
-      if (stored.requester_authority_json !== row.requester_authority_json) {
-        const original = decodeGitHubPublicationRequester(stored.requester_authority_json);
-        const current = decodeGitHubPublicationRequester(row.requester_authority_json);
-        if (!original || !current || !matchesGitHubPublicationRequester(original, current)) {
-          throw new Error("GitHub publication idempotency key was reused.");
-        }
-      }
-      checked(stored);
-      assertCurrent();
-      if (inserted.numAffectedRows === 1n) {
-        deferSharedGitHubPublicationChanged(db, stored);
-      }
-      return stored;
-    },
-    undefined,
-    { operationLabel: "github-repository-publication.request" },
+  ensureRepositoryGitHubPublicationSchema(db);
+  checked(row);
+  const inserted = executeSqliteQuerySync(
+    db,
+    query(db)
+      .insertInto(table)
+      .values(row)
+      .onConflict((conflict) => conflict.doNothing()),
   );
+  const stored = executeSqliteQueryTakeFirstSync(
+    db,
+    query(db)
+      .selectFrom(table)
+      .selectAll()
+      .where("session_id", "=", row.session_id)
+      .where("idempotency_key", "=", row.idempotency_key)
+      .where("owner_profile_id", row.owner_profile_id === null ? "is" : "=", row.owner_profile_id),
+  );
+  if (
+    !stored ||
+    (
+      [
+        "session_key",
+        "session_lifecycle_revision",
+        "agent_id",
+        "workspace_id",
+        "owner_profile_id",
+        "connection_generation",
+        "identity_source",
+        "identity_profile_id",
+        "identity_account_id",
+        "identity_login",
+        "title",
+        "body",
+        "claim_id",
+        "run_id",
+        "placement_generation",
+        "environment_id",
+        "owner_epoch",
+      ] satisfies (keyof RepositoryGitHubPublicationRow)[]
+    ).some((key) => stored[key] !== row[key])
+  ) {
+    throw new Error("GitHub publication idempotency key was reused.");
+  }
+  if (stored.requester_authority_json !== row.requester_authority_json) {
+    const original = decodeGitHubPublicationRequester(stored.requester_authority_json);
+    const current = decodeGitHubPublicationRequester(row.requester_authority_json);
+    if (!original || !current || !matchesGitHubPublicationRequester(original, current)) {
+      throw new Error("GitHub publication idempotency key was reused.");
+    }
+  }
+  checked(stored);
+  if (inserted.numAffectedRows === 1n) {
+    deferSharedGitHubPublicationChanged(db, stored);
+  }
+  return stored;
 }
 
 export function bindRepositoryGitHubPublicationCheckpoint(

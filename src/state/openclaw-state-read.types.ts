@@ -39,6 +39,10 @@ import type {
 } from "../cron/store/run-recovery-read.types.js";
 import type { CronQuarantinedJob } from "../cron/types-shared.js";
 import type { FleetCellRecord } from "../fleet/registry.types.js";
+import type {
+  GitHubPublicationReviewRead,
+  GitHubPublicationReviewRow,
+} from "../gateway/github-publication-review-store.types.js";
 import type { CronStandingGrantListing } from "../gateway/operator-approval-standing-grants.types.js";
 import type {
   ListTerminalOperatorApprovalsInput,
@@ -220,6 +224,7 @@ export type OpenClawStateReadCommand =
       publicationKind: "shared" | "personal";
       requestId: string;
     }
+  | { type: "publicationReview.read"; input: GitHubPublicationReviewRead }
   | { type: "githubPublication.sharedObservation"; input: SharedGitHubPublicationReadInput }
   | { type: "githubPublication.request"; requestId: string }
   | { type: "githubRepository.request"; requestId: string }
@@ -345,6 +350,7 @@ export type OpenClawStateReadResult =
       type: "githubPublication.lifecycle";
       lifecycle: GitHubPublicationSessionLifecycle | undefined;
     }
+  | { type: "publicationReview.read"; rows: GitHubPublicationReviewRow[] }
   | {
       type: "githubPublication.sharedObservation";
       row: GitHubPublicationRow | RepositoryGitHubPublicationRow | undefined;
