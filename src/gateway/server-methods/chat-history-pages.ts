@@ -13,6 +13,7 @@ import {
 } from "../chat-display-projection.core.js";
 import {
   dropPreSessionStartAnnouncePairs,
+  prepareForwardedMessageCronJobNameResolver,
   projectForwardedMessages,
 } from "../chat-display-projection.history.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
@@ -80,7 +81,7 @@ export async function readChatHistoryPage(
     getCliSessionBinding(params.entry, "claude-cli")?.sessionId
   ) {
     const page = await readChatHistoryPageLocal(params);
-    return { ...page, messages: refreshForwardedLabels(page.messages) };
+    return { ...page, messages: await refreshForwardedLabels(page.messages) };
   }
   const { readSessionHistoryPageInWorker } =
     await import("../../config/sessions/session-history-worker-runtime.js");
@@ -108,18 +109,20 @@ export async function readChatHistoryPage(
   const project = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
   return {
     ...page,
-    messages: refreshForwardedLabels(page.messages).map((message) => {
+    messages: (await refreshForwardedLabels(page.messages)).map((message) => {
       const record = asOptionalRecord(message);
       return record ? project(record) : message;
     }),
   };
 }
 
-function refreshForwardedLabels(messages: unknown[]): unknown[] {
+async function refreshForwardedLabels(messages: unknown[]): Promise<unknown[]> {
+  const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(messages);
   return projectForwardedMessages(
     messages.filter(
       (message): message is Record<string, unknown> => asOptionalRecord(message) !== undefined,
     ),
+    resolveCronJobName,
   );
 }
 
@@ -141,6 +144,8 @@ async function readChatHistoryPageLocal(params: ChatHistoryPageParams): Promise<
   const page = await readChatHistoryPageKernel(params, {
     readers: { ...sessionTranscriptReaders, subagentCoordination },
     resolveCurrentUserProfileDisplay,
+    // Local and worker kernels defer names to the completed page's asynchronous refresh.
+    resolveCronJobName: () => undefined,
     ...(cliSessionId
       ? {
           cliSessionId,
@@ -199,6 +204,7 @@ async function readChatHistoryPageLocal(params: ChatHistoryPageParams): Promise<
                   includeCommentaryFallbacks: true,
                   maxChars: effectiveMaxChars,
                   resolveCurrentUserProfileDisplay,
+                  resolveCronJobName: () => undefined,
                 },
               );
               if (!completeCliHistory.expanded && !messageId) {

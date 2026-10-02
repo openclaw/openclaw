@@ -386,6 +386,7 @@ export type OpenClawStateReadResult =
   | { type: "cron.scratch"; snapshot: CronScratchSnapshot | undefined }
   | {
       type: "cron.jobNames";
+      storeKey: string;
       names: Map<string, string | undefined>;
     }
   | {

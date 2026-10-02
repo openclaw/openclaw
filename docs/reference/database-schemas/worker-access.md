@@ -1175,6 +1175,16 @@ a child-process snapshot while holding the shared-state write transaction. Agent
 database admission refusals remain with their in-memory admission owner. Schemas,
 retention, configuration, and update behavior are unchanged.
 
+Cron display names are prepared through the existing shared-state read worker.
+Live resolvers retain their physical database generation; cron's mutation owner
+invalidates them on commit or uncertain settlement and publishes acknowledged
+name postimages before notifications. History, message lookup, and live streams
+refresh names at their existing asynchronous preparation boundaries. Deleted jobs
+use the existing “Automation” label. Unprepared or invalidated lookups fail with a
+refresh instruction instead of reading SQLite or showing an old name. The native
+name query remains only inside worker commands and Doctor's existing one-shot
+transaction hooks. Schemas, stored bytes, retention, and update behavior are unchanged.
+
 Cron reservation creation, activation, exact reservation cleanup, and stale-family removal use typed
 commands through the existing worker mutation owner. The host retains the
 partition lock, reservation identity, live policy, and runner settlement. The

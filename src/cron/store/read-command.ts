@@ -4,7 +4,7 @@ import type {
   OpenClawStateReadResult,
 } from "../../state/openclaw-state-read.types.js";
 import { readCronScratchSnapshotInDatabase } from "../scratch-read.kernel.js";
-import { readCronJobNamesInDatabase } from "./job-name.js";
+import { readCronJobNamesInDatabase } from "./job-name.kernel.js";
 import { resolveCronJobsStorePath } from "./paths.js";
 import { readCronQuarantinedJobsInDatabase } from "./quarantine.kernel.js";
 import {
@@ -52,15 +52,14 @@ export function readCronStateCommandInDatabase(
         type: command.type,
         snapshot: readCronScratchSnapshotInDatabase(db, command),
       };
-    case "cron.jobNames":
+    case "cron.jobNames": {
+      const storeKey = command.storePath ?? resolveCronJobsStorePath();
       return {
         type: command.type,
-        names: readCronJobNamesInDatabase(
-          db,
-          command.jobIds,
-          command.storePath ?? resolveCronJobsStorePath(),
-        ),
+        storeKey,
+        names: readCronJobNamesInDatabase(db, command.jobIds, storeKey),
       };
+    }
     case "cron.quarantine":
       return {
         type: command.type,
