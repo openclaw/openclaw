@@ -374,9 +374,7 @@ describe("write-unified-entry-dts", () => {
       expectStagingClean(root);
     }));
 
-  it.concurrent("records successful empty partitions for a bounded plugin selection", ({
-    command,
-  }) =>
+  it("records successful empty partitions for a bounded plugin selection", ({ command }) =>
     command.lifetime.run(async () => {
       const { root } = createFixture(command, TSDOWN_NON_SDK_DTS_CONFIG_GROUPS);
       const env = { OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "fixture-a" };
@@ -403,7 +401,7 @@ describe("write-unified-entry-dts", () => {
       expectStagingClean(root);
     }));
 
-  it.concurrent.for([
+  it.for([
     "last compiler failure",
     "missing successful receipt",
     "cached input mutation after emit",
