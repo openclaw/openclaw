@@ -11,6 +11,62 @@ import {
 } from "./update-command-executor-children.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
+/**
+ * The minimal shape this diagnostic reads. Both readers (current and legacy
+ * parent) satisfy it structurally, and a legacy read may carry no lease.
+ */
+type ManagedHandoffLeaseRead =
+  | { kind: "absent" }
+  | { kind: "unreadable"; error: unknown }
+  | {
+      kind: "current";
+      lease: { version: number; owner?: string; action: { kind: string } } | null;
+    };
+
+/**
+ * Every condition below compares the same handful of fields across the six
+ * leases in the custody chain, so a refusal that names none of them leaves an
+ * operator with a bare "recovery pending" and no way to tell a missing lease row
+ * from a version or owner mismatch. Report the observed state instead. This runs
+ * only on the refusing path, reads nothing, and mutates nothing.
+ */
+function describeUpdateCommandBinding(state: {
+  parent: ManagedHandoffLeaseRead;
+  originalChild: ManagedHandoffLeaseRead;
+  child: ManagedHandoffLeaseRead;
+  slotChild: ManagedHandoffLeaseRead | undefined;
+  retained: ManagedHandoffLeaseRead | undefined;
+  retainedChild: ManagedHandoffLeaseRead | undefined;
+  slot: boolean;
+  retainedFields: boolean;
+  legacyGrant: boolean;
+}): string {
+  const describe = (label: string, read: ManagedHandoffLeaseRead | undefined) => {
+    if (!read) {
+      return `${label}=absent`;
+    }
+    if (read.kind !== "current") {
+      return `${label}=${read.kind}`;
+    }
+    const { lease } = read;
+    if (!lease) {
+      return `${label}=current/absent`;
+    }
+    return `${label}=v${lease.version}/${lease.action.kind}/owner:${lease.owner === undefined ? "none" : "set"}`;
+  };
+  return [
+    `slot:${state.slot ? "present" : "absent"}`,
+    `retained:${state.retainedFields ? "present" : "absent"}`,
+    `legacy:${state.legacyGrant ? "yes" : "no"}`,
+    describe("parent", state.parent),
+    describe("originalChild", state.originalChild),
+    describe("child", state.child),
+    describe("slotChild", state.slotChild),
+    describe("retainedLease", state.retained),
+    describe("retainedChild", state.retainedChild),
+  ].join(" ");
+}
+
 export function resolveUpdateCommandChildBinding(
   grant: UpdateCommandChildGrant,
   runId: string,
@@ -207,7 +263,17 @@ export function resolveUpdateCommandChildBinding(
     !isDeepStrictEqual(child.lease.helper, spawner.executor)
   ) {
     throw new UpdateCommandRecoveryPendingError(
-      "Candidate executor binding does not match its parent.",
+      `Candidate executor binding does not match its parent: ${describeUpdateCommandBinding({
+        parent,
+        originalChild,
+        child,
+        slotChild,
+        retained,
+        retainedChild,
+        slot: Boolean(slot),
+        retainedFields,
+        legacyGrant,
+      })}.`,
     );
   }
   return {

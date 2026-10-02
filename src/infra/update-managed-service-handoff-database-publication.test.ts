@@ -612,6 +612,19 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
     expect(() => resolveUpdateCommandChildBinding(grant, runId, root)).toThrow(readError.message);
     readError = undefined;
     parentInode = initialInode;
+    // A readable store with no lease rows is what a recreated handoff database
+    // looks like: every custody read is absent, so the binding refuses. That
+    // refusal used to name nothing, leaving an operator unable to tell a missing
+    // row from a version or owner mismatch.
+    const emptied = new DatabaseSync(databasePath);
+    try {
+      emptied.exec("DELETE FROM managed_update_handoffs");
+    } finally {
+      emptied.close();
+    }
+    expect(() => resolveUpdateCommandChildBinding(grant, runId, root)).toThrow(
+      /binding does not match its parent:.*parent=absent.*child=absent/s,
+    );
     const damaged = new DatabaseSync(databasePath);
     try {
       damaged.exec("DROP TABLE managed_update_handoffs");
