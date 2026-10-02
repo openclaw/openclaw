@@ -168,7 +168,7 @@ describe("runDoctorConfigPreflight", () => {
         const backupPath = `${configPath}.bak`;
         const backupBytes = "{}\n";
         await fs.writeFile(backupPath, backupBytes);
-        const stateFiles = (await fs.readdir(path.dirname(configPath))).sort();
+        const stateFiles = (await fs.readdir(path.dirname(configPath))).toSorted();
         const legacyDir = path.join(home, ".clawdbot");
         await fs.mkdir(legacyDir);
         const sidecarDir = path.join(oauthDir, "auth-profiles");
@@ -185,7 +185,7 @@ describe("runDoctorConfigPreflight", () => {
               );
               expect(await fs.readFile(configPath, "utf8")).toBe(originalConfig);
               expect(await fs.readFile(backupPath, "utf8")).toBe(backupBytes);
-              expect((await fs.readdir(path.dirname(configPath))).sort()).toEqual(stateFiles);
+              expect((await fs.readdir(path.dirname(configPath))).toSorted()).toEqual(stateFiles);
               expect((await fs.lstat(legacyDir)).isSymbolicLink()).toBe(false);
               expect(await fs.readFile(sidecarPath, "utf8")).toBe(sidecarBytes);
               expect(await fs.readdir(sidecarDir)).toEqual([path.basename(sidecarPath)]);
