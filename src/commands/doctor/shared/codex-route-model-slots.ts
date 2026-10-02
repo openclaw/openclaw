@@ -33,7 +33,6 @@ export function recordCodexModelHit(params: {
   hits: CodexRouteHit[];
   path: string;
   model: string;
-  runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): string | undefined {
   if (
@@ -52,7 +51,6 @@ export function recordCodexModelHit(params: {
     path: params.path,
     model: params.model,
     canonicalModel,
-    ...(params.runtime ? { runtime: params.runtime } : {}),
   });
   return canonicalModel;
 }
@@ -61,7 +59,6 @@ export function collectStringModelSlot(params: {
   hits: CodexRouteHit[];
   path: string;
   value: unknown;
-  runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): void {
   if (typeof params.value !== "string") {
@@ -71,7 +68,6 @@ export function collectStringModelSlot(params: {
     hits: params.hits,
     path: params.path,
     model: params.value.trim(),
-    runtime: params.runtime,
     blockedModelIdentities: params.blockedModelIdentities,
   });
 }
@@ -80,15 +76,13 @@ export function collectModelConfigSlot(params: {
   hits: CodexRouteHit[];
   path: string;
   value: unknown;
-  runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): void {
-  visitModelSelectorRefs(params.value, params.path, (path, value, role) => {
+  visitModelSelectorRefs(params.value, params.path, (path, value) => {
     collectStringModelSlot({
       ...params,
       path,
       value,
-      runtime: role === "primary" ? params.runtime : undefined,
     });
   });
 }
@@ -149,7 +143,6 @@ export function rewriteStringModelSlot(params: {
   container: MutableRecord | undefined;
   key: string;
   path: string;
-  runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): boolean {
   if (typeof params.container?.[params.key] !== "string") {
@@ -212,17 +205,15 @@ export function rewriteModelConfigSlot(params: {
   container: MutableRecord | undefined;
   key: string;
   path: string;
-  runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): boolean {
   return rewriteModelReferenceSlot({
     ...params,
-    resolve: (model, path, role) =>
+    resolve: (model, path) =>
       recordCodexModelHit({
         ...params,
         model,
         path,
-        runtime: role === "primary" ? params.runtime : undefined,
       }),
   });
 }

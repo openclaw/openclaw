@@ -1871,7 +1871,10 @@ class ChatComposerLayoutTest {
     }
   }
 
-  private fun withChatSendRequests(assertions: (ConcurrentLinkedQueue<JsonObject>) -> Unit) {
+  private fun withChatSendRequests(
+    onSendJob: (Job) -> Unit = {},
+    assertions: (ConcurrentLinkedQueue<JsonObject>) -> Unit,
+  ) {
     val sent = ConcurrentLinkedQueue<JsonObject>()
     val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
 
@@ -1880,6 +1883,7 @@ class ChatComposerLayoutTest {
     val request: suspend (String, String, String?) -> String = { gatewayId, method, params ->
       if (method == "chat.send") {
         val payload = Json.parseToJsonElement(requireNotNull(params)).jsonObject
+        onSendJob(currentCoroutineContext().job)
         sent.add(payload)
         buildJsonObject {
           put("runId", payload.getValue("idempotencyKey"))
@@ -2031,7 +2035,8 @@ class ChatComposerLayoutTest {
     val height = mutableStateOf(720.dp)
     val viewModel = showChat(viewportWidth = 720.dp, viewportHeight = { height.value }, useChatShell = true)
     val owner = viewModel.captureChatShareOwner()
-    withChatSendRequests { sent ->
+    val sendJob = AtomicReference<Job?>(null)
+    withChatSendRequests(onSendJob = sendJob::set) { sent ->
       val editor = composerEditor()
       val draft = "Visible draft"
       editor.performClick().performTextReplacement(draft)
@@ -2066,7 +2071,24 @@ class ChatComposerLayoutTest {
       val edited = draft + "x visible IME input"
       editor.assertTextEquals(edited)
       composeRule.runOnIdle { dispatchHardwareKey(insetView, KeyEvent.KEYCODE_ENTER) }
-      composeRule.waitUntil { composeRule.runOnIdle { sent.isNotEmpty() } }
+      // Room resumes outside Compose's dispatcher; request entry precedes durable
+      // settlement and the ViewModel's draft clearing.
+      val send =
+        object : IdlingResource {
+          override val isIdleNow: Boolean
+            get() = sendJob.get()?.isCompleted == true && owner !in viewModel.chatComposerState.sendStates.value
+
+          override fun getDiagnosticMessageIfBusy(): String =
+            "Chat send requests=${sent.size} completed=${sendJob.get()?.isCompleted} " +
+              "state=${viewModel.chatComposerState.sendStates.value[owner]}"
+        }
+      composeRule.registerIdlingResource(send)
+      try {
+        composeRule.waitForIdle()
+      } finally {
+        composeRule.unregisterIdlingResource(send)
+      }
+      assertFalse("The admitted send must finish normally", checkNotNull(sendJob.get()).isCancelled)
       assertEquals(listOf(JsonPrimitive(edited)), sent.map { it["message"] })
       editor.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
     }

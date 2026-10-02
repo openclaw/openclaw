@@ -324,7 +324,7 @@ describe("worker turn launcher build recovery", () => {
           timestamp: 51,
         }),
       );
-      createWorkerSessionPlacementGate(placements).updateAckCursors({
+      await createWorkerSessionPlacementGate(placements).updateAckCursors({
         claim: request.turnClaim,
         transcriptSeq: 2,
         liveSeq: 1,

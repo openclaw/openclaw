@@ -147,6 +147,21 @@ export async function readSessionHistoryRequest(
       ),
     };
   }
+  if (request.kind === "inline-visibility") {
+    const { prepareSessionHistorySubagentFacts } =
+      await import("./session-history-delta-visibility.js");
+    const { lookup } = request.params;
+    return {
+      kind: "inline-visibility",
+      subagentCoordination: prepareSessionHistorySubagentFacts(
+        options.readers.subagentCoordination,
+        (recording) =>
+          lookup.kind === "session"
+            ? recording.isSubagentSession(lookup.sessionKey)
+            : recording.isSubagentRunMessage(lookup.runId, lookup.messageSeq),
+      ),
+    };
+  }
   if (request.kind === "rpc") {
     const { readChatHistoryPageKernel } =
       await import("./server-methods/chat-history-page-kernel.js");

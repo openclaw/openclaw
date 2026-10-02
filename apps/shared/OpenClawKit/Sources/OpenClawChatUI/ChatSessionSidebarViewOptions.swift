@@ -9,6 +9,7 @@ extension ChatSessionSidebarModel {
         var sort: Sort = .created
         var showAutomation = false
         var showSystem = false
+        var showArchived = false
 
         func includes(_ session: OpenClawChatSessionEntry) -> Bool {
             // Port src/shared/session-list-visibility.ts: cron keys own automation,

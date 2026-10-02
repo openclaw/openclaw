@@ -457,11 +457,12 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             throw new Error("Worker placement changed while loading turn execution");
           }
           if (!remoteExec) {
-            activeWorkerTurn = createWorkerTurnRunOwner({
+            activeWorkerTurn = await createWorkerTurnRunOwner({
               placements: options.placements,
               claim: turnClaim,
               sessionKey: placement.sessionKey,
               turn,
+              assertCurrent: assertAdmissionCurrent,
             });
             activeWorkerTurn.signal.throwIfAborted();
             turn = {

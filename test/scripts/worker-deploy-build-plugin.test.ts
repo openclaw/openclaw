@@ -630,10 +630,8 @@ try {
 } finally { session.close(); }
 console.log("relocated worker WebSocket and transcription passed");
 `;
-        const result = await promisify(execFile)(
-          process.execPath,
+        const result = await runNodeScript(
           [
-            ...(process.versions.bun ? ["--no-install"] : []),
             "--input-type=module",
             "--eval",
             probe,
@@ -641,20 +639,19 @@ console.log("relocated worker WebSocket and transcription passed");
             `ws://127.0.0.1:${address.port}`,
           ],
           {
-            cwd: relocated,
-            timeout: 30_000,
-            env: {
-              PATH: process.env.PATH,
-              SystemRoot: process.env.SystemRoot,
-              WINDIR: process.env.WINDIR,
-              HOME: root,
-              USERPROFILE: root,
-              TMPDIR: root,
-              TMP: root,
-              TEMP: root,
-            },
+            PATH: process.env.PATH,
+            SystemRoot: process.env.SystemRoot,
+            WINDIR: process.env.WINDIR,
+            HOME: root,
+            USERPROFILE: root,
+            TMPDIR: root,
+            TMP: root,
+            TEMP: root,
           },
+          30_000,
+          { cwd: relocated },
         );
+        expect(result.status, result.stderr).toBe(0);
         expect(result.stdout.trim()).toBe("relocated worker WebSocket and transcription passed");
         expect(requests).toEqual([
           { path: "/client", header: "client-header" },

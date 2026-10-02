@@ -62,7 +62,7 @@ Naming and value rules:
 - Values are limited to 64 KiB (65,536 UTF-8 bytes). An oversized value exits `2` whether it arrives from stdin, `--value`, or `--value-file`.
 - A `secret` entry may not be empty, because an empty credential cannot be diagnosed later. `get` refuses secret kinds, and listings mask them. `env` entries may be empty.
 - Known redaction placeholders such as `__OPENCLAW_REDACTED__` cannot be stored as values. CLI `set` and `import` skip redacted inputs for existing usable entries with an explicit unchanged message; a placeholder without a usable existing entry exits `2`.
-- `--kind secret|env` overrides automatic kind detection. Otherwise names ending in a common credential suffix such as `_API_KEY`, `_TOKEN`, `_PASSWORD`, `_PRIVATE_KEY`, or `_SECRET` become `secret`, and other names become `env`.
+- `--kind secret|env` explicitly changes an entry's kind. Otherwise `set` and `import` preserve the entry's current kind when saving, including protection changes made while input or confirmation is pending. Only new names use automatic detection: names ending in a common credential suffix such as `_API_KEY`, `_TOKEN`, `_PASSWORD`, `_PRIVATE_KEY`, or `_SECRET` become `secret`, and other names become `env`.
 
 ### Set values safely
 
@@ -72,7 +72,7 @@ Naming and value rules:
 openclaw secrets store set LOG_LEVEL --kind env --value debug
 ```
 
-For `secret` values, `--value` is refused with exit code `2` because command-line arguments can leak through shell history and process listings. Use one of the three safe inputs instead:
+For `secret` values, `--value` is refused with exit code `2` because command-line arguments can leak through shell history and process listings. It is also refused if another writer changes the entry to `secret` before the value is saved. Explicit `--kind env` still reclassifies the entry. Use one of the three safe inputs instead:
 
 - Pipe stdin when stdin is not a TTY.
 - Pass `--value-file <path>`. `--value-file -` means stdin.
@@ -145,7 +145,7 @@ openclaw secrets store import --from .env --yes
 op read 'op://Engineering/service-account/dotenv' | openclaw secrets store import --yes
 ```
 
-The importer supports quoted values and multiline quoted values such as PEM keys. Use `--yes` to skip confirmation and `--dry-run` to inspect the import without writing. Kind detection follows the same name-based rule as `store set`.
+The importer supports quoted values and multiline quoted values such as PEM keys. Use `--yes` to skip confirmation and `--dry-run` to inspect the import without writing. Like `store set`, import preserves an existing entry's kind and uses the name-based rule only for new names. Pass `--kind secret|env` to explicitly reclassify all imported entries.
 
 The store CLI commands do not accept `--url` or `--token` and do not route through the Gateway. The Control UI uses the admin-scoped `secrets.store.*` RPC methods instead. Those methods refresh the runtime automatically when a changed name is referenced by active config.
 

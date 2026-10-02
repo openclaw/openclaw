@@ -17,6 +17,7 @@ import {
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { formatUpdateDoctorConfigChange } from "../infra/update-doctor-config.js";
 import {
   captureUpdateDoctorConfigWrites,
@@ -143,6 +144,7 @@ async function runDoctorHealthFlowWithResult(
     ReturnType<typeof import("../commands/doctor-maintenance.js").beginDoctorMaintenance>
   >;
   let sqliteNoCowPaths: string[] = [];
+  let sqliteReclamationAgents: readonly AgentDatabaseMigrationTarget[] | undefined;
   let exitCode: number | undefined;
   let healthContext: DoctorHealthFlowContext | undefined;
   let preparedArchiveDiscovery: DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"];
@@ -471,6 +473,8 @@ async function runDoctorHealthFlowWithResult(
           ),
         );
         if (!readiness.schemaPublicationDeferred) {
+          sqliteReclamationAgents =
+            admissionSchemas.agentDatabaseMigrationDiscovery?.discovery.targets ?? [];
           resumeCapture?.();
           if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_PROXY_ENABLED)) {
             const { initializeDebugProxyCaptureAsync } =
@@ -501,6 +505,9 @@ async function runDoctorHealthFlowWithResult(
         }
       }
       if (ctx && maintenance && ctx.prompter.shouldRepair) {
+        if (isDoctorUpdateRepairMode(ctx.prompter.repairMode) && sqliteReclamationAgents) {
+          await maintenance.enableSqliteReclamation(sqliteReclamationAgents);
+        }
         await maintenance.cleanupRetainedRuntimes();
       }
     } catch (error) {
@@ -628,11 +635,7 @@ async function runDoctorHealthFlowWithResult(
     const causes = collectNestedErrorCandidates(error);
     const { classifyDoctorMaintenanceRefusal } =
       await import("../commands/doctor-maintenance-inspection.js");
-    const maintenanceRefusal =
-      causes.find(
-        (cause): cause is DoctorMaintenanceRefusalError =>
-          cause instanceof DoctorMaintenanceRefusalError && cause.refusal.kind === "data-at-risk",
-      )?.refusal ?? classifyDoctorMaintenanceRefusal(error);
+    const maintenanceRefusal = classifyDoctorMaintenanceRefusal(error);
     const unsafeConfigWrite = causes.find(
       (cause): cause is ConfigWritePostCommitError =>
         cause instanceof ConfigWritePostCommitError && cause.rollbackStatus !== "restored",
@@ -669,12 +672,10 @@ async function runDoctorHealthFlowWithResult(
               }),
             ],
     };
-    if (maintenance) {
-      if (!(error instanceof DoctorStateMigrationRefusalError)) {
-        effectiveRuntime.error(
-          "Doctor could not complete maintenance. Check the reported service state and resolve the failure.",
-        );
-      }
+    if (maintenance && !(error instanceof DoctorStateMigrationRefusalError)) {
+      effectiveRuntime.error(
+        "Doctor could not complete maintenance. Check the reported service state and resolve the failure.",
+      );
     }
     throw error;
   } finally {

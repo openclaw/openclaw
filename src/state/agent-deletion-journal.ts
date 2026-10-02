@@ -13,6 +13,7 @@ import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { resolveAgentCreationClaimAgentId } from "./agent-creation-claim.js";
 import { captureAgentDatabasePreparationDeletion } from "./agent-database-admission.js";
 import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
 import { resolveAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.js";
@@ -228,11 +229,18 @@ export function assertAgentDeletionPathFence(
       cleanupCompleted: row.cleanup_completed === 1,
     })),
   );
+  // Creation may open the identity it is recreating beneath that identity's completed record.
+  const creationAgentId = snapshot.fenceAgentId
+    ? undefined
+    : resolveAgentCreationClaimAgentId(snapshot.claimAgentId, state.path);
   for (const row of journalRows) {
     if (snapshot.fenceAgentId && snapshot.fenceAgentId !== row.agent_id) {
       continue;
     }
     if (row.agent_id === cleanupAgentId) {
+      continue;
+    }
+    if (row.cleanup_completed === 1 && row.agent_id === creationAgentId) {
       continue;
     }
     assertAgentDeletionIdentityClaimAllowed(snapshot.claimAgentId, row.agent_id);

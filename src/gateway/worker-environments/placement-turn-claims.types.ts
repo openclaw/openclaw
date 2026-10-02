@@ -9,3 +9,9 @@ export type PlacementTurnClaimCurrentCheck = {
   sessionEntry?: SessionEntryCurrentCheck;
   assertPlacementCurrent(placement: WorkerSessionPlacementRecord | undefined): void;
 };
+
+export type PlacementAckCursorInput = {
+  claim: WorkerSessionTurnClaim;
+  transcript?: number;
+  liveEvent?: number;
+};
