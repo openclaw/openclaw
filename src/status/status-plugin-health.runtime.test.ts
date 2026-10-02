@@ -163,7 +163,7 @@ describe("runtime plugin health snapshot", () => {
     });
   });
 
-  it("projects blocked hook registrations from the active runtime registry", () => {
+  it("projects blocked hook registrations from the active runtime registry", async () => {
     const registry = createEmptyPluginRegistry();
     registry.blockedHooks.push({
       pluginId: "openclaw-beads",
@@ -177,7 +177,7 @@ describe("runtime plugin health snapshot", () => {
     setActivePluginRegistry(registry, "openclaw-beads", "default", "/tmp/ws");
 
     // `source` is a host path; it stays out of the chat-facing snapshot.
-    expect(collectRuntimePluginHealthSnapshot().blockedHooks).toEqual([
+    expect((await collectRuntimePluginHealthSnapshot()).blockedHooks).toEqual([
       {
         pluginId: "openclaw-beads",
         hookName: "before_prompt_build",
@@ -188,8 +188,8 @@ describe("runtime plugin health snapshot", () => {
     ]);
   });
 
-  it("reports no blocked hooks when there is no active runtime registry", () => {
-    expect(collectRuntimePluginHealthSnapshot().blockedHooks).toEqual([]);
+  it("reports no blocked hooks when there is no active runtime registry", async () => {
+    expect((await collectRuntimePluginHealthSnapshot()).blockedHooks).toEqual([]);
   });
 
   it("includes core-owned runtime tool quarantines from this process", async () => {

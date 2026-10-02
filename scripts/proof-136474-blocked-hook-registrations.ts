@@ -172,7 +172,7 @@ async function runScenario(params: {
   );
 
   // Compact `/status` surface — runtime snapshot, no merge.
-  const compactLine = formatCompactPluginHealthLine(collectRuntimePluginHealthSnapshot());
+  const compactLine = formatCompactPluginHealthLine(await collectRuntimePluginHealthSnapshot());
   const compactCount = countCompactBlockedHooks(compactLine);
   console.log(`  compact line: ${compactLine ?? "(none)"}`);
   check(`compact /status counts every dead handler`, compactCount, params.expectedBlocked);
