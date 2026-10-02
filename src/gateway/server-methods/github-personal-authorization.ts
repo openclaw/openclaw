@@ -30,7 +30,7 @@ type Request = Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal
 function currentGitHubClient(
   options: Request,
   scope: "operator.read" | "operator.write" | "operator.sessions.read",
-  owner?: string | { profileId: string; role: string | null },
+  owner?: string | { profileId: string; role: string | null; githubLogin?: string | null },
 ) {
   const { client, context } = options;
   if (
@@ -54,7 +54,7 @@ function currentGitHubClient(
   const profileId = typeof owner === "string" ? owner : owner?.profileId;
   const policy =
     typeof owner === "object"
-      ? resolveOperatorRolePolicyForAssignment(owner.profileId, owner.role, cfg)
+      ? resolveOperatorRolePolicyForAssignment(owner.profileId, owner.role, cfg, owner.githubLogin)
       : profileId
         ? resolveOperatorRolePolicyForProfile(profileId, cfg)
         : resolveOperatorRolePolicy(client, cfg);

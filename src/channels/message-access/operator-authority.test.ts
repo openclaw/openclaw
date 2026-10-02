@@ -59,6 +59,7 @@ import {
   linkEmail,
   setDisplayName,
   setUserProfileRole,
+  syncGitHubIdentity,
 } from "../../state/user-profile-writes.worker.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import {
@@ -77,6 +78,41 @@ import { createHostChannelIngressRuntime } from "./runtime.js";
 
 installDiscordRegistryHooks();
 registerOperatorAssignmentTests();
+
+it("uses a linked sender's verified GitHub role and retires authority after a login change", async () => {
+  await withAdminIngress(async ({ admins, cfg, activatePolicy, context }) => {
+    const { profile, identity } = admins[0]!;
+    setUserProfileRole(profile.id, null);
+    syncGitHubIdentity({
+      identity: { accountId: 123, login: "Channel-Admin" },
+      authenticationAlias: { kind: "email", email: "ada@example.test" },
+    });
+    await activatePolicy({
+      roles: {
+        ...cfg.gateway!.roles!,
+        assignments: { byGithubLogin: { "channel-admin": "admin" } },
+      },
+    });
+
+    const ctx = await context(identity.senderId);
+    const authority = expectDefined(
+      prepareInternalGetReplyOptions(undefined, ctx)?.operatorAuthority,
+      "GitHub-assigned channel operator authority",
+    );
+    expect(authority.profileId).toBe(profile.id);
+    expect(authority.scopes).toEqual(["operator.admin"]);
+    expect(authority.rolePolicy?.sessionAccessCap).toBe("write");
+
+    syncGitHubIdentity({
+      identity: { accountId: 123, login: "Renamed-Channel-Admin" },
+      authenticationAlias: { kind: "email", email: "ada@example.test" },
+    });
+
+    expect(() => authority.assertCurrent()).toThrow();
+    const renamed = await context(identity.senderId);
+    expect(prepareInternalGetReplyOptions(undefined, renamed)?.operatorAuthority).toBeUndefined();
+  });
+});
 
 it.each(["equivalent", "sessions", "sandbox", "agents", "roles-disabled"] as const)(
   "compares linked-channel steering permissions with %s roles",

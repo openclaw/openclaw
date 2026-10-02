@@ -464,6 +464,7 @@ export type OpenClawStateReadResult =
         | {
             profileId: string;
             role: string | null;
+            githubLogin?: string | null;
             aliases: string[];
             display: UserProfileDisplay;
           }

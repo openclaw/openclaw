@@ -137,6 +137,7 @@ export async function prepareUserProfileAdministration(options: GatewayRequestHa
             sharedOwner ? authenticatedProfileId : role?.profileId,
             role?.role ?? null,
             cfg,
+            role?.githubLogin,
           );
     if (policy && !policy.scopes.includes("operator.admin")) {
       throw new Error("Profile administration requires operator.admin");

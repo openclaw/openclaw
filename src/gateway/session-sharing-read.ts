@@ -196,6 +196,7 @@ export function prepareProjectedSessionSharing(params: {
           roleProfile?.profileId,
           roleProfile?.role ?? null,
           cfg,
+          roleProfile?.githubLogin ?? null,
         );
   return {
     ...prepareSessionSharing(params, {

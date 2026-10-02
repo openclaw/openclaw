@@ -85,6 +85,8 @@ type ProfileFixture = {
   id: string;
   emails: readonly string[];
   role?: string;
+  effectiveRole?: string;
+  roleSource?: "assigned" | "githubLogin" | "default";
   mergedInto?: string | null;
   githubIdentity?: { login: string } | null;
 };

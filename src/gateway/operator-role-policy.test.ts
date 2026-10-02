@@ -9,9 +9,21 @@ import { runWithModelFallback } from "../agents/model-fallback-runner.js";
 import { resolveReplyOperatorAuthorityKey } from "../auto-reply/reply/reply-tool-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { linkUserChannelIdentity } from "../state/user-channel-identities.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import {
+  linkEmail,
+  setDisplayName,
+  setUserProfileRole,
+  syncGitHubIdentity,
+} from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { resolveChannelOperatorAdminAuthority } from "./channel-operator-authority.js";
+import {
+  hasCurrentGatewayOperatorAccess,
+  resolveGatewayOperatorAccessAuthority,
+} from "./operator-access-policy.js";
 import {
   authorizeGatewaySessionCreation,
   authorizeCurrentOperatorRoleScopes,
@@ -81,6 +93,133 @@ function identifiedClient(profileId: string): GatewayClient {
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
 describe("operator role policy", () => {
+  it("resolves verified GitHub login assignments with explicit precedence and live config", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const person = syncGitHubIdentity({
+        identity: { accountId: 42, login: "Release-Operator" },
+        authenticationAlias: { kind: "github-login", login: "Release-Operator" },
+      });
+      const unverified = ensureProfileForEmail("release-operator@example.test");
+      const catalog = await prepareUserProfileCatalog();
+      const cfg = roleConfig();
+      const roles = expectDefined(cfg.gateway?.roles, "roles");
+      roles.assignments = { byGithubLogin: { " release-OPERATOR ": "maintainer" } };
+      try {
+        expect(resolveOperatorRolePolicyForProfile(person.id, cfg)).toEqual(
+          roles.definitions.maintainer,
+        );
+        expect(resolveOperatorRolePolicyForProfile(unverified.id, cfg)).toEqual(guestRole);
+        setUserProfileRole(person.id, "guest");
+        invalidateOperatorRolePolicy(person.id);
+        expect(resolveOperatorRolePolicyForProfile(person.id, cfg)).toEqual(guestRole);
+        setUserProfileRole(person.id, "retired");
+        invalidateOperatorRolePolicy(person.id);
+        expect(resolveOperatorRolePolicyForProfile(person.id, cfg)).toEqual(
+          roles.definitions.maintainer,
+        );
+        roles.assignments.byGithubLogin = {};
+        publishOperatorRoleConfigChange({});
+        expect(resolveOperatorRolePolicyForProfile(person.id, cfg)).toEqual(guestRole);
+        roles.assignments.byGithubLogin = { "release-operator": "maintainer" };
+        publishOperatorRoleConfigChange({});
+        expect(resolveOperatorRolePolicyForProfile(person.id, cfg)).toEqual(
+          roles.definitions.maintainer,
+        );
+        const access = resolveGatewayOperatorAccessAuthority(person.id, cfg);
+        expect(access?.gatewayAccessGrant).toBeNull();
+        expect(hasCurrentGatewayOperatorAccess(access)).toBe(true);
+        setDisplayName(person.id, "Release Operator");
+        expect(hasCurrentGatewayOperatorAccess(access)).toBe(true);
+        syncGitHubIdentity({
+          identity: { accountId: 42, login: "Renamed-Operator" },
+          authenticationAlias: { kind: "github-login", login: "Renamed-Operator" },
+        });
+        expect(resolveOperatorRolePolicyForProfile(person.id, cfg)).toEqual(guestRole);
+        expect(hasCurrentGatewayOperatorAccess(access)).toBe(false);
+        expect(access?.signal.aborted).toBe(true);
+      } finally {
+        catalog.release();
+      }
+    });
+  });
+
+  it.each(["assigned", "empty mapping"])(
+    "preserves %s role authority when an irrelevant GitHub login changes",
+    async (roleSource) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const person = syncGitHubIdentity({
+          identity: { accountId: 43, login: "Explicit-Operator" },
+          authenticationAlias: { kind: "github-login", login: "Explicit-Operator" },
+        });
+        if (roleSource === "assigned") {
+          setUserProfileRole(person.id, "maintainer");
+        }
+        const cfg = roleConfig();
+        const roles = expectDefined(cfg.gateway?.roles, "roles");
+        roles.default = "maintainer";
+        roles.assignments = {
+          byGithubLogin: roleSource === "assigned" ? { "explicit-operator": "guest" } : {},
+        };
+        const catalog = await prepareUserProfileCatalog();
+        const context = createGatewayTestContext();
+        context.getRuntimeConfig = () => cfg;
+        let source: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+        try {
+          source = await captureGatewayOperatorRunAuthority({
+            client: identifiedClient(person.id),
+            context,
+            sourceAuthority: resolveGatewayOperatorAccessAuthority(person.id, cfg),
+          });
+          const authority = expectDefined(source, "explicit operator authority").authority;
+          syncGitHubIdentity({
+            identity: { accountId: 43, login: "Renamed-Explicit-Operator" },
+            authenticationAlias: { kind: "github-login", login: "Renamed-Explicit-Operator" },
+          });
+          expect(authority.assertCurrent).not.toThrow();
+          expect(authority.signal?.aborted).toBe(false);
+          expect(resolveOperatorRolePolicyForProfile(person.id, cfg)).toEqual(
+            roles.definitions.maintainer,
+          );
+        } finally {
+          source?.release();
+          catalog.release();
+        }
+      });
+    },
+  );
+
+  it.each(["assigned", "empty mapping"])(
+    "preserves %s CLI role authority when GitHub login casing changes",
+    async (roleSource) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const person = syncGitHubIdentity({
+          identity: { accountId: 44, login: "Cli-Operator" },
+          authenticationAlias: { kind: "github-login", login: "Cli-Operator" },
+        });
+        if (roleSource === "assigned") {
+          setUserProfileRole(person.id, "maintainer");
+        }
+        const identity = { channelId: "slack", accountId: "default", senderId: "cli-operator" };
+        linkUserChannelIdentity(person.id, identity);
+        const cfg = roleConfig();
+        const roles = expectDefined(cfg.gateway?.roles, "roles");
+        roles.default = "maintainer";
+        roles.assignments = {
+          byGithubLogin: roleSource === "assigned" ? { "cli-operator": "guest" } : {},
+        };
+        const authority = expectDefined(
+          resolveChannelOperatorAdminAuthority(cfg, identity),
+          "explicit CLI authority",
+        );
+        syncGitHubIdentity({
+          identity: { accountId: 44, login: "CLI-Operator" },
+          authenticationAlias: { kind: "github-login", login: "CLI-Operator" },
+        });
+        expect(authority.isCurrent(cfg)).toBe(true);
+      });
+    },
+  );
+
   it.each(["invocation", "access", "gateway resolver"] as const)(
     "keeps independent %s dependencies separate while retaining inherited authority",
     async (dependencyKind) => {

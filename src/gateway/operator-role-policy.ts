@@ -11,7 +11,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { profileCatalogPath } from "../state/user-profile-identity.read.js";
+import { readResidentUserProfileRevision } from "../state/user-profile-list.js";
 import { getUserProfileRole } from "../state/user-profiles.js";
+import { normalizeGitHubLogin } from "../utils/github-login.js";
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import {
   resolveOperatorSessionCreation,
@@ -93,6 +96,34 @@ export function readOperatorRolePolicyRevision(): number {
   return assignmentRevision;
 }
 
+/** Resolve names once for both authorization and the administrative profile projection. */
+export function resolveOperatorRoleSelection(
+  profileId: string | undefined,
+  assignedRole: string | null,
+  cfg: OpenClawConfig,
+  githubLogin: string | null | undefined,
+): { effectiveRole?: string; roleSource: "assigned" | "githubLogin" | "default" } {
+  const roles = cfg.gateway?.roles;
+  if (!roles || !profileId || profileId === GATEWAY_OWNER_PROFILE_ID) {
+    return { roleSource: "default" };
+  }
+  if (assignedRole && Object.hasOwn(roles.definitions, assignedRole)) {
+    return { effectiveRole: assignedRole, roleSource: "assigned" };
+  }
+  const login = githubLogin ? normalizeGitHubLogin(githubLogin)?.toLowerCase() : undefined;
+  if (login) {
+    for (const [configuredLogin, role] of Object.entries(roles.assignments?.byGithubLogin ?? {})) {
+      if (
+        normalizeGitHubLogin(configuredLogin)?.toLowerCase() === login &&
+        Object.hasOwn(roles.definitions, role)
+      ) {
+        return { effectiveRole: role, roleSource: "githubLogin" };
+      }
+    }
+  }
+  return { effectiveRole: roles.default, roleSource: "default" };
+}
+
 /** An enabled role boundary denies missing identity and unresolvable assignments. */
 export function resolveOperatorRolePolicyForProfile(
   profileId: string | undefined,
@@ -106,6 +137,9 @@ export function resolveOperatorRolePolicyForProfile(
     profileId,
     profileId ? readOperatorRoleAssignment(profileId) : null,
     cfg,
+    profileId && cfg.gateway.roles.assignments?.byGithubLogin
+      ? readResidentUserProfileRevision(profileId, profileCatalogPath({}))?.githubLogin
+      : undefined,
   );
 }
 
@@ -114,6 +148,7 @@ export function resolveOperatorRolePolicyForAssignment(
   profileId: string | undefined,
   assignedRole: string | null,
   cfg: OpenClawConfig,
+  githubLogin?: string | null,
 ): GatewayOperatorRoleDefinition | undefined {
   const roles = cfg.gateway?.roles;
   if (!roles || profileId === GATEWAY_OWNER_PROFILE_ID) {
@@ -122,21 +157,24 @@ export function resolveOperatorRolePolicyForAssignment(
   if (!profileId) {
     return deniedOperatorRole;
   }
-  if (assignedRole && Object.hasOwn(roles.definitions, assignedRole)) {
-    return roles.definitions[assignedRole];
-  }
-  if (assignedRole) {
+  const selection = resolveOperatorRoleSelection(profileId, assignedRole, cfg, githubLogin);
+  if (assignedRole && selection.roleSource !== "assigned") {
     const reportKey = `${profileId}:${assignedRole}`;
     if (!reportedUnknownAssignments.has(reportKey)) {
       reportedUnknownAssignments.add(reportKey);
       operatorRoleLog.warn(
         `User profile ${profileId} references unknown Gateway role "${assignedRole}"; ${
-          roles.default ? `applying default role "${roles.default}"` : "denying access"
+          selection.effectiveRole
+            ? `applying ${selection.roleSource} role "${selection.effectiveRole}"`
+            : "denying access"
         }. Update gateway.roles.definitions or clear the assignment with users.setRole.`,
       );
     }
   }
-  return (roles.default ? roles.definitions[roles.default] : undefined) ?? deniedOperatorRole;
+  return (
+    (selection.effectiveRole ? roles.definitions[selection.effectiveRole] : undefined) ??
+    deniedOperatorRole
+  );
 }
 
 /** Preserve human-derived restrictions, including ambiguous historical actors; this is not identity proof. */
@@ -192,11 +230,17 @@ export function resolveOperatorRolePolicy(
       authority.profileId,
       authority.readCurrentRoleAssignment(),
       cfg,
+      authority.readCurrentGithubLogin?.(),
     );
   }
   const prepared = client?.preparedSessionProfile;
   if (actor?.kind === "operator" && prepared?.aliases.has(actor.profileId)) {
-    return resolveOperatorRolePolicyForAssignment(prepared.profileId, prepared.role, cfg);
+    return resolveOperatorRolePolicyForAssignment(
+      prepared.profileId,
+      prepared.role,
+      cfg,
+      prepared.githubLogin,
+    );
   }
   return resolveOperatorRolePolicyForProfile(actor?.profileId, cfg);
 }

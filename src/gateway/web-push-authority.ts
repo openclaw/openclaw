@@ -76,7 +76,12 @@ function resolveCurrentWebPushTarget(params: {
     return null;
   }
   const rolePolicy = userProfileId
-    ? resolveOperatorRolePolicyForAssignment(userProfileId, params.profile?.role ?? null, cfg)
+    ? resolveOperatorRolePolicyForAssignment(
+        userProfileId,
+        params.profile?.role ?? null,
+        cfg,
+        params.profile?.githubLogin ?? null,
+      )
     : undefined;
   if (cfg.gateway?.roles && !rolePolicy) {
     return null;

@@ -51,6 +51,8 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   retain?: () => () => void;
   /** Live assignment from the original prepared profile lease. */
   readCurrentRoleAssignment?: (this: void) => string | null;
+  /** Verified primary login from the same live profile authority. */
+  readCurrentGithubLogin?: (this: void) => string | null;
   /** Prepared role permissions; source-policy changes revoke the owning authority. */
   rolePolicy?: Readonly<{
     sessionAccessCap: GatewayOperatorRoleDefinition["sessions"]["others"];
@@ -90,6 +92,7 @@ export function createAdmittedRunOperatorAuthority(
     }
   };
   const readCurrentRoleAssignment = source.readCurrentRoleAssignment;
+  const readCurrentGithubLogin = source.readCurrentGithubLogin;
   const authority = Object.freeze({
     profileId: source.profileId,
     scopes: Object.freeze([...source.scopes]),
@@ -108,6 +111,12 @@ export function createAdmittedRunOperatorAuthority(
       ? () => {
           assertCurrent();
           return readCurrentRoleAssignment();
+        }
+      : undefined,
+    readCurrentGithubLogin: readCurrentGithubLogin
+      ? () => {
+          assertCurrent();
+          return readCurrentGithubLogin();
         }
       : undefined,
     rolePolicy: source.rolePolicy

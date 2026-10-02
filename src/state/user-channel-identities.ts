@@ -410,7 +410,8 @@ export function resolveUserChannelIdentityInDatabase(
           !row.provider.includes("."),
       )
       .map((row) => `${row.subject}@${row.provider}`);
-    const githubAccounts = selectStoredGitHubIdentities(db, [profile.id]).get(profile.id)?.accounts;
+    const githubIdentity = selectStoredGitHubIdentities(db, [profile.id]).get(profile.id);
+    const githubAccounts = githubIdentity?.accounts;
     const githubLogins =
       githubAccounts?.map((account) => `${account.login.toLowerCase()}@github`) ?? [];
     return {
@@ -422,6 +423,7 @@ export function resolveUserChannelIdentityInDatabase(
       ...(githubAccounts?.length
         ? { githubAccountIds: githubAccounts.map(({ accountId }) => accountId) }
         : {}),
+      ...(githubIdentity?.primary ? { githubLogin: githubIdentity.primary.login } : {}),
       loginIdentities: [
         ...new Set([...loginEmails, ...providerLogins, ...githubLogins]),
       ].toSorted(),
