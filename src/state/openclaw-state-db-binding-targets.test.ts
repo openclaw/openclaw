@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -17,13 +18,17 @@ import {
   prepareOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// Vitest can enter teardown while a timed-out body is still closing its native owners.
+const fixture = createFixtureLifetime();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await fixture.cleanup();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 const migrationPaths = ["runtime open", "doctor repair"] as const;
 const pluginTarget = "plugin-binding:fixture:shared";
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
 
 function readBindings(database: DatabaseSync) {
   return database.prepare("SELECT * FROM current_conversation_bindings ORDER BY binding_key").all();
@@ -132,6 +137,7 @@ async function holdGatewayLifecycle(
   child: ChildProcess;
   release: () => Promise<void>;
 }> {
+  signal.throwIfAborted();
   const ownerUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.gatewayStateOwner);
   const source = `
     import { acquireGatewayStateOwner } from ${JSON.stringify(ownerUrl.href)};
@@ -175,165 +181,179 @@ async function holdGatewayLifecycle(
     ready = true;
   } finally {
     if (!ready) {
-      child.kill("SIGTERM");
-      await closed;
+      await fixture.verifyCleanup(async () => {
+        child.kill("SIGTERM");
+        await closed;
+      });
     }
   }
+  let releasing: Promise<void> | undefined;
   return {
     child,
-    release: async () => {
-      child.stdin?.end();
-      await closed;
-    },
+    release: () =>
+      (releasing ??= fixture.verifyCleanup(async () => {
+        child.stdin?.end();
+        await closed;
+      })),
   };
 }
 
 describe("conversation binding target migration", () => {
-  it("admits deferred content without schema mutation while another Gateway owns the state", async ({
+  it("admits deferred content without schema mutation while another Gateway owns the state", ({
     signal,
-  }) => {
-    const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-deferred-reader-") } };
-    const initial = openOpenClawStateDatabase(options);
-    const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, options);
-    initial.db
-      .prepare(`INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-      VALUES ('state.schema.contentVersion', ?, ?)`)
-      .run(String(OPENCLAW_STATE_SCHEMA_VERSION), Date.now());
-    initial.db.exec(`PRAGMA user_version = 15;
-      UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';`);
-    initial.db
-      .prepare(`UPDATE update_runs SET status = 'succeeded', phase = 'finished',
-      finished_at_ms = ? WHERE run_id = ?`)
-      .run(Date.now() - 60_000, run.runId);
-    closeOpenClawStateDatabaseForTest();
-    const holder = await holdGatewayLifecycle(initial.path, signal);
-    try {
-      expect(await prepareOpenClawStateDatabaseSchema(options)).toEqual({
-        changes: [],
-        warnings: [],
-      });
-      const reader = openOpenClawStateDatabase(options);
-      expect(reader.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
-      expect(reader.db.prepare("SELECT total_changes() AS writes").get()).toEqual({ writes: 0 });
-      reader.db
-        .prepare("UPDATE update_runs SET finished_at_ms = ? WHERE run_id = ?")
-        .run(Date.now() - 5 * 60_000, run.runId);
-      expect(() => reconcileOpenClawStateSchemaPublication(options)).not.toThrow();
-      expect(openOpenClawStateDatabase(options).db).toBe(reader.db);
-      expect(reader.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
+  }) =>
+    fixture.run(async () => {
+      signal.throwIfAborted();
+      const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-deferred-reader-") } };
+      const initial = openOpenClawStateDatabase(options);
+      const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, options);
+      initial.db
+        .prepare(`INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+          VALUES ('state.schema.contentVersion', ?, ?)`)
+        .run(String(OPENCLAW_STATE_SCHEMA_VERSION), Date.now());
+      initial.db.exec(`PRAGMA user_version = 15;
+          UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';`);
+      initial.db
+        .prepare(`UPDATE update_runs SET status = 'succeeded', phase = 'finished',
+          finished_at_ms = ? WHERE run_id = ?`)
+        .run(Date.now() - 60_000, run.runId);
       closeOpenClawStateDatabaseForTest();
-      const agedReader = openOpenClawStateDatabase(options);
-      expect(agedReader.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
-      expect(agedReader.db.prepare("SELECT total_changes() AS writes").get()).toEqual({
-        writes: 0,
-      });
-    } finally {
-      await holder.release();
-    }
-    expect(openOpenClawStateDatabase(options).db.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-    });
-  });
-
-  it("refuses runtime and doctor schema mutation while another Gateway owns the state", async ({
-    signal,
-  }) => {
-    const { options, databasePath } = createVersion14Bindings();
-    const holder = await holdGatewayLifecycle(databasePath, signal);
-    try {
-      for (const migrate of [
-        () => openOpenClawStateDatabase(options),
-        () => repairOpenClawStateDatabaseSchema(options),
-      ]) {
-        expect(migrate).toThrow(
-          expect.objectContaining({
-            name: "StateSchemaMutationConflictError",
-            message: expect.stringContaining("another Gateway owns that state directory"),
-          }),
-        );
-      }
-      const preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
+      const holder = await holdGatewayLifecycle(initial.path, signal);
       try {
-        expect(preserved.prepare("PRAGMA user_version").get()).toEqual({ user_version: 14 });
+        expect(await prepareOpenClawStateDatabaseSchema(options)).toEqual({
+          changes: [],
+          warnings: [],
+        });
+        const reader = openOpenClawStateDatabase(options);
+        expect(reader.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
+        expect(reader.db.prepare("SELECT total_changes() AS writes").get()).toEqual({ writes: 0 });
+        reader.db
+          .prepare("UPDATE update_runs SET finished_at_ms = ? WHERE run_id = ?")
+          .run(Date.now() - 5 * 60_000, run.runId);
+        expect(() => reconcileOpenClawStateSchemaPublication(options)).not.toThrow();
+        expect(openOpenClawStateDatabase(options).db).toBe(reader.db);
+        expect(reader.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
+        closeOpenClawStateDatabaseForTest();
+        const agedReader = openOpenClawStateDatabase(options);
+        expect(agedReader.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
+        expect(agedReader.db.prepare("SELECT total_changes() AS writes").get()).toEqual({
+          writes: 0,
+        });
       } finally {
-        preserved.close();
+        await holder.release();
       }
-    } finally {
-      await holder.release();
-    }
-  });
+      expect(openOpenClawStateDatabase(options).db.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
+    }));
+
+  it("refuses runtime and doctor schema mutation while another Gateway owns the state", ({
+    signal,
+  }) =>
+    fixture.run(async () => {
+      signal.throwIfAborted();
+      const { options, databasePath } = createVersion14Bindings();
+      const holder = await holdGatewayLifecycle(databasePath, signal);
+      try {
+        for (const migrate of [
+          () => openOpenClawStateDatabase(options),
+          () => repairOpenClawStateDatabaseSchema(options),
+        ]) {
+          expect(migrate).toThrow(
+            expect.objectContaining({
+              name: "StateSchemaMutationConflictError",
+              message: expect.stringContaining("another Gateway owns that state directory"),
+            }),
+          );
+        }
+        const preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
+        try {
+          expect(preserved.prepare("PRAGMA user_version").get()).toEqual({ user_version: 14 });
+        } finally {
+          preserved.close();
+        }
+      } finally {
+        await holder.release();
+      }
+    }));
 
   it.for(migrationPaths)(
     "preserves bindings and additive data through %s and cold reopen under a Gateway",
-    async (migrationPath, { signal }) => {
-      const { options, databasePath, before } = createVersion14Bindings();
-      if (migrationPath === "doctor repair") {
-        expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-      }
-      const migrated = openOpenClawStateDatabase(options);
-      const columns = migrated.db
-        .prepare("PRAGMA table_info(current_conversation_bindings)")
-        .all()
-        .map((row) => row.name);
-      expect(columns).not.toContain("target_agent_id");
-      expect(columns).not.toContain("target_session_id");
-      expect(readBindings(migrated.db)).toEqual(
-        before.rows.map(({ target_agent_id: _agent, target_session_id: _session, ...row }) => row),
-      );
-      expect(migrated.db.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-      });
-      expect(
-        migrated.db
-          .prepare("SELECT schema_version, app_version FROM schema_meta WHERE meta_key = 'primary'")
-          .get(),
-      ).toEqual({
-        schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
-        app_version: migrationPath === "runtime open" ? VERSION : null,
-      });
-      expect(
-        migrated.db
-          .prepare(
-            "SELECT name, \"unique\" FROM pragma_index_list('current_conversation_bindings') WHERE name = 'idx_current_conversation_bindings_target'",
-          )
-          .get(),
-      ).toEqual({ name: "idx_current_conversation_bindings_target", unique: 0 });
-      const query =
-        "SELECT binding_id FROM current_conversation_bindings WHERE target_session_key = ?";
-      expect(migrated.db.prepare(query).all(pluginTarget)).toHaveLength(2);
-      expect(
-        migrated.db
-          .prepare(`EXPLAIN QUERY PLAN ${query}`)
-          .all(pluginTarget)
-          .map((row) => row.detail),
-      ).toEqual([
-        expect.stringMatching(
-          /SEARCH current_conversation_bindings USING INDEX idx_current_conversation_bindings_target \(target_session_key=\?\)/,
-        ),
-      ]);
-      expect(migrated.db.prepare("PRAGMA integrity_check").get()).toEqual({
-        integrity_check: "ok",
-      });
-      expect(migrated.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    (migrationPath, { signal }) =>
+      fixture.run(async () => {
+        signal.throwIfAborted();
+        const { options, databasePath, before } = createVersion14Bindings();
+        if (migrationPath === "doctor repair") {
+          expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+        }
+        const migrated = openOpenClawStateDatabase(options);
+        const columns = migrated.db
+          .prepare("PRAGMA table_info(current_conversation_bindings)")
+          .all()
+          .map((row) => row.name);
+        expect(columns).not.toContain("target_agent_id");
+        expect(columns).not.toContain("target_session_id");
+        expect(readBindings(migrated.db)).toEqual(
+          before.rows.map(
+            ({ target_agent_id: _agent, target_session_id: _session, ...row }) => row,
+          ),
+        );
+        expect(migrated.db.prepare("PRAGMA user_version").get()).toEqual({
+          user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+        });
+        expect(
+          migrated.db
+            .prepare(
+              "SELECT schema_version, app_version FROM schema_meta WHERE meta_key = 'primary'",
+            )
+            .get(),
+        ).toEqual({
+          schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
+          app_version: migrationPath === "runtime open" ? VERSION : null,
+        });
+        expect(
+          migrated.db
+            .prepare(
+              "SELECT name, \"unique\" FROM pragma_index_list('current_conversation_bindings') WHERE name = 'idx_current_conversation_bindings_target'",
+            )
+            .get(),
+        ).toEqual({ name: "idx_current_conversation_bindings_target", unique: 0 });
+        const query =
+          "SELECT binding_id FROM current_conversation_bindings WHERE target_session_key = ?";
+        expect(migrated.db.prepare(query).all(pluginTarget)).toHaveLength(2);
+        expect(
+          migrated.db
+            .prepare(`EXPLAIN QUERY PLAN ${query}`)
+            .all(pluginTarget)
+            .map((row) => row.detail),
+        ).toEqual([
+          expect.stringMatching(
+            /SEARCH current_conversation_bindings USING INDEX idx_current_conversation_bindings_target \(target_session_key=\?\)/,
+          ),
+        ]);
+        expect(migrated.db.prepare("PRAGMA integrity_check").get()).toEqual({
+          integrity_check: "ok",
+        });
+        expect(migrated.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
 
-      const after = readMigrationSnapshot(migrated.db);
-      closeOpenClawStateDatabaseForTest();
-      const holder = await holdGatewayLifecycle(databasePath, signal);
-      try {
-        expect(readMigrationSnapshot(openOpenClawStateDatabase(options).db)).toEqual(after);
-      } finally {
+        const after = readMigrationSnapshot(migrated.db);
         closeOpenClawStateDatabaseForTest();
-        await holder.release();
-      }
-      expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-      const repaired = openNodeSqliteDatabase(databasePath, { readOnly: true });
-      try {
-        expect(readBindings(repaired)).toEqual(after.rows);
-        expect(readMigrationSnapshot(repaired).schema).toEqual(after.schema);
-      } finally {
-        repaired.close();
-      }
-    },
+        const holder = await holdGatewayLifecycle(databasePath, signal);
+        try {
+          expect(readMigrationSnapshot(openOpenClawStateDatabase(options).db)).toEqual(after);
+        } finally {
+          closeOpenClawStateDatabaseForTest();
+          await holder.release();
+        }
+        expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+        const repaired = openNodeSqliteDatabase(databasePath, { readOnly: true });
+        try {
+          expect(readBindings(repaired)).toEqual(after.rows);
+          expect(readMigrationSnapshot(repaired).schema).toEqual(after.schema);
+        } finally {
+          repaired.close();
+        }
+      }),
   );
 
   it.each(

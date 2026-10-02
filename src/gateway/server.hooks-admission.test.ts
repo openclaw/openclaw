@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { Agent, request as httpRequest } from "node:http";
 import path from "node:path";
 import { afterEach, assert, describe, expect, test, vi, type TestContext } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -14,6 +15,7 @@ import { drainSystemEvents, peekSystemEventEntries } from "../infra/system-event
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   connectWebchatClient,
+  createGatewaySuiteHarness,
   cronIsolatedRun,
   installGatewayTestHooks,
   rpcReq,
@@ -28,7 +30,10 @@ await import("./server.js");
 const HOOK_TOKEN = "hook-secret";
 const ROTATED_HOOK_TOKEN = "hook-secret-rotated";
 
-afterEach(() => {
+const fixtureLifetime = createFixtureLifetime();
+
+afterEach(async () => {
+  await fixtureLifetime.cleanup();
   drainSystemEvents(resolveMainSessionKeyFromConfig());
   vi.restoreAllMocks();
 });
@@ -174,12 +179,10 @@ async function writeHookTransformModule(moduleName: string, source: string): Pro
   await fs.writeFile(path.join(transformsDir, moduleName), source, "utf8");
 }
 
-async function createBlockedHookTransform(
-  moduleName: string,
-  onTestFinished: TestContext["onTestFinished"],
-): Promise<{
+async function createBlockedHookTransform(moduleName: string): Promise<{
   entered: Promise<void>;
   release: () => void;
+  dispose: () => void;
 }> {
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   assert(configPath, "expected OPENCLAW_CONFIG_PATH");
@@ -190,10 +193,6 @@ async function createBlockedHookTransform(
     entered.resolve();
     void released.promise.then(complete);
   };
-  process.once(enteredEvent, onEntered);
-  onTestFinished(() => {
-    process.removeListener(enteredEvent, onEntered);
-  });
   await writeHookTransformModule(
     moduleName,
     `export default async function transform() {
@@ -201,98 +200,125 @@ async function createBlockedHookTransform(
   return {};
 }`,
   );
-  return { entered: entered.promise, release: released.resolve };
+  process.once(enteredEvent, onEntered);
+  return {
+    entered: entered.promise,
+    release: released.resolve,
+    dispose: () => {
+      process.removeListener(enteredEvent, onEntered);
+    },
+  };
 }
 
-async function withRevokedHook(
+function withRevokedHook(
   mode: "disable" | "rotate",
-  { signal, onTestFinished }: Pick<TestContext, "signal" | "onTestFinished">,
+  { signal }: Pick<TestContext, "signal">,
   afterRotation?: (port: number, socket: Parameters<typeof rpcReq>[0]) => Promise<void>,
 ): Promise<void> {
-  const moduleName = `${mode}-reload.mjs`;
-  const transform = await createBlockedHookTransform(moduleName, onTestFinished);
-  await writeReloadableHooksConfig({
-    enabled: true,
-    token: HOOK_TOKEN,
-    mappings: [
-      {
-        match: { path: "revoked" },
-        action: "wake",
-        textTemplate: "{{payload.text}}",
-        transform: { module: moduleName },
-      },
-    ],
-  });
-  await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: "0" }, () =>
-    withGatewayServer(async ({ port, server }) => {
-      await server.startupSettled;
-      const socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
-      const mainSessionKey = resolveMainSessionKeyFromConfig();
-      try {
-        const current = await postHook(port, "/hooks/wake", { text: "before-reload" }, "before");
-        expect(current.status).toBe(200);
-        await expect
-          .poll(
-            () =>
-              peekSystemEventEntries(mainSessionKey).some((event) =>
-                event.text.includes("before-reload"),
-              ),
-            { timeout: 2_000, interval: 10 },
-          )
-          .toBe(true);
-        drainSystemEvents(mainSessionKey);
-        const revoked = postHook(port, "/hooks/revoked", { text: "after-reload" }, "revoked");
-        let response: Response;
+  return fixtureLifetime.run(async () => {
+    const moduleName = `${mode}-reload.mjs`;
+    const transform = await createBlockedHookTransform(moduleName);
+    try {
+      await writeReloadableHooksConfig({
+        enabled: true,
+        token: HOOK_TOKEN,
+        mappings: [
+          {
+            match: { path: "revoked" },
+            action: "wake",
+            textTemplate: "{{payload.text}}",
+            transform: { module: moduleName },
+          },
+        ],
+      });
+      await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: "0" }, async () => {
+        const gateway = await createGatewaySuiteHarness();
         try {
-          await withinTest(
-            awaitGateBeforeSettlement(
-              transform.entered,
-              revoked,
-              "hook request settled before its transform entered",
-            ),
-            signal,
-          );
-          await patchHooksConfig(
-            socket,
-            mode === "disable" ? { enabled: false } : { enabled: true, token: ROTATED_HOOK_TOKEN },
-          );
-          await waitForHookStatus({
-            port,
-            path: "/hooks/wake",
-            token: HOOK_TOKEN,
-            body: "{}",
-            status: mode === "disable" ? 404 : 401,
-          });
-          if (mode === "rotate") {
-            const control = await postHook(
+          const { port, server } = gateway;
+          await server.startupSettled;
+          const socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
+          const mainSessionKey = resolveMainSessionKeyFromConfig();
+          try {
+            const current = await postHook(
               port,
               "/hooks/wake",
-              {},
-              "current-token-control",
-              ROTATED_HOOK_TOKEN,
+              { text: "before-reload" },
+              "before",
             );
-            expect(control.status).toBe(400);
+            expect(current.status).toBe(200);
+            await expect
+              .poll(
+                () =>
+                  peekSystemEventEntries(mainSessionKey).some((event) =>
+                    event.text.includes("before-reload"),
+                  ),
+                { timeout: 2_000, interval: 10 },
+              )
+              .toBe(true);
+            drainSystemEvents(mainSessionKey);
+            const revoked = postHook(port, "/hooks/revoked", { text: "after-reload" }, "revoked");
+            let response: Response;
+            try {
+              await withinTest(
+                awaitGateBeforeSettlement(
+                  transform.entered,
+                  revoked,
+                  "hook request settled before its transform entered",
+                ),
+                signal,
+              );
+              await patchHooksConfig(
+                socket,
+                mode === "disable"
+                  ? { enabled: false }
+                  : { enabled: true, token: ROTATED_HOOK_TOKEN },
+              );
+              await waitForHookStatus({
+                port,
+                path: "/hooks/wake",
+                token: HOOK_TOKEN,
+                body: "{}",
+                status: mode === "disable" ? 404 : 401,
+              });
+              if (mode === "rotate") {
+                const control = await postHook(
+                  port,
+                  "/hooks/wake",
+                  {},
+                  "current-token-control",
+                  ROTATED_HOOK_TOKEN,
+                );
+                expect(control.status).toBe(400);
+              }
+            } finally {
+              await fixtureLifetime.verifyCleanup(async () => {
+                transform.release();
+                await revoked;
+              });
+              response = await revoked;
+            }
+            expect(response.status).toBe(409);
+            await expect(response.json()).resolves.toEqual({
+              ok: false,
+              error: "hook configuration changed; retry request",
+            });
+            expect(
+              peekSystemEventEntries(mainSessionKey).some((event) =>
+                event.text.includes("after-reload"),
+              ),
+            ).toBe(false);
+            await afterRotation?.(port, socket);
+          } finally {
+            socket.close();
           }
         } finally {
-          transform.release();
-          response = await revoked;
+          await fixtureLifetime.verifyCleanup(() => gateway.close());
         }
-        expect(response.status).toBe(409);
-        await expect(response.json()).resolves.toEqual({
-          ok: false,
-          error: "hook configuration changed; retry request",
-        });
-        expect(
-          peekSystemEventEntries(mainSessionKey).some((event) =>
-            event.text.includes("after-reload"),
-          ),
-        ).toBe(false);
-        await afterRotation?.(port, socket);
-      } finally {
-        socket.close();
-      }
-    }),
-  );
+      });
+    } finally {
+      await fixtureLifetime.verifyCleanup(async () => transform.dispose());
+    }
+  });
 }
 
 describe("gateway hook admission", () => {

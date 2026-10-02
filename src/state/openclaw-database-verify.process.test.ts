@@ -4,6 +4,7 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
@@ -17,9 +18,17 @@ import {
 } from "./openclaw-database-verify.impl.js";
 import { verifyOpenClawDatabases } from "./openclaw-database-verify.worker.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// Vitest can enter teardown while a timed-out body is still closing its native owners.
+const fixture = createFixtureLifetime();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await fixture.cleanup();
+    cleanup();
+  }),
+);
 
 async function importVerifierInUnrelatedFork(signal: AbortSignal): Promise<unknown[]> {
+  signal.throwIfAborted();
   const fixtureDir = tempDirs.make("openclaw-database-verify-process-");
   const fixturePath = path.join(fixtureDir, "unrelated-child.mjs");
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.databaseVerify);
@@ -59,10 +68,12 @@ async function importVerifierInUnrelatedFork(signal: AbortSignal): Promise<unkno
   try {
     return await withinTest(exited, signal);
   } finally {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGTERM");
-    }
-    await closed;
+    await fixture.verifyCleanup(async () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGTERM");
+      }
+      await closed;
+    });
   }
 }
 
@@ -109,11 +120,13 @@ describe("database verifier child process entrypoint", () => {
     }
   });
 
-  it("does not consume an unrelated fork's IPC messages", async ({ signal }) => {
-    await expect(importVerifierInUnrelatedFork(signal)).resolves.toEqual([
-      { echo: { type: "unrelated" } },
-    ]);
-  });
+  it("does not consume an unrelated fork's IPC messages", ({ signal }) =>
+    fixture.run(async () => {
+      signal.throwIfAborted();
+      await expect(importVerifierInUnrelatedFork(signal)).resolves.toEqual([
+        { echo: { type: "unrelated" } },
+      ]);
+    }));
 });
 
 describe("database verifier worker lifetime", () => {

@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import * as gatewayBenchChild from "../../scripts/lib/gateway-bench-child.js";
 import { createGatewayWsClient } from "../../scripts/lib/gateway-ws-client.js";
@@ -14,6 +14,7 @@ import {
   RUNTIME_POSTBUILD_STAMP_FILE,
 } from "../../scripts/lib/local-build-metadata-paths.mts";
 import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import {
@@ -22,12 +23,44 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import type { Deferred } from "../shared/deferred.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
+
+const testLifetime = createFixtureLifetime();
+// onTestFinished runs after shared afterEach hooks; join native teardown before those resets.
+afterEach(() => testLifetime.cleanup());
+type ConcurrentStreamLifetime = Pick<
+  ReturnType<typeof createFixtureLifetime>,
+  "verifyCleanup" | "createTempDir"
+> & { signal: AbortSignal };
+
+function runConcurrentStreamFixture<T>(
+  context: { signal: AbortSignal },
+  body: (lifetime: ConcurrentStreamLifetime) => Promise<T>,
+  ...cleanups: Array<() => unknown>
+): Promise<T> {
+  return testLifetime.run(() =>
+    runQaGatewayFixture(
+      async () => {
+        context.signal.throwIfAborted();
+        return await body({
+          signal: context.signal,
+          verifyCleanup: testLifetime.verifyCleanup,
+          createTempDir: testLifetime.createTempDir,
+        });
+      },
+      ...cleanups.map(
+        (cleanup) => () =>
+          testLifetime.verifyCleanup(async () => {
+            await cleanup();
+          }),
+      ),
+    ),
+  );
+}
 
 type StreamFrame = {
   id?: string;
@@ -181,7 +214,7 @@ describe("Gateway concurrent HTTP streams", () => {
   it("retains backing state when mock shutdown resolves without native closure", (context) => {
     let gateway: Awaited<ReturnType<typeof createOpenClawTestInstance>> | undefined;
     let mock: MockProcessOwner | undefined;
-    return runQaGatewayTestFixture(
+    return runConcurrentStreamFixture(
       context,
       async ({ signal, verifyCleanup }) => {
         const stateOwner = await createOpenClawTestInstance({
@@ -313,7 +346,7 @@ describe("Gateway concurrent HTTP streams", () => {
       client?.close();
     };
     signal.addEventListener("abort", cancel, { once: true });
-    return runQaGatewayTestFixture(
+    return runConcurrentStreamFixture(
       context,
       async ({ verifyCleanup }) => {
         signal.throwIfAborted();

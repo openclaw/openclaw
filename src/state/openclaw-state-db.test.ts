@@ -7,8 +7,13 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import {
+  cleanupTempDirs,
+  makeTempDir,
+  useAutoCleanupTempDirTracker,
+} from "../../test/helpers/temp-dir.js";
 import { resolveCronDeliveryPlan } from "../cron/delivery-plan.js";
 import { saveCronStore } from "../cron/store.js";
 import { loadedCronStoreFromRows, loadCronRows } from "../cron/store/row-codec.js";
@@ -54,7 +59,7 @@ import {
 import { hasDanglingSkillWorkshopCollectionReviewIndex } from "./openclaw-state-db-doctor-schema.js";
 import {
   runHotRollbackJournalRecoveryProbe,
-  runStateDatabaseProcessProbe,
+  runConcurrentSchemaProbe,
 } from "./openclaw-state-db-hot-journal.test-support.js";
 import { prepareStateDatabaseSchemaRepair } from "./openclaw-state-db-maintenance.js";
 import { ensureGitHubPublicationSchema } from "./openclaw-state-db-schema-additive.js";
@@ -114,6 +119,18 @@ type StateDbTestDatabase = Pick<
 >;
 
 const stateDbTempDirs: string[] = [];
+// Vitest can enter teardown while a timed-out body is still closing its native owners.
+const fixtureLifetime = createFixtureLifetime();
+const processTempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await fixtureLifetime.cleanup();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    stateDbLogInfo.mockClear();
+    vi.restoreAllMocks();
+    cleanup();
+  }),
+);
 let canonicalStateDatabaseTemplatePath: string | undefined;
 const materializeCorruptionRefusalStateDatabase = createCorruptionRefusalStateDatabaseFixture(() =>
   materializeCurrentStateDatabase(createTempStateDir()),
@@ -736,203 +753,6 @@ function expectNoncanonicalAuditSchemaRejected(
   });
 }
 
-async function runConcurrentSchemaProbe(params: {
-  mode: "fresh" | "upgrade";
-  moduleUrl: string;
-  rootDir: string;
-  signal: AbortSignal;
-}): Promise<string[]> {
-  const workerSource = `
-    import { once } from "node:events";
-
-    const {
-      closeOpenClawStateDatabaseForTest,
-      openOpenClawStateDatabase,
-    } = await import(process.env.OPENCLAW_SCHEMA_TEST_MODULE_URL);
-    const databasePath = process.env.OPENCLAW_SCHEMA_TEST_DATABASE_PATH;
-    const started = once(process, "message");
-    process.send("ready");
-    const [start] = await started;
-    if (start !== "start") throw new Error("schema probe received an invalid start");
-    process.send("entering");
-    try {
-      const database = openOpenClawStateDatabase({ path: databasePath });
-      const integrity = database.db.prepare("PRAGMA integrity_check").get();
-      if (integrity?.integrity_check !== "ok") {
-        throw new Error("state database integrity check failed");
-      }
-      const retired = once(process, "message");
-      process.send("opened");
-      const [retire] = await retired;
-      if (retire !== "retire") throw new Error("schema probe received an invalid retirement");
-    } catch (error) {
-      try {
-        closeOpenClawStateDatabaseForTest();
-      } catch (cleanupError) {
-        throw new AggregateError([error, cleanupError], "schema probe and worker cleanup failed");
-      }
-      throw error;
-    }
-    closeOpenClawStateDatabaseForTest();
-    process.disconnect();
-  `;
-  const orchestratorSource = `
-    import assert from "node:assert/strict";
-    import { spawn } from "node:child_process";
-    import path from "node:path";
-    import { DatabaseSync } from "node:sqlite";
-
-    const moduleUrl = ${JSON.stringify(params.moduleUrl)};
-    const rootDir = ${JSON.stringify(params.rootDir)};
-    const mode = ${JSON.stringify(params.mode)};
-    const workerSource = ${JSON.stringify(workerSource)};
-    const workerExecArgv = ${JSON.stringify(resolveRuntimeWorkerArgv(new URL(params.moduleUrl)).slice(0, -1))};
-    const workerCount = 2;
-    const roundCount = 1;
-    const databasePaths = [];
-
-    function observeChild(child) {
-      const entered = {};
-      const events = Object.fromEntries(["ready", "entering", "opened"].map((name) => [
-        name,
-        new Promise((resolve) => { entered[name] = resolve; }),
-      ]));
-      child.on("message", (name) => entered[name]?.());
-      let stdout = "";
-      let stderr = "";
-      child.stdout.on("data", (chunk) => {
-        stdout += chunk;
-      });
-      child.stderr.on("data", (chunk) => {
-        stderr += chunk;
-      });
-      const outcome = new Promise((resolve) => {
-        let error;
-        child.once("error", (failure) => { error = String(failure); });
-        child.once("close", (code, signal) => resolve({ code, signal, error, stderr, stdout }));
-      });
-      return { events, outcome };
-    }
-
-    async function waitForEvents(observers, event, label, round) {
-      await Promise.all(observers.map(({ events, outcome }, index) => Promise.race([
-        events[event],
-        outcome.then(() => {
-          throw new Error(\`round \${round} worker \${index} exited before \${label}\`);
-        }),
-        probeStopped,
-      ])));
-    }
-
-    for (let round = 0; round < roundCount; round += 1) {
-      const databasePath = path.join(rootDir, \`concurrent-\${mode}-\${round}.sqlite\`);
-
-      if (mode === "upgrade") {
-        const {
-          closeOpenClawStateDatabaseForTest,
-          openOpenClawStateDatabase,
-        } = await import(moduleUrl);
-        openOpenClawStateDatabase({ path: databasePath });
-        closeOpenClawStateDatabaseForTest();
-
-        const legacy = new DatabaseSync(databasePath);
-        legacy.exec(\`
-          DROP TABLE worker_environment_credentials;
-          ALTER TABLE gateway_boot_lifecycle DROP COLUMN startup_reason;
-          ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_mode;
-          ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_key_id;
-          ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_signature_count;
-          ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_threshold;
-          ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_verified_at;
-          ALTER TABLE worker_environments DROP COLUMN bootstrap_bundle_hash;
-          ALTER TABLE worker_environments DROP COLUMN bootstrap_openclaw_version;
-          ALTER TABLE worker_environments DROP COLUMN bootstrap_protocol_features_json;
-          ALTER TABLE worker_environments DROP COLUMN bootstrap_install_kind;
-          ALTER TABLE worker_environments DROP COLUMN owner_epoch;
-          ALTER TABLE worker_environments DROP COLUMN teardown_terminal_state;
-          ALTER TABLE worker_environments DROP COLUMN ssh_host_key;
-          DROP INDEX idx_worker_session_placements_environment; PRAGMA user_version = 1;
-          UPDATE schema_meta
-             SET schema_version = 1,
-                 updated_at = 1
-           WHERE meta_key = 'primary';
-        \`);
-        legacy.close();
-      }
-
-      probeAbort.signal.throwIfAborted();
-      const workers = Array.from({ length: workerCount }, () => {
-        return spawn(
-          process.execPath,
-          [...workerExecArgv, "--input-type=module", "-e", workerSource],
-          {
-            env: {
-              ...process.env,
-              OPENCLAW_SCHEMA_TEST_DATABASE_PATH: databasePath,
-              OPENCLAW_SCHEMA_TEST_MODULE_URL: moduleUrl,
-            },
-            stdio: ["ignore", "pipe", "pipe", "ipc"],
-          },
-        );
-      });
-      const observers = workers.map(observeChild);
-      const outcomes = observers.map(({ outcome }) => outcome);
-      let roundError;
-      let results;
-      try {
-        await waitForEvents(observers, "ready", "ready markers", round);
-        workers.forEach((worker) => worker.send("start"));
-        await waitForEvents(observers, "entering", "entering markers", round);
-        await waitForEvents(observers, "opened", "successful open markers", round);
-        // Keep both real connections live through successful admission, then join each close.
-        for (const [index, worker] of workers.entries()) {
-          assert.equal(worker.exitCode, null, \`round \${round} worker \${index} exited before retirement\`);
-          assert.equal(worker.signalCode, null, \`round \${round} worker \${index} signaled before retirement\`);
-          worker.send("retire");
-          const result = await Promise.race([outcomes[index], probeStopped]);
-          if (result.error || result.code !== 0) {
-            throw new Error(\`round \${round} worker \${index} retirement failed: \${JSON.stringify(result)}\`);
-          }
-        }
-      } catch (error) {
-        roundError = error;
-      } finally {
-        if (roundError) {
-          for (const worker of workers) {
-            if (worker.exitCode === null && worker.signalCode === null) {
-              worker.kill();
-            }
-          }
-        }
-        results = await Promise.all(outcomes);
-      }
-      if (roundError) {
-        throw new Error(
-          \`round \${round} probe failed: \${String(roundError)}; workers: \${JSON.stringify(results)}\`,
-          { cause: roundError },
-        );
-      }
-      const failures = results.filter((result) => result.error || result.code !== 0);
-      if (failures.length > 0) {
-        throw new Error(\`round \${round} worker failures: \${JSON.stringify(failures)}\`);
-      }
-      databasePaths.push(databasePath);
-    }
-
-    console.log(JSON.stringify(databasePaths));
-  `;
-  const output = await runStateDatabaseProcessProbe({
-    moduleUrl: params.moduleUrl,
-    source: orchestratorSource,
-    signal: params.signal,
-  });
-  const resultLine = output.trim().split("\n").at(-1);
-  if (!resultLine) {
-    throw new Error(`concurrent schema ${params.mode} probe produced no result`);
-  }
-  return JSON.parse(resultLine) as string[];
-}
-
 beforeAll(() => {
   const stateDir = createTempStateDir();
   canonicalStateDatabaseTemplatePath = openOpenClawStateDatabase({
@@ -942,15 +762,9 @@ beforeAll(() => {
 });
 
 afterAll(async () => {
+  await fixtureLifetime.cleanup();
   await closeOpenClawStateDatabaseAsync();
   cleanupTempDirs(stateDbTempDirs);
-});
-
-afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-  stateDbLogInfo.mockClear();
-  vi.restoreAllMocks();
 });
 
 describe("openclaw state database", () => {
@@ -4205,30 +4019,33 @@ INSERT INTO device_identities VALUES (
 
   it.skipIf(process.platform === "win32")(
     "recovers a hot rollback journal privately before writable recovery",
-    async ({ signal }) => {
-      const result = await runHotRollbackJournalRecoveryProbe({
-        moduleUrl: resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabase).href,
-        rootDir: createTempStateDir(),
-        signal,
-      });
+    ({ signal }) =>
+      fixtureLifetime.run(async () => {
+        signal.throwIfAborted();
+        const result = await runHotRollbackJournalRecoveryProbe({
+          moduleUrl: resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabase).href,
+          rootDir: processTempDirs.make("openclaw-state-db-"),
+          signal,
+          verifyCleanup: fixtureLifetime.verifyCleanup,
+        });
 
-      expect(result.readOnly).toEqual({
-        error: null,
-        opened: true,
-        uncommittedRows: 0,
-      });
-      expect(result).toMatchObject({
-        committedRowsAfterRecovery: 256,
-        immutableDirtyRowsBeforeKill: expect.any(Number),
-        integrity: "ok",
-        journalBytesBeforeReadOnly: expect.any(Number),
-        journalExistsAfterReadOnly: true,
-        journalExistsAfterRecovery: false,
-      });
-      expect(result.immutableDirtyRowsBeforeKill).toBeGreaterThan(0);
-      expect(result.journalBytesBeforeReadOnly).toBeGreaterThan(0);
-      expect(result.journalShaAfterReadOnly).toBe(result.journalShaBeforeReadOnly);
-    },
+        expect(result.readOnly).toEqual({
+          error: null,
+          opened: true,
+          uncommittedRows: 0,
+        });
+        expect(result).toMatchObject({
+          committedRowsAfterRecovery: 256,
+          immutableDirtyRowsBeforeKill: expect.any(Number),
+          integrity: "ok",
+          journalBytesBeforeReadOnly: expect.any(Number),
+          journalExistsAfterReadOnly: true,
+          journalExistsAfterRecovery: false,
+        });
+        expect(result.immutableDirtyRowsBeforeKill).toBeGreaterThan(0);
+        expect(result.journalBytesBeforeReadOnly).toBeGreaterThan(0);
+        expect(result.journalShaAfterReadOnly).toBe(result.journalShaBeforeReadOnly);
+      }),
   );
 
   it("adds and backfills Claw package update timestamps in existing state databases", () => {
@@ -4480,64 +4297,78 @@ INSERT INTO device_identities VALUES (
     },
   );
 
-  it("serializes concurrent additive schema upgrades across processes", async ({ signal }) => {
-    const rootDir = createTempStateDir();
-    const moduleUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabase).href;
-    const databasePaths = await runConcurrentSchemaProbe({
-      mode: "upgrade",
-      moduleUrl,
-      rootDir,
-      signal,
-    });
-    const expectedShape = createInitialStateSchemaShape();
-    const { DatabaseSync } = requireNodeSqlite();
+  it(
+    "serializes concurrent additive schema upgrades across processes",
+    ({ signal }) =>
+      fixtureLifetime.run(async () => {
+        signal.throwIfAborted();
+        const rootDir = processTempDirs.make("openclaw-state-db-");
+        const moduleUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabase).href;
+        const databasePaths = await runConcurrentSchemaProbe({
+          mode: "upgrade",
+          moduleUrl,
+          rootDir,
+          signal,
+          verifyCleanup: fixtureLifetime.verifyCleanup,
+        });
+        const expectedShape = createInitialStateSchemaShape();
+        const { DatabaseSync } = requireNodeSqlite();
 
-    expect(databasePaths).toHaveLength(1);
-    for (const databasePath of databasePaths) {
-      const db = new DatabaseSync(databasePath, { readOnly: true });
-      try {
-        expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-        expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-        expect(readSqliteNumberPragma(db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-        expect(
-          db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
-        ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
-        expect(collectSqliteSchemaShape(db)).toEqual(expectedShape);
-      } finally {
-        db.close();
-      }
-    }
-  }, 60_000);
+        expect(databasePaths).toHaveLength(1);
+        for (const databasePath of databasePaths) {
+          const db = new DatabaseSync(databasePath, { readOnly: true });
+          try {
+            expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+            expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+            expect(readSqliteNumberPragma(db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+            expect(
+              db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+            ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
+            expect(collectSqliteSchemaShape(db)).toEqual(expectedShape);
+          } finally {
+            db.close();
+          }
+        }
+      }),
+    60_000,
+  );
 
-  it("serializes concurrent fresh database initialization across processes", async ({ signal }) => {
-    const rootDir = createTempStateDir();
-    const moduleUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabase).href;
-    const databasePaths = await runConcurrentSchemaProbe({
-      mode: "fresh",
-      moduleUrl,
-      rootDir,
-      signal,
-    });
-    const expectedShape = createInitialStateSchemaShape();
-    const { DatabaseSync } = requireNodeSqlite();
+  it(
+    "serializes concurrent fresh database initialization across processes",
+    ({ signal }) =>
+      fixtureLifetime.run(async () => {
+        signal.throwIfAborted();
+        const rootDir = processTempDirs.make("openclaw-state-db-");
+        const moduleUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabase).href;
+        const databasePaths = await runConcurrentSchemaProbe({
+          mode: "fresh",
+          moduleUrl,
+          rootDir,
+          signal,
+          verifyCleanup: fixtureLifetime.verifyCleanup,
+        });
+        const expectedShape = createInitialStateSchemaShape();
+        const { DatabaseSync } = requireNodeSqlite();
 
-    expect(databasePaths).toHaveLength(1);
-    for (const databasePath of databasePaths) {
-      const db = new DatabaseSync(databasePath, { readOnly: true });
-      try {
-        expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-        expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-        expect(readSqliteNumberPragma(db, "auto_vacuum")).toBe(2);
-        expect(readSqliteNumberPragma(db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-        expect(
-          db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
-        ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
-        expect(collectSqliteSchemaShape(db)).toEqual(expectedShape);
-      } finally {
-        db.close();
-      }
-    }
-  }, 60_000);
+        expect(databasePaths).toHaveLength(1);
+        for (const databasePath of databasePaths) {
+          const db = new DatabaseSync(databasePath, { readOnly: true });
+          try {
+            expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+            expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+            expect(readSqliteNumberPragma(db, "auto_vacuum")).toBe(2);
+            expect(readSqliteNumberPragma(db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+            expect(
+              db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+            ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
+            expect(collectSqliteSchemaShape(db)).toEqual(expectedShape);
+          } finally {
+            db.close();
+          }
+        }
+      }),
+    60_000,
+  );
 
   it("opens databases with early cron tables before creating cron indexes", () => {
     const stateDir = createTempStateDir();

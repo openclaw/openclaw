@@ -81,6 +81,7 @@ import { readChatSendDedupeResponse } from "./chat-send-pre-admission.js";
 import {
   createChatDirectiveReplyBackend,
   createChatDirectiveSuiteResources,
+  createChatDirectiveUserMessageReader,
   createUnconfirmedTranscriptDelivery,
   expectClaimOnlyTranscriptMedia,
   readChatDirectiveConfig,
@@ -765,16 +766,9 @@ function expectUserUpdateIdentity(update: ReturnType<typeof findUserUpdate>) {
   expect(update?.agentId).toBe("main");
 }
 
-function readPersistedUserMessages(): Array<Record<string, unknown>> {
-  return readTranscriptJsonLines(mockState.transcriptPath)
-    .map((entry) => entry.message)
-    .filter(
-      (candidate): candidate is Record<string, unknown> =>
-        typeof candidate === "object" &&
-        candidate !== null &&
-        (candidate as { role?: unknown }).role === "user",
-    );
-}
+const readPersistedUserMessages = createChatDirectiveUserMessageReader(() =>
+  readTranscriptJsonLines(mockState.transcriptPath),
+);
 
 function expectDispatchContextFields(expected: {
   OriginatingChannel?: unknown;
@@ -1187,6 +1181,7 @@ beforeAll(() => {
 });
 
 afterEach(async () => {
+  await suiteResources.settleFixtures();
   // ACKs and terminal errors can precede detached transcript cleanup.
   await waitForAssertion(() => expect(getActiveSessionWorkAdmissionCount()).toBe(0));
   replyRunRegistryTesting.resetReplyRunRegistry();
@@ -2190,64 +2185,66 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     }
   });
 
-  it("never aborts or replays onto a successor after unconfirmed acceptance", async ({
-    signal,
-  }) => {
-    const { context, send } = await createSqliteChatRequest(
-      "openclaw-chat-send-steer-unconfirmed-",
-    );
-    const delivery = createUnconfirmedTranscriptDelivery();
-    const first = beginMessageInjectionOperation({
-      originatingLeafEntryId: null,
-      runId: "active-run",
-      cancel: vi.fn(),
-      queueMessage: delivery.queueMessage,
-    });
-
-    let successor: ReturnType<typeof beginMessageInjectionOperation> | undefined;
-    try {
-      await send({
-        idempotencyKey: "idem-steer-unconfirmed",
-        requestParams: { queueMode: "steer" },
-        waitFor: "none",
-      });
-      await withinTest(delivery.persisted, signal);
-      expect(readPersistedUserMessages()).toHaveLength(1);
-      expect(readPersistedUserMessages()[0]).not.toHaveProperty("__openclaw.steerTargetRunId");
-      first.complete();
-      const successorCancel = vi.fn();
-      successor = beginMessageInjectionOperation({
+  it("never aborts or replays onto a successor after unconfirmed acceptance", async ({ signal }) =>
+    suiteResources.runFixture(async () => {
+      const { context, send } = await createSqliteChatRequest(
+        "openclaw-chat-send-steer-unconfirmed-",
+      );
+      const delivery = createUnconfirmedTranscriptDelivery();
+      const first = beginMessageInjectionOperation({
         originatingLeafEntryId: null,
-        runId: "successor-run",
-        cancel: successorCancel,
-        queueMessage: vi.fn(async () => {}),
-      });
-      delivery.resolve({
-        transcriptCommit: "unconfirmed",
-        errorMessage: "receipt timed out",
+        runId: "active-run",
+        cancel: vi.fn(),
+        queueMessage: delivery.queueMessage,
       });
 
-      await waitForAssertion(() => {
-        expect(context.dedupe.get("chat:idem-steer-unconfirmed")?.payload).toEqual({
-          runId: "idem-steer-unconfirmed",
-          status: "ok",
+      let successor: ReturnType<typeof beginMessageInjectionOperation> | undefined;
+      try {
+        await send({
+          idempotencyKey: "idem-steer-unconfirmed",
+          requestParams: { queueMode: "steer" },
+          waitFor: "none",
         });
-      });
-      expect(successor.result).toBeNull();
-      expect(successorCancel).not.toHaveBeenCalled();
-      expect(mockState.lastDispatchCtx).toBeUndefined();
-      const persistedUsers = readPersistedUserMessages();
-      expect(persistedUsers).toHaveLength(1);
-      expect(
-        (persistedUsers[0]?.["__openclaw"] as Record<string, unknown> | undefined)
-          ?.steerTargetRunId,
-      ).toBeUndefined();
-    } finally {
-      delivery.resolve({ transcriptCommit: "unconfirmed", errorMessage: "test finished" });
-      first.complete();
-      successor?.complete();
-    }
-  });
+        await withinTest(delivery.persisted, signal);
+        expect(readPersistedUserMessages()).toHaveLength(1);
+        expect(readPersistedUserMessages()[0]).not.toHaveProperty("__openclaw.steerTargetRunId");
+        first.complete();
+        const successorCancel = vi.fn();
+        successor = beginMessageInjectionOperation({
+          originatingLeafEntryId: null,
+          runId: "successor-run",
+          cancel: successorCancel,
+          queueMessage: vi.fn(async () => {}),
+        });
+        delivery.resolve({
+          transcriptCommit: "unconfirmed",
+          errorMessage: "receipt timed out",
+        });
+
+        await waitForAssertion(() => {
+          expect(context.dedupe.get("chat:idem-steer-unconfirmed")?.payload).toEqual({
+            runId: "idem-steer-unconfirmed",
+            status: "ok",
+          });
+        });
+        expect(successor.result).toBeNull();
+        expect(successorCancel).not.toHaveBeenCalled();
+        expect(mockState.lastDispatchCtx).toBeUndefined();
+        const persistedUsers = readPersistedUserMessages();
+        expect(persistedUsers).toHaveLength(1);
+        expect(
+          (persistedUsers[0]?.["__openclaw"] as Record<string, unknown> | undefined)
+            ?.steerTargetRunId,
+        ).toBeUndefined();
+      } finally {
+        await suiteResources.verifyFixtureCleanup(async () => {
+          delivery.resolve({ transcriptCommit: "unconfirmed", errorMessage: "test finished" });
+          first.complete();
+          successor?.complete();
+          await delivery.settle();
+        });
+      }
+    }));
 
   it("falls back once when captured owner evidence is stale", async () => {
     const { context, respond, send } = await createSqliteChatRequest(

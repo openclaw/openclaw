@@ -1,10 +1,13 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { ManagedRun } from "../process/supervisor/types.js";
 import { buildWindowsCmdExeCommandLine } from "../process/windows-command.js";
+
+export const fixtureLifetime = createFixtureLifetime();
 
 export async function createSupervisedExitWatcherFixture(fixtureDir: string) {
   const childScriptPath = path.join(fixtureDir, "watcher.cjs");
@@ -52,4 +55,11 @@ export async function createSupervisedExitWatcherFixture(fixtureDir: string) {
     spawning: spawning.promise,
     spawn,
   };
+}
+
+export function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
 }

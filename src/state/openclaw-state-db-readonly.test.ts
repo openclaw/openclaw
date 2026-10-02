@@ -7,8 +7,10 @@ import path from "node:path";
 import { constants, DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
 import * as sqliteReadOnly from "../infra/sqlite-snapshot-source.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
@@ -52,10 +54,16 @@ function createOptions(stateDir: string) {
   };
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
-});
+// Vitest can enter teardown while a timed-out body is still closing its native owners.
+const fixture = createFixtureLifetime();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await fixture.cleanup();
+    vi.restoreAllMocks();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 it("keeps retained readers authoritative over an absent-path observation", async () => {
   await withTempDir("openclaw-state-availability-", async (root) => {
@@ -271,12 +279,13 @@ it("rejects non-filesystem stream sources without interpreting their logical pat
   });
 });
 
-it("waits for a transient database lock before a fresh read-only schema inspection", async ({
-  signal,
-}) => {
-  await withTempDir("openclaw-state-readonly-busy-", async (stateDir) => {
+it("waits for a transient database lock before a fresh read-only schema inspection", ({ signal }) =>
+  fixture.run(async () => {
+    signal.throwIfAborted();
+    const stateDir = tempDirs.make("openclaw-state-readonly-busy-");
     const options = createOptions(stateDir);
     await fsp.mkdir(path.dirname(options.path), { recursive: true });
+    signal.throwIfAborted();
     const setup = new DatabaseSync(options.path);
     try {
       setup.exec("CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('committed');");
@@ -290,18 +299,18 @@ it("waits for a transient database lock before a fresh read-only schema inspecti
         "--input-type=module",
         "--eval",
         `
-          import { DatabaseSync } from "node:sqlite";
-          const db = new DatabaseSync(process.argv[1]);
-          db.exec("BEGIN EXCLUSIVE; UPDATE held SET value = 'uncommitted';");
-          process.once("message", () => {
-            setTimeout(() => {
-              db.exec("ROLLBACK");
-              db.close();
-              process.disconnect();
-            }, 200);
-          });
-          process.send({ locked: true });
-        `,
+            import { DatabaseSync } from "node:sqlite";
+            const db = new DatabaseSync(process.argv[1]);
+            db.exec("BEGIN EXCLUSIVE; UPDATE held SET value = 'uncommitted';");
+            process.once("message", () => {
+              setTimeout(() => {
+                db.exec("ROLLBACK");
+                db.close();
+                process.disconnect();
+              }, 200);
+            });
+            process.send({ locked: true });
+          `,
         options.path,
       ],
       { stdio: ["ignore", "ignore", "pipe", "ipc"] },
@@ -336,11 +345,12 @@ it("waits for a transient database lock before a fresh read-only schema inspecti
       expect(await withinTest(closed, signal), stderr).toEqual({ code: 0, signal: null });
       expect(fs.readFileSync(options.path)).toEqual(before);
     } finally {
-      await stopChildProcess(child, 5_000);
-      await closed;
+      await fixture.verifyCleanup(async () => {
+        await stopChildProcess(child, 5_000);
+        await closed;
+      });
     }
-  });
-});
+  }));
 
 describe.each(["admission", "explicit", "async"] as const)("%s read-only state reads", (mode) => {
   const admittedRead: typeof withExistingOpenClawStateDatabaseReadOnly = (operation, options) =>

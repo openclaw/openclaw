@@ -4,6 +4,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
@@ -43,7 +44,24 @@ import type {
 import { retainOpenClawStateDatabaseForIdle } from "./openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// Vitest can enter teardown while a timed-out body is still closing its native owners.
+const fixture = createFixtureLifetime();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await fixture.cleanup();
+    await fixture.verifyCleanup(async () => {
+      await Promise.all([...workers].map((worker) => worker.close()));
+      workers.clear();
+      await Promise.all([...executions].map((execution) => execution.release()));
+      executions.clear();
+      vi.restoreAllMocks();
+      await closeOpenClawAgentDatabasesAsync(root);
+      closeOpenClawAgentDatabasesForTest();
+    });
+    await fixture.cleanup();
+    cleanup();
+  }),
+);
 const workers = new Set<OpenClawAgentSqliteWorkerStore<AgentWorkerFixtureOperations>>();
 const executions = new Set<OpenClawAgentDatabaseExecution>();
 let sourceMode: "borrowed" | "captured" = "borrowed";
@@ -52,6 +70,7 @@ beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
 });
 afterAll(async () => {
+  await fixture.cleanup();
   await receipts.close();
 });
 let root: string;
@@ -59,15 +78,6 @@ let options: { agentId: string; path: string };
 beforeEach(() => {
   root = fs.realpathSync(tempDirs.make("agent-worker-publication-"));
   options = { agentId: "main", path: path.join(root, "agent.sqlite") };
-});
-afterEach(async () => {
-  await Promise.all([...workers].map((worker) => worker.close()));
-  workers.clear();
-  await Promise.all([...executions].map((execution) => execution.release()));
-  executions.clear();
-  vi.restoreAllMocks();
-  await closeOpenClawAgentDatabasesAsync(root);
-  closeOpenClawAgentDatabasesForTest();
 });
 async function setup(input?: Parameters<typeof bindSqliteWorkerBackend>[0]) {
   const { db } = openOpenClawAgentDatabase(options);
@@ -210,164 +220,173 @@ describe.each(["borrowed", "captured"] as const)(
       ),
     )(
       "awaits both nested preparation hooks before $outcome $entry publication admission",
-      async ({ entry, outcome }, { signal }) => {
-        const preparation = {
-          codeMarker: path.join(root, "code-loading"),
-          codeGate: path.join(root, "code-release"),
-          commandMarker: path.join(root, "command-preparing"),
-          commandGate: path.join(root, "command-release"),
-        };
-        const { db, worker } = await setup({ preparation });
-        let current = true;
-        const assertCurrent = () => {
-          if (!current) {
-            throw new Error("fixture authority revoked during preparation");
-          }
-        };
-        const command = { type: "append" as const, input: { value: "prepared" } };
-        const work =
-          entry === "single"
-            ? worker.execute(command, assertCurrent)
-            : worker.run((scope) => scope.execute(command), assertCurrent);
-        void work.catch(() => undefined);
-        try {
-          await waitForFixtureEntry(preparation.codeMarker, work, signal);
-          expect(fs.existsSync(preparation.commandMarker)).toBe(false);
-          expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
-          fs.writeFileSync(preparation.codeGate, "release code loading");
-          await waitForFixtureEntry(preparation.commandMarker, work, signal);
-          expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
-          current = outcome === "success";
-          fs.writeFileSync(preparation.commandGate, "release command preparation");
-          if (outcome === "revoked") {
-            await expect(work).rejects.toThrow("fixture authority revoked during preparation");
+      ({ entry, outcome }, { signal }) =>
+        fixture.run(async () => {
+          signal.throwIfAborted();
+          const preparation = {
+            codeMarker: path.join(root, "code-loading"),
+            codeGate: path.join(root, "code-release"),
+            commandMarker: path.join(root, "command-preparing"),
+            commandGate: path.join(root, "command-release"),
+          };
+          const { db, worker } = await setup({ preparation });
+          let current = true;
+          const assertCurrent = () => {
+            if (!current) {
+              throw new Error("fixture authority revoked during preparation");
+            }
+          };
+          const command = { type: "append" as const, input: { value: "prepared" } };
+          const work =
+            entry === "single"
+              ? worker.execute(command, assertCurrent)
+              : worker.run((scope) => scope.execute(command), assertCurrent);
+          void work.catch(() => undefined);
+          try {
+            await waitForFixtureEntry(preparation.codeMarker, work, signal);
+            expect(fs.existsSync(preparation.commandMarker)).toBe(false);
             expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
-            await worker.run(
-              (scope) => scope.execute({ type: "append", input: { value: "retry" } }),
-              () => undefined,
-            );
-            expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([
-              { value: "retry" },
-            ]);
-          } else {
-            expect(await work).toBeGreaterThan(0);
-            expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([
-              { value: "prepared" },
-            ]);
+            fs.writeFileSync(preparation.codeGate, "release code loading");
+            await waitForFixtureEntry(preparation.commandMarker, work, signal);
+            expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
+            current = outcome === "success";
+            fs.writeFileSync(preparation.commandGate, "release command preparation");
+            if (outcome === "revoked") {
+              await expect(work).rejects.toThrow("fixture authority revoked during preparation");
+              expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
+              await worker.run(
+                (scope) => scope.execute({ type: "append", input: { value: "retry" } }),
+                () => undefined,
+              );
+              expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([
+                { value: "retry" },
+              ]);
+            } else {
+              expect(await work).toBeGreaterThan(0);
+              expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([
+                { value: "prepared" },
+              ]);
+            }
+          } finally {
+            fs.writeFileSync(preparation.codeGate, "release for cleanup");
+            fs.writeFileSync(preparation.commandGate, "release for cleanup");
+            await work.catch(() => undefined);
           }
-        } finally {
-          fs.writeFileSync(preparation.codeGate, "release for cleanup");
-          fs.writeFileSync(preparation.commandGate, "release for cleanup");
-          await work.catch(() => undefined);
-        }
-      },
+        }),
     );
 
-    it("keeps control reads responsive and admits sibling writes in FIFO order after native settlement", async ({
+    it("keeps control reads responsive and admits sibling writes in FIFO order after native settlement", ({
       signal,
-    }) => {
-      const { db, worker } = await setup();
-      const transactionMarker = path.join(root, "transaction");
-      let ticks = 0;
-      const timer = setInterval(() => ticks++, 10);
-      const native = worker.run(
-        (scope) =>
-          scope.execute({
-            type: "append",
-            input: { value: "worker", transactionMarker, delayMs: 250 },
-          }),
-        () => undefined,
-      );
-      try {
-        await waitForFixtureEntry(transactionMarker, native, signal);
-        const observed: string[] = [];
-        const writes = ["first", "second"].map((value) =>
-          withOpenClawAgentDatabaseWrite(
-            options,
-            () => {
-              observed.push(value);
-              db.prepare("INSERT INTO worker_proof(value) VALUES (?)").run(value);
-            },
-            db,
-          ),
+    }) =>
+      fixture.run(async () => {
+        signal.throwIfAborted();
+        const { db, worker } = await setup();
+        const transactionMarker = path.join(root, "transaction");
+        let ticks = 0;
+        const timer = setInterval(() => ticks++, 10);
+        const native = worker.run(
+          (scope) =>
+            scope.execute({
+              type: "append",
+              input: { value: "worker", transactionMarker, delayMs: 250 },
+            }),
+          () => undefined,
         );
-        expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
-        await nextTurn();
-        expect(observed).toEqual([]);
-        expect(await native).toBeGreaterThan(0);
-        await Promise.all(writes);
-        expect(ticks).toBeGreaterThan(5);
-        expect(observed).toEqual(["first", "second"]);
-        expect(db.prepare("SELECT value FROM worker_proof ORDER BY rowid").all()).toEqual([
-          { value: "worker" },
-          { value: "first" },
-          { value: "second" },
-        ]);
-        expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-      } finally {
-        clearInterval(timer);
-        await native.catch(() => undefined);
-      }
-    });
+        try {
+          await waitForFixtureEntry(transactionMarker, native, signal);
+          const observed: string[] = [];
+          const writes = ["first", "second"].map((value) =>
+            withOpenClawAgentDatabaseWrite(
+              options,
+              () => {
+                observed.push(value);
+                db.prepare("INSERT INTO worker_proof(value) VALUES (?)").run(value);
+              },
+              db,
+            ),
+          );
+          expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
+          await nextTurn();
+          expect(observed).toEqual([]);
+          expect(await native).toBeGreaterThan(0);
+          await Promise.all(writes);
+          expect(ticks).toBeGreaterThan(5);
+          expect(observed).toEqual(["first", "second"]);
+          expect(db.prepare("SELECT value FROM worker_proof ORDER BY rowid").all()).toEqual([
+            { value: "worker" },
+            { value: "first" },
+            { value: "second" },
+          ]);
+          expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+        } finally {
+          clearInterval(timer);
+          await native.catch(() => undefined);
+        }
+      }));
 
-    it("rolls back authority revoked before commit and keeps the owner reusable", async ({
-      signal,
-    }) => {
-      const { db, worker } = await setup();
-      let current = true;
-      const transactionMarker = path.join(root, "before-commit");
-      const work = worker.run(
-        (scope) =>
-          scope.execute({ type: "append", input: { value: "refused", transactionMarker } }),
-        () => {
-          if (!current) {
-            throw new Error("fixture authority revoked");
-          }
-        },
-      );
-      void work.catch(() => undefined);
-      await waitForFixtureEntry(transactionMarker, work, signal);
-      current = false;
-      await expect(work).rejects.toThrow("fixture authority revoked");
-      expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
-      await worker.run(
-        (scope) => scope.execute({ type: "append", input: { value: "retry" } }),
-        () => undefined,
-      );
-      expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([{ value: "retry" }]);
-    });
+    it("rolls back authority revoked before commit and keeps the owner reusable", ({ signal }) =>
+      fixture.run(async () => {
+        signal.throwIfAborted();
+        const { db, worker } = await setup();
+        let current = true;
+        const transactionMarker = path.join(root, "before-commit");
+        const work = worker.run(
+          (scope) =>
+            scope.execute({ type: "append", input: { value: "refused", transactionMarker } }),
+          () => {
+            if (!current) {
+              throw new Error("fixture authority revoked");
+            }
+          },
+        );
+        void work.catch(() => undefined);
+        await waitForFixtureEntry(transactionMarker, work, signal);
+        current = false;
+        await expect(work).rejects.toThrow("fixture authority revoked");
+        expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
+        await worker.run(
+          (scope) => scope.execute({ type: "append", input: { value: "retry" } }),
+          () => undefined,
+        );
+        expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([{ value: "retry" }]);
+      }));
 
     it.for(["scope", "single"] as const)(
       "drains an accepted %s commit grant when close revokes later work",
-      async (entry, { signal }) => {
-        const { db, worker } = await setup();
-        const commitMarker = path.join(root, "accepted-commit");
-        const command = { type: "append" as const, input: { value: "accepted", commitMarker } };
-        const work =
-          entry === "single"
-            ? worker.execute(command, () => undefined)
-            : worker.run(
-                (scope) => scope.execute(command),
-                () => undefined,
-              );
-        await waitForFixtureEntry(commitMarker, work, signal);
-        let closed = false;
-        const close = worker.close().then(() => {
-          closed = true;
-        });
-        await nextTurn();
-        expect(closed).toBe(false);
-        await expect(
-          worker.run(
-            async () => 0,
-            () => undefined,
-          ),
-        ).rejects.toThrow("closed");
-        expect(await work).toBeGreaterThan(0);
-        await close;
-        expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([{ value: "accepted" }]);
-      },
+      (entry, { signal }) =>
+        fixture.run(async () => {
+          signal.throwIfAborted();
+          const { db, worker } = await setup();
+          const commitMarker = path.join(root, "accepted-commit");
+          const command = { type: "append" as const, input: { value: "accepted", commitMarker } };
+          const work =
+            entry === "single"
+              ? worker.execute(command, () => undefined)
+              : worker.run(
+                  (scope) => scope.execute(command),
+                  () => undefined,
+                );
+          await waitForFixtureEntry(commitMarker, work, signal);
+          let closed = false;
+          const close = worker.close().then(() => {
+            closed = true;
+          });
+          await nextTurn();
+          expect(closed).toBe(false);
+          await expect(
+            worker.run(
+              async () => 0,
+              () => undefined,
+            ),
+          ).rejects.toThrow("closed");
+          expect(await work).toBeGreaterThan(0);
+          await close;
+          expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([
+            { value: "accepted" },
+          ]);
+        }),
     );
+
     it("publishes a captured command with one broker request", async () => {
       const { db, worker } = await setup();
       await worker.execute({ type: "append", input: { value: "warm" } }, () => undefined);
@@ -739,50 +758,54 @@ describe.each(["borrowed", "captured"] as const)(
         });
       }
     });
-    it("queues a real periodic maintenance tick behind publication", async ({ signal }) => {
-      let capturing = false;
-      const scheduled = observeSqliteWalPeriodicWork(() => capturing);
-      const configure = sqliteWal.configureSqliteConnectionPragmas;
-      vi.spyOn(sqliteWal, "configureSqliteConnectionPragmas").mockImplementation((db, policy) => {
-        capturing = policy?.databasePath === options.path;
-        try {
-          return configure(db, policy);
-        } finally {
-          capturing = false;
-        }
-      });
-      const { db, worker } = await setup().finally(scheduled.restore);
-      const tick = scheduled.periodic;
-      db.exec(`INSERT INTO cache_entries(scope, key, blob, updated_at)
-        VALUES ('maintenance-proof', 'pages', zeroblob(4194304), 1);
-        DELETE FROM cache_entries WHERE scope = 'maintenance-proof';`);
-      const freePages = () =>
-        Number(db.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0);
-      const before = freePages();
-      expect(before).toBeGreaterThan(512);
-      const exec = vi.spyOn(db, "exec");
-      const transactionMarker = path.join(root, "maintenance-transaction");
-      const work = worker.run(
-        (scope) =>
-          scope.execute({
-            type: "append",
-            input: { value: "published", transactionMarker, delayMs: 250 },
-          }),
-        () => undefined,
-      );
-      await waitForFixtureEntry(transactionMarker, work, signal);
-      const started = performance.now();
-      const maintenance = Promise.resolve(tick());
-      expect(performance.now() - started).toBeLessThan(100);
-      expect(exec.mock.calls.some(([sql]) => sql.includes("incremental_vacuum"))).toBe(false);
-      expect(freePages()).toBe(before);
-      await work;
-      await maintenance;
-      await withOpenClawAgentDatabaseWrite(options, () => undefined, db);
-      expect(exec.mock.calls.some(([sql]) => sql.includes("incremental_vacuum"))).toBe(false);
-      expect(before - freePages()).toBeGreaterThan(0);
-      expect(before - freePages()).toBeLessThanOrEqual(512);
-      expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([{ value: "published" }]);
-    });
+    it("queues a real periodic maintenance tick behind publication", ({ signal }) =>
+      fixture.run(async () => {
+        signal.throwIfAborted();
+        let capturing = false;
+        const scheduled = observeSqliteWalPeriodicWork(() => capturing);
+        const configure = sqliteWal.configureSqliteConnectionPragmas;
+        vi.spyOn(sqliteWal, "configureSqliteConnectionPragmas").mockImplementation((db, policy) => {
+          capturing = policy?.databasePath === options.path;
+          try {
+            return configure(db, policy);
+          } finally {
+            capturing = false;
+          }
+        });
+        const { db, worker } = await setup().finally(scheduled.restore);
+        const tick = scheduled.periodic;
+        db.exec(`INSERT INTO cache_entries(scope, key, blob, updated_at)
+            VALUES ('maintenance-proof', 'pages', zeroblob(4194304), 1);
+            DELETE FROM cache_entries WHERE scope = 'maintenance-proof';`);
+        const freePages = () =>
+          Number(db.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0);
+        const before = freePages();
+        expect(before).toBeGreaterThan(512);
+        const exec = vi.spyOn(db, "exec");
+        const transactionMarker = path.join(root, "maintenance-transaction");
+        const work = worker.run(
+          (scope) =>
+            scope.execute({
+              type: "append",
+              input: { value: "published", transactionMarker, delayMs: 250 },
+            }),
+          () => undefined,
+        );
+        await waitForFixtureEntry(transactionMarker, work, signal);
+        const started = performance.now();
+        const maintenance = Promise.resolve(tick());
+        expect(performance.now() - started).toBeLessThan(100);
+        expect(exec.mock.calls.some(([sql]) => sql.includes("incremental_vacuum"))).toBe(false);
+        expect(freePages()).toBe(before);
+        await work;
+        await maintenance;
+        await withOpenClawAgentDatabaseWrite(options, () => undefined, db);
+        expect(exec.mock.calls.some(([sql]) => sql.includes("incremental_vacuum"))).toBe(false);
+        expect(before - freePages()).toBeGreaterThan(0);
+        expect(before - freePages()).toBeLessThanOrEqual(512);
+        expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([
+          { value: "published" },
+        ]);
+      }));
   },
 );
