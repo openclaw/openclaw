@@ -496,6 +496,7 @@ function runCheckShardFixture(options: {
   frozenTarget: boolean;
   scripts: string[];
   task?: "guards" | "npm-lock" | "prod-types" | "test-types";
+  earlyGuards?: boolean;
   checkoutBase?: string;
   types?: {
     compose?: boolean;
@@ -603,9 +604,13 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
     'if [ "$*" = "${FAIL_PACKAGE_SCRIPT:-}" ]; then exit 17; fi',
   ]);
   const workflow = readCiWorkflow();
-  const checkShardStep = workflow.jobs["check-shard"].steps.find(
-    (step: WorkflowStep) => step.name === "Run check shard",
-  );
+  const checkShardStep = options.earlyGuards
+    ? workflow.jobs["check-additional-shard"].steps.find(
+        (step: WorkflowStep) => step.name === "Run independent checks",
+      )
+    : workflow.jobs["check-shard"].steps.find(
+        (step: WorkflowStep) => step.name === "Run check shard",
+      );
   const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
     eventName:
       options.types?.eventName ?? (options.frozenTarget ? "workflow_dispatch" : "pull_request"),
@@ -622,7 +627,8 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
       compatibility_target: String(options.frozenTarget),
       run_format_check: "false",
       changed_core_test_paths_json: options.types?.changedPathsJson ?? "",
-      narrow_check_paths_json: options.types?.narrowPathsJson ?? "",
+      narrow_check_paths_json:
+        options.types?.narrowPathsJson ?? (options.earlyGuards ? '["src/shared/runtime.ts"]' : ""),
       ...(options.types?.compose
         ? {
             core_type_matrix: expectDefined(
@@ -651,7 +657,11 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
   rows.push({
     name: "central",
     step: checkShardStep,
-    matrix: { task: options.task ?? "guards", ...options.types?.matrix },
+    matrix: {
+      task: options.task ?? "guards",
+      ...(options.earlyGuards ? { group: "guards" } : {}),
+      ...options.types?.matrix,
+    },
   });
   if (options.types?.boundary) {
     rows.push({
@@ -688,7 +698,7 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
           PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
           PNPM_CALLS: callsPath,
           TASK: options.task ?? "guards",
-          ...(typeCheck
+          ...(typeCheck || options.earlyGuards
             ? {
                 OPENCLAW_LOCAL_CHECK: undefined,
                 TYPE_ROW: row.name,
@@ -773,7 +783,7 @@ function runDependencyCheckFixture(options: {
       'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
     ]);
     const checkShardRun = readCiWorkflow().jobs["check-additional-shard"].steps.find(
-      (step: WorkflowStep) => step.name === "Run dependency checks",
+      (step: WorkflowStep) => step.name === "Run independent checks",
     ).run;
     const run = spawnSync("bash", ["-c", checkShardRun], {
       cwd: root,
@@ -1403,29 +1413,36 @@ describe("ci workflow guards", () => {
             workflow.jobs["check-shard"].strategy.matrix,
             context,
           ).include.map((row: { task: string }) => row.task),
-        ).toEqual(nodeDataOnly ? tasks : tasks.filter((task) => task !== "dependencies"));
+        ).toEqual(
+          nodeDataOnly ? tasks : tasks.filter((task) => !["guards", "dependencies"].includes(task)),
+        );
         const additional = workflow.jobs["check-additional-shard"];
-        const dependencyRows = evaluateWorkflowExpression(
+        const independentRows = evaluateWorkflowExpression(
           additional.strategy.matrix,
           context,
-        ).include.filter((row: { group: string }) => row.group === "dependencies");
-        expect(dependencyRows).toEqual(
-          tasks.includes("dependencies") && !nodeDataOnly
-            ? [
-                {
-                  check_name: "check-dependencies",
-                  group: "dependencies",
-                  runner: "blacksmith-16vcpu-ubuntu-2404",
-                },
-              ]
-            : [],
+        ).include.filter((row: { group: string }) =>
+          ["guards", "dependencies"].includes(row.group),
+        );
+        expect(independentRows).toEqual(
+          nodeDataOnly
+            ? []
+            : tasks
+                .filter((task) => ["guards", "dependencies"].includes(task))
+                .map((group) => ({
+                  check_name: `check-${group}`,
+                  group,
+                  runner:
+                    group === "guards"
+                      ? "blacksmith-4vcpu-ubuntu-2404"
+                      : "blacksmith-16vcpu-ubuntu-2404",
+                })),
         );
         if (nodeDataOnly) {
           expect(manifest.outputs.run_check).toBe("true");
           expect(manifest.outputs.run_check_additional).toBe("false");
         }
-        if (dependencyRows.length) {
-          // The dependency gate must start while the installed compiler planner is pending.
+        for (const matrix of independentRows) {
+          // These gates must start while the installed compiler planner is pending.
           expect(additional.needs).toEqual(["preflight"]);
           expect(
             evaluateWorkflowExpression(additional.if, {
@@ -1436,9 +1453,29 @@ describe("ci workflow guards", () => {
           expect(
             evaluateWorkflowExpression(additional["runs-on"], {
               ...context,
-              matrix: dependencyRows[0],
+              matrix,
             }),
-          ).toBe("blacksmith-16vcpu-ubuntu-2404");
+          ).toBe(matrix.runner);
+          const independentStep = additional.steps.find(
+            (candidate: WorkflowStep) => candidate.name === "Run independent checks",
+          );
+          const rowContext = { ...context, matrix };
+          expect(evaluateWorkflowExpression(`\${{ ${independentStep.if} }}`, rowContext)).toBe(
+            true,
+          );
+          expect(evaluateWorkflowExpression(independentStep.env.TASK, rowContext)).toBe(
+            matrix.group,
+          );
+          expect(
+            evaluateWorkflowExpression(independentStep.env.NARROW_CHECK_PATHS_JSON, rowContext),
+          ).toBe(JSON.stringify(paths));
+          const baseSha = "a".repeat(40);
+          expect(
+            evaluateWorkflowExpression(additional.env.CHECKOUT_BASE_SHA, {
+              ...rowContext,
+              preflightOutputs: { ...manifest.outputs, diff_base_revision: baseSha },
+            }),
+          ).toBe(matrix.group === "guards" ? baseSha : "");
         }
         expect(
           JSON.parse(
@@ -5561,6 +5598,50 @@ describe("ci workflow guards", () => {
     const workflow = readCiWorkflow();
     const buildArtifactsTestbox = readBuildArtifactsTestboxWorkflow();
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
+    const plannerRunner = workflow.jobs["check-plan"]["runs-on"];
+    const plannerContext = {
+      eventName: "pull_request" as const,
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      runnerBackend: "hybrid" as const,
+      runnerProfile: "hybrid" as const,
+    };
+    for (const eventName of ["pull_request", "push", "schedule"] as const) {
+      expect(evaluateWorkflowExpression(plannerRunner, { ...plannerContext, eventName })).toBe(
+        "blacksmith-16vcpu-ubuntu-2404",
+      );
+    }
+    const qualification = {
+      ...plannerContext,
+      eventName: "workflow_dispatch" as const,
+      preflightOutputs: { ci_qualification: "true", qualification_runner_backend: "hybrid" },
+    };
+    expect(evaluateWorkflowExpression(plannerRunner, qualification)).toBe(
+      "blacksmith-16vcpu-ubuntu-2404",
+    );
+    expect(
+      evaluateWorkflowExpression(plannerRunner, {
+        ...qualification,
+        dispatchId: "full-release-validation-test",
+        releaseRunnerGroup: "test-group",
+      }),
+    ).toEqual({ group: "test-group", labels: "blacksmith-16vcpu-ubuntu-2404" });
+    for (const override of [
+      { runnerBackend: "github" },
+      { runnerBackend: "blacksmith" },
+      { runnerBackend: "runson" },
+      { preflightOutputs: { node_runner_backend: "runson" } },
+      { headRepository: "contributor/openclaw" },
+      { repository: "contributor/openclaw" },
+      { runAttempt: 2 },
+      { frozenTarget: true },
+      { eventName: "workflow_dispatch" },
+    ] as const) {
+      expect(
+        evaluateWorkflowExpression(plannerRunner, { ...plannerContext, ...override }),
+        JSON.stringify(override),
+      ).toBe("ubuntu-24.04");
+    }
 
     expect(readFileSync("scripts/ci-build-manifest.mjs", "utf8")).toContain(
       "createNodeTestShardBundles",
@@ -6559,6 +6640,7 @@ describe("ci workflow guards", () => {
     ];
     const current = runCheckShardFixture({
       frozenTarget: false,
+      earlyGuards: true,
       scripts: [...requiredScripts, "check:temp-path-guardrails"],
     });
     expect(current.status, current.output).toBe(0);
@@ -6566,6 +6648,19 @@ describe("ci workflow guards", () => {
     expect(current.calls.indexOf("check:temp-path-guardrails")).toBeLessThan(
       current.calls.indexOf("dup:check"),
     );
+    expect(current.calls).toEqual([
+      "tool-display:check",
+      "check:host-env-policy:swift",
+      "check:browser-inspect-script:swift",
+      "check:temp-path-guardrails",
+      "dup:check",
+      "check:coercion-helpers",
+      "deps:patches:check",
+      "lint:webhook:no-low-level-body-read",
+      "lint:auth:no-pairing-store-group",
+      "lint:auth:pairing-account-scope",
+      "check:import-cycles",
+    ]);
 
     const frozenMissing = runCheckShardFixture({
       frozenTarget: true,
@@ -6580,6 +6675,7 @@ describe("ci workflow guards", () => {
 
     const currentMissing = runCheckShardFixture({
       frozenTarget: false,
+      earlyGuards: true,
       scripts: requiredScripts,
     });
     expect(currentMissing.status).toBe(1);
