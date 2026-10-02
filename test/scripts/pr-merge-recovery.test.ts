@@ -279,7 +279,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(result.status, result.output).toBe(1);
       if (retainedIntentFaults.has(fault)) {
         expect(result.output).toContain(
-          "operator recovery requires the exact unaccepted immediate intent or confirmed auto cancellation; no attempt was authorized",
+          "operator recovery requires an exact unaccepted immediate intent, confirmed auto cancellation, or explicitly auto-routed stale admin head; no attempt was authorized",
         );
       }
       expect(f.state().mutations, result.output).toBe(1);
