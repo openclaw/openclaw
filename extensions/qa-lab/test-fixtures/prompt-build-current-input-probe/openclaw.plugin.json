@@ -1,0 +1,11 @@
+{
+  "id": "qa-prompt-build-current-input-probe",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

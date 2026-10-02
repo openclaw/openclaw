@@ -159,6 +159,7 @@ export async function runEmbeddedAttemptPromptPhase(
       diagnosticTrace,
       isRawModelRun,
       ...(orphanRepair ? { orphanRepair } : {}),
+      ...(preparedUserTurnMessage ? { preparedUserTurnMessage } : {}),
       sessionAgentId,
       runtimeModel: runtimeInfo.model,
       systemPromptText,

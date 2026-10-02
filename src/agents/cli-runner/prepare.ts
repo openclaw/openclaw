@@ -105,6 +105,7 @@ import { remapSkillReferencePaths } from "../embedded-agent-runner/sandbox-skill
 import { selectContextEngineForTranscriptHost } from "../harness/context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
 import { createAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
+import { buildPromptBuildHookEvent } from "../hook-prompt-build-event.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { loadManifestModelCatalog, overlayConfiguredModelCatalog } from "../model-catalog.js";
 import { resolveModelContextWindowProfile } from "../model-context-window.js";
@@ -750,6 +751,11 @@ async function prepareCliRunContextWithinReadFence(
     ...buildAgentHookContextChannelFields(params),
   };
   const promptBuildHookRunner = skipsTurnPreparation ? undefined : getGlobalHookRunner();
+  // Only the recorder-owned admitted request carries current-input identity, so a
+  // run without one keeps the legacy identity-free event.
+  const currentUserMessage = skipsTurnPreparation
+    ? undefined
+    : await params.userTurnTranscriptRecorder?.resolveMessage();
   const promptBuildHookResult = await (async () => {
     if (skipsTurnPreparation) {
       return undefined;
@@ -759,6 +765,7 @@ async function prepareCliRunContextWithinReadFence(
         config: runConfig,
         prompt: params.prompt,
         messages: await loadOpenClawHistoryMessages(),
+        currentUserMessage,
         hookCtx: promptBuildHookContext,
         hookRunner: promptBuildHookRunner,
       });
@@ -1092,10 +1099,11 @@ async function prepareCliRunContextWithinReadFence(
     }
     try {
       return await promptBuildHookRunner.runAuthorizedPromptBuild(
-        {
+        buildPromptBuildHookEvent({
           prompt: params.prompt,
           messages: await loadOpenClawHistoryMessages(),
-        },
+          currentUserMessage,
+        }),
         promptBuildHookContext,
         {
           toolAuthorityFingerprint,
