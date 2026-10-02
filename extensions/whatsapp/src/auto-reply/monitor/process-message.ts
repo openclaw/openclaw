@@ -1,3 +1,4 @@
+import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
 import type { AckReactionHandle } from "openclaw/plugin-sdk/channel-feedback";
 import {
   type buildChannelInboundEventContext,
@@ -25,6 +26,7 @@ import {
 } from "../../inbound-policy.js";
 import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import { resolveWhatsAppIngressLifecycle } from "../../inbound/ingress-lifecycle.js";
+import type { WhatsAppMonitorOwnerScope } from "../../inbound/monitor-owner.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
@@ -80,6 +82,13 @@ const WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS = {
   timeoutMs: 2_000,
 };
 
+type WhatsAppMessageReceivedHookConfig = {
+  pluginHooks?: {
+    messageReceived?: boolean;
+  };
+  accounts?: Record<string, WhatsAppMessageReceivedHookConfig>;
+};
+
 function mapWhatsAppIngressToTurnAdmission(
   ingress: ReturnType<typeof requireWhatsAppInboundAdmission>["ingress"],
 ) {
@@ -100,8 +109,13 @@ function shouldEmitWhatsAppMessageReceivedHooks(params: {
   cfg: ReturnType<LoadConfigFn>;
   accountId?: string;
 }): boolean {
-  const channelConfig = params.cfg.channels?.whatsapp;
-  const accountConfig = params.accountId ? channelConfig?.accounts?.[params.accountId] : undefined;
+  // SAFETY: The WhatsApp config schema owns this pluginHooks shape; the cast preserves its account override fields.
+  const channelConfig = params.cfg.channels?.whatsapp as
+    | WhatsAppMessageReceivedHookConfig
+    | undefined;
+  const accountConfig = params.accountId
+    ? resolveAccountEntry(channelConfig?.accounts, params.accountId)
+    : undefined;
 
   return (
     accountConfig?.pluginHooks?.messageReceived ??
@@ -112,45 +126,58 @@ function shouldEmitWhatsAppMessageReceivedHooks(params: {
 
 function emitWhatsAppMessageReceivedHooksIfEnabled(params: {
   cfg: ReturnType<LoadConfigFn>;
+  loadConfig: LoadConfigFn;
+  monitorOwnerScope?: WhatsAppMonitorOwnerScope;
   ctx: Awaited<ReturnType<typeof prepareWhatsAppInboundContext>>["ctxPayload"];
   accountId?: string;
   sessionKey: string;
 }): void {
-  if (!shouldEmitWhatsAppMessageReceivedHooks(params)) {
+  const { cfg, loadConfig, monitorOwnerScope, ctx, accountId, sessionKey } = params;
+  if (!shouldEmitWhatsAppMessageReceivedHooks({ cfg, accountId })) {
     return;
   }
-  const canonical = deriveInboundMessageHookContext(params.ctx);
+  const canonical = deriveInboundMessageHookContext(ctx);
+  // Bounded hook factories run later; use the monitor's current snapshot at dispatch.
+  const getRuntimeConfig = loadConfig;
+  const isStillEnabled = () =>
+    monitorOwnerScope?.isCurrent() !== false &&
+    shouldEmitWhatsAppMessageReceivedHooks({ cfg: getRuntimeConfig(), accountId });
+  const enqueueIfEnabled = (task: () => Promise<unknown>, label: string) =>
+    fireAndForgetBoundedHook(
+      () => (isStillEnabled() ? task() : Promise.resolve()),
+      label,
+      undefined,
+      WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS,
+    );
   const hookRunner = getGlobalHookRunner();
   if (hookRunner?.hasHooks("message_received")) {
-    fireAndForgetBoundedHook(
+    enqueueIfEnabled(
       () =>
         hookRunner.runMessageReceived(
           toPluginMessageReceivedEvent(canonical),
           toPluginMessageContext(canonical),
         ),
       "whatsapp: message_received plugin hook failed",
-      undefined,
-      WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS,
     );
   }
-  fireAndForgetBoundedHook(
+  enqueueIfEnabled(
     () =>
       triggerInternalHook(
         createInternalHookEvent(
           "message",
           "received",
-          params.sessionKey,
+          sessionKey,
           toInternalMessageReceivedContext(canonical),
         ),
       ),
     "whatsapp: message_received internal hook failed",
-    undefined,
-    WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS,
   );
 }
 
 export async function processMessage(params: {
   cfg: ReturnType<LoadConfigFn>;
+  loadConfig: LoadConfigFn;
+  monitorOwnerScope?: WhatsAppMonitorOwnerScope;
   msg: AdmittedWebInboundMessage;
   route: ReturnType<typeof resolveAgentRoute>;
   groupHistoryKey: string;
@@ -430,6 +457,8 @@ export async function processMessage(params: {
     : undefined;
   emitWhatsAppMessageReceivedHooksIfEnabled({
     cfg: params.cfg,
+    loadConfig: params.loadConfig,
+    monitorOwnerScope: params.monitorOwnerScope,
     ctx: ctxPayload,
     accountId: params.route.accountId,
     sessionKey: params.route.sessionKey,

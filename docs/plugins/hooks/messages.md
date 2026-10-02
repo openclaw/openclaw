@@ -64,6 +64,15 @@ Use message hooks for channel-level routing and delivery policy:
   `messageId`, `senderId`, optional run/session correlation, ordered `media`,
   normalized `location`, stable `providerUpdate` identity when supplied by the
   channel, and metadata.
+- `poll_vote_received` (WhatsApp): passively observe a decoded vote with
+  `pollMessageId`, `chatJid`, `voter`, `selectedOptions`, and optional
+  `timestamp`. An empty `selectedOptions` array means the vote was retracted.
+  WhatsApp dispatches this event only for polls accepted through OpenClaw's
+  send path when the effective `pluginHooks.pollVoteReceived` opt-in is
+  enabled (default off; an account value overrides the channel value); it
+  never starts an agent run. Its context includes `channelId`,
+  `accountId`, `conversationId` (the chat JID), `senderId` (the voter JID),
+  and `messageId` (the vote-update message ID).
 - `message_sending`: rewrite `content` or return `{ cancel: true }`.
 - `reply_payload_sending`: rewrite normalized `ReplyPayload` objects
   (including `presentation`, `delivery`, media refs, and text) or return

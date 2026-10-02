@@ -360,8 +360,10 @@ describe("web inbound media saves with extension", () => {
     onMessage: Parameters<typeof monitorWebInbox>[0]["onMessage"],
     mediaMaxMb?: number,
   ) {
+    const cfg = { channels: { whatsapp: { allowFrom: ["*"] } } };
     return monitorWebInbox({
-      cfg: { channels: { whatsapp: { allowFrom: ["*"] } } },
+      cfg,
+      loadConfig: () => cfg,
       verbose: false,
       onMessage,
       accountId: "default",

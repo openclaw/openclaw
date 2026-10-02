@@ -35,6 +35,7 @@ import {
   toWhatsappJidWithLid,
 } from "../targets-runtime.js";
 import {
+  readWhatsAppBaileysCacheEntry,
   rememberWhatsAppBaileysCacheEntry,
   type WhatsAppBaileysMessageCache,
 } from "./baileys-cache.js";
@@ -186,6 +187,16 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
       message,
       BAILEYS_MESSAGE_TTL_MS,
     );
+  };
+
+  const getCachedBaileysMessage = (
+    remoteJid: string | null | undefined,
+    messageId: string | null | undefined,
+  ): proto.IMessage | undefined => {
+    if (!options.recentMessageKeys || !remoteJid || !messageId) {
+      return undefined;
+    }
+    return readWhatsAppBaileysCacheEntry(options.recentMessageKeys, `${remoteJid}:${messageId}`);
   };
 
   const rememberOutboundMessage = (remoteJid: string, result: WAMessage | undefined) => {
@@ -449,6 +460,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     resolveInboundJid,
     resolveReactionTargetJids,
     rememberBaileysMessage,
+    getCachedBaileysMessage,
     assertCanSendToJid,
     assertSendReady,
     sendTrackedMessage,

@@ -1,3 +1,4 @@
+// Verifies WhatsApp provider schema parsing and defaults.
 import { describe, expect, it } from "vitest";
 import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
@@ -16,9 +17,75 @@ describe("WhatsAppConfigSchema", () => {
     expect(WhatsAppConfigSchema.parse(config)).toMatchObject(config);
   });
 
+  it("keeps exposeErrorText out of generated config surfaces", () => {
+    const schema = WhatsAppConfigSchema.toJSONSchema({
+      target: "draft-07",
+      unrepresentable: "any",
+    }) as {
+      properties?: {
+        exposeErrorText?: unknown;
+        accounts?: {
+          additionalProperties?: {
+            properties?: {
+              exposeErrorText?: unknown;
+            };
+          };
+        };
+      };
+    };
+
+    expect(schema.properties?.exposeErrorText).toBeUndefined();
+    expect(schema.properties?.accounts?.additionalProperties?.properties?.exposeErrorText).toBe(
+      undefined,
+    );
+  });
+
+  it("rejects extra properties in pluginHooks", () => {
+    const result = WhatsAppConfigSchema.safeParse({
+      pluginHooks: { messageReceived: true, otherProp: "invalid" },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("preserves a disabled channel messageReceived hook", () => {
     expect(
       WhatsAppConfigSchema.parse({ pluginHooks: { messageReceived: false } }).pluginHooks,
     ).toEqual({ messageReceived: false });
+  });
+
+  it("accepts account-level pluginHooks.messageReceived: false", () => {
+    const result = WhatsAppConfigSchema.safeParse({
+      accounts: { work: { pluginHooks: { messageReceived: false } } },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.accounts?.work?.pluginHooks?.messageReceived).toBe(false);
+    }
+  });
+
+  it("accepts channel-level pluginHooks.pollVoteReceived", () => {
+    const result = WhatsAppConfigSchema.safeParse({ pluginHooks: { pollVoteReceived: true } });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.pluginHooks?.pollVoteReceived).toBe(true);
+    }
+  });
+
+  it("accepts account-level pluginHooks.pollVoteReceived", () => {
+    const result = WhatsAppConfigSchema.safeParse({
+      accounts: { work: { pluginHooks: { pollVoteReceived: true } } },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.accounts?.work?.pluginHooks?.pollVoteReceived).toBe(true);
+    }
+  });
+
+  it("defaults pluginHooks.pollVoteReceived to undefined (disabled) when omitted", () => {
+    const result = WhatsAppConfigSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.pluginHooks?.pollVoteReceived).toBeUndefined();
+    }
   });
 });

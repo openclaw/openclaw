@@ -5,9 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { createWhatsAppMonitorOwnerScope } from "./inbound/monitor-owner.js";
 import {
   loadConfigMock,
   resetPairingSecurityMocks,
@@ -242,11 +244,13 @@ export function getSock(): MockSock {
 }
 
 type MonitorWebInbox = typeof import("./inbound.js").monitorWebInbox;
+type InboxMonitorListener = Awaited<ReturnType<MonitorWebInbox>>;
 type ResetWebInboundDedupe = typeof import("./inbound.js").resetWebInboundDedupe;
 export type InboxOnMessage = NonNullable<Parameters<MonitorWebInbox>[0]["onMessage"]>;
 export type InboxMonitorOptions = Parameters<MonitorWebInbox>[0];
 let monitorWebInbox: MonitorWebInbox;
 let resetWebInboundDedupe: ResetWebInboundDedupe;
+const activeInboxListeners = new Set<InboxMonitorListener>();
 
 // Yields two macrotask ticks so already-scheduled inbound continuations run.
 // This deliberately does NOT wait for pending inbound work to finish — tests
@@ -334,23 +338,44 @@ export async function startInboxMonitor(
   }
   const merged = {
     cfg: mockLoadConfig() as never,
+    loadConfig: () => mockLoadConfig() as OpenClawConfig,
     verbose: false,
     onMessage,
     accountId: DEFAULT_ACCOUNT_ID,
     authDir: getAuthDir(),
     ...extraOptions,
   };
+  const monitorOwnerScope =
+    merged.monitorOwnerScope ?? createWhatsAppMonitorOwnerScope({ accountId: merged.accountId });
   const tracker: InboundWorkTracker = { pending: 0 };
   inboundWorkTrackers.add(tracker);
   const callerOnPendingWorkChanged = merged.onPendingWorkChanged;
   const listener = await monitorWebInbox({
     ...merged,
+    monitorOwnerScope,
     onPendingWorkChanged: (pendingWorkCount: number, at?: number) => {
       publishInboundPendingWork(tracker, pendingWorkCount);
       callerOnPendingWorkChanged?.(pendingWorkCount, at);
     },
   });
-  return { listener, sock: getSock() };
+  let closed = false;
+  const trackedListener: InboxMonitorListener = {
+    ...listener,
+    close: async () => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      activeInboxListeners.delete(trackedListener);
+      try {
+        await listener.close();
+      } finally {
+        monitorOwnerScope.dispose();
+      }
+    },
+  };
+  activeInboxListeners.add(trackedListener);
+  return { listener: trackedListener, monitorOwnerScope, sock: getSock() };
 }
 
 export function buildNotifyMessageUpsert(params: {
@@ -434,13 +459,29 @@ export function installWebMonitorInboxUnitTestHooks() {
     authDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    let closeFailed = false;
+    let closeError: unknown;
+    // Each close removes only its current Set member, preserving the remaining iteration.
+    for (const listener of activeInboxListeners) {
+      try {
+        await listener.close();
+      } catch (error) {
+        if (!closeFailed) {
+          closeFailed = true;
+          closeError = error;
+        }
+      }
+    }
     resetLogger();
     setLoggerOverride(null);
     vi.useRealTimers();
     if (authDir) {
       fsSync.rmSync(authDir, { recursive: true, force: true });
       authDir = undefined;
+    }
+    if (closeFailed) {
+      throw closeError;
     }
   });
 }

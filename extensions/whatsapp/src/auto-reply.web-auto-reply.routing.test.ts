@@ -52,6 +52,7 @@ function createHandlerForTest(opts: { cfg: OpenClawConfig; replyResolver: unknow
   const replyLogger = makeReplyLogger();
   const handler = createWebOnMessageHandler({
     cfg: opts.cfg,
+    loadConfig: () => opts.cfg,
     verbose: false,
     connectionId: "test",
     maxMediaBytes: 1024,

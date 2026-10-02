@@ -150,14 +150,17 @@ function mockObjectArg(mockFn: ReturnType<typeof vi.fn>, label: string, callInde
 }
 
 function makeHandler(overrides: Partial<Parameters<typeof createWebOnMessageHandler>[0]> = {}) {
-  return createWebOnMessageHandler({
-    cfg: {
-      channels: {
-        whatsapp: {
-          ackReaction: { enabled: true },
-        },
+  const defaultCfg = {
+    channels: {
+      whatsapp: {
+        ackReaction: { enabled: true },
       },
-    } as never,
+    },
+  } as never;
+  const cfg = overrides.cfg ?? defaultCfg;
+  return createWebOnMessageHandler({
+    cfg,
+    loadConfig: overrides.loadConfig ?? (() => cfg),
     verbose: false,
     connectionId: "conn-1",
     maxMediaBytes: 1024 * 1024,

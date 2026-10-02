@@ -23,6 +23,10 @@ import {
 import { getWhatsAppConnectionController } from "./connection-controller-runtime-context.js";
 import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
 import {
+  rememberWhatsAppOwnPollCreation,
+  shouldEmitWhatsAppPollVoteHooks,
+} from "./inbound/poll-votes.js";
+import {
   mergeWhatsAppAcceptedSendError,
   requireWhatsAppAcceptedSendResult,
   withWhatsAppLogicalDeliveryActivity,
@@ -388,7 +392,7 @@ export async function sendPollWhatsApp(
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
   const cfg = requireRuntimeConfig(options.cfg, "WhatsApp poll");
-  const { listener: active } = requireOutboundActiveWebListener({
+  const { listener: active, accountId: resolvedAccountId } = requireOutboundActiveWebListener({
     cfg,
     accountId: options.accountId,
   });
@@ -419,7 +423,24 @@ export async function sendPollWhatsApp(
     const durationMs = Date.now() - startedAt;
     outboundLog.info(`Sent poll ${messageId} -> ${redactedJid} (${durationMs}ms)`);
     logger.info({ jid: redactedJid, messageId }, "sent poll");
-    return { messageId, toJid: resolveActualSentRemoteJid(result, jid) };
+    const sentJid = resolveActualSentRemoteJid(result, jid);
+    // Ownership is retained in memory only while the privacy-gated hook is
+    // enabled. The poll message secret never crosses into persistent state.
+    if (shouldEmitWhatsAppPollVoteHooks({ cfg, accountId: resolvedAccountId })) {
+      // Record ownership from the accepted send itself, not just from later
+      // observing our own message echo back on the inbound messages.upsert
+      // stream — a vote arriving before (or without) that echo would
+      // otherwise be silently rejected by the poll_vote_received hook gate.
+      if (active.monitorOwnerScope) {
+        rememberWhatsAppOwnPollCreation(
+          resolvedAccountId,
+          sentJid,
+          messageId,
+          active.monitorOwnerScope,
+        );
+      }
+    }
+    return { messageId, toJid: sentJid };
   } catch (err) {
     logger.error({ err: String(err), to: redactedTo }, "failed to send poll via web session");
     throw err;

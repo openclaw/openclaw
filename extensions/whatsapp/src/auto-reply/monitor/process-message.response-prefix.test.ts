@@ -154,6 +154,7 @@ describe("WhatsApp inbound and outbound response-prefix boundary", () => {
           expect(registration).not.toBeNull();
           const sent = await processMessage({
             cfg,
+            loadConfig: () => cfg,
             msg,
             route,
             groupHistoryKey: `whatsapp:${accountId}:direct:${peer}`,

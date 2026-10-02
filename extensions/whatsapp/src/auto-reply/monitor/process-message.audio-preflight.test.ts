@@ -183,12 +183,14 @@ function makeRoute(overrides: Partial<TestRoute> = {}): TestRoute {
 }
 
 function makeParams(msgOverrides: AudioMessageOverrides = {}) {
+  const cfg = {
+    tools: { media: { audio: { enabled: true } } },
+    channels: { whatsapp: {} },
+    commands: { useAccessGroups: false },
+  } as never;
   return {
-    cfg: {
-      tools: { media: { audio: { enabled: true } } },
-      channels: { whatsapp: {} },
-      commands: { useAccessGroups: false },
-    } as never,
+    cfg,
+    loadConfig: () => cfg,
     msg: makeAudioMsg(msgOverrides),
     route: makeRoute(),
     groupHistoryKey: "whatsapp:default:+15550000002",

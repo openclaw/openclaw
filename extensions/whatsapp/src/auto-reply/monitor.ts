@@ -31,6 +31,7 @@ import {
   type WhatsAppBaileysMessageCache,
 } from "../inbound/baileys-cache.js";
 import type { WhatsAppGroupMetadataCache } from "../inbound/group-metadata-cache.js";
+import { createWhatsAppMonitorOwnerScope } from "../inbound/monitor-owner.js";
 import { attachWebInboxToSocket } from "../inbound/monitor.js";
 import type { WebInboundCallbackMessage } from "../inbound/types.js";
 import {
@@ -140,6 +141,10 @@ export async function monitorWebChannel(
     cfg: baseCfg,
     accountId: tuning.accountId,
   });
+  const monitorOwnerScope = createWhatsAppMonitorOwnerScope({
+    accountId: account.accountId,
+    abortSignal,
+  });
   const loadCurrentMonitorConfig = () =>
     resolveWebMonitorConfigSnapshot({
       cfg: getRuntimeConfig(),
@@ -239,6 +244,7 @@ export async function monitorWebChannel(
             const onMessage = createWebOnMessageHandler({
               cfg,
               loadConfig: loadCurrentMonitorConfig,
+              monitorOwnerScope,
               verbose,
               connectionId,
               maxMediaBytes,
@@ -258,6 +264,7 @@ export async function monitorWebChannel(
               verbose,
               accountId: account.accountId,
               authDir: account.authDir,
+              monitorOwnerScope,
               mediaMaxMb: account.mediaMaxMb,
               selfChatMode: account.selfChatMode,
               sendReadReceipts: account.sendReadReceipts,
@@ -648,6 +655,7 @@ export async function monitorWebChannel(
   } finally {
     statusController.markStopped();
     process.removeListener("SIGINT", handleSigint);
+    monitorOwnerScope.dispose();
     await controller.shutdown();
   }
 }

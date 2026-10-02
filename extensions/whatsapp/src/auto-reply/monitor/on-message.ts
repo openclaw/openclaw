@@ -16,6 +16,7 @@ import { resolveWhatsAppAccount } from "../../accounts.js";
 import { resolveWhatsAppGroupSessionRoute } from "../../group-session-key.js";
 import { getPrimaryIdentityId, getSenderIdentity } from "../../identity.js";
 import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
+import type { WhatsAppMonitorOwnerScope } from "../../inbound/monitor-owner.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { buildMentionConfig } from "../mentions.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
@@ -33,7 +34,8 @@ import {
 
 export function createWebOnMessageHandler(params: {
   cfg: OpenClawConfig;
-  loadConfig?: () => OpenClawConfig;
+  loadConfig: () => OpenClawConfig;
+  monitorOwnerScope?: WhatsAppMonitorOwnerScope;
   verbose: boolean;
   connectionId: string;
   maxMediaBytes: number;
@@ -90,6 +92,7 @@ export function createWebOnMessageHandler(params: {
     return processMessage({
       ...params,
       cfg,
+      loadConfig: params.loadConfig,
       msg,
       route,
       groupHistoryKey,
@@ -100,7 +103,8 @@ export function createWebOnMessageHandler(params: {
 
   return async (normalizedMsg: AdmittedWebInboundMessage) => {
     const canRunDirectEarlyAudioPreflight = normalizedMsg.admission.ingress.decision === "allow";
-    const cfg = params.loadConfig?.() ?? params.cfg;
+    const getRuntimeConfig = params.loadConfig;
+    const cfg = getRuntimeConfig();
     const peerId = resolvePeerId(normalizedMsg);
     const msg = withDirectSenderPeer(normalizedMsg, peerId);
     const admission = requireWhatsAppInboundAdmission(msg);

@@ -3,10 +3,17 @@ import { EventEmitter } from "node:events";
 import type { proto, WAMessage } from "baileys";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  buildPollCreationMessageForTests,
+  buildPollUpdateMessageForTests,
+  encryptPollVoteForTests,
+} from "./inbound/poll-votes.test-support.js";
 import { startWhatsAppQaDriverSession, type WhatsAppQaDriverSession } from "./qa-driver.runtime.js";
 import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
 const AUTH_DIR = "/tmp/openclaw-whatsapp-auth";
+const SELF_JID = "11111@s.whatsapp.net";
+const SELF_LID = "11111@lid";
 const mocks = vi.hoisted(() => ({
   createWebSendApi: vi.fn(),
   createWaSocket: vi.fn(),
@@ -36,6 +43,7 @@ function createMockSocket() {
     end: vi.fn(),
     ev: new EventEmitter(),
     sendMessage: mocks.socketSendMessage,
+    user: { id: SELF_JID, lid: SELF_LID },
   };
 }
 
@@ -401,6 +409,178 @@ describe("startWhatsAppQaDriverSession", () => {
       mimetype: "image/webp",
     });
     expect(mocks.socketSendMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "group participant", chatJid: "123456@g.us", participant: "111@s.whatsapp.net" },
+    { name: "PN DM peer", chatJid: "111@s.whatsapp.net", participant: undefined },
+    { name: "LID DM peer", chatJid: "111@lid", participant: undefined },
+  ])("decodes a received poll vote from its $name", async ({ chatJid, participant }) => {
+    const session = await startSession();
+    const pollCreatorJid = participant ?? chatJid;
+    const voterJid = "222@s.whatsapp.net";
+    const pollMsgId = "poll-1";
+
+    const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
+      section: "pollCreationMessage",
+      options: ["Yes", "No"],
+    });
+    emitMessages(
+      incoming(pollCreationMessage, {
+        id: pollMsgId,
+        remoteJid: chatJid,
+        fromMe: false,
+        participant,
+      }),
+    );
+
+    const vote = encryptPollVoteForTests({
+      selectedOptionNames: ["Yes"],
+      pollEncKey,
+      pollCreatorJid,
+      pollMsgId,
+      voterJid,
+    });
+    emitMessages(
+      incoming(
+        buildPollUpdateMessageForTests({
+          creationKey: {
+            remoteJid: chatJid,
+            id: pollMsgId,
+            fromMe: false,
+            participant,
+          },
+          vote,
+          senderTimestampMs: 1_700_000_100_000,
+        }),
+        {
+          id: "vote-1",
+          remoteJid: chatJid,
+          fromMe: false,
+          participant: voterJid,
+        },
+      ),
+    );
+
+    const observedMessages = session.getObservedMessages();
+    expect(observedMessages).toHaveLength(2);
+    expect(observedMessages[0]).toMatchObject({ kind: "poll" });
+    expect(observedMessages[1]).toMatchObject({
+      kind: "poll_vote",
+      pollVote: {
+        pollMessageId: pollMsgId,
+        chatJid,
+        voter: voterJid,
+        selectedOptions: ["Yes"],
+        timestamp: 1_700_000_100_000,
+      },
+    });
+  });
+
+  it("uses the stable self LID to decode a vote on a poll sent to a LID chat", async () => {
+    const session = await startSession();
+    const chatJid = "22222@lid";
+    const pollMsgId = "poll-lid-1";
+    const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
+      section: "pollCreationMessage",
+      options: ["Yes", "No"],
+    });
+    const creationKey = { id: pollMsgId, remoteJid: chatJid, fromMe: true };
+    emitMessages(incoming(pollCreationMessage, creationKey));
+
+    const vote = encryptPollVoteForTests({
+      selectedOptionNames: ["Yes"],
+      pollEncKey,
+      pollCreatorJid: SELF_LID,
+      pollMsgId,
+      voterJid: chatJid,
+    });
+    emitMessages(
+      incoming(buildPollUpdateMessageForTests({ creationKey, vote }), {
+        id: "vote-lid-1",
+        remoteJid: chatJid,
+      }),
+    );
+
+    const observed = await session.waitForMessage({
+      match: (message) => message.kind === "poll_vote",
+      timeoutMs: 1_000,
+    });
+    expect(observed.pollVote).toMatchObject({
+      pollMessageId: pollMsgId,
+      chatJid,
+      voter: chatJid,
+      selectedOptions: ["Yes"],
+    });
+  });
+
+  it("observes a poll vote delivered inside an ephemeralMessage envelope", async () => {
+    // Regression: this path used to read `message.pollUpdateMessage`
+    // directly, so a wrapped vote (what disappearing-message chats deliver)
+    // was classified as an ordinary message instead of poll_vote — the same
+    // defect already fixed on the production inbound path.
+    const session = await startSession();
+    const chatJid = "999@s.whatsapp.net";
+    const pollCreatorJid = "111@s.whatsapp.net";
+    const voterJid = "222@s.whatsapp.net";
+    const pollMsgId = "poll-wrapped-1";
+
+    const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
+      section: "pollCreationMessage",
+      options: ["Yes", "No"],
+    });
+    emitMessages(
+      incoming(pollCreationMessage, {
+        id: pollMsgId,
+        remoteJid: chatJid,
+        fromMe: false,
+        participant: pollCreatorJid,
+      }),
+    );
+    const vote = encryptPollVoteForTests({
+      selectedOptionNames: ["No"],
+      pollEncKey,
+      pollCreatorJid,
+      pollMsgId,
+      voterJid,
+    });
+    const voteMessage = buildPollUpdateMessageForTests({
+      creationKey: {
+        remoteJid: chatJid,
+        id: pollMsgId,
+        fromMe: false,
+        participant: pollCreatorJid,
+      },
+      vote,
+      senderTimestampMs: 1_700_000_200_000,
+    });
+    emitMessages(
+      incoming(
+        { ephemeralMessage: { message: voteMessage } },
+        {
+          id: "vote-wrapped-1",
+          remoteJid: chatJid,
+          fromMe: false,
+          participant: voterJid,
+        },
+      ),
+    );
+
+    const observedMessages = session.getObservedMessages();
+    expect(observedMessages[observedMessages.length - 1]).toMatchObject({
+      kind: "poll_vote",
+      pollVote: {
+        pollMessageId: pollMsgId,
+        chatJid,
+        voter: voterJid,
+        selectedOptions: ["No"],
+      },
+    });
+  });
+
+  it("passes the connection timeout to the shared connection waiter", async () => {
+    await startSession({ connectionTimeoutMs: 45_000 });
+    expect(mocks.waitForWaConnection).toHaveBeenCalledWith(sock, { timeoutMs: 45_000 });
   });
 
   it("passes a bounded socket adapter to the send API", async () => {
