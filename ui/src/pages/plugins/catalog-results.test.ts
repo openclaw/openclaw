@@ -190,9 +190,13 @@ describe("renderPluginCatalogResults", () => {
     expect(onRetry).toHaveBeenCalledOnce();
   });
 
-  it("does not invent first-party artwork for an uninstalled package", () => {
+  it.each([
+    { packageName: "@openclaw/whatsapp", pluginId: undefined },
+    { packageName: "@community/whatsapp", pluginId: "whatsapp" },
+  ])("does not invent first-party artwork for $packageName", ({ packageName, pluginId }) => {
     const entry = plugin("whatsapp");
-    entry.catalog.packageName = "@openclaw/whatsapp";
+    entry.catalog.packageName = packageName;
+    entry.local.pluginId = pluginId;
     const container = mount(baseProps({ query: "whatsapp", result: { items: [entry] } }));
     expect(container.querySelector(".plugin-catalog-card__art img")).toBeNull();
   });
