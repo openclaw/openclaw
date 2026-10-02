@@ -17,6 +17,7 @@ import {
   readOperatorModelPolicyMembership,
   resolveOperatorModelDefault,
 } from "../agents/operator-model-policy.js";
+import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -311,6 +312,16 @@ export function prepareOperatorModelPresentation(params: {
           const utilityModel = result.defaultModels?.automaticUtilityModel
             ? allowedReference(result.defaultModels.automaticUtilityModel)
             : undefined;
+          // The route describes the utility model in effect, so it is disclosed only
+          // when this role may see that model.
+          const utilitySetting = result.defaultModels?.utilityRuntime
+            ? readUtilityModelSetting(cfg)
+            : undefined;
+          const utilityRuntimeVisible =
+            utilitySetting?.kind === "auto"
+              ? utilityModel !== undefined
+              : utilitySetting?.kind === "explicit" &&
+                allowedReference(utilitySetting.modelRef) !== undefined;
           const visibleProviders = new Set(models.map(({ provider }) => provider));
           for (const model of decisionModels ?? []) {
             visibleProviders.add(model.provider);
@@ -348,6 +359,9 @@ export function prepareOperatorModelPresentation(params: {
                     automaticUtilityModel: utilityModel
                       ? result.defaultModels.automaticUtilityModel
                       : null,
+                    ...(utilityRuntimeVisible && result.defaultModels.utilityRuntime
+                      ? { utilityRuntime: result.defaultModels.utilityRuntime }
+                      : {}),
                   },
                 }
               : {}),

@@ -70,6 +70,39 @@ function memory(reference: IncognitoAgentDatabaseExecution) {
   );
 }
 
+function cancelDispatchedCreation(controller: AbortController) {
+  const posted = vi.spyOn(Worker.prototype, "postMessage");
+  vi.spyOn(Worker.prototype, "emit").mockImplementation(function (this: Worker, event, ...args) {
+    if (
+      event === "online" &&
+      posted.mock.calls.some(([message]) => isRecord(message) && message.type === "open")
+    ) {
+      controller.abort(new Error("cancelled dispatched creation"));
+    }
+    return EventEmitter.prototype.emit.call(this, event, ...args);
+  });
+}
+
+it("keeps concurrent creators viable when the initiating opening is cancelled", async () => {
+  const controller = new AbortController();
+  cancelDispatchedCreation(controller);
+  const [cancelled, first, second] = await Promise.allSettled([
+    open("main", authority, controller.signal),
+    open(),
+    open(),
+  ] as const);
+  expect(cancelled).toMatchObject({
+    status: "rejected",
+    reason: new Error("cancelled dispatched creation"),
+  });
+  assert(first.status === "fulfilled", "first valid creator must survive cancellation");
+  assert(second.status === "fulfilled", "second valid creator must survive cancellation");
+  expect(first.value.identity).toEqual(second.value.identity);
+  expect((await memory(first.value)).databaseBytes).toBeGreaterThan(0);
+  expect(fs.readdirSync(stateRoot, { recursive: true })).toEqual([]);
+  expect(fs.readdirSync(tempRoot, { recursive: true })).toEqual([]);
+});
+
 it.each([false, true])(
   "settles cancellation at final publication (another creator: %s)",
   async (anotherCreator) => {
@@ -275,16 +308,7 @@ it("refuses sentinel collisions and cancelled creation without publishing or tou
     }),
   ).toBeUndefined();
   const dispatched = new AbortController();
-  const posted = vi.spyOn(Worker.prototype, "postMessage");
-  vi.spyOn(Worker.prototype, "emit").mockImplementation(function (this: Worker, event, ...args) {
-    if (
-      event === "online" &&
-      posted.mock.calls.some(([message]) => isRecord(message) && message.type === "open")
-    ) {
-      dispatched.abort(new Error("cancelled dispatched creation"));
-    }
-    return EventEmitter.prototype.emit.call(this, event, ...args);
-  });
+  cancelDispatchedCreation(dispatched);
   await expect(open("dispatched", authority, dispatched.signal)).rejects.toThrow(
     "cancelled dispatched creation",
   );

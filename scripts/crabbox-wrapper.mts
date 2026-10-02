@@ -3774,6 +3774,19 @@ if (provider && !isProviderAdvertised(provider, providers)) {
 }
 
 if (canonicalProvider === "blacksmith-testbox") {
+  if (["run", "warmup"].includes(normalizedArgs[0] ?? "")) {
+    const workflowRef = parseCommandInvocation(help.text, normalizedArgs).optionEntries.findLast(
+      ({ name }) => name === "blacksmith-ref",
+    );
+    if (workflowRef && workflowRef.value !== "main") {
+      console.error(
+        "[crabbox] Testbox workflow ref must be main so allocations use current spending limits. Omit --blacksmith-ref; the source capsule preserves the checkout being tested.",
+      );
+      process.exit(2);
+    }
+    // Override config/environment refs before binding the allocation receipt.
+    normalizedArgs.splice(commandOptionEnd(normalizedArgs), 0, "--blacksmith-ref=main");
+  }
   // The delegated provider rejects uploaded scripts before acquiring a lease.
   if (
     normalizedArgs[0] === "run" &&

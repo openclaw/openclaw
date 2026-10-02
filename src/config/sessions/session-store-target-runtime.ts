@@ -5,6 +5,8 @@ import {
 } from "../../state/openclaw-agent-db-registry-listing.js";
 import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import type {
+  SessionStoreTargetInventoryRequest,
+  SessionStoreTargetInventoryResult,
   SessionStoreTargetReadRequest,
   SessionStoreTargetReadResult,
 } from "./session-store-target-inventory.js";
@@ -20,6 +22,60 @@ type StoreTargetReadOwner = {
   refreshBeforeDispatch: (assertRetainedTarget: () => void) => Promise<void>;
   revalidateTarget: () => Promise<void>;
 };
+
+/** Capture registry admission now; retain its witness independently of discovery custody. */
+export function prepareSessionStoreTargetInventoryRead(
+  request: Omit<SessionStoreTargetInventoryRequest, "registeredDatabases">,
+) {
+  const { candidates, ...prepared } = request;
+  const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: request.env });
+  let registryStarted = false;
+  const assertRegistryCurrent = () => {
+    if (registryStarted) {
+      registry.assertCurrent();
+    }
+  };
+  return {
+    assertRegistryCurrent,
+    withRead<T>(
+      operation: (
+        inventory: Extract<SessionStoreTargetInventoryResult, { kind: "session-target-inventory" }>,
+        assertCurrent: () => void,
+      ) => Promise<T>,
+      assertCallerCurrent?: () => void,
+    ) {
+      return withSessionHistoryWorkerReadCandidates(candidates, async (discovery) => {
+        const assertCurrent = () => {
+          assertCallerCurrent?.();
+          discovery.assertCurrent();
+          assertRegistryCurrent();
+        };
+        let inventory = await discovery.readTargetInventory({
+          ...prepared,
+          registeredDatabases: { status: "deferred" },
+        });
+        assertCurrent();
+        if (inventory.kind === "session-target-registry-required") {
+          registryStarted = true;
+          const current = await registry.read();
+          assertCurrent();
+          inventory = await discovery.readTargetInventory({
+            ...prepared,
+            registeredDatabases:
+              current.result.status === "available"
+                ? current.result.entries
+                : { status: "unavailable" },
+          });
+          assertCurrent();
+        }
+        if (inventory.kind !== "session-target-inventory") {
+          throw new Error("Session store inventory requested registry rows twice");
+        }
+        return operation(inventory, assertCurrent);
+      });
+    },
+  };
+}
 
 export async function withSessionStoreTarget<T>(
   request: Omit<SessionStoreTargetReadRequest, "registeredDatabases">,

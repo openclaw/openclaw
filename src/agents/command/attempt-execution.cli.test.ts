@@ -1091,9 +1091,9 @@ describe("CLI attempt execution", () => {
         if (replacement) {
           expect(await runParams.claimCliSessionFork?.()).toBe(true);
           await runParams.persistCliSessionForkSuccessor?.(successorCliSessionId);
-          expect(claudeBinding(readSessionStore()[sessionKey])).toMatchObject({
+          expect(claudeBinding(readSessionStore()[sessionKey])).toEqual({
             sessionId: successorCliSessionId,
-            forceReuse: true,
+            authProfileId: "anthropic:claude-cli",
           });
         }
         controller.abort(

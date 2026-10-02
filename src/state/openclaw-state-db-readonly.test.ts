@@ -248,6 +248,7 @@ it("rejects non-filesystem stream sources without interpreting their logical pat
         db,
         path: pathname,
         walMaintenance: {
+          stop: async () => {},
           checkpoint: () => false,
           close: () => false,
           reclaimFreePages: createSqliteWalReclamationResult,

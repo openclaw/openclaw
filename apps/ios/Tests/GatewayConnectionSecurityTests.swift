@@ -172,13 +172,6 @@ import Testing
             "gateway.preferredStableID": nil,
             "gateway.lastDiscoveredStableID": stableID,
         ]) {
-            let defaults = UserDefaults.standard
-            defaults.removeObject(forKey: "gateway.last.host")
-            defaults.removeObject(forKey: "gateway.last.port")
-            defaults.removeObject(forKey: "gateway.last.tls")
-            defaults.removeObject(forKey: "gateway.last.stableID")
-            defaults.removeObject(forKey: "gateway.last.kind")
-
             let gateway = self.makeDiscoveredGateway(
                 stableID: stableID,
                 lanHost: "test.local",

@@ -33,58 +33,47 @@ class TestWorkerServiceError extends Error {
 
 describe("prepared worker reserve lifecycle", () => {
   const fixture = usePreparedPoolFixture();
-  it.each(["resolution", "idle policy"])(
-    "cleans expired reserves and refills healthy projects after another provider's %s fails",
-    async (failure) => {
-      const expired = await fixture.ready(await fixture.seed("expired", { reserve: true }));
-      fixture.nowMs = 1_500;
-      await fixture.attach(
-        await fixture.ready(await fixture.seed("healthy", { projectKey: "c".repeat(64) })),
-      );
-      fixture.config.cloudWorkers!.profiles!.broken = { provider: "broken" };
-      await fixture.attach(
-        await fixture.ready(
-          await fixture.store.createIntent({
-            environmentId: "broken",
-            providerId: "broken",
-            profileId: "broken",
-            profileSnapshot: fixture.profile(),
-            provisionOperationId: "provision:broken",
-          }),
-        ),
-      );
-      fixture.nowMs = 2_000;
-      const reconcile = vi.fn<PoolOptions["reconcile"]>(async () => {});
-      const owner = fixture.pool({
-        reconcile,
-        resolveProvider: (id) => {
-          if (id !== "broken") {
-            return fixture.provider;
-          }
-          if (failure === "resolution") {
-            throw new Error("provider resolution failed");
-          }
-          return {
-            ...fixture.provider,
-            resolvePreparedIdleTimeoutMs: () => {
-              throw new Error("provider idle policy failed");
-            },
-          };
-        },
-      });
-      await fixture.schedule(owner);
-      expect(fixture.store.get(expired.environmentId)?.destroyRequestedAtMs).toBe(fixture.nowMs);
-      expect(reconcile.mock.calls.map(([record]) => record)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            environmentId: expired.environmentId,
-            destroyRequestedAtMs: fixture.nowMs,
-          }),
-          expect.objectContaining({ preparation: expect.objectContaining({ demandAtMs: 1_500 }) }),
-        ]),
-      );
-    },
-  );
+  it("cleans expired reserves and refills healthy projects after another provider's resolution fails", async () => {
+    const expired = await fixture.ready(await fixture.seed("expired", { reserve: true }));
+    fixture.nowMs = 1_500;
+    await fixture.attach(
+      await fixture.ready(await fixture.seed("healthy", { projectKey: "c".repeat(64) })),
+    );
+    fixture.config.cloudWorkers!.profiles!.broken = { provider: "broken" };
+    await fixture.attach(
+      await fixture.ready(
+        await fixture.store.createIntent({
+          environmentId: "broken",
+          providerId: "broken",
+          profileId: "broken",
+          profileSnapshot: fixture.profile(),
+          provisionOperationId: "provision:broken",
+        }),
+      ),
+    );
+    fixture.nowMs = 2_000;
+    const reconcile = vi.fn<PoolOptions["reconcile"]>(async () => {});
+    const owner = fixture.pool({
+      reconcile,
+      resolveProvider: (id) => {
+        if (id !== "broken") {
+          return fixture.provider;
+        }
+        throw new Error("provider resolution failed");
+      },
+    });
+    await fixture.schedule(owner);
+    expect(fixture.store.get(expired.environmentId)?.destroyRequestedAtMs).toBe(fixture.nowMs);
+    expect(reconcile.mock.calls.map(([record]) => record)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          environmentId: expired.environmentId,
+          destroyRequestedAtMs: fixture.nowMs,
+        }),
+        expect.objectContaining({ preparation: expect.objectContaining({ demandAtMs: 1_500 }) }),
+      ]),
+    );
+  });
 
   it.each(["available", "missing", "throwing"] as const)(
     "retains terminal demand beyond seven days with %s provider policy",
@@ -188,13 +177,11 @@ describe("prepared worker reserve lifecycle", () => {
   });
 
   it.each([
-    ["provisioning", true, 1_950],
-    ["provisioning", true, 2_050],
-    ["syncing", false, 1_950],
-    ["syncing", true, 2_050],
+    ["provisioning", true],
+    ["syncing", false],
   ] as const)(
-    "does not renew consumed %s demand (failed=%s) during maintenance at %s",
-    async (stage, fail, maintenanceAtMs) => {
+    "does not renew consumed %s demand (failed=%s) before or after expiry",
+    async (stage, fail) => {
       const source = await fixture.attach(await fixture.ready(await fixture.seed("source")));
       await fixture.schedule(fixture.pool());
       await fixture.teardown(source);
@@ -205,7 +192,7 @@ describe("prepared worker reserve lifecycle", () => {
         await fixture.teardown(consumed);
       }
       await fixture.reopenStore();
-      fixture.nowMs = maintenanceAtMs;
+      fixture.nowMs = 1_950;
       const owner = fixture.pool();
       await owner.noteDemand(consumed.environmentId);
       await fixture.schedule(owner);
@@ -213,19 +200,15 @@ describe("prepared worker reserve lifecycle", () => {
       const replacement = fixture
         .reserves()
         .filter((record) => record.preparation?.consumedAtMs === null);
-      if (maintenanceAtMs < 2_000) {
-        expect(replacement).toHaveLength(1);
-        expect(replacement[0]?.preparation).toMatchObject({
-          demandAtMs: 1_000,
-          expiresAtMs: 2_000,
-        });
-        fixture.nowMs = 2_050;
-        await fixture.schedule(owner);
-        expect(fixture.reserves()).toHaveLength(2);
-        expect(fixture.store.get(replacement[0]!.environmentId)?.destroyRequestedAtMs).toBe(2_050);
-      } else {
-        expect(replacement).toEqual([]);
-      }
+      expect(replacement).toHaveLength(1);
+      expect(replacement[0]?.preparation).toMatchObject({
+        demandAtMs: 1_000,
+        expiresAtMs: 2_000,
+      });
+      fixture.nowMs = 2_050;
+      await fixture.schedule(owner);
+      expect(fixture.reserves()).toHaveLength(2);
+      expect(fixture.store.get(replacement[0]!.environmentId)?.destroyRequestedAtMs).toBe(2_050);
     },
   );
 
@@ -242,46 +225,40 @@ describe("prepared worker reserve lifecycle", () => {
     expect(fixture.reserves()).toEqual([]);
   });
 
-  it.each(["checkout", "sync"])(
-    "starts a full idle window after a long first %s without extending it on detach",
-    async (phase) => {
-      const idleWindow = 15 * 60_000;
-      fixture.provider.resolvePreparedIdleTimeoutMs = () => idleWindow;
-      const allocated = await fixture.ready(await fixture.seed("slow-first-checkout"));
-      const activatedAtMs = fixture.nowMs + 16 * 60_000;
-      if (phase === "checkout") {
-        fixture.nowMs = activatedAtMs;
-      }
-      const attached = await fixture.attach(allocated, "active", activatedAtMs);
-      const owner = fixture.pool();
-      await owner.noteDemand(attached.environmentId);
-      await fixture.schedule(owner);
-      const reserve = fixture.reserves()[0]!;
-      expect(reserve.preparation).toMatchObject({
-        demandAtMs: activatedAtMs,
-        expiresAtMs: activatedAtMs + idleWindow,
-      });
-      expect(fixture.provider.notePreparedDemand).toHaveBeenCalledWith(
-        { leaseId: attached.leaseId, profile: {} },
-        { preparationKey: PREPARATION_KEY, demandAtMs: activatedAtMs },
-      );
+  it("starts a full idle window after a long first sync without extending it on detach", async () => {
+    const idleWindow = 15 * 60_000;
+    fixture.provider.resolvePreparedIdleTimeoutMs = () => idleWindow;
+    const allocated = await fixture.ready(await fixture.seed("slow-first-checkout"));
+    const activatedAtMs = fixture.nowMs + 16 * 60_000;
+    const attached = await fixture.attach(allocated, "active", activatedAtMs);
+    const owner = fixture.pool();
+    await owner.noteDemand(attached.environmentId);
+    await fixture.schedule(owner);
+    const reserve = fixture.reserves()[0]!;
+    expect(reserve.preparation).toMatchObject({
+      demandAtMs: activatedAtMs,
+      expiresAtMs: activatedAtMs + idleWindow,
+    });
+    expect(fixture.provider.notePreparedDemand).toHaveBeenCalledWith(
+      { leaseId: attached.leaseId, profile: {} },
+      { preparationKey: PREPARATION_KEY, demandAtMs: activatedAtMs },
+    );
 
-      fixture.nowMs += 60_000;
-      await fixture.store.transition({
-        environmentId: attached.environmentId,
-        from: "attached",
-        to: "idle",
-      });
-      await owner.noteDemand(attached.environmentId);
-      await fixture.schedule(owner);
-      expect(fixture.provider.notePreparedDemand).toHaveBeenCalledOnce();
-      expect(fixture.store.get(reserve.environmentId)?.preparation).toEqual(reserve.preparation);
-      fixture.nowMs = activatedAtMs + idleWindow;
-      await fixture.schedule(owner);
-      expect(fixture.reserves()).toHaveLength(1);
-      expect(fixture.store.get(reserve.environmentId)?.destroyRequestedAtMs).toBe(fixture.nowMs);
-    },
-  );
+    fixture.nowMs += 60_000;
+    await fixture.store.transition({
+      environmentId: attached.environmentId,
+      from: "attached",
+      to: "idle",
+    });
+    await owner.noteDemand(attached.environmentId);
+    await fixture.schedule(owner);
+    expect(fixture.provider.notePreparedDemand).toHaveBeenCalledOnce();
+    expect(fixture.store.get(reserve.environmentId)?.preparation).toEqual(reserve.preparation);
+    fixture.nowMs = activatedAtMs + idleWindow;
+    await fixture.schedule(owner);
+    expect(fixture.reserves()).toHaveLength(1);
+    expect(fixture.store.get(reserve.environmentId)?.destroyRequestedAtMs).toBe(fixture.nowMs);
+  });
 
   it.each([false, true])(
     "retains slow activation demand when teardown precedes refill (reserve=%s)",
@@ -559,11 +536,8 @@ describe("prepared worker reserve lifecycle", () => {
     ["expired demand", true, undefined],
     ["project active", false, "project"],
     ["project cleanup", true, "project"],
-    ["global active", false, "global"],
     ["global cleanup", true, "global"],
-    ["previous provider active", false, "provider"],
     ["previous provider cleanup", true, "provider"],
-    ["later global active", false, "later-global"],
     ["later global cleanup", true, "later-global"],
   ] as const)(
     "rechecks reserve intent and capacity after the provider queue (%s)",

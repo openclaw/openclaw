@@ -70,7 +70,9 @@ const azureProviderHelp =
   "provider: hetzner, aws, azure, local-container, blacksmith-testbox, or cloudflare\n";
 const fakeRunValueOptionHelp = [
   "artifact-glob value",
+  "blacksmith-job string",
   "blacksmith-ref string",
+  "blacksmith-workflow string",
   "capture-stderr string",
   "capture-stdout string",
   "download value",
@@ -2388,6 +2390,7 @@ describe("scripts/crabbox-wrapper", () => {
         "blacksmith-testbox",
         "--id",
         id,
+        "--blacksmith-ref=main",
         "--reclaim",
         "--shell",
         "--",
@@ -3829,9 +3832,9 @@ esac
 
   it.each([
     {
-      scenario: "Blacksmith feature ref",
+      scenario: "Blacksmith maintained workflow",
       provider: "blacksmith-testbox",
-      args: ["--blacksmith-ref", "feature-branch"],
+      args: ["--blacksmith-ref", "main"],
       command: ["corepack", "pnpm", "check:changed"],
     },
     { scenario: "local container", provider: "local-container", args: [], command: ["echo ok"] },
@@ -3855,6 +3858,61 @@ esac
       if (reclaim) {
         expect(output.args).toContain("--reclaim");
       }
+    },
+  );
+
+  it.each([
+    ["warmup", "--blacksmith-ref=main", "--blacksmith-ref", "feature-branch"],
+    ["run", "-blacksmith-ref=feature-branch", "--sync-only"],
+  ])("refuses historical Testbox workflow allocation before delegation: %s", (...args) => {
+    const invocationLog = makeInvocationLog();
+    const result = runDefaultWrapper([...args, "--provider", "blacksmith-testbox"], {
+      env: { OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: invocationLog },
+    });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("Testbox workflow ref must be main");
+    expect(
+      readInvocations(invocationLog).some(
+        (invocation) =>
+          ["run", "warmup"].includes(invocation[0] ?? "") && !invocation.includes("--help"),
+      ),
+    ).toBe(false);
+  });
+
+  it.each([[], ["--blacksmith-ref=old-workflow", "-blacksmith-ref", "main"]])(
+    "pins Testbox policy independently of configured refs and payload arguments: %j",
+    (...refs) => {
+      const { output } = runSuccessfulDefaultWrapper(
+        [
+          "run",
+          "--provider",
+          "blacksmith-testbox",
+          ...refs,
+          "--blacksmith-workflow",
+          ".github/workflows/ci-check-high-memory-testbox.yml",
+          "--blacksmith-job",
+          "check",
+          "--",
+          "echo",
+          "--blacksmith-ref",
+          "historical-source",
+        ],
+        {
+          configJson: { provider: "blacksmith-testbox", blacksmith: { ref: "old-workflow" } },
+          env: { CRABBOX_BLACKSMITH_REF: "old-environment-ref" },
+        },
+      );
+      const optionEnd = output.args.indexOf("--");
+      expect(output.args.slice(0, optionEnd)).toContain("--blacksmith-ref=main");
+      expect(output.args.slice(0, optionEnd)).toEqual(
+        expect.arrayContaining([
+          "--blacksmith-workflow",
+          ".github/workflows/ci-check-high-memory-testbox.yml",
+          "--blacksmith-job",
+          "check",
+        ]),
+      );
+      expect(output.args.at(-1)).toContain("historical-source");
     },
   );
 
@@ -6463,14 +6521,7 @@ cp.spawnSync = (command, args, options) => {
 
   it("uses the temporary full checkout for sparse sync-only runs", () => {
     const { output, result } = runSuccessfulDefaultWrapper(
-      [
-        "run",
-        "--provider",
-        "blacksmith-testbox",
-        "--blacksmith-ref",
-        "feature-branch",
-        "--sync-only",
-      ],
+      ["run", "--provider", "blacksmith-testbox", "--blacksmith-ref", "main", "--sync-only"],
       cleanSparseSyncOptions,
     );
 

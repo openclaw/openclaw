@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../config/sessions/session-accessor.sqlite-active-events-read.js";
 import { resolveConversationInDatabase } from "../config/sessions/session-accessor.sqlite-conversation-read.js";
 import { readSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { readSessionTranscriptRunInputVisibilityFromProjection } from "../config/sessions/session-accessor.sqlite-history-input-visibility.js";
@@ -6,12 +7,15 @@ import { readTranscriptDisplayDeltaFromProjection } from "../config/sessions/ses
 import {
   readCurrentProjectionSnapshot,
   type CurrentTranscriptProjection,
+  type SessionTranscriptBoundedMessageTailOptions,
 } from "../config/sessions/session-accessor.sqlite-projection-read.js";
 import { readSessionTranscriptBindingFromProjection } from "../config/sessions/session-accessor.sqlite-transcript-binding.js";
 import type { SessionTranscriptRawDeltaLimits } from "../config/sessions/session-accessor.types.js";
 import { readWithCanonicalSessionAdmission } from "../config/sessions/session-canonical-key.js";
 import type { SessionConversationBinding } from "../config/sessions/session-history-types.js";
 import { listSessionReactionsInDatabase } from "../config/sessions/session-reaction-store.read.js";
+import { readSessionTranscriptAccountingFromProjection } from "../config/sessions/session-transcript-accounting.js";
+import type { SessionTranscriptAccountingOptions } from "../config/sessions/session-transcript-accounting.types.js";
 import {
   SessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
@@ -124,6 +128,14 @@ export function createReadonlySessionHistoryReader(
     return result.value;
   };
   return {
+    readTranscriptAccounting: (options: SessionTranscriptAccountingOptions) =>
+      readSnapshot((projection) =>
+        readSessionTranscriptAccountingFromProjection(projection, options),
+      ),
+    readBoundedMessageTail: (options: SessionTranscriptBoundedMessageTailOptions) =>
+      readSnapshot((projection) =>
+        readSessionTranscriptBoundedMessageTailPageFromProjection(projection, options),
+      ),
     readArtifactSummaries: async (query: Extract<SessionArtifactReadQuery, { kind: "list" }>) => {
       const { readArtifactSummariesFromProjection } = await import("./session-artifact-read.js");
       return readSnapshot((projection) => readArtifactSummariesFromProjection(projection, query));

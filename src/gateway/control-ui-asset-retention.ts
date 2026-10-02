@@ -53,7 +53,7 @@ async function readCachedGeneration(
   try {
     signal?.throwIfAborted();
     const stats = await fs.lstat(directory);
-    if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    if (!stats.isDirectory()) {
       return null;
     }
     const assetRoot = await openRoot(directory);
@@ -92,12 +92,7 @@ async function readCachedGeneration(
 }
 
 function sameDirectory(left: Stats, right: Stats): boolean {
-  return (
-    right.isDirectory() &&
-    !right.isSymbolicLink() &&
-    left.dev === right.dev &&
-    left.ino === right.ino
-  );
+  return right.isDirectory() && left.dev === right.dev && left.ino === right.ino;
 }
 
 function compareGenerations(left: RetainedGeneration, right: RetainedGeneration): number {
@@ -126,12 +121,12 @@ async function readCacheInventory(
   const known = new Map(verified.map((generation) => [generation.generation, generation]));
   for (const entry of entries) {
     signal?.throwIfAborted();
-    if (!entry.isDirectory() || entry.isSymbolicLink()) {
+    if (!entry.isDirectory()) {
       continue;
     }
     const directory = path.join(cacheRealPath, entry.name);
     const stats = await fs.lstat(directory).catch(() => null);
-    if (!stats || !stats.isDirectory() || stats.isSymbolicLink()) {
+    if (!stats?.isDirectory()) {
       continue;
     }
     directories.set(directory, stats);
@@ -161,7 +156,7 @@ async function readAssetManifest(
   signal?.throwIfAborted();
   const stats = await fs.lstat(manifestPath);
   signal?.throwIfAborted();
-  if (stats.isSymbolicLink() || !stats.isFile() || stats.size > CONTROL_UI_MANIFEST_MAX_BYTES) {
+  if (!stats.isFile() || stats.size > CONTROL_UI_MANIFEST_MAX_BYTES) {
     throw new Error(`Invalid Control UI asset manifest: ${manifestPath}`);
   }
   const manifest = parseControlUiAssetManifest(

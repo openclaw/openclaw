@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
@@ -12,7 +12,12 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
-afterEach(() => vi.restoreAllMocks());
+// Periodic WAL maintenance is independent of the request SQL budget.
+beforeEach(() => vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] }));
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 const cfg = { agents: { entries: { main: {} } } };
 

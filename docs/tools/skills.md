@@ -836,6 +836,13 @@ The prompt contains a bounded skill directory. Skills omitted by the prompt
 budget remain discoverable through `skills_search` when that tool is enabled.
 Small catalogs continue to appear in full.
 
+When search is available, the agent is instructed to check for a relevant skill
+before work involving files, specialized tools, or a reusable workflow.
+An omitted directory is identified explicitly; the agent searches by task goal
+instead of trying to scan a list that is not present. Known names and clear
+directory matches can go directly to a complete skill read. Simple conversation
+and self-contained answers do not require discovery.
+
 - `skills_search({ query, limit? })` searches eligible installed names,
   descriptions, and bounded instruction text. The default limit is 5; the maximum
   is 20. Queries must contain 1-1,000 characters. Results contain names, locations,
@@ -878,8 +885,9 @@ weight of body text; exact names rank first.
 
 Body indexing reads at most 1,024 skills in name order, four at a time. Each body
 contributes at most 16 KiB, reduced equally across the selected skills
-to keep their total at most 4 MiB. File readers enforce this budget before reading;
-oversized files and owners without bounded search reads retain metadata only.
+to keep their total at most 4 MiB. Local files contribute a bounded prefix, with
+one extra byte read to detect truncation. Owners that reject oversized bounded
+reads or do not support bounded search reads retain metadata only.
 Remote workspace owners with whole-skill reads only do not use their document
 bridge for indexing. Already-delivered inline bodies can contribute a bounded
 prefix. Metadata remains searchable for the full eligible catalog.

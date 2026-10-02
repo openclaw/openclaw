@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, afterEach, assert, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, assert, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   buildFullReleaseCandidateBinding,
   buildFullReleaseCandidateRequest,
@@ -1262,6 +1262,25 @@ describe("release decision policy", () => {
     url: "https://example.invalid/windows",
   };
   const ciGate = { name: "openclaw/ci-gate", conclusion: "success", status: "completed" };
+
+  // In-process readChild calls compose child provenance expectations from the ambient
+  // process.env.GITHUB_REPOSITORY, while every GitHub run fixture in this suite describes
+  // the canonical openclaw/openclaw repository. Fork checkouts run these tests with their
+  // own GITHUB_REPOSITORY and would fail provenance validation, so pin the ambient
+  // repository to the fixture identity for this suite and restore it afterwards. The
+  // collector subprocess tests already pin the same identity via collectorEnv().
+  let ambientRepository: string | undefined;
+  beforeEach(() => {
+    ambientRepository = process.env.GITHUB_REPOSITORY;
+    process.env.GITHUB_REPOSITORY = "openclaw/openclaw";
+  });
+  afterEach(() => {
+    if (ambientRepository === undefined) {
+      delete process.env.GITHUB_REPOSITORY;
+    } else {
+      process.env.GITHUB_REPOSITORY = ambientRepository;
+    }
+  });
 
   it.each(["beta", "stable", "full"])(
     "reports Windows Node failures as policy advisory for %s publication",

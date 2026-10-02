@@ -1,6 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
 import { coerceErrorMessage } from "@openclaw/normalization-core";
-import type { Selectable } from "kysely";
 import { setConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { withClawMcpLifecycleLease } from "../agents/mcp-lifecycle-lease.js";
 import { canonicalizeConfiguredMcpServer } from "../config/mcp-config-normalize.js";
@@ -10,70 +8,27 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { digestClawValue } from "./digest.js";
+import {
+  CLAW_MCP_REF_SCHEMA_VERSION,
+  refToRow,
+  rowToRef,
+  selectMcpRefs,
+  type McpDatabase,
+  type McpRefRow,
+  type PersistedClawMcpServerRef,
+} from "./mcp-records.js";
 import type { ClawReferencedCleanup } from "./package-remove.js";
+import { reconcileClawMcpServerRefsInWorker } from "./provenance-write.js";
 import type { ClawAddPlan, ClawMcpServer } from "./types.js";
 
-export const CLAW_MCP_REF_SCHEMA_VERSION = "openclaw.clawMcpServerRef.v1" as const;
-
-export type PersistedClawMcpServerRef = {
-  schemaVersion: typeof CLAW_MCP_REF_SCHEMA_VERSION;
-  agentId: string;
-  name: string;
-  configDigest: string;
-  relationship: "managed" | "referenced";
-  origin: "claw-introduced" | "pre-existing";
-  independentOwner: boolean;
-  status: "pending" | "complete" | "failed";
-  error?: string;
-  createdAtMs: number;
-  updatedAtMs: number;
-};
-
-type McpDatabase = Pick<DB, "claw_mcp_server_refs">;
-type McpRefRow = Selectable<DB["claw_mcp_server_refs"]>;
-
-function selectMcpRefs(db: DatabaseSync) {
-  return getNodeSqliteKysely<McpDatabase>(db)
-    .selectFrom("claw_mcp_server_refs")
-    .select([
-      "schema_version",
-      "agent_id",
-      "name",
-      "config_digest",
-      "relationship",
-      "origin",
-      "independent_owner",
-      "status",
-      "error",
-      "created_at_ms",
-      "updated_at_ms",
-    ]);
-}
-
-function refToRow(ref: PersistedClawMcpServerRef): McpRefRow {
-  return {
-    agent_id: ref.agentId,
-    name: ref.name,
-    schema_version: ref.schemaVersion,
-    config_digest: ref.configDigest,
-    relationship: ref.relationship,
-    origin: ref.origin,
-    independent_owner: ref.independentOwner ? 1 : 0,
-    status: ref.status,
-    error: ref.error ?? null,
-    created_at_ms: ref.createdAtMs,
-    updated_at_ms: ref.updatedAtMs,
-  };
-}
+export { CLAW_MCP_REF_SCHEMA_VERSION, type PersistedClawMcpServerRef } from "./mcp-records.js";
 
 export class ClawMcpInstallError extends Error {
   constructor(
@@ -89,25 +44,6 @@ export class ClawMcpInstallError extends Error {
 function mcpServerFromActionDetails(details: Record<string, unknown>): ClawMcpServer | undefined {
   const { expectedState: _expectedState, prerequisites: _prerequisites, ...server } = details;
   return "command" in server || "url" in server ? (server as ClawMcpServer) : undefined;
-}
-
-function rowToRef(row: McpRefRow): PersistedClawMcpServerRef {
-  return {
-    schemaVersion: CLAW_MCP_REF_SCHEMA_VERSION,
-    agentId: row.agent_id,
-    name: row.name,
-    configDigest: row.config_digest,
-    // SAFETY: The canonical table constrains relationship to these two values.
-    relationship: row.relationship as PersistedClawMcpServerRef["relationship"],
-    // SAFETY: The canonical table constrains origin to these two values.
-    origin: row.origin as PersistedClawMcpServerRef["origin"],
-    independentOwner: sqliteNumber(row.independent_owner) === 1,
-    // SAFETY: Existing inventory exposes stored status without additional validation.
-    status: row.status as PersistedClawMcpServerRef["status"],
-    ...(row.error ? { error: row.error } : {}),
-    createdAtMs: sqliteNumber(row.created_at_ms),
-    updatedAtMs: sqliteNumber(row.updated_at_ms),
-  };
 }
 
 export function digestClawMcpServer(server: Record<string, unknown>): string {
@@ -436,16 +372,17 @@ export function reconcileClawMcpServerRefs(
   agentId: string,
   configuredServers: Record<string, Record<string, unknown>>,
   options: OpenClawStateDatabaseOptions & { nowMs?: number } = {},
-): PersistedClawMcpServerRef[] {
-  return readClawMcpServerRefs(agentId, options).map((ref) => {
-    if (ref.status !== "pending") {
-      return ref;
-    }
-    const configured = configuredServers[ref.name];
-    return configured && digestClawMcpServer(configured) === ref.configDigest
-      ? updateRef(ref, { status: "complete" }, options)
-      : ref;
-  });
+): Promise<PersistedClawMcpServerRef[]> {
+  return reconcileClawMcpServerRefsInWorker(
+    agentId,
+    Object.fromEntries(
+      Object.entries(configuredServers).map(([name, server]) => [
+        name,
+        digestClawMcpServer(server),
+      ]),
+    ),
+    options,
+  );
 }
 
 export function deleteClawMcpServerRef(

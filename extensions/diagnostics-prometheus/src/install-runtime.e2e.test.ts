@@ -16,6 +16,7 @@ import {
   type TempWorkspace,
 } from "openclaw/plugin-sdk/temp-path";
 import { stopChildProcess } from "openclaw/plugin-sdk/test-env";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { packagingEntrypoints } from "./install-runtime-entrypoints.test-support.mts";
 
@@ -93,9 +94,9 @@ function isolatedEnv(params: {
   return env;
 }
 
-async function runCli(args: string[], env: NodeJS.ProcessEnv, build = false): Promise<string> {
-  const entry = build ? "scripts/run-node.mjs" : "openclaw.mjs";
-  const result = await execFileAsync(process.execPath, [entry, ...args], {
+async function runCli(args: string[], env: NodeJS.ProcessEnv): Promise<string> {
+  // E2E setup owns shared dist; a child rebuild can delete running siblings' chunks.
+  const result = await execFileAsync(process.execPath, ["openclaw.mjs", ...args], {
     cwd: repoRoot,
     env,
     maxBuffer: 4 * 1024 * 1024,
@@ -183,32 +184,11 @@ async function readPluginVersion(): Promise<string> {
   return manifest.version.trim();
 }
 
-async function waitForFile(
-  filePath: string,
-  child: ChildProcess,
-  timeoutMs: number,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      throw new Error("local npm registry exited before publishing its port");
-    }
-    try {
-      if ((await fs.stat(filePath)).size > 0) {
-        return;
-      }
-    } catch {
-      // The registry writes the port file only after the listener is ready.
-    }
-    await delay(50);
-  }
-  throw new Error("timed out waiting for local npm registry");
-}
-
 async function startRegistry(params: {
   root: string;
   tarballPath: string;
   version: string;
+  signal: AbortSignal;
 }): Promise<string> {
   const portFile = path.join(params.root, "registry-port");
   const logPath = path.join(params.root, "registry.log");
@@ -229,13 +209,24 @@ async function startRegistry(params: {
         home: params.root,
         stateDir: path.join(params.root, "unused-state"),
       }),
-      stdio: ["ignore", logHandle.fd, logHandle.fd],
+      stdio: ["ignore", logHandle.fd, logHandle.fd, "ipc"],
     },
   );
   children.push(child);
+  const listening = once(child, "message", { signal: params.signal });
+  const closed = once(child, "close", { signal: params.signal });
+  const ready = withinTest(
+    awaitGateBeforeSettlement(
+      listening,
+      closed,
+      "local npm registry exited before publishing its port",
+    ),
+    params.signal,
+  );
+  void ready.catch(() => {});
   await logHandle.close();
-  await waitForFile(portFile, child, 10_000);
-  const port = (await fs.readFile(portFile, "utf8")).trim();
+  const [port] = await ready;
+  expect(port).toEqual(expect.any(Number));
   return `http://127.0.0.1:${port}`;
 }
 
@@ -332,6 +323,7 @@ describe("diagnostics-prometheus managed install runtime", () => {
       root,
       tarballPath: packedPlugin.tarballPath,
       version: pluginVersion,
+      signal,
     });
     const env = isolatedEnv({
       configPath,
@@ -343,7 +335,6 @@ describe("diagnostics-prometheus managed install runtime", () => {
     await runCli(
       ["plugins", "install", `npm:${packageName}@${pluginVersion}`, "--accept-capabilities"],
       env,
-      true,
     );
     const inspect = JSON.parse(
       await runCli(["plugins", "inspect", pluginId, "--runtime", "--json"], env),

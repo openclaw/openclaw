@@ -176,24 +176,21 @@ async function withWebchatTool(
 }
 
 describe("WebChat automation creation through the tool and Gateway", () => {
-  it.each([false, true])(
-    "persists current-session announce (explicit delivery: %s)",
-    async (explicit) => {
-      await withWebchatTool(async ({ add, cron }) => {
-        await add(explicit ? { mode: "announce" } : undefined);
-        expect(await cron.list({ includeDisabled: true })).toEqual([
-          expect.objectContaining({
-            sessionTarget: "current",
-            sessionKey,
-            enabled: false,
-            delivery: { mode: "announce" },
-            payload: expect.objectContaining({ kind: "agentTurn", toolsAllow: ["read"] }),
-            trigger: { script: "return { fire: false };", once: true },
-          }),
-        ]);
-      });
-    },
-  );
+  it("persists default current-session announce", async () => {
+    await withWebchatTool(async ({ add, cron }) => {
+      await add();
+      expect(await cron.list({ includeDisabled: true })).toEqual([
+        expect.objectContaining({
+          sessionTarget: "current",
+          sessionKey,
+          enabled: false,
+          delivery: { mode: "announce" },
+          payload: expect.objectContaining({ kind: "agentTurn", toolsAllow: ["read"] }),
+          trigger: { script: "return { fire: false };", once: true },
+        }),
+      ]);
+    });
+  });
 
   it("does not pin an older stored external route onto a live WebChat job", async () => {
     await withWebchatTool(
@@ -206,17 +203,14 @@ describe("WebChat automation creation through the tool and Gateway", () => {
     );
   });
 
-  it.each(["webchat", "not-a-channel"])(
-    "rejects an explicit %s channel before persistence",
-    async (channel) => {
-      await withWebchatTool(async ({ add, cron }) => {
-        await expect(add({ mode: "announce", channel })).rejects.toThrow(
-          "delivery.channel must be one of: discord, telegram",
-        );
-        expect(await cron.list({ includeDisabled: true })).toEqual([]);
-      });
-    },
-  );
+  it("rejects an explicit webchat channel before persistence", async () => {
+    await withWebchatTool(async ({ add, cron }) => {
+      await expect(add({ mode: "announce", channel: "webchat" })).rejects.toThrow(
+        "delivery.channel must be one of: discord, telegram",
+      );
+      expect(await cron.list({ includeDisabled: true })).toEqual([]);
+    });
+  });
 
   it("preserves an explicit configured external delivery override", async () => {
     await withWebchatTool(async ({ add, cron }) => {

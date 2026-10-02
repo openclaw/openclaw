@@ -138,7 +138,6 @@ export async function runCopilotExecution(context: {
     }
     void session.abort().catch(() => undefined);
   };
-  params.abortSignal?.addEventListener("abort", abortActiveSession, { once: true });
   let sandbox: SandboxContext | null = null;
   let effectiveWorkspaceDir = resolvedWorkspaceForSandbox;
   if (resolvedWorkspaceForSandbox) {
@@ -150,9 +149,7 @@ export async function runCopilotExecution(context: {
         sandboxSessionKey,
       }));
     } catch (error: unknown) {
-      settled = true;
-      params.abortSignal?.removeEventListener("abort", abortActiveSession);
-      if (abortRequested || params.abortSignal?.aborted) {
+      if (params.abortSignal?.aborted) {
         return finishAttempt(
           createResult(input, {
             aborted: true,
@@ -179,8 +176,6 @@ export async function runCopilotExecution(context: {
   hookContext.workspaceDir = effectiveWorkspaceDir;
   const requestedCwd = readResolvedAttemptPath(input.cwd);
   if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspaceForSandbox) {
-    settled = true;
-    params.abortSignal?.removeEventListener("abort", abortActiveSession);
     return finishAttempt(
       createResult(input, {
         messagesSnapshot: messages,
@@ -240,6 +235,10 @@ export async function runCopilotExecution(context: {
     | Awaited<ReturnType<typeof createToolBridge>>["promptToolPolicy"]
     | undefined;
   try {
+    params.abortSignal?.addEventListener("abort", abortActiveSession, { once: true });
+    if (params.abortSignal?.aborted) {
+      abortActiveSession();
+    }
     let resultContentSourceByToolName = new Map<
       string,
       NonNullable<AnyAgentTool["resultContentSource"]>

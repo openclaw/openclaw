@@ -8,8 +8,6 @@ import {
   currentRunningSnapshotInfo,
   extractLastOpenClawVersionFromLog,
   makeTempDir,
-  packageBuildCommitFromTgz,
-  packageVersionFromTgz,
   modelProviderConfigBatchJson,
   posixCodexPlatformPackageRepairFunction,
   posixProviderOnlyPluginIsolationScript,
@@ -41,6 +39,8 @@ import { resolveMacosVmName, waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
 import {
   assertDevChannelUpdate,
+  expectedPackageBuildCommit,
+  expectedPackageTargetVersion,
   installSmokeRuntimeCompanions,
   npmRegistryEnv,
   packAndServeSmokeArtifact,
@@ -251,7 +251,7 @@ class MacosSmoke extends SmokeRunController<MacosOptions> {
         );
         if (this.options.targetPackageSpec) {
           this.targetExpectVersion =
-            this.artifact.version || (await packageVersionFromTgz(this.artifact.path));
+            this.artifact.version || (await expectedPackageTargetVersion(this.artifact));
         }
       } else if (this.targetInstallsDirectly()) {
         this.targetExpectVersion = run(
@@ -362,26 +362,7 @@ class MacosSmoke extends SmokeRunController<MacosOptions> {
       }),
     );
     await this.phases.phase("fresh.onboard-ref", 420, () => this.runRefOnboard());
-    await this.phases.phase("fresh.gateway-start", 180, () => this.startManualGatewayIfNeeded());
-    await this.phases.phase("fresh.gateway-status", 180, () => this.verifyGateway());
-    this.status.freshGateway = "pass";
-    await this.phases.phase("fresh.dashboard-load", 180, () => this.verifyDashboardLoad());
-    this.status.freshDashboard = "pass";
-    await this.phases.phase("fresh.first-agent-turn", this.agentTimeoutSeconds, () =>
-      this.verifyTurn(),
-    );
-    this.status.freshAgent = "pass";
-    if (this.discordEnabled()) {
-      this.status.freshDiscord = "fail";
-      await this.phases.phase("fresh.discord-config", 600, () => this.discord?.configure());
-      await this.phases.phase("fresh.discord-gateway-ready", 180, () =>
-        this.ensureDiscordGatewayReady(),
-      );
-      await this.phases.phase("fresh.discord-roundtrip", 180, () =>
-        this.runDiscordRoundtrip("fresh"),
-      );
-      this.status.freshDiscord = "pass";
-    }
+    await this.runGatewaySmoke("fresh");
   }
 
   protected async runUpgradeLane(): Promise<void> {
@@ -422,25 +403,29 @@ class MacosSmoke extends SmokeRunController<MacosOptions> {
       );
     }
     await this.phases.phase("upgrade.onboard-ref", 420, () => this.runRefOnboard());
-    await this.phases.phase("upgrade.gateway-start", 180, () => this.startManualGatewayIfNeeded());
-    await this.phases.phase("upgrade.gateway-status", 180, () => this.verifyGateway());
-    this.status.upgradeGateway = "pass";
-    await this.phases.phase("upgrade.dashboard-load", 180, () => this.verifyDashboardLoad());
-    this.status.upgradeDashboard = "pass";
-    await this.phases.phase("upgrade.first-agent-turn", this.agentTimeoutSeconds, () =>
+    await this.runGatewaySmoke("upgrade");
+  }
+
+  private async runGatewaySmoke(lane: "fresh" | "upgrade"): Promise<void> {
+    await this.phases.phase(`${lane}.gateway-start`, 180, () => this.startManualGatewayIfNeeded());
+    await this.phases.phase(`${lane}.gateway-status`, 180, () => this.verifyGateway());
+    this.status[`${lane}Gateway`] = "pass";
+    await this.phases.phase(`${lane}.dashboard-load`, 180, () => this.verifyDashboardLoad());
+    this.status[`${lane}Dashboard`] = "pass";
+    await this.phases.phase(`${lane}.first-agent-turn`, this.agentTimeoutSeconds, () =>
       this.verifyTurn(),
     );
-    this.status.upgradeAgent = "pass";
+    this.status[`${lane}Agent`] = "pass";
     if (this.discordEnabled()) {
-      this.status.upgradeDiscord = "fail";
-      await this.phases.phase("upgrade.discord-config", 600, () => this.discord?.configure());
-      await this.phases.phase("upgrade.discord-gateway-ready", 180, () =>
+      this.status[`${lane}Discord`] = "fail";
+      await this.phases.phase(`${lane}.discord-config`, 600, () => this.discord?.configure());
+      await this.phases.phase(`${lane}.discord-gateway-ready`, 180, () =>
         this.ensureDiscordGatewayReady(),
       );
-      await this.phases.phase("upgrade.discord-roundtrip", 180, () =>
-        this.runDiscordRoundtrip("upgrade"),
+      await this.phases.phase(`${lane}.discord-roundtrip`, 180, () =>
+        this.runDiscordRoundtrip(lane),
       );
-      this.status.upgradeDiscord = "pass";
+      this.status[`${lane}Discord`] = "pass";
     }
   }
 
@@ -461,15 +446,7 @@ exec node "$entry" ${argv}`,
     const prlctlDeadline = Date.now() + 45_000;
     const deadline = Date.now() + timeoutSeconds * 1000;
     while (Date.now() < prlctlDeadline && Date.now() < deadline) {
-      const result = run("prlctl", ["exec", this.options.vmName, "--current-user", "whoami"], {
-        check: false,
-        quiet: true,
-        timeoutMs: this.phases.remainingTimeoutMs(),
-      });
-      const user = result.stdout.trim().replaceAll("\r", "").split("\n").at(-1) ?? "";
-      if (result.status === 0 && /^[A-Za-z0-9._-]+$/.test(user)) {
-        this.guestUser = user;
-        this.guestTransport = "current-user";
+      if (this.tryCurrentUser()) {
         return;
       }
       run("sleep", ["2"], { quiet: true });
@@ -484,20 +461,27 @@ exec node "$entry" ${argv}`,
       return;
     }
     while (Date.now() < deadline) {
-      const result = run("prlctl", ["exec", this.options.vmName, "--current-user", "whoami"], {
-        check: false,
-        quiet: true,
-        timeoutMs: this.phases.remainingTimeoutMs(),
-      });
-      const user = result.stdout.trim().replaceAll("\r", "").split("\n").at(-1) ?? "";
-      if (result.status === 0 && /^[A-Za-z0-9._-]+$/.test(user)) {
-        this.guestUser = user;
-        this.guestTransport = "current-user";
+      if (this.tryCurrentUser()) {
         return;
       }
       run("sleep", ["2"], { quiet: true });
     }
     throw new Error("guest current user did not become available");
+  }
+
+  private tryCurrentUser(): boolean {
+    const result = run("prlctl", ["exec", this.options.vmName, "--current-user", "whoami"], {
+      check: false,
+      quiet: true,
+      timeoutMs: this.phases.remainingTimeoutMs(),
+    });
+    const user = result.stdout.trim().replaceAll("\r", "").split("\n").at(-1) ?? "";
+    if (result.status !== 0 || !/^[A-Za-z0-9._-]+$/.test(user)) {
+      return false;
+    }
+    this.guestUser = user;
+    this.guestTransport = "current-user";
+    return true;
   }
 
   private resolveDesktopUser(): string {
@@ -649,8 +633,7 @@ ${guestOpenClaw} --version`);
       die("package artifact missing");
     }
     const commit =
-      this.artifact.buildCommitShort ||
-      (await packageBuildCommitFromTgz(this.artifact.path)).slice(0, 7);
+      this.artifact.buildCommitShort || (await expectedPackageBuildCommit(this.artifact));
     this.verifyVersionContains(commit);
   }
 

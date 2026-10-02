@@ -242,6 +242,11 @@ export type QaTransportAdapter = Omit<
   reset: () => Promise<void>;
   waitForNoOutbound: (input?: QaTransportWaitForNoOutboundInput) => Promise<void>;
   waitForOutbound: (input: QaTransportOutboundMatch) => Promise<QaBusMessage>;
+  waitForCompletedReply?: (input: {
+    inbound: QaBusMessage;
+    gateway: Parameters<QaTransportAdapterDefinition["waitReady"]>[0]["gateway"];
+    timeoutMs?: number;
+  }) => Promise<QaBusMessage>;
   waitForCondition: <T>(
     check: () => T | Promise<T | null | undefined> | null | undefined,
     timeoutMs?: number,

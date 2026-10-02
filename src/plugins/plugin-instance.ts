@@ -125,6 +125,15 @@ export class PluginInstance {
     return this.activeCall() !== undefined;
   }
 
+  /** A reload has reserved this instance and is draining its admitted work. */
+  get replacementPending(): boolean {
+    return this.replacementReserved;
+  }
+
+  holdsPendingReplacement(token: object): boolean {
+    return this.replacementReserved && this.hasToken(token);
+  }
+
   run<T>(run: () => T): T {
     const current = this.activeCall();
     if (current) {
@@ -386,7 +395,9 @@ export class PluginInstance {
     pluginInvocationContext.getStore()?.assertCurrent?.(this);
     const current = invocation.getStore();
     const call =
-      current?.instance === this && current.token === token ? current : { instance: this, token };
+      current?.instance === this && current.token === token
+        ? current
+        : { instance: this, token, parent: current };
     if (!this.owner) {
       const enter = () => invocation.run(call, run);
       // Deferred setup imports use the same SDK resolver facts as their initial load.

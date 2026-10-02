@@ -9,6 +9,7 @@ import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -37,6 +38,7 @@ import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
+import type { SqliteReclamationWorkerMessage } from "./session-accessor.sqlite-reclamation-worker.types.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
 import { createSessionEntryReclamationPlan } from "./session-accessor.sqlite-reclamation.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
@@ -270,59 +272,78 @@ test("binds first shared-state creation without host SQL and reuses reclamation 
   });
 });
 
-test("retains a late lease receipt for exact cleanup after source read admission is revoked", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      env: state.env,
-      sessionId: "synthetic-late-lease",
-      sessionKey: "agent:main:synthetic-late-lease",
-    };
-    const databaseOptions = {
-      agentId: scope.agentId,
-      env: state.env,
-      path: openOpenClawAgentDatabase(scope).path,
-    };
-    const { entry, plan } = createEntryFixture(scope, databaseOptions);
-    const sharedPath = resolveOpenClawStateSqlitePath(state.env);
-    const admission = stateCache.captureOpenClawStateDatabaseReadAdmission(sharedPath);
-    const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
-    let child: Worker | undefined;
-    let revoked = false;
-    vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
-      const worker = spawn(data);
-      child = worker;
-      worker.prependListener("message", (message: { type: string }) => {
-        if (message.type === "lease") {
-          // Native acquisition already committed, but its notification has not reached the owner.
-          stateCache.closeOpenClawStateDatabaseByPath(sharedPath);
-          revoked = true;
-          expect(() => admission.assertCurrent()).toThrow("read admission changed");
-        }
+test.each(["established", "first-created"] as const)(
+  "retains a late lease receipt for exact cleanup after source read admission is revoked (%s)",
+  async (sharedState) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        env: state.env,
+        sessionId: "synthetic-late-lease",
+        sessionKey: "agent:main:synthetic-late-lease",
+      };
+      const databaseOptions = {
+        agentId: scope.agentId,
+        env:
+          sharedState === "first-created"
+            ? { ...state.env, OPENCLAW_STATE_DIR: state.statePath("late-lease-owner") }
+            : state.env,
+        path: openOpenClawAgentDatabase(scope).path,
+      };
+      const { entry, plan } = createEntryFixture(scope, databaseOptions);
+      const sharedPath = resolveOpenClawStateSqlitePath(databaseOptions.env);
+      const admission = stateCache.captureOpenClawStateDatabaseReadAdmission(sharedPath);
+      expect(admission.identity.key.startsWith("path:")).toBe(sharedState === "first-created");
+      const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
+      let child: Worker | undefined;
+      let revoked = false;
+      vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
+        const worker = spawn(data);
+        child = worker;
+        worker.prependListener("message", (message: SqliteReclamationWorkerMessage) => {
+          if (message.type === "lease") {
+            // Native acquisition already committed, but its notification has not reached the owner.
+            const physical = readDatabasePathIdentitySync(sharedPath);
+            const receipt = message.receipt;
+            expect(receipt.sharedStateIdentity).toBe(physical.key);
+            expect(receipt.sharedStatePath).toBe(sharedPath);
+            expect(receipt.agentId).toBe(databaseOptions.agentId);
+            expect(receipt.path).toBe(databaseOptions.path);
+            expect(receipt.ownerPid).toBe(process.pid);
+            expect(admission.identity.key.startsWith("path:")).toBe(
+              sharedState === "first-created",
+            );
+            stateCache.clearOpenClawStateDatabaseOpenFailure(sharedPath);
+            revoked = true;
+            expect(() => admission.assertCurrent()).toThrow("read admission changed");
+          }
+        });
+        return worker;
       });
-      return worker;
+      try {
+        await expect(
+          runSqliteSessionReclamation({
+            forceInProcess: false,
+            plan,
+          }),
+        ).rejects.toThrow("OpenClaw state database read admission changed");
+        expect(revoked).toBe(true);
+        expect(admission.assertCurrent).toThrow("read admission changed");
+        expect(admission.identity.key).toBe(readDatabasePathIdentitySync(sharedPath).key);
+        expect(child?.threadId).toBe(-1);
+        expect(loadSessionEntry(scope)).toEqual(entry);
+        await closeOpenClawAgentDatabasesAsync(state.stateDir);
+        expect(
+          openOpenClawStateDatabase({ env: databaseOptions.env })
+            .db.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?")
+            .all(databaseOptions.path),
+        ).toEqual([]);
+      } finally {
+        vi.restoreAllMocks();
+      }
     });
-    try {
-      await expect(
-        runSqliteSessionReclamation({
-          forceInProcess: false,
-          plan,
-        }),
-      ).rejects.toThrow("OpenClaw state database read admission changed");
-      expect(revoked).toBe(true);
-      expect(child?.threadId).toBe(-1);
-      expect(loadSessionEntry(scope)).toEqual(entry);
-      await closeOpenClawAgentDatabasesAsync(state.stateDir);
-      expect(
-        openOpenClawStateDatabase({ env: state.env })
-          .db.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?")
-          .all(databaseOptions.path),
-      ).toEqual([]);
-    } finally {
-      vi.restoreAllMocks();
-    }
-  });
-});
+  },
+);
 
 test("logs a native reclamation Worker throw with its cause, first frame and hashed session", async () => {
   await withOpenClawTestState(
@@ -384,7 +405,7 @@ test("logs a native reclamation Worker throw with its cause, first frame and has
               error: expect.stringContaining(
                 `synthetic reclamation crash for ${redactIdentifier(scope.sessionId)} | synthetic disk failure`,
               ),
-              errorFrame: expect.stringContaining("at MessagePort.failReclamation"),
+              errorFrame: expect.stringMatching(/^at (?:MessagePort\.)?failReclamation \(/u),
             }),
           }),
           expect.objectContaining({

@@ -3,6 +3,7 @@
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { HealthSummary } from "./health/types.js";
 import { createChatRunState } from "./server-chat-state.js";
+import type { GatewayClient } from "./server-methods/client-types.js";
 
 /** Create a Gateway maintenance-state stub with configurable health/presence versions. */
 export function createGatewayMaintenanceStateForTest(params?: {
@@ -13,6 +14,7 @@ export function createGatewayMaintenanceStateForTest(params?: {
   const chatRunState = createChatRunState();
   return {
     scheduler: createTestGatewayScheduler("fake-timers"),
+    clients: new Set<GatewayClient>(),
     broadcast: () => {},
     nodeSendToAllSubscribed: () => {},
     getPresenceVersion: () => params?.presenceVersion ?? 1,

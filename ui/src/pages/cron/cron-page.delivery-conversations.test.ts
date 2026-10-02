@@ -7,6 +7,7 @@ import type { CronJob, CronJobsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { CronState } from "../../lib/cron/types.ts";
+import { createContext } from "./cron-page.test-support.ts";
 import type { DeliveryConversationsController } from "./delivery-conversations.ts";
 import { createCronViewJob } from "./view.test-support.ts";
 import "./cron-page.ts";
@@ -87,63 +88,6 @@ function operatorHello(scopes: string[]): NonNullable<ApplicationGatewaySnapshot
     protocol: 4,
     auth: { role: "operator", scopes },
   };
-}
-
-function createContext(
-  gateway: TestGateway,
-  scopeId: string | null = "main",
-  selectedId: string | null = scopeId,
-): ApplicationContext {
-  const subscribe = () => () => undefined;
-  let selectionState = { selectedId, scopeId };
-  const selectionListeners = new Set<(state: typeof selectionState) => void>();
-  return {
-    basePath: "",
-    gateway,
-    agents: {
-      state: {
-        agentsList: { defaultId: "main", agents: [{ id: "main" }] },
-        agentsLoading: false,
-        agentsError: null,
-      },
-      ensureList: vi.fn(async () => undefined),
-      subscribe,
-    },
-    channels: {
-      state: {
-        channelsSnapshot: null,
-      },
-      refresh: vi.fn(async () => undefined),
-      subscribe,
-    },
-    runtimeConfig: {
-      state: { configSnapshot: null },
-      subscribe,
-    },
-    agentSelection: {
-      get state() {
-        return selectionState;
-      },
-      set(agentId: string | null) {
-        selectionState = { selectedId: agentId, scopeId: agentId };
-        for (const listener of selectionListeners) {
-          listener(selectionState);
-        }
-      },
-      setScope(agentId: string | null) {
-        selectionState = { ...selectionState, scopeId: agentId };
-        for (const listener of selectionListeners) {
-          listener(selectionState);
-        }
-      },
-      subscribe(listener: (state: typeof selectionState) => void) {
-        selectionListeners.add(listener);
-        return () => selectionListeners.delete(listener);
-      },
-    },
-    navigate: vi.fn(),
-    preload: vi.fn(async () => undefined),
-  } as unknown as ApplicationContext;
 }
 
 function createPage(context: ApplicationContext, options: { render?: boolean } = {}): CronTestPage {

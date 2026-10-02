@@ -5,10 +5,17 @@ import type { McpOAuthWorkerOperations } from "../agents/mcp-oauth-store.worker.
 import type { WorktreeWorkerOperations } from "../agents/worktrees/dispatch.worker.js";
 import type { AuditWorkerOperations } from "../audit/audit-event-writer.worker.js";
 import type { ChannelIngressWorkerOperations } from "../channels/message/ingress-queue.worker-contract.js";
+import type { ClawProvenanceWriteOperations } from "../claws/provenance-write.worker-contract.js";
 import type { DoctorWorkerOperations } from "../commands/doctor-state.worker.js";
 import type { FleetRegistryWriteOperations } from "../fleet/registry.worker-contract.js";
 import type { ManagedImageRecordWorkerOperations } from "../gateway/managed-image-record-store.kernel.js";
 import type { OperatorApprovalWorkerOperations } from "../gateway/operator-approval-store.worker-contract.js";
+import type { WorkerInferenceStoreOperations } from "../gateway/worker-environments/inference-store.worker-contract.js";
+import type { WorkerPlacementDispatchStoreOperations } from "../gateway/worker-environments/placement-dispatch-store.worker-contract.js";
+import type { PlacementSessionToolWorkerOperations } from "../gateway/worker-environments/placement-session-tool-operations.worker-contract.js";
+import type { PlacementTurnClaimWorkerOperations } from "../gateway/worker-environments/placement-turn-claims.worker-contract.js";
+import type { WorkspaceJournalWorkerOperations } from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
+import type { WorkerEnvironmentWorkerOperations } from "../gateway/worker-environments/store-worker-contract.js";
 import type { DeliveryQueueWorkerOperations } from "../infra/delivery-queue.worker-contract.js";
 import type { DevicePairingWorkerOperations } from "../infra/device-pairing-worker-contract.js";
 import type { ExecAuthorizationWorkerOperations } from "../infra/exec-approvals-authorization.worker-contract.js";
@@ -31,10 +38,12 @@ import type {
 } from "../skills/workshop/store.worker-contract.js";
 import type { TranscriptWriteOperations } from "../transcripts/store-write.worker-contract.js";
 import type { OnboardingRecommendationWriteOperations } from "./onboarding-recommendations.kernel.js";
+import type { RepositoryWorkspaceWorkerOperations } from "./session-repository-workspaces.worker-contract.js";
 import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
-export type RegisteredStateWorkerOperations = WebPushWorkerOperations &
+export type RegisteredStateWorkerOperations = ClawProvenanceWriteOperations &
+  WebPushWorkerOperations &
   ProjectRegistryWorkerOperations &
   ApnsRegistrationWorkerOperations &
   WorktreeWorkerOperations &
@@ -65,9 +74,18 @@ export type RegisteredStateWorkerOperations = WebPushWorkerOperations &
   TranscriptWriteOperations &
   AuthProfileWorkerOperations &
   PluginRuntimeWorkerOperations &
+  WorkerInferenceStoreOperations &
+  WorkerPlacementDispatchStoreOperations &
+  PlacementSessionToolWorkerOperations &
+  PlacementTurnClaimWorkerOperations &
+  WorkspaceJournalWorkerOperations &
+  WorkerEnvironmentWorkerOperations &
+  RepositoryWorkspaceWorkerOperations &
   UserProfileWorkerOperations;
 
 export const stateWorkerRegistry = createWorkerOperationRegistry<RegisteredStateWorkerOperations>({
+  clawProvenance: () =>
+    import("../claws/provenance-write.worker.js").then((m) => m.clawProvenanceOperations),
   projects: () =>
     import("../projects/project-registry.worker.js").then((m) => m.projectRegistryOperations),
   operatorApprovals: () =>
@@ -135,5 +153,33 @@ export const stateWorkerRegistry = createWorkerOperationRegistry<RegisteredState
   conversationBindings: () =>
     import("../infra/outbound/current-conversation-bindings.worker.js").then(
       (m) => m.conversationBindingOperations,
+    ),
+  workerInference: () =>
+    import("../gateway/worker-environments/inference-store.worker.js").then(
+      (m) => m.workerInferenceOperations,
+    ),
+  workerPlacements: () =>
+    import("../gateway/worker-environments/placement-dispatch-store.worker.js").then(
+      (m) => m.workerPlacementOperations,
+    ),
+  placementTools: () =>
+    import("../gateway/worker-environments/placement-session-tool-operations.worker.js").then(
+      (m) => m.placementSessionToolOperations,
+    ),
+  placementTurns: () =>
+    import("../gateway/worker-environments/placement-turn-claims.worker.js").then(
+      (m) => m.placementTurnClaimOperations,
+    ),
+  placementJournals: () =>
+    import("../gateway/worker-environments/placement-workspace-journal.worker.js").then(
+      (m) => m.workspaceJournalOperations,
+    ),
+  workerEnvironments: () =>
+    import("../gateway/worker-environments/store.worker.js").then(
+      (m) => m.workerEnvironmentOperations,
+    ),
+  repositoryWorkspaces: () =>
+    import("./session-repository-workspaces.worker.js").then(
+      (m) => m.repositoryWorkspaceOperations,
     ),
 });

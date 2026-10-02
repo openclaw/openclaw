@@ -27,10 +27,11 @@ backup.
 
 ## Upgrading very old versions
 
-For installations older than June 2026, upgrade to **`2026.9.5` first**, run its
+For installations older than July 2026, upgrade to **`2026.9.5` first**, run its
 Doctor migrations, and then upgrade to `latest`. The bridge release still
 imports the old `tasks/runs.sqlite`, `flows/registry.sqlite`, and
-`plugin-state/state.sqlite` databases, imports pre-June plugin JSON state and
+`plugin-state/state.sqlite` databases, imports the JSON plugin install index,
+pre-June plugin JSON state, and
 `credentials/oauth.json`, repairs retired agent and channel config keys, and
 includes the old runtime aliases. The retired plugin imports cover Telegram,
 iMessage, Active Memory, Nostr, and Microsoft Teams; see
@@ -473,6 +474,11 @@ migrations. Automatic rollback keeps compatible databases in place, preserving
 newer writes. If the previous runtime cannot read the current databases, the
 updater retains the candidate and recovery artifacts and reports why rollback
 was refused.
+
+Rollback snapshots settle local SQLite writers under maintenance ownership before
+capture, so writer shutdown during rollback is not mistaken for intervening writes.
+The installed updater owns snapshot capture; staging a newer candidate cannot
+change that behavior in an already-running older updater.
 
 Switch channels or target a specific version:
 

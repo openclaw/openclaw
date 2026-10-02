@@ -125,6 +125,9 @@ afterEach(() => {
 describe("scheduleGatewayHandlerPrewarm", () => {
   it("prepares first-use modules, primary skills, and Memory Core in sequence without executing requests", async () => {
     vi.useFakeTimers();
+    mocks.prewarmGatewaySessionHistory.mockImplementationOnce(async () => {
+      mocks.events.push("session-history-worker");
+    });
     mocks.getMemoryCapabilityRegistration.mockReturnValue({ pluginId: "memory-core" });
     const cfg: OpenClawConfig = {
       agents: {
@@ -149,6 +152,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
         await vi.dynamicImportSettled();
       } while (vi.getTimerCount() > 0);
 
+      expect(mocks.events[0]).toBe("session-history-worker");
       expect(mocks.events).toContain("connection");
       expect(mocks.events).toContain("agent-events");
       expect(mocks.events.filter((event) => event === "handlers")).toHaveLength(3);
@@ -306,6 +310,33 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     await sidecar.stop();
   });
 
+  it("prepares the history worker during foreground work while other preparation stays idle", async () => {
+    vi.useFakeTimers();
+    const admission = expectDefined(tryBeginGatewayRootWorkAdmission(), "foreground admission");
+    const prepared: string[] = [];
+    const sidecar = scheduleGatewayHandlerPrewarm({
+      scheduler: createTestGatewayScheduler("fake-timers"),
+      getConfig: () => ({}),
+      log: { warn: vi.fn() },
+      startupTrace: {
+        measure: async (name, load) => {
+          prepared.push(name);
+          return await load();
+        },
+      },
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.dynamicImportSettled();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
+      expect(prepared).toEqual(["post-ready.gateway-data.session-history-worker"]);
+    } finally {
+      admission.release();
+      await sidecar.stop();
+    }
+  });
+
   it("stays stopped when readiness arrives after shutdown", async () => {
     vi.useFakeTimers();
     const { promise: gatewayReady, resolve: releaseGatewayReady } = createDeferred();
@@ -421,7 +452,7 @@ it("keeps the context cache delayed and uses current config after foreground wor
   }
 });
 
-it("skips optional discovery when foreground work arrives after idle admission", async () => {
+it("keeps worker preparation but skips optional discovery when foreground work arrives after admission", async () => {
   vi.useFakeTimers();
   mocks.getMemoryCapabilityRegistration.mockReturnValue({ pluginId: "memory-core" });
   const handle = scheduleGatewayHandlerPrewarm({
@@ -450,7 +481,7 @@ it("skips optional discovery when foreground work arrives after idle admission",
     expect(mocks.prepareWorkspaceSkillEntries).not.toHaveBeenCalled();
     expect(mocks.ensureSkillsWatcher).not.toHaveBeenCalled();
     expect(mocks.prewarmMemorySearchWorker).not.toHaveBeenCalled();
-    expect(mocks.prewarmGatewaySessionHistory).not.toHaveBeenCalled();
+    expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
   } finally {
     await handle.stop();
   }

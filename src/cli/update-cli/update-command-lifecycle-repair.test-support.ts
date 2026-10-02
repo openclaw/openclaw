@@ -132,6 +132,7 @@ export function registerRepairCustodyTests(mocks: {
         release,
         releaseState,
         repairSqliteNoCow: vi.fn(async () => {}),
+        enableSqliteReclamation: async () => {},
         cleanupRetainedRuntimes: vi.fn(async () => {}),
       });
       vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");

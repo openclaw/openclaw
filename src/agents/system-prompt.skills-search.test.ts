@@ -21,15 +21,17 @@ describe("installed skill prompt guidance", () => {
     }
   });
 
-  it("advertises search only when the prepared tool surface supports it", () => {
+  it.each([false, true])("guides discovery without a prompt directory (%s)", (codeModeActive) => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      toolNames: ["skills_search", "skills_read"],
+      codeModeActive,
+      toolNames: codeModeActive ? ["exec"] : ["skills_search", "skills_read"],
+      capabilityToolNames: ["skills_search", "skills_read"],
       skillsPrompt: "",
     });
-    expect(prompt).toContain("skills_search");
-    expect(prompt).toContain("skills_read");
-    expect(prompt).toContain("directory is bounded");
+    expect(prompt).toContain(codeModeActive ? "skills.search(query)" : "skills_search");
+    expect(prompt).toContain(codeModeActive ? 'skills.read("<name>")' : "skills_read");
+    expect(prompt).not.toContain("<available_skills>");
     const denied = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["read"],

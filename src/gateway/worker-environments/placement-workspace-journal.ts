@@ -16,7 +16,7 @@ import type {
   WorkspaceJournalMutation,
   WorkspaceJournalReadCommand,
   WorkspaceJournalReadResult,
-} from "./placement-workspace-journal.worker-contract.js";
+} from "./placement-workspace-journal.types.js";
 import { MAX_RECONCILIATION_PACK_BYTES } from "./workspace-manifest.js";
 import {
   parseWorkerWorkspaceReconciliationPlan,
