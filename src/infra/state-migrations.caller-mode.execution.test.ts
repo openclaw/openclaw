@@ -207,7 +207,10 @@ describe("legacy state migration caller execution", () => {
       warnings: [],
     });
     expect(result.stepReceipts.find((receipt) => receipt.id === "exec-approvals")).toMatchObject({
-      source: [{ kind: "path", path: execPath }],
+      source: [
+        { kind: "path", path: execPath },
+        { kind: "sqlite", path: stateDatabasePath },
+      ],
       outcome: "completed",
       warnings: [],
     });
@@ -259,7 +262,10 @@ describe("legacy state migration caller execution", () => {
     expect(fs.realpathSync(legacyStateDir)).toBe(fs.realpathSync(stateDir));
     expect(fs.existsSync(execPath)).toBe(false);
     expect(result.stepReceipts.find((receipt) => receipt.id === "exec-approvals")).toMatchObject({
-      source: [{ kind: "path", path: path.join(stateDir, "exec-approvals.json") }],
+      source: [
+        { kind: "path", path: path.join(stateDir, "exec-approvals.json") },
+        { kind: "sqlite", path: path.join(stateDir, "state", "openclaw.sqlite") },
+      ],
       outcome: "completed",
     });
     expect(
@@ -309,6 +315,7 @@ describe("legacy state migration caller execution", () => {
     );
     expect(plan.steps.find((step) => step.id === "exec-approvals")?.source).toEqual([
       { kind: "path", path: path.join(stateDir, "exec-approvals.json") },
+      { kind: "sqlite", path: path.join(stateDir, "state", "openclaw.sqlite") },
     ]);
     expect(fs.existsSync(legacyStateDir)).toBe(true);
     expect(fs.existsSync(stateDir)).toBe(false);

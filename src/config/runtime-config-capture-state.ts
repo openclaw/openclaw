@@ -1,9 +1,5 @@
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
-import {
-  getRetainedLegacyDefaultAgentId,
-  setRetainedLegacyDefaultAgentId,
-} from "./legacy.default-agent-owner-state.js";
 import { cloneConfigWithResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -24,7 +20,6 @@ export function captureRuntimeConfigWithSource(
 ): OpenClawConfig {
   const clone = (value: OpenClawConfig) => {
     const captured = cloneConfigWithResolutionFacts(value);
-    setRetainedLegacyDefaultAgentId(captured, getRetainedLegacyDefaultAgentId(value));
     return freezeJsonSnapshot(captured);
   };
   const captured = clone(config);

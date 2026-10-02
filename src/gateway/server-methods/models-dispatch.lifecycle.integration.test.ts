@@ -190,7 +190,7 @@ async function withDispatchLifecycle(
           heartbeat: { every: "0m" },
           modelPolicy: { allow: ["opencode/*"] },
         },
-        list: [{ id: "main", workspace: state.workspaceDir }],
+        entries: { main: { workspace: state.workspaceDir } },
       },
       tools: { profile: "minimal" },
       plugins: {

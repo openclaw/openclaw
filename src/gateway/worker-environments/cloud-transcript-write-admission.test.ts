@@ -170,7 +170,6 @@ describe("cloud transcript write admission", () => {
     { change: "missing", cleared: false },
     { change: "writer", cleared: false },
     { change: "current", cleared: true },
-    { change: "claim", cleared: true },
   ] as const)(
     "checks $change settlement authority after admitting a workspace report (cleared: $cleared)",
     async ({ change, cleared }) => {

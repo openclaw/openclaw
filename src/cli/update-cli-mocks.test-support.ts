@@ -561,6 +561,12 @@ vi.mock("../config/backup-rotation.js", async (importOriginal) => ({
   createPreUpdateConfigSnapshot: (...args: unknown[]) => createPreUpdateConfigSnapshotMock(...args),
 }));
 
+vi.mock("../daemon/inspect.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/inspect.js")>()),
+  // Service state is fixture-owned; never pair it with the host's installed services.
+  listManagedOpenClawGatewayServices: vi.fn(async () => ({ services: [], errors: [] })),
+}));
+
 vi.mock("../daemon/service.js", async () => {
   const { createUpdateServiceStateReader } =
     await import("./update-cli/update-command-service-state.test-support.js");
