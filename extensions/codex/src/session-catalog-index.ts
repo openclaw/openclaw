@@ -11,6 +11,7 @@ import type { CodexCatalogIndexOptions } from "./session-catalog-index-contract.
 import { readCodexCatalogCursor } from "./session-catalog-index-cursor.js";
 import { CodexCatalogIndexEvents } from "./session-catalog-index-events.js";
 import { CodexCatalogField } from "./session-catalog-index-field.js";
+import { reconcileCodexCatalogFiles } from "./session-catalog-index-files.js";
 import { applyCodexCatalogName } from "./session-catalog-index-names.js";
 import { CodexCatalogObservations } from "./session-catalog-index-observations.js";
 import {
@@ -19,7 +20,6 @@ import {
   type CodexCatalogOrderKey,
 } from "./session-catalog-index-order.js";
 import { prepareCodexCatalogQuery } from "./session-catalog-index-query.js";
-import { reconcileCodexCatalogFiles } from "./session-catalog-index-reconcile.js";
 import type {
   CodexCatalogIndexRow,
   CodexCatalogRolloutFingerprint,
