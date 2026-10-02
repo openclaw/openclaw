@@ -169,14 +169,14 @@ export async function withSqliteSessionPageReclamation<T>(
                 readSessionArchivePruningInDatabase(database, ARCHIVE_RETENTION_BATCH_SIZE),
               assertNativeCurrent,
             ),
-          pruneRetention: async (input) =>
+          pruneRetention: async (retention) =>
             withSqliteSessionDatabase(
               databaseOptions,
               (database) =>
                 pruneSessionArchivesByRetentionInDatabase(
                   database,
                   databaseOptions,
-                  input,
+                  retention,
                   assertNativeCurrent,
                 ),
               assertNativeCurrent,
@@ -325,10 +325,13 @@ export async function withSqliteSessionPageReclamation<T>(
                 assertPruningCurrent();
                 return result;
               },
-              pruneRetention: (input) =>
+              pruneRetention: (retention) =>
                 write(
                   (worker) =>
-                    worker.execute({ type: "session.archivePruning.pruneRetention", input }),
+                    worker.execute({
+                      type: "session.archivePruning.pruneRetention",
+                      input: retention,
+                    }),
                   "session.history.archive-prune",
                 ),
               removeLegacy: (filePath) =>

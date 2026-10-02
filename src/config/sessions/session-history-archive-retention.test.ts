@@ -152,14 +152,14 @@ it.each([
       return withPages(input, (reclaim, assertCurrent, prepared, archives) =>
         run(reclaim, assertCurrent, prepared, {
           ...archives,
-          pruneRetention: async (input) => {
+          pruneRetention: async (retention) => {
             attempts += 1;
             entered.resolve();
             await release.promise;
             if (change === "rejected") {
               throw new Error("injected retention rejection");
             }
-            return archives.pruneRetention(input);
+            return archives.pruneRetention(retention);
           },
         }),
       );
