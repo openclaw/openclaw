@@ -60,17 +60,19 @@ async function measure(name: string, run: () => Promise<unknown>) {
     }
     return result;
   };
+  // The native query methods are overloaded (named or anonymous parameters); forward the
+  // caller's argument list untouched instead of narrowing it to one overload.
   StatementSync.prototype.get = function (...args) {
     queries++;
-    return originalGet.apply(this, args);
+    return Reflect.apply(originalGet, this, args);
   };
   StatementSync.prototype.all = function (...args) {
     queries++;
-    return originalAll.apply(this, args);
+    return Reflect.apply(originalAll, this, args);
   };
   StatementSync.prototype.iterate = function (...args) {
     queries++;
-    return originalIterate.apply(this, args);
+    return Reflect.apply(originalIterate, this, args);
   };
   const start = performance.now();
   try {
