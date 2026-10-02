@@ -26,20 +26,6 @@ export const GatewaySuspensionSchema = closedObject({
 });
 export type GatewaySuspension = Static<typeof GatewaySuspensionSchema>;
 
-export const GatewaySuspendTaskBlockerSchema = closedObject({
-  taskId: Type.String(),
-  status: Type.Literal("running"),
-  runtime: Type.Union([
-    Type.Literal("subagent"),
-    Type.Literal("acp"),
-    Type.Literal("cli"),
-    Type.Literal("cron"),
-  ]),
-  runId: Type.Optional(Type.String()),
-  label: Type.Optional(Type.String()),
-  title: Type.Optional(Type.String()),
-});
-
 export const GatewaySuspendBlockerSchema = closedObject({
   kind: Type.Union([
     Type.Literal("queue"),
@@ -47,7 +33,9 @@ export const GatewaySuspendBlockerSchema = closedObject({
     Type.Literal("embedded-run"),
     Type.Literal("background-exec"),
     Type.Literal("cron-run"),
-    Type.Literal("task"),
+    Type.Literal("agent-run"),
+    Type.Literal("acp-run"),
+    Type.Literal("media-generation"),
     Type.Literal("root-request"),
     Type.Literal("session-admission"),
     Type.Literal("session-mutation"),
@@ -58,7 +46,6 @@ export const GatewaySuspendBlockerSchema = closedObject({
   ]),
   count: CountSchema,
   message: Type.String(),
-  task: Type.Optional(GatewaySuspendTaskBlockerSchema),
 });
 
 export const GatewaySuspendPrepareParamsSchema = closedObject({
@@ -163,7 +150,6 @@ export const GatewaySuspendHandoffResultSchema = closedObject({
 
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
-export type GatewaySuspendTaskBlocker = Static<typeof GatewaySuspendTaskBlockerSchema>;
 export type GatewaySuspendBlocker = Static<typeof GatewaySuspendBlockerSchema>;
 export type GatewaySuspendPrepareParams = Static<typeof GatewaySuspendPrepareParamsSchema>;
 export type GatewaySuspendPrepareResult = Static<typeof GatewaySuspendPrepareResultSchema>;

@@ -5,6 +5,7 @@ import {
   type WorkerProvider,
 } from "../../plugins/types.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
+import { hasForcedWorkerEnvironmentAbandonment } from "./environment-errors.js";
 import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-record.js";
 import type {
   WorkerEnvironmentAbandonment,
@@ -90,13 +91,15 @@ export function createWorkerProviderOwnerLifecycle(
   const stopOwner = async (
     record: WorkerEnvironmentRecord,
     reason?: WorkerTunnelStopReason,
+    runtimeRefresh?: { assertCurrent: () => void },
   ): Promise<WorkerEnvironmentRecord> => {
     requireCurrentOwner(record);
+    runtimeRefresh?.assertCurrent();
     options.onOwnerStopped?.(record.environmentId);
     const sessionId = record.attachedSessionIds.length === 1 ? record.attachedSessionIds[0] : null;
-    if (sessionId) {
-      // Transfer an exact pending-result owner before credential revocation makes its
-      // same-lifecycle worker permanently unreachable to recovery.
+    if (sessionId && !runtimeRefresh) {
+      // Runtime refresh hands off eligible results before capturing placement authority.
+      // Other revocations transfer custody before making the old process unreachable.
       options.placementStore?.prepareWorkspaceResultOwnerRevocation(
         { sessionId, environmentId: record.environmentId, ownerEpoch: record.ownerEpoch },
         new Error(record.lastError ?? "Cloud worker owner revoked before workspace recovery"),
@@ -111,9 +114,11 @@ export function createWorkerProviderOwnerLifecycle(
       expectedOwnerEpoch: record.ownerEpoch,
       assertCurrent: () => {
         requireCurrentOwner(record);
+        runtimeRefresh?.assertCurrent();
       },
     });
     requireCurrentOwner(record);
+    runtimeRefresh?.assertCurrent();
     // Only a dedicated node lease makes provider teardown proof of worker termination.
     // Shared or unknown host isolation still requires the exact worker's stop acknowledgement.
     await tunnels?.stop(
@@ -269,13 +274,12 @@ export function createWorkerProviderOwnerLifecycle(
     );
   };
 
-  const cancelRequested = (record: WorkerEnvironmentRecord) =>
-    move(record, "failed", { lastError: "Provisioning canceled before provider allocation" });
-
   const finishDestroy = async (record: WorkerEnvironmentRecord, provider?: WorkerProvider) => {
     let r = record;
     if (r.state === "requested") {
-      return cancelRequested(requireCurrentOwner(r));
+      return move(requireCurrentOwner(r), "failed", {
+        lastError: "Provisioning canceled before provider allocation",
+      });
     }
     // Fence local authority even when the provider is unavailable. stopOwner preserves
     // shared/unknown-host stop acknowledgements before releasing their attachments.
@@ -323,11 +327,11 @@ export function createWorkerProviderOwnerLifecycle(
     destroyOptions: {
       requireUnattached?: boolean;
       abandonment?: WorkerEnvironmentAbandonment;
+      forceAbandon?: () => Promise<void>;
       retryRequested?: boolean;
     } = {},
   ) => {
-    const stopping = options.isStopping();
-    if (stopping) {
+    if (options.isStopping()) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
     return withLock(environmentId, async () => {
@@ -336,6 +340,7 @@ export function createWorkerProviderOwnerLifecycle(
       abandonment?.authorize?.();
       let record = store.get(environmentId);
       if (!record) {
+        await destroyOptions.forceAbandon?.();
         throw serviceError("environment_not_found", `Unknown worker environment: ${environmentId}`);
       }
       if (
@@ -344,6 +349,7 @@ export function createWorkerProviderOwnerLifecycle(
           record.state === "destroyed" ||
           (record.state === "failed" && !record.leaseId))
       ) {
+        await destroyOptions.forceAbandon?.();
         return record;
       }
       if (
@@ -375,23 +381,35 @@ export function createWorkerProviderOwnerLifecycle(
         );
       }
       const destroyOwner = record;
+      const assertDestroyOwner = () => {
+        abandonment?.authorize?.();
+        const current = requireCurrentOwner(destroyOwner);
+        if (destroyOptions.requireUnattached && current.attachedSessionIds.length > 0) {
+          throw serviceError(
+            "invalid_state",
+            "Attached cloud workers must be stopped through sessions.reclaim",
+          );
+        }
+      };
       record = await store.requestDestroy({
         environmentId,
         state: record.state,
-        assertCurrent: () => {
-          abandonment?.authorize?.();
-          const current = requireCurrentOwner(destroyOwner);
-          if (destroyOptions.requireUnattached && current.attachedSessionIds.length > 0) {
-            throw serviceError(
-              "invalid_state",
-              "Attached cloud workers must be stopped through sessions.reclaim",
-            );
-          }
-        },
-        ...(abandonment
-          ? { terminalState: "failed", lastError: FORCED_WORKER_ABANDONMENT_ERROR }
+        assertCurrent: assertDestroyOwner,
+        ...(abandonment ? { terminalState: "failed" } : {}),
+        ...(abandonment || destroyOptions.forceAbandon
+          ? { lastError: FORCED_WORKER_ABANDONMENT_ERROR }
           : {}),
       });
+      if (destroyOptions.forceAbandon && !hasForcedWorkerEnvironmentAbandonment(record)) {
+        record = await store.recordError({
+          environmentId,
+          state: record.state,
+          error: FORCED_WORKER_ABANDONMENT_ERROR,
+          assertCurrent: assertDestroyOwner,
+        });
+      }
+      // Persist the operator's discard decision before placement draining can survive a crash.
+      await destroyOptions.forceAbandon?.();
       try {
         const destroyed = await finishDestroy(record);
         abandonment?.authorize?.();

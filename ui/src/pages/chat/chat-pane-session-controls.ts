@@ -1,7 +1,7 @@
 import { html } from "lit";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
-import { hasOperatorReadAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
@@ -84,7 +84,7 @@ export function readChatPaneComposerAccess(
         sessionScope: true,
         session,
       }).allowed);
-  return { canCompose: hasOperatorReadAccess(auth) || canSend, canSend };
+  return { canCompose: canSend, canSend };
 }
 
 export function readChatPaneMutationAccess(
@@ -92,35 +92,40 @@ export function readChatPaneMutationAccess(
   sessionKey: string,
   session?: GatewaySessionRow,
 ) {
+  const scopedPatchAccess = (patch: SessionPatch) =>
+    readSessionMethodAccess(snapshot, {
+      method: "sessions.patch",
+      params: { key: sessionKey, ...patch },
+      sessionScope: true,
+      session,
+    });
   return {
-    model: readSessionMethodAccess(snapshot, {
-      method: "sessions.patch",
-      params: { key: sessionKey, model: null },
-      sessionScope: true,
-      session,
-    }),
-    effort: readSessionMethodAccess(snapshot, {
-      method: "sessions.patch",
-      params: { key: sessionKey, thinkingLevel: null },
-      sessionScope: true,
-      session,
-    }),
+    model: scopedPatchAccess({ model: null }),
+    effort: scopedPatchAccess({ thinkingLevel: null }),
     contextWindow: readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
       params: { key: sessionKey, contextWindow: null },
     }),
-    permission: readSessionMethodAccess(snapshot, {
-      method: "sessions.patch",
-      params: { key: sessionKey, permissionMode: "guarded" },
-      sessionScope: true,
-      session,
-    }),
-    unarchive: readSessionMethodAccess(snapshot, {
-      method: "sessions.patch",
-      params: { key: sessionKey, archived: false },
-      sessionScope: true,
-      session,
-    }),
+    permission: scopedPatchAccess({ permissionMode: "guarded" }),
+    unarchive: scopedPatchAccess({ archived: false }),
+  };
+}
+
+export function readChatPublicationAccess(
+  snapshot: ApplicationGatewaySnapshot,
+  session: GatewaySessionRow,
+  participationBlocked: boolean,
+) {
+  const canMutate = !session.archived && !participationBlocked;
+  return {
+    canPublishShared:
+      canMutate &&
+      readSessionMethodAccess(snapshot, {
+        method: "sessions.github.publish",
+        requiredScope: "operator.sessions.write",
+        session,
+      }).allowed,
+    canPublishPersonal: canMutate && hasOperatorWriteAccess(snapshot.hello?.auth ?? null),
   };
 }
 

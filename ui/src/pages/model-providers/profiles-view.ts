@@ -72,7 +72,7 @@ function profileSource(profile: ProviderProfile): string | undefined {
   }
 }
 
-function apiKeySource(card: ModelProviderCard): string | undefined {
+export function apiKeySource(card: ModelProviderCard): string | undefined {
   if (card.apiKey?.source === "config") {
     return t("modelProviders.credentials.configKey");
   }
@@ -213,13 +213,9 @@ function profileGroups(card: ModelProviderCard, drafts: Record<string, string[]>
   });
 }
 
-function rowsIn(section: HTMLElement, selector: string): HTMLElement[] {
-  return [...section.querySelectorAll<HTMLElement>(selector)];
-}
-
 function clearDragState(section: HTMLElement): void {
   section.classList.remove(SORTING_CLASS);
-  for (const row of rowsIn(section, ".model-providers__profile")) {
+  for (const row of section.querySelectorAll<HTMLElement>(".model-providers__profile")) {
     row.classList.remove(DRAGGING_CLASS);
     row.style.removeProperty("translate");
   }
@@ -246,7 +242,7 @@ function startPointerDrag(params: {
   const sectionTop = section.getBoundingClientRect().top;
   // Use the original slots for hit testing. Measuring animated neighbors would
   // make the insertion point oscillate as they move out from under the pointer.
-  const slots = rowsIn(section, ".model-providers__profile")
+  const slots = [...section.querySelectorAll<HTMLElement>(".model-providers__profile")]
     .filter((candidate) => candidate.dataset.profileProvider === params.provider)
     .map((element) => ({ element, bounds: element.getBoundingClientRect() }));
   const source = slots.find((slot) => slot.element === row);
@@ -315,7 +311,7 @@ function startPointerDrag(params: {
     update(event);
     const targetId = target?.element.dataset.profileId;
     clearDragState(section);
-    grip.removeEventListener("pointermove", handleMove);
+    grip.removeEventListener("pointermove", update);
     grip.removeEventListener("pointerup", handleUp);
     grip.removeEventListener("pointercancel", handleCancel);
     grip.removeEventListener("lostpointercapture", handleCancel);
@@ -329,7 +325,6 @@ function startPointerDrag(params: {
       params.move(targetId, position);
     }
   };
-  const handleMove = (event: PointerEvent) => update(event);
   const handleUp = (event: PointerEvent) => finish(event, true);
   const handleCancel = (event: PointerEvent) => finish(event, false);
   const handleKeyDown = (event: KeyboardEvent) => {
@@ -339,7 +334,7 @@ function startPointerDrag(params: {
       finish(params.event, false);
     }
   };
-  grip.addEventListener("pointermove", handleMove);
+  grip.addEventListener("pointermove", update);
   grip.addEventListener("pointerup", handleUp);
   grip.addEventListener("pointercancel", handleCancel);
   grip.addEventListener("lostpointercapture", handleCancel);

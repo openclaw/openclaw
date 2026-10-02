@@ -5,13 +5,12 @@ import {
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { formatSqliteErrorCodeSuffix } from "../infra/sqlite-error-diagnostics.js";
 import {
-  acquireStateDatabaseHandleLease,
-  retainHeldStateDatabaseCoordinator,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "../infra/state-database-coordinator.js";
+  resolveRuntimeWorkerThreadExecArgv,
+  resolveRuntimeWorkerUrl,
+} from "../infra/runtime-worker-url.js";
+import { formatSqliteErrorCodeSuffix } from "../infra/sqlite-error-diagnostics.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { createCpuTrackedWorker } from "../infra/worker-cpu.js";
 import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -23,6 +22,7 @@ import {
   leaseHeartbeatState as state,
   leaseHeartbeatStartupPhase,
   LEASE_HEARTBEAT_START_TIMEOUT_MS,
+  type LeaseHeartbeatLoss,
   type LeaseHeartbeatRenewalFailure,
   type LeaseHeartbeatReply,
   type LeaseHeartbeatRequest,
@@ -124,11 +124,7 @@ type PendingHeartbeatRequest = {
 export function startOpenClawStateLeaseHeartbeat(
   params: Omit<
     LeaseHeartbeatWorkerData,
-    | "shared"
-    | "renewalProgress"
-    | "parentCoordinatorRetained"
-    | "retainedStartup"
-    | "deferActivation"
+    "shared" | "expectedIdentity" | "renewalProgress" | "deferActivation"
   > & {
     /** The caller retains its shared-state actor through startup and failure teardown. */
     startupContext?: OpenClawStateWorkerContext;
@@ -146,13 +142,9 @@ export function startOpenClawStateLeaseHeartbeat(
     throw new Error("state lease heartbeat path differs from its captured admission");
   }
   const databasePath = startupContext?.admission.databasePath ?? params.path;
-  const retainedStartup = startupContext
-    ? {
-        expectedIdentity: startupContext.admission.identity.key,
-        coordinatorRuntime: { ...startupContext.coordinatorRuntime },
-      }
-    : undefined;
-  if (retainedStartup && !retainedStartup.expectedIdentity.startsWith("file:")) {
+  const expectedIdentity =
+    startupContext?.admission.identity.key ?? readDatabasePathIdentitySync(databasePath).key;
+  if (!expectedIdentity.startsWith("file:")) {
     throw new Error("state lease heartbeat requires an established database identity");
   }
   const startedAt = performance.now();
@@ -194,11 +186,7 @@ export function startOpenClawStateLeaseHeartbeat(
     ready.reject(error);
     rejectPending(error);
   };
-  const lifecycle = createLeaseHeartbeatCleanup({
-    cancel: close,
-    onReleaseFailed: (cause) =>
-      fail(new Error("state lease heartbeat handle release failed", { cause })),
-  });
+  const lifecycle = createLeaseHeartbeatCleanup({ cancel: close });
   const assertRunning = () => {
     // This checks only local lifetime; verify() owns the fresh durable check.
     if (Atomics.load(shared, state.status) !== state.ready) {
@@ -206,6 +194,9 @@ export function startOpenClawStateLeaseHeartbeat(
     }
   };
   let lossReported = false;
+  let workerLoss: LeaseHeartbeatLoss | undefined;
+  const lossDetail = () =>
+    workerLoss ? ` (lossPath=${workerLoss.path}, lossOutcome=${workerLoss.outcome})` : "";
   const fail = (error: Error) => {
     if (lossReported || Atomics.load(shared, state.status) === state.closed) {
       return;
@@ -383,34 +374,18 @@ export function startOpenClawStateLeaseHeartbeat(
   try {
     params.retainCleanup?.(lifecycle.cleanup);
     const url = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.stateLeaseHeartbeat);
-    const workerArgv = resolveRuntimeWorkerArgv(url);
+    const execArgv = resolveRuntimeWorkerThreadExecArgv(url);
     // Source aliases belong to the parent-selected tsconfig, not an unrelated cwd.
     // Keep the lease worker isolated from every other ambient environment setting.
-    const sourceTsconfig = workerArgv.length > 1 ? process.env.TSX_TSCONFIG_PATH : undefined;
-    // Async startup retains its actor until the worker owns a guarded connection.
-    // Legacy startup needs the parent guard through native worker exit instead.
-    const coordinatorRetained = lifecycle.retainCoordinator(() =>
-      retainedStartup
-        ? withStateDatabaseCoordinatorRuntimeDirectory(retainedStartup.coordinatorRuntime, () =>
-            retainHeldStateDatabaseCoordinator(databasePath),
-          )
-        : retainHeldStateDatabaseCoordinator(databasePath),
-    );
-    if (!retainedStartup) {
-      lifecycle.retainHandle(() =>
-        acquireStateDatabaseHandleLease({ databasePath, busyTimeoutMs: 0 }),
-      );
-    }
+    const sourceTsconfig = execArgv.length > 0 ? process.env.TSX_TSCONFIG_PATH : undefined;
     startupContext?.admission.assertCurrent();
     worker = lifecycle.start(() =>
       runInDetachedAsyncContext(() =>
         createCpuTrackedWorker(url, {
           workerData: {
             path: databasePath,
-            existingOnly: retainedStartup ? true : params.existingOnly,
-            ...(retainedStartup ? { retainedStartup } : {}),
+            expectedIdentity,
             ...(startupContext ? { deferActivation: true as const } : {}),
-            ...(coordinatorRetained ? { parentCoordinatorRetained: true as const } : {}),
             identity: {
               scope: params.identity.scope,
               key: params.identity.key,
@@ -424,7 +399,7 @@ export function startOpenClawStateLeaseHeartbeat(
             renewalProgress: renewalProgress.buffer,
           } satisfies LeaseHeartbeatWorkerData,
           env: sourceTsconfig ? { TSX_TSCONFIG_PATH: sourceTsconfig } : {},
-          execArgv: workerArgv.slice(0, -1),
+          execArgv,
           stdout: true,
           stderr: true,
         }),
@@ -449,21 +424,30 @@ export function startOpenClawStateLeaseHeartbeat(
         ? ": lease expired or ownership lost"
         : "";
     return new Error(
-      `state lease heartbeat exited${detail} (exitCode=${exitCode ?? "unknown"}, acquiredAt=${params.acquiredAt}, lastRenewedAt=${lastRenewedAt || "never"})`,
+      `state lease heartbeat exited${detail} (exitCode=${exitCode ?? "unknown"}, acquiredAt=${params.acquiredAt}, lastRenewedAt=${lastRenewedAt || "never"})${lossDetail()}`,
       renewalFailure
         ? { cause: Object.assign(new Error(renewalFailure.message), renewalFailure) }
         : undefined,
     );
   };
-  worker.once("error", (error) =>
-    fail(
-      renewalFailure ? exitError() : toErrorObject(error, "state lease heartbeat worker failed"),
-    ),
-  );
+  worker.once("error", (error) => {
+    if (renewalFailure) {
+      fail(exitError());
+      return;
+    }
+    const failure = toErrorObject(error, "state lease heartbeat worker failed");
+    failure.message += lossDetail();
+    fail(failure);
+  });
   worker.once("exit", (code) => fail(exitError(code)));
   worker.on("message", (reply: LeaseHeartbeatReply | null) => {
     if (reply === null) {
       settleStartup("message");
+      return;
+    }
+    if ("loss" in reply) {
+      // Diagnostic delivery never changes readiness, authority, or failure timing.
+      workerLoss ??= reply.loss;
       return;
     }
     if ("attempt" in reply) {
@@ -496,7 +480,9 @@ export function startOpenClawStateLeaseHeartbeat(
       if (reply.payload) {
         retainOpenClawStateWorkerErrorPayload(error, reply.payload);
       }
-      deferred.reject(hydrateOpenClawStateWorkerError(error));
+      const hydrated = hydrateOpenClawStateWorkerError(error);
+      hydrated.message += lossDetail();
+      deferred.reject(hydrated);
       return;
     }
     try {

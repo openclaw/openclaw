@@ -88,15 +88,10 @@ describe("managed node startup config", () => {
     },
   );
 
-  it.each([["node", "run"], ["connect"]])(
-    "checks ordinary %j readiness outside the managed scope",
-    async (...commandPath) => {
-      await ensureConfigReady({ runtime: runtime(), commandPath });
-      expect(mocks.prepareStartup).toHaveBeenCalledWith({
-        gateway: false,
-      });
-    },
-  );
+  it("checks ordinary node readiness outside the managed scope", async () => {
+    await ensureConfigReady({ runtime: runtime(), commandPath: ["node", "run"] });
+    expect(mocks.prepareStartup).toHaveBeenCalledWith({ gateway: false });
+  });
 
   it("rejects invalid plugin configuration without offering to repair shared state", async () => {
     mocks.readConfig.mockResolvedValue(snapshot(false));

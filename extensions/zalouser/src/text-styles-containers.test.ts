@@ -146,8 +146,8 @@ describe("parseZalouserTextStyles containers", () => {
     });
   });
 
-  it.each(["#", "##", "###", "####"])("keeps marker-only heading %s representable", (input) => {
-    expect(parseZalouserTextStyles(input)).toEqual({ text: input, styles: [] });
+  it("keeps marker-only level-four headings representable", () => {
+    expect(parseZalouserTextStyles("####")).toEqual({ text: "####", styles: [] });
   });
 
   it("preserves padding on marker-only literal headings", () => {

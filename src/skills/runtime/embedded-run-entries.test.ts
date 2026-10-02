@@ -17,6 +17,7 @@ import {
 } from "../types.js";
 import { resolveEmbeddedRunSkillEntries } from "./embedded-run-entries.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
+import { recordSkillRootsExecutionFileHost } from "./skill-snapshot-provenance.js";
 
 describe("resolveEmbeddedRunSkillEntries", () => {
   const prepareWorkspaceSkillsSpy = vi.spyOn(skillsLoaderModule, "prepareWorkspaceSkills");
@@ -27,27 +28,65 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     prepareWorkspaceSkillsSpy.mockResolvedValue([]);
   });
 
-  it("loads skill entries with config when no resolved snapshot skills exist", async () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          diffs: { enabled: true },
-        },
-      },
-    };
-
-    const result = await resolveEmbeddedRunSkillEntries({
-      workspaceDir: "/tmp/workspace",
-      config,
-      skillsSnapshot: {
-        prompt: "skills prompt",
+  it.each([false, true])(
+    "retains canonical source ownership unless materialized (sandbox=%s)",
+    async (workspaceOnly) => {
+      const workspaceDir = path.resolve("/synthetic/materialized");
+      const executionWorkspaceDir = path.resolve("/synthetic/canonical");
+      const skillsSnapshot: SkillSnapshot = {
+        prompt: "Hydrate selected skills",
         skills: [],
+        promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
+        skillRoots: recordSkillRootsExecutionFileHost(
+          {
+            agentWorkspaceDir: path.resolve("/synthetic/agent"),
+            executionWorkspaceDir,
+          },
+          "gateway",
+        ),
+      };
+      const serializedSnapshot = JSON.stringify(skillsSnapshot);
+      const hydratedSnapshot: SkillSnapshot = JSON.parse(serializedSnapshot);
+      await resolveEmbeddedRunSkillEntries({
+        workspaceDir,
+        workspaceOnly,
+        config: {},
+        skillsSnapshot: hydratedSnapshot,
+      });
+      expect(prepareWorkspaceSkillsSpy.mock.lastCall?.[0]).toBe(
+        workspaceOnly ? workspaceDir : path.resolve("/synthetic/agent"),
+      );
+      expect(prepareWorkspaceSkillsSpy.mock.lastCall?.[1]).toMatchObject({
+        executionWorkspaceDir: workspaceOnly ? undefined : executionWorkspaceDir,
+        executionWorkspaceFileHost: workspaceOnly ? undefined : "gateway",
+      });
+    },
+  );
+
+  it("rebuilds version-6 roots that predate source-host provenance", async () => {
+    const agentWorkspaceDir = path.resolve("/synthetic/current-agent");
+    const executionWorkspaceDir = path.resolve("/synthetic/current-canonical");
+    await resolveEmbeddedRunSkillEntries({
+      workspaceDir: agentWorkspaceDir,
+      executionWorkspaceDir,
+      executionWorkspaceFileHost: "gateway",
+      config: {},
+      skillsSnapshot: {
+        prompt: "Hydrate selected skills",
+        skills: [],
+        promptFormatVersion: 6,
+        skillRoots: {
+          agentWorkspaceDir: path.resolve("/synthetic/stale-agent"),
+          executionWorkspaceDir: path.resolve("/synthetic/stale-canonical"),
+        },
       },
     });
 
-    expect(result.shouldLoadSkillEntries).toBe(true);
-    expect(prepareWorkspaceSkillsSpy).toHaveBeenCalledTimes(1);
-    expect(prepareWorkspaceSkillsSpy).toHaveBeenCalledWith("/tmp/workspace", { config }, undefined);
+    expect(prepareWorkspaceSkillsSpy.mock.lastCall?.[0]).toBe(agentWorkspaceDir);
+    expect(prepareWorkspaceSkillsSpy.mock.lastCall?.[1]).toMatchObject({
+      executionWorkspaceDir,
+      executionWorkspaceFileHost: "gateway",
+    });
   });
 
   it("threads agentId through live skill loading", async () => {
@@ -190,24 +229,6 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     );
   });
 
-  it("skips skill entry loading when resolved snapshot skills are present", async () => {
-    const snapshot: SkillSnapshot = {
-      prompt: "skills prompt",
-      skills: [{ name: "diffs" }],
-      resolvedSkills: [],
-    };
-
-    const result = await resolveEmbeddedRunSkillEntries({
-      workspaceDir: "/tmp/workspace",
-      config: {},
-      skillsSnapshot: snapshot,
-    });
-
-    expect(result.shouldLoadSkillEntries).toBe(false);
-    expect(result.skillEntries).toEqual([]);
-    expect(prepareWorkspaceSkillsSpy).not.toHaveBeenCalled();
-  });
-
   it("exposes a cached lazy loader without eagerly loading a modern snapshot", async () => {
     const loadedEntries: SkillEntry[] = [
       {
@@ -232,6 +253,8 @@ describe("resolveEmbeddedRunSkillEntries", () => {
       },
     });
 
+    expect(result.shouldLoadSkillEntries).toBe(false);
+    expect(result.skillEntries).toEqual([]);
     expect(prepareWorkspaceSkillsSpy).not.toHaveBeenCalled();
     expect(await result.loadSkillEntries()).toBe(loadedEntries);
     expect(await result.loadSkillEntries()).toBe(loadedEntries);

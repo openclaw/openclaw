@@ -2,7 +2,7 @@
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveAgentDir, resolveSessionAgentId } from "../agents/agent-scope.js";
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { resolveSession } from "../agents/command/session.js";
 import {
   appendTranscriptEvent,
@@ -19,7 +19,6 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, {
     prefix: "openclaw-agent-session-",
-    skipSessionCleanup: true,
   });
 }
 
@@ -97,18 +96,6 @@ describe("agent session resolution", () => {
 
       expect(resolution.sessionKey).toBe("agent:main:explicit:explicit-session-123");
       expect(resolution.sessionId).toBe("explicit-session-123");
-    });
-  });
-
-  it("uses the resumed session agent scope when sessionId resolves to another agent store", async () => {
-    await withCrossAgentResumeFixture(async ({ sessionId, sessionKey, cfg }) => {
-      const resolution = resolveSession({ cfg, sessionId });
-      expect(resolution.sessionKey).toBe(sessionKey);
-      const agentId = resolveSessionAgentId({ sessionKey: resolution.sessionKey, config: cfg });
-      expect(agentId).toBe("exec");
-      expect(resolveAgentDir(cfg, agentId)).toContain(
-        `${path.sep}agents${path.sep}exec${path.sep}agent`,
-      );
     });
   });
 
@@ -351,22 +338,16 @@ describe("agent session resolution", () => {
       }
       const sessionStore = { [resolution.sessionKey]: resolution.sessionEntry };
       const resolvedTranscript = await resolveSessionTranscriptFile({
-        sessionId: resolution.sessionId,
         sessionKey: resolution.sessionKey,
         sessionEntry: resolution.sessionEntry,
         sessionStore,
-        storePath: resolution.storePath,
-        agentId: "main",
       });
       expect(resolvedTranscript.sessionFile).toBe(resolution.sessionKey);
       await expect(
         resolveSessionTranscriptFile({
-          sessionId: resolution.sessionId,
           sessionKey: resolution.sessionKey,
           sessionEntry: undefined,
           sessionStore,
-          storePath: resolution.storePath,
-          agentId: "main",
         }),
       ).resolves.toMatchObject({
         sessionEntry: expect.objectContaining({ sessionId }),

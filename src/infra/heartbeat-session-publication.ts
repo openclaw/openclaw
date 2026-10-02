@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
@@ -188,14 +189,7 @@ export async function publishHeartbeatSessionReply(params: {
                 provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
                 // Unlike delivery mirrors, completion notifications remain model context.
                 model: "automation-result",
-                usage: {
-                  input: 0,
-                  output: 0,
-                  cacheRead: 0,
-                  cacheWrite: 0,
-                  totalTokens: 0,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-                },
+                usage: makeZeroUsageSnapshot(),
                 stopReason: "stop",
                 timestamp: Date.now(),
                 idempotencyKey: key,
@@ -228,29 +222,47 @@ export async function publishHeartbeatSessionReply(params: {
       // Accept at the committed-message boundary, while the writer still owns it.
       // A later drain failure cannot revoke a notification already published here.
       updateMode: "none",
-      onMessageCommitted: (receipt) => {
+      onMessageCommitted: (receipt, acceptCompletion) => {
         assertCurrent(receipt.messageId);
-        if (attachMedia && !attachMedia({ messageId: receipt.messageId, blocks: displayMedia })) {
-          throw new Error("heartbeat source receipt media custody is unavailable");
+        const publish = (): Promise<HeartbeatSessionPublication> => {
+          const messageSeq = readCommittedTranscriptMessageSequence(receipt);
+          assertCurrent(receipt.messageId);
+          // Replays invalidate history without emitting the assistant message again.
+          return publishTranscriptUpdate(
+            scope,
+            receipt.appended
+              ? {
+                  lifecycleRevision: expected.expectedLifecycleRevision ?? undefined,
+                  message: receipt.message,
+                  messageId: receipt.messageId,
+                  ...(messageSeq !== undefined ? { messageSeq } : {}),
+                }
+              : {},
+          ).then(
+            () => ({ ok: true, messageId: receipt.messageId }),
+            (error: unknown) => ({ ok: false, reason: formatErrorMessage(error) }),
+          );
+        };
+        if (!attachMedia) {
+          acceptedPublication = publish();
+          return;
         }
-        const messageSeq = readCommittedTranscriptMessageSequence(receipt);
-        assertCurrent(receipt.messageId);
-        // The canonical emitter runs synchronously. Replays invalidate history,
-        // without emitting the same assistant message inline again.
-        acceptedPublication = publishTranscriptUpdate(
-          scope,
-          receipt.appended
-            ? {
-                lifecycleRevision: expected.expectedLifecycleRevision ?? undefined,
-                message: receipt.message,
-                messageId: receipt.messageId,
-                ...(messageSeq !== undefined ? { messageSeq } : {}),
-              }
-            : {},
-        ).then(
-          () => ({ ok: true, messageId: receipt.messageId }),
-          (error: unknown) => ({ ok: false, reason: formatErrorMessage(error) }),
-        );
+        const completion = attachMedia({
+          messageId: receipt.messageId,
+          blocks: readAssistantDisplayContent(receipt.message),
+        }).then((attached) => {
+          if (!attached) {
+            throw new Error("heartbeat source receipt media custody is unavailable");
+          }
+          return publish();
+        });
+        acceptedPublication = completion.catch((error: unknown) => ({
+          ok: false,
+          reason: formatErrorMessage(error),
+        }));
+        acceptCompletion(async () => {
+          await completion;
+        });
       },
     });
     return (

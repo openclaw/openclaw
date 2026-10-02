@@ -19,7 +19,8 @@ export type CodexAuthCredential =
       kind: "oauth";
       provider: typeof OPENAI_PROVIDER_ID;
       profileId: string;
-      result: ProviderAuthResult;
+      credential: OAuthCredential;
+      configPatch: ProviderAuthResult["configPatch"];
     }
   | {
       kind: "api_key";
@@ -78,11 +79,7 @@ export function itemProfileTarget(
   source: { codexHome: string },
 ): { profileId: string; matchedExisting: boolean } {
   if (credential.kind === "oauth") {
-    const profile = credential.result.profiles[0];
-    const matched =
-      profile?.credential.type === "oauth"
-        ? findMatchingOAuthProfile(store, profile.credential)
-        : undefined;
+    const matched = findMatchingOAuthProfile(store, credential.credential);
     if (matched) {
       return { profileId: matched, matchedExisting: true };
     }
@@ -93,8 +90,7 @@ export function itemProfileTarget(
       legacyProfile?.provider === OPENAI_PROVIDER_ID &&
       legacyProfile.mode === "oauth" &&
       source.codexHome === defaultCodexHome() &&
-      profile?.credential.type === "oauth" &&
-      oauthSubject(profile.credential) !== undefined &&
+      oauthSubject(credential.credential) !== undefined &&
       !Object.entries(store.profiles).some(
         ([id, existing]) =>
           id !== LEGACY_CODEX_PROFILE_ID &&

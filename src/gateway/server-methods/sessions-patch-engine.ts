@@ -77,7 +77,7 @@ export async function executeSessionPatchMutations(params: {
   const timing = params.diagnostics?.scope("preflight");
   let personalModelSelection: UserModelAccountSelection | undefined;
   try {
-    personalModelSelection = preparePersonalModelSelection(params, params.patch.model);
+    personalModelSelection = await preparePersonalModelSelection(params, params.patch.model);
   } catch (error) {
     return { ok: false, error: unexpectedPatchError(params.targets[0]?.key ?? "", error) };
   }

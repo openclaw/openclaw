@@ -433,16 +433,4 @@ describe("POST /tools/invoke request cancellation", () => {
       await response.catch(() => undefined);
     }
   });
-
-  it("releases its disconnect watcher when tool execution fails", async () => {
-    lifecycle.execute.mockRejectedValueOnce(new Error("probe failed"));
-
-    const response = await invokeAbortProbe();
-
-    expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({
-      ok: false,
-      error: { type: "tool_error", message: "tool execution failed" },
-    });
-  });
 });

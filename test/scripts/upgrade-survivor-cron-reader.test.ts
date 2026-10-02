@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -21,6 +22,7 @@ const jobs = [
   { id: "main-job", name: "survivor-default-owner", effectiveAgentId: "main" },
   { id: "ops-job", name: "survivor-ops-owner", agentId: "ops", effectiveAgentId: "ops" },
 ];
+const marker = (agentId: string) => `OPENCLAW_E2E_LEGACY_OPERATOR_CRON_${agentId.toUpperCase()}`;
 const entries = jobs.map((job, index) => ({
   jobId: job.id,
   action: "finished",
@@ -28,7 +30,9 @@ const entries = jobs.map((job, index) => ({
   runAtMs: 100 + index,
   runId: `published-run-${index}`,
   status: "ok",
-  summary: `published output ${index}`,
+  summary: marker(job.effectiveAgentId),
+  sessionId: `retained-session-${index}`,
+  sessionKey: `agent:${job.effectiveAgentId}:cron:${job.id}:run:retained-session-${index}`,
 }));
 const page = (values: typeof entries, total = values.length, offset = 0) => ({
   entries: values,
@@ -69,11 +73,30 @@ it.each(["2026.9.4", "2026.9.6"])(
       }
       if (args[1] === "add") {
         expect(args.includes("--no-deliver")).toBe(version === "2026.9.6");
-        return reply(jobs.find((job) => job.name === args[args.indexOf("--name") + 1]));
+        const job = jobs.find((candidate) => candidate.name === args[args.indexOf("--name") + 1])!;
+        if (version === "2026.9.6") {
+          expect(args[args.indexOf("--message") + 1]).toBe(
+            `Reply with exactly ${marker(job.effectiveAgentId)}.`,
+          );
+          expect(args).not.toContain("--command");
+        } else {
+          expect(args[args.indexOf("--command") + 1]).toBe("printf survivor-cron");
+          expect(args).not.toContain("--message");
+        }
+        return reply(job);
       }
       if (args[1] === "run") {
         expect(args).toEqual(["cron", "run", args[2], "--wait"]);
         ran.add(args[2]);
+        const job = jobs.find((candidate) => candidate.id === args[2])!;
+        fs.appendFileSync(
+          path.join(root, "legacy-operator-requests.jsonl"),
+          JSON.stringify({
+            method: "POST",
+            path: "/v1/chat/completions",
+            body: { message: marker(job.effectiveAgentId) },
+          }) + "\n",
+        );
         return reply({ ok: true });
       }
       expect(args[1]).toBe("runs");
@@ -96,6 +119,9 @@ it.each(["2026.9.4", "2026.9.6"])(
     if (version === "2026.9.6") {
       expect([...ran]).toEqual(["main-job", "ops-job"]);
       expect(saved.jobs.flatMap((job: { history: unknown[] }) => job.history)).toEqual(entries);
+      expect(saved.jobs.map((job: { transcriptMarker: string }) => job.transcriptMarker)).toEqual(
+        jobs.map((job) => marker(job.effectiveAgentId)),
+      );
     } else {
       expect([...ran]).toEqual([]);
       expect(saved.jobs.every((job: { history?: unknown[] }) => job.history === undefined)).toBe(
@@ -112,6 +138,10 @@ it.each([
   { source: "native", damage: "content" },
   { source: "legacy", damage: "missing-filter" },
   { source: "native", damage: "offset" },
+  { source: "native", damage: "transcript-duplicate" },
+  { source: "native", damage: "transcript-other-run" },
+  { source: "native", damage: "transcript-other-prompt-run" },
+  { source: "native", damage: "transcript-missing-cursor" },
 ])("checks candidate Cron pages for $source history ($damage)", async ({ source, damage }) => {
   const root = dirs.make("survivor-cron-reader-check-");
   fs.writeFileSync(
@@ -119,7 +149,9 @@ it.each([
     JSON.stringify({
       jobs: jobs.map((job, index) => ({
         ...job,
-        ...(source === "native" ? { history: [entries[index]] } : {}),
+        ...(source === "native"
+          ? { history: [entries[index]], transcriptMarker: marker(job.effectiveAgentId) }
+          : {}),
       })),
     }),
   );
@@ -135,6 +167,7 @@ it.each([
       JSON.stringify({ status: "passed", contract }),
     );
   }
+  const transcriptRequests: unknown[] = [];
   vi.mocked(spawnSync).mockImplementation((command, args, options) => {
     if (command !== "openclaw") {
       return originalChildProcess.spawnSync(command, args, options);
@@ -144,6 +177,64 @@ it.each([
     }
     if (args[1] === "list") {
       return reply({ jobs });
+    }
+    if (args[0] === "gateway") {
+      expect(args.slice(0, 5)).toEqual([
+        "gateway",
+        "call",
+        "cron.history",
+        "--expect-url",
+        "ws://127.0.0.1:18789",
+      ]);
+      const request = JSON.parse(args[args.indexOf("--params") + 1]);
+      const index = jobs.findIndex((job) => job.id === request.id);
+      const job = jobs[index];
+      const entry = entries[index];
+      assert(job && entry, "unexpected Cron transcript fixture identity");
+      expect(request).toEqual({
+        id: job.id,
+        runId: entry.runId,
+        limit: 1,
+        ...(request.cursor ? { cursor: `earlier-${index}` } : {}),
+      });
+      transcriptRequests.push(request);
+      const transcriptMarker = marker(job.effectiveAgentId);
+      return reply({
+        messages: [
+          {
+            role: "assistant",
+            content: request.cursor
+              ? `Reply with exactly ${transcriptMarker}.`
+              : damage === "transcript-other-run"
+                ? "another run"
+                : transcriptMarker,
+            ...(request.cursor
+              ? {
+                  provenance: {
+                    kind: "internal_system",
+                    sourceTool: "cron",
+                    jobId: entry.jobId,
+                    runId:
+                      damage === "transcript-other-prompt-run" ? "another-run" : entry.sessionId,
+                    sourceSessionKey: entry.sessionKey,
+                  },
+                  senderSession: { sessionKey: entry.sessionKey },
+                }
+              : {}),
+            __openclaw: {
+              id:
+                request.cursor && damage !== "transcript-duplicate"
+                  ? `prompt-${index}`
+                  : `answer-${index}`,
+              seq: request.cursor ? 1 : 2,
+              ...(request.cursor ? { turnBoundary: true } : {}),
+            },
+          },
+        ],
+        ...(!request.cursor && damage !== "transcript-missing-cursor"
+          ? { nextCursor: `earlier-${index}` }
+          : {}),
+      });
     }
     expect(args.slice(0, 2)).toEqual(["cron", "runs"]);
     const selected = entries.filter((entry) => entry.jobId === args[args.indexOf("--id") + 1]);
@@ -175,5 +266,28 @@ it.each([
   expect(proof.source).toBe(source === "native" ? "published-native-runs" : contract);
   if (damage === "none") {
     expect(proof.pages).toHaveLength(2);
+    expect(transcriptRequests).toHaveLength(source === "native" ? 4 : 0);
+    if (source === "native") {
+      for (const [index, transcriptProof] of proof.pages.entries()) {
+        const job = jobs[index];
+        const entry = entries[index];
+        assert(job && entry, "unexpected Cron transcript proof identity");
+        expect(transcriptProof.transcript).toMatchObject({
+          sessionId: entry.sessionId,
+          sessionKey: entry.sessionKey,
+          recent: {
+            messages: [{ role: "assistant", content: marker(job.effectiveAgentId) }],
+          },
+          earlier: {
+            messages: [
+              {
+                role: "assistant",
+                content: `Reply with exactly ${marker(job.effectiveAgentId)}.`,
+              },
+            ],
+          },
+        });
+      }
+    }
   }
 });

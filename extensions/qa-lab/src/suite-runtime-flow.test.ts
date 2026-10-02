@@ -44,13 +44,18 @@ vi.mock("./runtime-tool-fixture.js", async (importOriginal) => ({
   runRuntimeToolFixture,
 }));
 
+import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
 import * as browserRuntime from "./browser-runtime.js";
 import * as cronRunWait from "./cron-run-wait.js";
 import * as discoveryEval from "./discovery-eval.js";
 import { QaSuiteScenarioSkipError } from "./errors.js";
-import * as extractToolPayload from "./extract-tool-payload.js";
+import { inspectQaExecutionIdentityStorage } from "./execution-identity-storage-inspection.js";
 import * as modelSwitchEval from "./model-switch-eval.js";
-import * as suiteRuntimeAgent from "./suite-runtime-agent.js";
+import { runQaCli } from "./qa-cli-process.js";
+import * as suiteRuntimeAgentMedia from "./suite-runtime-agent-media.js";
+import * as suiteRuntimeAgentProcess from "./suite-runtime-agent-process.js";
+import * as suiteRuntimeAgentSession from "./suite-runtime-agent-session.js";
+import * as suiteRuntimeAgentTools from "./suite-runtime-agent-tools.js";
 import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 import * as suiteRuntimeGateway from "./suite-runtime-gateway.js";
 import * as suiteRuntimeTransport from "./suite-runtime-transport.js";
@@ -293,11 +298,15 @@ describe("qa suite runtime flow", () => {
     expect(call.scenario).toBe(scenario);
     expect(call.deps.runScenario).toBeTypeOf("function");
     for (const dependencyModule of [
-      suiteRuntimeAgent,
+      suiteRuntimeAgentMedia,
+      suiteRuntimeAgentProcess,
+      suiteRuntimeAgentSession,
+      suiteRuntimeAgentTools,
+      { runQaCli, inspectQaExecutionIdentityStorage },
       suiteRuntimeGateway,
       cronRunWait,
       discoveryEval,
-      extractToolPayload,
+      { extractQaToolPayload },
       modelSwitchEval,
     ]) {
       for (const [name, helper] of Object.entries(dependencyModule)) {
@@ -354,11 +363,11 @@ describe("qa suite runtime flow", () => {
       env,
       { toolName: "read" },
       {
-        createSession: suiteRuntimeAgent.createSession,
-        readEffectiveTools: suiteRuntimeAgent.readEffectiveTools,
-        runAgentPrompt: suiteRuntimeAgent.runAgentPrompt,
+        createSession: suiteRuntimeAgentSession.createSession,
+        readEffectiveTools: suiteRuntimeAgentSession.readEffectiveTools,
+        runAgentPrompt: suiteRuntimeAgentProcess.runAgentPrompt,
         fetchJson: suiteRuntimeGateway.fetchJson,
-        ensureImageGenerationConfigured: suiteRuntimeAgent.ensureImageGenerationConfigured,
+        ensureImageGenerationConfigured: suiteRuntimeAgentMedia.ensureImageGenerationConfigured,
       },
     );
     expect(call.constants).toEqual({

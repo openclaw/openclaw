@@ -56,6 +56,7 @@ import {
   type ConfigSetDryRunResult,
 } from "./config-set-dryrun.js";
 import type { ConfigSetCurrentExpectation } from "./config-set-input.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
 
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
@@ -260,24 +261,6 @@ function configApplyHintForOperations(
     : "No gateway restart needed.";
 }
 
-function assertConfigSetCurrentExpectation(params: {
-  authoredConfig: OpenClawConfig;
-  operation: ConfigSetOperation;
-  expectation: ConfigSetCurrentExpectation;
-}): void {
-  const current = getAtPath(params.authoredConfig, params.operation.setPath);
-  const matches =
-    params.expectation.kind === "absent"
-      ? !current.found
-      : current.found && isDeepStrictEqual(current.value, params.expectation.value);
-  if (!matches) {
-    throw new ConfigMutationConflictError(
-      "conditional config set expectation did not match the authored config",
-      { retryable: false },
-    );
-  }
-}
-
 export async function runConfigOperations(params: {
   runtime: RuntimeEnv;
   operations: ConfigSetOperation[];
@@ -308,11 +291,17 @@ export async function runConfigOperations(params: {
       throw new Error("conditional config set requires one resolved operation");
     }
     assertCurrentExpectation = () => {
-      assertConfigSetCurrentExpectation({
-        authoredConfig: snapshot.resolved,
-        operation: expectationOperation,
-        expectation: currentExpectation,
-      });
+      const current = getAtPath(snapshot.resolved, expectationOperation.setPath);
+      const matches =
+        currentExpectation.kind === "absent"
+          ? !current.found
+          : current.found && isDeepStrictEqual(current.value, currentExpectation.value);
+      if (!matches) {
+        throw new ConfigMutationConflictError(
+          "conditional config set expectation did not match the authored config",
+          { retryable: false },
+        );
+      }
     };
   }
   // Mutate resolved config so runtime defaults never leak into the authored file.
@@ -428,6 +417,7 @@ export async function runConfigOperations(params: {
       pathTokens: operation.pathTokens,
       quotedNumericSegments: operation.quotedNumericSegments,
       schema: mutationSchema?.schema as JsonSchemaRecord | undefined,
+      command: params.successMode,
     };
     let suppliedPaths: PathSegment[][];
     if (merge) {
@@ -438,6 +428,7 @@ export async function runConfigOperations(params: {
         path: operation.setPath,
         value: operation.value,
         allowReplace: options.replace || operation.mutation === "replace",
+        command: params.successMode,
       });
       setAtPath(next, operation.setPath, operation.value, pathOptions);
       suppliedPaths = [operation.setPath];
@@ -577,15 +568,19 @@ export function handleConfigMutationError(params: {
   err: unknown;
   runtime: RuntimeEnv;
   options: ConfigMutationOptions;
+  jsonOutput: boolean;
 }) {
   if (params.err instanceof ExitError) {
     throw params.err;
   }
-  const isConflict = params.err instanceof ConfigMutationConflictError;
+  const conflict = params.err instanceof ConfigMutationConflictError ? params.err : undefined;
   const detail = formatErrorMessage(params.err);
-  const message = isConflict
-    ? `The config file changed while this command was writing (${detail}), so nothing was changed. Re-run the same command to pick up the new file and try again.`
-    : detail;
+  let message = detail;
+  if (conflict) {
+    message = conflict.retryable
+      ? `The config file changed while this command was writing (${detail}), so nothing was changed. Re-run the same command to pick up the new file and try again.`
+      : `Config change declined (${detail}). No settings were saved. Review the current config and any conditional expectations before retrying.`;
+  }
   if (params.options.dryRun && params.options.json) {
     if (params.err instanceof ConfigSetDryRunValidationError) {
       writeRuntimeJson(params.runtime, params.err.result);
@@ -599,11 +594,14 @@ export function handleConfigMutationError(params: {
       checks: { schema: false, resolvability: false, resolvabilityComplete: false },
       refsChecked: 0,
       skippedExecRefs: 0,
-      errors: [{ kind: isConflict ? "conflict" : "schema", message }],
+      errors: [{ kind: conflict ? "conflict" : "schema", message }],
     };
     writeRuntimeJson(params.runtime, result);
     params.runtime.error(danger(message));
     exitCliAfterOutput(params.runtime, 1);
+  }
+  if (params.jsonOutput) {
+    writeRuntimeJson(params.runtime, formatCliJsonFailure(message));
   }
   if (isConfigValidationFailedError(params.err)) {
     params.runtime.error("Config change declined. No settings were saved.");

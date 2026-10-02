@@ -40,7 +40,7 @@ export async function dispatchInteraction(
 ): Promise<void> {
   const interaction = createInteraction(client, rawData as RawInteraction);
   if (rawData.type === InteractionType.ApplicationCommandAutocomplete) {
-    const command = client.commands.find((entry) => entry.name === readInteractionName(rawData));
+    const command = client.commands.find((entry) => entry.name === rawData.data?.name);
     if (!command) {
       return;
     }
@@ -74,7 +74,7 @@ async function dispatchAcknowledgeableInteraction(
   interaction: ReturnType<typeof createInteraction>,
 ): Promise<void> {
   if (rawData.type === InteractionType.ApplicationCommand) {
-    const command = client.commands.find((entry) => entry.name === readInteractionName(rawData));
+    const command = client.commands.find((entry) => entry.name === rawData.data?.name);
     if (command) {
       await deferCommandInteractionIfNeeded(command, interaction as CommandInteraction);
       await command.run(interaction as CommandInteraction);
@@ -82,13 +82,13 @@ async function dispatchAcknowledgeableInteraction(
     return;
   }
   if (rawData.type === InteractionType.MessageComponent) {
-    const customId = readCustomId(rawData);
+    const customId = rawData.data?.custom_id;
     if (!customId) {
       return;
     }
     const componentInteraction = interaction as BaseComponentInteraction;
     const component = client.componentHandler.resolve(customId, {
-      componentType: (rawData as { data?: { component_type?: number } }).data?.component_type,
+      componentType: rawData.data?.component_type,
     });
     if (component) {
       await deferComponentInteractionIfNeeded(component, componentInteraction);
@@ -97,7 +97,7 @@ async function dispatchAcknowledgeableInteraction(
     return;
   }
   if (rawData.type === InteractionType.ModalSubmit) {
-    const customId = readCustomId(rawData);
+    const customId = rawData.data?.custom_id;
     if (!customId) {
       return;
     }
@@ -108,12 +108,7 @@ async function dispatchAcknowledgeableInteraction(
   }
 }
 
-/**
- * Fixed text. The thrown error is deliberately not echoed here: an interaction
- * response is visible to the whole channel, and handler exceptions routinely
- * carry absolute paths, config keys, and provider responses. The rethrow keeps
- * the detail in the Gateway log where operators already look for it.
- */
+// Exceptions can contain paths, config and provider responses; keep details in Gateway logs.
 const INTERACTION_FAILURE_NOTICE = "Command failed. Check the Gateway logs for details.";
 
 type FailureReportableInteraction = {
@@ -125,46 +120,19 @@ type FailureReportableInteraction = {
   }): Promise<boolean>;
 };
 
-/**
- * Best-effort user-visible notice for a failed interaction. Never throws: a
- * reporting failure must not mask the original error.
- *
- * Deliberately narrow. It reports only for `deferred`, where a spinner is known
- * to exist and the original response is a placeholder this dispatch created:
- *
- * - `deferred`        the deferring callback succeeded (state advances only
- *                     after a REST success), so editing the original response
- *                     resolves a spinner that would otherwise hang forever.
- * - `deferred-update` a component acknowledgement. Discord leaves no spinner,
- *                     and the original response is the message the component is
- *                     attached to, so editing it would overwrite content the
- *                     user is still reading.
- * - `unacknowledged`  nothing is known to have reached Discord. A second
- *                     initial callback risks "already acknowledged" if the
- *                     first one landed after all, and Discord already shows its
- *                     own "did not respond" notice.
- * - `replied`         the user has seen a message, and nextReplyAction() would
- *                     turn this into a contradictory follow-up beside it.
- */
+// Only a confirmed deferred reply owns an unanswered spinner. Deferred updates
+// refer to existing channel content; other states must not create a second reply.
 async function reportInteractionFailure(interaction: FailureReportableInteraction): Promise<void> {
   if (interaction.responseState !== "deferred") {
     return;
   }
-  // A follow-up has already put output in front of the user. Discord may have
-  // consumed the deferred placeholder to deliver it, so editing the original
-  // response here risks overwriting that output. Leaving the placeholder alone
-  // is the safer failure: the user has something to see either way.
+  // A follow-up can consume the placeholder; never overwrite its visible output.
   if (interaction.hasSentFollowUp) {
     return;
   }
   try {
-    // The checks above are a fast path read outside the response queue. The edit
-    // re-reads both inside it, so a follow-up still in flight when the handler
-    // threw settles first and this cannot overwrite output it delivered.
-    //
-    // allowed_mentions stays pinned even though the notice is a constant, so a
-    // later change to this text cannot silently gain the ability to ping a
-    // channel through Discord's default mention parsing.
+    // Recheck inside the response queue after in-flight follow-ups settle.
+    // Pin mentions so future notice text cannot introduce channel pings.
     await interaction.editDeferredPlaceholderIfUnanswered({
       content: INTERACTION_FAILURE_NOTICE,
       allowed_mentions: { parse: [] },
@@ -196,12 +164,4 @@ async function deferComponentInteractionIfNeeded(
     return;
   }
   await interaction.acknowledge();
-}
-
-function readInteractionName(rawData: APIInteraction): string | undefined {
-  return (rawData as { data?: { name?: string } }).data?.name;
-}
-
-function readCustomId(rawData: APIInteraction): string | undefined {
-  return (rawData as { data?: { custom_id?: string } }).data?.custom_id;
 }

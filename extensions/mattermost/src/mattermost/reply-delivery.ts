@@ -13,23 +13,9 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { requiresMattermostMediaUpload, resolveMattermostPresentation } from "../normalize.js";
-import type { MattermostSendResult } from "./send.js";
+import type { MattermostSendResult, sendMessageMattermost } from "./send.js";
 
 type MarkdownTableMode = Parameters<PluginRuntime["channel"]["text"]["convertMarkdownTables"]>[1];
-
-type SendMattermostMessage = (
-  to: string,
-  text: string,
-  opts: {
-    cfg: OpenClawConfig;
-    accountId?: string;
-    mediaUrl?: string;
-    mediaLocalRoots?: readonly string[];
-    requireMediaUpload?: boolean;
-    replyToId?: string;
-    buttons?: Array<unknown>;
-  },
-) => Promise<MattermostSendResult>;
 
 /**
  * Result of `deliverMattermostReplyPayload`. Inbound delivery adapters use this
@@ -63,7 +49,7 @@ export async function deliverMattermostReplyPayload(params: {
   replyToId?: string;
   textLimit: number;
   tableMode: MarkdownTableMode;
-  sendMessage: SendMattermostMessage;
+  sendMessage: typeof sendMessageMattermost;
 }): Promise<MattermostReplyDeliveryResult> {
   if (isReasoningReplyPayload(params.payload)) {
     return {

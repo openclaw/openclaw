@@ -14,7 +14,6 @@ import androidx.core.graphics.scale
 import androidx.exifinterface.media.ExifInterface
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonPrimitive
 import java.io.ByteArrayOutputStream
 import java.time.Instant
 import kotlin.math.max
@@ -26,14 +25,12 @@ private const val DEFAULT_PHOTOS_QUALITY = 0.85
 private const val MAX_TOTAL_BASE64_CHARS = 340 * 1024
 private const val MAX_PER_PHOTO_BASE64_CHARS = 300 * 1024
 
-/** Request shape for photos.latest after defaults and bounds are applied. */
 internal data class PhotosLatestRequest(
   val limit: Int,
   val maxWidth: Int,
   val quality: Double,
 )
 
-/** Encoded photo payload returned to the gateway. */
 @Serializable
 internal data class EncodedPhotoPayload(
   val format: String,
@@ -44,7 +41,6 @@ internal data class EncodedPhotoPayload(
   val createdAt: String? = null,
 )
 
-/** Photo access seam for Android MediaStore and tests. */
 internal interface PhotosDataSource {
   fun hasPermission(context: Context): Boolean
 
@@ -238,54 +234,32 @@ private object SystemPhotosDataSource : PhotosDataSource {
   }
 }
 
-/** Handles photos.latest by querying MediaStore and returning bounded JPEG payloads. */
 class PhotosHandler internal constructor(
   private val appContext: Context,
   private val dataSource: PhotosDataSource = SystemPhotosDataSource,
 ) {
-  /** Returns the newest accessible photos as gateway-sized base64 JPEGs. */
   fun handlePhotosLatest(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasPermission(appContext)) {
-      return GatewaySession.InvokeResult.error(
-        code = "PHOTOS_PERMISSION_REQUIRED",
-        message = "PHOTOS_PERMISSION_REQUIRED: grant Photos permission",
-      )
+      return nodeInvokeError("PHOTOS_PERMISSION_REQUIRED", "grant Photos permission")
     }
     val request =
       parseRequest(paramsJson)
-        ?: return GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: expected JSON object",
-        )
+        ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object")
     return try {
       val photos = dataSource.latest(appContext, request)
       GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("photos" to photos)))
     } catch (err: Throwable) {
-      GatewaySession.InvokeResult.error(
-        code = "PHOTOS_UNAVAILABLE",
-        message = "PHOTOS_UNAVAILABLE: ${err.message ?: "photo fetch failed"}",
-      )
+      nodeInvokeError("PHOTOS_UNAVAILABLE", err.message ?: "photo fetch failed")
     }
   }
 
   private fun parseRequest(paramsJson: String?): PhotosLatestRequest? {
-    if (paramsJson.isNullOrBlank()) {
-      return PhotosLatestRequest(
-        limit = DEFAULT_PHOTOS_LIMIT,
-        maxWidth = DEFAULT_PHOTOS_MAX_WIDTH,
-        quality = DEFAULT_PHOTOS_QUALITY,
-      )
-    }
-    val params = parseJsonParamsObject(paramsJson) ?: return null
-
-    val limitRaw = (params["limit"] as? JsonPrimitive)?.content?.toIntOrNull()
-    val maxWidthRaw = (params["maxWidth"] as? JsonPrimitive)?.content?.toIntOrNull()
-    val qualityRaw = (params["quality"] as? JsonPrimitive)?.content?.toDoubleOrNull()
-
+    val params = if (paramsJson.isNullOrBlank()) null else parseJsonParamsObject(paramsJson) ?: return null
     // Clamp model-supplied values to protect memory and response-size limits.
-    val limit = (limitRaw ?: DEFAULT_PHOTOS_LIMIT).coerceIn(1, 20)
-    val maxWidth = (maxWidthRaw ?: DEFAULT_PHOTOS_MAX_WIDTH).coerceIn(240, 4096)
-    val quality = (qualityRaw ?: DEFAULT_PHOTOS_QUALITY).coerceIn(0.1, 1.0)
-    return PhotosLatestRequest(limit = limit, maxWidth = maxWidth, quality = quality)
+    return PhotosLatestRequest(
+      limit = (parseJsonInt(params, "limit") ?: DEFAULT_PHOTOS_LIMIT).coerceIn(1, 20),
+      maxWidth = (parseJsonInt(params, "maxWidth") ?: DEFAULT_PHOTOS_MAX_WIDTH).coerceIn(240, 4096),
+      quality = (parseJsonDouble(params, "quality") ?: DEFAULT_PHOTOS_QUALITY).coerceIn(0.1, 1.0),
+    )
   }
 }

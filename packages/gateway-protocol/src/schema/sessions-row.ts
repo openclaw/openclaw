@@ -25,11 +25,18 @@ export const SessionRepositorySourceSchema = closedObject({
   ref: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
 });
 
+/** Channel-owned destination for returning to the conversation that launched a session. */
+export const SessionConversationLinkSchema = closedObject({
+  url: Type.String({ minLength: 1, maxLength: 2048, pattern: "^https?://" }),
+  label: Type.String({ minLength: 1, maxLength: 128 }),
+});
+
 export const SessionRunStatusSchema = Type.Union([
   Type.Literal("queued"),
   Type.Literal("running"),
   Type.Literal("done"),
   Type.Literal("failed"),
+  Type.Literal("interrupted"),
   Type.Literal("killed"),
   Type.Literal("timeout"),
 ]);
@@ -116,6 +123,7 @@ export const SessionRowSchema = Type.Object(
     /** Named sidebar tint from SESSION_COLOR_IDS; clients map names to theme hues. */
     color: Type.Optional(Type.String()),
     channelAvatarUrl: Type.Optional(NonEmptyString),
+    conversationLink: Type.Optional(SessionConversationLinkSchema),
     boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
     /** Shared dashboard default; absent means split. */
     boardPresentation: Type.Optional(Type.Union([Type.Literal("split"), Type.Literal("expanded")])),
@@ -137,6 +145,8 @@ export const SessionRowSchema = Type.Object(
     updatedAt: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
     /** Gateway sampling time, retained when a read reuses a cached projection. */
     snapshotAt: Type.Optional(Type.Number()),
+    /** Connection-scoped presentation identity on full event ancestor rows. */
+    ancestorRevision: Type.Optional(NonEmptyString),
     /** Personal list preference for the authenticated viewer; not session visibility. */
     hiddenFromInvolvingMe: Type.Optional(Type.Boolean()),
     archived: Type.Optional(Type.Boolean()),
@@ -145,6 +155,8 @@ export const SessionRowSchema = Type.Object(
     archiveReason: Type.Optional(SessionEntryArchiveReasonSchema),
     pinned: Type.Optional(Type.Boolean()),
     pinnedAt: Type.Optional(Type.Number()),
+    snoozedUntil: Type.Optional(Type.Number()),
+    snoozedAt: Type.Optional(Type.Number()),
     unread: Type.Optional(Type.Boolean()),
     lastReadAt: Type.Optional(Type.Number()),
     markedUnreadAt: Type.Optional(Type.Number()),
@@ -223,6 +235,8 @@ export const SessionRowSchema = Type.Object(
     participantCount: Type.Optional(Type.Integer({ minimum: 0 })),
     visibility: Type.Optional(SessionVisibilitySchema),
     sharingRole: Type.Optional(SessionSharingRoleSchema),
+    /** Recipient-local send admission; null explicitly clears a previous restriction. */
+    sendDisabledReason: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     createdAt: Type.Optional(Type.Number()),
     forkSource: Type.Optional(
       Type.Object({
@@ -257,10 +271,28 @@ export const SessionRowSchema = Type.Object(
   { additionalProperties: true },
 );
 
+/** Unchanged presentation of an ancestor previously delivered on this connection. */
+export const SessionAncestorRefSchema = closedObject({
+  key: NonEmptyString,
+  sessionId: Type.Optional(Type.String()),
+  agentId: Type.Optional(NonEmptyString),
+  revision: NonEmptyString,
+  snapshotAt: Type.Number(),
+});
+
+/** Complete visible ancestor coverage shared by sessions.changed and session.message. */
+export const SessionEventAncestorsSchema = closedObject({
+  ancestorSessions: Type.Array(SessionRowSchema, { maxItems: 64 }),
+  ancestorSessionRefs: Type.Optional(Type.Array(SessionAncestorRefSchema, { maxItems: 64 })),
+});
+
 export type SessionCreatedActor = Static<typeof SessionCreatedActorSchema>;
+export type SessionConversationLink = Static<typeof SessionConversationLinkSchema>;
 export type SessionPermissionMode = Static<typeof SessionPermissionModeSchema>;
 export type SessionOwner = Static<typeof SessionOwnerSchema>;
 export type SessionRunStatus = Static<typeof SessionRunStatusSchema>;
 export type SessionToolOverrides = Static<typeof SessionToolOverridesSchema>;
 export type SessionRow = Static<typeof SessionRowSchema>;
+export type SessionAncestorRef = Static<typeof SessionAncestorRefSchema>;
+export type SessionEventAncestors = Static<typeof SessionEventAncestorsSchema>;
 export type SessionEntryArchiveReason = Static<typeof SessionEntryArchiveReasonSchema>;

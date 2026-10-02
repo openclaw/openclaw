@@ -120,8 +120,8 @@ session key. Exact-run continuation aliases can be retired after completion;
 the key does not guarantee a separate durable session row. Missing session facts
 remain unknown. Diagnostics are redacted, single-line, and bounded to
 500 characters per string. Successful output is not logged: inspect the agent's
-run session for it. The HTTP `runId` correlates hook logs; it is not a TaskFlow id
-or a task id to pass to `openclaw tasks show`.
+run session for it. The HTTP `runId` correlates hook logs; it is not an automation
+job ID to pass to `openclaw automations runs`.
 
 `sessionMode` defaults to `isolated`, so this test gets a fresh run session and
 a generated logical `hook:<uuid>` key. The stored session can use a

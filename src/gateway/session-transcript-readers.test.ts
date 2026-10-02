@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   persistSessionTranscriptTurn,
   replaceTranscriptEvents,
@@ -12,14 +13,15 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { visitSessionMessagesAsync } from "./session-transcript-native.test-support.js";
 import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessageByIdAsync,
   readSessionMessageCountAsync,
+  readSessionTranscriptAccountingAsync,
   readSessionMessagesAsync,
   readSessionMessagesAroundIdWithStatsAsync,
   readSessionMessagesPageWithStatsAsync,
-  visitSessionMessagesAsync,
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
 import { readLatestSessionUsageFromTranscriptAsync } from "./session-transcript-usage.js";
@@ -66,6 +68,45 @@ describe("session transcript reader facade", () => {
       )
       .run(sessionId);
   }
+
+  test("prepares byte, usage and taint facts without host transcript SQL", async () => {
+    const events = [
+      { type: "session", id: "accounting", version: 3 },
+      {
+        type: "message",
+        id: "user",
+        parentId: null,
+        message: { role: "user", content: "question" },
+      },
+      {
+        type: "message",
+        id: "answer",
+        parentId: "user",
+        message: {
+          role: "assistant",
+          content: "answer",
+          usage: { input: 200, output: 7 },
+          __openclaw: { turnTainted: true },
+        },
+      },
+    ];
+    const scope = await writeTranscript("accounting", events);
+    const options = { includeByteSize: true, includeUsage: true, includeTurnTaint: true };
+    await readSessionTranscriptAccountingAsync(scope, options);
+    const hostSql = observeHostDataSql();
+    const result = await readSessionTranscriptAccountingAsync(scope, options).finally(() =>
+      hostSql.restore(),
+    );
+    expect(hostSql.queries).toEqual([]);
+    expect(result).toEqual({
+      byteSize: events
+        .slice(1)
+        .reduce((bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1, 0),
+      eventCount: 2,
+      turnTainted: true,
+      usage: { promptTokens: 200, outputTokens: 7, trailingMessages: [] },
+    });
+  });
 
   test("reads active-branch messages and message ids through a scope", async () => {
     const scope = await writeTranscript("reader-active-branch", [

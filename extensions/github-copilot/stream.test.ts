@@ -589,10 +589,8 @@ describe("wrapCopilotAnthropicStream", () => {
     ]);
   });
 
-  it.each([
-    { provider: "anthropic", id: "claude-sonnet-4-6", toolId: "toolu_native_123" },
-    { provider: "kimi", id: "k2p5", toolId: "functions.read:0" },
-  ])("does not patch unrelated $provider Anthropic streams", (model) => {
+  it("does not patch an unrelated provider's Anthropic stream", () => {
+    const model = { provider: "kimi", id: "k2p5", toolId: "functions.read:0" };
     const payload = {
       messages: [
         { role: "assistant", content: [{ type: "tool_use", id: model.toolId }] },

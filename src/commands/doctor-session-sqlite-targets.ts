@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import {
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreCandidateTargetsSync,
@@ -14,8 +13,14 @@ import {
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { canonicalMigrationFilePath } from "../infra/session-sqlite-migration-manifest.js";
-import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-readers.js";
+import {
+  canonicalMigrationFilePath,
+  type SessionSqliteMigrationTargetInput,
+} from "../infra/session-sqlite-migration-manifest.js";
+import {
+  projectExistingAgentDatabaseTargets,
+  resolveTargetSqlitePath,
+} from "../infra/session-sqlite-migration-readers.js";
 import {
   hasOrphanedSqliteSidecars,
   resolveSqliteDatabaseFilePaths,
@@ -27,8 +32,57 @@ import type {
   DoctorSessionSqliteMode,
   DoctorSessionSqliteOptions,
 } from "./doctor-session-sqlite-types.js";
+import {
+  assertDoctorSqliteMaintenancePathsNotAliased,
+  isDestructiveDoctorSessionSqliteMode,
+  type DoctorSqliteMaintenanceAuthority,
+} from "./doctor-sqlite-maintenance-lock.js";
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
+
+export async function prepareDoctorSessionSqliteTargets(
+  params: DoctorSessionSqliteOptions & {
+    cfg: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+    authority?: DoctorSqliteMaintenanceAuthority;
+  },
+) {
+  const resolved = resolveDoctorSessionSqliteTargets(params);
+  if (isDestructiveDoctorSessionSqliteMode(params.mode)) {
+    assertDoctorSqliteMaintenancePathsNotAliased(
+      `session SQLite ${params.mode}`,
+      resolveDoctorSessionSqliteMaintenancePaths(resolved.targets),
+      resolveDoctorSessionSqliteMaintenanceRoots(resolved.targets, params.env),
+    );
+  }
+  const repairEntryStates = async (targets: readonly SessionStoreTarget[]) => {
+    params.authority?.assertCurrent();
+    const { repairLegacySessionEntryStates } = await import("./doctor-session-delivery-state.js");
+    return await repairLegacySessionEntryStates({
+      apply: true,
+      cfg: params.cfg,
+      env: params.env,
+      authority: params.authority,
+      targets: projectExistingAgentDatabaseTargets(targets, params.env, params.cfg),
+      deferSchemaRepair: params.mode === "import",
+    });
+  };
+  if (params.mode === "import") {
+    await repairEntryStates(resolved.targets);
+  }
+  // Recovery reuses this preparation only after restoring or repairing each physical target.
+  return { ...resolved, repairEntryStates };
+}
+
+export function createMigrationTargetInput(
+  target: SessionStoreTarget,
+): SessionSqliteMigrationTargetInput {
+  return {
+    agentId: target.agentId,
+    sqlitePath: canonicalMigrationFilePath(resolveTargetSqlitePath(target)),
+    storePath: canonicalMigrationFilePath(target.storePath),
+  };
+}
 
 // Direct store migrations are scoped by path; broader agent discovery needs runtime config.
 export function resolveDoctorSessionSqliteConfig(
@@ -46,13 +100,11 @@ export function resolveDoctorSessionSqliteConfig(
 export function resolveDoctorSessionSqliteMaintenancePaths(
   targets: readonly SessionStoreTarget[],
 ): string[] {
-  const protectedPaths = new Set<string>();
-  for (const target of targets) {
-    for (const databasePath of resolveSqliteDatabaseFilePaths(resolveTargetSqlitePath(target))) {
-      protectedPaths.add(databasePath);
-    }
-  }
-  return [...protectedPaths];
+  return [
+    ...new Set(
+      targets.flatMap((target) => resolveSqliteDatabaseFilePaths(resolveTargetSqlitePath(target))),
+    ),
+  ];
 }
 
 export function resolveDoctorSessionSqliteMaintenanceRoots(
@@ -100,7 +152,11 @@ export function resolveDoctorSessionSqliteTargets(params: {
 }): { targets: SessionStoreTarget[]; knownTargets?: SessionStoreTarget[] } {
   if (params.store) {
     return {
-      targets: resolveSessionStoreTargets(params.cfg, { store: params.store }, { env: params.env }),
+      targets: resolveSessionStoreTargets(
+        params.cfg,
+        { store: params.store, agent: params.agent, allAgents: params.allAgents },
+        { env: params.env },
+      ),
     };
   }
   const discoversHistory =
@@ -132,18 +188,7 @@ export function resolveDoctorSessionSqliteTargets(params: {
     const candidates = discoversHistory
       ? resolveAllAgentSessionStoreCandidateTargetsSync(params.cfg, { env: params.env })
       : resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env });
-    const legacyStorePath = path.join(resolveStateDir(params.env), "sessions", "sessions.json");
-    const legacyTargets =
-      discoversHistory && fs.existsSync(legacyStorePath)
-        ? resolveSessionStoreTargets(params.cfg, { allAgents: true }, { env: params.env }).map(
-            (target) => ({
-              agentId: target.agentId,
-              sqlitePath: resolveTargetSqlitePath(target, params.env),
-              storePath: legacyStorePath,
-            }),
-          )
-        : [];
-    const targets = [...legacyTargets, ...candidates].map((target) => ({
+    const targets = candidates.map((target) => ({
       target,
       sqlitePath: resolveTargetSqlitePath(target, params.env),
     }));
@@ -189,6 +234,6 @@ export function filterLegacySessionStoreTargets(
         (historicalArchives.get(canonicalMigrationFilePath(target.storePath))?.transcripts.length ??
           0) > 0 ||
         (fs.existsSync(path.dirname(target.storePath)) &&
-          fs.readdirSync(path.dirname(target.storePath)).some(isPrimarySessionTranscriptFileName))),
+          fs.readdirSync(path.dirname(target.storePath)).some((file) => file.endsWith(".jsonl")))),
   );
 }

@@ -1,8 +1,3 @@
-/**
- * Session package/resource manager.
- *
- * Resolves extension, skill, prompt, and theme sources from npm, git, local paths, and project manifests.
- */
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -73,25 +68,10 @@ type LocalSource = {
 
 type ParsedSource = NpmSource | GitSource | LocalSource;
 
-interface ResourceManifest {
-  extensions?: string[];
-  skills?: string[];
-  prompts?: string[];
-  themes?: string[];
-}
+type ResourceManifest = Partial<Record<ResourceType, string[]>>;
 
-/**
- * Compute a numeric precedence rank for a resource based on its metadata.
- * Lower rank = higher precedence. Used to sort resolved resources so that
- * name-collision resolution ("first wins") produces the correct outcome.
- *
- * Precedence (highest to lowest):
- *   0  project + settings entry (source: "local", scope: "project")
- *   1  project + auto-discovered (source: "auto", scope: "project")
- *   2  user + settings entry (source: "local", scope: "user")
- *   3  user + auto-discovered (source: "auto", scope: "user")
- *   4  package resource (origin: "package")
- */
+// First-wins discovery ranks project before user, explicit before automatic,
+// and package resources after both top-level scopes.
 function resourcePrecedenceRank(m: PathMetadata): number {
   if (m.origin === "package") {
     return 4;
@@ -100,7 +80,7 @@ function resourcePrecedenceRank(m: PathMetadata): number {
   return scopeBase + (m.source === "local" ? 0 : 1);
 }
 
-type ResourceType = "extensions" | "skills" | "prompts" | "themes";
+type ResourceType = keyof ResolvedPaths;
 type TopLevelAutoResourceType = Extract<ResourceType, "prompts" | "themes">;
 type ResourceState = { metadata: PathMetadata; enabled: boolean };
 type ResourceAccumulator = Record<ResourceType, Map<string, ResourceState>>;
@@ -130,10 +110,6 @@ function getAgentResourceTempDir(agentDir: string): string {
   return tempDir;
 }
 
-function isPattern(s: string): boolean {
-  return isOverridePattern(s) || hasGlobPattern(s);
-}
-
 function isOverridePattern(s: string): boolean {
   return s.startsWith("!") || s.startsWith("+") || s.startsWith("-");
 }
@@ -146,7 +122,7 @@ function splitPatterns(entries: string[]): { plain: string[]; patterns: string[]
   const plain: string[] = [];
   const patterns: string[] = [];
   for (const entry of entries) {
-    if (isPattern(entry)) {
+    if (isOverridePattern(entry) || hasGlobPattern(entry)) {
       patterns.push(entry);
     } else {
       plain.push(entry);
@@ -171,7 +147,7 @@ function collectDirectoryEntries(
   dir: string,
   root: string,
   ignoreMatcher?: IgnoreMatcher,
-  options: { allowNodeModules?: boolean; requireWithinRoot?: boolean } = {},
+  options: { requireWithinRoot?: boolean } = {},
 ): CollectedDirectory {
   if (!existsSync(dir)) {
     return { entries: [], ignoreMatcher };
@@ -180,10 +156,7 @@ function collectDirectoryEntries(
   const ig = addIgnoreRules(dir, root, ignoreMatcher);
   try {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (
-        entry.name.startsWith(".") ||
-        (!options.allowNodeModules && entry.name === "node_modules")
-      ) {
+      if (entry.name.startsWith(".") || entry.name === "node_modules") {
         continue;
       }
       const fullPath = join(dir, entry.name);
@@ -216,26 +189,15 @@ function collectDirectoryEntries(
 function collectFiles(
   dir: string,
   filePattern: RegExp,
-  skipNodeModules = true,
   ignoreMatcher?: IgnoreMatcher,
   rootDir?: string,
 ): string[] {
   const files: string[] = [];
   const root = rootDir ?? dir;
-  const directory = collectDirectoryEntries(dir, root, ignoreMatcher, {
-    allowNodeModules: !skipNodeModules,
-  });
+  const directory = collectDirectoryEntries(dir, root, ignoreMatcher);
   for (const entry of directory.entries) {
     if (entry.isDirectory) {
-      files.push(
-        ...collectFiles(
-          entry.fullPath,
-          filePattern,
-          skipNodeModules,
-          directory.ignoreMatcher,
-          root,
-        ),
-      );
+      files.push(...collectFiles(entry.fullPath, filePattern, directory.ignoreMatcher, root));
     } else if (entry.isFile && filePattern.test(entry.name)) {
       files.push(entry.fullPath);
     }
@@ -273,29 +235,12 @@ function collectSkillEntries(
   return entries;
 }
 
-function findGitRepoRoot(startDir: string): string | null {
-  let dir = resolve(startDir);
-  while (true) {
-    if (existsSync(join(dir, ".git"))) {
-      return dir;
-    }
-    const parent = dirname(dir);
-    if (parent === dir) {
-      return null;
-    }
-    dir = parent;
-  }
-}
-
 function collectAncestorAgentsSkillDirs(startDir: string): string[] {
   const skillDirs: string[] = [];
-  const resolvedStartDir = resolve(startDir);
-  const gitRepoRoot = findGitRepoRoot(resolvedStartDir);
-
-  let dir = resolvedStartDir;
+  let dir = resolve(startDir);
   while (true) {
     skillDirs.push(join(dir, ".agents", "skills"));
-    if (gitRepoRoot && dir === gitRepoRoot) {
+    if (existsSync(join(dir, ".git"))) {
       break;
     }
     const parent = dirname(dir);
@@ -350,13 +295,11 @@ function resolveExtensionEntries(dir: string, rootDir = dir): string[] | null {
     }
   }
 
-  const indexTs = join(dir, "index.ts");
-  const indexJs = join(dir, "index.js");
-  if (existsSync(indexTs) && isRealPathWithinRoot(rootDir, indexTs)) {
-    return [indexTs];
-  }
-  if (existsSync(indexJs) && isRealPathWithinRoot(rootDir, indexJs)) {
-    return [indexJs];
+  for (const filename of ["index.ts", "index.js"]) {
+    const path = join(dir, filename);
+    if (existsSync(path) && isRealPathWithinRoot(rootDir, path)) {
+      return [path];
+    }
   }
 
   return null;
@@ -365,13 +308,11 @@ function resolveExtensionEntries(dir: string, rootDir = dir): string[] | null {
 function collectAutoExtensionEntries(dir: string): string[] {
   const entries: string[] = [];
 
-  // First check if this directory itself has explicit extension entries (package.json or index)
   const rootEntries = resolveExtensionEntries(dir);
   if (rootEntries) {
     return rootEntries;
   }
 
-  // Otherwise, discover extensions from directory contents.
   const directory = collectDirectoryEntries(dir, dir, undefined, { requireWithinRoot: true });
   for (const entry of directory.entries) {
     if (entry.isFile && (entry.name.endsWith(".ts") || entry.name.endsWith(".js"))) {
@@ -492,7 +433,6 @@ function applyPatterns(allPaths: string[], patterns: string[], baseDir: string):
     }
   }
 
-  // Step 1: Apply includes (or all if no includes)
   let result: string[];
   if (includes.length === 0) {
     result = [...allPaths];
@@ -500,12 +440,10 @@ function applyPatterns(allPaths: string[], patterns: string[], baseDir: string):
     result = allPaths.filter((filePath) => matchesAnyPattern(filePath, includes, baseDir));
   }
 
-  // Step 2: Apply excludes
   if (excludes.length > 0) {
     result = result.filter((filePath) => !matchesAnyPattern(filePath, excludes, baseDir));
   }
 
-  // Step 3: Force-include (add back from allPaths, overriding exclusions)
   if (forceIncludes.length > 0) {
     for (const filePath of allPaths) {
       if (!result.includes(filePath) && matchesAnyExactPattern(filePath, forceIncludes, baseDir)) {
@@ -514,7 +452,6 @@ function applyPatterns(allPaths: string[], patterns: string[], baseDir: string):
     }
   }
 
-  // Step 4: Force-exclude (remove even if included or force-included)
   if (forceExcludes.length > 0) {
     result = result.filter((filePath) => !matchesAnyExactPattern(filePath, forceExcludes, baseDir));
   }
@@ -600,7 +537,7 @@ export class DefaultPackageManager implements PackageManager {
       : options?.local
         ? "project"
         : "user";
-    const packageSources = sources.map((source) => ({ pkg: source as PackageSource, scope }));
+    const packageSources = sources.map((pkg) => ({ pkg, scope }));
     await this.resolvePackageSources(packageSources, accumulator);
     return this.toResolvedPaths(accumulator);
   }
@@ -627,23 +564,11 @@ export class DefaultPackageManager implements PackageManager {
       }
 
       metadata.baseDir = target.baseDir;
-      if (target.kind === "file") {
-        this.addResource(
-          accumulator.extensions,
-          target.path,
-          metadata,
-          this.isExtensionEnabled(target.path, filter?.extensions, target.baseDir),
-        );
-        continue;
-      }
-
-      const hasPackageLayout = this.collectPackageResources(
-        target.path,
-        accumulator,
-        filter,
-        metadata,
-      );
-      if (parsed.type === "local" && !hasPackageLayout) {
+      if (
+        target.kind === "file" ||
+        (!this.collectPackageResources(target.path, accumulator, filter, metadata) &&
+          parsed.type === "local")
+      ) {
         this.addResource(
           accumulator.extensions,
           target.path,
@@ -713,65 +638,36 @@ export class DefaultPackageManager implements PackageManager {
       return { type: "local", path: source };
     }
 
-    // Try parsing as git URL
-    const gitParsed = parseGitUrl(source);
-    if (gitParsed) {
-      return gitParsed;
-    }
-
-    return { type: "local", path: source };
+    return parseGitUrl(source) ?? { type: "local", path: source };
   }
 
   private installedNpmMatchesPinnedVersion(source: NpmSource, installedPath: string): boolean {
-    const installedVersion = this.getInstalledNpmVersion(installedPath);
-    if (!installedVersion) {
-      return false;
-    }
-
-    const { version: pinnedVersion } = this.parseNpmSpec(source.spec);
-    if (!pinnedVersion) {
-      return true;
-    }
-
-    return installedVersion === pinnedVersion;
-  }
-
-  private getInstalledNpmVersion(installedPath: string): string | undefined {
     const packageJsonPath = join(installedPath, "package.json");
     if (!existsSync(packageJsonPath)) {
-      return undefined;
+      return false;
     }
     try {
       const content = readFileSync(packageJsonPath, "utf-8");
       const pkg = JSON.parse(content) as { version?: string };
-      return pkg.version;
+      const { version } = this.parseNpmSpec(source.spec);
+      return Boolean(pkg.version) && (!version || pkg.version === version);
     } catch {
-      return undefined;
+      return false;
     }
   }
 
-  /**
-   * Get a unique identity for a package, ignoring version/ref.
-   * Used to detect when the same package is in both global and project settings.
-   * For git packages, uses normalized host/path to ensure SSH and HTTPS URLs
-   * for the same repository are treated as identical.
-   */
+  /** Ignore versions and normalize git transports when deduplicating scoped packages. */
   private getPackageIdentity(source: string, scope: SourceScope): string {
     const parsed = this.parseSource(source);
     if (parsed.type === "npm") {
       return `npm:${parsed.name}`;
     }
     if (parsed.type === "git") {
-      // Use host/path for identity to normalize SSH and HTTPS
       return `git:${parsed.host}/${parsed.path}`;
     }
     return `local:${this.resolvePathFromBase(parsed.path, this.getBaseDirForScope(scope))}`;
   }
 
-  /**
-   * Dedupe packages: if same package identity appears in both global and project,
-   * keep only the project one (project wins).
-   */
   private dedupePackages(
     packages: Array<{ pkg: PackageSource; scope: SourceScope }>,
   ): Array<{ pkg: PackageSource; scope: SourceScope }> {
@@ -801,20 +697,14 @@ export class DefaultPackageManager implements PackageManager {
     if (scope === "temporary") {
       return join(this.getTemporaryDir("npm"), "node_modules", source.name);
     }
-    if (scope === "project") {
-      return join(this.cwd, CONFIG_DIR_NAME, "npm", "node_modules", source.name);
-    }
-    return join(this.agentDir, "npm", "node_modules", source.name);
+    return join(this.getBaseDirForScope(scope), "npm", "node_modules", source.name);
   }
 
   private getGitInstallPath(source: GitSource, scope: SourceScope): string {
     if (scope === "temporary") {
       return this.getTemporaryDir(`git-${source.host}`, source.path);
     }
-    if (scope === "project") {
-      return join(this.cwd, CONFIG_DIR_NAME, "git", source.host, source.path);
-    }
-    return join(this.agentDir, "git", source.host, source.path);
+    return join(this.getBaseDirForScope(scope), "git", source.host, source.path);
   }
 
   private getTemporaryDir(prefix: string, suffix?: string): string {
@@ -870,11 +760,8 @@ export class DefaultPackageManager implements PackageManager {
         this.addManifestEntries(entries, packageRoot, resourceType, target, metadata);
         continue;
       }
-      const dir = join(packageRoot, resourceType);
-      if (existsSync(dir)) {
-        for (const path of this.collectConventionResourceFiles(packageRoot, resourceType)) {
-          this.addResource(target, path, metadata, true);
-        }
+      for (const path of this.collectConventionResourceFiles(packageRoot, resourceType)) {
+        this.addResource(target, path, metadata, true);
       }
     }
     return hasPackageLayout;
@@ -884,25 +771,16 @@ export class DefaultPackageManager implements PackageManager {
     packageRoot: string,
     userPatterns: string[],
     resourceType: ResourceType,
-    target: Map<string, { metadata: PathMetadata; enabled: boolean }>,
+    target: Map<string, ResourceState>,
     metadata: PathMetadata,
   ): void {
     const allFiles = this.collectManifestFiles(packageRoot, resourceType);
 
-    if (userPatterns.length === 0) {
-      // Empty array explicitly disables all resources of this type
-      for (const f of allFiles) {
-        this.addResource(target, f, metadata, false);
-      }
-      return;
-    }
-
-    // Apply user patterns
-    const enabledByUser = applyPatterns(allFiles, userPatterns, packageRoot);
-
+    // An explicit empty filter disables the type; absent filters use package defaults.
+    const enabledByUser =
+      userPatterns.length > 0 ? applyPatterns(allFiles, userPatterns, packageRoot) : new Set();
     for (const f of allFiles) {
-      const enabled = enabledByUser.has(f);
-      this.addResource(target, f, metadata, enabled);
+      this.addResource(target, f, metadata, enabledByUser.has(f));
     }
   }
 
@@ -940,7 +818,7 @@ export class DefaultPackageManager implements PackageManager {
     entries: string[] | undefined,
     root: string,
     resourceType: ResourceType,
-    target: Map<string, { metadata: PathMetadata; enabled: boolean }>,
+    target: Map<string, ResourceState>,
     metadata: PathMetadata,
   ): void {
     if (!entries) {
@@ -994,7 +872,7 @@ export class DefaultPackageManager implements PackageManager {
   private resolveLocalEntries(
     entries: string[],
     resourceType: ResourceType,
-    target: Map<string, { metadata: PathMetadata; enabled: boolean }>,
+    target: Map<string, ResourceState>,
     metadata: PathMetadata,
     baseDir: string,
   ): void {
@@ -1002,15 +880,12 @@ export class DefaultPackageManager implements PackageManager {
       return;
     }
 
-    // Collect all files from plain entries (non-pattern entries)
     const { plain, patterns } = splitPatterns(entries);
     const resolvedPlain = plain.map((p) => this.resolvePathFromBase(p, baseDir));
     const allFiles = this.collectFilesFromPaths(resolvedPlain, resourceType);
 
-    // Determine which files are enabled based on patterns
     const enabledPaths = applyPatterns(allFiles, patterns, baseDir);
 
-    // Add all files with their enabled state
     for (const f of allFiles) {
       this.addResource(target, f, metadata, enabledPaths.has(f));
     }
@@ -1114,14 +989,11 @@ export class DefaultPackageManager implements PackageManager {
   }
 
   private addResource(
-    map: Map<string, { metadata: PathMetadata; enabled: boolean }>,
+    map: Map<string, ResourceState>,
     path: string,
     metadata: PathMetadata,
     enabled: boolean,
   ): void {
-    if (!path) {
-      return;
-    }
     if (!map.has(path)) {
       map.set(path, { metadata, enabled });
     }
@@ -1137,9 +1009,7 @@ export class DefaultPackageManager implements PackageManager {
   }
 
   private toResolvedPaths(accumulator: ResourceAccumulator): ResolvedPaths {
-    const mapToResolved = (
-      entries: Map<string, { metadata: PathMetadata; enabled: boolean }>,
-    ): ResolvedResource[] => {
+    const mapToResolved = (entries: Map<string, ResourceState>): ResolvedResource[] => {
       const resolved = Array.from(entries.entries()).map(([path, { metadata, enabled }]) => ({
         path,
         enabled,

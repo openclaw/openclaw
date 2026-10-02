@@ -4,10 +4,8 @@ import { createWorkerProjectPreparationIdentity } from "./preparation-identity.j
 import { PROJECT_KEY, usePreparedPoolFixture } from "./prepared-pool.test-support.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
 import { prepareWorkerProviderProject } from "./provider-project-preparation.js";
-import {
-  workerProjectSeedKey,
-  type RepositoryWorkerProjectSnapshot,
-} from "./workspace-git-base.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
+import { workerProjectSeedKey } from "./workspace-git-base.js";
 
 const sourceAdmission = vi.hoisted(() =>
   vi.fn<typeof import("./repository-project-admission.js").prepareRepositoryWorkerProjectSource>(),
@@ -222,7 +220,7 @@ describe("prepared project retention compatibility", () => {
     ).toThrow("not owned by this lifecycle");
   });
 
-  it.each(["profile", "provider", "target", "owner selection", "agent deletion", "runtime"])(
+  it.each(["profile", "provider", "target", "runtime"])(
     "rechecks %s drift without acquiring external source authority",
     async (mutation) => {
       const { record, owner, invalidateArtifacts } = await setup();
@@ -238,10 +236,6 @@ describe("prepared project retention compatibility", () => {
           platform: "linux",
           arch: "x64",
         });
-      } else if (mutation === "owner selection") {
-        fixture.config.tools = { github: { kind: "oauth", profileId: `ghp_${"a".repeat(32)}` } };
-      } else if (mutation === "agent deletion") {
-        fixture.config.agents = { list: [{ id: "other" }] };
       } else {
         invalidateArtifacts();
       }

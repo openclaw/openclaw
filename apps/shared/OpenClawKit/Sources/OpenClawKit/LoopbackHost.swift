@@ -1,5 +1,8 @@
 import Foundation
 import Network
+#if canImport(Darwin)
+import Darwin
+#endif
 
 public enum LoopbackHost {
     public static func isLoopback(_ rawHost: String) -> Bool {
@@ -7,16 +10,7 @@ public enum LoopbackHost {
     }
 
     public static func isLoopbackHost(_ rawHost: String) -> Bool {
-        var host = rawHost
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        if host.hasSuffix(".") {
-            host.removeLast()
-        }
-        if let zoneIndex = host.firstIndex(of: "%") {
-            host = String(host[..<zoneIndex])
-        }
+        let host = self.normalizedHost(rawHost)
         if host.isEmpty {
             return false
         }
@@ -53,6 +47,40 @@ public enum LoopbackHost {
         let isUniqueLocal = (bytes[0] & 0xFE) == 0xFC
         let isLinkLocal = bytes[0] == 0xFE && (bytes[1] & 0xC0) == 0x80
         return isUniqueLocal || isLinkLocal
+    }
+
+    public static func isPrivateOrTailnetIPv4Literal(_ value: String) -> Bool {
+        let labels = value.split(separator: ".", omittingEmptySubsequences: false)
+        guard labels.count == 4 else { return false }
+        var parts: [Int] = []
+        parts.reserveCapacity(4)
+        for label in labels {
+            guard !label.isEmpty,
+                  label.allSatisfy(\.isNumber),
+                  let part = Int(label),
+                  part >= 0,
+                  part <= 255
+            else { return false }
+            parts.append(part)
+        }
+        switch (parts[0], parts[1]) {
+        case (10, _), (192, 168), (169, 254), (172, 16...31), (100, 64...127):
+            return true
+        default:
+            return false
+        }
+    }
+
+    public static func isPrivateIPv6Literal(_ value: String) -> Bool {
+        #if canImport(Darwin)
+        var addr = in6_addr()
+        guard value.withCString({ inet_pton(AF_INET6, $0, &addr) }) == 1 else {
+            return false
+        }
+        return value.hasPrefix("fc") || value.hasPrefix("fd") || value.hasPrefix("fe80:")
+        #else
+        return false
+        #endif
     }
 
     static func normalizedHost(_ rawHost: String) -> String {

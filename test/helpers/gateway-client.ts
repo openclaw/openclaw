@@ -5,7 +5,7 @@ export class GatewayTestClientCleanupError extends AggregateError {}
 
 /** Own acquisition until hello-ok, without imposing identity or protocol defaults. */
 export async function acquireGatewayTestClient(
-  options: Omit<GatewayClientOptions, "onConnectError" | "onClose">,
+  options: Omit<GatewayClientOptions, "onConnectError">,
   wait: {
     timeoutMs: number;
     timeoutMessage: string;
@@ -61,8 +61,17 @@ export async function acquireGatewayTestClient(
         settle({ client });
       },
       onConnectError: (error) => settle({ error }),
-      onClose: (code, reason) =>
-        settle({ error: new Error(`${wait.closeMessage} (${code}): ${reason}`) }),
+      onClose: (code, reason, info) => {
+        // Name the handshake stage: an abnormal close before the connect frame is a peer
+        // drop, while one after it is a refused or interrupted handshake.
+        const stage = info
+          ? ` [${info.phase} socketOpened=${String(info.socketOpened)} connectRequestSent=${String(
+              info.connectRequestSent ?? false,
+            )}]`
+          : "";
+        settle({ error: new Error(`${wait.closeMessage} (${code}): ${reason}${stage}`) });
+        options.onClose?.(code, reason, info);
+      },
     });
     const timer = setTimeout(
       () => settle({ error: new Error(wait.timeoutMessage) }),

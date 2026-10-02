@@ -15,6 +15,7 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { expandUpdateFirstHopCompatLanes } from "../../scripts/lib/update-first-hop-lanes.mjs";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
@@ -25,6 +26,8 @@ const closure = [
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/official-external-provider-catalog.json",
+  "scripts/lib/record-shared.mjs",
   "scripts/lib/update-compat-inventory.json",
   "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
@@ -90,9 +93,9 @@ function fixture(
       recursive: true,
     });
     for (const file of [
-      "record-shared.mjs",
       "update-compat-contract.mjs",
       "openclaw-e2e-instance.sh",
+      "docker-e2e-watchdog.mjs",
       "direct-run.mjs",
     ]) {
       copyFileSync(join(repo, "scripts/lib", file), join(toolingRoot, "scripts/lib", file));
@@ -111,21 +114,12 @@ function fixture(
     const installedParser = createRequire(import.meta.url).resolve("typescript/package.json");
     const nativeName = `@typescript/typescript-${process.platform}-${process.arch}`;
     const installedNative = createRequire(installedParser).resolve(`${nativeName}/package.json`);
-    cpSync(dirname(installedParser), join(toolingRoot, "node_modules/typescript"), {
-      recursive: true,
+    copyTreeCloseOnExec(dirname(installedParser), join(toolingRoot, "node_modules/typescript"), {
       dereference: true,
     });
-    // A joined writer keeps concurrent test forks from inheriting the executable's writable fd.
-    execFileSync(
-      process.execPath,
-      [
-        "-e",
-        "require('node:fs').cpSync(process.argv[1], process.argv[2], { recursive: true, dereference: true })",
-        dirname(installedNative),
-        join(toolingRoot, "node_modules", nativeName),
-      ],
-      { stdio: "pipe", timeout: 20_000 },
-    );
+    copyTreeCloseOnExec(dirname(installedNative), join(toolingRoot, "node_modules", nativeName), {
+      dereference: true,
+    });
   }
   const log = join(root, "forbidden-commands");
   const bin = join(root, "bin");
@@ -472,6 +466,8 @@ describe("frozen admission upgrade Docker aliases", () => {
     expect(record.contracts).toHaveLength(1);
     expect(record.contracts[0].modes).toEqual({
       OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE: "current",
+      OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE: "absent",
+      OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE: "native",
       releaseTrain: train,
     });
     expect(record.selectedSha).toBe(f.selected.sha);
@@ -549,6 +545,7 @@ describe("frozen admission bootstrap repairs", () => {
   it.each([
     reader,
     "scripts/lib/docker-e2e-scenarios.mts",
+    "scripts/lib/record-shared.mjs",
     shell,
     "scripts/lib/trusted-native-typescript.mjs",
     "scripts/lib/native-typescript.mts",
@@ -572,6 +569,8 @@ describe("frozen admission bootstrap repairs", () => {
   it.each([
     entrypoint,
     "scripts/lib/official-external-channel-catalog.json",
+    "scripts/lib/official-external-provider-catalog.json",
+    "scripts/lib/record-shared.mjs",
     "scripts/lib/upgrade-survivor-scenarios.json",
     `${recipeDirectory}/agents.json`,
     "package.json",

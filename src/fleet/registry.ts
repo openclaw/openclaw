@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import path from "node:path";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
@@ -11,9 +11,9 @@ import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-
 import type {
   FleetCellOperationName,
   FleetCellRecord,
-  FleetRegistryWriteOperations,
   ReserveFleetCellParams,
 } from "./registry.types.js";
+import type { FleetRegistryWriteOperations } from "./registry.worker-contract.js";
 
 export type { FleetCellOperationName, FleetCellRecord } from "./registry.types.js";
 

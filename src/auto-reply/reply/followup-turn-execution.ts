@@ -16,9 +16,10 @@ import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
-import { hasReplyOperationExecutionStarted } from "./reply-run-registry.js";
+import { hasReplyOperationExecutionStarted, replyRunRegistry } from "./reply-run-registry.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
+import { resolveReplySourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
 
 export type FollowupExecutionResult = {
@@ -239,10 +240,8 @@ export async function executeFollowupTurn(params: {
             if (!draftOwnsPreamble && !shouldEmitStructuredProgress()) {
               return false;
             }
-            const visible = (
-              await settleProgressVisibilityCallbackResult(sourceOpts.onItemEvent!(item))
-            ).visible;
-            return visible;
+            return (await settleProgressVisibilityCallbackResult(sourceOpts.onItemEvent!(item)))
+              .visible;
           })
       : undefined,
     onNarrationUpdate: wrap(sourceOpts?.onNarrationUpdate),
@@ -282,9 +281,6 @@ export async function executeFollowupTurn(params: {
             if (visible) {
               return true;
             }
-            if (!forceToolResultProgress && !verboseToolResult) {
-              return false;
-            }
           }
           if (!forceToolResultProgress && !verboseToolResult) {
             return false;
@@ -304,12 +300,10 @@ export async function executeFollowupTurn(params: {
         ) {
           return false;
         }
-        const visible =
-          transientToolResultProgress && !verboseToolResult
-            ? (await settleProgressVisibilityCallbackResult(transientToolResultProgress(payload)))
-                .visible
-            : await params.onToolResult(payload, { runId: turn.runId }).then(() => true);
-        return visible;
+        return transientToolResultProgress && !verboseToolResult
+          ? (await settleProgressVisibilityCallbackResult(transientToolResultProgress(payload)))
+              .visible
+          : await params.onToolResult(payload, { runId: turn.runId }).then(() => true);
       });
     },
   };
@@ -391,7 +385,7 @@ export async function executeFollowupTurn(params: {
           getActiveSessionEntry: turn.session.current,
           activeSessionStore: turn.sessionStore,
           storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
-          resolvedVerboseLevel: currentVerboseLevel() ?? "off",
+          resolvedVerboseLevel: currentVerboseLevel(),
           toolProgressDetail: defaults.toolProgressDetail,
           onCompactionNoticePayload: async (payload) => {
             await enqueueProgressResult(async () => {
@@ -408,6 +402,16 @@ export async function executeFollowupTurn(params: {
       // custody after lazy collection binds it, so runtime appends consume all sources.
       await recorder?.resolveMessage();
       turn.operation.abortSignal.throwIfAborted();
+      const sourceTurnId = resolveReplySourceTurnId({
+        sourceTurnId: turn.queued.sourceTurnId,
+        admissionRunId: turn.queued.messageId,
+        ingressProvider: turn.queued.run.messageProvider,
+        entry: turn.session.current(),
+      });
+      if (sourceTurnId) {
+        replyRunRegistry.bindSourceTurnId(turn.operation, sourceTurnId);
+        setChannelSourceTurnId(sessionCtx, sourceTurnId);
+      }
       execution = await (recorder?.withPendingInput
         ? recorder.withPendingInput(execute)
         : execute());

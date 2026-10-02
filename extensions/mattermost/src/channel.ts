@@ -42,11 +42,15 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   chunkTextForOutbound,
   sanitizeAssistantVisibleText,
 } from "openclaw/plugin-sdk/text-chunking";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { mattermostApprovalAuth } from "./approval-auth.js";
 import {
   describeMattermostAccount,
@@ -114,17 +118,7 @@ function hasMattermostPresentationNavigation(presentation: MessagePresentation):
 function readMattermostPayloadData(payload: {
   channelData?: Record<string, unknown>;
 }): Record<string, unknown> | undefined {
-  const data = payload.channelData?.mattermost;
-  return data && typeof data === "object" && !Array.isArray(data)
-    ? (data as Record<string, unknown>)
-    : undefined;
-}
-
-function readMattermostPresentationButtons(payload: {
-  channelData?: Record<string, unknown>;
-}): Array<unknown> | undefined {
-  const buttons = readMattermostPayloadData(payload)?.presentationButtons;
-  return Array.isArray(buttons) ? buttons : undefined;
+  return asOptionalRecord(payload.channelData?.mattermost);
 }
 
 type MattermostDirectoryListParams = Parameters<
@@ -143,7 +137,7 @@ const mattermostSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedM
   findingTitle: "Mattermost security warning",
   policyPathSuffix: "dmPolicy",
   classifyEntryAuthentication: identityEntryAuthenticationClassifier(mattermostIngressIdentity),
-  normalizeDmEntry: (raw) => normalizeAllowEntry(raw),
+  normalizeDmEntry: normalizeAllowEntry,
 });
 
 function listEnabledMattermostAccounts({
@@ -232,10 +226,7 @@ function resolveMattermostAutoThreadId(params: {
   const replyToId = normalizeOptionalString(params.replyToId);
   const context = params.toolContext;
   const currentThreadId = normalizeOptionalString(context?.currentThreadTs);
-  const currentMessageId =
-    typeof context?.currentMessageId === "number"
-      ? String(context.currentMessageId)
-      : normalizeOptionalString(context?.currentMessageId);
+  const currentMessageId = normalizeMattermostThreadId(context?.currentMessageId);
   const currentTarget = normalizeMattermostThreadTarget(context?.currentChannelId);
   if (currentThreadId && currentTarget === normalizeMattermostThreadTarget(params.to)) {
     if (replyToId === currentMessageId) {
@@ -358,9 +349,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
         : {}),
     };
   },
-  supportsAction: ({ action }) => {
-    return action === "react" || action === "read";
-  },
+  supportsAction: ({ action }) => action === "react" || action === "read",
   handleAction: async ({
     action,
     params,
@@ -459,17 +448,12 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       throw new Error(result.error);
     }
 
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: remove
-            ? `Removed reaction :${emojiName}: from ${postId}`
-            : `Reacted with :${emojiName}: on ${postId}`,
-        },
-      ],
-      details: {},
-    };
+    return textResult(
+      remove
+        ? `Removed reaction :${emojiName}: from ${postId}`
+        : `Reacted with :${emojiName}: on ${postId}`,
+      {},
+    );
   },
 };
 
@@ -532,7 +516,7 @@ function resolveMattermostSendAttachmentMedia(params: Record<string, unknown>): 
   return mediaUrls[0];
 }
 
-async function sendMattermostMedia(
+async function sendMattermostContent(
   ctx: ChannelOutboundContext,
   content: { text: string; mediaUrl?: string; buttons?: unknown[]; attachmentText?: string } = ctx,
 ) {
@@ -602,8 +586,11 @@ const mattermostOutbound: ChannelOutboundAdapter = {
     };
   },
   sendPayload: async (ctx) => {
-    const buttons = readMattermostPresentationButtons(ctx.payload);
-    const rawAttachmentText = readMattermostPayloadData(ctx.payload)?.attachmentText;
+    const mattermostData = readMattermostPayloadData(ctx.payload);
+    const buttons = Array.isArray(mattermostData?.presentationButtons)
+      ? mattermostData.presentationButtons
+      : undefined;
+    const rawAttachmentText = mattermostData?.attachmentText;
     const attachmentText = typeof rawAttachmentText === "string" ? rawAttachmentText : undefined;
     if (buttons?.length || attachmentText !== undefined) {
       const mediaUrl = resolvePayloadMediaUrls({
@@ -612,7 +599,7 @@ const mattermostOutbound: ChannelOutboundAdapter = {
       })
         .map((url) => url.trim())
         .find(Boolean);
-      const result = await sendMattermostMedia(ctx, {
+      const result = await sendMattermostContent(ctx, {
         text: ctx.payload.text ?? ctx.text,
         mediaUrl,
         buttons,
@@ -636,20 +623,8 @@ const mattermostOutbound: ChannelOutboundAdapter = {
   },
   ...createAttachedChannelResultAdapter({
     channel: "mattermost",
-    sendText: async (ctx) =>
-      toMattermostOutboundResult(
-        await (
-          await loadMattermostChannelRuntime()
-        ).sendMessageMattermost(ctx.to, ctx.text, {
-          cfg: ctx.cfg,
-          accountId: ctx.accountId ?? undefined,
-          replyToId: ctx.replyToId ?? (ctx.threadId != null ? String(ctx.threadId) : undefined),
-          assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
-          onPlatformSendDispatch: ctx.onPlatformSendDispatch,
-          onDeliveryResult: createMattermostDeliveryProgressReporter(ctx.onDeliveryResult),
-        }),
-      ),
-    sendMedia: sendMattermostMedia,
+    sendText: (ctx) => sendMattermostContent(ctx, { text: ctx.text }),
+    sendMedia: sendMattermostContent,
   }),
 };
 
@@ -742,7 +717,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
           ? { to: `channel:${parent}`, threadId: child }
           : { to: normalizeMattermostMessagingTarget(`channel:${child}`) };
       },
-      resolveOutboundSessionRoute: (params) => resolveMattermostOutboundSessionRoute(params),
+      resolveOutboundSessionRoute: resolveMattermostOutboundSessionRoute,
       targetResolver: {
         looksLikeId: looksLikeMattermostTargetId,
         hint: "<channelId|user:ID|channel:ID>",
@@ -818,7 +793,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
           botTokenSource: account.botTokenSource,
         });
         ctx.log?.info(`[${account.accountId}] starting channel`);
-        return (await loadMattermostChannelRuntime()).monitorMattermostProvider({
+        return (await import("./mattermost/monitor.js")).monitorMattermostProvider({
           botToken: account.botToken ?? undefined,
           baseUrl: account.baseUrl ?? undefined,
           accountId: account.accountId,
@@ -834,14 +809,14 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     text: {
       idLabel: "mattermostUserId",
       message: "OpenClaw: your access has been approved.",
-      normalizeAllowEntry: (entry) => normalizeAllowEntry(entry),
+      normalizeAllowEntry,
       notify: createLoggedPairingApprovalNotifier(
         ({ id }) => `[mattermost] User ${id} approved for pairing`,
       ),
     },
   },
   threading: {
-    buildToolContext: (params) => buildMattermostThreadingToolContext(params),
+    buildToolContext: buildMattermostThreadingToolContext,
     scopedAccountReplyToMode: {
       resolveAccount: (cfg, accountId) =>
         resolveMattermostAccount({
@@ -856,10 +831,8 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
             : "channel",
         ),
     },
-    resolveAutoThreadId: ({ to, replyToId, toolContext }) =>
-      resolveMattermostAutoThreadId({ to, replyToId, toolContext }),
-    matchesToolContextTarget: ({ target, toolContext }) =>
-      matchesMattermostToolContextTarget({ target, toolContext }),
+    resolveAutoThreadId: resolveMattermostAutoThreadId,
+    matchesToolContextTarget: matchesMattermostToolContextTarget,
     resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit, replyDelivery }) => {
       const ambientThreadId = threadId != null ? String(threadId) : undefined;
       // Direct chats stay flat when their effective mode is off. Opted-in DMs

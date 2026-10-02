@@ -184,7 +184,6 @@ export async function invoke(lane: Lane, recoveryRunIds: readonly string[] = [])
       {
         json: true,
         yes: true,
-        restart: false,
         timeout: "15",
         deferCompletionCache: true,
       },

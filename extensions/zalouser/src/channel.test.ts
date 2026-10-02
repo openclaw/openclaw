@@ -126,35 +126,6 @@ describe("zalouser outbound", () => {
     expect(sanitize("⚠️ 🛠️ `search repos (agent)` failed")).toBe("");
   });
 
-  it("passes markdown chunk settings through sendText", async () => {
-    const sendText = requireZalouserSendText();
-
-    const result = await sendText({
-      cfg: { channels: { zalouser: { enabled: true } } } as never,
-      to: "group:123456",
-      text: "hello world\nthis is a test",
-      accountId: "default",
-    } as never);
-
-    expect(mockSendMessage).toHaveBeenCalledWith(
-      "123456",
-      "hello world\nthis is a test",
-      expect.objectContaining({
-        profile: "default",
-        isGroup: true,
-        textMode: "markdown",
-        textChunkMode: "newline",
-        textChunkLimit: 10,
-        onDeliveryResult: expect.any(Function),
-      }),
-    );
-    expect(result).toEqual({
-      channel: "zalouser",
-      messageId: "mid-1",
-      receipt: undefined,
-    });
-  });
-
   it("uses the selected account profile for direct outbound messages", async () => {
     const sendText = requireZalouserSendText();
 

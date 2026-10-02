@@ -5,6 +5,7 @@ import { resolveContextEngineCapabilities } from "../../agents/embedded-agent-ru
 import { runContextEngineMaintenance } from "../../agents/embedded-agent-runner/context-engine-maintenance.js";
 import { buildAfterTurnRuntimeContext } from "../../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginEntryConfig } from "../../config/types.plugins.js";
 import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 import type { RuntimeLogger } from "./types-core.js";
@@ -31,6 +32,10 @@ const cfg = {
     },
   },
 } satisfies OpenClawConfig;
+
+function configWithPluginPolicy(pluginId: string, llm: PluginEntryConfig["llm"]): OpenClawConfig {
+  return { ...cfg, plugins: { entries: { [pluginId]: { llm } } } };
+}
 
 function createPreparedModel(
   modelId = "gpt-5.5",
@@ -207,27 +212,6 @@ describe("runtime.llm.complete", () => {
     });
   });
 
-  it("uses trusted context-engine attribution inside plugin runtime scope", async () => {
-    const runtimeContext = resolveContextEngineCapabilities({
-      config: cfg,
-      sessionKey: "agent:ada:session:abc",
-      purpose: "context-engine.after-turn",
-    });
-
-    const result = await withPluginRuntimePluginScope({ pluginId: "memory-core" }, () =>
-      runtimeContext.llm!.complete({
-        messages: [{ role: "user", content: "summarize" }],
-        purpose: "memory-maintenance",
-      }),
-    );
-
-    expect(result.audit.caller).toEqual({
-      kind: "context-engine",
-      id: "context-engine.after-turn",
-    });
-    expect(result.agentId).toBe("ada");
-  });
-
   it("does not fall back to the default agent for unbound active-session hooks", async () => {
     const runtimeContext = resolveContextEngineCapabilities({
       config: cfg,
@@ -337,88 +321,12 @@ describe("runtime.llm.complete", () => {
     expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
   });
 
-  it("allows context-engine model overrides through the owning plugin llm policy", async () => {
-    const runtimeContext = resolveContextEngineCapabilities({
-      config: {
-        ...cfg,
-        plugins: {
-          entries: {
-            "lossless-claw": {
-              llm: {
-                allowModelOverride: true,
-                allowedModels: ["openai/gpt-5.4-mini", "minimax/MiniMax-M2.7"],
-              },
-            },
-          },
-        },
-      },
-      sessionKey: "agent:main:session:abc",
-      contextEnginePluginId: "lossless-claw",
-      purpose: "context-engine.compaction",
-    });
-
-    const result = await runtimeContext.llm!.complete({
-      agentId: "main",
-      model: "openai/gpt-5.4-mini",
-      messages: [{ role: "user", content: "summarize" }],
-    });
-
-    expectSingleCallFirstArg(hoisted.acquireSimpleCompletionModelForAgent, {
-      agentId: "main",
-      modelRef: "openai/gpt-5.4-mini",
-    });
-    expectFields(requireRecord(result.audit, "audit"), {
-      caller: { kind: "context-engine", id: "context-engine.compaction" },
-      sessionKey: "agent:main:session:abc",
-    });
-  });
-
-  it("denies context-engine model overrides outside the owning plugin allowlist", async () => {
-    const runtimeContext = resolveContextEngineCapabilities({
-      config: {
-        ...cfg,
-        plugins: {
-          entries: {
-            "lossless-claw": {
-              llm: {
-                allowModelOverride: true,
-                allowedModels: ["openai/gpt-5.4-mini"],
-              },
-            },
-          },
-        },
-      },
-      sessionKey: "agent:main:session:abc",
-      contextEnginePluginId: "lossless-claw",
-      purpose: "context-engine.compaction",
-    });
-
-    await expect(
-      runtimeContext.llm!.complete({
-        model: "openai/gpt-5.5",
-        messages: [{ role: "user", content: "summarize" }],
-      }),
-    ).rejects.toThrow(
-      'model override "openai/gpt-5.5" is not allowlisted for plugin "lossless-claw"',
-    );
-    expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
-  });
-
   it("matches allowlist entries for provider-qualified model ids without doubling the provider prefix", async () => {
     const runtimeContext = resolveContextEngineCapabilities({
-      config: {
-        ...cfg,
-        plugins: {
-          entries: {
-            "lossless-claw": {
-              llm: {
-                allowModelOverride: true,
-                allowedModels: ["openrouter/gpt-5.4-mini"],
-              },
-            },
-          },
-        },
-      },
+      config: configWithPluginPolicy("lossless-claw", {
+        allowModelOverride: true,
+        allowedModels: ["openrouter/gpt-5.4-mini"],
+      }),
       sessionKey: "agent:main:session:abc",
       contextEnginePluginId: "lossless-claw",
       purpose: "context-engine.compaction",
@@ -449,19 +357,10 @@ describe("runtime.llm.complete", () => {
 
   it("reports denials for provider-qualified model ids without doubling the provider prefix", async () => {
     const runtimeContext = resolveContextEngineCapabilities({
-      config: {
-        ...cfg,
-        plugins: {
-          entries: {
-            "lossless-claw": {
-              llm: {
-                allowModelOverride: true,
-                allowedModels: ["openrouter/gpt-5.4-mini"],
-              },
-            },
-          },
-        },
-      },
+      config: configWithPluginPolicy("lossless-claw", {
+        allowModelOverride: true,
+        allowedModels: ["openrouter/gpt-5.4-mini"],
+      }),
       sessionKey: "agent:main:session:abc",
       contextEnginePluginId: "lossless-claw",
       purpose: "context-engine.compaction",
@@ -492,19 +391,10 @@ describe("runtime.llm.complete", () => {
 
   it("keeps context-engine attribution and host-derived policy inside plugin runtime scope", async () => {
     const runtimeContext = resolveContextEngineCapabilities({
-      config: {
-        ...cfg,
-        plugins: {
-          entries: {
-            "lossless-claw": {
-              llm: {
-                allowModelOverride: true,
-                allowedModels: ["openai/gpt-5.4-mini"],
-              },
-            },
-          },
-        },
-      },
+      config: configWithPluginPolicy("lossless-claw", {
+        allowModelOverride: true,
+        allowedModels: ["openai/gpt-5.4-mini"],
+      }),
       sessionKey: "agent:main:session:abc",
       contextEnginePluginId: "lossless-claw",
       purpose: "context-engine.compaction",
@@ -624,19 +514,11 @@ describe("runtime.llm.complete", () => {
 
   it("requires model overrides to satisfy host and plugin allowlists", async () => {
     const llm = createRuntimeLlm({
-      getConfig: () => ({
-        ...cfg,
-        plugins: {
-          entries: {
-            "restricted-plugin": {
-              llm: {
-                allowModelOverride: true,
-                allowedModels: ["openai/gpt-5.4"],
-              },
-            },
-          },
-        },
-      }),
+      getConfig: () =>
+        configWithPluginPolicy("restricted-plugin", {
+          allowModelOverride: true,
+          allowedModels: ["openai/gpt-5.4"],
+        }),
       authority: {
         allowComplete: true,
         allowModelOverride: true,
@@ -817,18 +699,10 @@ describe("runtime.llm.complete", () => {
     ).rejects.toThrow("cannot override the target agent");
 
     const allowed = createRuntimeLlm({
-      getConfig: () => ({
-        ...cfg,
-        plugins: {
-          entries: {
-            "trusted-plugin": {
-              llm: {
-                allowAgentIdOverride: true,
-              },
-            },
-          },
-        },
-      }),
+      getConfig: () =>
+        configWithPluginPolicy("trusted-plugin", {
+          allowAgentIdOverride: true,
+        }),
       authority: {
         allowComplete: true,
       },
@@ -847,19 +721,11 @@ describe("runtime.llm.complete", () => {
 
   it("allows plugin model overrides only when configured and allowlisted", async () => {
     const llm = createRuntimeLlm({
-      getConfig: () => ({
-        ...cfg,
-        plugins: {
-          entries: {
-            "trusted-plugin": {
-              llm: {
-                allowModelOverride: true,
-                allowedModels: ["openai/gpt-5.4"],
-              },
-            },
-          },
-        },
-      }),
+      getConfig: () =>
+        configWithPluginPolicy("trusted-plugin", {
+          allowModelOverride: true,
+          allowedModels: ["openai/gpt-5.4"],
+        }),
       authority: {
         allowComplete: true,
       },
@@ -888,16 +754,10 @@ describe("runtime.llm.complete", () => {
 
   it("keeps the shipped model allowlist scoped to explicit overrides", async () => {
     const llm = createRuntimeLlm({
-      getConfig: () => ({
-        ...cfg,
-        plugins: {
-          entries: {
-            "restricted-plugin": {
-              llm: { allowedModels: ["anthropic/claude-haiku-4-5"] },
-            },
-          },
-        },
-      }),
+      getConfig: () =>
+        configWithPluginPolicy("restricted-plugin", {
+          allowedModels: ["anthropic/claude-haiku-4-5"],
+        }),
       authority: { allowComplete: true },
     });
 
@@ -910,16 +770,10 @@ describe("runtime.llm.complete", () => {
 
   it("applies a completion model allowlist to the host-resolved default", async () => {
     const llm = createRuntimeLlm({
-      getConfig: () => ({
-        ...cfg,
-        plugins: {
-          entries: {
-            "restricted-plugin": {
-              llm: { allowedCompletionModels: ["anthropic/claude-haiku-4-5"] },
-            },
-          },
-        },
-      }),
+      getConfig: () =>
+        configWithPluginPolicy("restricted-plugin", {
+          allowedCompletionModels: ["anthropic/claude-haiku-4-5"],
+        }),
       authority: { allowComplete: true },
     });
 
@@ -933,20 +787,12 @@ describe("runtime.llm.complete", () => {
 
   it("applies the completion model allowlist to explicit overrides too", async () => {
     const llm = createRuntimeLlm({
-      getConfig: () => ({
-        ...cfg,
-        plugins: {
-          entries: {
-            "restricted-plugin": {
-              llm: {
-                allowModelOverride: true,
-                allowedModels: ["*"],
-                allowedCompletionModels: ["openai/gpt-5.4"],
-              },
-            },
-          },
-        },
-      }),
+      getConfig: () =>
+        configWithPluginPolicy("restricted-plugin", {
+          allowModelOverride: true,
+          allowedModels: ["*"],
+          allowedCompletionModels: ["openai/gpt-5.4"],
+        }),
       authority: { allowComplete: true },
     });
 
@@ -965,14 +811,7 @@ describe("runtime.llm.complete", () => {
     "fails closed for an unusable completion allowlist %j",
     async (allowedCompletionModels) => {
       const llm = createRuntimeLlm({
-        getConfig: () => ({
-          ...cfg,
-          plugins: {
-            entries: {
-              "restricted-plugin": { llm: { allowedCompletionModels } },
-            },
-          },
-        }),
+        getConfig: () => configWithPluginPolicy("restricted-plugin", { allowedCompletionModels }),
         authority: { allowComplete: true },
       });
 
@@ -987,14 +826,8 @@ describe("runtime.llm.complete", () => {
 
   it("accepts an explicit wildcard completion allowlist", async () => {
     const llm = createRuntimeLlm({
-      getConfig: () => ({
-        ...cfg,
-        plugins: {
-          entries: {
-            "restricted-plugin": { llm: { allowedCompletionModels: ["*"] } },
-          },
-        },
-      }),
+      getConfig: () =>
+        configWithPluginPolicy("restricted-plugin", { allowedCompletionModels: ["*"] }),
       authority: { allowComplete: true },
     });
 

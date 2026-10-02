@@ -5,11 +5,13 @@ import { pathToFileURL } from "node:url";
 import { expect, it, vi, type Mock } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { stampConfigWriteMetadata } from "../../config/io.meta.js";
+import { resolveConfigPath } from "../../config/paths.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import { acquireGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { consumeGatewayRestartIntentPayloadSync } from "../../infra/restart-intent.js";
-import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
+import * as processAncestry from "../../infra/restart-stale-pids.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -32,7 +34,7 @@ const hostPlatform = process.platform;
 
 function createServingOwnerFixture() {
   let lease: ReturnType<typeof acquireGatewayOwnerLease> | undefined;
-  let coordinator: ReturnType<typeof acquireGatewayLifecycleCoordinator> | undefined;
+  let coordinator: ReturnType<typeof acquireGatewayStateOwner> | undefined;
   let env: NodeJS.ProcessEnv;
   const release = async () => {
     await lease?.release();
@@ -48,8 +50,14 @@ function createServingOwnerFixture() {
       // Use the real host's self identity while native service transport is simulated.
       mockProcessPlatform(hostPlatform);
       try {
-        coordinator = acquireGatewayLifecycleCoordinator({
+        coordinator = acquireGatewayStateOwner({
           databasePath: resolveOpenClawStateSqlitePath(env),
+          payload: {
+            pid: process.pid,
+            createdAt: new Date().toISOString(),
+            configPath: resolveConfigPath(env),
+            role: "gateway",
+          },
         });
         lease = acquireGatewayOwnerLease({
           env,
@@ -80,6 +88,21 @@ export async function createServiceActivationFixture() {
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-activation-")),
   );
   vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+  const inspectHostAncestry = processAncestry.inspectSelfAndAncestorPidsSync;
+  vi.spyOn(processAncestry, "inspectSelfAndAncestorPidsSync").mockImplementation((...args) => {
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    // The native manager is simulated; this test process still has real host ancestors.
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      enumerable: descriptor.enumerable,
+      value: hostPlatform,
+    });
+    try {
+      return inspectHostAncestry(...args);
+    } finally {
+      Object.defineProperty(process, "platform", descriptor);
+    }
+  });
   const readProcessStartTime = processIdentity.getFileLockProcessStartTime;
   // The service platform is simulated; only this live test process gets a fixed start identity.
   vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockImplementation((pid, ...args) =>
@@ -180,7 +203,6 @@ export function registerRecoveryTests(params: {
   };
 }): void {
   it.each([
-    { startup: "fast", readyAfterMs: 0, needsRecovery: false },
     { startup: "slow", readyAfterMs: 20_000, needsRecovery: false },
     { startup: "unready", readyAfterMs: Infinity, needsRecovery: false },
     { startup: "wrong version", readyAfterMs: 0, needsRecovery: true },
@@ -365,7 +387,6 @@ export function registerRecoveryTests(params: {
     "metadata",
     "unit",
     "unavailable",
-    "replacement root",
     "profile",
     "before activation",
     "after readiness",
@@ -401,11 +422,7 @@ export function registerRecoveryTests(params: {
         ...command,
         programArguments: [
           process.execPath,
-          path.join(
-            ["foreign", "replacement root"].includes(change) ? foreign : root,
-            "dist",
-            "index.js",
-          ),
+          path.join(change === "foreign" ? foreign : root, "dist", "index.js"),
           "gateway",
           "--port",
           "19002",

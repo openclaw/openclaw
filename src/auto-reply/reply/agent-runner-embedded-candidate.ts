@@ -38,10 +38,8 @@ export async function runEmbeddedFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
     effectiveRun: AgentFallbackCandidateCommonParams["candidateRun"];
     directBlockDeliveries: DirectBlockDelivery[];
-    sessionRuntimeOverride?: string;
     getLifecycleGeneration: () => string;
     onLifecycleGeneration: (generation: string) => void;
-    allowTransientCooldownProbe?: boolean;
     notifyUserAboutCompaction: boolean;
     messageToolDeliveryState: MessageToolDeliveryState;
     onCompactionFacts: (facts: {
@@ -64,6 +62,15 @@ export async function runEmbeddedFallbackCandidate(
     ...params.candidateFastMode,
     thinkLevel: params.candidateThinkLevel,
   };
+  const agentHarnessPolicy = params.agentHarnessRuntimeOverride
+    ? ({ runtime: params.agentHarnessRuntimeOverride, runtimeSource: "model" } as const)
+    : resolveAgentHarnessPolicy({
+        provider: params.provider,
+        modelId: params.model,
+        config: params.runtimeConfig,
+        agentId: turn.followupRun.run.agentId,
+        sessionKey: turn.followupRun.run.runtimePolicySessionKey ?? turn.sessionKey,
+      });
   const { embeddedContext, senderContext, runBaseParams } = await buildEmbeddedRunExecutionParams({
     run: candidateRun,
     replyRoute: turn.followupRun,
@@ -74,19 +81,11 @@ export async function runEmbeddedFallbackCandidate(
     promptCacheKey: turn.opts?.promptCacheKey,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     model: params.model,
+    agentRuntime: agentHarnessPolicy.runtime,
   });
   if (sourceReplyDeliveryRuntime) {
     bindSourceReplyDeliveryRuntime(runBaseParams, sourceReplyDeliveryRuntime);
   }
-  const agentHarnessPolicy = params.sessionRuntimeOverride
-    ? ({ runtime: params.sessionRuntimeOverride, runtimeSource: "model" } as const)
-    : resolveAgentHarnessPolicy({
-        provider: params.provider,
-        modelId: params.model,
-        config: params.runtimeConfig,
-        agentId: turn.followupRun.run.agentId,
-        sessionKey: turn.followupRun.run.runtimePolicySessionKey ?? turn.sessionKey,
-      });
   const embeddedRunProvider = resolveOpenAIRuntimeProvider({
     provider: params.provider,
     harnessRuntime: agentHarnessPolicy.runtime,
@@ -96,7 +95,7 @@ export async function runEmbeddedFallbackCandidate(
     workspaceDir: turn.followupRun.run.workspaceDir,
   });
   const embeddedRunHarnessOverride =
-    params.sessionRuntimeOverride ??
+    params.agentHarnessRuntimeOverride ??
     (agentHarnessPolicy.runtime === "openclaw" && embeddedRunProvider !== params.provider
       ? "openclaw"
       : undefined);
@@ -289,7 +288,6 @@ export async function runEmbeddedFallbackCandidate(
             messageToolDeliveryState: params.messageToolDeliveryState,
             provider: params.provider,
             model: params.model,
-            runId: params.runId,
             effectiveSessionId: params.effectiveRun.sessionId,
             notifyUserAboutCompaction: params.notifyUserAboutCompaction,
             onCompactionCompleted: () => {
@@ -317,10 +315,7 @@ export async function runEmbeddedFallbackCandidate(
         shouldEmitToolResult: turn.shouldEmitToolResult,
         shouldEmitToolOutput: turn.shouldEmitToolOutput,
         bootstrapPromptWarningSignaturesSeen: params.bootstrapPromptWarningSignaturesSeen,
-        bootstrapPromptWarningSignature:
-          params.bootstrapPromptWarningSignaturesSeen[
-            params.bootstrapPromptWarningSignaturesSeen.length - 1
-          ],
+        bootstrapPromptWarningSignature: params.bootstrapPromptWarningSignaturesSeen.at(-1),
         onToolResult: turn.opts?.onToolResult
           ? (() => {
               // Serialized delivery preserves tool result order across detached callbacks.

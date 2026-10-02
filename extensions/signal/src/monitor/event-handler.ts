@@ -70,6 +70,7 @@ import {
   maybeResolveSignalApprovalReaction,
   resolveSignalApprovalConversationKey,
 } from "../approval-reactions.js";
+import type { SignalSseEvent } from "../client-types.js";
 import {
   formatSignalPairingIdLine,
   formatSignalSenderDisplay,
@@ -104,6 +105,13 @@ import type {
 } from "./event-handler.types.js";
 import { resolveSignalQuoteContext } from "./inbound-context.js";
 import { renderSignalMentions, resolveSignalMentionFacts } from "./mentions.js";
+import {
+  buildSignalReactionSystemEventText,
+  isSignalReactionMessage,
+  resolveSignalReactionTargets,
+  resolveSignalStatusReactionTimestamp,
+  shouldEmitSignalReactionNotification,
+} from "./reactions.js";
 
 const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
 const RETRYABLE_FLUSH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
@@ -134,32 +142,6 @@ function resolveSignalInboundRoute(params: {
       id: params.isGroup ? (params.groupId ?? "unknown") : params.senderPeerId,
     },
   });
-}
-
-function resolveSignalStatusReactionTimestamp(params: {
-  timestamp?: number;
-  messageId?: string;
-}): number | null {
-  if (typeof params.timestamp === "number") {
-    return Number.isFinite(params.timestamp) && params.timestamp > 0 ? params.timestamp : null;
-  }
-  const parsed = Number(params.messageId);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
-type SignalStatusDispatchResult = {
-  settledReceipt?: {
-    counts: Record<
-      "tool" | "block" | "final",
-      { failedBeforeSend: number; failedAfterSend: number }
-    >;
-  };
-};
-
-function hasSignalStatusReplyDeliveryFailure(result: SignalStatusDispatchResult): boolean {
-  return Object.values(result.settledReceipt?.counts ?? {}).some(
-    (counts) => counts.failedBeforeSend > 0 || counts.failedAfterSend > 0,
-  );
 }
 
 async function finalizeSignalStatusReaction(params: {
@@ -611,7 +593,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           const hasFinalResponse =
             result.dispatched && hasVisibleInboundReplyDispatch(result.dispatchResult);
           const hasDeliveryFailure =
-            result.dispatched && hasSignalStatusReplyDeliveryFailure(result.dispatchResult);
+            result.dispatched &&
+            Object.values(result.dispatchResult.settledReceipt?.counts ?? {}).some(
+              (counts) => counts.failedBeforeSend > 0 || counts.failedAfterSend > 0,
+            );
           const hasAgentRunFailure =
             result.dispatched && readAgentRunTerminalOutcome(result.dispatchResult) === "failed";
           void finalizeSignalStatusReaction({
@@ -896,8 +881,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     ) {
       return true;
     }
-    const targets = deps.resolveSignalReactionTargets(params.reaction);
-    const shouldNotify = deps.shouldEmitSignalReactionNotification({
+    const targets = resolveSignalReactionTargets(params.reaction);
+    const shouldNotify = shouldEmitSignalReactionNotification({
       mode: deps.reactionMode,
       account: deps.account,
       accountUuid: deps.accountUuid,
@@ -918,7 +903,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       senderPeerId,
     });
     const groupLabel = isGroup ? `${groupName ?? "Signal Group"} id:${groupId}` : undefined;
-    const text = deps.buildSignalReactionSystemEventText({
+    const text = buildSignalReactionSystemEventText({
       emojiLabel,
       actorLabel: senderName,
       messageId,
@@ -945,7 +930,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   }
 
   return async (
-    event: { event?: string; data?: string },
+    event: SignalSseEvent,
     turnAdoptionLifecycle?: SignalIngressLifecycle,
     preparedPayload?: SignalReceivePayload,
   ): Promise<{ kind: "deferred" } | { kind: "failed-retryable"; error: unknown } | void> => {
@@ -993,9 +978,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     const dataMessage = envelope.dataMessage ?? envelope.editMessage?.dataMessage;
-    const reaction = deps.isSignalReactionMessage(envelope.reactionMessage)
+    const reaction = isSignalReactionMessage(envelope.reactionMessage)
       ? envelope.reactionMessage
-      : deps.isSignalReactionMessage(dataMessage?.reaction)
+      : isSignalReactionMessage(dataMessage?.reaction)
         ? dataMessage?.reaction
         : null;
 
@@ -1171,6 +1156,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
     const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+    const attachments = dataMessage.attachments ?? [];
+    const mediaFacts: ChannelInboundMediaInput[] = attachments.map((attachment) => {
+      const contentType = attachment?.contentType ?? undefined;
+      return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
+    });
     if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
       logInboundDrop({
         log: deps.runtime.log,
@@ -1180,14 +1170,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         onceKey: JSON.stringify([deps.accountId, groupId]),
         hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(groupId)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
       });
-      const pendingMedia: ChannelInboundMediaInput[] = (dataMessage.attachments ?? []).map(
-        (attachment) => {
-          const contentType = attachment?.contentType ?? undefined;
-          return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
-        },
-      );
       // Skipped messages intentionally avoid downloads; facts stay type-only.
-      const pendingMediaText = formatSignalMediaText(pendingMedia);
+      const pendingMediaText = formatSignalMediaText(mediaFacts);
       const pendingBodyText = messageText || pendingMediaText || visibleQuoteText;
       const historyKey = groupId ?? "unknown";
       createChannelHistoryWindow({ historyMap: deps.groupHistories }).record({
@@ -1196,7 +1180,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         entry: {
           sender: envelope.sourceName ?? senderDisplay,
           body: messageText || visibleQuoteText,
-          media: toHistoryMediaEntries(pendingMedia),
+          media: toHistoryMediaEntries(mediaFacts),
           timestamp: inboundTimestamp,
           messageId,
         },
@@ -1207,7 +1191,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         replyToId,
         author: senderRecipient,
         body: messageText || visibleQuoteText,
-        media: pendingMedia,
+        media: mediaFacts,
         sourceTimestamp: inboundTimestamp,
       });
       const signalGroupPolicy = resolveChannelGroupPolicy({
@@ -1252,11 +1236,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    const attachments = dataMessage.attachments ?? [];
-    const mediaFacts: ChannelInboundMediaInput[] = attachments.map((attachment) => {
-      const contentType = attachment?.contentType ?? undefined;
-      return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
-    });
     let unavailableAttachmentCount = deps.ignoreAttachments ? attachments.length : 0;
     if (!deps.ignoreAttachments) {
       for (const [index, attachment] of attachments.entries()) {

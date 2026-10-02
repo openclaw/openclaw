@@ -229,17 +229,10 @@ internal fun OpenClawWearApp(
       interaction = WearInteractionState.READY
       return
     }
-    if (!state.canSubmitReply) {
-      interaction = WearInteractionState.READY
-      view.performHapticFeedback(HapticFeedbackConstants.REJECT)
-      return
-    }
-    if (!state.connected || sessionId == null) {
-      interaction = WearInteractionState.READY
-      view.performHapticFeedback(HapticFeedbackConstants.REJECT)
-      return
-    }
-    if (!viewModel.sendReply(message) { awaitingReplyRunId = it }) {
+    if (
+      !state.canSubmitReply || !state.connected || sessionId == null ||
+      !viewModel.sendReply(message) { awaitingReplyRunId = it }
+    ) {
       interaction = WearInteractionState.READY
       view.performHapticFeedback(HapticFeedbackConstants.REJECT)
       return
@@ -447,12 +440,8 @@ internal fun OpenClawWearApp(
         actionBusy =
           state.loading ||
             state.sending ||
-            state.talkBusy ||
-            state.controlBusy ||
-            state.hasActiveStream ||
-            state.realtimeTalk.active ||
-            state.realtimeCapturing ||
-            state.realtimePlaying,
+            state.contextChangeBusy ||
+            state.hasActiveStream,
         inputEnabled = state.connected && snapshot?.activeSessionId != null && state.canSubmitReply,
         canAbort = state.hasActiveStream || state.pendingReply != null,
         themeMode = themeMode,

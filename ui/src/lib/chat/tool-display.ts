@@ -5,76 +5,27 @@ import {
   defaultTitle,
   normalizeToolDisplayName,
   resolveToolVerbAndDetailForArgs,
-  type ToolDisplaySpec as ToolDisplaySpecBase,
+  type ToolDisplaySpec,
 } from "../../../../src/agents/tool-display-common.js";
 import type { ToolDetailMode } from "../../../../src/agents/tool-display-exec.js";
 import type { ControlUiEmbedSandboxMode } from "../../../../src/gateway/control-ui-bootstrap-contract.js";
+import { resolveToolDisplayIcon } from "./tool-display-icon.ts";
 
 const A2UI_PATH = "/__openclaw__/a2ui";
 const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 const CANVAS_CAPABILITY_PATH_PREFIX = "/__openclaw__/cap";
 
-type ToolDisplaySpec = ToolDisplaySpecBase & {
-  icon?: string;
-};
-
-type SharedToolDisplaySpec = ToolDisplaySpecBase & {
-  emoji?: string;
-};
-
-type SharedToolDisplayConfig = {
-  version?: number;
-  fallback?: SharedToolDisplaySpec;
-  tools?: Record<string, SharedToolDisplaySpec>;
-};
-
 type ToolDisplay = {
   name: string;
-  icon: ChatToolIconName;
-  title: string;
+  icon: ReturnType<typeof resolveToolDisplayIcon>;
   label: string;
-  verb?: string;
   detail?: string;
 };
 
 export type EmbedSandboxMode = ControlUiEmbedSandboxMode;
-type ChatToolIconName = string;
 
-const EMOJI_ICON_MAP: Record<string, ChatToolIconName> = {
-  "🧩": "puzzle",
-  "🛠️": "wrench",
-  "🧰": "wrench",
-  "📖": "fileText",
-  "✍️": "edit",
-  "📝": "penLine",
-  "📎": "paperclip",
-  "🌐": "globe",
-  "📺": "monitor",
-  "🧾": "fileText",
-  "🔐": "settings",
-  "💻": "monitor",
-  "🔌": "plug",
-  "💬": "messageSquare",
-};
-
-function convertSpec(spec?: SharedToolDisplaySpec): ToolDisplaySpec {
-  return {
-    icon: EMOJI_ICON_MAP[spec?.emoji ?? ""] ?? "puzzle",
-    title: spec?.title,
-    label: spec?.label,
-    detailKeys: spec?.detailKeys,
-    actions: spec?.actions,
-  };
-}
-
-const SHARED_TOOL_DISPLAY_CONFIG = SHARED_TOOL_DISPLAY_JSON as SharedToolDisplayConfig;
-const FALLBACK = convertSpec(SHARED_TOOL_DISPLAY_CONFIG.fallback ?? { emoji: "🧩" });
-const TOOL_MAP: Record<string, ToolDisplaySpec> = Object.fromEntries(
-  Object.entries(SHARED_TOOL_DISPLAY_CONFIG.tools ?? {}).map(([key, spec]) => [
-    key,
-    convertSpec(spec),
-  ]),
-);
+const FALLBACK = SHARED_TOOL_DISPLAY_JSON.fallback;
+const TOOL_MAP: Record<string, ToolDisplaySpec> = SHARED_TOOL_DISPLAY_JSON.tools;
 
 function shortenHomeInString(input: string): string {
   // Browser-safe home shortening: avoid importing Node-only helpers (keeps Vite builds working in Docker/CI).
@@ -86,27 +37,22 @@ function shortenHomeInString(input: string): string {
 export function resolveToolDisplay(params: {
   name?: string;
   args?: unknown;
-  meta?: string;
   detailMode?: ToolDetailMode;
 }): ToolDisplay {
   const name = normalizeToolDisplayName(params.name);
   const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
-  const icon = spec?.icon ?? FALLBACK.icon ?? "puzzle";
-  const title = spec?.title ?? defaultTitle(name);
-  const label = spec?.label ?? title;
-  const toolDisplayParts = resolveToolVerbAndDetailForArgs({
+  const icon = resolveToolDisplayIcon(name);
+  const label = spec?.label ?? spec?.title ?? defaultTitle(name);
+  let { detail } = resolveToolVerbAndDetailForArgs({
     toolKey: key,
     args: params.args,
-    meta: params.meta,
     spec,
     fallbackDetailKeys: FALLBACK.detailKeys,
     detailMode: "first",
     toolDetailMode: params.detailMode,
     detailCoerce: { includeFalsy: true },
   });
-  const { verb } = toolDisplayParts;
-  let { detail } = toolDisplayParts;
 
   if (detail) {
     detail = shortenHomeInString(detail);
@@ -115,9 +61,7 @@ export function resolveToolDisplay(params: {
   return {
     name,
     icon,
-    title,
     label,
-    verb,
     detail,
   };
 }

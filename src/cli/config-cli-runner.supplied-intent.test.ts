@@ -128,11 +128,7 @@ function op(
     inputMode: "json",
   };
 }
-async function apply(
-  resolved: unknown,
-  operations: ConfigSetOperation[],
-  authored: unknown = resolved,
-) {
+function loadSnapshot(resolved: unknown, authored: unknown = resolved): void {
   state.snapshot = {
     path: "/test/openclaw.json",
     resolved: structuredClone(resolved),
@@ -141,6 +137,14 @@ async function apply(
     runtimeConfig: structuredClone(resolved),
     authoredConfig: structuredClone(authored),
   };
+}
+
+async function apply(
+  resolved: unknown,
+  operations: ConfigSetOperation[],
+  authored: unknown = resolved,
+) {
+  loadSnapshot(resolved, authored);
   await runConfigOperations({
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     operations,
@@ -263,7 +267,7 @@ describe("ordered runner supplied intent after deletion", () => {
     expect(result.paths).toEqual([["channels", "custom", "accounts", "1", "name"]]);
   });
 
-  it("does not shift canonical numeric agent IDs after a legacy roster splice", async () => {
+  it("drops deleted canonical agent intent without moving surviving IDs", async () => {
     const result = await apply(
       {
         agents: {
@@ -274,25 +278,6 @@ describe("ordered runner supplied intent after deletion", () => {
           ],
         },
       },
-      [op("set", ["agents", "list", "1", "name"], "edited"), op("delete", ["agents", "list", "0"])],
-    );
-    expect(result.paths).toEqual([["agents", "entries", "1", "name"]]);
-    expect(result.config.agents?.entries).toEqual({
-      "1": { name: "edited" },
-      "2": { name: "two" },
-    });
-  });
-
-  it("drops deleted canonical agent intent without moving surviving IDs", async () => {
-    const result = await apply(
-      {
-        agents: {
-          list: [
-            { id: "0", name: "zero" },
-            { id: "1", name: "one" },
-          ],
-        },
-      },
       [
         op("set", ["agents", "list", "0", "name"], "removed"),
         op("set", ["agents", "list", "1", "name"], "survivor"),
@@ -300,6 +285,10 @@ describe("ordered runner supplied intent after deletion", () => {
       ],
     );
     expect(result.paths).toEqual([["agents", "entries", "1", "name"]]);
+    expect(result.config.agents?.entries).toEqual({
+      "1": { name: "survivor" },
+      "2": { name: "two" },
+    });
   });
 
   it("rebases a nested array below a canonical agent ID", async () => {
@@ -338,32 +327,54 @@ describe("ordered runner supplied intent after deletion", () => {
   });
 });
 
-describe("ordered writer policy after deletion", () => {
-  it("keeps final writer restoration on the shifted explicit leaf", async () => {
-    const authored = modelConfig(rows);
-    const resolved = modelConfig(resolvedRows);
-    const result = await apply(
-      resolved,
-      [op("set", modelPath(1, "name"), "${TARGET}"), op("delete", modelPath(0))],
-      authored,
-    );
-    expect(result.policyPaths).toEqual([modelPath(0, "name")]);
-    expect(
-      restoreEnvVarRefsFromResolved(result.config, authored, resolved, result.policyPaths),
-    ).toEqual(
-      modelConfig([
-        { id: "edited", name: "${TARGET}" },
-        { id: "untouched", name: "${OTHER_ALIAS}" },
-      ]),
-    );
-  });
+describe("replacement guard advice per subcommand", () => {
+  async function refusal(successMode: "set" | "patch"): Promise<string> {
+    loadSnapshot(modelConfig(resolvedRows));
+    try {
+      await runConfigOperations({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        operations: [op(undefined, modelsPath, [{ id: "edited", name: "${TARGET}" }])],
+        options: {},
+        successMode,
+      });
+    } catch (err) {
+      return (err as Error).message;
+    }
+    throw new Error("expected the replacement guard to refuse");
+  }
 
-  it("removes deleted explicit leaf policy without authorizing its survivor", async () => {
-    const result = await apply(
-      modelConfig(resolvedRows),
-      [op("set", modelPath(1, "name"), "${TARGET}"), op("delete", modelPath(1))],
-      modelConfig(rows),
+  // The advice has to name flags the running subcommand registers: `config patch` accepts
+  // neither --merge nor --replace, only --replace-path.
+  it.each([
+    {
+      successMode: "patch" as const,
+      advice: "Use --replace-path models.providers.example.models to replace intentionally.",
+    },
+    {
+      successMode: "set" as const,
+      advice: "Use --merge to merge by id or --replace to replace intentionally.",
+    },
+  ])(
+    "refuses a $successMode model list replacement naming its own flags",
+    async ({ successMode, advice }) => {
+      expect(await refusal(successMode)).toBe(
+        `Refusing to replace models.providers.example.models; it would remove existing entries: drop, untouched. ${advice}`,
+      );
+    },
+  );
+
+  it("recommends a shell-safe path for a dotted provider key", async () => {
+    const dottedPath = ["models", "providers", "local.service", "models"];
+    loadSnapshot({ models: { providers: { "local.service": { models: resolvedRows } } } });
+    await expect(
+      runConfigOperations({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        operations: [op(undefined, dottedPath, [{ id: "edited", name: "${TARGET}" }])],
+        options: {},
+        successMode: "patch",
+      }),
+    ).rejects.toThrow(
+      `Use --replace-path 'models.providers["local.service"].models' to replace intentionally.`,
     );
-    expect(result.policyPaths).toBeUndefined();
   });
 });

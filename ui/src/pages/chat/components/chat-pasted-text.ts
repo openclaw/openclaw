@@ -7,6 +7,7 @@ import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.t
 import { renderCompactAttachmentFile } from "./chat-attachment-file.ts";
 import { renderAttachmentChip } from "./chat-attachment-preview-chip.ts";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";
+import type { AttachmentAdmission } from "./chat-message-attachment-admission.ts";
 import type { AssistantAttachmentItem, AttachmentItem } from "./chat-message-media.ts";
 
 export function isPastedTextAttachment(
@@ -38,6 +39,8 @@ class ChatPastedText extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) scope = "";
   @property({ attribute: false }) onOpen?: () => void;
   @property({ attribute: false }) composerAction?: TemplateResult;
+  @property({ attribute: false }) composerRemoveAction?: TemplateResult;
+  @property({ attribute: false }) admission?: AttachmentAdmission;
   @state() private excerpt = "";
   private key = "";
   private loading?: AbortController;
@@ -88,7 +91,9 @@ class ChatPastedText extends OpenClawLightDomContentsElement {
 
   protected override render() {
     if (this.composerAction) {
-      return html`<div class="chat-attachment-thumb chat-attachment-thumb--file">
+      return html`<div
+        class="chat-attachment-thumb chat-attachment-thumb--file chat-attachment-thumb--pasted-text"
+      >
         ${renderCompactAttachmentFile(
           { id: this.scope, mimeType: "text/plain" },
           {
@@ -97,12 +102,15 @@ class ChatPastedText extends OpenClawLightDomContentsElement {
             onOpen: this.onOpen,
           },
         )}
+        ${this.composerRemoveAction}
       </div>`;
     }
     return renderAttachmentChip({
       label: this.excerpt || t("chat.attachments.pastedText"),
       icon: icons.fileText,
       onClick: this.onOpen,
+      onReveal: this.admission?.onAdmit,
+      elementRef: this.admission?.observeElement,
     });
   }
 }

@@ -4,6 +4,7 @@ import { asNullableRecord, readStringField } from "@openclaw/normalization-core/
 import { html, nothing, type TemplateResult } from "lit";
 import type { NostrProfile } from "../../api/types.ts";
 import { renderChannelIcon } from "../../components/channel-icon.ts";
+import { icons } from "../../components/icons.ts";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
@@ -265,7 +266,7 @@ export function renderChannelDetail(params: {
               aria-label=${t("common.close")}
               @click=${() => params.onClose()}
             >
-              ✕
+              ${icons.x}
             </button>
           </div>
         </div>

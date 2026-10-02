@@ -3,38 +3,31 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { ensureContextEnginesInitialized } from "../../../context-engine/init.js";
 import { resolveContextEngine } from "../../../context-engine/registry.js";
 import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
-import {
-  SUBAGENT_KILL_TASK_ERROR,
-  type DetachedTaskLifecycleRuntime,
-} from "../../../tasks/detached-task-runtime-contract.js";
-import { getDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.js";
-import {
-  resetDetachedTaskLifecycleRuntimeForTests,
-  setDetachedTaskLifecycleRuntime,
-} from "../../../tasks/task-runtime.test-helpers.js";
+import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
+import * as internalSessionEffects from "../../internal-session-effects.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import {
   captureSubagentCompletionReply,
   runSubagentAnnounceFlow,
 } from "../announce/subagent-announce.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
+import type { SubagentRegistryWrite } from "./subagent-registry.store.kernel.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-const taskRuntimeMocks = vi.hoisted(() => ({
-  finalizeTaskRunByRunId:
-    vi.fn<NonNullable<DetachedTaskLifecycleRuntime["finalizeTaskRunByRunId"]>>(),
-}));
-const taskStatusMocks = vi.hoisted(() => ({
-  findTaskByRunIdForStatus: vi.fn(),
-  listTasksForSessionKeyForStatus: vi.fn(() => [] as never[]),
-}));
 const sessionAccessorMocks = vi.hoisted(() => ({
   loadSessionEntryReadOnly: vi.fn<
     typeof import("../../../config/sessions/session-accessor.js").loadSessionEntryReadOnly
@@ -58,11 +51,6 @@ const respondToGatewayRequest = vi.hoisted(() => async (request: unknown) => {
 
 vi.mock("../../../gateway/call.js", () => ({
   callGateway: vi.fn(respondToGatewayRequest),
-}));
-
-vi.mock("../../../tasks/task-status-access.js", () => ({
-  findTaskByRunIdForStatus: taskStatusMocks.findTaskByRunIdForStatus,
-  listTasksForSessionKeyForStatus: taskStatusMocks.listTasksForSessionKeyForStatus,
 }));
 
 vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) => {
@@ -117,7 +105,7 @@ vi.mock("../announce/subagent-announce.requester-settle-wake.js", () => ({
   maybeWakeRequesterAfterAllChildrenSettled: vi.fn<
     typeof import("../announce/subagent-announce.requester-settle-wake.js").maybeWakeRequesterAfterAllChildrenSettled
   >(async (params) => {
-    params.completeBatch([params.settledEntry]);
+    await params.completeBatch([params.settledEntry]);
     return false;
   }),
 }));
@@ -127,6 +115,7 @@ vi.mock("../../../plugins/hook-runner-global.js", () => ({
 }));
 
 describe("subagent registry archive behavior", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let settleRootWork: ReturnType<typeof observeRootWork>;
   let mod: typeof import("./subagent-registry.test-helpers.js");
   let createCanonicalSubagentRunFixture: typeof import("./subagent-registry.persistence.test-support.js").createCanonicalSubagentRunFixture;
@@ -141,8 +130,17 @@ describe("subagent registry archive behavior", () => {
 
   const addCanonicalSubagentRunForTests = (
     entry: Parameters<typeof mod.addSubagentRunForTests>[0],
-  ) => {
+  ) =>
     mod.addSubagentRunForTests(createCanonicalSubagentRunFixture(createSubagentRunRecord(entry)));
+
+  const sweepAndSettleCleanup = async () => {
+    try {
+      await mod.testing.sweepOnceForTests();
+    } finally {
+      // Sweeping admits detached cleanup and requester-settlement work. Join
+      // those real promises; a fixed number of microtasks cannot prove retirement.
+      await settleRootWork(true);
+    }
   };
 
   const waitForNoRequesterRuns = async () => {
@@ -151,8 +149,7 @@ describe("subagent registry archive behavior", () => {
     });
   };
 
-  beforeEach(() => {
-    resetDetachedTaskLifecycleRuntimeForTests();
+  beforeEach(async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
     currentConfig = {
@@ -167,50 +164,8 @@ describe("subagent registry archive behavior", () => {
     vi.mocked(captureSubagentCompletionReply).mockReset();
     vi.mocked(runSubagentAnnounceFlow).mockReset();
     vi.mocked(getAgentRunContext).mockReset().mockReturnValue(undefined);
-    taskRuntimeMocks.finalizeTaskRunByRunId.mockReset().mockImplementation((params) => [
-      {
-        taskId: params.taskId ?? `task-${params.runId}`,
-        runtime: params.runtime ?? "subagent",
-        runId: params.runId,
-        childSessionKey: params.sessionKey,
-        requesterSessionKey: "agent:main:main",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        task: "Finalized archive fixture task",
-        status: params.status,
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: 0,
-        endedAt: params.endedAt,
-        error: params.error,
-      },
-    ]);
-    taskStatusMocks.findTaskByRunIdForStatus.mockReset();
-    taskStatusMocks.listTasksForSessionKeyForStatus.mockReset();
-    taskStatusMocks.listTasksForSessionKeyForStatus.mockReturnValue([]);
     sessionAccessorMocks.loadSessionEntryReadOnly.mockReset();
-    taskStatusMocks.findTaskByRunIdForStatus.mockImplementation((runId: string) => {
-      const entry = mod
-        .listSubagentRunsForRequester("agent:main:main")
-        .find((candidate) => candidate.runId === runId);
-      return entry
-        ? ({
-            taskId: `task-${runId}`,
-            runId,
-            runtime: "subagent",
-            childSessionKey: entry.childSessionKey,
-            createdAt: entry.createdAt,
-            status: "cancelled",
-            error: SUBAGENT_KILL_TASK_ERROR,
-          } as never)
-        : undefined;
-    });
-    mod.resetSubagentRegistryForTests({ persist: false });
-    // Async sweeps and shipped synchronous termination share the same fixture owner.
-    setDetachedTaskLifecycleRuntime({
-      ...getDetachedTaskLifecycleRuntime(),
-      finalizeTaskRunByRunId: taskRuntimeMocks.finalizeTaskRunByRunId,
-    });
+    await mod.resetSubagentRegistryForTests({ persist: false });
     settleRootWork = observeRootWork();
   });
 
@@ -218,8 +173,7 @@ describe("subagent registry archive behavior", () => {
     try {
       await settleRootWork();
     } finally {
-      resetDetachedTaskLifecycleRuntimeForTests();
-      mod.resetSubagentRegistryForTests({ persist: false });
+      await mod.resetSubagentRegistryForTests({ persist: false });
       vi.useRealTimers();
     }
   });
@@ -294,19 +248,30 @@ describe("subagent registry archive behavior", () => {
     const endedAt = Date.now();
     const lifecycleHandler = vi.mocked(onAgentEvent).mock.calls.at(-1)?.[0];
     expect(lifecycleHandler).toBeTypeOf("function");
-    lifecycleHandler?.({
-      runId: "run-delete-completed",
-      stream: "lifecycle",
-      seq: 1,
-      ts: endedAt,
-      data: { phase: "end", endedAt, terminalReply: { disposition: "visible", text: "done" } },
+    const terminalPublished = createDeferred();
+    const stop = subscribeSubagentRunChanges("projection", () => {
+      const run = subagentRuns.get("run-delete-completed");
+      if (run?.execution.status === "terminal" && run.execution.endedAt === endedAt) {
+        terminalPublished.resolve();
+      }
     });
-
-    await vi.waitFor(() => {
-      expect(mod.listSubagentRunsForRequester("agent:main:main")[0]).toMatchObject({
-        execution: { status: "terminal", endedAt },
-        archiveAtMs: endedAt + 60_000,
+    try {
+      lifecycleHandler?.({
+        runId: "run-delete-completed",
+        stream: "lifecycle",
+        seq: 1,
+        ts: endedAt,
+        data: { phase: "end", endedAt, terminalReply: { disposition: "visible", text: "done" } },
       });
+      await terminalPublished.promise;
+    } finally {
+      stop();
+    }
+
+    await settleRootWork(true);
+    expect(mod.listSubagentRunsForRequester("agent:main:main")[0]).toMatchObject({
+      execution: { status: "terminal", endedAt },
+      archiveAtMs: endedAt + 60_000,
     });
   });
 
@@ -314,7 +279,7 @@ describe("subagent registry archive behavior", () => {
     // Queued collectors have no gateway run context until FIFO dispatch; the
     // stale-context reap must not fabricate a lost-context failure for them.
     const now = Date.now();
-    addCanonicalSubagentRunForTests({
+    await addCanonicalSubagentRunForTests({
       runId: "run-queued-collector",
       childSessionKey: "agent:main:subagent:queued-collector",
       requesterSessionKey: "agent:main:main",
@@ -340,7 +305,7 @@ describe("subagent registry archive behavior", () => {
   it("does not archive an active run carrying an obsolete persisted deadline", async () => {
     vi.mocked(getAgentRunContext).mockReturnValue({} as never);
     const now = Date.now();
-    addCanonicalSubagentRunForTests({
+    await addCanonicalSubagentRunForTests({
       runId: "run-delete-stale-deadline",
       childSessionKey: "agent:main:subagent:delete-stale-deadline",
       requesterSessionKey: "agent:main:main",
@@ -371,7 +336,7 @@ describe("subagent registry archive behavior", () => {
     "does not archive a completed delete-mode run while delivery is %s",
     async (deliveryStatus) => {
       const now = Date.now();
-      addCanonicalSubagentRunForTests({
+      await addCanonicalSubagentRunForTests({
         runId: `run-delete-delivery-${deliveryStatus}`,
         childSessionKey: `agent:main:subagent:delete-delivery-${deliveryStatus}`,
         requesterSessionKey: "agent:main:main",
@@ -397,7 +362,21 @@ describe("subagent registry archive behavior", () => {
           ),
       ).toBe(false);
 
-      entry!.delivery!.status = "delivered";
+      await mutateSubagentRuns([entry!.runId], (rows) => {
+        const current = rows.get(entry!.runId)!;
+        return {
+          value: undefined,
+          postimages: new Map([
+            [
+              current.runId,
+              {
+                ...current,
+                delivery: { ...current.delivery, status: "delivered" as const },
+              },
+            ],
+          ]),
+        };
+      });
       await mod.testing.sweepOnceForTests();
 
       await waitForNoRequesterRuns();
@@ -432,7 +411,7 @@ describe("subagent registry archive behavior", () => {
       }
       return {};
     });
-    vi.mocked(ensureContextEnginesInitialized).mockImplementation(() => {});
+    vi.mocked(ensureContextEnginesInitialized).mockResolvedValue(undefined);
     vi.mocked(resolveContextEngine).mockResolvedValue({
       info: { id: "test", name: "Test", version: "0.0.1" },
       ingest: async () => ({ ingested: false }),
@@ -441,7 +420,7 @@ describe("subagent registry archive behavior", () => {
       onSubagentEnded,
     });
 
-    addCanonicalSubagentRunForTests({
+    await addCanonicalSubagentRunForTests({
       runId: "run-delete-retry",
       childSessionKey: "agent:main:subagent:delete-retry",
       requesterSessionKey: "agent:main:main",
@@ -484,7 +463,7 @@ describe("subagent registry archive behavior", () => {
 
   it("stabilizes provisional killed tasks before deleting expired tombstones", async () => {
     const now = Date.now();
-    addCanonicalSubagentRunForTests({
+    await addCanonicalSubagentRunForTests({
       runId: "run-killed-tombstone-expired",
       childSessionKey: "agent:main:subagent:killed-tombstone-expired",
       requesterSessionKey: "agent:main:main",
@@ -497,34 +476,21 @@ describe("subagent registry archive behavior", () => {
       endedReason: "subagent-killed",
       outcome: { status: "error", error: "manual kill" },
       suppressAnnounceReason: "killed",
-      killReconciliation: { killedAt: now - 5 * 60_000 },
+      killReconciliation: { killedAt: now - 5 * 60_000, taskCancellationAccepted: true },
       cleanupHandled: true,
       cleanupCompletedAt: now - 5 * 60_000,
       archiveAtMs: now,
     });
 
-    await mod.testing.sweepOnceForTests();
-    await vi.dynamicImportSettled();
-
-    expect(taskRuntimeMocks.finalizeTaskRunByRunId).toHaveBeenCalledWith({
-      taskId: "task-run-killed-tombstone-expired",
-      runId: "run-killed-tombstone-expired",
-      runtime: "subagent",
-      sessionKey: "agent:main:subagent:killed-tombstone-expired",
-      status: "cancelled",
-      endedAt: now - 5 * 60_000,
-      lastEventAt: now - 5 * 60_000,
-      error: "manual kill",
-      suppressDelivery: true,
-    });
-    await waitForNoRequesterRuns();
+    await sweepAndSettleCleanup();
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
 
-  it("retains expired tombstones when provisional task finalization is rejected", async () => {
+  it("retains cancellation evidence when the retirement write is rejected", async () => {
     const now = Date.now();
-    taskRuntimeMocks.finalizeTaskRunByRunId.mockReturnValueOnce([]);
-    addCanonicalSubagentRunForTests({
-      runId: "run-killed-tombstone-retry",
+    const runId = "run-killed-tombstone-retry";
+    await addCanonicalSubagentRunForTests({
+      runId,
       childSessionKey: "agent:main:subagent:killed-tombstone-retry",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
@@ -535,28 +501,76 @@ describe("subagent registry archive behavior", () => {
       endedReason: "subagent-killed",
       outcome: { status: "error", error: "manual kill" },
       suppressAnnounceReason: "killed",
-      killReconciliation: { killedAt: now - 5 * 60_000 },
+      killReconciliation: { killedAt: now - 5 * 60_000, taskCancellationAccepted: true },
       cleanupHandled: true,
       cleanupCompletedAt: now - 5 * 60_000,
       archiveAtMs: now,
     });
-
-    await mod.testing.sweepOnceForTests();
-
-    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(1);
-    expect(
-      vi
-        .mocked(callGateway)
-        .mock.calls.some(
-          ([request]) => (request as { method?: string } | undefined)?.method === "sessions.delete",
+    await mutateSubagentRuns([runId], (rows) => {
+      const entry = rows.get(runId)!;
+      return {
+        value: undefined,
+        postimages: new Map([
+          [
+            runId,
+            {
+              ...entry,
+              execution: { ...entry.execution, suppressSessionEffects: true },
+            },
+          ],
+        ]),
+      };
+    });
+    const execute = stateWorker.runOpenClawStateWorkerOperation;
+    let rejectedWrites = 0;
+    let refusedPreimage: SubagentRunRecord | undefined;
+    const writer = vi
+      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+      .mockImplementation((owner, run, options) =>
+        execute(
+          owner,
+          (scope) =>
+            run({
+              execute: async (command, executeOptions) => {
+                if (
+                  command.type === "subagents.persistChanges" &&
+                  (command.input as SubagentRegistryWrite).deleteRunIds.includes(runId)
+                ) {
+                  rejectedWrites += 1;
+                  refusedPreimage = subagentRuns.get(runId);
+                  throw new Error("retirement write rejected");
+                }
+                return scope.execute(command, executeOptions);
+              },
+            }),
+          options,
         ),
-    ).toBe(false);
+      );
+    try {
+      await sweepAndSettleCleanup();
+      expect(rejectedWrites).toBe(1);
+      expect(refusedPreimage).toBeDefined();
+      expect(refusedPreimage?.cleanupHandled).toBe(true);
+      expect(subagentRuns.get(runId)).toEqual({ ...refusedPreimage, cleanupHandled: false });
+      expect(subagentRuns.get(runId)).toMatchObject({
+        endedReason: "subagent-killed",
+        execution: { status: "terminal", outcome: { status: "error", error: "manual kill" } },
+      });
+      expect(loadSubagentRegistryFromSqlite().get(runId)).toMatchObject({
+        endedReason: "subagent-killed",
+        execution: { status: "terminal", outcome: { status: "error", error: "manual kill" } },
+      });
+      expect(
+        vi.mocked(callGateway).mock.calls.some(([request]) => request.method === "sessions.delete"),
+      ).toBe(false);
+    } finally {
+      writer.mockRestore();
+    }
   });
 
-  it("retires expired tombstones when their task row is already gone", async () => {
+  it("retires expired tombstones without a secondary ledger row", async () => {
     const now = Date.now();
-    taskStatusMocks.findTaskByRunIdForStatus.mockReturnValue(undefined);
-    addCanonicalSubagentRunForTests({
+    await addCanonicalSubagentRunForTests({
       runId: "run-killed-task-missing",
       childSessionKey: "agent:main:subagent:killed-task-missing",
       requesterSessionKey: "agent:main:main",
@@ -574,25 +588,13 @@ describe("subagent registry archive behavior", () => {
       archiveAtMs: now,
     });
 
-    await mod.testing.sweepOnceForTests();
-    await vi.dynamicImportSettled();
-
-    expect(taskRuntimeMocks.finalizeTaskRunByRunId).not.toHaveBeenCalled();
-    await waitForNoRequesterRuns();
+    await sweepAndSettleCleanup();
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
 
   it("preserves stable operator cancellation when retiring expired tombstones", async () => {
     const now = Date.now();
-    taskStatusMocks.findTaskByRunIdForStatus.mockReturnValue({
-      taskId: "task-killed-operator-cancelled",
-      runId: "run-killed-operator-cancelled",
-      runtime: "subagent",
-      childSessionKey: "agent:main:subagent:killed-operator-cancelled",
-      createdAt: now - 10 * 60_000,
-      status: "cancelled",
-      error: "Cancelled by operator.",
-    } as never);
-    addCanonicalSubagentRunForTests({
+    await addCanonicalSubagentRunForTests({
       runId: "run-killed-operator-cancelled",
       childSessionKey: "agent:main:subagent:killed-operator-cancelled",
       requesterSessionKey: "agent:main:main",
@@ -604,31 +606,19 @@ describe("subagent registry archive behavior", () => {
       endedReason: "subagent-killed",
       outcome: { status: "error", error: "manual kill" },
       suppressAnnounceReason: "killed",
-      killReconciliation: { killedAt: now - 5 * 60_000 },
+      killReconciliation: { killedAt: now - 5 * 60_000, taskCancellationAccepted: true },
       cleanupHandled: true,
       cleanupCompletedAt: now - 5 * 60_000,
       archiveAtMs: now,
     });
 
-    await mod.testing.sweepOnceForTests();
-    await vi.dynamicImportSettled();
-
-    expect(taskRuntimeMocks.finalizeTaskRunByRunId).not.toHaveBeenCalled();
-    await waitForNoRequesterRuns();
+    await sweepAndSettleCleanup();
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
 
   it("keeps stable cancellation tombstones through the completion grace window", async () => {
     const now = Date.now();
-    taskStatusMocks.findTaskByRunIdForStatus.mockReturnValue({
-      taskId: "task-killed-grace",
-      runId: "run-killed-grace",
-      runtime: "subagent",
-      childSessionKey: "agent:main:subagent:killed-grace",
-      createdAt: now - 2 * 60_000,
-      status: "cancelled",
-      error: "Cancelled by operator.",
-    } as never);
-    addCanonicalSubagentRunForTests({
+    await addCanonicalSubagentRunForTests({
       runId: "run-killed-grace",
       childSessionKey: "agent:main:subagent:killed-grace",
       requesterSessionKey: "agent:main:main",
@@ -640,7 +630,7 @@ describe("subagent registry archive behavior", () => {
       endedReason: "subagent-killed",
       outcome: { status: "error", error: "manual kill" },
       suppressAnnounceReason: "killed",
-      killReconciliation: { killedAt: now - 60_000 },
+      killReconciliation: { killedAt: now - 60_000, taskCancellationAccepted: true },
       cleanupHandled: true,
       cleanupCompletedAt: now - 60_000,
       archiveAtMs: now,
@@ -649,56 +639,11 @@ describe("subagent registry archive behavior", () => {
     await mod.testing.sweepOnceForTests();
 
     expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(1);
-    expect(taskRuntimeMocks.finalizeTaskRunByRunId).not.toHaveBeenCalled();
-  });
-
-  it("retires expired tombstones after an opaque legacy runtime finalizer misses", async () => {
-    const legacyRuntime = { ...getDetachedTaskLifecycleRuntime() };
-    delete legacyRuntime.findTaskRun;
-    setDetachedTaskLifecycleRuntime(legacyRuntime);
-    taskStatusMocks.findTaskByRunIdForStatus.mockReturnValue(undefined);
-    taskStatusMocks.listTasksForSessionKeyForStatus.mockReturnValue([]);
-    taskRuntimeMocks.finalizeTaskRunByRunId.mockReturnValueOnce([]);
-    const now = Date.now();
-    addCanonicalSubagentRunForTests({
-      runId: "run-killed-opaque-runtime",
-      childSessionKey: "agent:main:subagent:killed-opaque-runtime",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "bound opaque runtime reconciliation",
-      cleanup: "keep",
-      createdAt: now - 10 * 60_000,
-      endedAt: now - 5 * 60_000,
-      endedReason: "subagent-killed",
-      outcome: { status: "error", error: "manual kill" },
-      suppressAnnounceReason: "killed",
-      killReconciliation: { killedAt: now - 5 * 60_000 },
-      cleanupHandled: true,
-      cleanupCompletedAt: now - 5 * 60_000,
-      archiveAtMs: now,
-    });
-
-    await mod.testing.sweepOnceForTests();
-    await vi.dynamicImportSettled();
-
-    expect(taskRuntimeMocks.finalizeTaskRunByRunId).toHaveBeenCalled();
-    await waitForNoRequesterRuns();
   });
 
   it("stabilizes replacement runs through their durable task session scope", async () => {
     const now = Date.now();
-    taskStatusMocks.findTaskByRunIdForStatus.mockReturnValue(undefined);
-    taskStatusMocks.listTasksForSessionKeyForStatus.mockReturnValue([
-      {
-        taskId: "task-before-replacement",
-        runId: "run-before-replacement",
-        runtime: "subagent",
-        childSessionKey: "agent:main:subagent:replacement",
-        status: "running",
-        createdAt: now - 11 * 60_000,
-      },
-    ] as never);
-    addCanonicalSubagentRunForTests({
+    await addCanonicalSubagentRunForTests({
       runId: "run-after-replacement",
       childSessionKey: "agent:main:subagent:replacement",
       requesterSessionKey: "agent:main:main",
@@ -717,34 +662,14 @@ describe("subagent registry archive behavior", () => {
       archiveAtMs: now,
     });
 
-    await mod.testing.sweepOnceForTests();
-    await vi.dynamicImportSettled();
-
-    expect(taskRuntimeMocks.finalizeTaskRunByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({
-        taskId: "task-before-replacement",
-        runId: "run-before-replacement",
-        sessionKey: "agent:main:subagent:replacement",
-      }),
-    );
-    await waitForNoRequesterRuns();
+    await sweepAndSettleCleanup();
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
 
-  it("directly kills a replacement run through its durable task ID", () => {
+  it("directly kills a replacement run through its durable task ID", async () => {
     const now = Date.now();
     const childSessionKey = "agent:main:subagent:replacement-direct-kill";
-    taskStatusMocks.findTaskByRunIdForStatus.mockReturnValue(undefined);
-    taskStatusMocks.listTasksForSessionKeyForStatus.mockReturnValue([
-      {
-        taskId: "task-before-replacement-direct-kill",
-        runId: "run-before-replacement-direct-kill",
-        runtime: "subagent",
-        childSessionKey,
-        status: "running",
-        createdAt: now - 11 * 60_000,
-      },
-    ] as never);
-    addCanonicalSubagentRunForTests({
+    await addCanonicalSubagentRunForTests({
       runId: "run-after-replacement-direct-kill",
       childSessionKey,
       requesterSessionKey: "agent:main:main",
@@ -756,35 +681,16 @@ describe("subagent registry archive behavior", () => {
     });
 
     expect(
-      mod.markSubagentRunTerminated({
+      await mod.markSubagentRunTerminated({
         runId: "run-after-replacement-direct-kill",
         reason: "manual kill",
       }),
     ).toBe(1);
-
-    expect(taskRuntimeMocks.finalizeTaskRunByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-before-replacement-direct-kill",
-        sessionKey: childSessionKey,
-        status: "cancelled",
-      }),
-    );
   });
 
   it("does not reconcile an older tombstone through a newer session task", async () => {
     const now = Date.now();
-    taskStatusMocks.findTaskByRunIdForStatus.mockReturnValue(undefined);
-    taskStatusMocks.listTasksForSessionKeyForStatus.mockReturnValue([
-      {
-        taskId: "task-new-generation",
-        runId: "run-new-generation",
-        runtime: "subagent",
-        childSessionKey: "agent:main:subagent:reused-session",
-        status: "running",
-        createdAt: now - 60_000,
-      },
-    ] as never);
-    addCanonicalSubagentRunForTests({
+    await addCanonicalSubagentRunForTests({
       runId: "run-old-generation",
       childSessionKey: "agent:main:subagent:reused-session",
       requesterSessionKey: "agent:main:main",
@@ -805,16 +711,98 @@ describe("subagent registry archive behavior", () => {
       cleanupCompletedAt: now - 5 * 60_000,
     });
 
-    await mod.testing.sweepOnceForTests();
-    await vi.dynamicImportSettled();
+    await sweepAndSettleCleanup();
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+  });
 
-    expect(taskRuntimeMocks.finalizeTaskRunByRunId).not.toHaveBeenCalled();
-    await waitForNoRequesterRuns();
+  it("retains newly rearmed requester custody while superseded cleanup is awaiting", async () => {
+    vi.mocked(getAgentRunContext).mockReturnValue({} as never);
+    const now = Date.now();
+    const runId = "superseded-new-wake";
+    const successorRunId = "superseded-new-wake-successor";
+    const childSessionKey = "agent:main:subagent:superseded-new-wake";
+    await addCanonicalSubagentRunForTests({
+      runId,
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "retain rearmed wake",
+      cleanup: "keep",
+      generation: 1,
+      createdAt: now - 10 * 60_000,
+      execution: {
+        status: "terminal",
+        endedAt: now - 5 * 60_000,
+        outcome: { status: "error", error: "killed" },
+        transcriptTarget: {
+          agentId: "main",
+          sessionId: "old-effects",
+          sessionKey: "agent:main:internal-session-effects:old-wake",
+          storePath: "/synthetic-old-effects",
+        },
+      },
+      endedReason: "subagent-killed",
+      suppressAnnounceReason: "killed",
+      killReconciliation: { killedAt: now - 5 * 60_000 },
+    });
+    await addCanonicalSubagentRunForTests({
+      runId: successorRunId,
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "successor",
+      cleanup: "keep",
+      generation: 2,
+      createdAt: now - 60_000,
+    });
+    const entered = createDeferred();
+    const released = createDeferred();
+    const cleanup = vi
+      .spyOn(internalSessionEffects, "removeInternalSessionEffectsSession")
+      .mockImplementationOnce(async () => {
+        entered.resolve();
+        await released.promise;
+      });
+    const pending = mod.testing.sweepOnceForTests();
+    try {
+      await entered.promise;
+      await mutateSubagentRuns([runId, successorRunId], (rows) => {
+        const current = rows.get(runId)!;
+        return {
+          value: undefined,
+          postimages: new Map<string, SubagentRunRecord | null>([
+            [successorRunId, null],
+            [
+              runId,
+              {
+                ...current,
+                requesterSettleWake: {
+                  status: "pending",
+                  attemptCount: 0,
+                  rearmGeneration: 2,
+                  batchRunIds: [runId],
+                  requesterYieldBatch: true,
+                },
+              },
+            ],
+          ]),
+        };
+      });
+    } finally {
+      released.resolve();
+      await pending;
+      cleanup.mockRestore();
+    }
+    expect(subagentRuns.get(runId)?.requesterSettleWake?.rearmGeneration).toBe(2);
+    expect(loadSubagentRegistryFromSqlite().get(runId)?.requesterSettleWake?.rearmGeneration).toBe(
+      2,
+    );
+    expect(subagentRuns.has(successorRunId)).toBe(false);
   });
 
   it("retires expired keep-mode reconciliation rows without deleting their sessions", async () => {
     const now = Date.now();
-    addCanonicalSubagentRunForTests({
+    await addCanonicalSubagentRunForTests({
       runId: "run-killed-keep-expired",
       childSessionKey: "agent:main:subagent:killed-keep-expired",
       requesterSessionKey: "agent:main:main",
@@ -832,11 +820,8 @@ describe("subagent registry archive behavior", () => {
       archiveAtMs: now,
     });
 
-    await mod.testing.sweepOnceForTests();
-    await vi.dynamicImportSettled();
-
-    expect(taskRuntimeMocks.finalizeTaskRunByRunId).toHaveBeenCalled();
-    await waitForNoRequesterRuns();
+    await sweepAndSettleCleanup();
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
     expect(
       vi
         .mocked(callGateway)
@@ -849,7 +834,7 @@ describe("subagent registry archive behavior", () => {
   it("stabilizes killed tasks before their configured session archive deadline", async () => {
     const now = Date.now();
     const archiveAtMs = now + 55 * 60_000;
-    addCanonicalSubagentRunForTests({
+    await addCanonicalSubagentRunForTests({
       runId: "run-killed-retained-session",
       childSessionKey: "agent:main:subagent:killed-retained-session",
       requesterSessionKey: "agent:main:main",
@@ -868,8 +853,6 @@ describe("subagent registry archive behavior", () => {
     });
 
     await mod.testing.sweepOnceForTests();
-
-    expect(taskRuntimeMocks.finalizeTaskRunByRunId).toHaveBeenCalled();
     expect(mod.listSubagentRunsForRequester("agent:main:main")).toEqual([
       expect.objectContaining({
         runId: "run-killed-retained-session",
@@ -891,7 +874,7 @@ describe("subagent registry archive behavior", () => {
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(() => {
       throw new Error("plugin load failed");
     });
-    addCanonicalSubagentRunForTests({
+    await addCanonicalSubagentRunForTests({
       runId: "run-killed-hook-load-failure",
       childSessionKey: "agent:main:subagent:killed-hook-load-failure",
       requesterSessionKey: "agent:main:main",
@@ -937,7 +920,7 @@ describe("subagent registry archive behavior", () => {
       return {};
     });
 
-    addCanonicalSubagentRunForTests({
+    await addCanonicalSubagentRunForTests({
       runId: "run-delete-inflight",
       childSessionKey: "agent:main:subagent:delete-inflight",
       requesterSessionKey: "agent:main:main",
@@ -1020,7 +1003,7 @@ describe("subagent registry archive behavior", () => {
       cleanup: "keep",
     });
 
-    const replaced = mod.replaceSubagentRunAfterSteerCore({
+    const replaced = await mod.replaceSubagentRunAfterSteerCore({
       previousRunId: "run-old",
       nextRunId: "run-new",
     });
@@ -1049,7 +1032,7 @@ describe("subagent registry archive behavior", () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
 
-    const replaced = mod.replaceSubagentRunAfterSteerCore({
+    const replaced = await mod.replaceSubagentRunAfterSteerCore({
       previousRunId: "run-delete-old",
       nextRunId: "run-delete-new",
     });
@@ -1062,25 +1045,30 @@ describe("subagent registry archive behavior", () => {
   });
 
   it("does not traverse legacy attachment paths after steer restart", async () => {
-    const attachmentsRootDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-replace-attachments-"),
-    );
+    const attachmentsRootDir = tempDirs.make("openclaw-replace-attachments-");
     const attachmentsDir = path.join(attachmentsRootDir, "old");
     await fs.mkdir(attachmentsDir, { recursive: true });
     await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
 
-    await mod.registerSubagentRun({
-      runId: "run-delete-attachments-old",
+    const runId = "run-delete-attachments-old";
+    await addCanonicalSubagentRunForTests({
+      runId,
       childSessionKey: "agent:main:subagent:delete-attachments-old",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "replace attachments",
       cleanup: "delete",
+      createdAt: Date.now(),
+      execution: { status: "running" },
       attachmentsRootDir,
       attachmentsDir,
     });
+    const restored = expectDefined(loadSubagentRegistryFromSqlite().get(runId), "legacy run");
+    expect(restored).toMatchObject({ attachmentsRootDir, attachmentsDir });
+    expect(restored.attachmentId).toBeUndefined();
+    subagentRuns.set(runId, restored);
 
-    const replaced = mod.replaceSubagentRunAfterSteerCore({
+    const replaced = await mod.replaceSubagentRunAfterSteerCore({
       previousRunId: "run-delete-attachments-old",
       nextRunId: "run-delete-attachments-new",
     });

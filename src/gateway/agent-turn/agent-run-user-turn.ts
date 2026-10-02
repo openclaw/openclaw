@@ -34,6 +34,7 @@ import {
   type ChatImageContent,
   type OffloadedRef,
 } from "../chat-attachments.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
 import { gatewayClientSenderFields } from "../server-methods/gateway-client-identity.js";
@@ -41,7 +42,6 @@ import { resolveGatewayInputParticipant } from "../session-input-participant.js"
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
-  clientHasAdminScope,
   shouldSuppressAgentPromptPersistence,
   type RestoredCronContinuation,
 } from "./agent-handler-helpers.js";
@@ -213,7 +213,7 @@ export async function prepareAgentRunUserTurn(params: {
 
     const senderIsOwner = params.restoredCronContinuation
       ? true
-      : clientHasAdminScope(params.client);
+      : hasGatewayAdminScope(params.client);
     const settleWakeReplay = params.settleWakeReplay;
     if (
       settleWakeReplay &&
@@ -256,8 +256,10 @@ export async function prepareAgentRunUserTurn(params: {
         offloadedRefs: params.offloadedRefs,
         log: params.context.logGateway,
         logContext: "agent",
+        assertCurrent: params.assertCurrent,
       });
       durableMediaIds = persistedMedia.entries.map((entry) => entry.id);
+      params.assertCurrent();
       const media = persistedMedia.entries.map((entry) => entry.fact);
       const slots = persistedMedia.entries.flatMap((entry, factIndex) =>
         entry.imageKind ? [{ kind: entry.imageKind, factIndex }] : [],
@@ -287,6 +289,7 @@ export async function prepareAgentRunUserTurn(params: {
         pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,
         target: () => {
+          params.assertCurrent();
           const loaded = loadSessionEntry(params.resolvedSessionKey!, {
             agentId: params.activeSessionAgentId,
             clone: false,
@@ -312,7 +315,11 @@ export async function prepareAgentRunUserTurn(params: {
           };
         },
         errorContext: "gateway agent user turn transcript",
-        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+        beforeMessageWrite: (writeContext) => {
+          const preparedMessage = runAgentHarnessBeforeMessageWriteHook(writeContext);
+          params.assertCurrent();
+          return preparedMessage;
+        },
         onPersistenceError: (error) => {
           params.context.logGateway.warn(
             `gateway agent user transcript persistence failed: ${formatForLog(error)}`,

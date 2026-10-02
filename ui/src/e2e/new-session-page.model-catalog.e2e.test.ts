@@ -48,8 +48,9 @@ suite.define(() => {
 
         await modelSelect.click();
         await expect.poll(() => picker.getAttribute("open")).toBe("");
+        // Opening the picker moves focus to its filter so typing filters models.
         await expect
-          .poll(() => modelSelect.evaluate((element) => element === document.activeElement))
+          .poll(() => search.evaluate((element) => element === document.activeElement))
           .toBe(true);
         await revealChatModelOption(firstModel);
         await revealChatModelOption(secondModel);
@@ -733,7 +734,9 @@ suite.define(() => {
       await gateway.waitForRequest("models.list");
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
-      await expect.poll(() => modelSelect.getAttribute("title")).toBe("Models unavailable");
+      await expect
+        .poll(() => modelSelect.getByText("Models unavailable", { exact: true }).isVisible())
+        .toBe(true);
       expect(await page.locator("[data-chat-model-option]").count()).toBe(0);
 
       await modelSelect.click();

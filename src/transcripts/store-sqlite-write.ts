@@ -8,7 +8,10 @@ import {
   parseTranscriptExportManifest,
   parseTranscriptPendingExports,
 } from "./store-export-state.js";
-import { readTranscriptCanonicalSessionRow } from "./store-sqlite-read.js";
+import {
+  readTranscriptCanonicalSessionRow,
+  readTranscriptExportOwnership,
+} from "./store-sqlite-read.js";
 import {
   meetingTranscriptDb,
   meetingTranscriptSessionQuery,
@@ -152,13 +155,7 @@ function updateMeetingTranscriptExportState(
       | undefined,
   ) => { export_pending_json: string; export_manifest_json?: string },
 ): void {
-  const stored = executeSqliteQueryTakeFirstSync(
-    database,
-    meetingTranscriptSessionQuery(database, session).select([
-      "export_manifest_json",
-      "export_pending_json",
-    ]),
-  );
+  const stored = readTranscriptExportOwnership(database, session);
   executeSqliteQuerySync(
     database,
     meetingTranscriptDb(database)

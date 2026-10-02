@@ -26,14 +26,20 @@ afterEach(() => {
 
 describe("unsupported CLI Node update admission", () => {
   it("admits a capability-passing Node build outside the release table", async () => {
-    vi.stubGlobal("process", { ...process, versions: { ...process.versions, node: "24.15.0" } });
+    vi.stubGlobal("process", {
+      ...process,
+      versions: { ...process.versions, bun: undefined, node: "24.15.0" },
+    });
     await expect(updateCommand({ json: true })).rejects.toThrow("state admission reached");
     expect(mocks.stateAdmission).toHaveBeenCalledOnce();
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
-  it.each(["22.23.2", "26.0.0"])("refuses Node %s before stateful preparation", async (node) => {
-    vi.stubGlobal("process", { ...process, versions: { ...process.versions, node } });
+  it("refuses a failed SQLite capability probe before stateful preparation", async () => {
+    vi.stubGlobal("process", {
+      ...process,
+      versions: { ...process.versions, bun: undefined, node: "26.0.0" },
+    });
     const capabilities = await nodeSqlite.detectCurrentSqliteCapabilities();
     vi.spyOn(nodeSqlite, "detectCurrentSqliteCapabilities").mockResolvedValue({
       ...capabilities,

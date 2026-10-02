@@ -1,8 +1,3 @@
-/**
- * Subagent spawn-depth lookup helpers.
- *
- * Reads persisted session store state to recover spawn depth and parent lineage across restarts.
- */
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
@@ -24,13 +19,7 @@ function buildKeyCandidates(
   cfg?: OpenClawConfig,
   explicitAgentId?: string,
 ): string[] {
-  if (!cfg) {
-    return [rawKey];
-  }
-  if (rawKey === "unknown") {
-    return [rawKey];
-  }
-  if (parseAgentSessionKey(rawKey)) {
+  if (!cfg || rawKey === "unknown" || parseAgentSessionKey(rawKey)) {
     return [rawKey];
   }
   const agentId = resolveSessionAgentId({

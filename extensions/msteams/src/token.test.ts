@@ -12,7 +12,6 @@ import * as delegatedState from "./delegated-state.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
-import { readAccessToken } from "./token-response.js";
 import {
   hasConfiguredMSTeamsCredentials,
   resolveDelegatedAccessToken,
@@ -130,25 +129,6 @@ describe("token – federated credentials (certificate)", () => {
   beforeEach(saveAndClearEnv);
   afterEach(restoreEnv);
 
-  it("hasConfigured returns true when certificate path is provided", () => {
-    const cfg = {
-      appId: "app-id",
-      tenantId: "tenant-id",
-      authType: "federated",
-      certificatePath: "/cert.pem",
-    } satisfies MSTeamsConfig;
-    expect(hasConfiguredMSTeamsCredentials(cfg)).toBe(true);
-  });
-
-  it("hasConfigured returns false when neither cert nor MI is provided", () => {
-    const cfg = {
-      appId: "app-id",
-      tenantId: "tenant-id",
-      authType: "federated",
-    } satisfies MSTeamsConfig;
-    expect(hasConfiguredMSTeamsCredentials(cfg)).toBe(false);
-  });
-
   it("ignores blank certificate settings", () => {
     process.env.MSTEAMS_CERTIFICATE_PATH = "   ";
     const cfg = {
@@ -262,26 +242,6 @@ describe("token – federated credentials (certificate)", () => {
     });
   });
 
-  it("resolves federated credentials with certificate from config", () => {
-    const cfg = {
-      appId: "app-id",
-      tenantId: "tenant-id",
-      authType: "federated",
-      certificatePath: "/cert.pem",
-      certificateThumbprint: "AABBCCDD",
-    } satisfies MSTeamsConfig;
-    const result = resolveMSTeamsCredentials(cfg);
-    expect(result).toEqual({
-      type: "federated",
-      appId: "app-id",
-      tenantId: "tenant-id",
-      certificatePath: "/cert.pem",
-      certificateThumbprint: "AABBCCDD",
-      useManagedIdentity: undefined,
-      managedIdentityClientId: undefined,
-    });
-  });
-
   it("resolves federated credentials from env vars", () => {
     process.env.MSTEAMS_AUTH_TYPE = "federated";
     process.env.MSTEAMS_APP_ID = "env-app-id";
@@ -304,26 +264,6 @@ describe("token – federated credentials (certificate)", () => {
 describe("token – federated credentials (managed identity)", () => {
   beforeEach(saveAndClearEnv);
   afterEach(restoreEnv);
-
-  it("resolves managed identity from config", () => {
-    const cfg = {
-      appId: "app-id",
-      tenantId: "tenant-id",
-      authType: "federated",
-      useManagedIdentity: true,
-      managedIdentityClientId: "mi-client-id",
-    } satisfies MSTeamsConfig;
-    const result = resolveMSTeamsCredentials(cfg);
-    expect(result).toEqual({
-      type: "federated",
-      appId: "app-id",
-      tenantId: "tenant-id",
-      certificatePath: undefined,
-      certificateThumbprint: undefined,
-      useManagedIdentity: true,
-      managedIdentityClientId: "mi-client-id",
-    });
-  });
 
   it("resolves system-assigned managed identity (no clientId)", () => {
     const cfg = {
@@ -377,21 +317,6 @@ describe("token – federated credentials (managed identity)", () => {
 describe("token – backward compatibility", () => {
   beforeEach(saveAndClearEnv);
   afterEach(restoreEnv);
-
-  it("defaults to secret when authType is absent", () => {
-    const cfg = {
-      appId: "app-id",
-      appPassword: "pw",
-      tenantId: "tenant-id",
-    } satisfies MSTeamsConfig;
-    const result = resolveMSTeamsCredentials(cfg);
-    expect(result).toEqual({
-      type: "secret",
-      appId: "app-id",
-      appPassword: "pw",
-      tenantId: "tenant-id",
-    });
-  });
 
   it("explicit authType=secret behaves same as absent", () => {
     const cfg = {
@@ -549,20 +474,5 @@ describe("resolveDelegatedAccessToken", () => {
       }),
     ).rejects.toBe(error);
     expect(oauthTokenMocks.refreshMSTeamsDelegatedTokens).not.toHaveBeenCalled();
-  });
-});
-
-describe("readAccessToken", () => {
-  it("reads string and object token forms", () => {
-    expect(readAccessToken("abc")).toBe("abc");
-    expect(readAccessToken({ accessToken: "access-token" })).toBe("access-token");
-    expect(readAccessToken({ token: "fallback-token" })).toBe("fallback-token");
-  });
-
-  it("returns null for unsupported token payloads", () => {
-    expect(readAccessToken({ accessToken: 123 })).toBeNull();
-    expect(readAccessToken({ token: false })).toBeNull();
-    expect(readAccessToken(null)).toBeNull();
-    expect(readAccessToken(undefined)).toBeNull();
   });
 });

@@ -138,9 +138,7 @@ internal fun ProvidersModelsScreen(
 
         errorText?.let { message ->
           item {
-            ClawPanel {
-              Text(text = message, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-            }
+            SettingsMessagePanel(text = message)
           }
         }
       }
@@ -191,7 +189,7 @@ internal fun providerRows(
         modelCount = providerModels.size,
         models = providerModels,
       )
-    }.sortedWith(compareBy(::providerPriority, { it.name.lowercase() }))
+    }.sortedWith(compareBy({ providerPriority(it.id) }, { it.name.lowercase() }))
 }
 
 private val ProviderAvailability.label: String
@@ -230,8 +228,6 @@ internal fun modelProviderReady(status: String): Boolean {
 }
 
 private val modelComparator = compareBy<GatewayModelSummary>({ it.name.lowercase() }, { it.id.lowercase() })
-
-private fun providerPriority(row: ProviderRow): Int = providerPriority(row.id)
 
 private fun providerPriority(provider: String): Int =
   when (provider.trim().lowercase()) {

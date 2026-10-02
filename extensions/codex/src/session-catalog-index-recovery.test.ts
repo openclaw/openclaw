@@ -242,8 +242,11 @@ describe("resident Codex catalog recovery", () => {
       readNative,
       assertCurrent: () => {},
     });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     try {
       await index.initialize();
+      // Drain the startup scan before changing the rollout and arranging its read failure.
+      await vi.advanceTimersByTimeAsync(0);
       await index.reconcile();
       await writeCatalogRollout(root, { ...original, cwd: "/workspace/changed" });
       const changed = await fs.stat(file);
@@ -265,6 +268,7 @@ describe("resident Codex catalog recovery", () => {
       expect(readNative).toHaveBeenCalledOnce();
     } finally {
       await index.close();
+      vi.useRealTimers();
     }
   });
 

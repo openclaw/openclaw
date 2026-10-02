@@ -66,35 +66,6 @@ afterEach(() => {
 });
 
 describe("GatewayProtocolClient socket factory recovery", () => {
-  it("automatically retries a socket factory failure when the transport opts in", async () => {
-    vi.useFakeTimers();
-    const { client, createSocket, onConnectError } = createSocketFactoryHarness({
-      initialFailures: 1,
-      retryFactoryError: () => true,
-    });
-
-    client.start();
-
-    expect(createSocket).toHaveBeenCalledOnce();
-    expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ message: "temporary socket construction failure" }),
-    );
-    expect(vi.getTimerCount()).toBe(1);
-
-    client.start();
-    expect(createSocket).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(1);
-
-    await vi.advanceTimersByTimeAsync(9);
-    expect(createSocket).toHaveBeenCalledOnce();
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(createSocket).toHaveBeenCalledTimes(2);
-    expect(client.connected).toBe(true);
-
-    client.stop();
-  });
-
   it.each([
     { draw: 0, delays: [10, 20, 40, 80, 84, 84], resetDelay: 25 },
     { draw: 0.5, delays: [11, 22, 44, 88, 92, 92], resetDelay: 28 },
@@ -111,6 +82,17 @@ describe("GatewayProtocolClient socket factory recovery", () => {
 
       try {
         client.start();
+
+        expect(createSocket).toHaveBeenCalledOnce();
+        expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ message: "temporary socket construction failure" }),
+        );
+        expect(vi.getTimerCount()).toBe(1);
+
+        client.start();
+        expect(createSocket).toHaveBeenCalledOnce();
+        expect(vi.getTimerCount()).toBe(1);
+
         for (const [index, delay] of delays.entries()) {
           await vi.advanceTimersByTimeAsync(delay - 1);
           expect(createSocket).toHaveBeenCalledTimes(index + 1);

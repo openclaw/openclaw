@@ -36,6 +36,7 @@ import type {
   SessionTranscriptTurnPersistResult,
 } from "./session-accessor.types.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "./session-store-owner.js";
+import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 import {
   getOwnedSessionTranscriptWriterFence,
@@ -234,7 +235,10 @@ async function appendTranscriptTurnMessages(
       },
     );
     if (result) {
-      options.onMessageCommitted?.(result);
+      const completion = completeSessionTranscriptCommit([result], options.onMessageCommitted);
+      if (completion) {
+        await completion;
+      }
       appendedMessages.push(result);
     }
   }

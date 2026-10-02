@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import { isDeepStrictEqual } from "node:util";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { writeGatewayRestartIntentSync } from "openclaw/plugin-sdk/qa-runtime";
@@ -141,30 +142,6 @@ function getGatewayRetryAfterMs(error: unknown) {
   return null;
 }
 
-function areJsonValuesEqual(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) {
-    return true;
-  }
-  if (Array.isArray(left) || Array.isArray(right)) {
-    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
-      return false;
-    }
-    return left.every((entry, index) => areJsonValuesEqual(entry, right[index]));
-  }
-  if (isPlainObject(left) || isPlainObject(right)) {
-    if (!isPlainObject(left) || !isPlainObject(right)) {
-      return false;
-    }
-    const leftKeys = Object.keys(left).toSorted();
-    const rightKeys = Object.keys(right).toSorted();
-    if (!areJsonValuesEqual(leftKeys, rightKeys)) {
-      return false;
-    }
-    return leftKeys.every((key) => areJsonValuesEqual(left[key], right[key]));
-  }
-  return false;
-}
-
 function withoutQaConfigApplyVolatileFields(
   config: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -190,8 +167,8 @@ function isConfigMutationNoopForSnapshot(
     return false;
   }
   return action === "config.patch"
-    ? areJsonValuesEqual(applyQaMergePatch(config, nextConfig), config)
-    : areJsonValuesEqual(
+    ? isDeepStrictEqual(applyQaMergePatch(config, nextConfig), config)
+    : isDeepStrictEqual(
         withoutQaConfigApplyVolatileFields(config),
         withoutQaConfigApplyVolatileFields(nextConfig),
       );

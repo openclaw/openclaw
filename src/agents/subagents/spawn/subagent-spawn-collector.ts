@@ -75,6 +75,7 @@ export function createCollectorLaunchCallbacks(params: {
     release?.();
   };
   let launchTerminationConfirmed = false;
+  let pendingLaunchTermination: string | undefined;
   let dispatchAttempted = false;
   const startOnce = async () => {
     await runWithGatewayIndependentRootWorkContinuation(async () => {
@@ -112,20 +113,20 @@ export function createCollectorLaunchCallbacks(params: {
       params.recordParticipant();
       try {
         const started = gatewayContextResolver
-          ? startQueuedSubagentRun(childRunId, gatewayRunId, undefined, gatewayContextResolver)
-          : startQueuedSubagentRun(childRunId, gatewayRunId);
+          ? await startQueuedSubagentRun(
+              childRunId,
+              gatewayRunId,
+              undefined,
+              gatewayContextResolver,
+            )
+          : await startQueuedSubagentRun(childRunId, gatewayRunId);
         if (!started) {
           throw new Error("collector registry row could not transition from queued to running");
         }
       } catch (error) {
-        await terminateAcceptedCollectorRun({
-          childSessionKey,
-          gatewayRunId,
-          ...provisionalSessionIdentity,
-          isCurrent: canCleanupCreatedSession,
-          ...(callCleanupGateway ? { callGateway: callCleanupGateway } : {}),
-        });
-        launchTerminationConfirmed = true;
+        // Publication temporarily blocks cleanup authority. Settle rollback after
+        // that barrier so a paused owner cannot count as confirmed termination.
+        pendingLaunchTermination = gatewayRunId;
         throw error;
       }
       await params.emitSpawnLifecycleHooks(gatewayRunId);
@@ -145,7 +146,7 @@ export function createCollectorLaunchCallbacks(params: {
       ),
     ]);
   let cleanupAttempt: ReturnType<typeof cleanupOnce> | undefined;
-  const publishCleanupCompletion = ([contextRollback, sessionCleanup]: Awaited<
+  const publishCleanupCompletion = async ([contextRollback, sessionCleanup]: Awaited<
     ReturnType<typeof cleanupOnce>
   >) => {
     const cleanupComplete =
@@ -160,7 +161,7 @@ export function createCollectorLaunchCallbacks(params: {
         reason: "delete",
         parentSessionKey: params.requesterSessionKey,
       });
-      completeCollectorLaunchCleanup(childRunId);
+      await completeCollectorLaunchCleanup(childRunId);
     }
   };
   const settleLaunchFailure = async (error: unknown) => {
@@ -189,6 +190,16 @@ export function createCollectorLaunchCallbacks(params: {
       ) {
         await publication;
       }
+      if (pendingLaunchTermination && !launchTerminationConfirmed) {
+        await terminateAcceptedCollectorRun({
+          childSessionKey,
+          gatewayRunId: pendingLaunchTermination,
+          ...provisionalSessionIdentity,
+          isCurrent: canCleanupCreatedSession,
+          ...(callCleanupGateway ? { callGateway: callCleanupGateway } : {}),
+        });
+        launchTerminationConfirmed = true;
+      }
       const launchError = summarizeSpawnError(error);
       const settleFailure = async () => {
         if (registrationScope) {
@@ -196,7 +207,7 @@ export function createCollectorLaunchCallbacks(params: {
           return;
         }
         await retrySubagentCleanup(async () => {
-          settleFailedQueuedSubagentLaunch(childRunId, launchError);
+          await settleFailedQueuedSubagentLaunch(childRunId, launchError);
           return true;
         });
       };
@@ -209,7 +220,7 @@ export function createCollectorLaunchCallbacks(params: {
           await settleFailure();
         }
         if (cleanupAttempt) {
-          publishCleanupCompletion(await cleanupAttempt);
+          await publishCleanupCompletion(await cleanupAttempt);
         }
         releaseAuthority();
         return true;
@@ -218,7 +229,7 @@ export function createCollectorLaunchCallbacks(params: {
       if (dispatchAttempted || !registrationScope) {
         await settleFailure();
       }
-      publishCleanupCompletion(cleanup);
+      await publishCleanupCompletion(cleanup);
       releaseAuthority();
       return true;
     }, "subagents:spawn-cleanup");

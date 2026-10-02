@@ -53,6 +53,13 @@ export class UserProfileNotFoundError extends Error {
   }
 }
 
+export class UserProfileMergeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UserProfileMergeError";
+  }
+}
+
 export class UserProfileOwnerError extends Error {
   constructor(readonly code: UserProfileOwnerErrorCode) {
     super(

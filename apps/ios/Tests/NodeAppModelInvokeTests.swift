@@ -1210,6 +1210,38 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
 @Suite(.serialized) struct NodeAppModelInvokeTests {
     @Test(arguments: [false, true]) @MainActor
+    func `chat preserves a typed draft on initial agent resolution only for the same account`(
+        changesAccount: Bool) throws
+    {
+        let appModel = NodeAppModel()
+        appModel.enterScreenshotFixtureMode()
+        appModel.gatewayDefaultAgentId = nil
+        let url = try #require(URL(string: "wss://draft.example.test"))
+        let (first, second) = try makeGatewayPair(
+            firstURL: url, firstStableID: "draft-fixture", firstToken: "synthetic-first",
+            secondURL: url, secondStableID: "draft-fixture", secondToken: "synthetic-second")
+        appModel.activeGatewayConnectConfig = first
+        let owner = appModel.chatPresentation
+        owner.sync(appModel: appModel)
+        let original = try #require(owner.viewModel)
+        defer { owner.viewModel?.detachTransport() }
+        let gatewayOwner = appModel.chatViewModelOwnerID
+        let sessionKey = appModel.chatSessionKey
+        #expect(appModel.chatDeliveryAgentId == nil)
+        original.input = "Keep this draft while the default agent resolves"
+
+        appModel.gatewayDefaultAgentId = "main"
+        if changesAccount { appModel.activeGatewayConnectConfig = second }
+        #expect(appModel.chatViewModelOwnerID == gatewayOwner)
+        #expect(appModel.chatSessionKey == sessionKey)
+        owner.sync(appModel: appModel)
+
+        let current = try #require(owner.viewModel)
+        #expect(appModel.chatDeliveryAgentId == "main")
+        #expect(current.input == (changesAccount ? "" : "Keep this draft while the default agent resolves"))
+    }
+
+    @Test(arguments: [false, true]) @MainActor
     func `chat account replacement retires pinned questions and preserves attachment cleanup`(
         restoresOriginalAccount: Bool) throws
     {
@@ -1525,7 +1557,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         appModel.focusChatSession(rustSessionKey)
 
         appModel.setSelectedAgentId("main")
-        #expect(appModel.defaultChatSessionKey == "main")
         #expect(appModel.mainSessionKey == "main")
         #expect(appModel.chatSessionKey == "main")
     }
@@ -1537,17 +1568,17 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         appModel.openChat(sessionKey: "incident-42")
 
         appModel.setSelectedAgentId("main")
-        #expect(appModel.defaultChatSessionKey == "main")
+        #expect(appModel.mainSessionKey == "main")
         #expect(appModel.chatSessionKey == "incident-42")
     }
 
-    @Test @MainActor func `default chat session key ignores explicit chat focus`() {
+    @Test @MainActor func `main session key ignores explicit chat focus`() {
         let appModel = NodeAppModel()
         appModel.gatewayDefaultAgentId = "main"
         appModel.setSelectedAgentId("rust-claw")
         appModel.openChat(sessionKey: "incident-42")
 
-        #expect(appModel.defaultChatSessionKey == SessionKey.makeAgentSessionKey(
+        #expect(appModel.mainSessionKey == SessionKey.makeAgentSessionKey(
             agentId: "rust-claw",
             baseKey: "main"))
         #expect(appModel.chatSessionKey == "incident-42")
@@ -1616,7 +1647,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             beforeResponse: { await fetchGate.wait() })
 
         let fetching = Task { @MainActor in
-            await appModel._test_presentExecApprovalNotificationPrompt(ExecApprovalNotificationPrompt(
+            await appModel._test_presentExecApprovalNotificationPrompt(ApprovalNotificationPrompt(
                 approvalId: "approval-tapped-b",
                 gatewayDeviceId: nil))
         }
@@ -2173,7 +2204,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 identifier: "old-requested-approval",
                 userInfo: [
                     "openclaw": [
-                        "kind": ExecApprovalNotificationBridge.requestedKind,
+                        "kind": ApprovalNotificationBridge.exec.requestedKind,
                         "approvalId": "recovery-a",
                         "gatewayDeviceId": "device-a",
                     ],
@@ -2182,7 +2213,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 identifier: "new-requested-approval",
                 userInfo: [
                     "openclaw": [
-                        "kind": ExecApprovalNotificationBridge.requestedKind,
+                        "kind": ApprovalNotificationBridge.exec.requestedKind,
                         "approvalId": "recovery-b",
                         "gatewayDeviceId": "device-b",
                     ],
@@ -2783,7 +2814,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     @Test @MainActor func `offline resolution push remains durable until its gateway reconnects`() async {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
-        let push = ExecApprovalNotificationPrompt(
+        let push = ApprovalNotificationPrompt(
             approvalId: "approval-resolved-offline",
             gatewayDeviceId: "gateway-device-a")
         let notificationCenter = MockBootstrapNotificationCenter()
@@ -2791,14 +2822,14 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             identifier: "offline-request-alert",
             userInfo: [
                 "openclaw": [
-                    "kind": ExecApprovalNotificationBridge.requestedKind,
+                    "kind": ApprovalNotificationBridge.exec.requestedKind,
                     "approvalId": push.approvalId,
                     "gatewayDeviceId": "gateway-device-a",
                 ],
             ])]
         let firstModel = NodeAppModel(notificationCenter: notificationCenter)
 
-        #expect(await firstModel.handleExecApprovalResolvedRemotePush(push))
+        await firstModel.handleExecApprovalResolvedRemotePush(push)
         #expect(firstModel.pendingExecApprovalResolvedPushes == [push])
         #expect(notificationCenter.pendingRemovedIdentifiers == [[
             "exec.approval-v2.16:gateway-device-a.approval-resolved-offline",
@@ -2813,7 +2844,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     @Test @MainActor func `offline approval request remains durable until its gateway reconnects`() async {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
-        let push = ExecApprovalNotificationPrompt(
+        let push = ApprovalNotificationPrompt(
             approvalId: "approval-requested-offline",
             gatewayDeviceId: "gateway-device-a")
         let firstModel = NodeAppModel(notificationCenter: MockBootstrapNotificationCenter())
@@ -2828,7 +2859,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     @Test @MainActor func `offline approval notification tap retains watch recovery`() async {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
-        let push = ExecApprovalNotificationPrompt(
+        let push = ApprovalNotificationPrompt(
             approvalId: "approval-notification-offline",
             gatewayDeviceId: "gateway-device-a")
         let appModel = NodeAppModel(notificationCenter: MockBootstrapNotificationCenter())
@@ -3333,7 +3364,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         talkMode.updateGatewayConnected(true)
         defer {
             barrier.release()
-            _ = talkMode.cancelPushToTalk()
+            _ = talkMode.cancelPushToTalk(expectedTranscriptionOnly: false)
         }
         let startResponse = await appModel.handleInvoke(
             talkRequest(id: "fresh-before-stale-cancel", command: .pttStart))
@@ -4651,7 +4682,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         defer {
             barrier.release()
             appModel.testTalkCapturePreparationHandler = nil
-            _ = talkMode.cancelPushToTalk()
+            _ = talkMode.cancelPushToTalk(expectedTranscriptionOnly: false)
         }
 
         let start = Task { @MainActor in
@@ -7579,7 +7610,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             identifier: "delivered-approval",
             userInfo: [
                 "openclaw": [
-                    "kind": ExecApprovalNotificationBridge.requestedKind,
+                    "kind": ApprovalNotificationBridge.exec.requestedKind,
                     "approvalId": "approval-delivered-recovery",
                     "gatewayDeviceId": "gateway-device-a",
                 ],
@@ -7606,10 +7637,10 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let decomposedOwner = "gateway-device-e\u{0301}"
         #expect(composedOwner == decomposedOwner)
         let appModel = NodeAppModel(notificationCenter: MockBootstrapNotificationCenter())
-        let composedRecovery = ExecApprovalNotificationPrompt(
+        let composedRecovery = ApprovalNotificationPrompt(
             approvalId: "approval-exact-push-recovery",
             gatewayDeviceId: composedOwner)
-        let decomposedRecovery = ExecApprovalNotificationPrompt(
+        let decomposedRecovery = ApprovalNotificationPrompt(
             approvalId: "approval-exact-push-recovery",
             gatewayDeviceId: decomposedOwner)
 
@@ -7629,14 +7660,14 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(GatewayStableIdentifier.key(recoveryPushes.first?.gatewayDeviceId) ==
             GatewayStableIdentifier.key(decomposedOwner))
 
-        let composedResolved = ExecApprovalNotificationPrompt(
+        let composedResolved = ApprovalNotificationPrompt(
             approvalId: "approval-exact-push-resolved",
             gatewayDeviceId: composedOwner)
-        let decomposedResolved = ExecApprovalNotificationPrompt(
+        let decomposedResolved = ApprovalNotificationPrompt(
             approvalId: "approval-exact-push-resolved",
             gatewayDeviceId: decomposedOwner)
-        #expect(await appModel.handleExecApprovalResolvedRemotePush(composedResolved))
-        #expect(await appModel.handleExecApprovalResolvedRemotePush(decomposedResolved))
+        await appModel.handleExecApprovalResolvedRemotePush(composedResolved)
+        await appModel.handleExecApprovalResolvedRemotePush(decomposedResolved)
         var resolvedPushes = appModel.pendingExecApprovalResolvedPushes
         #expect(resolvedPushes.count == 2)
         #expect(Set(resolvedPushes.compactMap { GatewayStableIdentifier.key($0.gatewayDeviceId) }).count == 2)
@@ -7805,7 +7836,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             identifier: "approval-event-notification",
             userInfo: [
                 "openclaw": [
-                    "kind": ExecApprovalNotificationBridge.requestedKind,
+                    "kind": ApprovalNotificationBridge.exec.requestedKind,
                     "approvalId": "approval-event-resolved",
                     "gatewayDeviceId": "gateway-device-a",
                 ],
@@ -7854,7 +7885,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         await appModel.handleOperatorGatewayServerEvent(
             EventFrame(
                 type: "event",
-                event: ExecApprovalNotificationBridge.resolvedKind,
+                event: ApprovalNotificationBridge.exec.resolvedKind,
                 payload: AnyCodable(["id": "approval-event-resolved"]),
                 seq: nil,
                 stateversion: nil),
@@ -7862,7 +7893,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         #expect(appModel.pendingExecApprovalPrompt?.id == "approval-event-resolved")
         #expect(appModel._test_pendingWatchExecApprovalRecoveryIDs() == ["approval-event-resolved"])
-        let pendingResolvedPush = ExecApprovalNotificationPrompt(
+        let pendingResolvedPush = ApprovalNotificationPrompt(
             approvalId: "approval-event-resolved",
             gatewayDeviceId: nil)
         #expect(appModel.pendingExecApprovalResolvedPushes == [pendingResolvedPush])
@@ -7877,10 +7908,10 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let appModel = NodeAppModel(notificationCenter: MockBootstrapNotificationCenter())
         appModel.connectedGatewayID = "gateway-a"
         appModel._test_setExecApprovalPromptFetchFailure("gateway unavailable")
-        let gatewayA = ExecApprovalNotificationPrompt(
+        let gatewayA = ApprovalNotificationPrompt(
             approvalId: "shared-approval-id",
             gatewayDeviceId: "gateway-device-a")
-        let gatewayB = ExecApprovalNotificationPrompt(
+        let gatewayB = ApprovalNotificationPrompt(
             approvalId: "shared-approval-id",
             gatewayDeviceId: "gateway-device-b")
         appModel._test_recordPendingWatchExecApprovalRecoveryID(
@@ -8009,7 +8040,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         await appModel.handleOperatorGatewayServerEvent(EventFrame(
             type: "event",
-            event: ExecApprovalNotificationBridge.requestedKind,
+            event: ApprovalNotificationBridge.exec.requestedKind,
             payload: AnyCodable(["id": "approval-notifications-off"]),
             seq: nil,
             stateversion: nil))
@@ -8031,7 +8062,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         await appModel.handleOperatorGatewayServerEvent(EventFrame(
             type: "event",
-            event: ExecApprovalNotificationBridge.requestedKind,
+            event: ApprovalNotificationBridge.exec.requestedKind,
             payload: AnyCodable(["id": "approval-requested-retry"]),
             seq: nil,
             stateversion: nil))
@@ -8059,7 +8090,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         var routeIsCurrent = true
         let event = EventFrame(
             type: "event",
-            event: ExecApprovalNotificationBridge.requestedKind,
+            event: ApprovalNotificationBridge.exec.requestedKind,
             payload: AnyCodable(["id": "approval-stale-route"]),
             seq: nil,
             stateversion: nil)
@@ -8089,7 +8120,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         await appModel.handleOperatorGatewayServerEvent(EventFrame(
             type: "event",
-            event: ExecApprovalNotificationBridge.requestedKind,
+            event: ApprovalNotificationBridge.exec.requestedKind,
             payload: AnyCodable(["id": "approval-suppressed"]),
             seq: nil,
             stateversion: nil))
@@ -8104,7 +8135,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         await appModel.handleOperatorGatewayServerEvent(EventFrame(
             type: "event",
-            event: ExecApprovalNotificationBridge.requestedKind,
+            event: ApprovalNotificationBridge.exec.requestedKind,
             payload: AnyCodable(["id": "approval-guidance-resolved"]),
             seq: nil,
             stateversion: nil))

@@ -202,7 +202,7 @@ enum MacNodeCodexThreadCatalog {
             throw CatalogError.catalogDisabled
         }
         let invocation = try self.resolveInvocation(root: root)
-        return try await self.list(params: params, invocation: invocation, client: client)
+        return try await self.encodeResponse(self.list(params: params, invocation: invocation, client: client))
     }
 
     static func turns(
@@ -270,23 +270,16 @@ enum MacNodeCodexThreadCatalog {
         for _ in 0..<100 {
             let remainingTimeout = deadline.timeIntervalSinceNow
             guard remainingTimeout > 0 else { throw CatalogError.timedOut }
-            let payload = try await list(
+            let response = try await list(
                 params: ListParams(sourceHomeId: sourceHomeId, cursor: cursor, limit: 100),
                 invocation: invocation,
                 client: client,
                 timeoutSeconds: remainingTimeout)
-            guard let response = try JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
-                  let sessions = response["sessions"] as? [[String: Any]],
-                  let pageSourceHomeId = response["sourceHomeId"] as? String
-            else {
-                throw CatalogError.appServerUnavailable
+            sourceHomeId = response.sourceHomeId
+            if response.sessions.contains(where: { $0.threadId == threadId }) {
+                return response.sourceHomeId
             }
-            sourceHomeId = pageSourceHomeId
-            if sessions.contains(where: { $0["threadId"] as? String == threadId }) {
-                return pageSourceHomeId
-            }
-            guard let nextCursor = response["nextCursor"] as? String,
-                  !nextCursor.isEmpty,
+            guard let nextCursor = response.nextCursor,
                   !seenCursors.contains(nextCursor)
             else { break }
             seenCursors.insert(nextCursor)
@@ -325,7 +318,7 @@ enum MacNodeCodexThreadCatalog {
         let params = try self.decodeParams(paramsJSON)
         let client = CodexAppServerThreadClient()
         return try await self.withEphemeralClient(client) {
-            try await self.list(
+            try await self.encodeResponse(self.list(
                 params: params,
                 invocation: ResolvedInvocation(
                     executable: executable,
@@ -334,7 +327,7 @@ enum MacNodeCodexThreadCatalog {
                     clearEnv: clearEnv),
                 client: client,
                 timeoutSeconds: timeoutSeconds,
-                maxLineBytes: maxLineBytes)
+                maxLineBytes: maxLineBytes))
         }
     }
 
@@ -343,7 +336,7 @@ enum MacNodeCodexThreadCatalog {
         invocation: ResolvedInvocation,
         client: CodexAppServerThreadClient,
         timeoutSeconds: Double = MacNodeCodexThreadCatalog.defaultTimeoutSeconds,
-        maxLineBytes: Int = 5 * 1024 * 1024) async throws -> String
+        maxLineBytes: Int = 5 * 1024 * 1024) async throws -> WireResponse
     {
         guard params.searchTerm != nil else {
             let response = try await client.request(
@@ -353,7 +346,7 @@ enum MacNodeCodexThreadCatalog {
                 sourceHomeId: params.sourceHomeId,
                 timeoutSeconds: timeoutSeconds,
                 maxLineBytes: maxLineBytes)
-            return try self.normalize(
+            return try self.normalizedResponse(
                 listResultData: response.data,
                 sourceHomeId: response.sourceHomeId)
         }
@@ -413,11 +406,11 @@ enum MacNodeCodexThreadCatalog {
         }
 
         guard let sourceHomeId else { throw CatalogError.appServerUnavailable }
-        return try self.encodeResponse(WireResponse(
+        return WireResponse(
             sourceHomeId: sourceHomeId,
             sessions: sessions,
             nextCursor: nextCursor,
-            backwardsCursor: backwardsCursor))
+            backwardsCursor: backwardsCursor)
     }
 
     private static func withEphemeralClient<T>(
@@ -461,12 +454,9 @@ extension MacNodeCodexThreadCatalog {
         guard self.supportsConfiguredHomeScope(appServer) else {
             throw CatalogError.unsupportedAppServerHomeScope
         }
-        let configuredCommand = self.nonEmptyString(appServer?.command)
         let environmentCommand = self.nonEmptyString(environment[self.commandEnvironmentKey])
-        let customCommand = configuredCommand ?? environmentCommand
-        let rawCommand = customCommand ?? "codex"
-        let command = rawCommand.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !command.isEmpty else { throw CatalogError.codexUnavailable }
+        let customCommand = appServer?.command ?? environmentCommand
+        let command = customCommand ?? "codex"
 
         let executable: String?
         var installedAppExecutable: String?
@@ -521,10 +511,7 @@ extension MacNodeCodexThreadCatalog {
         guard let rawConfig = entry["config"] else {
             return ConfiguredPlugin(supervisionEnabled: false, appServer: nil)
         }
-        guard let config = rawConfig as? [String: Any] else {
-            throw CatalogError.invalidAppServerConfiguration
-        }
-        try self.validateKeys(config, allowed: self.pluginConfigKeys)
+        let config = try self.configuredObject(rawConfig, allowed: self.pluginConfigKeys)
         try self.validateEnum(
             config,
             key: "codexDynamicToolsLoading",
@@ -543,10 +530,7 @@ extension MacNodeCodexThreadCatalog {
 
     private static func validateAppServerConfig(_ rawValue: Any?) throws -> ConfiguredAppServer? {
         guard let rawValue else { return nil }
-        guard let appServer = rawValue as? [String: Any] else {
-            throw CatalogError.invalidAppServerConfiguration
-        }
-        try self.validateKeys(appServer, allowed: self.appServerConfigKeys)
+        let appServer = try self.configuredObject(rawValue, allowed: self.appServerConfigKeys)
         try self.validateEnum(appServer, key: "mode", allowed: ["yolo", "guardian"])
         try self.validateEnum(appServer, key: "transport", allowed: ["stdio", "websocket", "unix"])
         try self.validateEnum(appServer, key: "homeScope", allowed: ["agent", "user"])
@@ -579,29 +563,12 @@ extension MacNodeCodexThreadCatalog {
         try self.validateString(appServer, key: "defaultWorkspaceDir")
         try self.validateExperimentalConfig(appServer["experimental"])
 
-        let transport = try self.optionalConfiguredString(appServer, key: "transport")
-        let homeScope = try self.optionalConfiguredString(appServer, key: "homeScope")
-        let command = try self.optionalConfiguredString(appServer, key: "command")
-        let args = try self.configuredArguments(appServer, key: "args")
-        let clearEnv = try self.configuredStringList(appServer, key: "clearEnv")
-
-        return ConfiguredAppServer(
-            transport: transport,
-            homeScope: homeScope,
-            command: self.nonEmptyString(command),
-            args: args,
-            clearEnv: clearEnv)
-    }
-
-    private static func optionalConfiguredString(
-        _ object: [String: Any],
-        key: String) throws -> String?
-    {
-        guard let value = object[key] else { return nil }
-        guard let value = value as? String else {
-            throw CatalogError.invalidAppServerConfiguration
-        }
-        return value
+        return try ConfiguredAppServer(
+            transport: appServer["transport"] as? String,
+            homeScope: appServer["homeScope"] as? String,
+            command: self.nonEmptyString(appServer["command"]),
+            args: self.configuredArguments(appServer, key: "args"),
+            clearEnv: (appServer["clearEnv"] as? [String] ?? []).compactMap(self.nonEmptyString))
     }
 
     private static func configuredArguments(
@@ -609,47 +576,25 @@ extension MacNodeCodexThreadCatalog {
         key: String) throws -> [String]?
     {
         guard let value = object[key] else { return nil }
-        let args: [String]
-        if let values = value as? [Any] {
-            guard values.allSatisfy({ $0 is String }) else {
-                throw CatalogError.invalidAppServerConfiguration
-            }
-            args = values.compactMap(self.nonEmptyString)
+        if let values = value as? [String] {
+            return values.compactMap(self.nonEmptyString)
         } else if let value = value as? String {
-            args = self.splitShellWords(value)
+            return self.splitShellWords(value)
         } else {
             throw CatalogError.invalidAppServerConfiguration
         }
-        return args
-    }
-
-    private static func configuredStringList(
-        _ object: [String: Any],
-        key: String) throws -> [String]
-    {
-        guard let value = object[key] else { return [] }
-        guard let values = value as? [Any], values.allSatisfy({ $0 is String }) else {
-            throw CatalogError.invalidAppServerConfiguration
-        }
-        return values.compactMap(self.nonEmptyString)
     }
 
     private static func validateDiscoveryConfig(_ rawValue: Any?) throws {
         guard let rawValue else { return }
-        guard let config = rawValue as? [String: Any] else {
-            throw CatalogError.invalidAppServerConfiguration
-        }
-        try self.validateKeys(config, allowed: ["enabled", "timeoutMs"])
+        let config = try self.configuredObject(rawValue, allowed: ["enabled", "timeoutMs"])
         try self.validateBoolean(config, key: "enabled")
         try self.validatePositiveNumber(config, key: "timeoutMs")
     }
 
     private static func validateComputerUseConfig(_ rawValue: Any?) throws {
         guard let rawValue else { return }
-        guard let config = rawValue as? [String: Any] else {
-            throw CatalogError.invalidAppServerConfiguration
-        }
-        try self.validateKeys(config, allowed: [
+        let config = try self.configuredObject(rawValue, allowed: [
             "enabled",
             "autoInstall",
             "marketplaceDiscoveryTimeoutMs",
@@ -675,10 +620,7 @@ extension MacNodeCodexThreadCatalog {
 
     private static func validateSupervisionConfig(_ rawValue: Any?) throws -> Bool {
         guard let rawValue else { return false }
-        guard let config = rawValue as? [String: Any] else {
-            throw CatalogError.invalidAppServerConfiguration
-        }
-        try self.validateKeys(config, allowed: [
+        let config = try self.configuredObject(rawValue, allowed: [
             "enabled",
             "endpoints",
             "allowRawTranscripts",
@@ -730,10 +672,7 @@ extension MacNodeCodexThreadCatalog {
 
     private static func validateNetworkProxyConfig(_ rawValue: Any?) throws {
         guard let rawValue else { return }
-        guard let config = rawValue as? [String: Any] else {
-            throw CatalogError.invalidAppServerConfiguration
-        }
-        try self.validateKeys(config, allowed: [
+        let config = try self.configuredObject(rawValue, allowed: [
             "enabled",
             "profileName",
             "baseProfile",
@@ -777,10 +716,7 @@ extension MacNodeCodexThreadCatalog {
 
     private static func validateExperimentalConfig(_ rawValue: Any?) throws {
         guard let rawValue else { return }
-        guard let config = rawValue as? [String: Any] else {
-            throw CatalogError.invalidAppServerConfiguration
-        }
-        try self.validateKeys(config, allowed: ["sandboxExecServer"])
+        let config = try self.configuredObject(rawValue, allowed: ["sandboxExecServer"])
         try self.validateBoolean(config, key: "sandboxExecServer")
     }
 
@@ -799,10 +735,7 @@ extension MacNodeCodexThreadCatalog {
         if rawValue is String {
             return
         }
-        guard let secret = rawValue as? [String: Any] else {
-            throw CatalogError.invalidAppServerConfiguration
-        }
-        try self.validateKeys(secret, allowed: ["source", "provider", "id"])
+        let secret = try self.configuredObject(rawValue, allowed: ["source", "provider", "id"])
         guard secret.keys.count == 3,
               let source = secret["source"] as? String,
               let provider = secret["provider"] as? String,
@@ -844,6 +777,14 @@ extension MacNodeCodexThreadCatalog {
         guard object.keys.allSatisfy(allowed.contains) else {
             throw CatalogError.invalidAppServerConfiguration
         }
+    }
+
+    private static func configuredObject(_ value: Any, allowed: Set<String>) throws -> [String: Any] {
+        guard let object = value as? [String: Any] else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+        try self.validateKeys(object, allowed: allowed)
+        return object
     }
 
     private static func validateBoolean(_ object: [String: Any], key: String) throws {
@@ -898,7 +839,7 @@ extension MacNodeCodexThreadCatalog {
 
     private static func validateStringArray(_ object: [String: Any], key: String) throws {
         guard let value = object[key] else { return }
-        guard let values = value as? [Any], values.allSatisfy({ $0 is String }) else {
+        guard value is [String] else {
             throw CatalogError.invalidAppServerConfiguration
         }
     }
@@ -909,11 +850,8 @@ extension MacNodeCodexThreadCatalog {
         allowedValues: Set<String>) throws
     {
         guard let value = object[key] else { return }
-        guard let values = value as? [String: Any],
-              values.values.allSatisfy({ value in
-                  guard let value = value as? String else { return false }
-                  return allowedValues.contains(value)
-              })
+        guard let values = value as? [String: String],
+              values.values.allSatisfy(allowedValues.contains)
         else {
             throw CatalogError.invalidAppServerConfiguration
         }
@@ -1005,16 +943,7 @@ extension MacNodeCodexThreadCatalog {
             key: "searchTerm",
             maxLength: self.maxSessionNameLength)
         params.cwd = try self.optionalString(raw, key: "cwd", maxLength: self.maxCwdLength)
-        if let value = raw["limit"] {
-            guard let number = value as? NSNumber,
-                  CFGetTypeID(number) != CFBooleanGetTypeID(),
-                  number.doubleValue.rounded() == number.doubleValue,
-                  (1...100).contains(number.intValue)
-            else {
-                throw CatalogError.invalidParams("limit must be an integer from 1 to 100")
-            }
-            params.limit = number.intValue
-        }
+        params.limit = try self.decodeLimit(raw["limit"], fallback: params.limit, maximum: 100)
         return params
     }
 
@@ -1034,17 +963,20 @@ extension MacNodeCodexThreadCatalog {
         var params = TurnParams(threadId: threadId)
         params.sourceHomeId = try self.optionalString(raw, key: "sourceHomeId", maxLength: 64)
         params.cursor = try self.optionalString(raw, key: "cursor", maxLength: self.maxCursorLength)
-        if let value = raw["limit"] {
-            guard let number = value as? NSNumber,
-                  CFGetTypeID(number) != CFBooleanGetTypeID(),
-                  number.doubleValue.rounded() == number.doubleValue,
-                  (1...50).contains(number.intValue)
-            else {
-                throw CatalogError.invalidParams("limit must be an integer from 1 to 50")
-            }
-            params.limit = number.intValue
-        }
+        params.limit = try self.decodeLimit(raw["limit"], fallback: params.limit, maximum: 50)
         return params
+    }
+
+    private static func decodeLimit(_ value: Any?, fallback: Int, maximum: Int) throws -> Int {
+        guard let value else { return fallback }
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number.doubleValue.rounded() == number.doubleValue,
+              (1...maximum).contains(number.intValue)
+        else {
+            throw CatalogError.invalidParams("limit must be an integer from 1 to \(maximum)")
+        }
+        return number.intValue
     }
 
     private static func optionalString(

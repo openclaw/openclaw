@@ -1,8 +1,3 @@
-/**
- * Lazy channel registry value loader.
- *
- * Resolves plugin sub-surfaces from the request-scoped or process-root registry.
- */
 import type { PluginChannelRegistration } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";

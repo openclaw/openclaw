@@ -1,4 +1,3 @@
-// Model-backed compaction request construction.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
@@ -99,7 +98,8 @@ export async function runGatewaySessionCompaction(
     entry: params.entry,
     cfg: params.cfg,
   });
-  const primaryConversation = resolveCurrentSessionPrimaryConversation(transcriptTarget);
+  const primaryConversation = await resolveCurrentSessionPrimaryConversation(transcriptTarget);
+  params.abortSignal?.throwIfAborted();
   return await compactEmbeddedAgentSession(
     {
       abortSignal: params.abortSignal,

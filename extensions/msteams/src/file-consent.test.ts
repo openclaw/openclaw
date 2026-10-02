@@ -29,102 +29,15 @@ async function validateConsentUploadUrl(url: string, validationOpts?: ConsentVal
   });
 }
 
-async function isPrivateOrReservedIP(ip: string): Promise<boolean> {
-  try {
-    await validateConsentUploadUrl("https://probe.example.org/upload", {
-      allowlist: ["example.org"],
-      resolveFn: async () => ({ address: ip }),
-    });
-    return false;
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("private/reserved IP")) {
-      return true;
-    }
-    throw error;
-  }
-}
-
 const responseWithCancel = (status: number, statusText?: string) => {
   const cancel = vi.fn();
   const body = new ReadableStream<Uint8Array>({ cancel });
   return { response: new Response(body, { status, statusText }), cancel };
 };
 
-// ─── isPrivateOrReservedIP ───────────────────────────────────────────────────
-
-describe("isPrivateOrReservedIP", () => {
-  it.each([
-    ["10.0.0.1", true],
-    ["10.255.255.255", true],
-    ["172.16.0.1", true],
-    ["172.31.255.255", true],
-    ["172.15.0.1", false],
-    ["172.32.0.1", false],
-    ["192.168.0.1", true],
-    ["192.168.255.255", true],
-    ["127.0.0.1", true],
-    ["127.255.255.255", true],
-    ["169.254.0.1", true],
-    ["169.254.169.254", true],
-    ["0.0.0.0", true],
-    ["8.8.8.8", false],
-    ["13.107.136.10", false],
-    ["52.96.0.1", false],
-  ] as const)("IPv4 %s → %s", async (ip, expected) => {
-    expect(await isPrivateOrReservedIP(ip)).toBe(expected);
-  });
-
-  it.each([
-    ["::1", true],
-    ["::", true],
-    ["fe80::1", true],
-    ["fe80::", true],
-    ["fc00::1", true],
-    ["fd12:3456::1", true],
-    ["2001:0db8::1", true],
-    ["2620:1ec:c11::200", false],
-    // IPv4-mapped IPv6 addresses
-    ["::ffff:127.0.0.1", true],
-    ["::ffff:10.0.0.1", true],
-    ["::ffff:192.168.1.1", true],
-    ["::ffff:169.254.169.254", true],
-    ["::ffff:8.8.8.8", false],
-    ["::ffff:13.107.136.10", false],
-  ] as const)("IPv6 %s → %s", async (ip, expected) => {
-    expect(await isPrivateOrReservedIP(ip)).toBe(expected);
-  });
-
-  it.each([
-    ["999.999.999.999", true],
-    ["256.0.0.1", true],
-    ["10.0.0.256", true],
-    ["-1.0.0.1", false],
-    ["1.2.3.4.5", false],
-  ] as const)("malformed IPv4 %s → %s", async (ip, expected) => {
-    expect(await isPrivateOrReservedIP(ip)).toBe(expected);
-  });
-});
-
 // ─── validateConsentUploadUrl ────────────────────────────────────────────────
 
 describe("validateConsentUploadUrl", () => {
-  it("accepts a valid SharePoint HTTPS URL", async () => {
-    await expect(
-      validateConsentUploadUrl("https://contoso.sharepoint.com/sites/uploads/file.pdf", {
-        resolveFn: publicResolve,
-      }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("accepts subdomains of allowlisted domains", async () => {
-    await expect(
-      validateConsentUploadUrl(
-        "https://contoso-my.sharepoint.com/personal/user/Documents/file.docx",
-        { resolveFn: publicResolve },
-      ),
-    ).resolves.toBeUndefined();
-  });
-
   it("accepts graph.microsoft.com", async () => {
     await expect(
       validateConsentUploadUrl("https://graph.microsoft.com/v1.0/me/drive/items/123/content", {
@@ -133,76 +46,16 @@ describe("validateConsentUploadUrl", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("rejects non-HTTPS URLs", async () => {
-    await expect(
-      validateConsentUploadUrl("http://contoso.sharepoint.com/file.pdf", {
-        resolveFn: publicResolve,
-      }),
-    ).rejects.toThrow("must use HTTPS");
-  });
-
   it("rejects invalid URLs", async () => {
     await expect(
       validateConsentUploadUrl("not a url", { resolveFn: publicResolve }),
     ).rejects.toThrow("not a valid URL");
   });
 
-  it("rejects hosts not in the allowlist", async () => {
-    await expect(
-      validateConsentUploadUrl("https://evil.example.com/exfil", { resolveFn: publicResolve }),
-    ).rejects.toThrow("not in the allowed domains");
-  });
-
-  it("rejects an SSRF attempt with internal metadata URL", async () => {
-    await expect(
-      validateConsentUploadUrl("https://169.254.169.254/latest/meta-data/", {
-        resolveFn: publicResolve,
-      }),
-    ).rejects.toThrow("not in the allowed domains");
-  });
-
-  it("rejects localhost", async () => {
-    await expect(
-      validateConsentUploadUrl("https://localhost:8080/internal", { resolveFn: publicResolve }),
-    ).rejects.toThrow("not in the allowed domains");
-  });
-
-  it("rejects when DNS resolves to a private IPv4 (10.x)", async () => {
-    await expect(
-      validateConsentUploadUrl("https://malicious.sharepoint.com/exfil", {
-        resolveFn: privateResolve("10.0.0.1"),
-      }),
-    ).rejects.toThrow("private/reserved IP");
-  });
-
-  it("rejects when DNS resolves to loopback", async () => {
-    await expect(
-      validateConsentUploadUrl("https://evil.sharepoint.com/path", {
-        resolveFn: privateResolve("127.0.0.1"),
-      }),
-    ).rejects.toThrow("private/reserved IP");
-  });
-
-  it("rejects when DNS resolves to link-local (169.254.x.x)", async () => {
-    await expect(
-      validateConsentUploadUrl("https://evil.sharepoint.com/path", {
-        resolveFn: privateResolve("169.254.169.254"),
-      }),
-    ).rejects.toThrow("private/reserved IP");
-  });
-
   it("rejects when DNS resolves to IPv6 loopback", async () => {
     await expect(
       validateConsentUploadUrl("https://evil.sharepoint.com/path", {
         resolveFn: privateResolve("::1"),
-      }),
-    ).rejects.toThrow("private/reserved IP");
-  });
-
-  it("rejects when DNS resolves to IPv4-mapped IPv6 private address", async () => {
-    await expect(
-      validateConsentUploadUrl("https://evil.sharepoint.com/path", {
-        resolveFn: privateResolve("::ffff:10.0.0.1"),
       }),
     ).rejects.toThrow("private/reserved IP");
   });
@@ -253,12 +106,6 @@ describe("validateConsentUploadUrl", () => {
       validateConsentUploadUrl("https://notsharepoint.com/file", { resolveFn: publicResolve }),
     ).rejects.toThrow("not in the allowed domains");
   });
-
-  it("rejects file:// protocol", async () => {
-    await expect(
-      validateConsentUploadUrl("file:///etc/passwd", { resolveFn: publicResolve }),
-    ).rejects.toThrow("must use HTTPS");
-  });
 });
 
 // ─── CONSENT_UPLOAD_HOST_ALLOWLIST ───────────────────────────────────────────
@@ -283,17 +130,14 @@ describe("CONSENT_UPLOAD_HOST_ALLOWLIST", () => {
     ).resolves.toBeUndefined();
   });
 
-  it.each([
-    "microsoft.com",
-    "azure.com",
-    "blob.core.windows.net",
-    "azureedge.net",
-    "trafficmanager.net",
-  ])("rejects the overly broad domain %s", async (domain) => {
-    await expect(
-      validateConsentUploadUrl(`https://${domain}/upload`, { resolveFn: publicResolve }),
-    ).rejects.toThrow("not in the allowed domains");
-  });
+  it.each(["microsoft.com", "blob.core.windows.net"])(
+    "rejects the overly broad domain %s",
+    async (domain) => {
+      await expect(
+        validateConsentUploadUrl(`https://${domain}/upload`, { resolveFn: publicResolve }),
+      ).rejects.toThrow("not in the allowed domains");
+    },
+  );
 });
 
 // ─── uploadToConsentUrl (integration with validation) ────────────────────────

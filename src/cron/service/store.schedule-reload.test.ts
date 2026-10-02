@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
-import { saveCronStore } from "../store.js";
+import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { findJobOrThrow, recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
+import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import { createCronServiceState } from "./state.js";
-import { ensureLoaded, persist } from "./store.js";
+import { ensureLoaded } from "./store.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-store-schedule-reload" });
 
@@ -16,6 +18,7 @@ async function writeSingleJobStore(storePath: string, job: CronJob) {
 
 function createStoreTestState(storePath: string, onEvent = vi.fn()) {
   return createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath,
     cronEnabled: true,
     log: logger,
@@ -80,13 +83,15 @@ describe("cron service schedule reload", () => {
     expect(onEvent).not.toHaveBeenCalled();
     expect(state.durableNextRunAtMsByJobId.get(reloadedJob.id)).toBe(staleNextRunAtMs);
 
-    await persist(state);
+    await recomputeUnownedCronSchedules(state);
 
+    const nextRunAtMs = Date.parse("2026-03-28T06:30:00.000Z");
+    expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(nextRunAtMs);
     expect(onEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "scheduled",
         jobId: reloadedJob.id,
-        nextRunAtMs: undefined,
+        nextRunAtMs,
       }),
     );
   });

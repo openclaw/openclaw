@@ -95,6 +95,8 @@ suite.define(() => {
         const errors: string[] = [];
         page.on("pageerror", (error) => errors.push(error.message));
         const gateway = await installMockGateway(page, {
+          // The final reload has only an unbound pane; selecting Home releases the roster.
+          awaitInitialRoster: false,
           sessionKey: homeKey,
           sessionScope,
           mainSessionKey: sessionScope === "global" ? "global" : homeKey,

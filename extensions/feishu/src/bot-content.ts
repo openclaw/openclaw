@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import {
@@ -17,22 +18,7 @@ import type { FeishuChatType, FeishuMediaInfo } from "./types.js";
 type FeishuMention = NonNullable<FeishuMessageEvent["message"]["mentions"]>[number];
 
 type FeishuMessageLike = {
-  message: {
-    content: string;
-    message_type: string;
-    mentions?: FeishuMention[];
-    chat_id: string;
-    root_id?: string;
-    parent_id?: string;
-    thread_id?: string;
-    message_id: string;
-  };
-  sender: {
-    sender_id: {
-      open_id?: string;
-      user_id?: string;
-    };
-  };
+  message: Pick<FeishuMessageEvent["message"], "content" | "message_type" | "mentions">;
 };
 
 type ResolvedFeishuGroupSession = {
@@ -107,11 +93,7 @@ export function resolveFeishuGroupSession(params: {
 
   return {
     peerId,
-    parentPeer:
-      topicScope &&
-      (groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender")
-        ? { kind: "group", id: chatId }
-        : null,
+    parentPeer: topicScope ? { kind: "group", id: chatId } : null,
     groupSessionScope,
     replyInThread,
     threadReply,
@@ -137,14 +119,13 @@ export function parseMessageContent(content: string, messageType: string): strin
     if (messageType === "share_chat") {
       if (parsed && typeof parsed === "object") {
         const share = parsed as { body?: unknown; summary?: unknown; share_chat_id?: unknown };
-        if (typeof share.body === "string" && share.body.trim()) {
-          return share.body.trim();
+        const text = normalizeOptionalString(share.body) ?? normalizeOptionalString(share.summary);
+        if (text) {
+          return text;
         }
-        if (typeof share.summary === "string" && share.summary.trim()) {
-          return share.summary.trim();
-        }
-        if (typeof share.share_chat_id === "string" && share.share_chat_id.trim()) {
-          return `[Forwarded message: ${share.share_chat_id.trim()}]`;
+        const sharedChatId = normalizeOptionalString(share.share_chat_id);
+        if (sharedChatId) {
+          return `[Forwarded message: ${sharedChatId}]`;
         }
       }
       return "[Forwarded message]";
@@ -207,9 +188,6 @@ export function normalizeMentions(
 }
 
 export function normalizeFeishuCommandProbeBody(text: string): string {
-  if (!text) {
-    return "";
-  }
   return text
     .replace(/<at\b[^>]*>[^<]*<\/at>/giu, " ")
     .replace(/(^|\s)@[^/\s]+(?=\s|$|\/)/gu, "$1")
@@ -274,7 +252,13 @@ export async function resolveFeishuMediaList(params: {
     return [];
   }
 
-  const out: FeishuMediaInfo[] = [];
+  const resources: Array<{
+    key: string;
+    type: "image" | "file";
+    fileName?: string;
+    kind: FeishuMediaInfo["kind"];
+    label: string;
+  }> = [];
   if (messageType === "post") {
     const { attachments } = parsePostContent(content);
     if (attachments.length === 0) {
@@ -288,61 +272,52 @@ export async function resolveFeishuMediaList(params: {
         continue;
       }
       seenAttachments.add(identity);
-      const fileName = attachment.kind === "file" ? attachment.fileName : undefined;
-      const mediaKind = attachment.kind === "image" ? "image" : "video";
-      try {
-        const { saved } = await saveMessageResourceFeishu({
-          cfg,
-          messageId,
-          fileKey: attachment.key,
-          type: attachment.kind,
-          accountId,
-          maxBytes,
-          ...(fileName ? { originalFilename: fileName } : {}),
-        });
-        out.push({
-          path: saved.path,
-          contentType: saved.contentType,
-          kind: mediaKind,
-        });
-        log?.(
-          `feishu: downloaded embedded ${attachment.kind} ${attachment.key}, saved to ${saved.path}`,
-        );
-      } catch (err) {
-        out.push({ kind: mediaKind });
-        log?.(
-          `feishu: failed to download embedded ${attachment.kind} ${attachment.key}: ${String(err)}`,
-        );
-      }
+      resources.push({
+        key: attachment.key,
+        type: attachment.kind,
+        fileName: attachment.kind === "file" ? attachment.fileName : undefined,
+        kind:
+          attachment.kind === "image"
+            ? "image"
+            : attachment.origin === "top-level"
+              ? "document"
+              : "video",
+        label: `embedded ${attachment.kind} ${attachment.key}`,
+      });
     }
-    return out;
-  }
-
-  const mediaKeys = parseMediaKeys(content, messageType);
-  const fileKey = mediaKeys.fileKey || mediaKeys.imageKey;
-  if (!fileKey) {
-    return [{ kind: resolveFeishuMediaKind(messageType) }];
-  }
-
-  try {
-    const { saved } = await saveMessageResourceFeishu({
-      cfg,
-      messageId,
-      fileKey,
+  } else {
+    const mediaKeys = parseMediaKeys(content, messageType);
+    const fileKey = mediaKeys.fileKey || mediaKeys.imageKey;
+    if (!fileKey) {
+      return [{ kind: resolveFeishuMediaKind(messageType) }];
+    }
+    resources.push({
+      key: fileKey,
       type: messageType === "image" ? "image" : "file",
-      accountId,
-      maxBytes,
-      originalFilename: mediaKeys.fileName,
-    });
-    out.push({
-      path: saved.path,
-      contentType: saved.contentType,
+      fileName: mediaKeys.fileName,
       kind: resolveFeishuMediaKind(messageType),
+      label: `${messageType} media`,
     });
-    log?.(`feishu: downloaded ${messageType} media, saved to ${saved.path}`);
-  } catch (err) {
-    out.push({ kind: resolveFeishuMediaKind(messageType) });
-    log?.(`feishu: failed to download ${messageType} media: ${String(err)}`);
+  }
+
+  const out: FeishuMediaInfo[] = [];
+  for (const resource of resources) {
+    try {
+      const { saved } = await saveMessageResourceFeishu({
+        cfg,
+        messageId,
+        fileKey: resource.key,
+        type: resource.type,
+        accountId,
+        maxBytes,
+        originalFilename: resource.fileName,
+      });
+      out.push({ path: saved.path, contentType: saved.contentType, kind: resource.kind });
+      log?.(`feishu: downloaded ${resource.label}, saved to ${saved.path}`);
+    } catch (err) {
+      out.push({ kind: resource.kind });
+      log?.(`feishu: failed to download ${resource.label}: ${String(err)}`);
+    }
   }
   return out;
 }

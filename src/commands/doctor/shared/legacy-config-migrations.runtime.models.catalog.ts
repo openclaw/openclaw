@@ -36,6 +36,21 @@ const DEAD_MODEL_COMPAT_KEYS = ["nativeWebSearchTool", "requiresMistralToolIds"]
 
 type ModelCompatOverrideState = { dead: number; divergent: number; matching: number };
 
+export function* providerModelEntries(providers: unknown) {
+  for (const [providerId, value] of Object.entries(getRecord(providers) ?? {})) {
+    const provider = getRecord(value);
+    if (!provider || !Array.isArray(provider.models)) {
+      continue;
+    }
+    for (const [modelIndex, modelValue] of provider.models.entries()) {
+      const model = getRecord(modelValue);
+      if (model) {
+        yield { providerId, provider, modelIndex, model };
+      }
+    }
+  }
+}
+
 function normalizedCatalogModelKey(provider: string, modelId: string): string {
   // Keep doctor identity aligned with runtime catalog lookup and merge keys,
   // which intentionally treat provider/model ids case-insensitively.
@@ -145,63 +160,50 @@ function inspectModelCompatOverrides(
   if (!providers) {
     return total;
   }
-  const hasCompat = Object.values(providers).some((providerValue) => {
-    const models = getRecord(providerValue)?.models;
-    return (
-      Array.isArray(models) &&
-      models.some((modelValue) => Boolean(getRecord(getRecord(modelValue)?.compat)))
-    );
-  });
+  const entries = [...providerModelEntries(providers)];
+  const hasCompat = entries.some(({ model }) => Boolean(getRecord(model.compat)));
   if (!hasCompat) {
     return total;
   }
   const catalogRows = buildConfiguredProviderCatalogRows(providers);
-  for (const [providerId, providerValue] of Object.entries(providers)) {
-    const provider = getRecord(providerValue);
-    const models = provider?.models;
-    if (!provider || !Array.isArray(models)) {
+  for (const { providerId, provider, modelIndex, model } of entries) {
+    const compat = getRecord(model.compat);
+    const modelId = typeof model.id === "string" ? model.id : "";
+    if (!compat || !modelId) {
       continue;
     }
-    for (const [modelIndex, modelValue] of models.entries()) {
-      const model = getRecord(modelValue);
-      const compat = getRecord(model?.compat);
-      const modelId = typeof model?.id === "string" ? model.id : "";
-      if (!model || !compat || !modelId) {
-        continue;
+    const state = { dead: 0, divergent: 0, matching: 0 };
+    for (const key of DEAD_MODEL_COMPAT_KEYS) {
+      if (Object.hasOwn(compat, key)) {
+        state.dead += 1;
       }
-      const state = { dead: 0, divergent: 0, matching: 0 };
-      for (const key of DEAD_MODEL_COMPAT_KEYS) {
-        if (Object.hasOwn(compat, key)) {
-          state.dead += 1;
-        }
-      }
-      const configuredRoute = {
-        api: model.api ?? provider.api,
-        baseUrl: model.baseUrl ?? provider.baseUrl,
-      };
-      const catalogRow = resolveUniqueCatalogModelRoute(
-        catalogRows.get(normalizedCatalogModelKey(providerId, modelId)),
-        configuredRoute,
-      );
-      const catalogRouteMatches = catalogRow !== undefined;
-      if (catalogRouteMatches) {
-        const catalogCompat = catalogRow.compat ?? {};
-        for (const [key, value] of Object.entries(compat)) {
-          if ((DEAD_MODEL_COMPAT_KEYS as readonly string[]).includes(key)) {
-            continue;
-          }
-          if (isDeepStrictEqual(value, catalogCompat[key as keyof typeof catalogCompat])) {
-            state.matching += 1;
-          } else {
-            state.divergent += 1;
-          }
-        }
-      }
-      total.dead += state.dead;
-      total.divergent += state.divergent;
-      total.matching += state.matching;
-      onEntry?.({ catalogRow, compat, model, modelIndex, provider, providerId, state });
     }
+    const configuredRoute = {
+      api: model.api ?? provider.api,
+      baseUrl: model.baseUrl ?? provider.baseUrl,
+    };
+    const catalogRow = resolveUniqueCatalogModelRoute(
+      catalogRows.get(normalizedCatalogModelKey(providerId, modelId)),
+      configuredRoute,
+    );
+    const catalogRouteMatches = catalogRow !== undefined;
+    if (catalogRouteMatches) {
+      const catalogCompat = catalogRow.compat ?? {};
+      for (const [key, value] of Object.entries(compat)) {
+        if ((DEAD_MODEL_COMPAT_KEYS as readonly string[]).includes(key)) {
+          continue;
+        }
+        if (isDeepStrictEqual(value, catalogCompat[key as keyof typeof catalogCompat])) {
+          state.matching += 1;
+        } else {
+          state.divergent += 1;
+        }
+      }
+    }
+    total.dead += state.dead;
+    total.divergent += state.divergent;
+    total.matching += state.matching;
+    onEntry?.({ catalogRow, compat, model, modelIndex, provider, providerId, state });
   }
   return total;
 }
@@ -287,46 +289,25 @@ export function resolveStaleContextWindowFix(params: {
 }
 
 export function hasStaleContextWindowValue(providers: unknown): boolean {
-  const providersRecord = getRecord(providers);
-  if (!providersRecord) {
-    return false;
-  }
-  for (const [providerId, provider] of Object.entries(providersRecord)) {
-    const models = getRecord(provider)?.models;
-    if (!Array.isArray(models)) {
+  for (const { providerId, model } of providerModelEntries(providers)) {
+    const modelId = typeof model.id === "string" ? model.id : undefined;
+    const contextWindow = model.contextWindow;
+    if (!modelId || typeof contextWindow !== "number" || !Number.isFinite(contextWindow)) {
       continue;
     }
-    for (const model of models) {
-      const modelRecord = getRecord(model);
-      const modelId = typeof modelRecord?.id === "string" ? modelRecord.id : undefined;
-      const contextWindow = modelRecord?.contextWindow;
-      if (!modelId || typeof contextWindow !== "number" || !Number.isFinite(contextWindow)) {
-        continue;
-      }
-      if (resolveStaleContextWindowFix({ providerId, modelId, contextWindow })) {
-        return true;
-      }
+    if (resolveStaleContextWindowFix({ providerId, modelId, contextWindow })) {
+      return true;
     }
   }
   return false;
 }
 
 export function hasInvalidThinkingFormat(providers: unknown): boolean {
-  const providersRecord = getRecord(providers);
-  if (!providersRecord) {
-    return false;
-  }
-  for (const provider of Object.values(providersRecord)) {
-    const models = getRecord(provider)?.models;
-    if (!Array.isArray(models)) {
-      continue;
-    }
-    for (const model of models) {
-      const compat = getRecord(getRecord(model)?.compat);
-      const thinkingFormat = compat?.thinkingFormat;
-      if (typeof thinkingFormat === "string" && !isModelThinkingFormat(thinkingFormat)) {
-        return true;
-      }
+  for (const { model } of providerModelEntries(providers)) {
+    const compat = getRecord(model.compat);
+    const thinkingFormat = compat?.thinkingFormat;
+    if (typeof thinkingFormat === "string" && !isModelThinkingFormat(thinkingFormat)) {
+      return true;
     }
   }
   return false;

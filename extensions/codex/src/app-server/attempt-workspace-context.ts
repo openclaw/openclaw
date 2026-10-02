@@ -1,5 +1,8 @@
-/** Workspace snapshots, per-turn workspace context, and memory-tool routing for Codex. */
 import path from "node:path";
+import {
+  resolveAgentWorkspaceMemoryRouting,
+  shouldIncludeAgentHarnessRuntimeContext,
+} from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   buildAgentWorkspaceInstructionSnapshot,
   buildBootstrapContextForFiles,
@@ -8,8 +11,8 @@ import {
   type EmbeddedContextFile,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveBootstrapFilesForPreparation } from "openclaw/plugin-sdk/codex-mcp-projection";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isMessageOnlyCodexSourceReply } from "./dynamic-tool-profile.js";
 import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
 
@@ -27,23 +30,22 @@ const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
 export type CodexBootstrapFile = Awaited<
   ReturnType<typeof prepareAgentWorkspaceContext>
 >["bootstrapFiles"][number];
-type CodexBootstrapContext = {
+export type CodexWorkspaceBootstrapContext = {
   bootstrapFiles: CodexBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
-};
-export type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   inheritsAgentWorkspace: boolean;
   promptContextFiles?: EmbeddedContextFile[];
   threadDeveloperInstructionFiles?: EmbeddedContextFile[];
-  turnScopedDeveloperInstructionFiles?: EmbeddedContextFile[];
+  personaFiles?: EmbeddedContextFile[];
   memoryReferenceFiles?: EmbeddedContextFile[];
   memoryToolRoutedBootstrapFiles?: CodexBootstrapFile[];
   memoryToolNames?: string[];
   memoryToolRouted?: boolean;
   promptContext?: string;
   threadDeveloperInstructions?: string;
-  turnScopedDeveloperInstructions?: string;
-  memoryCollaborationInstructions?: string;
+  personaInstructions?: string;
+  sharedPersonaInstructions?: string;
+  memoryInstructions?: string;
 };
 
 /** A child baseline reads the bounded workspace snapshot without invoking admission hooks. */
@@ -55,7 +57,7 @@ export async function prepareCodexWorkspaceDeveloperInstructions(params: {
   workspaceDir: string;
   cwd: string;
 }): Promise<string | undefined> {
-  if (isSameCodexWorkspacePath(params.workspaceDir, params.cwd)) {
+  if (path.resolve(params.workspaceDir) === path.resolve(params.cwd)) {
     return undefined;
   }
   const files = await resolveBootstrapFilesForPreparation(params);
@@ -66,7 +68,6 @@ export async function prepareCodexWorkspaceDeveloperInstructions(params: {
   return buildAgentWorkspaceInstructionSnapshot(contextFiles, params.workspaceDir).instructions;
 }
 
-/** Loads and partitions workspace snapshots, turn instructions, and memory references. */
 export async function buildCodexWorkspaceBootstrapContext(params: {
   params: EmbeddedRunAttemptParams;
   agentWorkspaceDeveloperInstructions?: string;
@@ -81,15 +82,12 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
 }): Promise<CodexWorkspaceBootstrapContext> {
   const availableToolNames = new Set(
     flattenCodexDynamicToolFunctions(params.tools).map((tool) =>
-      normalizeCodexDynamicToolName(tool.name),
+      normalizeLowercaseStringOrEmpty(tool.name),
     ),
-  );
-  const memoryToolNames = Array.from(CODEX_MEMORY_TOOL_NAMES).filter((name) =>
-    availableToolNames.has(name),
   );
   const executionWorkspace = params.executionWorkspace ?? params.resolvedWorkspace;
   const inheritsAgentWorkspace = executionWorkspace !== params.resolvedWorkspace;
-  const injectOpenClawContext = shouldInjectCodexOpenClawPromptContext(params.params);
+  const injectOpenClawContext = shouldIncludeAgentHarnessRuntimeContext(params.params);
   const restrictedProjectDocNeedsOpenClawCarrier =
     params.params.pluginHarnessToolPolicyRestricted === true &&
     !params.params.disableTools &&
@@ -103,13 +101,12 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
     const promptWorkspace = inheritsAgentWorkspace
       ? params.resolvedWorkspace
       : params.effectiveWorkspace;
-    const memoryToolsAvailable =
-      memoryToolNames.length > 0 &&
-      canRouteCodexWorkspaceMemoryThroughTools({
-        config: params.params.config,
-        agentId: params.params.agentId ?? params.sessionAgentId,
-        workspaceDir: inheritsAgentWorkspace ? params.resolvedWorkspace : params.effectiveWorkspace,
-      });
+    const { memoryToolNames, memoryToolRouted } = resolveAgentWorkspaceMemoryRouting({
+      config: params.params.config,
+      agentId: params.params.agentId ?? params.sessionAgentId,
+      workspaceDir: promptWorkspace,
+      toolNames: availableToolNames,
+    });
     const prepared = await prepareAgentWorkspaceContext({
       scope: "full",
       workspaceDir: params.resolvedWorkspace,
@@ -122,7 +119,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       warn: (message) => embeddedAgentLog.warn(message),
       contextMode: params.params.bootstrapContextMode,
       runKind: params.params.bootstrapContextRunKind,
-      memoryToolRouted: memoryToolsAvailable,
+      memoryToolRouted,
       onMemoryPreparationError: (error) =>
         embeddedAgentLog.warn("failed to prepare codex memory recall instructions", { error }),
       memoryTools: injectOpenClawContext
@@ -152,28 +149,29 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
     const threadDeveloperInstructionFiles = includeAgentWorkspaceInstructions
       ? prepared.instructionSnapshot.files
       : [];
-    const turnScopedDeveloperInstructionFiles = injectOpenClawContext ? prepared.personaFiles : [];
+    const personaFiles = injectOpenClawContext ? prepared.personaFiles : [];
     return {
       bootstrapFiles,
       contextFiles,
       inheritsAgentWorkspace,
       promptContextFiles,
       threadDeveloperInstructionFiles,
-      turnScopedDeveloperInstructionFiles,
+      personaFiles,
       memoryReferenceFiles,
       memoryToolRoutedBootstrapFiles,
       memoryToolNames,
-      memoryToolRouted: memoryToolsAvailable,
+      memoryToolRouted,
       promptContext: renderCodexWorkspaceBootstrapPromptContext(promptContextFiles),
       // Empty is a captured snapshot too; a missing value still permits first capture.
       threadDeveloperInstructions: includeAgentWorkspaceInstructions
         ? (params.agentWorkspaceDeveloperInstructions ?? prepared.instructionSnapshot.instructions)
         : undefined,
-      turnScopedDeveloperInstructions: injectOpenClawContext
-        ? prepared.personaInstructions
+      personaInstructions: injectOpenClawContext ? prepared.personaInstructions : undefined,
+      sharedPersonaInstructions: injectOpenClawContext
+        ? prepared.sharedPersonaInstructions
         : undefined,
-      memoryCollaborationInstructions: injectOpenClawContext
-        ? renderCodexWorkspaceMemoryCollaborationInstructions({
+      memoryInstructions: injectOpenClawContext
+        ? renderCodexWorkspaceMemoryInstructions({
             files: memoryReferenceFiles,
             toolNames: memoryToolNames,
             memoryRecallInstructions: prepared.memoryRecallInstructions,
@@ -193,19 +191,10 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   }
 }
 
-export function shouldInjectCodexOpenClawPromptContext(params: EmbeddedRunAttemptParams): boolean {
-  // Lightweight cron runs are commonly exact commands. Keep the user input byte-for-byte
-  // to avoid changing command intent while Codex keeps its native project-doc loader.
-  return !(
-    params.bootstrapContextMode === "lightweight" && params.bootstrapContextRunKind === "cron"
-  );
-}
-
 function renderCodexWorkspaceBootstrapPromptContext(
   contextFiles: EmbeddedContextFile[],
 ): string | undefined {
-  const files = contextFiles;
-  if (files.length === 0) {
+  if (contextFiles.length === 0) {
     return undefined;
   }
   const lines = [
@@ -214,18 +203,14 @@ function renderCodexWorkspaceBootstrapPromptContext(
     "# Project Context",
     "",
     "The following project context files have been loaded:",
+    "",
   ];
-  lines.push("");
-  for (const file of files) {
+  for (const file of contextFiles) {
     lines.push(`## ${file.path}`, "", file.content, "");
   }
   return lines.join("\n").trim();
 }
 
-/**
- * Renders a memory-file reference that points Codex at memory tools instead of
- * embedding MEMORY.md contents.
- */
 function renderCodexWorkspaceMemoryReference(params: {
   files: EmbeddedContextFile[];
   toolNames?: readonly string[];
@@ -248,7 +233,7 @@ function renderCodexWorkspaceMemoryReference(params: {
   return lines.join("\n").trim();
 }
 
-function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
+function renderCodexWorkspaceMemoryInstructions(params: {
   files: EmbeddedContextFile[];
   toolNames: readonly string[];
   memoryRecallInstructions?: string;
@@ -266,31 +251,13 @@ function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
 
 function renderCodexMemoryToolSearchBridge(toolNames: readonly string[]): string | undefined {
   const memoryToolNames = toolNames
-    .map((name) => normalizeCodexDynamicToolName(name))
+    .map(normalizeLowercaseStringOrEmpty)
     .filter((name) => CODEX_MEMORY_TOOL_NAMES.has(name))
     .toSorted();
   if (memoryToolNames.length === 0) {
     return undefined;
   }
   return `Codex may expose ${memoryToolNames.join(" and ")} as deferred tools. When the memory guidance above calls for memory recall, use an already-loaded memory tool directly. If the needed memory tool is deferred and not currently callable, use \`tool_search\` to load it, then call that memory tool.`;
-}
-
-function canRouteCodexWorkspaceMemoryThroughTools(params: {
-  config: EmbeddedRunAttemptParams["config"] | undefined;
-  agentId: string;
-  workspaceDir: string;
-}): boolean {
-  if (!params.config) {
-    return false;
-  }
-  return isSameCodexWorkspacePath(
-    resolveAgentWorkspaceDir(params.config, params.agentId),
-    params.workspaceDir,
-  );
-}
-
-function isSameCodexWorkspacePath(left: string, right: string): boolean {
-  return path.resolve(left) === path.resolve(right);
 }
 
 /**
@@ -332,10 +299,6 @@ export function getCodexContextFileDisplayBasename(filePath: string): string {
 
 export function getCodexContextFileBasename(filePath: string): string {
   return normalizeCodexContextFilePath(filePath).split("/").pop() ?? "";
-}
-
-export function normalizeCodexDynamicToolName(name: string): string {
-  return name.trim().toLowerCase();
 }
 
 export function isNonEmptyString(value: unknown): value is string {

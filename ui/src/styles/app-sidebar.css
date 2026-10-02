@@ -8,6 +8,21 @@
 
 .shell--mobile-nav .sidebar-shell {
   --sidebar-session-row-floor: 44px;
+  --sidebar-inset: 2px;
+  --sidebar-row-gap: 4px;
+}
+
+/* Keep metadata, but do not charge a title for an empty endcap. */
+.shell--mobile-nav .sidebar-recent-session--single-line:not(.sidebar-recent-session--team) {
+  .sidebar-recent-session__text {
+    gap: var(--sidebar-row-gap);
+  }
+
+  .sidebar-recent-session__details:not(
+    :has(.session-row-badges, .viewer-facepile, .session-row-trail)
+  ) {
+    display: none;
+  }
 }
 
 /* The mobile drawer keeps management actions in its always-reachable menu. */
@@ -32,7 +47,11 @@
 }
 
 .shell--mobile-nav .sidebar-zone-entry .sidebar-recent-session {
-  padding-right: 4px;
+  padding-inline: 4px;
+
+  > .sidebar-recent-session__link {
+    gap: var(--sidebar-row-gap);
+  }
 }
 
 .shell--mobile-nav .sidebar-recent-session:not(.sidebar-recent-session--child) {

@@ -2,12 +2,8 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
+import { describe, expect, it, vi } from "vitest";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore, type NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import {
@@ -31,19 +27,15 @@ import {
 } from "./node-worker-supervisor.test-support.js";
 import { inspectOwnedNodeWorkerTree } from "./node-worker-tree-control.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const tempDirs = useStateDatabaseTempDirs();
 const fileLockModule = createRequire(import.meta.url).resolve("@openclaw/fs-safe/file-lock");
 
 describe("node worker environment stop after failed initialization", () => {
   it.runIf(process.platform === "linux" || process.platform === "darwin")(
     "settles native recovery without publishing capacity until the unrelated container recovers",
     async () => {
+      const cleanupMode =
+        process.platform === "linux" && !process.versions.bun ? "linux-subreaper" : "owned-anchor";
       const capacities: Array<{ total: number; available: number }> = [];
       const root = tempDirs.make("node-worker-stop-initialization-");
       const fixture = createNodeWorkerContainerFixture(root, fileLockModule, {
@@ -65,8 +57,8 @@ describe("node worker environment stop after failed initialization", () => {
       let bodyFailure: { error: unknown } | undefined;
       await (async () => {
         const receipt = JSON.parse(await waitForChildLine(owner)) as NodeWorkerLaunchReceipt;
-        expect(receipt.workerCleanupMode).toBe("owned-anchor");
         anchor = receipt.worker!;
+        expect(receipt.workerCleanupMode).toBe(cleanupMode);
         process.kill(anchor.pid, "SIGSTOP");
         owner.kill("SIGKILL");
         await waitForChildExit(owner);
@@ -111,6 +103,7 @@ describe("node worker environment stop after failed initialization", () => {
         expect(await store.get(native.launchId)).toMatchObject({
           state: "running",
           workerLineageSettled: false,
+          ...(cleanupMode === "linux-subreaper" ? { workerDescendantsReaped: false } : {}),
         });
         expect(capacities).toEqual([{ total: 3, available: 0 }]);
 
@@ -131,7 +124,11 @@ describe("node worker environment stop after failed initialization", () => {
         });
         expect(inspectOwnedNodeWorkerTree(anchor)).toBe("dead");
         const cancelled = await store.get(native.launchId);
-        expect(cancelled).toMatchObject({ state: "cancelled", workerLineageSettled: true });
+        expect(cancelled).toMatchObject({
+          state: "cancelled",
+          workerLineageSettled: cleanupMode === "owned-anchor",
+          ...(cleanupMode === "linux-subreaper" ? { workerDescendantsReaped: true } : {}),
+        });
         expect([await store.get(live.launchId), await store.get(blocked.launchId)]).toEqual(
           preserved,
         );

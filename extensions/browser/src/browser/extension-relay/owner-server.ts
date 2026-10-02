@@ -1,5 +1,6 @@
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
+import { parseStrictJsonObject } from "../../../chrome-extension/modules/strict-json.js";
 import { randomRelayId } from "./auth-v2-crypto.js";
 import {
   RELAY_OPERATION_TTL_MS,
@@ -9,7 +10,6 @@ import {
 } from "./owner-protocol.js";
 import type { ExtensionRelayBridge } from "./relay-bridge.js";
 import { parseExtensionMessage } from "./relay-protocol.js";
-import { parseStrictJsonObject } from "./strict-json.js";
 
 /** All references and streams belong to this authenticated connection, never to a token holder. */
 export function attachRelayOwner(params: {

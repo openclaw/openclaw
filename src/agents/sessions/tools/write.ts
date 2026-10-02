@@ -1,8 +1,3 @@
-/**
- * Built-in write session tool.
- *
- * Writes files through queued local or injected operations with readback/idempotency metadata.
- */
 import {
   mkdir as fsMkdir,
   readFile as fsReadFile,
@@ -15,7 +10,7 @@ import { isMissingPathError } from "../../../infra/errors.js";
 import { captureAgentToolSourceExecutionGuard } from "../../agent-tool-source-execution-guard.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { getLanguageFromPath, highlightCode } from "../../modes/interactive/theme/theme.js";
-import type { AgentTool } from "../../runtime/index.js";
+import type { AgentTool, AgentToolResult } from "../../runtime/index.js";
 import { textResult } from "../../tools/tool-results.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { WRITE_DIFF_MAX_BYTES } from "./file-diff.js";
@@ -153,13 +148,12 @@ function updateWriteHighlightCacheIncremental(
   if (!lang) {
     return undefined;
   }
-  if (!cache) {
-    return rebuildWriteHighlightCacheFull(rawPath, fileContent);
-  }
-  if (cache.lang !== lang || cache.rawPath !== rawPath) {
-    return rebuildWriteHighlightCacheFull(rawPath, fileContent);
-  }
-  if (!fileContent.startsWith(cache.rawContent)) {
+  if (
+    !cache ||
+    cache.lang !== lang ||
+    cache.rawPath !== rawPath ||
+    !fileContent.startsWith(cache.rawContent)
+  ) {
     return rebuildWriteHighlightCacheFull(rawPath, fileContent);
   }
   if (fileContent.length === cache.rawContent.length) {
@@ -170,19 +164,9 @@ function updateWriteHighlightCacheIncremental(
   const deltaDisplay = normalizeDisplayText(deltaRaw);
   const deltaNormalized = replaceTabs(deltaDisplay);
   cache.rawContent = fileContent;
-  if (cache.normalizedLines.length === 0) {
-    cache.normalizedLines.push("");
-    cache.highlightedLines.push("");
-  }
-
   const segments = deltaNormalized.split("\n");
   const lastIndex = cache.normalizedLines.length - 1;
-  const firstSegment = segments.at(0);
-  const currentLastLine = cache.normalizedLines.at(lastIndex);
-  if (firstSegment === undefined || currentLastLine === undefined) {
-    return rebuildWriteHighlightCacheFull(rawPath, fileContent);
-  }
-  cache.normalizedLines[lastIndex] = currentLastLine + firstSegment;
+  cache.normalizedLines[lastIndex] = cache.normalizedLines[lastIndex]! + segments[0]!;
   cache.highlightedLines[lastIndex] = highlightSingleLine(
     cache.normalizedLines[lastIndex],
     cache.lang,
@@ -230,18 +214,11 @@ function formatWriteCall(
 }
 
 function formatWriteResult(
-  result: {
-    content: Array<{
-      type: string;
-      text?: string;
-      data?: string;
-      mimeType?: string;
-    }>;
-    isError?: boolean;
-  },
+  result: AgentToolResult<WriteToolDetails>,
   theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
+  isError: boolean,
 ): string | undefined {
-  if (!result.isError) {
+  if (!isError) {
     return undefined;
   }
   const output = result.content
@@ -424,16 +401,7 @@ export function createWriteToolDefinition(
     promptGuidelines: ["Use only new files/complete rewrites."],
     parameters: writeSchema,
     outputSchema: WriteToolOutputSchema,
-    async execute(
-      toolCallId,
-      { path, content }: { path: string; content: string },
-      signal?: AbortSignal,
-      onUpdate?,
-      ctx?,
-    ) {
-      void toolCallId;
-      void onUpdate;
-      void ctx;
+    async execute(_toolCallId, { path, content }, signal, _onUpdate, _ctx) {
       const assertCurrent = captureAgentToolSourceExecutionGuard();
       const absolutePath = resolvePath(path, cwd);
       const dir = dirname(absolutePath);
@@ -518,19 +486,12 @@ export function createWriteToolDefinition(
       } else {
         component.cache = undefined;
       }
-      component.setText(
-        formatWriteCall(
-          renderArgs,
-          { expanded: context.expanded, isPartial: context.isPartial },
-          theme,
-          component.cache,
-        ),
-      );
+      component.setText(formatWriteCall(renderArgs, context, theme, component.cache));
       return component;
     },
     renderResult(result, optionsLocal, theme, context) {
       void optionsLocal;
-      const output = formatWriteResult({ ...result, isError: context.isError }, theme);
+      const output = formatWriteResult(result, theme, context.isError);
       if (!output) {
         const component = (context.lastComponent as Container | undefined) ?? new Container();
         component.clear();

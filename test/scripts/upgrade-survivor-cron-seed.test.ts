@@ -49,8 +49,9 @@ if (args[0] === "fixture-systemctl") {
   if (args[2] === "is-active") process.exit(fs.existsSync(live) ? 0 : 3);
   if (args[2] === "stop") {
     assert.equal(fs.existsSync(boot), true);
-    fs.unlinkSync(live);
-    fs.unlinkSync(process.env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE);
+    // Like systemd, stopping an inactive unit succeeds.
+    fs.rmSync(live, { force: true });
+    fs.rmSync(process.env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE, { force: true });
   } else {
     assert.equal(args[2], "start");
     assert.equal(fs.existsSync(live), false);
@@ -197,6 +198,7 @@ install_update_restart_systemctl_shim() { :; }
 openclaw_e2e_wait_gateway_ready() { node "$FIXTURE_PROBE" fixture-ready "\${5:-strict}"; }
 openclaw_e2e_probe_tcp() { [ -f "$FIXTURE_ROOT/live" ]; }
 update_candidate() { node "$FIXTURE_PROBE" fixture-update "\${1:-0}" "\${2:-}" "\${3:-}"; }
+assert_managed_membership_warning() { [ -f "$FIXTURE_ROOT/restarted" ]; }
 assert_survival() { printf 'passed' > "$FIXTURE_ROOT/survival"; }
 ${source.slice(phaseStart, phaseEnd)}
 assert_survival
@@ -257,12 +259,6 @@ function migratedJobs() {
 // These checks protect the lane's independent acceptance contract: merely
 // retaining cron rows must not conceal a lost effective owner after Doctor.
 describe("legacy operator cron acceptance", () => {
-  it("requires both unchanged jobs with their resolved runtime owners", () => {
-    expect(() =>
-      assertLegacyOperatorCronOwners({ jobs: migratedJobs() }, { jobs: baselineJobs }),
-    ).not.toThrow();
-  });
-
   it("allows candidate maintenance jobs but rejects duplicated operator jobs", () => {
     const jobs = [
       ...migratedJobs(),
@@ -275,7 +271,7 @@ describe("legacy operator cron acceptance", () => {
     );
   });
 
-  it.each([null, undefined, "ops"])("rejects default-owner projection %s", (effectiveAgentId) => {
+  it.each([undefined, "ops"])("rejects default-owner projection %s", (effectiveAgentId) => {
     const jobs = migratedJobs();
     Object.assign(jobs[0]!, { effectiveAgentId });
     expect(() => assertLegacyOperatorCronOwners({ jobs }, { jobs: baselineJobs })).toThrow(

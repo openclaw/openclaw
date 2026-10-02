@@ -1905,7 +1905,7 @@ describe("providerScopedModelRegistryProviders", () => {
         useExplicit: false,
         useSmall: false,
       }),
-    ).toEqual([{ provider: "fireworks", id: "accounts/fireworks/routers/glm-5p2-fast" }]);
+    ).toEqual([{ provider: "fireworks", id: "accounts/fireworks/routers/glm-5p3-fast" }]);
   });
 
   it("loads explicit gateway model refs through dynamic discovery", () => {
@@ -4572,6 +4572,7 @@ type OpenAIUltraWireObservation = {
 };
 
 const OPENAI_ULTRA_WIRE_CAPTURE_LIMIT = 512;
+const OPENAI_ULTRA_UTILITY_MODEL = "openai/gpt-5.4-mini";
 const OPENAI_ULTRA_NORMAL_EFFORT = "medium";
 const openAIUltraRunsByClient = new WeakMap<GatewayClient, Map<string, string>>();
 
@@ -4692,7 +4693,16 @@ function startOpenAIUltraWireCapture(upstreamBaseUrls: readonly string[]): OpenA
       return ((input: RequestInfo | URL, init?: RequestInit) => {
         const url =
           typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-        if (endpoints.has(url) && typeof init?.body === "string") {
+        // Responses bodies are pre-encoded bytes; decode synchronously so ownership
+        // is captured in the dispatching async context.
+        const rawBody = init?.body;
+        const body =
+          typeof rawBody === "string"
+            ? rawBody
+            : ArrayBuffer.isView(rawBody)
+              ? new TextDecoder().decode(rawBody)
+              : undefined;
+        if (init && endpoints.has(url) && body !== undefined) {
           if (observations.length >= OPENAI_ULTRA_WIRE_CAPTURE_LIMIT) {
             overflow = true;
           } else {
@@ -4722,7 +4732,7 @@ function startOpenAIUltraWireCapture(upstreamBaseUrls: readonly string[]): OpenA
               captureAgentRunLifecycleGeneration(runId) === context.lifecycleGeneration &&
               validateAgentRunDelegatedAuthority(authority);
             observations.push({
-              ...readOpenAIUltraWireObservation(init.body),
+              ...readOpenAIUltraWireObservation(body),
               ...(ownsRequest && typeof context.isHeartbeat === "boolean"
                 ? { owner: { diagnostic, isHeartbeat: context.isHeartbeat } }
                 : {}),
@@ -5953,6 +5963,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               defaults: {
                 ...params.cfg.agents?.defaults,
                 thinkingDefault: OPENAI_ULTRA_NORMAL_EFFORT,
+                // Utility side calls (Activity recaps, titles) deliberately use low effort.
+                // The default OpenAI utility model is an Ultra candidate, so route them to a
+                // model outside the sweep instead of attributing them to Ultra runs.
+                utilityModel: OPENAI_ULTRA_UTILITY_MODEL,
               },
             },
           }

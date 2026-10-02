@@ -1,8 +1,3 @@
-/**
- * Subagent spawn planning helpers.
- *
- * Resolves model, thinking, and timeout choices before the sessions_spawn executor launches work.
- */
 import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { formatThinkingLevels } from "../../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -22,12 +17,8 @@ import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
 import { prepareModelChoice } from "./subagent-spawn.runtime.js";
 
-/** Splits a provider/model ref while preserving model-only refs. */
 export function splitModelRef(ref?: string) {
-  if (!ref) {
-    return { provider: undefined, model: undefined };
-  }
-  const trimmed = ref.trim();
+  const trimmed = ref?.trim();
   if (!trimmed) {
     return { provider: undefined, model: undefined };
   }
@@ -40,7 +31,6 @@ export function splitModelRef(ref?: string) {
   return { provider: undefined, model: trimmed };
 }
 
-/** Resolves the effective subagent run timeout from per-call override or config default. */
 export function resolveConfiguredSubagentRunTimeoutSeconds(params: {
   cfg: OpenClawConfig;
   runTimeoutSeconds?: number;
@@ -51,7 +41,6 @@ export function resolveConfiguredSubagentRunTimeoutSeconds(params: {
   );
 }
 
-/** Resolves the subagent model plus thinking patch to apply to the spawned session. */
 export async function resolveSubagentModelAndThinkingPlan(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
@@ -153,6 +142,7 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
   return {
     status: "ok" as const,
     resolvedModel,
+    modelRef: choice.ref,
     ...(inheritedModel ? { inheritedModel: choice.ref } : {}),
     modelApplied: true,
     thinkingOverride: thinkingPlan.thinkingOverride,

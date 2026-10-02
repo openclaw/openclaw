@@ -1,4 +1,3 @@
-// Tlon API module exposes the plugin public contract.
 import crypto from "node:crypto";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -74,10 +73,6 @@ async function releaseUploadResponse(
   } finally {
     await guarded.release();
   }
-}
-
-function getExtensionFromMimeType(mimeType?: string): string {
-  return extensionForMime(mimeType) || ".jpg";
 }
 
 function hasCustomS3Creds(
@@ -171,13 +166,6 @@ function prefixEndpoint(endpoint: string): string {
 
 function sanitizeFileName(fileName: string): string {
   return fileName.split(/[/\\]/).pop() || fileName;
-}
-
-async function getAuthCookie(config: ClientConfig): Promise<string> {
-  return await authenticate(config.shipUrl, await config.getCode(), {
-    ssrfPolicy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(config.dangerouslyAllowPrivateNetwork),
-    beforeRequest: config.assertDirectAdapterHandoff,
-  });
 }
 
 async function scryJson<T>(config: ClientConfig, cookie: string, path: string): Promise<T> {
@@ -293,7 +281,10 @@ export async function uploadFile(
     ...clientConfig,
     shipName: clientConfig.shipName.replace(/^~/, ""),
   };
-  const cookie = await getAuthCookie(config);
+  const cookie = await authenticate(config.shipUrl, await config.getCode(), {
+    ssrfPolicy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(config.dangerouslyAllowPrivateNetwork),
+    beforeRequest: config.assertDirectAdapterHandoff,
+  });
   const privateNetworkPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(
     config.dangerouslyAllowPrivateNetwork,
   );
@@ -304,13 +295,37 @@ export async function uploadFile(
   ]);
 
   const contentType = params.contentType || params.blob.type || "application/octet-stream";
-  const extension = getExtensionFromMimeType(contentType);
+  const extension = extensionForMime(contentType) || ".jpg";
   const fileName = sanitizeFileName(params.fileName || `upload${extension}`);
   const fileKey = `${config.shipName}/${Date.now()}-${crypto.randomUUID()}-${fileName}`;
 
   const useMemex =
     isHostedShipUrl(config.shipUrl) &&
     (storageConfig.service === "presigned-url" || !hasCustomS3Creds(credentials));
+
+  const uploadBlob = async (url: string, headers?: Record<string, string>): Promise<void> => {
+    let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
+    try {
+      guarded = await fetchWithSsrFGuard({
+        url,
+        init: { method: "PUT", body: params.blob, headers },
+        auditContext: useMemex ? "tlon-memex-upload" : "tlon-custom-s3-upload",
+        capture: false,
+        maxRedirects: 0,
+        ...(useMemex ? {} : { policy: privateNetworkPolicy }),
+        timeoutMs: TLON_UPLOAD_TIMEOUT_MS,
+        beforeRequest: config.assertDirectAdapterHandoff,
+      });
+      if (useMemex) {
+        assertTrustedMemexUploadUrl(guarded.finalUrl, "Memex final upload URL");
+      }
+      if (!guarded.response.ok) {
+        throw new Error(`Upload failed: ${guarded.response.status}`);
+      }
+    } finally {
+      await releaseUploadResponse(guarded);
+    }
+  };
 
   if (useMemex) {
     const { hostedUrl, uploadUrl } = await getMemexUploadUrl({
@@ -322,31 +337,10 @@ export async function uploadFile(
     });
     const trustedUploadUrl = assertTrustedMemexUploadUrl(uploadUrl, "Memex upload URL");
 
-    let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
-    try {
-      guarded = await fetchWithSsrFGuard({
-        url: trustedUploadUrl,
-        init: {
-          method: "PUT",
-          body: params.blob,
-          headers: {
-            "Cache-Control": "public, max-age=3600",
-            "Content-Type": contentType,
-          },
-        },
-        auditContext: "tlon-memex-upload",
-        capture: false,
-        maxRedirects: 0,
-        timeoutMs: TLON_UPLOAD_TIMEOUT_MS,
-        beforeRequest: config.assertDirectAdapterHandoff,
-      });
-      assertTrustedMemexUploadUrl(guarded.finalUrl, "Memex final upload URL");
-      if (!guarded.response.ok) {
-        throw new Error(`Upload failed: ${guarded.response.status}`);
-      }
-    } finally {
-      await releaseUploadResponse(guarded);
-    }
+    await uploadBlob(trustedUploadUrl, {
+      "Cache-Control": "public, max-age=3600",
+      "Content-Type": contentType,
+    });
 
     return { url: assertTrustedMemexUploadUrl(hostedUrl, "Memex hosted URL") };
   }
@@ -383,28 +377,7 @@ export async function uploadFile(
     expiresIn: 3600,
   });
 
-  let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
-  try {
-    guarded = await fetchWithSsrFGuard({
-      url: signedUrl,
-      init: {
-        method: "PUT",
-        body: params.blob,
-        headers: signedUrl.includes("digitaloceanspaces.com") ? headers : undefined,
-      },
-      auditContext: "tlon-custom-s3-upload",
-      capture: false,
-      maxRedirects: 0,
-      policy: privateNetworkPolicy,
-      timeoutMs: TLON_UPLOAD_TIMEOUT_MS,
-      beforeRequest: config.assertDirectAdapterHandoff,
-    });
-    if (!guarded.response.ok) {
-      throw new Error(`Upload failed: ${guarded.response.status}`);
-    }
-  } finally {
-    await releaseUploadResponse(guarded);
-  }
+  await uploadBlob(signedUrl, signedUrl.includes("digitaloceanspaces.com") ? headers : undefined);
 
   const publicUrl = storageConfig.publicUrlBase
     ? new URL(fileKey, storageConfig.publicUrlBase).toString()

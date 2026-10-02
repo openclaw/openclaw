@@ -23,8 +23,6 @@ type BuildChannelInboundContext =
   typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
 
 interface LineBotOptions {
-  channelAccessToken: string;
-  channelSecret: string;
   accountId?: string;
   runtime?: RuntimeEnv;
   buildContext?: BuildChannelInboundContext;

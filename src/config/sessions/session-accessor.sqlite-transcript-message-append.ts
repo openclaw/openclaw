@@ -110,10 +110,7 @@ export function prepareTranscriptMessageAppend<TMessage extends object>(
     envelope: TranscriptMessageEnvelope;
   },
 ): PreparedTranscriptMessageAppend<TMessage> | undefined {
-  if (
-    !isRecord(options.message) ||
-    (options.message.role !== "assistant" && options.message.role !== "toolResult")
-  ) {
+  if (!isRecord(options.message) || options.message.role === "user") {
     // Pending user custody retains its transaction-owned preparation.
     return undefined;
   }
@@ -121,7 +118,10 @@ export function prepareTranscriptMessageAppend<TMessage extends object>(
   const messageJson = JSON.stringify(canonicalizePersistedUserMessageMedia(message).message);
   // SAFETY: Decode the detached canonical message from its own JSON storage bytes.
   const prepared = { messageJson, persistedMessage: JSON.parse(messageJson) as TMessage };
-  if (!candidate) {
+  if (
+    !candidate ||
+    (options.message.role !== "assistant" && options.message.role !== "toolResult")
+  ) {
     return prepared;
   }
   const eventJson = serializePreparedMessageEvent(candidate.envelope, messageJson);
@@ -269,25 +269,16 @@ export function appendTranscriptMessageInTransaction<TMessage>(
           ? "preserve-owner"
           : "dedupe",
   });
-  if (!appended && idempotencyKey && options.idempotencyLookup !== "caller-checked") {
-    const existing = readTranscriptMessageByScopedIdempotencyKey(
-      database,
-      resolved,
-      idempotencyKey,
-      options.idempotencyLookup,
-    );
-    if (existing) {
-      if (
-        !options.prepareMessageAfterIdempotencyCheck &&
-        !messagesMatchForIdempotentReplay(existing.message, finalMessage)
-      ) {
-        throw new TranscriptTurnAdmissionConflictError(idempotencyKey);
-      }
-      return existingAppendResult(existing);
-    }
-  }
   if (!appended) {
-    const existing = readTranscriptMessageByEventId(database, resolved, messageId);
+    const existing =
+      (idempotencyKey && options.idempotencyLookup !== "caller-checked"
+        ? readTranscriptMessageByScopedIdempotencyKey(
+            database,
+            resolved,
+            idempotencyKey,
+            options.idempotencyLookup,
+          )
+        : undefined) ?? readTranscriptMessageByEventId(database, resolved, messageId);
     if (existing) {
       if (
         !options.prepareMessageAfterIdempotencyCheck &&
@@ -297,8 +288,6 @@ export function appendTranscriptMessageInTransaction<TMessage>(
       }
       return existingAppendResult(existing);
     }
-  }
-  if (!appended) {
     throw new Error(`SQLite transcript append did not insert message ${messageId}.`);
   }
   const persistedMessage =

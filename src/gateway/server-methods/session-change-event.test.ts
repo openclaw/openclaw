@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -144,7 +145,7 @@ function preparePlacementProjection(
   });
   bindSessionRowProjection(context, () => projection);
   onTestFinished(() => projection.dispose());
-  const snapshot = vi.spyOn(projection, "snapshot");
+  const present = vi.spyOn(projection, "present");
   const update = () => {
     const record = projection.describe({ key: sessionKey, agentId: "main" });
     if (!record) {
@@ -159,11 +160,17 @@ function preparePlacementProjection(
     }
   };
   update();
-  return { update, snapshot };
+  return { update, present };
 }
 
-beforeEach(() => {
+let restorePerformanceClock: () => void;
+
+beforeEach((context) => {
   vi.useFakeTimers();
+  // Publication budgets must advance on the same clock as debounce timers.
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+  restorePerformanceClock = () => clock.mockRestore();
+  context.onTestFinished(restorePerformanceClock);
   mocks.invalidate();
   mocks.invalidate.mockClear();
   mocks.loadRow.mockReset().mockImplementation((key: string) => ({
@@ -248,8 +255,10 @@ describe("sessions.changed coalescing", () => {
     expect(published).not.toHaveProperty("placement.turnClaim");
     expect(JSON.stringify(published)).not.toContain("private-turn-claim");
     expect(getMany).not.toHaveBeenCalled();
-    expect(resident.snapshot).toHaveBeenCalledTimes(2);
-    expect(resident.snapshot).toHaveBeenLastCalledWith({ key: sessionKey, agentId: "main" });
+    expect(resident.present).toHaveBeenCalledTimes(2);
+    expect(resident.present).toHaveBeenLastCalledWith(
+      expect.objectContaining({ key: sessionKey, agentId: "main" }),
+    );
 
     placements.clear();
     resident.update();
@@ -583,6 +592,7 @@ describe("sessions.changed coalescing", () => {
 
   it("keeps persisted replacement identity through recipient projection", async () => {
     vi.useRealTimers();
+    restorePerformanceClock();
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const config = { agents: { entries: { main: {} } } };
       const sessionKey = "agent:main:replacement";
@@ -600,7 +610,7 @@ describe("sessions.changed coalescing", () => {
         bootId: "event-generation",
         cfg: config,
       });
-      const send = vi.fn<(frame: string) => void>();
+      const send = vi.fn<(frame: string | Buffer) => void>();
       connection.clients.add({
         connId: "conn-1",
         usesSharedGatewayAuth: false,
@@ -651,7 +661,9 @@ describe("sessions.changed coalescing", () => {
         ]);
         expect(payloads[0]).not.toHaveProperty("session");
         expect(payloads[1]).not.toHaveProperty("session");
-        expect(send.mock.calls.map(([frame]) => JSON.parse(frame).payload)).toMatchObject([
+        expect(
+          send.mock.calls.map(([frame]) => JSON.parse(frame.toString()).payload),
+        ).toMatchObject([
           { reason: "delete", sessionId: "original" },
           { reason: "create", sessionId: "replacement", session: { sessionId: "replacement" } },
         ]);
@@ -682,7 +694,7 @@ describe("sessions.changed coalescing", () => {
             await flushPendingSessionsChangedEvents(context);
             expect(
               send.mock.calls
-                .map(([frame]) => JSON.parse(frame).payload)
+                .map(([frame]) => JSON.parse(frame.toString()).payload)
                 .filter((payload) => payload.sessionKey === sessionKey),
             ).toMatchObject([
               {

@@ -7,18 +7,23 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import type { Frame } from "playwright";
 import { expect, inject, it } from "vitest";
-import { disposeAllSessionMcpRuntimes } from "../../../src/agents/agent-bundle-mcp-manager-api.js";
+import {
+  disposeAllSessionMcpRuntimes,
+  setSessionMcpRuntimeScheduler,
+} from "../../../src/agents/agent-bundle-mcp-manager-api.js";
 import { getOrCreateSessionMcpRuntime } from "../../../src/agents/agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "../../../src/agents/agent-bundle-mcp-materialize.js";
 import { getMcpAppViewLease } from "../../../src/agents/mcp-ui-resource.js";
 import { readConfigFileSnapshotWithPluginMetadata } from "../../../src/config/config.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { startGatewayServer } from "../../../src/gateway/server.js";
-import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.listener.js";
+import { createTestGatewayScheduler } from "../../../src/test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.ts";
+import type { TestPortClaim } from "../../../src/test-utils/port-claims.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -53,8 +58,11 @@ let proofDir: string;
 let state: OpenClawTestState | undefined;
 let gatewayStartup: ReturnType<typeof startGatewayServer> | undefined;
 let runtimeStartup: ReturnType<typeof getOrCreateSessionMcpRuntime> | undefined;
+let mcpScheduler: ReturnType<typeof createTestGatewayScheduler> | undefined;
 let gatewayPort: number;
 let sandboxPort: number;
+// Each claim is held until the listener bound to its port has closed.
+const portClaims: Partial<Record<"appAsset" | "gateway" | "sandbox", TestPortClaim>> = {};
 let tempRoot: string;
 let viewId: string;
 let appAssetServer: HttpServer | undefined;
@@ -66,11 +74,13 @@ let fixture: ReturnType<typeof createMcpAppFixtureControl>;
 let showFixture: (callId: string) => Promise<string>;
 
 const failures: Array<{ step: string; error: string }> = [];
-async function settleCleanup(step: string, cleanup: () => Promise<unknown>) {
+async function settleCleanup(step: string, cleanup: () => Promise<unknown>): Promise<boolean> {
   try {
     await cleanup();
+    return true;
   } catch (error) {
     failures.push({ step, error: String(error) });
+    return false;
   }
 }
 async function recordCleanup() {
@@ -122,7 +132,8 @@ const suite = createControlUiE2eSuite({
       state.envVars.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
       const appEntryPath = require.resolve("@modelcontextprotocol/ext-apps/app-with-deps");
       const appModuleSource = await fs.readFile(appEntryPath, "utf8");
-      const appAssetPort = await getGatewayE2ePortBlock();
+      portClaims.appAsset = await acquireGatewayE2ePortBlock();
+      const appAssetPort = portClaims.appAsset.port;
       signal.throwIfAborted();
       const fixtureAssetServer = createHttpServer((request, response) => {
         if (request.url === "/history-away") {
@@ -162,11 +173,12 @@ const suite = createControlUiE2eSuite({
         fixtureControlPath,
         fixtureEventsPath,
       );
-      gatewayPort = await getGatewayE2ePortBlock();
-      do {
-        signal.throwIfAborted();
-        sandboxPort = await getGatewayE2ePortBlock();
-      } while (sandboxPort === gatewayPort);
+      portClaims.gateway = await acquireGatewayE2ePortBlock();
+      gatewayPort = portClaims.gateway.port;
+      signal.throwIfAborted();
+      // A held claim keeps the sandbox block distinct from the Gateway block.
+      portClaims.sandbox = await acquireGatewayE2ePortBlock();
+      sandboxPort = portClaims.sandbox.port;
       const cfg: OpenClawConfig = {
         gateway: {
           auth: { mode: "token", token: authValue },
@@ -187,6 +199,9 @@ const suite = createControlUiE2eSuite({
       await state.writeConfig(cfg);
       signal.throwIfAborted();
       state.applyEnv();
+      mcpScheduler = createTestGatewayScheduler();
+      await setSessionMcpRuntimeScheduler(mcpScheduler);
+      signal.throwIfAborted();
       // Keep rejected acquisitions: no returned handle does not prove cleanup succeeded.
       runtimeStartup = getOrCreateSessionMcpRuntime({
         sessionId: `mcp-app-conformance-${randomUUID()}`,
@@ -235,23 +250,35 @@ const suite = createControlUiE2eSuite({
       signal.throwIfAborted();
     },
     close: async () => {
-      await settleCleanup("gateway", async () => {
+      const gatewayClosed = await settleCleanup("gateway", async () => {
         const gateway = await gatewayStartup;
         await gateway?.close({ reason: "MCP App conformance complete" });
       });
-      await settleCleanup("MCP startup", async () => {
+      const mcpStartupSettled = await settleCleanup("MCP startup", async () => {
         await runtimeStartup;
       });
-      await settleCleanup("MCP runtimes", () => disposeAllSessionMcpRuntimes());
-      if (appAssetServer) {
-        await settleCleanup(
-          "asset server",
-          () =>
-            new Promise<void>((resolve, reject) => {
-              appAssetServer?.close((error) => (error ? reject(error) : resolve()));
-            }),
-        );
-      }
+      const mcpClosed = await settleCleanup("MCP runtimes", () => disposeAllSessionMcpRuntimes());
+      await settleCleanup("MCP scheduler", async () => {
+        await mcpScheduler?.stop();
+      });
+      const assetServerClosed = appAssetServer
+        ? await settleCleanup(
+            "asset server",
+            () =>
+              new Promise<void>((resolve, reject) => {
+                appAssetServer?.close((error) => (error ? reject(error) : resolve()));
+              }),
+          )
+        : true;
+      // Incomplete cleanup can leave a listener bound; keep its port claimed.
+      const releasable = [
+        gatewayClosed && portClaims.gateway,
+        gatewayClosed && mcpStartupSettled && mcpClosed && portClaims.sandbox,
+        assetServerClosed && portClaims.appAsset,
+      ].filter((claim): claim is TestPortClaim => Boolean(claim));
+      await settleCleanup("port claims", () =>
+        Promise.all(releasable.map((claim) => claim.release())),
+      );
       if (tempRoot) {
         await settleCleanup("archive fixture events", () =>
           fs.copyFile(fixtureEventsPath, path.join(proofDir, "fixture-events.jsonl")),
@@ -325,6 +352,10 @@ suite.define(() => {
         await waitForTextContaining(app.locator("#tools"), "model_only", false);
         await waitForText(app.locator("#isolation"), "isolated");
         await waitForText(app.locator("#host-theme"), "dark");
+        // A light proxy between dark documents paints an opaque UA canvas.
+        const proxyColorScheme = () =>
+          app.parentFrame()?.evaluate(() => getComputedStyle(document.documentElement).colorScheme);
+        await expect.poll(proxyColorScheme).toBe("dark");
         await waitForTextContaining(
           app.locator("#host-variables"),
           '"--color-background-primary":"#161920"',
@@ -348,6 +379,7 @@ suite.define(() => {
           setTheme?.("light");
         });
         await waitForText(app.locator("#host-theme"), "light");
+        await expect.poll(proxyColorScheme).toBe("light");
         await waitForTextContaining(
           app.locator("#host-variables"),
           '"--color-background-primary":"#ffffff"',

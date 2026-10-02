@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
+import { createDeferredCore } from "../shared/deferred.js";
 
 /** Resolve effective inbound debounce milliseconds from explicit, channel, and global config. */
 export function resolveInboundDebounceMs(params: {
@@ -72,11 +73,8 @@ function createInboundDebounceFlush(params: {
   lifecycle?: InboundDebounceAdmissionLifecycleInput;
   dispatch: (lifecycle: InboundDebounceAdmissionLifecycle) => Promise<void>;
 }): InboundDebounceFlush {
-  let resolveAdmission!: () => void;
   let admitted = false;
-  const admission = new Promise<void>((resolve) => {
-    resolveAdmission = resolve;
-  });
+  const { promise: admission, resolve: resolveAdmission } = createDeferredCore();
   const markAdmitted = () => {
     if (admitted) {
       return;
@@ -237,37 +235,31 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     await runFlush(items);
   };
 
+  const untrackKeyTask = (key: string, settled: Promise<void>) => {
+    if (keyChains.get(key) === settled) {
+      keyChains.delete(key);
+      if (!buffers.has(key)) {
+        keyGenerations.delete(key);
+      }
+    }
+  };
+
   const enqueueKeyTask = (key: string, task: () => Promise<void>) => {
     const previous = keyChains.get(key) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(task);
     const settled = next.catch(() => undefined);
     keyChains.set(key, settled);
-    const cleanup = () => {
-      if (keyChains.get(key) === settled) {
-        keyChains.delete(key);
-        if (!buffers.has(key)) {
-          keyGenerations.delete(key);
-        }
-      }
-    };
+    const cleanup = () => untrackKeyTask(key, settled);
     settled.then(cleanup, cleanup);
     return next;
   };
 
   const runKeyTaskNow = (key: string, task: () => Promise<void>) => {
-    let resolveSettled!: () => void;
-    const settled = new Promise<void>((resolve) => {
-      resolveSettled = resolve;
-    });
+    const { promise: settled, resolve: resolveSettled } = createDeferredCore();
     keyChains.set(key, settled);
     const cleanup = () => {
       resolveSettled();
-      if (keyChains.get(key) === settled) {
-        keyChains.delete(key);
-        if (!buffers.has(key)) {
-          keyGenerations.delete(key);
-        }
-      }
+      untrackKeyTask(key, settled);
     };
     let next: Promise<void>;
     try {
@@ -281,23 +273,13 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   };
 
   const enqueueReservedKeyTask = (key: string, task: () => Promise<void>) => {
-    let readyReleased = false;
-    let releaseReady!: () => void;
-    const ready = new Promise<void>((resolve) => {
-      releaseReady = resolve;
-    });
+    const { promise: ready, resolve: releaseReady } = createDeferredCore();
     return {
       task: enqueueKeyTask(key, async () => {
         await ready;
         await task();
       }),
-      release: () => {
-        if (readyReleased) {
-          return;
-        }
-        readyReleased = true;
-        releaseReady();
-      },
+      release: releaseReady,
     };
   };
 

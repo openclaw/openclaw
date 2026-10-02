@@ -1,5 +1,5 @@
+import { mkdirSync } from "node:fs";
 import path from "node:path";
-import { webhookCallback } from "grammy";
 import type { Message, Update } from "grammy/types";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -14,8 +14,7 @@ import {
   updateAmbientTranscriptWatermark,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createTelegramMessageContextRuntime } from "./bot-handlers.message-context.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 import type { TelegramPromptContextEntry } from "./bot-message-context.types.js";
@@ -23,6 +22,7 @@ import {
   apiCalls,
   commandMessage,
   createBot,
+  deliverTelegramUpdate,
   from,
   groupChat as forumChat,
   harness,
@@ -35,8 +35,12 @@ import {
 } from "./message-cache-persistence.js";
 import { createTelegramMessageCache } from "./message-cache.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const createStorePath = () => path.join(tempDirs.make("telegram-watermark-"), "sessions.json");
+let storeId = 0;
+function createStorePath(): string {
+  const storeDir = harness.state.path(`telegram-watermark-${storeId++}`);
+  mkdirSync(storeDir);
+  return path.join(storeDir, "sessions.json");
+}
 const sender = { id: 1234, is_bot: false, first_name: "Pat" };
 const groupChat = { id: -1001234567890, type: "supergroup", title: "Room" } as const;
 const groupSession = "agent:main:telegram:group:-1001234567890";
@@ -621,16 +625,7 @@ describe("Telegram registered topic recovery", () => {
               : {}),
           },
         };
-        await webhookCallback(
-          bot,
-          "std/http",
-        )(
-          new Request("http://localhost/telegram", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(update),
-          }),
-        );
+        await deliverTelegramUpdate(bot, update);
         expect(harness.replySpy).toHaveBeenCalledOnce();
         const observed = harness.replySpy.mock.calls[0]![0];
         const recovered = targetChat === forumChat.id;

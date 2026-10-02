@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type { AssistantMessageEvent, Model } from "@openclaw/llm-core";
+import type {
+  AssistantMessageEvent,
+  Model,
+  TextContent as TextBlock,
+  ThinkingContent as ThinkingBlock,
+  ToolCall,
+} from "@openclaw/llm-core";
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
+import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import {
@@ -80,17 +87,13 @@ function extractToolCallThoughtSignature(toolCall: unknown): string | undefined 
   const extra = (tc.extra_content as Record<string, unknown> | undefined)?.google as
     | Record<string, unknown>
     | undefined;
-  const fromExtra = extra?.thought_signature;
-  if (typeof fromExtra === "string" && fromExtra.length > 0) {
-    return fromExtra;
-  }
-  const fromFunction = (tc.function as { thought_signature?: unknown } | undefined)
-    ?.thought_signature;
-  if (typeof fromFunction === "string" && fromFunction.length > 0) {
-    return fromFunction;
-  }
-  const fromToolCall = tc.thought_signature;
-  return typeof fromToolCall === "string" && fromToolCall.length > 0 ? fromToolCall : undefined;
+  return (
+    readNonEmptyStringPreservingWhitespace(extra?.thought_signature) ??
+    readNonEmptyStringPreservingWhitespace(
+      (tc.function as { thought_signature?: unknown } | undefined)?.thought_signature,
+    ) ??
+    readNonEmptyStringPreservingWhitespace(tc.thought_signature)
+  );
 }
 
 export async function processCompletionsStream(
@@ -112,16 +115,7 @@ export async function processCompletionsStream(
   if (options?.strictReasoningTags) {
     reasoningTagTextPartitioner.markStrict();
   }
-  type ToolCallBlock = {
-    type: "toolCall";
-    id: string;
-    name: string;
-    arguments: Record<string, unknown>;
-    partialArgs: string;
-    thoughtSignature?: string;
-  };
-  type TextBlock = { type: "text"; text: string; textSignature?: string };
-  type ThinkingBlock = { type: "thinking"; thinking: string; thinkingSignature?: string };
+  type ToolCallBlock = ToolCall & { partialArgs: string };
   let currentBlock: TextBlock | ThinkingBlock | ToolCallBlock | null = null;
   let directTextBlock: TextBlock | null = null;
   let directThinkingBlock: ThinkingBlock | null = null;
@@ -147,14 +141,13 @@ export async function processCompletionsStream(
     directMode && currentBlock && currentBlock.type !== "toolCall"
       ? (contentBlockIndices.get(currentBlock) ?? output.content.length - 1)
       : output.content.length - 1;
-  const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
   let chunkPushedEvent = false;
   const pushStreamEvent = (event: AssistantMessageEvent) => {
     chunkPushedEvent = true;
     stream.push(event);
   };
   const queuePostToolCallDelta = (next: CompletionsReasoningDelta) => {
-    const nextBytes = measureUtf8Bytes(next.text);
+    const nextBytes = Buffer.byteLength(next.text, "utf8");
     if (pendingPostToolCallBytes + nextBytes > MAX_POST_TOOL_CALL_BUFFER_BYTES) {
       throw new Error("Exceeded post-tool-call delta buffer limit");
     }
@@ -163,17 +156,12 @@ export async function processCompletionsStream(
     if (
       !previous ||
       previous.kind !== next.kind ||
-      (previous.kind === "text" && next.kind === "text" && previous.source !== next.source)
+      (previous.kind === "text" && next.kind === "text" && previous.source !== next.source) ||
+      (previous.kind === "thinking" &&
+        next.kind === "thinking" &&
+        previous.signature !== next.signature)
     ) {
       pendingPostToolCallDeltas.push(next);
-      return;
-    }
-    if (next.kind === "thinking" && previous.kind === "thinking") {
-      if (previous.signature !== next.signature) {
-        pendingPostToolCallDeltas.push(next);
-        return;
-      }
-      previous.text += next.text;
       return;
     }
     previous.text += next.text;
@@ -349,20 +337,6 @@ export async function processCompletionsStream(
   const appendFilteredVisibleTextDelta = (text: string) => {
     appendRecoveredParts(deepSeekToolCallRecoverer?.push(text) ?? [{ kind: "text", text }]);
   };
-  const appendRoutedContentDelta = (delta: CompletionsReasoningDelta) => {
-    if (delta.kind === "text") {
-      appendFilteredVisibleTextDelta(delta.text);
-      return;
-    }
-    if (!emitReasoning) {
-      return;
-    }
-    if (currentBlock?.type === "toolCall" && !directMode) {
-      queuePostToolCallDelta(delta);
-    } else {
-      appendThinkingDelta(delta);
-    }
-  };
   const appendPartitionedVisibleDelta = (delta: { kind: "text" | "thinking"; text: string }) => {
     if (delta.kind === "text") {
       appendFilteredVisibleTextDelta(delta.text);
@@ -514,7 +488,13 @@ export async function processCompletionsStream(
         } else {
           const hasLaterVisibleText = contentDeltaIndex < lastVisibleTextIndex;
           beginReasoning(hasLaterVisibleText);
-          appendRoutedContentDelta(contentDelta);
+          if (emitReasoning) {
+            if (currentBlock?.type === "toolCall" && !directMode) {
+              queuePostToolCallDelta(contentDelta);
+            } else {
+              appendThinkingDelta(contentDelta);
+            }
+          }
         }
       }
       if (!hasReasoningThinking) {

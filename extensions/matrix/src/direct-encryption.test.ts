@@ -179,15 +179,6 @@ describe.each([true, false])(
         const total = counters.counts();
         expect(result?.target).toMatchObject({ to: `room:${roomId}`, roomId });
         expectRepair(client, encrypted);
-        console.info(
-          "MATRIX_SQL_PROOF",
-          JSON.stringify({
-            operation: "native availability plus registered prepareTarget",
-            encrypted,
-            availability,
-            total,
-          }),
-        );
         expect(total).toEqual(availability);
       } finally {
         counters.restore();
@@ -237,10 +228,6 @@ describe.each([true, false])(
             accessToken: "synthetic-matrix-token",
             encryption: encrypted,
           }),
-        );
-        console.info(
-          "MATRIX_SQL_PROOF",
-          JSON.stringify({ operation: "complete registered Commander repair", encrypted, total }),
         );
         expect(total).toEqual([0, 0, 0, 0, 0, 0]);
       } finally {

@@ -148,6 +148,9 @@ it("restores the admitted backup after database readiness exceeds the lease TTL"
         delayed = true;
         // Keep the real admission promise pending while interval renewals become due.
         await vi.advanceTimersByTimeAsync(checkpoint.STARTUP_MIGRATION_LEASE_TTL_MS + 60_000);
+        expect(checkpoint.hasActiveStartupMigrationLease()).toBe(true);
+        // Subsequent plugin lease acquisition uses a worker with the real wall clock.
+        vi.setSystemTime(vi.getRealSystemTime());
       }
     });
 

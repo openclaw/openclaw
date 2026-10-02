@@ -29,7 +29,8 @@ export function telegramSpooledUpdateLaneKey(update: unknown, botInfo?: Telegram
 }
 
 export async function writeTelegramSpooledUpdate(params: {
-  spoolDir: string;
+  stateDir: string;
+  accountId?: string;
   update: unknown;
   laneKey?: string;
   now?: number;
@@ -39,7 +40,7 @@ export async function writeTelegramSpooledUpdate(params: {
     throw new Error("Telegram update missing numeric update_id.");
   }
   const receivedAt = params.now ?? Date.now();
-  await openTelegramIngressQueue(params.spoolDir).enqueue(
+  await openTelegramIngressQueue(params).enqueue(
     telegramQueueEventId(updateId),
     {
       version: TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION,
@@ -80,10 +81,11 @@ function parsePendingRecord(
 }
 
 export async function listTelegramSpooledUpdates(params: {
-  spoolDir: string;
+  stateDir: string;
+  accountId?: string;
   limit?: number | "all";
 }): Promise<TelegramSpooledUpdate[]> {
-  const records = await openTelegramIngressQueue(params.spoolDir).listPending({
+  const records = await openTelegramIngressQueue(params).listPending({
     limit: params.limit ?? 100,
     orderBy: "id",
   });
@@ -96,9 +98,10 @@ export async function listTelegramSpooledUpdates(params: {
 }
 
 export async function listTelegramSpooledUpdateClaims(params: {
-  spoolDir: string;
+  stateDir: string;
+  accountId?: string;
 }): Promise<TelegramSpooledUpdate[]> {
-  const claims = await openTelegramIngressQueue(params.spoolDir).listClaims();
+  const claims = await openTelegramIngressQueue(params).listClaims();
   return claims
     .flatMap((claim) => {
       const update = parsePendingRecord(claim);

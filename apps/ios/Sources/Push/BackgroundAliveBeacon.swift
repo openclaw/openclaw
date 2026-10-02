@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import OpenClawProtocol
 import UIKit
 
@@ -57,8 +58,8 @@ enum BackgroundAliveBeacon {
             sentAtMs: Int64(Date().timeIntervalSince1970 * 1000),
             displayName: displayName,
             version: DeviceInfoHelper.appVersion(),
-            platform: DeviceInfoHelper.platformString(),
-            deviceFamily: DeviceInfoHelper.deviceFamily(),
+            platform: InstanceIdentity.platformString,
+            deviceFamily: InstanceIdentity.deviceFamily,
             modelIdentifier: DeviceInfoHelper.modelIdentifier(),
             pushTransport: pushTransport)
     }

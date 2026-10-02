@@ -1,13 +1,15 @@
 // Cron session reaper tests cover cleanup of sessions created by scheduled runs.
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import * as mediaGeneration from "../agents/media-generation-activity.js";
+import { resetGeneratedMediaTaskActivityForTests } from "../agents/media-generation-activity.test-support.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
-import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as sessionEntryReader from "../config/sessions/session-entry-read-runtime.js";
@@ -18,9 +20,9 @@ import {
 } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { initializeSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import {
   listOpenClawRegisteredAgentDatabases,
   unregisterOpenClawAgentDatabase,
@@ -30,47 +32,20 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { drainSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import type { Logger } from "./service/state.js";
 import { sweepCronRunSessions as sweepCronRunSessionsImpl } from "./session-reaper.js";
-import { resetReaperThrottle } from "./session-reaper.test-support.js";
+import { resetReaperThrottle, seedSessionEntries } from "./session-reaper.test-support.js";
 
 const { listSessionEntriesCore, patchSessionEntryCore, replaceSessionEntry } = sessionAccessor;
-
-const taskStatusMocks = vi.hoisted(() => ({
-  buildPendingSet: vi.fn<() => Set<string>>(() => new Set()),
-  descendants: new Map<string, SubagentRunRecord>(),
-}));
+const { explicitSqliteCloseReleasesNativeResources: keepsMaintenanceWorker } =
+  await initializeSqliteRuntimeCapabilities();
 
 function sweepCronRunSessions(
   params: Omit<Parameters<typeof sweepCronRunSessionsImpl>[0], "agentId">,
 ) {
   return sweepCronRunSessionsImpl({ ...params, agentId: "main" });
-}
-
-vi.mock("../tasks/task-status-access.js", () => ({
-  buildPendingGeneratedMediaSessionKeySet: taskStatusMocks.buildPendingSet,
-}));
-vi.mock("../agents/subagents/registry/subagent-registry-state.js", () => ({
-  getSubagentRunsSnapshotForSessions: () => taskStatusMocks.descendants,
-}));
-
-function createTestLogger(): Logger {
-  return {
-    debug: () => {},
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-  };
-}
-
-async function seedSessionEntries(
-  storePath: string,
-  entries: Record<string, SessionEntry>,
-): Promise<void> {
-  for (const [sessionKey, entry] of Object.entries(entries)) {
-    await replaceSessionEntry({ agentId: "main", storePath, sessionKey }, entry);
-  }
 }
 
 function readSessionEntries(storePath: string): Record<string, SessionEntry> {
@@ -108,25 +83,43 @@ describe("isCronRunSessionKey", () => {
 });
 
 describe("sweepCronRunSessions", () => {
-  const tempDirs: string[] = [];
+  let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
   let tmpDir: string;
   let storePath: string;
-  const log = createTestLogger();
+  let buildPendingSet: MockInstance<typeof mediaGeneration.buildPendingGeneratedMediaSessionKeySet>;
+  const log = {
+    debug: vi.fn<Logger["debug"]>(),
+    info: vi.fn<Logger["info"]>(),
+    warn: vi.fn<Logger["warn"]>(),
+    error: vi.fn<Logger["error"]>(),
+  } satisfies Logger;
 
   beforeEach(async () => {
-    resetReaperThrottle();
-    taskStatusMocks.buildPendingSet.mockReset().mockReturnValue(new Set());
-    taskStatusMocks.descendants.clear();
-    tmpDir = makeTempDir(tempDirs, "cron-reaper-");
+    state = await createOpenClawTestState({
+      scenario: "minimal",
+      env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" },
+    });
+    tmpDir = state.root;
     storePath = path.join(tmpDir, "sessions.json");
+    resetReaperThrottle();
+    subagentRuns.clear();
+    clearSubagentRunsReadCacheForTest();
+    resetGeneratedMediaTaskActivityForTests();
+    log.warn.mockClear();
+    buildPendingSet = vi.spyOn(mediaGeneration, "buildPendingGeneratedMediaSessionKeySet");
   });
 
   afterEach(async () => {
-    await closeOpenClawAgentDatabasesAsync();
-    clearRuntimeConfigSnapshot();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    cleanupTempDirs(tempDirs);
+    buildPendingSet?.mockRestore();
+    if (!state) {
+      return;
+    }
+    await drainSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
+    subagentRuns.clear();
+    clearSubagentRunsReadCacheForTest();
+    resetGeneratedMediaTaskActivityForTests();
+    await state.cleanup();
+    state = undefined;
   });
 
   it("prunes expired cron run sessions", async () => {
@@ -427,7 +420,7 @@ describe("sweepCronRunSessions", () => {
     let foregroundRead:
       | ReturnType<typeof sessionEntryReader.readSessionEntriesFromStoreInWorker>
       | undefined;
-    if (!process.versions.bun) {
+    if (keepsMaintenanceWorker) {
       const closeResources = maintenanceLane.pool.closeResources.bind(maintenanceLane.pool);
       vi.spyOn(maintenanceLane.pool, "closeResources").mockImplementationOnce((key) => {
         const closing = closeResources(key);
@@ -447,7 +440,7 @@ describe("sweepCronRunSessions", () => {
     });
 
     expect(result).toEqual({ swept: true, pruned: 1 });
-    if (!process.versions.bun) {
+    if (keepsMaintenanceWorker) {
       expect(foregroundRead).toBeDefined();
       expect(await foregroundRead).toMatchObject({
         entries: [
@@ -511,7 +504,7 @@ describe("sweepCronRunSessions", () => {
       },
     };
     await seedSessionEntries(storePath, store);
-    taskStatusMocks.buildPendingSet.mockReturnValue(new Set([sessionKey]));
+    mediaGeneration.registerGeneratedMediaTaskActivity("pending-media", sessionKey, "main");
 
     const result = await sweepCronRunSessions({
       sessionStorePath: storePath,
@@ -519,7 +512,8 @@ describe("sweepCronRunSessions", () => {
       log,
     });
 
-    expect(result.pruned).toBe(0);
+    expect(result).toEqual({ swept: true, pruned: 0 });
+    expect(log.warn).not.toHaveBeenCalled();
     expect(readSessionEntries(storePath)).toEqual(store);
   });
 
@@ -538,7 +532,7 @@ describe("sweepCronRunSessions", () => {
         },
       },
     });
-    taskStatusMocks.buildPendingSet.mockReturnValue(new Set([sessionKey]));
+    mediaGeneration.registerGeneratedMediaTaskActivity("pending-media", sessionKey, "main");
 
     const result = await sweepCronRunSessions({
       sessionStorePath: storePath,
@@ -546,7 +540,8 @@ describe("sweepCronRunSessions", () => {
       log,
     });
 
-    expect(result.pruned).toBe(0);
+    expect(result).toEqual({ swept: true, pruned: 0 });
+    expect(log.warn).not.toHaveBeenCalled();
     expect(readSessionEntries(storePath)[sessionKey]).toMatchObject({
       updatedAt: now - 25 * 3_600_000,
       cronRunContinuation: {
@@ -582,7 +577,7 @@ describe("sweepCronRunSessions", () => {
       expectsCompletionMessage: true,
       delivery: { status: "pending" },
     });
-    taskStatusMocks.descendants.set(child.runId, child);
+    subagentRuns.set(child.runId, child);
 
     const first = await sweepCronRunSessions({ sessionStorePath: storePath, nowMs: now, log });
     expect(first).toEqual({ swept: true, pruned: 1 });
@@ -605,6 +600,7 @@ describe("sweepCronRunSessions", () => {
       log,
     });
     expect(settled).toEqual({ swept: true, pruned: 1 });
+    expect(log.warn).not.toHaveBeenCalled();
     expect(readSessionEntries(storePath)).toEqual({});
   });
 
@@ -642,11 +638,12 @@ describe("sweepCronRunSessions", () => {
       expectsCompletionMessage: true,
       delivery: { status: "pending" },
     });
-    taskStatusMocks.descendants.set(child.runId, child);
+    subagentRuns.set(child.runId, child);
     try {
       releaseWriter.resolve();
       const result = await sweep;
-      expect(result.pruned).toBe(0);
+      expect(result).toEqual({ swept: true, pruned: 0 });
+      expect(log.warn).not.toHaveBeenCalled();
       expect(readSessionEntries(storePath)[sessionKey]).toEqual(parent);
     } finally {
       releaseWriter.resolve();
@@ -684,7 +681,7 @@ describe("sweepCronRunSessions", () => {
       log,
     });
 
-    expect(result.pruned).toBe(2);
+    expect(result).toEqual({ swept: true, pruned: 2 });
     expect(readSessionEntries(storePath)).toEqual({});
   });
 
@@ -1045,7 +1042,7 @@ describe("sweepCronRunSessions", () => {
       },
     };
     await seedSessionEntries(storePath, store);
-    taskStatusMocks.buildPendingSet.mockClear();
+    buildPendingSet.mockClear();
 
     const result = await sweepCronRunSessions({
       sessionStorePath: storePath,
@@ -1053,8 +1050,8 @@ describe("sweepCronRunSessions", () => {
       log,
     });
 
-    expect(result.pruned).toBe(1);
-    expect(taskStatusMocks.buildPendingSet).not.toHaveBeenCalled();
+    expect(result).toEqual({ swept: true, pruned: 1 });
+    expect(buildPendingSet).not.toHaveBeenCalled();
   });
 
   it("builds one pending-media snapshot for multiple expired continuations", async () => {
@@ -1074,7 +1071,7 @@ describe("sweepCronRunSessions", () => {
         cronRunContinuation: continuation,
       },
     });
-    taskStatusMocks.buildPendingSet.mockReturnValue(new Set([keptKey]));
+    mediaGeneration.registerGeneratedMediaTaskActivity("kept-media", keptKey, "main");
 
     const result = await sweepCronRunSessions({
       sessionStorePath: storePath,
@@ -1082,8 +1079,8 @@ describe("sweepCronRunSessions", () => {
       log,
     });
 
-    expect(result.pruned).toBe(1);
-    expect(taskStatusMocks.buildPendingSet).toHaveBeenCalledOnce();
+    expect(result).toEqual({ swept: true, pruned: 1 });
+    expect(buildPendingSet).toHaveBeenCalledOnce();
     expect(Object.keys(readSessionEntries(storePath))).toEqual([keptKey]);
   });
 });

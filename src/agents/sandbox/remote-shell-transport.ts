@@ -215,15 +215,24 @@ async function uploadDirectoryToRemoteCommand(
       cwd: command.cwd,
       signal: params.signal,
     });
-    const tarStderr: Buffer[] = [];
-    const remoteStdout: Buffer[] = [];
-    const remoteStderr: Buffer[] = [];
-    let tarClosed = false;
-    let remoteClosed = false;
-    let tarCode: number | null = 0;
-    let remoteCode: number | null = 0;
-    let tarSignal: NodeJS.Signals | null = null;
-    let remoteSignal: NodeJS.Signals | null = null;
+    const children: Array<{
+      name: string;
+      process: ChildProcess;
+      stderr: Buffer[];
+      closed: boolean;
+      code: number | null;
+      signal: NodeJS.Signals | null;
+    }> = [
+      { name: "tar", process: tar },
+      { name: "remote", process: remote },
+    ].map((child) =>
+      Object.assign(child, {
+        stderr: [],
+        closed: false,
+        code: 0,
+        signal: null,
+      }),
+    );
     let failure: Error | undefined;
     let settled = false;
 
@@ -243,34 +252,24 @@ async function uploadDirectoryToRemoteCommand(
       maybeResolve();
     };
 
-    tar.on("error", fail);
-    remote.on("error", fail);
-
-    tar.on("close", (code, signal) => {
-      tarClosed = true;
-      tarCode = code;
-      tarSignal = signal;
-      maybeResolve();
-    });
-    remote.on("close", (code, signal) => {
-      remoteClosed = true;
-      remoteCode = code;
-      remoteSignal = signal;
-      maybeResolve();
-    });
-
-    // EMFILE/ENFILE can leave streams absent; native error and close still settle the child.
-    tar.stderr?.on("data", (chunk) => tarStderr.push(Buffer.from(chunk)));
-    tar.stderr?.on("error", fail);
-    tar.stdout?.on("error", fail);
-    remote.stdout?.on("data", (chunk) => remoteStdout.push(Buffer.from(chunk)));
-    remote.stdout?.on("error", fail);
-    remote.stderr?.on("data", (chunk) => remoteStderr.push(Buffer.from(chunk)));
-    remote.stderr?.on("error", fail);
+    for (const child of children) {
+      child.process.on("error", fail);
+      child.process.on("close", (code, signal) => {
+        child.closed = true;
+        child.code = code;
+        child.signal = signal;
+        maybeResolve();
+      });
+      // EMFILE/ENFILE can leave streams absent; native error and close still settle the child.
+      child.process.stderr?.on("data", (chunk) => child.stderr.push(Buffer.from(chunk)));
+      child.process.stderr?.on("error", fail);
+      child.process.stdout?.on("error", fail);
+    }
+    remote.stdout?.resume();
     remote.stdin?.on("error", fail);
 
     function maybeResolve() {
-      if (settled || !tarClosed || !remoteClosed) {
+      if (settled || children.some((child) => !child.closed)) {
         return;
       }
       settled = true;
@@ -281,30 +280,20 @@ async function uploadDirectoryToRemoteCommand(
       // A null code means the process died from a signal (OOM kill, dropped
       // connection, supervisor teardown) without reporting a status. An
       // unknown outcome is not evidence of a completed transfer.
-      if (tarCode === null) {
-        reject(new Error(`tar exited from signal ${tarSignal ?? "unknown"}`));
-        return;
-      }
-      if (tarCode !== 0) {
-        reject(
-          new Error(
-            Buffer.concat(tarStderr).toString("utf8").trim() || `tar exited with code ${tarCode}`,
-          ),
-        );
-        return;
-      }
-      if (remoteCode === null) {
-        reject(new Error(`remote exited from signal ${remoteSignal ?? "unknown"}`));
-        return;
-      }
-      if (remoteCode !== 0) {
-        reject(
-          new Error(
-            Buffer.concat(remoteStderr).toString("utf8").trim() ||
-              `remote exited with code ${remoteCode}`,
-          ),
-        );
-        return;
+      for (const child of children) {
+        if (child.code === null) {
+          reject(new Error(`${child.name} exited from signal ${child.signal ?? "unknown"}`));
+          return;
+        }
+        if (child.code !== 0) {
+          reject(
+            new Error(
+              Buffer.concat(child.stderr).toString("utf8").trim() ||
+                `${child.name} exited with code ${child.code}`,
+            ),
+          );
+          return;
+        }
       }
       resolve();
     }

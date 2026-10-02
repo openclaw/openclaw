@@ -37,7 +37,7 @@ import {
   type WorktreeCleanupOwnerPolicy,
 } from "./gc-removal.js";
 import {
-  createWorktreeLockPrefilter,
+  createWorktreeGcPrefilter,
   lockState,
   lockWorktreeForProcess,
   unlockWorktree,
@@ -90,6 +90,7 @@ import {
   resetFailedWorktreeAdd,
   resolveRepository,
   resolveRepositoryFromRealPath,
+  resolveRepositoryIdentity,
   runSetupScript,
   validateName,
   withWorktreeSource,
@@ -480,12 +481,22 @@ export class ManagedWorktreeService {
         this.requireAllocationSpace(materialized.worktreePath, repository);
         // Preserve a possibly published record if insertion or source unwind fails.
         publicationStarted = true;
-        const record = this.publishRepositoryWorktree(
-          current,
-          repository,
-          materialized,
-          provisionedPaths,
-        );
+        const { name, worktreePath, branch, recordBase } = materialized;
+        const createdAt = this.now();
+        const record: ManagedWorktreeRecord = {
+          id: randomUUID(),
+          name,
+          repoFingerprint: repository.fingerprint,
+          repoRoot: repository.repoRoot,
+          path: worktreePath,
+          branch,
+          baseRef: recordBase,
+          ownerKind: current.ownerKind ?? "manual",
+          ...(current.ownerId ? { ownerId: current.ownerId } : {}),
+          createdAt,
+          lastActiveAt: createdAt,
+        };
+        insertRegistryWorktree(this.env, record, { provisionedPaths });
         publication.record = { ...record };
         return { record, materialized: true };
       });
@@ -625,10 +636,10 @@ export class ManagedWorktreeService {
         base: sourceProfile?.commit ?? gitBase,
         sourceProfile,
         prepareCommit: async (commit) => {
-          gitBytes = await estimateWorktreeGitBytes(repository.repoRoot, commit, {
+          return (gitBytes = await estimateWorktreeGitBytes(repository.repoRoot, commit, {
             signal: params.signal,
             assertCurrent: params.commitGuard,
-          });
+          }));
         },
         requireSpace: (cloneBytes) =>
           this.requireAllocationSpace(
@@ -696,31 +707,6 @@ export class ManagedWorktreeService {
     return provisionedPaths;
   }
 
-  private publishRepositoryWorktree(
-    params: CreateManagedWorktreeParams & WorktreeAllocationGuard,
-    repository: ResolvedRepository,
-    materialized: MaterializedRepositoryWorktree,
-    provisionedPaths: string[],
-  ): ManagedWorktreeRecord {
-    const { name, worktreePath, branch, recordBase } = materialized;
-    const createdAt = this.now();
-    const record: ManagedWorktreeRecord = {
-      id: randomUUID(),
-      name,
-      repoFingerprint: repository.fingerprint,
-      repoRoot: repository.repoRoot,
-      path: worktreePath,
-      branch,
-      baseRef: recordBase,
-      ownerKind: params.ownerKind ?? "manual",
-      ...(params.ownerId ? { ownerId: params.ownerId } : {}),
-      createdAt,
-      lastActiveAt: createdAt,
-    };
-    insertRegistryWorktree(this.env, record, { provisionedPaths });
-    return record;
-  }
-
   async list(): Promise<ManagedWorktreeRecord[]> {
     return await reconcileListedWorktrees(this.env, listRegistryWorktrees(this.env), this.now);
   }
@@ -759,13 +745,11 @@ export class ManagedWorktreeService {
     originUrl: string;
     fingerprint: string;
   }> {
-    const resolved = await resolveRepository(repoRoot);
-    return {
-      checkoutRoot: resolved.sourceRoot,
-      repoRoot: resolved.repoRoot,
-      originUrl: resolved.originUrl,
-      fingerprint: resolved.fingerprint,
-    };
+    return await resolveRepositoryIdentity(repoRoot);
+  }
+
+  async resolveRepositoryIdentities(roots: string[]) {
+    return await runGitReadOperation({ type: "repository.identities", input: { roots } });
   }
 
   /**
@@ -1289,7 +1273,7 @@ export class ManagedWorktreeService {
 
   async gc(params: ManagedWorktreeGcParams = {}): Promise<ManagedWorktreeGcResult> {
     const now = this.now();
-    const isLocked = createWorktreeLockPrefilter();
+    const prefilter = createWorktreeGcPrefilter();
     const progress = new WorktreeGcProgress();
     const result = progress.result;
     const { records, leases } = await readWorktreeCleanupState(this.env);
@@ -1302,12 +1286,13 @@ export class ManagedWorktreeService {
     const protect = (record: ManagedWorktreeRecord) =>
       autoRemovalProtectionReason(
         record,
-        isLocked,
+        prefilter,
         hasLiveLease,
         { env: this.env, getConfig: this.getConfig ?? getRuntimeConfig },
-        params.shouldProtectOwner,
+        params,
       );
     const onError = createWorktreeGcErrorHandler({ env: this.env, now, progress, policy: params });
+    // Keep cold classification serial: each candidate can request several Git processes.
     for (const record of records) {
       let retiredOwner = false;
       try {

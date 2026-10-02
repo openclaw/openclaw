@@ -1,8 +1,3 @@
-/**
- * Auth profile mutation helpers.
- * Updates profile order, last-good state, usage stats, and provider profile
- * records through locked or immediate store writes.
- */
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
@@ -11,8 +6,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
+import { removePersistedPluginModelCatalogCredentials } from "../plugin-model-catalog.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
-import { loadCandidateAuthProfileStore } from "./candidate-stores.js";
+import {
+  listCandidateAuthProfileStores,
+  loadCandidateAuthProfileStore,
+} from "./candidate-stores.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { withOAuthProfileLocks, type OAuthProfileLockKey } from "./oauth-profile-lock.js";
 import {
@@ -29,12 +28,15 @@ import {
   ensureAuthProfileStoreForLocalUpdate,
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
+  saveAuthProfileStoreIfPersistenceSnapshotMatches,
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
 import {
+  captureAuthProfileStorePersistenceSnapshot,
   isSharedMainAuthProfileAgentDir,
   resolvePersistedAuthProfileOwnerAgentDir,
   resolveRuntimeAuthProfileAgentDir,
+  restoreAuthProfileStorePersistenceSnapshot,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import { resetAuthProfileFailureState } from "./usage-state.js";
@@ -101,14 +103,7 @@ export async function setAuthProfileOrder(params: {
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
     sharedStoreWrite: params.sharedStoreWrite,
-    // Preserve requested IDs that the agent inherits (not owns) so the local
-    // save path does not prune them from the order. Without this, a secondary
-    // agent's `models auth order set --agent` accepts an inherited profile ID
-    // (validated against the merged store) but drops it while persisting, so
-    // `order get` falls back to the inherited main order — the CLI reports a
-    // switch that never happened (issue #119233). Mirrors the adjacent
-    // promoteAuthProfileInOrder preservation contract; the clear-order path
-    // (deduped.length === 0) must not preserve anything.
+    // Keep inherited IDs in local order; pruning them silently undoes the requested switch.
     ...(deduped.length > 0 ? { saveOptions: { preserveOrderProfileIds: deduped } } : {}),
     updater: (store) => {
       if (deduped.length === 0) {
@@ -144,27 +139,19 @@ export async function promoteAuthProfileInOrder(params: {
       }
       const matchingOrderEntries = listProviderAuthStateEntries(store.order, providerKey);
       const existing = readProviderAuthState(store.order, providerKey);
-      if (!existing || existing.length === 0) {
-        if (!params.createIfMissing) {
-          return false;
-        }
-        const providerProfiles = dedupeProfileIds(
-          params.createFromOrder !== undefined
-            ? params.createFromOrder
-            : listProfilesForProvider(store, providerKey),
-        );
-        const next = dedupeProfileIds([
-          params.profileId,
-          ...providerProfiles.filter((profileId) => profileId !== params.profileId),
-        ]);
-        store.order = replaceProviderAuthState(store.order, providerKey, next);
-        return true;
+      if (!existing?.length && !params.createIfMissing) {
+        return false;
       }
       const next = dedupeProfileIds([
         params.profileId,
-        ...existing.filter((profileId) => profileId !== params.profileId),
+        ...(existing?.length
+          ? existing
+          : params.createFromOrder !== undefined
+            ? params.createFromOrder
+            : listProfilesForProvider(store, providerKey)),
       ]);
       if (
+        existing?.length &&
         next.length === existing.length &&
         next.every((profileId, idx) => profileId === existing[idx]) &&
         matchingOrderEntries.length === 1 &&
@@ -415,6 +402,26 @@ async function removeAuthProfileTargetsWithLocks(
       credential?.type === "oauth" ? [{ profileId, provider: credential.provider }] : [],
     ),
   );
+  const credentials = new Set<string>();
+  for (const target of targets) {
+    for (const credential of target.expectedProfiles.values()) {
+      if (!credential) {
+        continue;
+      }
+      const values =
+        credential.type === "api_key"
+          ? [credential.key]
+          : credential.type === "token"
+            ? [credential.token]
+            : [credential.access, credential.refresh];
+      for (const value of values) {
+        if (value) {
+          credentials.add(value);
+        }
+      }
+    }
+  }
+  const catalogStores = credentials.size > 0 ? await listCandidateAuthProfileStores({ cfg }) : [];
   return await withOAuthProfileLocks(lockKeys, async () => {
     for (const target of targets) {
       const current = loadAuthProfileStoreWithoutExternalProfiles(target.agentDir, {
@@ -425,12 +432,19 @@ async function removeAuthProfileTargetsWithLocks(
         return { kind: "retry" };
       }
     }
+    // Scrub first so a failed catalog write leaves the saved profile available
+    // for a retry. Only captured secret values are removed, never other accounts.
+    for (const candidate of catalogStores) {
+      await removePersistedPluginModelCatalogCredentials({ ...candidate, credentials });
+    }
 
     removeOAuthRefreshGenerationPeers(await prepareAuthProfileRemovalPeers(targets, cfg));
 
     const stores: AuthProfileStore[] = [];
+    const restoreRemovedStores: Array<() => void> = [];
     for (const target of targets) {
       let stale = false;
+      let publishRemoval: (() => boolean) | undefined;
       const updated = await updateAuthProfileStoreWithLock({
         agentDir: target.agentDir,
         updater: (store) => {
@@ -438,7 +452,21 @@ async function removeAuthProfileTargetsWithLocks(
             stale = true;
             return false;
           }
-          return removeProfileReferences(store, target.profileIds, target.provider);
+          const before = captureAuthProfileStorePersistenceSnapshot(target.agentDir);
+          if (!removeProfileReferences(store, target.profileIds, target.provider)) {
+            return false;
+          }
+          const saved = saveAuthProfileStoreIfPersistenceSnapshotMatches({
+            store,
+            snapshot: before,
+            agentDir: target.agentDir,
+          });
+          restoreRemovedStores.push(() =>
+            restoreAuthProfileStorePersistenceSnapshot(before, saved.owned, target.agentDir),
+          );
+          publishRemoval = saved.publishRuntimeSnapshots;
+          // The guarded save supplies the exact compensation receipt.
+          return false;
         },
       });
       if (updated === null) {
@@ -447,7 +475,38 @@ async function removeAuthProfileTargetsWithLocks(
       if (stale) {
         return { kind: "retry" };
       }
+      publishRemoval?.();
       stores.push(updated);
+    }
+    try {
+      for (const candidate of catalogStores) {
+        await removePersistedPluginModelCatalogCredentials({ ...candidate, credentials });
+      }
+    } catch (error) {
+      const failures: unknown[] = [error];
+      for (let index = restoreRemovedStores.length - 1; index >= 0; index -= 1) {
+        try {
+          restoreRemovedStores[index]?.();
+        } catch (restoreError) {
+          failures.push(restoreError);
+        }
+      }
+      const restored = targets.every((target) =>
+        authProfileRemovalTargetMatches(
+          target,
+          loadAuthProfileStoreWithoutExternalProfiles(target.agentDir, {
+            allowKeychainPrompt: false,
+            inheritedAuthDir: target.agentDir,
+          }),
+        ),
+      );
+      throw new AggregateError(
+        failures,
+        restored
+          ? "Catalog cleanup failed; saved credentials were restored. Rerun the same `openclaw models auth logout` command to finish removing cached copies."
+          : "Catalog cleanup failed and concurrent auth changes prevented full restoration. Inspect the current auth profiles before retrying logout.",
+        { cause: error },
+      );
     }
     return { kind: "updated", stores };
   });

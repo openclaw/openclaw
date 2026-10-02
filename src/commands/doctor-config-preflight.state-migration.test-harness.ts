@@ -71,6 +71,9 @@ const beginDoctorMaintenance = vi.hoisted(() =>
     signal: new AbortController().signal,
     run: <T>(operation: () => T): T => operation(),
     releaseState: vi.fn(async () => {}),
+    repairSqliteNoCow: vi.fn(async () => {}),
+    enableSqliteReclamation: vi.fn(async () => {}),
+    cleanupRetainedRuntimes: vi.fn(async () => {}),
     release: doctorMaintenanceRelease,
     finish: vi.fn(async () => {}),
   })),
@@ -171,7 +174,7 @@ const note = vi.hoisted(() => vi.fn());
 const pendingPluginMigrations = vi.hoisted(() => vi.fn((): DeferredPluginMigration[] => []));
 const recordDeferredPluginMigrations = vi.hoisted(() =>
   vi.fn<typeof import("../infra/deferred-plugin-migrations.js").recordDeferredPluginMigrations>(
-    ({ pending }) => pending,
+    async ({ pending }) => pending,
   ),
 );
 const inspectPluginMigrationAvailability = vi.hoisted(() =>

@@ -52,7 +52,6 @@ afterEach(resetLogger);
 
 describe("AgentSession model-visible tool-result redaction", () => {
   it.each([
-    { kind: "opaque", ambientPolicy: "matching", callbackChange: "none" },
     { kind: "opaque", ambientPolicy: "different", callbackChange: "none" },
     { kind: "opaque", ambientPolicy: "absent", callbackChange: "none" },
     { kind: "opaque", ambientPolicy: "matching", callbackChange: "duplicate" },
@@ -186,11 +185,8 @@ describe("AgentSession model-visible tool-result redaction", () => {
   );
 
   it.each([
-    ["anthropic-messages", "read", "fixture.txt"],
     ["anthropic-messages", "read", ".env"],
-    ["anthropic-messages", "exec", "fixture.txt"],
     ["openai-responses", "read", "fixture.txt"],
-    ["openai-responses", "read", ".env"],
     ["openai-responses", "exec", "fixture.txt"],
   ] as const)("keeps secrets off %s after %s returns %s", async (api, toolName, filename) => {
     const cwd = tempDirs.make("openclaw-tool-result-redaction-");

@@ -7,12 +7,13 @@ import {
 } from "../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../agents/embedded-agent-runner/runs.test-support.js";
 import {
-  clearSessionQueues,
   enqueueFollowupRun,
   type FollowupRun,
   type QueueSettings,
 } from "../auto-reply/reply/queue.js";
 import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
+import { clearFollowupDrainCallback } from "../auto-reply/reply/queue/drain.js";
+import { clearFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import {
@@ -27,6 +28,7 @@ import {
 import { emitCoreSemanticRunProgressDiagnosticEvent } from "../infra/diagnostic-semantic-run-progress.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   beginDiagnosticBackendActivity,
   closeDiagnosticEmbeddedRunOwner,
@@ -36,14 +38,17 @@ import {
 } from "./diagnostic-run-activity.js";
 import type { StuckSessionRecoveryOutcome } from "./diagnostic-session-recovery.js";
 import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
-import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "./diagnostic.js";
+import { startGatewayDiagnosticHeartbeat, stopGatewayDiagnosticHeartbeat } from "./diagnostic.js";
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
 describe("stuck session follow-up recovery", () => {
   const queueKeys = new Set<string>();
 
   afterEach(() => {
-    clearSessionQueues([...queueKeys]);
+    for (const key of queueKeys) {
+      clearFollowupQueue(key);
+      clearFollowupDrainCallback(key);
+    }
     queueKeys.clear();
     embeddedRunTesting.resetActiveEmbeddedRuns();
     replyRunTesting.resetReplyRunRegistry();
@@ -140,7 +145,8 @@ describe("stuck session follow-up recovery", () => {
           return outcome;
         },
       );
-      startDiagnosticHeartbeat(
+      startGatewayDiagnosticHeartbeat(
+        createTestGatewayScheduler("fake-timers"),
         { diagnostics: { enabled: true } },
         { sampleLiveness: () => null, recoverStuckSession: recover },
       );
@@ -187,7 +193,7 @@ describe("stuck session follow-up recovery", () => {
         expect(waits).toEqual([30_000]);
       }
     } finally {
-      stopDiagnosticHeartbeat();
+      stopGatewayDiagnosticHeartbeat();
       dispatchRecovery.resolve();
       releaseActive.resolve();
       backend.close();

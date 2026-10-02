@@ -28,6 +28,70 @@ function readPnpmStageArgs(argv: string[], env?: NodeJS.ProcessEnv, pnpm12 = fal
 }
 
 describe.runIf(process.platform !== "win32")("native package transactions", () => {
+  it.each(["bun", "pnpm"] as const)(
+    "stages %s before reading admission-gated options",
+    async (manager) => {
+      await withTestDir({ prefix: "openclaw-native-admission-" }, async (base) => {
+        const project = path.join(base, manager, "global");
+        const globalRoot = path.join(project, ...(manager === "pnpm" ? ["5"] : []), "node_modules");
+        const packageRoot = path.join(globalRoot, "openclaw");
+        const binDir = path.join(base, "bin");
+        await writePackageRoot(packageRoot, "1.0.0");
+        const probes: string[][] = [];
+        let admitted = false;
+        const beforeVerifyCandidate = vi.fn(async () => {
+          admitted = true;
+          throw new Error("fixture stop at candidate admission");
+        });
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: { manager, command: manager, globalRoot, packageRoot },
+          installSpec: "openclaw@2.0.0",
+          packageName: "openclaw",
+          timeoutMs: 1000,
+          env: { BUN_INSTALL_GLOBAL_DIR: project, BUN_INSTALL_BIN: binDir },
+          get requirePackageReplacement() {
+            if (!admitted) {
+              throw new Error("Staged update has not been admitted for activation.");
+            }
+            return true;
+          },
+          beforeVerifyCandidate,
+          runCommand: async (argv) => {
+            probes.push(argv);
+            const stage = readPnpmStageArgs(argv);
+            return {
+              code: 0,
+              stderr: "",
+              stdout:
+                argv[1] === "root" && stage.projectRoot
+                  ? path.join(stage.projectRoot, "5", "node_modules")
+                  : (stage.binDir ?? binDir),
+            };
+          },
+          runStep: async ({ name, argv, cwd }) => {
+            if (!cwd) {
+              throw new Error("missing native stage directory");
+            }
+            await writePackageRoot(
+              path.join(cwd, path.relative(project, globalRoot), "openclaw"),
+              "2.0.0",
+            );
+            return { name, command: argv.join(" "), cwd, durationMs: 0, exitCode: 0 };
+          },
+        });
+
+        expect(result.failedStep?.stderrTail).toBe("fixture stop at candidate admission");
+        expect(beforeVerifyCandidate).toHaveBeenCalledOnce();
+        expect(probes[0]).toEqual(
+          manager === "bun" ? ["bun", "pm", "bin", "-g"] : ["pnpm", "bin", "-g"],
+        );
+        if (manager === "pnpm") {
+          expect(probes.map((argv) => argv[1])).toEqual(["bin", "root", "bin"]);
+        }
+      });
+    },
+  );
+
   it.each([
     {
       layout: "pnpm11",

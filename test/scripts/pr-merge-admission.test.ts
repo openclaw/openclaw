@@ -502,6 +502,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
   it.each([
     {
       name: "removed",
+      reason: "completed review is missing.",
       comments: [
         {
           id: 2,
@@ -511,24 +512,26 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       ],
     },
     {
-      name: "expired",
+      name: "malformed",
+      reason: "trusted review-version field values are invalid.",
       comments: [
         {
           id: 2,
-          body: `<!-- clawsweeper-review-version item=123 reviewed_at=${new Date(Date.now() - 13 * 60 * 60_000).toISOString()} sha=${"a".repeat(40)} source_revision=${"c".repeat(64)} lease_owner=github-run-2 lease_comment_id=2 v=1 -->
+          body: `<!-- clawsweeper-review-version item=123 reviewed_at=invalid sha=${"a".repeat(40)} source_revision=${"c".repeat(64)} lease_owner=github-run-2 lease_comment_id=2 v=1 -->
 
 <!-- clawsweeper-review item=123 -->`,
           user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
         },
       ],
     },
-  ])("revalidates $name review evidence immediately before intent", ({ comments }) => {
+  ])("revalidates $name review evidence immediately before intent", ({ comments, reason }) => {
     const f = fixture();
     f.save({ ...f.state(), issueCommentsAfterFirst: comments });
 
     const run = f.run();
 
     expect(run.status, run.output).toBe(1);
+    expect(run.output).toContain(`ClawSweeper review gate failed: ${reason}`);
     expect(f.state().issueCommentReads).toBe(2);
     expect(f.state().mutations).toBe(0);
     expect(() => f.record()).toThrow();
@@ -546,13 +549,18 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(() => f.record()).toThrow();
   });
 
-  it("retains evidence from a newer completion observed at final admission", () => {
+  it("retains the newest completion at final admission regardless of review age", () => {
     const f = fixture();
-    const reviewedAt = new Date(Date.now() + 1_000).toISOString();
+    const next = f.state();
+    next.issueComments[0]!.body = next.issueComments[0]!.body.replace(
+      /reviewed_at=\S+/u,
+      "reviewed_at=2000-01-01T00:00:00.000Z",
+    );
+    const reviewedAt = "2000-01-02T00:00:00.000Z";
     f.save({
-      ...f.state(),
+      ...next,
       issueCommentsAfterFirst: [
-        ...f.state().issueComments,
+        ...next.issueComments,
         {
           id: 2,
           body: `<!-- clawsweeper-review-version item=123 reviewed_at=${reviewedAt} sha=${f.head} source_revision=${"c".repeat(64)} lease_owner=github-run-2 lease_comment_id=2 v=1 -->

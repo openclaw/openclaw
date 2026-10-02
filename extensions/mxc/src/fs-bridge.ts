@@ -14,10 +14,7 @@ import {
 } from "openclaw/plugin-sdk/sandbox";
 import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeMxcPathForComparison } from "./path-comparison.js";
-import {
-  resolveMxcReadOnlySkillMounts,
-  type MxcReadOnlySkillMount,
-} from "./workspace-skill-mounts.js";
+import { resolveMxcReadOnlySkillMounts } from "./workspace-skill-mounts.js";
 
 type MxcFsBridgeContext = Parameters<
   NonNullable<SandboxBackendHandle["createFsBridge"]>
@@ -32,8 +29,6 @@ type MxcFsMount = {
 type ResolvedMxcPath = SandboxResolvedPath & {
   hostPath: string;
   mount: MxcFsMount;
-  mountRelativePath: string;
-  writable: boolean;
 };
 
 export function createMxcFsBridge(params: { sandbox: MxcFsBridgeContext }): SandboxFsBridge {
@@ -79,7 +74,7 @@ class MxcFsBridge implements SandboxFsBridge {
     const target = this.resolveTarget(params);
     return (await (
       await fsRoot(target.mount.hostRoot)
-    ).readBytes(target.mountRelativePath, {
+    ).readBytes(target.relativePath, {
       hardlinks: "reject",
       ...(params.maxBytes === undefined ? {} : { maxBytes: params.maxBytes }),
     })) as Buffer;
@@ -90,17 +85,11 @@ class MxcFsBridge implements SandboxFsBridge {
   ): Promise<DirectoryEntry[]> {
     const target = this.resolveTarget(params);
     const root = await fsRoot(target.mount.hostRoot);
-    const entries = await root.list(target.mountRelativePath, { withFileTypes: true });
+    const entries = await root.list(target.relativePath, { withFileTypes: true });
     return entries.map(({ name, isDirectory }) => ({ name, isDirectory }));
   }
 
-  async writeFile(params: {
-    filePath: string;
-    cwd?: string;
-    data: Buffer | string;
-    encoding?: BufferEncoding;
-    mkdir?: boolean;
-  }): Promise<void> {
+  async writeFile(params: Parameters<SandboxFsBridge["writeFile"]>[0]): Promise<void> {
     const target = this.resolveTarget(params);
     this.ensureWritable(target, "write files");
     const buffer = Buffer.isBuffer(params.data)
@@ -108,18 +97,14 @@ class MxcFsBridge implements SandboxFsBridge {
       : Buffer.from(params.data, params.encoding ?? "utf8");
     await (
       await fsRoot(target.mount.hostRoot)
-    ).write(target.mountRelativePath, buffer, {
+    ).write(target.relativePath, buffer, {
       mkdir: params.mkdir !== false,
     });
   }
 
-  async createFileExclusive(params: {
-    filePath: string;
-    cwd?: string;
-    data: Buffer | string;
-    encoding?: BufferEncoding;
-    mkdir?: boolean;
-  }): Promise<"created" | "exists"> {
+  async createFileExclusive(
+    params: Parameters<NonNullable<SandboxFsBridge["createFileExclusive"]>>[0],
+  ): Promise<"created" | "exists"> {
     const target = this.resolveTarget(params);
     this.ensureWritable(target, "create files");
     const buffer = Buffer.isBuffer(params.data)
@@ -128,7 +113,7 @@ class MxcFsBridge implements SandboxFsBridge {
     try {
       await (
         await fsRoot(target.mount.hostRoot)
-      ).create(target.mountRelativePath, buffer, {
+      ).create(target.relativePath, buffer, {
         mkdir: params.mkdir !== false,
       });
       return "created";
@@ -143,23 +128,18 @@ class MxcFsBridge implements SandboxFsBridge {
   async mkdirp(params: { filePath: string; cwd?: string }): Promise<void> {
     const target = this.resolveTarget(params);
     this.ensureWritable(target, "create directories");
-    if (target.mountRelativePath.length === 0) {
+    if (target.relativePath.length === 0) {
       return;
     }
-    await (await fsRoot(target.mount.hostRoot)).mkdir(target.mountRelativePath);
+    await (await fsRoot(target.mount.hostRoot)).mkdir(target.relativePath);
   }
 
-  async remove(params: {
-    filePath: string;
-    cwd?: string;
-    recursive?: boolean;
-    force?: boolean;
-  }): Promise<void> {
+  async remove(params: Parameters<SandboxFsBridge["remove"]>[0]): Promise<void> {
     const target = this.resolveTarget(params);
     this.ensureWritable(target, "remove files");
     await removePathWithinRoot({
       rootDir: target.mount.hostRoot,
-      relativePath: target.mountRelativePath,
+      relativePath: target.relativePath,
       recursive: params.recursive,
       force: params.force ?? false,
     });
@@ -167,28 +147,31 @@ class MxcFsBridge implements SandboxFsBridge {
 
   async rename(params: { from: string; to: string; cwd?: string }): Promise<void> {
     const { from: source, to: target } = this.resolveRenameTargets(params);
-    if (!isSameMountRoot(source.mount.hostRoot, target.mount.hostRoot)) {
+    if (
+      normalizeMxcPathForComparison(source.mount.hostRoot) !==
+      normalizeMxcPathForComparison(target.mount.hostRoot)
+    ) {
       throw new Error(
         `Sandbox rename must stay within the same mounted root: ${source.containerPath} -> ${target.containerPath}`,
       );
     }
 
     const root = await fsRoot(source.mount.hostRoot);
-    const targetParent = resolveRelativeParentPath(target.mountRelativePath);
+    const targetParent = resolveRelativeParentPath(target.relativePath);
     if (targetParent) {
       await root.mkdir(targetParent);
     }
-    await root.move(source.mountRelativePath, target.mountRelativePath, { overwrite: true });
+    await root.move(source.relativePath, target.relativePath, { overwrite: true });
   }
 
   async stat(params: { filePath: string; cwd?: string }): Promise<SandboxFsStat | null> {
     const target = this.resolveTarget(params);
     const root = await fsRoot(target.mount.hostRoot);
-    if (!(await root.exists(target.mountRelativePath))) {
+    if (!(await root.exists(target.relativePath))) {
       return null;
     }
 
-    const stats = await root.stat(target.mountRelativePath);
+    const stats = await root.stat(target.relativePath);
     return {
       type: stats.isDirectory ? "directory" : stats.isFile ? "file" : "other",
       size: stats.size,
@@ -223,8 +206,6 @@ class MxcFsBridge implements SandboxFsBridge {
         relativePath: mountRelativePath,
         containerPath,
         mount,
-        mountRelativePath,
-        writable: mount.writable,
       };
     }
     return null;
@@ -240,7 +221,7 @@ class MxcFsBridge implements SandboxFsBridge {
   }
 
   private ensureWritable(target: ResolvedMxcPath, action: string): void {
-    if (!target.writable) {
+    if (!target.mount.writable) {
       throw new Error(`Sandbox path is read-only; cannot ${action}: ${target.containerPath}`);
     }
   }
@@ -250,22 +231,10 @@ function resolveWorkspaceMounts(sandbox: MxcFsBridgeContext): readonly MxcFsMoun
   const containerRoot = path.resolve(sandbox.containerWorkdir);
   const workspaceDir = path.resolve(sandbox.workspaceDir);
   const agentWorkspaceDir = path.resolve(sandbox.agentWorkspaceDir);
-  const mounts: MxcFsMount[] =
-    sandbox.workspaceAccess === "rw"
-      ? [
-          {
-            hostRoot: agentWorkspaceDir,
-            containerRoot,
-            writable: true,
-          },
-        ]
-      : [
-          {
-            hostRoot: workspaceDir,
-            containerRoot,
-            writable: false,
-          },
-        ];
+  const writable = sandbox.workspaceAccess === "rw";
+  const mounts: MxcFsMount[] = [
+    { hostRoot: writable ? agentWorkspaceDir : workspaceDir, containerRoot, writable },
+  ];
 
   if (
     sandbox.workspaceAccess === "ro" &&
@@ -288,16 +257,12 @@ function resolveMxcProtectedSkillMounts(sandbox: MxcFsBridgeContext): readonly M
       skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
       workdir: sandbox.containerWorkdir,
       workspaceAccess: sandbox.workspaceAccess,
-    }).map(normalizeMxcProtectedSkillMount),
+    }).map((mount) => ({
+      hostRoot: path.resolve(mount.hostPath),
+      containerRoot: path.resolve(mount.containerPath),
+      writable: false,
+    })),
   );
-}
-
-function normalizeMxcProtectedSkillMount(mount: MxcReadOnlySkillMount): MxcFsMount {
-  return {
-    hostRoot: path.resolve(mount.hostPath),
-    containerRoot: path.resolve(mount.containerPath),
-    writable: false,
-  };
 }
 
 function dedupeAndSortMounts(mounts: readonly MxcFsMount[]): readonly MxcFsMount[] {
@@ -310,20 +275,14 @@ function dedupeAndSortMounts(mounts: readonly MxcFsMount[]): readonly MxcFsMount
       deduped.set(key, mount);
     }
   }
-  return [...deduped.values()].toSorted((left, right) => {
-    const lengthDiff = right.containerRoot.length - left.containerRoot.length;
-    if (lengthDiff !== 0) {
-      return lengthDiff;
-    }
-    return right.hostRoot.length - left.hostRoot.length;
-  });
+  return [...deduped.values()].toSorted(
+    (left, right) =>
+      right.containerRoot.length - left.containerRoot.length ||
+      right.hostRoot.length - left.hostRoot.length,
+  );
 }
 
 function resolveRelativeParentPath(relativePath: string): string | null {
   const parent = path.dirname(relativePath);
   return parent === "." || parent === "" ? null : parent;
-}
-
-function isSameMountRoot(first: string, second: string): boolean {
-  return normalizeMxcPathForComparison(first) === normalizeMxcPathForComparison(second);
 }

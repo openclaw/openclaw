@@ -101,6 +101,67 @@ describe("collectWhatsAppStatusIssues", () => {
     ]);
   });
 
+  it.each([
+    {
+      name: "unstable auth with a reconnecting runtime",
+      account: {
+        statusState: "unstable",
+        linked: true,
+        running: true,
+        connected: false,
+        reconnectAttempts: 2,
+        healthState: "reconnecting",
+        lastError: "socket closed",
+      },
+      authMessage: "Auth state is still stabilizing.",
+      authFix:
+        "Wait a moment for queued credential writes to finish, then retry the command or rerun health.",
+      runtimeMessage: "Linked but reconnecting (reconnectAttempts=2): socket closed",
+    },
+    {
+      name: "unlinked auth with a stopped runtime",
+      account: {
+        linked: false,
+        running: true,
+        connected: false,
+        reconnectAttempts: 1,
+        healthState: "stopped",
+        lastError: "socket closed",
+      },
+      authMessage: "Not linked (no WhatsApp Web session).",
+      authFix: "Run: openclaw channels login (scan QR on the gateway host).",
+      runtimeMessage: "stopped (reconnectAttempts=1): socket closed",
+    },
+  ])(
+    "reports runtime issues alongside $name",
+    ({ account, authMessage, authFix, runtimeMessage }) => {
+      const issues = collectWhatsAppStatusIssues([
+        {
+          accountId: "default",
+          enabled: true,
+          ...account,
+        },
+      ]);
+
+      expect(issues).toEqual([
+        {
+          channel: "whatsapp",
+          accountId: "default",
+          kind: "auth",
+          message: authMessage,
+          fix: authFix,
+        },
+        {
+          channel: "whatsapp",
+          accountId: "default",
+          kind: "runtime",
+          message: runtimeMessage,
+          fix: "Run: openclaw doctor (or restart the gateway). If it persists, relink via channels login and check logs.",
+        },
+      ]);
+    },
+  );
+
   it("reports linked but disconnected runtime state", () => {
     const issues = collectWhatsAppStatusIssues([
       {

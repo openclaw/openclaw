@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { resolve as resolveFilePath } from "node:path";
+import type OpenAI from "openai";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
@@ -7,19 +8,13 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { textResult, type AgentToolResult } from "openclaw/plugin-sdk/tool-results";
-import type { OpenClawPluginApi } from "./api.js";
 import type { MemoryConfig } from "./config.js";
 
-type OpenAiEmbeddingClient = {
-  post<T>(
-    path: string,
-    options: { body: unknown; timeout?: number; maxRetries?: number },
-  ): Promise<T>;
-};
 const loadOpenAiModule = createLazyRuntimeModule(() => import("openai"));
 const loadMemoryEmbeddingProviderModule = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/memory-core-host-engine-embeddings"),
@@ -91,7 +86,7 @@ function embeddingConfigFingerprint(embedding: EmbeddingConfig): string {
 }
 
 class OpenAiCompatibleEmbeddings {
-  private clientPromise: Promise<OpenAiEmbeddingClient>;
+  private clientPromise: Promise<OpenAI>;
 
   constructor(
     apiKey: string,
@@ -100,7 +95,7 @@ class OpenAiCompatibleEmbeddings {
     private dimensions?: number,
   ) {
     this.clientPromise = loadOpenAiModule().then(
-      ({ default: OpenAI }) => new OpenAI({ apiKey, baseURL: baseUrl }) as OpenAiEmbeddingClient,
+      ({ default: OpenAI }) => new OpenAI({ apiKey, baseURL: baseUrl }),
     );
   }
 
@@ -554,7 +549,7 @@ type EmbeddingCreateResponse = {
   }>;
 };
 
-export function normalizeEmbeddingVector(value: unknown): number[] {
+function normalizeEmbeddingVector(value: unknown): number[] {
   if (typeof value === "string") {
     const canonicalEmbedding = canonicalizeBase64(value);
     if (!canonicalEmbedding) {

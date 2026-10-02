@@ -4,6 +4,7 @@ import {
   isSubagentRunLive,
   isSubagentRunQueued,
 } from "../../agents/subagents/registry/subagent-registry-read.js";
+import { getSubagentRunRuntimeKey } from "../../agents/subagents/registry/subagent-run-generation.js";
 import { isSwarmRunWaitingForCapacity } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { isAgentRunWaitingForCapacity } from "../../infra/agent-run-capacity-wait.js";
 import {
@@ -12,7 +13,7 @@ import {
   type ProjectedAgentRunIndex,
 } from "../../infra/agent-run-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
+import { chatRunBelongsToAgent, resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import type { GatewayRequestContext } from "./types.js";
 
 /** Active-run matcher including hidden remote lifecycle projections. */
@@ -91,14 +92,10 @@ function isTrackedActiveSessionRunForKey(
   if (!requestedAgentId) {
     return false;
   }
-  const activeAgentId = resolveChatRunOwnerAgentId({
-    agentId: active.agentId,
-    sessionKey: active.sessionKey,
-    defaultAgentId,
-  });
-  return activeAgentId
-    ? normalizeAgentId(activeAgentId) === normalizeAgentId(requestedAgentId)
-    : false;
+  return chatRunBelongsToAgent(
+    { agentId: active.agentId, sessionKey: active.sessionKey, defaultAgentId },
+    requestedAgentId,
+  );
 }
 
 function isTrackedActiveSessionRunForSessionId(
@@ -114,12 +111,9 @@ function isTrackedActiveSessionRunForSessionId(
   if (!requestedAgentId) {
     return false;
   }
-  return (
-    resolveChatRunOwnerAgentId({
-      agentId: active.agentId,
-      sessionKey: active.sessionKey,
-      defaultAgentId,
-    }) === normalizeAgentId(requestedAgentId)
+  return chatRunBelongsToAgent(
+    { agentId: active.agentId, sessionKey: active.sessionKey, defaultAgentId },
+    requestedAgentId,
   );
 }
 
@@ -242,7 +236,7 @@ export function resolveVisibleActiveSessionRunState(params: {
     (isAgentRunWaitingForCapacity(directSubagent.runId) ||
       isSwarmRunWaitingForCapacity(
         directSubagent.schedulerSlotId ?? directSubagent.runId,
-        directSubagent,
+        getSubagentRunRuntimeKey(directSubagent),
       ));
   const projectedRunState = resolveProjectedAgentRunProgressState({
     sessionKeys: [params.requestedKey, params.canonicalKey],

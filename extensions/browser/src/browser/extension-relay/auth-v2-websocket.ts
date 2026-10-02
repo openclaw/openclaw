@@ -1,6 +1,7 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import type { RawData, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
+import { parseStrictJsonObject } from "../../../chrome-extension/modules/strict-json.js";
 import type { BrowserRelayProofFields } from "./auth-v2-crypto.js";
 import {
   BROWSER_RELAY_CHALLENGE_TTL_MS,
@@ -12,7 +13,6 @@ import {
   boundedRawDataByteLength,
   MAX_WEBSOCKET_AUTH_MESSAGE_BYTES,
 } from "./preauth-websocket-guard.js";
-import { parseStrictJsonObject } from "./strict-json.js";
 const log = createSubsystemLogger("browser").child("extension-relay");
 
 export function authenticateExtensionWebSocket(params: {

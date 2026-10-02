@@ -1,4 +1,3 @@
-// Control UI view renders the Logbook automatic work journal tab.
 import { html, nothing, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";

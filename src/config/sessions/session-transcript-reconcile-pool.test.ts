@@ -1,14 +1,11 @@
+import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
-import {
-  acquireStateDatabaseCoordinator,
-  captureStateDatabaseCoordinatorRuntime,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "../../infra/state-database-coordinator.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import {
@@ -73,78 +70,69 @@ function observeCanonicalWriterLeases() {
   return { leases, restore: () => spy.mockRestore() };
 }
 
-it.each([false, true])(
-  "reconciles a dirty projection while the parent retains lifecycle custody (custom runtime: %s)",
-  async (customRuntime) => {
-    const stateDir = tempDirs.make("openclaw-reconcile-parent-custody-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const options = { agentId: "main", env };
-    const defaultRuntime = captureStateDatabaseCoordinatorRuntime();
-    await withStateDatabaseCoordinatorRuntimeDirectory(
-      customRuntime ? `${stateDir}/runtime` : defaultRuntime,
-      async () => {
-        const canonical = observeCanonicalWriterLeases();
-        let lifecycle: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
-        let defaultExclusion: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
-        try {
-          await persistSessionTranscriptTurn(
-            { ...options, sessionId: "parent-custody", sessionKey: "agent:main:parent-custody" },
-            {
-              messages: [
-                { eventId: "seed", message: { role: "user", content: "synthetic custody" } },
-              ],
-              touchSessionEntry: false,
-            },
-          );
-          await waitForSessionTranscriptIndexReconcile(options);
-          const database = openOpenClawAgentDatabase(options);
-          const nativeLeases = readAgentDatabaseLeaseIds(database.path, env);
-          expect(nativeLeases).toHaveLength(1);
-          let plannerLeaseId: string | undefined;
-          observer.onTask = ({ input }) => {
-            if (input.mode === "disk" && input.path === database.path) {
-              plannerLeaseId = input.leaseId;
-            }
-          };
-          database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
-          const databasePath = openOpenClawStateDatabase({ env }).path;
-          lifecycle = acquireStateDatabaseCoordinator({ databasePath });
-          if (customRuntime) {
-            // A dropped custom runtime must not silently acquire the default coordinator.
-            defaultExclusion = acquireStateDatabaseCoordinator({
-              databasePath,
-              runtimeDirectory: defaultRuntime.directory,
-            });
-          }
-          await expect(reconcileSessionTranscriptIndexes(options)).resolves.toEqual({
-            reconciledSessions: 1,
-          });
-          const canonicalLeaseId = expectDefined(
-            canonical.leases.get(database.path),
-            "canonical writer lease",
-          );
-          expect(canonicalLeaseId).toEqual(expect.any(String));
-          expect(plannerLeaseId).toEqual(expect.any(String));
-          expect(new Set([...nativeLeases, canonicalLeaseId, plannerLeaseId]).size).toBe(3);
-          expect(readAgentDatabaseLeaseIds(database.path, env)).toEqual(
-            [...nativeLeases, canonicalLeaseId].toSorted(),
-          );
-          expect(
-            database.db.prepare("SELECT message_id, text FROM session_transcript_fts").all(),
-          ).toEqual([{ message_id: "seed", text: "synthetic custody" }]);
-        } finally {
-          canonical.restore();
-          lifecycle?.release();
-          defaultExclusion?.release();
-          await closeSessionTranscriptReconcileWorkerPool();
-          await closeOpenClawAgentDatabasesAsync(stateDir);
-          closeOpenClawStateDatabaseForTest();
-        }
+it("reconciles a dirty projection while the parent retains serving Gateway ownership", async () => {
+  const stateDir = tempDirs.make("openclaw-reconcile-parent-owner-");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  const options = { agentId: "main", env };
+  const canonical = observeCanonicalWriterLeases();
+  let owner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
+  try {
+    await persistSessionTranscriptTurn(
+      { ...options, sessionId: "parent-owner", sessionKey: "agent:main:parent-owner" },
+      {
+        messages: [{ eventId: "seed", message: { role: "user", content: "synthetic ownership" } }],
+        touchSessionEntry: false,
       },
     );
-  },
-  30_000,
-);
+    await waitForSessionTranscriptIndexReconcile(options);
+    const database = openOpenClawAgentDatabase(options);
+    const nativeLeases = readAgentDatabaseLeaseIds(database.path, env);
+    expect(nativeLeases).toHaveLength(1);
+    let plannerLeaseId: string | undefined;
+    observer.onTask = ({ input }) => {
+      if (input.mode === "disk" && input.path === database.path) {
+        plannerLeaseId = input.leaseId;
+      }
+    };
+    database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
+    owner = acquireGatewayStateOwner({
+      databasePath: openOpenClawStateDatabase({ env }).path,
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: path.join(stateDir, "openclaw.json"),
+        stateDir,
+        role: "gateway",
+      },
+    });
+    await expect(reconcileSessionTranscriptIndexes(options)).resolves.toEqual({
+      reconciledSessions: 1,
+    });
+    owner.assertCurrent();
+    const canonicalLeaseId = expectDefined(
+      canonical.leases.get(database.path),
+      "canonical writer lease",
+    );
+    expect(canonicalLeaseId).toEqual(expect.any(String));
+    expect(plannerLeaseId).toEqual(expect.any(String));
+    expect(new Set([...nativeLeases, canonicalLeaseId, plannerLeaseId]).size).toBe(3);
+    expect(readAgentDatabaseLeaseIds(database.path, env)).toEqual(
+      [...nativeLeases, canonicalLeaseId].toSorted(),
+    );
+    expect(
+      database.db.prepare("SELECT message_id, text FROM session_transcript_fts").all(),
+    ).toEqual([{ message_id: "seed", text: "synthetic ownership" }]);
+  } finally {
+    canonical.restore();
+    try {
+      await closeSessionTranscriptReconcileWorkerPool();
+      await closeOpenClawAgentDatabasesAsync(stateDir);
+      closeOpenClawStateDatabaseForTest();
+    } finally {
+      owner?.release();
+    }
+  }
+}, 30_000);
 
 it.each(["complete", "native-exit"] as const)(
   "drains active and queued reconciliation through %s before retiring its lifecycle",

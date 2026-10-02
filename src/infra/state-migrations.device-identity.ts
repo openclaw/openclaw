@@ -5,19 +5,16 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { acquireDeviceIdentityCoordinator } from "./device-identity-coordinator.js";
 import {
   normalizeLegacyDeviceIdentity,
   type NormalizedLegacyDeviceIdentity,
 } from "./device-identity-legacy.js";
 import {
   readStoredDeviceIdentityReadOnly,
-  resolveDeviceIdentityStore,
   validateStoredDeviceIdentity,
   type DeviceIdentity,
 } from "./device-identity-store.js";
 import { deriveEd25519PrivateKeyRaw, deriveEd25519PublicKeyRaw } from "./ed25519-signature.js";
-import { formatErrorMessage } from "./errors.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -99,17 +96,8 @@ async function readLegacySourceSnapshot(params: {
   return { ...snapshot, identity };
 }
 
-type CanonicalIdentityRow = {
-  identity_key: string;
-  device_id: string;
-  public_key_pem: string;
-  private_key_pem: string;
-  created_at_ms: number;
-  updated_at_ms: number;
-};
-
 function classifyCanonicalRow(
-  row: CanonicalIdentityRow,
+  row: NonNullable<ReturnType<typeof readCanonicalIdentity>>,
   identity: NormalizedLegacyDeviceIdentity,
 ): "same" | "different" | "invalid" {
   if (!isValidCreatedAtMs(row.updated_at_ms)) {
@@ -144,9 +132,7 @@ function classifyCanonicalRow(
     : "different";
 }
 
-function readCanonicalIdentity(
-  db: ReturnType<typeof openOpenClawStateDatabase>["db"],
-): CanonicalIdentityRow | undefined {
+function readCanonicalIdentity(db: ReturnType<typeof openOpenClawStateDatabase>["db"]) {
   return executeSqliteQueryTakeFirstSync(
     db,
     getNodeSqliteKysely<DeviceIdentityMigrationDatabase>(db)
@@ -428,26 +414,15 @@ async function migrateWithExclusiveStateOwnership(params: {
     };
   }
 
-  if (activePath === params.detected.sourcePath) {
-    try {
+  let result: ReturnType<typeof importAndRecordReceipt>;
+  try {
+    if (activePath === params.detected.sourcePath) {
       snapshot = await source.claim({
         snapshot,
         mismatchMessage: "legacy device identity changed before Doctor could claim it",
         beforeClaim: () => params.beforeClaim?.(params.detected.sourcePath),
       });
-    } catch (error) {
-      const restoreError = await source.restore();
-      return {
-        changes: [],
-        warnings: [
-          `Failed migrating legacy device identity: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
-        ],
-      };
     }
-  }
-
-  let result: ReturnType<typeof importAndRecordReceipt>;
-  try {
     result = importAndRecordReceipt({
       env: params.env,
       sourcePath: params.detected.sourcePath,
@@ -513,28 +488,13 @@ export async function migrateLegacyDeviceIdentity(params: {
   if (params.doctorOnlyStateMigrations !== true) {
     return { changes: [], warnings: [] };
   }
-  let identityCoordinator: ReturnType<typeof acquireDeviceIdentityCoordinator> | undefined;
   return await withLegacyMigrationStateLock({
     stateDir: params.stateDir,
     env: params.env,
     label: "legacy device identity",
     releaseLabel: "Device identity",
     errorLabel: "Failed reading legacy device identity state",
-    beforeRelease: () => identityCoordinator?.release(),
     run: async (env) => {
-      try {
-        identityCoordinator = acquireDeviceIdentityCoordinator({
-          databasePath: resolveDeviceIdentityStore({ env, identityKey: IDENTITY_KEY }).databasePath,
-          stateDir: params.stateDir,
-        });
-      } catch (error) {
-        return {
-          changes: [],
-          warnings: [
-            `Failed migrating legacy device identity: identity state is busy (${formatErrorMessage(error)}).`,
-          ],
-        };
-      }
       if (hasLegacyDeviceIdentityPath(params.detected)) {
         const stateRoot = await root(params.stateDir, {
           hardlinks: "reject",

@@ -21,19 +21,16 @@ export const qaChannelRuntimeMeta = {
   docsPath: "/channels/qa-channel",
   blurb: "Synthetic QA channel for OpenClaw QA runs.",
 };
-const qaChannelSetupMeta = qaChannelRuntimeMeta;
 
 type QaChannelPluginBase = Pick<
   ChannelPlugin<ResolvedQaChannelAccount>,
   "id" | "meta" | "capabilities" | "reload" | "configSchema" | "setupContract" | "config"
 >;
 
-export function createQaChannelPluginBase(
-  meta: ChannelPlugin<ResolvedQaChannelAccount>["meta"] = qaChannelSetupMeta,
-): QaChannelPluginBase {
+export function createQaChannelPluginBase(): QaChannelPluginBase {
   return {
     id: QA_CHANNEL_ID,
-    meta,
+    meta: qaChannelRuntimeMeta,
     capabilities: {
       chatTypes: ["direct", "group"],
     },

@@ -4,6 +4,7 @@ import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import type { BoardWidgetPutResult } from "../../packages/gateway-protocol/src/index.js";
+import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../packages/gateway-protocol/src/schema/canvas.js";
 import { optionalStringEnum } from "../agents/schema/string-enum.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "../agents/tools/common.js";
 import {
@@ -41,8 +42,7 @@ import { findWidgetScriptSyntaxError } from "./widget-script-syntax.js";
 import { buildWidgetDocument } from "./wrap.js";
 
 const SHOW_WIDGET_REQUIRED_CLIENT_CAPS = ["inline-widgets"];
-const WIDGET_CODE_MAX_CHARS = 262_144;
-const PINNED_WIDGET_MAX_UTF8_BYTES = 256 * 1024;
+const REGISTERED_WIDGET_CODE_MAX_CHARS = 262_144;
 const WIDGET_MAX_PER_SCOPE = 32;
 
 function currentPluginRegistry() {
@@ -55,17 +55,15 @@ export function hasRegisteredShowWidgetKinds(): boolean {
 
 function createShowWidgetToolSchema(
   kinds: readonly string[],
-  presenters: readonly WidgetPresenter[],
+  presenters: readonly Exclude<WidgetPresenter, { target: "current_channel" }>[],
   capabilityGuidance: string,
   pinnedOnly: boolean,
   reportAvailable: boolean,
 ) {
-  const presenterTargets = presenters.flatMap((presenter) =>
-    presenter.target === "current_channel" ? [] : [presenter.target],
-  );
+  const presenterTargets = presenters.map((presenter) => presenter.target);
   const targets = ["assistant_message", ...presenterTargets] as const;
-  const presenterDescriptions = presenters.flatMap((presenter) =>
-    presenter.target === "current_channel" ? [] : [`${presenter.target}: ${presenter.description}`],
+  const presenterDescriptions = presenters.map(
+    (presenter) => `${presenter.target}: ${presenter.description}`,
   );
   const widgetCode = Type.String({
     description:
@@ -274,9 +272,9 @@ function resolveRetentionScope(options: ShowWidgetToolOptions): string {
 }
 
 function assertPinnedWidgetDocumentSize(html: string): void {
-  if (Buffer.byteLength(html, "utf8") > PINNED_WIDGET_MAX_UTF8_BYTES) {
+  if (Buffer.byteLength(html, "utf8") > WIDGET_HTML_MAX_UTF8_BYTES) {
     throw new WidgetHtmlInputError(
-      `pin exceeds effective dashboard budget (${PINNED_WIDGET_MAX_UTF8_BYTES} UTF-8 bytes after wrapping)`,
+      `pin exceeds effective dashboard budget (${WIDGET_HTML_MAX_UTF8_BYTES} UTF-8 bytes after wrapping)`,
     );
   }
 }
@@ -352,10 +350,11 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         if (!rawWidgetCode.trim()) {
           throw new WidgetHtmlInputError("widget_code required");
         }
-        assertWidgetHtmlSize(rawWidgetCode, WIDGET_CODE_MAX_CHARS, {
-          inputName: "widget_code",
-          unit: "characters",
-        });
+        assertWidgetHtmlSize(
+          rawWidgetCode,
+          kind === "html" ? WIDGET_HTML_MAX_UTF8_BYTES : REGISTERED_WIDGET_CODE_MAX_CHARS,
+          { inputName: "widget_code", unit: kind === "html" ? "bytes" : "characters" },
+        );
         if (kind === "html") {
           // Untrimmed so reported line/column match the widget_code the model sent.
           const scriptError = findWidgetScriptSyntaxError(rawWidgetCode);
@@ -419,8 +418,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         }
       }
       const currentPresenterSupportsKind =
-        currentChannelPresenter?.target === "current_channel" &&
-        currentChannelPresenter.capabilities.sourceKinds.includes(kind);
+        currentChannelPresenter?.capabilities.sourceKinds.includes(kind);
       const wantsCurrentChannel =
         requestedTarget === "assistant_message" && currentPresenterSupportsKind;
       const wantsNodePanel = requestedTarget === "node_panel";
@@ -429,7 +427,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           "inline widget hosting is disabled; set pin=true to place the widget on the session dashboard",
         );
       }
-      if (wantsCurrentChannel && currentChannelPresenter?.target === "current_channel") {
+      if (wantsCurrentChannel && currentChannelPresenter) {
         const { maxSourceBytes } = currentChannelPresenter.capabilities;
         if (maxSourceBytes !== undefined) {
           assertWidgetHtmlSize(rawWidgetCode, maxSourceBytes, { inputName: "widget_code" });
@@ -455,6 +453,8 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
             composedWidget,
             registration ? { scriptOrigins: ["'self'"] } : {},
           );
+      const hasPresentationRoute =
+        !isReport && (inlineAvailable || wantsCurrentChannel || wantsNodePanel);
       let pinnedText = "";
       let pinnedWidgetName: string | undefined;
       let capabilityState: BoardWidgetPutResult["widgets"][number]["grantState"] | undefined;
@@ -472,6 +472,11 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
               connectOrigins: capabilities?.netOrigins,
             }),
           );
+        }
+        if (hasPresentationRoute) {
+          assertWidgetHtmlSize(wrappedDocument, WIDGET_HTML_MAX_UTF8_BYTES, {
+            inputName: "widget document after wrapping",
+          });
         }
         const snapshot = await gatewayCall<BoardWidgetPutResult>("board.widget.put", {
           sessionKey: pinSessionKey,
@@ -522,9 +527,11 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         if (capabilityState === "granted") {
           pinnedText += "; capabilities granted";
         }
+      } else if (hasPresentationRoute) {
+        assertWidgetHtmlSize(wrappedDocument, WIDGET_HTML_MAX_UTF8_BYTES, {
+          inputName: "widget document after wrapping",
+        });
       }
-      const hasPresentationRoute =
-        !isReport && (inlineAvailable || wantsCurrentChannel || wantsNodePanel);
       if (!hasPresentationRoute) {
         return jsonResult({
           status:

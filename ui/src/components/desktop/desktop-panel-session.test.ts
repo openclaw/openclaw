@@ -86,7 +86,7 @@ describe("session desktop connection", () => {
         control: true,
         ...(explicit ? { source: desktopEnvironment.id } : { session: "agent:main:preview" }),
       });
-      expect(panel.renderRoot.textContent).toContain("Agent input is paused");
+      expect(panel.renderRoot.textContent).not.toContain("Agent input is paused");
       clickPanelButton(panel, 'button[aria-label="Switch to view only"]');
       await waitForFast(() => expect(connect).toHaveBeenCalledTimes(3));
       expect(request).toHaveBeenLastCalledWith("desktop.observe", {

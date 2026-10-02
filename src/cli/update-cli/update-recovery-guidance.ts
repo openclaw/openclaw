@@ -37,6 +37,8 @@ export function resolveUpdateResultNextAction(params: {
   runningVersion?: string;
   verificationFailure?: string;
   env: NodeJS.ProcessEnv;
+  /** Prepared before ledger writes so formatting performs no filesystem discovery. */
+  environment?: { container: boolean; stateDir: string };
 }): string | undefined {
   const { result, env } = params;
   if (isUpdateGatewayReadinessPending(result)) {
@@ -53,6 +55,36 @@ export function resolveUpdateResultNextAction(params: {
     return UPDATE_INSTALL_SKIP_GUIDANCE[result.reason];
   }
   if (result.status === "error") {
+    const doctorSettlement = result.steps.findLast(
+      (step) => step.name === "doctor process settlement",
+    );
+    if (doctorSettlement && doctorSettlement.exitCode !== 0) {
+      const detail =
+        doctorSettlement.failureFacts
+          ?.map((fact) => fact.message)
+          .filter(Boolean)
+          .join("; ") || doctorSettlement.stderrTail;
+      return `${detail ?? "Doctor process settlement could not be verified."} Keep the Gateway stopped while Doctor writers may still be running. Preserve the migrated state and recovery snapshots; after the recorded processes have stopped, run \`${formatCliCommand("openclaw update repair", env)}\`.`;
+    }
+    if (
+      result.reason === "state-migrated-no-rollback" &&
+      doctorSettlement?.exitCode === 0 &&
+      result.recovery?.serviceRestartSafe === true &&
+      result.recovery.service === "healthy"
+    ) {
+      return `Doctor did not finish normally, but all tracked process groups stopped and the candidate Gateway is healthy on the preserved migrated state. Keep the recovery snapshots and run \`${formatCliCommand("openclaw update repair", env)}\` to finish maintenance.`;
+    }
+    if (
+      result.reason === "state-migrated-no-rollback" &&
+      result.steps.some((step) => step.name === "database rollback" && step.exitCode !== 0) &&
+      result.recovery?.serviceRestartSafe === true &&
+      result.recovery.service === "healthy"
+    ) {
+      const refusal =
+        result.rollbackOutcome?.reason ??
+        result.steps.findLast((step) => step.name === "database rollback")?.stderrTail;
+      return `Rollback refused: ${refusal ?? "restoring the backup would discard later writes"}. The Gateway is running on the preserved migrated state. Keep the recovery snapshots and run \`${formatCliCommand("openclaw doctor", env)}\` to inspect the remaining repair.`;
+    }
     if (
       result.reason === "update-failed" &&
       !result.recovery &&
@@ -100,7 +132,7 @@ export function resolveUpdateResultNextAction(params: {
                 failedStep.name,
               ) &&
               /\beacces\b/i.test(failedStep.stderrTail ?? ""))))) &&
-      isContainerEnvironment();
+      (params.environment?.container ?? isContainerEnvironment());
     // Record deployment-specific advice here so CLI output and later reports agree.
     // Keep the recovery constraints: an image change must not roll back migrated state.
     const deployment = containerPackageFailure
@@ -124,7 +156,7 @@ export function resolveUpdateResultNextAction(params: {
     if (params.restart === false && result.postUpdate?.plugins?.changed) {
       return `Plugins updated; Gateway restart skipped (--no-restart). Run \`${command("openclaw gateway restart")}\` to activate them in the running Gateway.`;
     }
-    return `After verifying your history, preview recovery rollback retirement with ${command("openclaw update cleanup --dry-run")} for state ${resolveStateDir(env)}. Keep the same state/config overrides.`;
+    return `After verifying your history, preview recovery rollback retirement with ${command("openclaw update cleanup --dry-run")} for state ${params.environment?.stateDir ?? resolveStateDir(env)}. Keep the same state/config overrides.`;
   }
   return undefined;
 }

@@ -60,10 +60,7 @@ function splitModelRef(modelRef?: string | null): { provider: string; model: str
 }
 
 function normalizePage(value: number | undefined): number {
-  if (!Number.isFinite(value)) {
-    return 1;
-  }
-  return Math.max(1, Math.floor(value as number));
+  return Math.max(1, Math.floor(asFiniteNumber(value) ?? 1));
 }
 
 function paginateItems<T>(items: T[], page?: number, pageSize = MODELS_PAGE_SIZE) {
@@ -89,26 +86,19 @@ function buildButton(params: {
   model?: string;
   style?: "default" | "primary" | "danger";
 }): MattermostInteractiveButtonInput {
-  const baseState =
-    params.action === "providers" || params.action === "back"
+  const baseState = {
+    action: params.action,
+    ownerUserId: params.ownerUserId,
+    ...(params.action === "list" || params.action === "select"
       ? {
-          action: params.action,
-          ownerUserId: params.ownerUserId,
+          provider: normalizeProviderId(params.provider ?? ""),
+          page: normalizePage(params.page),
         }
-      : params.action === "list"
-        ? {
-            action: "list" as const,
-            ownerUserId: params.ownerUserId,
-            provider: normalizeProviderId(params.provider ?? ""),
-            page: normalizePage(params.page),
-          }
-        : {
-            action: "select" as const,
-            ownerUserId: params.ownerUserId,
-            provider: normalizeProviderId(params.provider ?? ""),
-            page: normalizePage(params.page),
-            model: normalizeStringifiedOptionalString(params.model) ?? "",
-          };
+      : {}),
+    ...(params.action === "select"
+      ? { model: normalizeStringifiedOptionalString(params.model) ?? "" }
+      : {}),
+  };
 
   const digest = createHash("sha256").update(JSON.stringify(baseState)).digest("hex").slice(0, 12);
   return {
@@ -222,19 +212,16 @@ export function resolveMattermostModelPickerCurrentModel(params: {
     const storePath = resolveStorePath(params.cfg.session?.store, {
       agentId: params.route.agentId,
     });
-    const sessionEntry = getSessionEntry({
-      storePath,
-      sessionKey: params.route.sessionKey,
-      ...(params.readConsistency === "latest" ? { readConsistency: "latest" as const } : {}),
-    });
+    const loadSessionEntry = (sessionKey: string) =>
+      getSessionEntry({
+        storePath,
+        sessionKey,
+        ...(params.readConsistency === "latest" ? { readConsistency: "latest" as const } : {}),
+      });
+    const sessionEntry = loadSessionEntry(params.route.sessionKey);
     const override = resolveStoredModelOverride({
       sessionEntry,
-      loadSessionEntry: (sessionKey) =>
-        getSessionEntry({
-          storePath,
-          sessionKey,
-          ...(params.readConsistency === "latest" ? { readConsistency: "latest" as const } : {}),
-        }),
+      loadSessionEntry,
       sessionKey: params.route.sessionKey,
       parentSessionKey: sessionEntry?.parentSessionKey,
       defaultProvider: params.data.resolvedDefault.provider,

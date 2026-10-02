@@ -156,14 +156,8 @@ function parseQuestionRecord(payload: unknown): QuestionRecord | null {
   if (payload.status === "pending") {
     return { ...base, status: "pending" };
   }
-  if (payload.status === "answered") {
-    const answers = parseQuestionAnswers(payload.answers);
-    return answers ? { ...base, status: "answered", answers } : null;
-  }
-  if (payload.status === "cancelled" || payload.status === "expired") {
-    return { ...base, status: payload.status };
-  }
-  return null;
+  const resolved = parseQuestionResolvedEvent(payload);
+  return resolved ? { ...base, ...resolved } : null;
 }
 
 function parseQuestionRequestedEvent(payload: unknown): QuestionRecord | null {
@@ -256,20 +250,10 @@ function storeQuestionRecord(
     clearSecretQuestionDrafts(record.questions, drafts);
   }
   const prompt: QuestionPrompt = {
-    id: record.id,
-    questions: record.questions,
-    ...(record.agentId ? { agentId: record.agentId } : {}),
-    ...(record.sessionKey ? { sessionKey: record.sessionKey } : {}),
-    ...(record.runId ? { runId: record.runId } : {}),
-    createdAtMs: record.createdAtMs,
-    expiresAtMs: record.expiresAtMs,
-    status: record.status,
-    ...(record.status === "answered" ? { answers: record.answers } : {}),
+    ...record,
     ...(previous?.submittedAnswers ? { submittedAnswers: previous.submittedAnswers } : {}),
     answeredElsewhere:
-      record.status === "answered"
-        ? !(previous?.localResolutionConfirmed ?? false) && !(previous?.submitting ?? false)
-        : false,
+      record.status === "answered" && !previous?.localResolutionConfirmed && !previous?.submitting,
     localResolutionConfirmed: previous?.localResolutionConfirmed ?? false,
     locallyExpired: false,
     submitting:

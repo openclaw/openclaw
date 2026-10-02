@@ -19,6 +19,17 @@ export type ClearSkillProposalRollbackInput = {
   expectedRecordJson: string;
 };
 
+export function skillProposalRollbackValues(rollback: SkillProposalRollback) {
+  return {
+    written_at: rollback.writtenAt,
+    target_skill_file: rollback.targetSkillFile,
+    action: rollback.action,
+    previous_content_hash: rollback.previousContentHash ?? null,
+    previous_content: rollback.previousContent ?? null,
+    support_files_json: rollback.supportFiles ? JSON.stringify(rollback.supportFiles) : null,
+  };
+}
+
 function removeOtherPendingTargetRollbacks(
   database: DatabaseSync,
   params: { proposalId: string; targetSkillFile: string },
@@ -71,33 +82,16 @@ export function writeSkillProposalRollbackInDatabase(
     proposalId: params.proposalId,
     targetSkillFile: params.rollback.targetSkillFile,
   });
+  const values = skillProposalRollbackValues(params.rollback);
   executeSqliteQuerySync(
     db,
     kysely
       .insertInto("skill_workshop_proposal_rollbacks")
       .values({
         proposal_id: params.proposalId,
-        written_at: params.rollback.writtenAt,
-        target_skill_file: params.rollback.targetSkillFile,
-        action: params.rollback.action,
-        previous_content_hash: params.rollback.previousContentHash ?? null,
-        previous_content: params.rollback.previousContent ?? null,
-        support_files_json: params.rollback.supportFiles
-          ? JSON.stringify(params.rollback.supportFiles)
-          : null,
+        ...values,
       })
-      .onConflict((conflict) =>
-        conflict.column("proposal_id").doUpdateSet({
-          written_at: params.rollback.writtenAt,
-          target_skill_file: params.rollback.targetSkillFile,
-          action: params.rollback.action,
-          previous_content_hash: params.rollback.previousContentHash ?? null,
-          previous_content: params.rollback.previousContent ?? null,
-          support_files_json: params.rollback.supportFiles
-            ? JSON.stringify(params.rollback.supportFiles)
-            : null,
-        }),
-      ),
+      .onConflict((conflict) => conflict.column("proposal_id").doUpdateSet(values)),
   );
 }
 

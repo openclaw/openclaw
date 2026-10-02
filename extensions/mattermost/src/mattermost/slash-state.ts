@@ -1,17 +1,6 @@
-/**
- * Shared state for Mattermost slash commands.
- *
- * Bridges the plugin registration phase (HTTP route) with the monitor phase
- * (command registration with MM API). The HTTP handler needs to know which
- * tokens are known for fast-path routing, and the monitor needs to store
- * registered command IDs.
- *
- * State is kept per-account so that multi-account deployments don't
- * overwrite each other's tokens, registered commands, or handlers.
- */
-
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import type { MattermostConfig } from "../types.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
@@ -55,8 +44,6 @@ type SlashHandlerMatch =
       accountIds: string[];
     };
 
-// ─── Per-account state ───────────────────────────────────────────────────────
-
 type SlashCommandAccountState = {
   /** Tokens from registered/current commands, used for fast-path routing. */
   commandTokens: Set<string>;
@@ -64,35 +51,13 @@ type SlashCommandAccountState = {
   registeredCommands: MattermostRegisteredCommand[];
   /** Current HTTP handler for this account. */
   handler: SlashHandler | null;
-  /** The account that activated slash commands. */
-  account: ResolvedMattermostAccount;
-  /** Map from trigger to original command name (for skill commands that start with oc_). */
-  triggerMap: Map<string, string>;
 };
 
-/**
- * Map from accountId → per-account slash command state.
- *
- * Anchored to globalThis so that jiti-loaded (route registration) and
- * native-ESM-loaded (monitor/activation) module instances share the
- * same Map. Without this, each module loader creates its own copy of
- * the module-level variable and the HTTP handler never sees the tokens
- * populated by the monitor.
- */
-const ACCOUNT_STATES_KEY = Symbol.for("openclaw.mattermost.slash-account-states");
-
-function getSlashAccountStates(): Map<string, SlashCommandAccountState> {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalStore[ACCOUNT_STATES_KEY];
-  if (existing instanceof Map) {
-    return existing as Map<string, SlashCommandAccountState>;
-  }
-  const accountStates = new Map<string, SlashCommandAccountState>();
-  globalStore[ACCOUNT_STATES_KEY] = accountStates;
-  return accountStates;
-}
-
-const accountStates = getSlashAccountStates();
+// Route registration and monitor activation can use different module loaders.
+// Share their map; deactivateSlashCommands owns account cleanup.
+const accountStates = resolveGlobalMap<string, SlashCommandAccountState>(
+  Symbol.for("openclaw.mattermost.slash-account-states"),
+);
 
 function resolveSlashRouteInFlightKey(authorization: string | undefined): string {
   const token = authorization?.match(/^Token ([^,\s]+)$/iu)?.[1];
@@ -168,9 +133,6 @@ function resolveSlashHandlerForCommand(params: {
   );
 }
 
-/**
- * Get the slash command state for a specific account, or null if not activated.
- */
 export function getSlashCommandState(accountId: string): SlashCommandAccountState | null {
   return accountStates.get(accountId) ?? null;
 }
@@ -193,8 +155,6 @@ export function activateSlashCommands(params: {
   const { account, commandTokens, registeredCommands, triggerMap, api, log } = params;
   const accountId = account.accountId;
 
-  const tokenSet = new Set(commandTokens);
-
   const handler = createSlashCommandHttpHandler({
     account,
     cfg: api.cfg,
@@ -205,11 +165,9 @@ export function activateSlashCommands(params: {
   });
 
   accountStates.set(accountId, {
-    commandTokens: tokenSet,
+    commandTokens: new Set(commandTokens),
     registeredCommands,
     handler,
-    account,
-    triggerMap: triggerMap ?? new Map(),
   });
 
   log?.(
@@ -217,9 +175,6 @@ export function activateSlashCommands(params: {
   );
 }
 
-/**
- * Deactivate slash commands for a specific account (on shutdown/disconnect).
- */
 export function deactivateSlashCommands(accountId?: string) {
   for (const [stateAccountId, state] of accountStates) {
     if (accountId && stateAccountId !== accountId) {
@@ -293,11 +248,6 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
       return;
     }
 
-    // We need to peek at the body to route to the right account handler. Each
-    // account handler still performs upstream token validation before running a
-    // command.
-
-    // If there's only one active account (common case), route directly.
     if (accountStates.size === 1) {
       const state = accountStates.values().next().value;
       if (!state?.handler) {

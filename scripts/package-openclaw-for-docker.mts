@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveTimerTimeoutMs } from "../packages/normalization-core/src/number-coercion.ts";
 import {
   booleanFlag,
   parseFlagArgs,
@@ -22,7 +23,10 @@ import {
   LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
   PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
 } from "./lib/package-lifecycle-marker.mjs";
-import { cleanPackedOpenClawTarballs } from "./lib/packed-openclaw-tarballs.mts";
+import {
+  cleanPackedOpenClawTarballs,
+  validatePackedTarballOutputName,
+} from "./lib/packed-openclaw-tarballs.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
 import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
@@ -38,7 +42,6 @@ const DEFAULT_TIMEOUT_KILL_AFTER_MS = 5_000;
 const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const POST_FORCE_KILL_WAIT_MS = 1_000;
 const DEFAULT_CAPTURED_STDOUT_MAX_BYTES = 1024 * 1024;
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const AI_RUNTIME_PACKAGE = "@openclaw/ai";
 const AI_RUNTIME_BACKUP_DIR = ".openclaw-ai-package-backup";
 
@@ -81,6 +84,7 @@ type PackageOptions = RunOptions & {
   allowUnreleasedChangelog?: unknown;
   extractAiRuntime?: (tarballPath: string, destination: string) => Promise<unknown>;
   normalizeTarballModes?: (tarballPath: string) => Promise<unknown>;
+  onCleanupFailure?: (error: unknown) => void;
   outputName?: string;
   packJsonPath?: string;
   pnpmPack?: boolean;
@@ -173,30 +177,8 @@ function resolveTimeoutMs(envName: string, defaultValue: number) {
   return parsed;
 }
 
-function numericTimerValueMs(valueMs: unknown) {
-  const value = Number(valueMs);
-  return Number.isFinite(value) ? Math.floor(value) : undefined;
-}
-
-function resolvePackageBuildTimeoutMs(
-  valueMs: unknown,
-  fallbackMs: unknown = MAX_TIMER_TIMEOUT_MS,
-) {
-  const value = numericTimerValueMs(valueMs) ?? numericTimerValueMs(fallbackMs);
-  return Math.min(Math.max(value ?? MAX_TIMER_TIMEOUT_MS, 1), MAX_TIMER_TIMEOUT_MS);
-}
-
 function resolveOptionalTimerTimeoutMs(valueMs: unknown) {
-  if (valueMs === undefined) {
-    return undefined;
-  }
-  return resolvePackageBuildTimeoutMs(valueMs, 1);
-}
-
-function validateOutputName(value: string) {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.t(?:ar\.)?gz$/u.test(value)) {
-    throw new Error(`--output-name must be a tarball filename, not a path: ${value}`);
-  }
+  return valueMs === undefined ? undefined : resolveTimerTimeoutMs(Number(valueMs), 1);
 }
 
 function resolvePackedOpenClawFileName(value: string) {
@@ -252,7 +234,7 @@ export function parseArgs(argv: string[]) {
     },
   );
   if (options.outputName) {
-    validateOutputName(options.outputName);
+    validatePackedTarballOutputName(options.outputName);
   }
   if (options.packJson && options.pnpmPack) {
     throw new Error("--pack-json cannot be combined with --pnpm-pack");
@@ -270,8 +252,8 @@ function run(command: string, args: string[], cwd: string, options: RunOptions =
   }
   return new Promise<string>((resolve, reject) => {
     const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(options.timeoutMs);
-    const resolvedKillAfterMs = resolvePackageBuildTimeoutMs(
-      options.killAfterMs,
+    const resolvedKillAfterMs = resolveTimerTimeoutMs(
+      Number(options.killAfterMs),
       DEFAULT_TIMEOUT_KILL_AFTER_MS,
     );
     const useProcessGroup = process.platform !== "win32";
@@ -670,6 +652,7 @@ export async function prepareBundledAiRuntimePackage(
     originalAiRuntimeMoved = false;
     packedAiTarballs = [];
     if (cleanupError) {
+      packageOptions.onCleanupFailure?.(cleanupError);
       throw toErrorObject(cleanupError, "Package cleanup failed.");
     }
   };
@@ -703,6 +686,7 @@ export async function prepareBundledAiRuntimePackage(
     try {
       await restoreManifest(aiRuntimeSourceDir);
     } catch (restoreError) {
+      packageOptions.onCleanupFailure?.(restoreError);
       throw packError ? packagePreparationRestoreError(packError, restoreError) : restoreError;
     }
     if (packError) {
@@ -939,6 +923,8 @@ export async function packOpenClawPackageForDocker(
   try {
     let cleanupBundledAiRuntime = async () => {};
     let cleanupBundledPlugins = async () => {};
+    const cleanupFailures = new Set<unknown>();
+    const onCleanupFailure = (error: unknown) => void cleanupFailures.add(error);
     try {
       await cleanPackedOpenClawTarballs(outputPath);
       if (packageOptions.bundlePlugins?.length) {
@@ -946,6 +932,7 @@ export async function packOpenClawPackageForDocker(
         cleanupBundledPlugins = await preparePackageBundledPlugins(
           sourcePath,
           packageOptions.bundlePlugins,
+          onCleanupFailure,
         );
       }
       cleanupBundledAiRuntime = await prepareBundledAiRuntime(
@@ -955,6 +942,7 @@ export async function packOpenClawPackageForDocker(
         {
           prepareManifest,
           restoreManifest,
+          onCleanupFailure,
         },
       );
       // AI staging materializes the bundled tree; pack must not inherit the
@@ -975,21 +963,34 @@ export async function packOpenClawPackageForDocker(
           DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
         ),
       });
+    } catch (error) {
+      packageError = error;
+      throw error;
     } finally {
-      try {
-        await cleanupBundledAiRuntime();
-      } finally {
+      // Restore shared manifests in reverse preparation order. A helper can
+      // fail restoring during preparation, before its cleanup handle returns.
+      for (const cleanup of [cleanupBundledAiRuntime, cleanupBundledPlugins]) {
         try {
-          await cleanupBundledPlugins();
-        } finally {
-          await restorePackageSourceArtifacts(
-            sourcePath,
-            restoreDocsMap,
-            restoreManifest,
-            restoreChangelog,
-          );
+          await cleanup();
+        } catch (error) {
+          onCleanupFailure(error);
         }
       }
+      await restorePackageSourceArtifacts(
+        sourcePath,
+        async (cwd) => {
+          if (cleanupFailures.size) {
+            throw new AggregateError(
+              new Set([...(packageError === undefined ? [] : [packageError]), ...cleanupFailures]),
+              "Package source cleanup failed; packaging receipt retained.",
+              { cause: packageError },
+            );
+          }
+          await restoreDocsMap(cwd);
+        },
+        restoreManifest,
+        restoreChangelog,
+      );
     }
     // Scan the emptied pnpm destination instead of trusting its absolute-path output.
     let tarball = await newestOpenClawTarball(
@@ -1008,11 +1009,24 @@ export async function packOpenClawPackageForDocker(
     if (packageOptions.packJsonPath) {
       // npm's original receipt predates normalization. Inspect the finished bytes;
       // dry-run preserves the archive while npm owns hashes, modes, and inventory.
+      // npm streams a file spec through its cache while extracting it, so give this
+      // inspection a private cache that leaves with the receipt instead of copying
+      // the artifact into, and waiting on, the caller's shared npm cache.
       packReceiptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-pack-receipt-"));
       const packReceiptPath = path.join(packReceiptDir, "pack.json");
       await runCaptureImpl(
         "npm",
-        ["pack", tarball, "--dry-run", "--json", "--ignore-scripts", "--offline", "--silent"],
+        [
+          "pack",
+          tarball,
+          "--dry-run",
+          "--json",
+          "--ignore-scripts",
+          "--offline",
+          "--silent",
+          "--cache",
+          path.join(packReceiptDir, "npm-cache"),
+        ],
         sourcePath,
         {
           stdoutFilePath: packReceiptPath,

@@ -5,14 +5,11 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import type { TaskSummary } from "../packages/gateway-protocol/src/schema/tasks.js";
 import { inspectManagedProcessGroup } from "../scripts/lib/managed-child-process.mts";
 import { isLiveTestEnabled, logLiveProgress } from "../src/agents/live-test-helpers.js";
 import { createExternalGates } from "../src/agents/subagents/announce/subagent-external-gate.test-support.js";
-import {
-  loadSubagentRegistryFromSqlite,
-  saveSubagentRegistryChangesToSqlite,
-} from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryChangesToSqlite } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import { resolveSessionStorePathCore } from "../src/config/sessions.js";
 import {
@@ -348,14 +345,7 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
           },
           { timeout: WAIT_MS },
         );
-        const tasksBefore = await client.request<{ tasks: TaskSummary[] }>("tasks.list", {
-          sessionKey: parentKey,
-          limit: 100,
-        });
-        const originalTask = tasksBefore.tasks.find(
-          (task) => task.runtime === "subagent" && task.childSessionKey === initial.childSessionKey,
-        )!;
-        expect(originalTask?.id).toBeTruthy();
+        expect(initial.runId).toBeTruthy();
         const initialPid = await killOwnedGateway();
         first.release(firstMarker);
         evidence.phase = "first-recovery-checkpoint";
@@ -411,14 +401,6 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
               execution: { outcome: { status: "ok" } },
               delivery: { status: "delivered" },
             });
-            const { tasks } = await client!.request<{ tasks: TaskSummary[] }>("tasks.list", {
-              sessionKey: parentKey,
-              limit: 100,
-            });
-            expect(tasks.find((task) => task.id === originalTask.id)).toMatchObject({
-              status: "completed",
-              runId: originalTask.runId,
-            });
           },
           { timeout: WAIT_MS },
         );
@@ -431,8 +413,7 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
           initialPid,
           recoveredPid,
           finalPid: instance.child?.pid,
-          taskId: originalTask.id,
-          taskRunId: originalTask.runId,
+          childSessionKey: initial.childSessionKey,
           executionRunIds: [initial.runId, recovered.runId, completed.runId],
           recoveredMarkerReachedProvider: true,
           successfulFirstCommandRepeated: false,

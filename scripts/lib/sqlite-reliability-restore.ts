@@ -1,4 +1,3 @@
-import { fork, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -7,17 +6,11 @@ import { createLocalSqliteSnapshotProvider } from "../../src/snapshot/local-repo
 import {
   assertSameCompactionPayload,
   assertSameReliabilityState,
-  formatReliabilityStderr,
   type CompactionPayloadProof,
   type ReliabilityReport,
   type ReliabilityStateProof,
 } from "./sqlite-reliability-contract.js";
-import {
-  assertReliabilityForcedExit,
-  waitForReliabilityWorkerExit,
-  waitForReliabilityWorkerMessage,
-} from "./sqlite-reliability-process.js";
-import { resolveForwardedNodeCompilerArgs } from "./tsx-cli-shim.mjs";
+import { startReliabilityCrashWorker } from "./sqlite-reliability-process.js";
 
 type RestoreCrashPoint = "after-publish" | "before-publish";
 type RestoreExit =
@@ -38,9 +31,7 @@ type RestoreCrashResult = {
 const RESTORE_WORKER_PATH = fileURLToPath(
   new URL("./sqlite-reliability-restore-worker.ts", import.meta.url),
 );
-const RESTORE_TIMEOUT_MS = 120_000;
 const MIN_STAGED_RESTORE_BYTES = 1024 * 1024;
-const WORKER_EXIT_TIMEOUT_MESSAGE = "SQLite restore worker did not exit after forced termination.";
 
 function hashFile(filePath: string): string {
   return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
@@ -60,61 +51,18 @@ function listRestoreStagingEntries(scratchPath: string): string[] {
     .filter((entry) => entry.startsWith(".sqlite-publish-") || entry.startsWith(".tmp-restore-"));
 }
 
-function listOuterRestoreStagingEntries(scratchPath: string): string[] {
-  return listRestoreStagingEntries(scratchPath).filter((entry) =>
-    entry.startsWith(".tmp-restore-"),
-  );
-}
-
-function hasPublicationStaging(scratchPath: string): boolean {
-  return listRestoreStagingEntries(scratchPath).some((entry) =>
-    entry.startsWith(".sqlite-publish-"),
-  );
-}
-
-async function waitForWorkerReady(params: {
-  child: ChildProcess;
-  readStderr: () => string;
-}): Promise<void> {
-  await waitForReliabilityWorkerMessage({
-    child: params.child,
-    matches: (message) =>
-      message !== null &&
-      typeof message === "object" &&
-      (message as { kind?: unknown }).kind === "ready",
-    timeoutMs: 30_000,
-    timeoutMessage: () =>
-      `SQLite restore worker did not become ready.${formatReliabilityStderr(params.readStderr())}`,
-    exitMessage: (code, signal) =>
-      `SQLite restore worker exited before ready: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(params.readStderr())}`,
-  });
-}
-
-async function waitForCrashPoint(params: {
-  child: ChildProcess;
+function assertCrashPoint(params: {
   crashPoint: RestoreCrashPoint;
-  readStderr: () => string;
   scratchPath: string;
   targetPath: string;
-}): Promise<void> {
-  await waitForReliabilityWorkerMessage({
-    child: params.child,
-    matches: (message) => {
-      const event = message as { crashPoint?: unknown; kind?: unknown } | undefined;
-      return event?.kind === "crash-point" && event.crashPoint === params.crashPoint;
-    },
-    timeoutMs: RESTORE_TIMEOUT_MS,
-    timeoutMessage: () =>
-      `SQLite restore worker did not reach ${params.crashPoint}.${formatReliabilityStderr(params.readStderr())}`,
-    exitMessage: (code, signal) =>
-      `SQLite restore worker exited before ${params.crashPoint}: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(params.readStderr())}`,
-  });
-
-  const outerStagingEntries = listOuterRestoreStagingEntries(params.scratchPath);
+}): void {
+  const stagingEntries = listRestoreStagingEntries(params.scratchPath);
   const targetVisible = fs.existsSync(params.targetPath);
-  const publicationStagingVisible = hasPublicationStaging(params.scratchPath);
+  const publicationStagingVisible = stagingEntries.some((entry) =>
+    entry.startsWith(".sqlite-publish-"),
+  );
   const barrierValid =
-    outerStagingEntries.length > 0 &&
+    stagingEntries.some((entry) => entry.startsWith(".tmp-restore-")) &&
     (params.crashPoint === "before-publish"
       ? !targetVisible && publicationStagingVisible
       : targetVisible && !publicationStagingVisible);
@@ -141,22 +89,14 @@ async function assertRepositorySnapshotAvailable(params: {
   }
 }
 
-async function runCrashPoint(params: {
-  crashPoint: RestoreCrashPoint;
-  expectedPayload: CompactionPayloadProof;
-  expectedSnapshotBytes: number;
-  expectedState: ReliabilityStateProof;
-  provider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
-  repositoryPath: string;
-  scratchPath: string;
-  snapshotPath: string;
-  validationRootPath: string;
-  verifyPayload: (databasePath: string) => CompactionPayloadProof;
-  verifyState: (databasePath: string) => ReliabilityStateProof;
-}): Promise<RestoreCrashResult> {
+async function runCrashPoint(
+  params: Parameters<typeof runRestoreInterruptionProof>[0] & {
+    crashPoint: RestoreCrashPoint;
+    provider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
+  },
+): Promise<RestoreCrashResult> {
   const targetPath = path.join(params.scratchPath, `${params.crashPoint}.sqlite`);
-  let stderr = "";
-  const child = fork(
+  const worker = startReliabilityCrashWorker(
     RESTORE_WORKER_PATH,
     [
       params.crashPoint,
@@ -166,44 +106,27 @@ async function runCrashPoint(params: {
       targetPath,
     ],
     {
+      label: "SQLite restore worker",
       cwd: process.cwd(),
-      execArgv: [...resolveForwardedNodeCompilerArgs(), "--import", "tsx"],
-      serialization: "json",
-      stdio: ["ignore", "ignore", "pipe", "ipc"],
     },
   );
-  child.stderr?.setEncoding("utf8");
-  child.stderr?.on("data", (chunk: string) => {
-    stderr += chunk;
-  });
 
   let crashStagingEntries: string[];
   try {
-    await waitForWorkerReady({ child, readStderr: () => stderr });
-    await waitForCrashPoint({
-      child,
+    await worker.waitForReady();
+    await worker.waitForCrashPoint(params.crashPoint);
+    assertCrashPoint({
       crashPoint: params.crashPoint,
-      readStderr: () => stderr,
       scratchPath: params.scratchPath,
       targetPath,
     });
-    if (!child.kill("SIGKILL")) {
-      throw new Error(
-        `SQLite restore worker exited before the ${params.crashPoint} crash signal was delivered.`,
-      );
-    }
-    const exit = await waitForReliabilityWorkerExit(child, WORKER_EXIT_TIMEOUT_MESSAGE);
-    assertReliabilityForcedExit(exit, "SQLite restore worker");
+    const exit = await worker.crash(params.crashPoint);
 
     crashStagingEntries = listRestoreStagingEntries(params.scratchPath);
     if (!crashStagingEntries.some((entry) => entry.startsWith(".tmp-restore-"))) {
       throw new Error(`SQLite restore worker left no owned staging at ${params.crashPoint}.`);
     }
-    await assertRepositorySnapshotAvailable({
-      expectedSnapshotBytes: params.expectedSnapshotBytes,
-      provider: params.provider,
-      snapshotPath: params.snapshotPath,
-    });
+    await assertRepositorySnapshotAvailable(params);
 
     const targetVisibleAfterCrash = fs.existsSync(targetPath);
     let retryRestored = false;
@@ -255,11 +178,7 @@ async function runCrashPoint(params: {
       params.expectedPayload,
       `${params.crashPoint} restore`,
     );
-    await assertRepositorySnapshotAvailable({
-      expectedSnapshotBytes: params.expectedSnapshotBytes,
-      provider: params.provider,
-      snapshotPath: params.snapshotPath,
-    });
+    await assertRepositorySnapshotAvailable(params);
     for (const entry of crashStagingEntries) {
       if (!fs.existsSync(path.join(params.scratchPath, entry))) {
         throw new Error(`SQLite restore retry removed crash staging it did not own: ${entry}`);
@@ -279,10 +198,7 @@ async function runCrashPoint(params: {
       targetVisibleAfterCrash,
     };
   } finally {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGKILL");
-      await waitForReliabilityWorkerExit(child, WORKER_EXIT_TIMEOUT_MESSAGE).catch(() => undefined);
-    }
+    await worker.stop();
     fs.rmSync(targetPath, { force: true });
     for (const entry of listRestoreStagingEntries(params.scratchPath)) {
       fs.rmSync(path.join(params.scratchPath, entry), { force: true, recursive: true });
@@ -311,11 +227,7 @@ export async function runRestoreInterruptionProof(params: {
     repositoryPath: params.repositoryPath,
     validationRootPath: params.validationRootPath,
   });
-  await assertRepositorySnapshotAvailable({
-    expectedSnapshotBytes: params.expectedSnapshotBytes,
-    provider,
-    snapshotPath: params.snapshotPath,
-  });
+  await assertRepositorySnapshotAvailable({ ...params, provider });
 
   const beforePublish = await runCrashPoint({
     ...params,

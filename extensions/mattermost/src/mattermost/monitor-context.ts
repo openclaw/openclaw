@@ -26,12 +26,6 @@ export function shouldUpdateMattermostDraftToolProgress(
   );
 }
 
-export function shouldSuppressMattermostDefaultToolProgressMessages(
-  account: Pick<ResolvedMattermostAccount, "streamingMode">,
-): boolean {
-  return account.streamingMode !== "off";
-}
-
 export function buildMattermostModelPickerSelectMessageSid(params: {
   postId: string;
   provider: string;

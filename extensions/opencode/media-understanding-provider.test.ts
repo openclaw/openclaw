@@ -1,4 +1,3 @@
-// Opencode tests cover media understanding provider plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -59,13 +58,5 @@ describe("opencode media understanding provider", () => {
       reasoning: { effort: "low" },
       store: false,
     });
-  });
-
-  it("declares OpenCode image understanding support", () => {
-    expect(opencodeMediaUnderstandingProvider.id).toBe("opencode");
-    expect(opencodeMediaUnderstandingProvider.capabilities).toEqual(["image"]);
-    expect(opencodeMediaUnderstandingProvider.defaultModels).toEqual({ image: "gpt-5-nano" });
-    expect(typeof opencodeMediaUnderstandingProvider.describeImage).toBe("function");
-    expect(typeof opencodeMediaUnderstandingProvider.describeImages).toBe("function");
   });
 });

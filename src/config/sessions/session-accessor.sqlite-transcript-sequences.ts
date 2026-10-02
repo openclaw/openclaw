@@ -1,9 +1,7 @@
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
@@ -13,6 +11,7 @@ import type {
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
 import {
+  getSessionKysely,
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
@@ -43,14 +42,7 @@ export function rememberCommittedTranscriptMessageSequencesInTransaction(
   if (appendedMessages.length === 0) {
     return;
   }
-  const db = getNodeSqliteKysely<
-    Pick<
-      OpenClawAgentKyselyDatabase,
-      | "session_transcript_active_events"
-      | "session_transcript_index_state"
-      | "transcript_event_identities"
-    >
-  >(database.db);
+  const db = getSessionKysely(database.db);
   const projection = executeSqliteQueryTakeFirstSync(
     database.db,
     db

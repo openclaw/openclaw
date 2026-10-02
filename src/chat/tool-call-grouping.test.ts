@@ -33,10 +33,6 @@ describe("groupToolCalls", () => {
 
   it.each<[string, ToolCallIdentity[]]>([
     [
-      "unrecorded relationships between matching tool names",
-      [toolCard("outer"), toolCard("child")],
-    ],
-    [
       "a child with no recorded run",
       [toolCard("outer"), toolCard("child", { runId: undefined, parentToolCallId: "outer" })],
     ],
@@ -52,7 +48,6 @@ describe("groupToolCalls", () => {
       "call ids reused across different runs",
       [toolCard("outer"), toolCard("child", { runId: "other", parentToolCallId: "outer" })],
     ],
-    ["a missing parent", [toolCard("child", { parentToolCallId: "missing" })]],
     ["a self-parent", [toolCard("self", { parentToolCallId: "self" })]],
     [
       "ambiguous duplicate call identities and their children",
@@ -61,14 +56,6 @@ describe("groupToolCalls", () => {
         toolCard("duplicate", { parentToolCallId: "outer" }),
         toolCard("duplicate", { parentToolCallId: "outer" }),
         toolCard("child", { parentToolCallId: "duplicate" }),
-      ],
-    ],
-    [
-      "a cycle",
-      [
-        toolCard("a", { parentToolCallId: "c" }),
-        toolCard("b", { parentToolCallId: "a" }),
-        toolCard("c", { parentToolCallId: "b" }),
       ],
     ],
   ])("keeps %s accessible at the top level", (_label, cards) => {

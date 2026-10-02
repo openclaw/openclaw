@@ -17,7 +17,7 @@ import { resolvePluginSubagentCompletionRequester } from "../plugins/runtime/sub
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { createBackgroundWorkOwner } from "../process/background-work.js";
-import { ADMIN_SCOPE } from "./operator-scopes.js";
+import { ADMIN_SCOPE, hasGatewayAdminScope } from "./operator-scopes.js";
 import type { GatewayContextResolver, GatewayRequestOptions } from "./server-methods/types.js";
 import {
   dispatchGatewayMethodInProcess,
@@ -122,13 +122,8 @@ function assertPluginSubagentModelAllowed(
   }
 }
 
-function hasAdminScope(client: GatewayRequestOptions["client"] | undefined): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  return scopes.includes(ADMIN_SCOPE);
-}
-
 function canClientUseModelOverride(client: GatewayRequestOptions["client"]): boolean {
-  return hasAdminScope(client) || client?.internal?.allowModelOverride === true;
+  return hasGatewayAdminScope(client) || client?.internal?.allowModelOverride === true;
 }
 
 export function canTrustedOfficialPluginRequestScopes(params: {
@@ -487,7 +482,7 @@ export function createGatewaySubagentRuntime(
       const pluginOwnedCleanupOptions = pluginId
         ? {
             pluginRuntimeOwnerId: pluginId,
-            ...(!hasAdminScope(scope?.client)
+            ...(!hasGatewayAdminScope(scope?.client)
               ? {
                   forceSyntheticClient: true,
                   syntheticScopes: [ADMIN_SCOPE],

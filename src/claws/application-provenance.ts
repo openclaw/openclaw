@@ -1,5 +1,4 @@
 import { stableStringify } from "@openclaw/normalization-core";
-import { clawProfileExtensionPackages } from "./application-plan.js";
 import type { ClawPackageStatus } from "./lifecycle-status.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
 import type {
@@ -53,6 +52,15 @@ export function recordingClawPackagePreflight(
     results.set(clawPackageKey(pkg), normalized);
     return normalized;
   };
+}
+
+function clawProfileExtensionPackages(profile: ClawOpenClawProfile | undefined): ClawPackage[] {
+  return (profile?.extensions ?? []).map((extension) => ({
+    kind: "plugin",
+    source: extension.source,
+    ref: extension.ref,
+    version: extension.version,
+  }));
 }
 
 export function clawTargetPackages(

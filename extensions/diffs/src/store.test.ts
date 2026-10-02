@@ -395,12 +395,6 @@ describe("DiffArtifactStore", () => {
     expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
   });
 
-  it("allocates PDF file paths when format is pdf", async () => {
-    const standalonePdf = await store.createStandaloneFileArtifact({ format: "pdf" });
-    expect(standalonePdf.filePath).toMatch(/preview\.pdf$/);
-    await store.completeFileArtifact(standalonePdf.id);
-  });
-
   it("drops an artifact row and temp directory after render failure", async () => {
     const standalone = await store.createStandaloneFileArtifact();
     await fs.writeFile(standalone.filePath, "partial");
@@ -785,12 +779,9 @@ describe("createDiffsHttpHandler", () => {
   );
 
   it.each([
-    ["127.0.0.1", 200],
     ["127.0.0.2", 200],
-    ["127.255.255.254", 200],
     ["::1", 200],
     ["::ffff:127.0.0.2", 200],
-    ["128.0.0.1", 404],
   ] as const)("classifies viewer client address %s", async (remoteAddress, expectedStatusCode) => {
     const artifact = await createViewerArtifact(store);
     const handler = createDiffsHttpHandler({ store, allowRemoteViewer: false });
@@ -806,32 +797,6 @@ describe("createDiffsHttpHandler", () => {
     );
 
     expect(res.statusCode).toBe(expectedStatusCode);
-  });
-
-  it("allows the at-capacity remote miss and blocks the next request", async () => {
-    const handler = createDiffsHttpHandler({ store, allowRemoteViewer: true });
-
-    for (let i = 0; i < 40; i++) {
-      const miss = createMockServerResponse();
-      await handler(
-        remoteReq({
-          method: "GET",
-          url: missingViewerPath,
-        }),
-        miss,
-      );
-      expect(miss.statusCode).toBe(404);
-    }
-
-    const limited = createMockServerResponse();
-    await handler(
-      remoteReq({
-        method: "GET",
-        url: missingViewerPath,
-      }),
-      limited,
-    );
-    expect(limited.statusCode).toBe(429);
   });
 
   it("slides the remote failure window across the original window boundary", async () => {

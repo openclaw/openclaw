@@ -60,8 +60,8 @@ export type PublishablePluginPackage = {
   packageDir: string;
   packageName: string;
   version: string;
-  channel: "stable" | "alpha" | "beta";
-  publishTag: "latest" | "alpha" | "beta" | "extended-stable";
+  channel: "stable" | "beta";
+  publishTag: "latest" | "beta" | "extended-stable";
   installNpmSpec?: string;
   requiredLatestDependencies?: RequiredLatestDependency[];
 };
@@ -142,9 +142,12 @@ function resolvePublishablePluginVersion(params: {
   const parsedVersion = parseReleaseVersion(version);
   if (parsedVersion === null) {
     params.validationErrors.push(
-      `${params.extensionId}: package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, YYYY.M.PATCH-alpha.N, or YYYY.M.PATCH-beta.N; found "${version}".`,
+      `${params.extensionId}: package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, or YYYY.M.PATCH-beta.N; found "${version}".`,
     );
     return null;
+  }
+  if (parsedVersion.channel === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
   }
   return { version, parsedVersion };
 }
@@ -187,8 +190,11 @@ export function collectPublishablePluginPackageErrors(
     errors.push("package.json version must be non-empty.");
   } else if (parseReleaseVersion(packageVersion) === null) {
     errors.push(
-      `package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, YYYY.M.PATCH-alpha.N, or YYYY.M.PATCH-beta.N; found "${packageVersion}".`,
+      `package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, or YYYY.M.PATCH-beta.N; found "${packageVersion}".`,
     );
+  }
+  if (parseReleaseVersion(packageVersion)?.channel === "alpha") {
+    errors.push("Alpha releases are retired; use a beta prerelease instead.");
   }
   if (!Array.isArray(extensions) || extensions.length === 0) {
     errors.push("openclaw.extensions must contain at least one entry.");
@@ -252,6 +258,9 @@ export function collectPublishablePluginPackagesFromCandidates(
   target: "npm" | "clawhub",
   filters: PublishablePluginPackageFilters = {},
 ): PublishablePluginPackage[] {
+  if (filters.rootVersion?.includes("-alpha.")) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   const publishable: PublishablePluginPackage[] = [];
   const validationErrors: string[] = [];
   const selectedExtensionIds = new Set(filters.extensionIds ?? []);
@@ -312,18 +321,16 @@ export function collectPublishablePluginPackagesFromCandidates(
     const publishTag =
       target === "npm"
         ? resolveNpmPublishPlan(version, undefined, filters.npmDistTag).publishTag
-        : parsedVersion.channel === "alpha"
-          ? "alpha"
-          : parsedVersion.channel === "beta"
-            ? "beta"
-            : "latest";
+        : parsedVersion.channel === "beta"
+          ? "beta"
+          : "latest";
 
     publishable.push({
       extensionId,
       packageDir,
       packageName,
       version,
-      channel: parsedVersion.channel,
+      channel: parsedVersion.channel === "beta" ? "beta" : "stable",
       publishTag,
       ...(target === "npm"
         ? { installNpmSpec: normalizeOptionalString(packageJson.openclaw?.install?.npmSpec) }

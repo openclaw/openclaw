@@ -69,6 +69,7 @@ import {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingMaxAgeBySessionKey,
 } from "./matrix/thread-bindings-shared.js";
+import { matrixPresentationCapabilities } from "./presentation-capabilities.js";
 import { matrixResolverAdapter } from "./resolver.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
@@ -83,7 +84,6 @@ const loadMatrixChannelRuntime = createLazyRuntimeNamedExport(
   "matrixChannelRuntime",
 );
 
-const loadMatrixDoctorModule = createLazyRuntimeModule(() => import("./doctor.js"));
 // Share the import across account starts; the monitor pulls in the reply pipeline.
 const loadMatrixMonitorModule = createLazyRuntimeModule(() =>
   import("./matrix/monitor/index.js").catch((error: unknown) => {
@@ -99,10 +99,6 @@ const matrixDoctor: ChannelDoctorAdapter = {
   warnOnEmptyGroupSenderAllowlist: true,
   legacyConfigRules: MATRIX_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig: normalizeMatrixCompatibilityConfig,
-  runConfigSequence: async ({ cfg, env, shouldRepair }) =>
-    await (await loadMatrixDoctorModule()).runMatrixDoctorSequence({ cfg, env, shouldRepair }),
-  cleanStaleConfig: async ({ cfg }) =>
-    await (await loadMatrixDoctorModule()).cleanStaleMatrixPluginConfig(cfg),
 };
 
 const listMatrixDirectoryPeersFromConfig = createResolvedDirectoryEntriesLister<MatrixConfig>({
@@ -363,19 +359,7 @@ const matrixChannelOutbound: ChannelOutboundAdapter = {
       reconcileUnknownSend: true,
     },
   },
-  presentationCapabilities: {
-    supported: true,
-    buttons: true,
-    selects: true,
-    context: true,
-    divider: true,
-    limits: {
-      text: {
-        markdownDialect: "markdown",
-        supportsEdit: true,
-      },
-    },
-  },
+  presentationCapabilities: matrixPresentationCapabilities,
   shouldSuppressLocalPayloadPrompt: shouldSuppressLocalMatrixExecApprovalPrompt,
   ...createRuntimeOutboundDelegates({
     getRuntime: loadMatrixChannelRuntime,

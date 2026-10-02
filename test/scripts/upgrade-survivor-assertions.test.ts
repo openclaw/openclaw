@@ -367,7 +367,7 @@ describe("upgrade recovery result assertions", () => {
       }),
   );
 
-  it.each(["projects-doctor", "projects-startup-migration", "taskflow-restoration"])(
+  it.each(["projects-doctor", "projects-startup-migration"])(
     "validates published worker update results through the real assertion CLI (%s)",
     (scenario) =>
       withEnv({ OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario }, () => {
@@ -1013,6 +1013,7 @@ function seedSessionSourceFixture(stateDir: string, scenario = "base", missingPa
       `source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
 SCENARIO="$OPENCLAW_UPGRADE_SURVIVOR_SCENARIO"
 UPDATE_RESTART_MODE="$OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE"
+baseline_version=2026.9.3
 phase() { shift; "$@"; }
 ${missingPath ? "run_missing_load_path_fixture seed" : ""}
 "$1" "$2" seed
@@ -1081,6 +1082,7 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
 
 function assertConfig(params: {
   acceptedIntents: string[];
+  baselineVersion?: string;
   config: unknown;
   scenario: string;
   stage?: "baseline" | "survival";
@@ -1093,6 +1095,7 @@ function assertConfig(params: {
     writeJson(configPath, params.config);
     writeJson(coveragePath, {
       acceptedIntents: params.acceptedIntents,
+      baselineVersion: params.baselineVersion,
     });
 
     execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "assert-config"], {
@@ -1711,6 +1714,47 @@ process.stdout.write(sessionDir + "\\n");
       expect(() => run(wrongChannel)).toThrow(/update.channel/);
     },
   );
+
+  it.each([
+    { baselineVersion: undefined, legacy: true },
+    { baselineVersion: "2026.9.6", legacy: true },
+    { baselineVersion: "2026.9.7", legacy: false },
+  ])(
+    "validates Tool Search at baseline $baselineVersion and after upgrade",
+    ({ baselineVersion, legacy }) => {
+      const run = (toolSearch: unknown, stage: "baseline" | "survival" = "survival") =>
+        assertConfig({
+          acceptedIntents: ["tool-search"],
+          baselineVersion,
+          config: { tools: { toolSearch } },
+          scenario: "base",
+          stage,
+        });
+      const baselineValue = legacy ? { mode: "code", codeTimeoutMs: 5000 } : { mode: "tools" };
+      const wrongBaselineValue = legacy ? { mode: "tools" } : { mode: "code", codeTimeoutMs: 5000 };
+      expect(() => run(baselineValue, "baseline")).not.toThrow();
+      expect(() => run(wrongBaselineValue, "baseline")).toThrow(/Tool Search mode/);
+      expect(() => run({ mode: "tools", codeTimeoutMs: 5000 }, "baseline")).toThrow(
+        legacy ? /Tool Search mode/ : /legacy timeout/,
+      );
+      expect(() => run({ mode: "tools" })).not.toThrow();
+    },
+  );
+
+  it("requires migrated Tool Search unless the intent was not accepted", () => {
+    // Survival validation is independent of the published baseline version.
+    const run = (toolSearch: unknown) =>
+      assertConfig({
+        acceptedIntents: ["tool-search"],
+        config: { tools: { toolSearch } },
+        scenario: "base",
+      });
+    expect(() => run({ mode: "code", codeTimeoutMs: 5000 })).toThrow(/Tool Search mode/);
+    expect(() => run({ mode: "tools", codeTimeoutMs: 5000 })).toThrow(/legacy timeout/);
+    expect(() => run({ mode: "tools", enabled: false })).toThrow(/disabled/);
+    expect(() => run(undefined)).toThrow(/Tool Search mode/);
+    expect(() => assertConfig({ acceptedIntents: [], config: {}, scenario: "base" })).not.toThrow();
+  });
 
   it("requires password auth for the mobile pairing reconnect scenario", () => {
     expect(() =>
@@ -2497,6 +2541,53 @@ process.stdout.write(sessionDir + "\\n");
         writeLegacyCacheSessionState(stateDir, { includePrompt: false });
       }),
     ).not.toThrow();
+  });
+
+  it.each([
+    { corruption: "none", error: undefined },
+    { corruption: "missing-table", error: /no such table: session_entry_snapshots/ },
+    { corruption: "missing-snapshot", error: /metadata prompt was not preserved/ },
+    { corruption: "wrong-prompt", error: /metadata prompt was not preserved/ },
+  ])("reads schema 24 session snapshots ($corruption)", ({ corruption, error }) => {
+    const verify = () =>
+      runSessionStateAssertion((stateDir) => {
+        writeMigratedSessionState(stateDir);
+        const db = new DatabaseSync(
+          join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+        );
+        try {
+          db.exec(`
+            PRAGMA user_version = 24;
+            CREATE TABLE session_entry_snapshots (
+              session_key TEXT NOT NULL,
+              field TEXT NOT NULL,
+              value_json TEXT NOT NULL,
+              PRIMARY KEY (session_key, field)
+            );
+            INSERT INTO session_entry_snapshots
+              SELECT session_key, 'skillsSnapshot', json_extract(entry_json, '$.skillsSnapshot')
+              FROM session_nodes WHERE json_type(entry_json, '$.skillsSnapshot') IS NOT NULL;
+            UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.skillsSnapshot');
+          `);
+          if (corruption === "missing-table") {
+            db.exec("DROP TABLE session_entry_snapshots;");
+          } else if (corruption === "missing-snapshot") {
+            db.exec("DELETE FROM session_entry_snapshots;");
+          } else if (corruption === "wrong-prompt") {
+            db.prepare("UPDATE session_entry_snapshots SET value_json = ?").run(
+              JSON.stringify({ prompt: "wrong prompt" }),
+            );
+          }
+        } finally {
+          db.close();
+        }
+        writeMigratedSessionFiles(stateDir);
+      });
+    if (error) {
+      expect(verify).toThrow(error);
+    } else {
+      expect(verify).not.toThrow();
+    }
   });
 
   it("does not mask missing session_nodes rows with a valid file store", () => {

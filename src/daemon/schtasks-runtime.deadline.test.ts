@@ -154,6 +154,10 @@ describe("bounded Startup runtime observations", () => {
         { label: "empty command line", entry: { ProcessId: 222, CommandLine: "" } },
         { label: "blank command line", entry: { ProcessId: 222, CommandLine: "  " } },
         {
+          label: "unparseable command line",
+          entry: { ProcessId: 222, CommandLine: "node\0 gateway" },
+        },
+        {
           label: "missing process identity",
           entry: { CommandLine: command(kind).programArguments.join(" ") },
         },
@@ -253,6 +257,49 @@ describe("bounded Startup runtime observations", () => {
 });
 
 describe("Scheduled Task runtime inspection budget", () => {
+  it.each([
+    { queryMs: 40, revalidationMs: 40, expired: false, calls: 2 },
+    { queryMs: 100, revalidationMs: 0, expired: true, calls: 1 },
+    { queryMs: 40, revalidationMs: 60, expired: true, calls: 2 },
+    { queryMs: 40, revalidationMs: 61, expired: true, calls: 2 },
+  ])(
+    "charges registered query $queryMs ms and revalidation $revalidationMs ms to one deadline",
+    async ({ queryMs, revalidationMs, expired, calls }) => {
+      const { readScheduledTaskCommand } =
+        await vi.importActual<typeof import("./schtasks-layout.js")>("./schtasks-layout.js");
+      const taskName = "\\Custom\\Gateway";
+      const action = {
+        type: 0,
+        path: "C:\\node.exe",
+        arguments: '"C:\\openclaw\\entry.js" gateway',
+        workingDirectory: "",
+      };
+      let queries = 0;
+      native.mockImplementation(() => {
+        now += queries++ === 0 ? queryMs : revalidationMs;
+        return result(JSON.stringify({ taskPath: taskName, state: 4, actions: [action] }));
+      });
+      const inspection = readScheduledTaskCommand(
+        { OPENCLAW_WINDOWS_TASK_NAME: taskName },
+        { requireLoaded: true, timeoutMs: 100 },
+      );
+      if (expired) {
+        await expect(inspection).rejects.toMatchObject({
+          reason: "windows-task-inspection-failed",
+          timeoutMs: 0,
+        });
+      } else {
+        await expect(inspection).resolves.toMatchObject({
+          programArguments: [action.path, "C:\\openclaw\\entry.js", "gateway"],
+        });
+      }
+      expect(native).toHaveBeenCalledTimes(calls);
+      expect(native.mock.calls.map((call) => call[2]?.timeout)).toEqual(
+        calls === 1 ? [100] : [100, 60],
+      );
+    },
+  );
+
   it("charges the native query before Startup process and listener inspection", async () => {
     vi.spyOn(fs, "access").mockResolvedValue(undefined);
     schedulerElapsed = 40;

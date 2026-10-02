@@ -8,8 +8,10 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
-import { saveExecApprovals } from "../infra/exec-approvals.js";
+import {
+  saveExecApprovals,
+  testing as execApprovalsStoreTesting,
+} from "../infra/exec-approvals-store.test-support.js";
 import { clearExecutablePathCache } from "../infra/executable-path.js";
 import * as pathEnv from "../infra/path-env.js";
 import * as terminalUpload from "../infra/terminal-file-upload.js";
@@ -31,7 +33,7 @@ const fixture = vi.hoisted(() => ({
     invoke: vi.fn(),
     handleInput: vi.fn(),
     cancel: vi.fn(),
-    cancelAll: vi.fn(),
+    cancelAll: vi.fn(async () => undefined),
     updateGatewayConnection: vi.fn(),
     close: vi.fn(),
   },
@@ -625,6 +627,7 @@ it("publishes host stats through the native bridge only while connected", async 
         connection: { url: "wss://gateway.example.test", protocol: 4, capabilities: [] },
       }),
     );
+    await vi.advanceTimersByTimeAsync(0);
     expect(publications()).toHaveLength(1);
     expect(publications()[0]).toMatchObject({
       type: "node-event",

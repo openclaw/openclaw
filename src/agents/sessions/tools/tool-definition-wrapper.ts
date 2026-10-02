@@ -1,15 +1,9 @@
-/**
- * Tool definition/AgentTool adapters.
- *
- * Bridges extension-style ToolDefinition objects and core runtime AgentTool objects.
- */
 import type { TSchema } from "typebox";
 import { copyCodeModeControlToolIdentity } from "../../code-mode-control-tools.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { copyInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.js";
 
-/** Wrap a ToolDefinition into an AgentTool for the core runtime. */
 export function wrapToolDefinition<
   TParams extends TSchema = TSchema,
   TDetails = unknown,
@@ -37,7 +31,6 @@ export function wrapToolDefinition<
   return copyInternalToolExecutionPreparer(definition, tool);
 }
 
-/** Wrap multiple ToolDefinitions into AgentTools for the core runtime. */
 export function wrapToolDefinitions(
   definitions: ToolDefinition[],
   ctxFactory?: () => ExtensionContext,

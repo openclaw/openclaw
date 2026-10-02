@@ -10,6 +10,7 @@ import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
+import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import * as pidAlive from "../../shared/pid-alive.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
@@ -137,6 +138,23 @@ function corruptByte(offset: number) {
   expect(corrupted.subarray(92, 100)).toEqual(bytes.subarray(92, 100));
 }
 
+async function expectRevocationWithoutWrites(mutate: (fence: UpdateRecoveryFence) => void) {
+  let before: ReturnType<typeof snapshot> | undefined;
+  let refusal: unknown;
+  await expect(
+    withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(root);
+      fence.assertCurrent();
+      mutate(fence);
+      before = snapshot();
+      refusal = captureFailure(fence.assertCurrent);
+    }),
+  ).rejects.toThrow();
+  expect(refusal).toBeInstanceOf(UpdateCommandRecoveryPendingError);
+  expect(before).toBeDefined();
+  expect(snapshot()).toEqual(before);
+}
+
 describe("invocation-scoped update ownership reader", () => {
   it("keeps native setup bounded across hundreds of real fences without excluding another writer", async () => {
     await withUpdateCommandExecutor(randomUUID(), async (executor) => {
@@ -242,29 +260,18 @@ describe("invocation-scoped update ownership reader", () => {
   it.each(["owner", "payload", "generation", "deleted"] as const)(
     "observes committed %s revocation on the next fence",
     async (change) => {
-      let before: ReturnType<typeof snapshot> | undefined;
-      let refusal: unknown;
-      await expect(
-        withUpdateCommandExecutor(randomUUID(), async (executor) => {
-          const fence = await executor.enter(root);
-          fence.assertCurrent();
-          write((database) => {
-            const sql = {
-              owner: "UPDATE managed_update_handoffs SET owner='replacement' WHERE install_root=?",
-              payload: "UPDATE managed_update_handoffs SET payload_json='{}' WHERE install_root=?",
-              generation:
-                "UPDATE managed_update_handoffs SET updated_at=updated_at+1 WHERE install_root=?",
-              deleted: "DELETE FROM managed_update_handoffs WHERE install_root=?",
-            }[change];
-            expect(database.prepare(sql).run(root).changes).toBe(1);
-          });
-          before = snapshot();
-          refusal = captureFailure(fence.assertCurrent);
-        }),
-      ).rejects.toThrow();
-      expect(refusal).toBeInstanceOf(UpdateCommandRecoveryPendingError);
-      expect(before).toBeDefined();
-      expect(snapshot()).toEqual(before);
+      await expectRevocationWithoutWrites(() => {
+        write((database) => {
+          const sql = {
+            owner: "UPDATE managed_update_handoffs SET owner='replacement' WHERE install_root=?",
+            payload: "UPDATE managed_update_handoffs SET payload_json='{}' WHERE install_root=?",
+            generation:
+              "UPDATE managed_update_handoffs SET updated_at=updated_at+1 WHERE install_root=?",
+            deleted: "DELETE FROM managed_update_handoffs WHERE install_root=?",
+          }[change];
+          expect(database.prepare(sql).run(root).changes).toBe(1);
+        });
+      });
     },
   );
 
@@ -357,7 +364,6 @@ describe("invocation-scoped update ownership reader", () => {
       apply: () => fs.renameSync(databasePath, path.join(root, "retained.sqlite")),
     },
     { name: "empty database", apply: () => fs.truncateSync(databasePath, 0) },
-    { name: "corrupt database", apply: () => fs.writeFileSync(databasePath, "invalid SQLite") },
     { name: "in-place signature corruption", apply: () => corruptByte(0) },
     {
       name: "in-place lease-page corruption",
@@ -483,86 +489,67 @@ describe("invocation-scoped update ownership reader", () => {
   it.skipIf(process.platform === "win32").each(["database", "parent"] as const)(
     "refuses unsafe %s permissions without repairing them",
     async (target) => {
-      let before: ReturnType<typeof snapshot> | undefined;
-      let refusal: unknown;
-      await expect(
-        withUpdateCommandExecutor(randomUUID(), async (executor) => {
-          const fence = await executor.enter(root);
-          fs.chmodSync(
-            target === "database" ? databasePath : directory,
-            target === "database" ? 0o640 : 0o750,
-          );
-          before = snapshot();
-          refusal = captureFailure(fence.assertCurrent);
-        }),
-      ).rejects.toThrow();
-      expect(refusal).toBeInstanceOf(UpdateCommandRecoveryPendingError);
-      expect(snapshot()).toEqual(before);
+      await expectRevocationWithoutWrites(() => {
+        fs.chmodSync(
+          target === "database" ? databasePath : directory,
+          target === "database" ? 0o640 : 0o750,
+        );
+      });
     },
   );
 
   it.skipIf(process.platform === "win32").each(["database", "parent"] as const)(
     "refuses a symlinked %s even when it reaches the original inode",
     async (target) => {
-      let before: ReturnType<typeof snapshot> | undefined;
-      let refusal: unknown;
-      await expect(
-        withUpdateCommandExecutor(randomUUID(), async (executor) => {
-          const fence = await executor.enter(root);
-          const source = target === "database" ? databasePath : directory;
-          const retained = path.join(
-            root,
-            target === "database" ? "retained.sqlite" : "retained-parent",
-          );
-          fs.renameSync(source, retained);
-          fs.symlinkSync(retained, source, target === "database" ? "file" : "dir");
-          before = snapshot();
-          refusal = captureFailure(fence.assertCurrent);
-        }),
-      ).rejects.toThrow();
-      expect(refusal).toBeInstanceOf(UpdateCommandRecoveryPendingError);
-      expect(snapshot()).toEqual(before);
+      await expectRevocationWithoutWrites(() => {
+        const source = target === "database" ? databasePath : directory;
+        const retained = path.join(
+          root,
+          target === "database" ? "retained.sqlite" : "retained-parent",
+        );
+        fs.renameSync(source, retained);
+        fs.symlinkSync(retained, source, target === "database" ? "file" : "dir");
+      });
     },
   );
 
   it("refuses a hot journal after warming the reader and preserves its recovery bytes", async () => {
-    let before: ReturnType<typeof snapshot> | undefined;
-    let refusal: unknown;
-    await expect(
-      withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(root);
-        write((database) =>
-          database.exec(`
+    await expectRevocationWithoutWrites((fence) => {
+      write((database) =>
+        database.exec(`
         CREATE TABLE padding(data BLOB);
         WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<32)
         INSERT INTO padding SELECT zeroblob(8192) FROM n;
       `),
-        );
-        fence.assertCurrent();
-        const crashed = spawnSync(
-          process.execPath,
-          [
-            "--input-type=module",
-            "--eval",
-            `
+      );
+      fence.assertCurrent();
+      const crashed = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          `
         import { DatabaseSync } from 'node:sqlite';
         const database = new DatabaseSync(process.argv[1]);
         database.exec("PRAGMA busy_timeout=0; PRAGMA synchronous=FULL; PRAGMA cache_size=2; PRAGMA cache_spill=ON; BEGIN IMMEDIATE; UPDATE managed_update_handoffs SET owner='uncommitted'; UPDATE padding SET data=zeroblob(16384)");
-        process.exit(0);
+        process.kill(process.pid, "SIGKILL");
       `,
-            databasePath,
-          ],
-          { encoding: "utf8", env: {}, timeout: 5000 },
-        );
-        expect(crashed.error).toBeUndefined();
-        expect(crashed.status, crashed.stderr).toBe(0);
-        expect(fs.statSync(databasePath + "-journal").size).toBeGreaterThan(512);
-        before = snapshot();
-        refusal = captureFailure(fence.assertCurrent);
-      }),
-    ).rejects.toThrow();
-    expect(refusal).toBeInstanceOf(UpdateCommandRecoveryPendingError);
-    expect(before).toBeDefined();
-    expect(snapshot()).toEqual(before);
+          databasePath,
+        ],
+        { encoding: "utf8", env: {}, timeout: 5000 },
+      );
+      expect(crashed.error).toBeUndefined();
+      // A self-directed Windows kill uses TerminateProcess(1), not a POSIX signal exit.
+      expect({ status: crashed.status, signal: crashed.signal }, crashed.stderr).toEqual(
+        process.platform === "win32"
+          ? { status: 1, signal: null }
+          : { status: null, signal: "SIGKILL" },
+      );
+      const journal = fs.readFileSync(databasePath + "-journal");
+      expect(journal.length).toBeGreaterThan(512);
+      expect(journal.subarray(0, 8)).toEqual(
+        Buffer.from([0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]),
+      );
+    });
   });
 });

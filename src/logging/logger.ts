@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Logger as TsLogger } from "tslog";
 import type { OpenClawConfig } from "../config/types.js";
@@ -22,7 +23,7 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { DEFAULT_POSIX_TMP_ROOT } from "../infra/tmp-openclaw-dir.js";
 import { invalidateLoggingConfigCache, readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
-import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
+import { type LogLevel, isLogLevelEnabled, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import {
   isLegacyRollingLogFilePath,
   resolveRollingLogFilePathForDate,
@@ -125,23 +126,16 @@ function assignDiagnosticLogAttribute(
   if (!DIAGNOSTIC_LOG_ATTRIBUTE_KEY_RE.test(normalizedKey)) {
     return;
   }
+  let attribute: string | number | boolean;
   if (typeof value === "string") {
-    attributes[normalizedKey] = sanitizeDiagnosticLogText(
-      value,
-      MAX_DIAGNOSTIC_LOG_ATTRIBUTE_VALUE_CHARS,
-    );
-    state.count += 1;
+    attribute = sanitizeDiagnosticLogText(value, MAX_DIAGNOSTIC_LOG_ATTRIBUTE_VALUE_CHARS);
+  } else if (typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))) {
+    attribute = value;
+  } else {
     return;
   }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    attributes[normalizedKey] = value;
-    state.count += 1;
-    return;
-  }
-  if (typeof value === "boolean") {
-    attributes[normalizedKey] = value;
-    state.count += 1;
-  }
+  attributes[normalizedKey] = attribute;
+  state.count += 1;
 }
 
 function addDiagnosticLogAttributesFrom(
@@ -164,7 +158,7 @@ function addDiagnosticLogAttributesFrom(
 }
 
 function isPlainLogRecordObject(value: unknown): value is Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return false;
   }
   const prototype = Object.getPrototypeOf(value);
@@ -172,11 +166,8 @@ function isPlainLogRecordObject(value: unknown): value is Record<string, unknown
 }
 
 function normalizeTraceContext(value: unknown): DiagnosticTraceContext | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const candidate = value as Partial<DiagnosticTraceContext>;
-  if (!isValidDiagnosticTraceId(candidate.traceId)) {
+  const candidate = asOptionalRecord(value);
+  if (!candidate || !isValidDiagnosticTraceId(candidate.traceId)) {
     return undefined;
   }
   if (candidate.spanId !== undefined && !isValidDiagnosticSpanId(candidate.spanId)) {
@@ -197,14 +188,7 @@ function normalizeTraceContext(value: unknown): DiagnosticTraceContext | undefin
 }
 
 function extractTraceContext(value: unknown): DiagnosticTraceContext | undefined {
-  const direct = normalizeTraceContext(value);
-  if (direct) {
-    return direct;
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return normalizeTraceContext((value as { trace?: unknown }).trace);
+  return normalizeTraceContext(value) ?? normalizeTraceContext(asOptionalRecord(value)?.trace);
 }
 
 function getSortedNumericLogEntries(logObj: TsLogRecord): Array<[string, unknown]> {
@@ -218,10 +202,7 @@ function normalizeFileLogContextValue(value: unknown): string | undefined {
     const normalized = value.trim();
     return normalized ? clampLogText(normalized, MAX_FILE_LOG_CONTEXT_VALUE_CHARS) : undefined;
   }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(value);
-  }
-  if (typeof value === "boolean") {
+  if (typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))) {
     return String(value);
   }
   return undefined;
@@ -258,10 +239,7 @@ function resolveLogHostname(): string {
 }
 
 function withResolvedLogMetaHostname(meta: unknown, hostname: string): unknown {
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return meta;
-  }
-  return { ...(meta as Record<string, unknown>), hostname };
+  return isRecord(meta) ? { ...meta, hostname } : meta;
 }
 
 function extractLogBindingPrefix(numericArgs: unknown[]): {
@@ -274,10 +252,10 @@ function extractLogBindingPrefix(numericArgs: unknown[]): {
     numericArgs[0].trim().startsWith("{")
   ) {
     try {
-      const parsed = JSON.parse(numericArgs[0]);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const parsed: unknown = JSON.parse(numericArgs[0]);
+      if (isRecord(parsed)) {
         return {
-          bindings: parsed as Record<string, unknown>,
+          bindings: parsed,
           args: numericArgs.slice(1),
         };
       }
@@ -527,14 +505,7 @@ function getRuntimeSettings(): ResolvedRuntimeSettings {
 }
 
 export function isFileLogLevelEnabled(level: LogLevel): boolean {
-  const settings = getRuntimeSettings();
-  if (level === "silent") {
-    return false;
-  }
-  if (settings.level === "silent") {
-    return false;
-  }
-  return levelToMinLevel(level) >= levelToMinLevel(settings.level);
+  return isLogLevelEnabled(level, getRuntimeSettings().level);
 }
 
 type SubLoggerSettings = NonNullable<Parameters<TsLogger<LogObj>["getSubLogger"]>[0]>;

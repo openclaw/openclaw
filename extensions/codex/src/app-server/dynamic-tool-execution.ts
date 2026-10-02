@@ -34,8 +34,6 @@ import {
 } from "./protocol.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
-export { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
-
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
 const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 // timeoutSeconds is an inner tool budget. Keep enough outer-watchdog headroom
@@ -81,9 +79,7 @@ function readNumericTimeoutMs(value: unknown): number | undefined {
   }
   if (typeof value === "string") {
     const parsed = parseStrictNonNegativeInteger(value);
-    if (parsed !== undefined) {
-      return Math.max(0, Math.floor(parsed));
-    }
+    return parsed === undefined ? undefined : Math.max(0, parsed);
   }
   return undefined;
 }
@@ -435,12 +431,6 @@ export function shouldReleaseTurnAfterTerminalDynamicTool(
   );
 }
 
-export function shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(
-  response: CodexDynamicToolRuntimeResponse,
-): boolean {
-  return response.asyncStarted !== true;
-}
-
 type TerminalDynamicToolBatchAction =
   | "idle"
   | "wait"
@@ -578,28 +568,13 @@ export function resolveDynamicToolCallTimeoutMs(params: {
   if (params.call.tool === "message") {
     return CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS;
   }
-  if (params.call.tool === "agents_wait") {
-    // Collector waits default to the full swarm budget, but an operator's
-    // configured per-tool timeout still wins over that default. The outer
-    // watchdog must outlive the tool's own 600s deadline (cap + grace) so a
-    // full-budget wait returns its structured timeout result instead of
-    // being aborted by the harness first.
-    const requestedMs =
-      readDynamicToolCallTimeoutMs(params.call.arguments) ??
-      readConfiguredDynamicToolTimeoutMs(params.call.tool, params.config) ??
-      CODEX_DYNAMIC_AGENTS_WAIT_TOOL_TIMEOUT_MS;
-    return Math.max(
-      1,
-      Math.min(
-        CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
-        Math.floor(requestedMs),
-      ),
-    );
-  }
+  // Collector waits need the full swarm budget plus grace for their structured timeout.
+  const isCollectorWait = params.call.tool === "agents_wait";
   return clampDynamicToolTimeoutMs(
     readDynamicToolCallTimeoutMs(params.call.arguments) ??
       readConfiguredDynamicToolTimeoutMs(params.call.tool, params.config) ??
-      CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+      (isCollectorWait ? CODEX_DYNAMIC_AGENTS_WAIT_TOOL_TIMEOUT_MS : CODEX_DYNAMIC_TOOL_TIMEOUT_MS),
+    isCollectorWait ? CODEX_DYNAMIC_AGENTS_WAIT_TOOL_TIMEOUT_MS : CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS,
   );
 }
 
@@ -707,6 +682,9 @@ function readPositiveFiniteTimeoutMs(value: unknown): number | undefined {
     : undefined;
 }
 
-function clampDynamicToolTimeoutMs(timeoutMs: number): number {
-  return Math.max(1, Math.min(CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS, Math.floor(timeoutMs)));
+function clampDynamicToolTimeoutMs(
+  timeoutMs: number,
+  maximum = CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS,
+): number {
+  return Math.max(1, Math.min(maximum, Math.floor(timeoutMs)));
 }

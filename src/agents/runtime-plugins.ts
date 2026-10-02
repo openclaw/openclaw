@@ -41,6 +41,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { adoptRuntimeToolRegistrations } from "../plugins/tool-registry-adoption.js";
 import { adoptRuntimeWidgetPresenterRegistrations } from "../plugins/widget-presenters.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -60,6 +61,8 @@ type AgentRuntimePluginRegistryParams = {
   basePluginIds?: readonly string[];
   /** Exact registry from the supplied lifecycle metadata generation. */
   reusableRegistry?: PluginRegistry;
+  /** Live Gateway registry whose unchanged instances this load borrows instead of loading. */
+  borrowRegistry?: PluginRegistry;
   selections?: readonly AgentHarnessPluginSelection[];
   /** Config-wide harness runtimes carried by a prepared lifecycle batch. */
   configuredHarnessRuntimes?: readonly string[];
@@ -141,6 +144,7 @@ function resolveAgentRuntimePluginRegistryLoad(
     preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts,
     onlyPluginIds: startupPluginIds === undefined ? undefined : plan.pluginIds,
     channelPluginLoadIntent: startupPluginIds === undefined ? undefined : "full",
+    borrowRegistry: params.borrowRegistry,
   };
 }
 
@@ -168,6 +172,7 @@ function adoptAgentRuntimeRegistrations(
 ): {
   registry: PluginRegistry;
   donor?: PluginRegistry;
+  toolDonor?: PluginRegistry;
 } {
   const activeRegistry = getActivePluginRegistry();
   if (params.purpose === "model-catalog") {
@@ -178,16 +183,28 @@ function adoptAgentRuntimeRegistrations(
     (params.env === undefined || params.env === process.env)
       ? adoptRuntimeChannelRegistrations(pluginRegistry, channelSource)
       : pluginRegistry;
+  const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const toolDonor = requestRegistry && getPluginRegistryGatewayOwner(requestRegistry)?.current();
+  const toolRegistry =
+    toolDonor &&
+    config &&
+    params.allowGatewaySubagentBinding === true &&
+    (params.env === undefined || params.env === process.env)
+      ? adoptRuntimeToolRegistrations(channelRegistry, toolDonor, config)
+      : channelRegistry;
   if (!activeRegistry) {
-    return { registry: channelRegistry };
+    return {
+      registry: bindAdmittingGateway(bindPluginRegistryResourceOwner(toolRegistry, pluginRegistry)),
+      ...(toolRegistry !== channelRegistry ? { toolDonor } : {}),
+    };
   }
   const memoryRegistry =
     params.metadataSnapshot &&
     params.workspaceDir &&
     config &&
     getActivePluginRegistryWorkspaceDir() === resolveUserPath(params.workspaceDir)
-      ? adoptRuntimeMemoryRegistrations(channelRegistry, activeRegistry, config)
-      : channelRegistry;
+      ? adoptRuntimeMemoryRegistrations(toolRegistry, activeRegistry, config)
+      : toolRegistry;
   const registry = bindPluginRegistryResourceOwner(
     adoptRuntimeWidgetPresenterRegistrations(
       adoptRuntimeContextEngineRegistrations(
@@ -205,6 +222,7 @@ function adoptAgentRuntimeRegistrations(
   return {
     registry: bindAdmittingGateway(registry),
     ...(registry !== pluginRegistry ? { donor: activeRegistry } : {}),
+    ...(toolRegistry !== channelRegistry ? { toolDonor } : {}),
   };
 }
 
@@ -213,7 +231,7 @@ function bindAdmittingGateway(registry: PluginRegistry): PluginRegistry {
   const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
   const admittingGateway = requestRegistry && getPluginRegistryGatewayOwner(requestRegistry);
   if (admittingGateway) {
-    bindPluginRegistryGatewayOwner(registry, admittingGateway);
+    bindPluginRegistryGatewayOwner(registry, admittingGateway, requestRegistry);
   }
   return registry;
 }
@@ -244,7 +262,7 @@ export async function acquireAgentRuntimePluginRegistry(
     : acquire());
   let releaseWork = () => {};
   try {
-    const { registry, donor } = adoptAgentRuntimeRegistrations(
+    const { registry, donor, toolDonor } = adoptAgentRuntimeRegistrations(
       acquired.registry,
       params,
       loadOptions.config,
@@ -259,8 +277,14 @@ export async function acquireAgentRuntimePluginRegistry(
     if (registry !== acquired.registry) {
       primaryResources.attach(registry);
     }
-    if (donor) {
+    if (donor || toolDonor) {
+      // Invocation custody follows every borrowed factory, independently of the lookup donor.
       primaryResources.adoptInvocations(registry, donor);
+      const toolResources = toolDonor && getPluginRegistryInspectionResources(toolDonor);
+      if (toolResources && toolDonor !== donor) {
+        // Release invocation custody before relinquishing this additional physical source.
+        primaryResources.retainDependency(toolResources);
+      }
     }
     return {
       registry,

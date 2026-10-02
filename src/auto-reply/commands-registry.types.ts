@@ -6,7 +6,7 @@ import type { ThinkingCatalogEntry } from "./thinking.shared.js";
 export type { CommandArgValues, CommandArgs } from "./commands-args.types.js";
 
 /** Where a command may be invoked. */
-export type CommandScope = "text" | "native" | "both";
+type CommandScope = "text" | "native" | "both";
 
 /**
  * Controls progressive disclosure of commands in the UI.
@@ -56,7 +56,7 @@ export type CommandArgDefinition = {
 };
 
 /** Menu metadata for commands that should prompt for a missing argument. */
-export type CommandArgMenuSpec = {
+type CommandArgMenuSpec = {
   arg: string;
   title?: string;
 };

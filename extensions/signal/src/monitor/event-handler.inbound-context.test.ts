@@ -13,7 +13,6 @@ import type {
   SignalDataMessage,
   SignalEnvelope,
   SignalEventHandlerDeps,
-  SignalReactionMessage,
 } from "./event-handler.types.js";
 vi.useRealTimers();
 let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
@@ -1286,18 +1285,13 @@ describe("signal createSignalEventHandler inbound context", () => {
       groupPolicy: "allowlist",
       groupAllowFrom: ["g1"],
       reactionMode: "all",
-      isSignalReactionMessage: (reaction): reaction is SignalReactionMessage => Boolean(reaction),
-      shouldEmitSignalReactionNotification: () => true,
-      resolveSignalReactionTargets: () => [
-        { kind: "phone", id: "+15550001111", display: "+15550001111" },
-      ],
-      buildSignalReactionSystemEventText: () => "reaction added",
     });
 
     await handler(
       createSignalReceiveEvent({
         reactionMessage: {
           emoji: "+1",
+          targetAuthor: "+15550001111",
           targetSentTimestamp: 1700000000000,
           groupInfo: { groupId: "g1", groupName: "Test Group" },
         },
@@ -1305,10 +1299,13 @@ describe("signal createSignalEventHandler inbound context", () => {
     );
 
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith("reaction added", {
-      sessionKey: "agent:main:signal:group:g1",
-      contextKey: "signal:reaction:added:1700000000000:+15550001111:+1:g1",
-    });
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Signal reaction added: +1 by Alice msg 1700000000000 from +15550001111 in Test Group id:g1",
+      {
+        sessionKey: "agent:main:signal:group:g1",
+        contextKey: "signal:reaction:added:1700000000000:+15550001111:+1:g1",
+      },
+    );
   });
 
   it("checks approval reactions before dropping defaultTo-only senders at the generic access gate", async () => {
@@ -1328,12 +1325,6 @@ describe("signal createSignalEventHandler inbound context", () => {
       dmPolicy: "allowlist",
       allowFrom: [],
       reactionMode: "all",
-      isSignalReactionMessage: (reaction): reaction is SignalReactionMessage => Boolean(reaction),
-      shouldEmitSignalReactionNotification: () => true,
-      resolveSignalReactionTargets: () => [
-        { kind: "phone", id: "+15550001111", display: "+15550001111" },
-      ],
-      buildSignalReactionSystemEventText: () => "reaction added",
     });
 
     await handler(

@@ -101,11 +101,7 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(
           onExit: (code) => {
             exitCode = code;
           },
-          dispatch: () =>
-            worker.postMessage(
-              { type: "mutate", coordination },
-              coordination.stateLifecycle ? [coordination.stateLifecycle] : [],
-            ),
+          dispatch: () => worker.postMessage({ type: "mutate", coordination }, []),
         }),
     ).then((result) => [result]);
     const observe = (outcome: "resolved" | "rejected") => {

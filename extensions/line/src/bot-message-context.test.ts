@@ -1,4 +1,3 @@
-// Line tests cover bot message context plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -85,6 +84,18 @@ describe("buildLineMessageContext", () => {
     buildLineMessageContext({
       event,
       allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+      ...overrides,
+    });
+
+  const buildPostbackContext = (
+    event: PostbackEvent,
+    overrides: Partial<Omit<Parameters<typeof buildLinePostbackContext>[0], "event">> = {},
+  ) =>
+    buildLinePostbackContext({
+      event,
       cfg,
       account,
       commandAuthorized: true,
@@ -220,16 +231,6 @@ describe("buildLineMessageContext", () => {
     ).toBeUndefined();
   });
 
-  it("describes a sticker with the keywords LINE sent for it", async () => {
-    const context = await buildMessageContext(
-      stickerEvent({ keywords: ["Thank you", "Thanks", "Grateful", "Bowing"] }),
-    );
-
-    // Only LINE's own sticker facts reach the agent; the package id names no
-    // package that a webhook carries.
-    expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: Thank you, Thanks, Grateful]");
-  });
-
   it("projects a sticker webhook LINE actually sent", async () => {
     // Observed payload from a real LINE sticker message (tokens redacted).
     // Its package id is one the deleted table claimed to know, and LINE's own
@@ -262,12 +263,6 @@ describe("buildLineMessageContext", () => {
     );
 
     expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: amaze, Congratulations, :o]");
-  });
-
-  it("uses the sender's own text for a message sticker", async () => {
-    const context = await buildMessageContext(stickerEvent({ text: "See you tomorrow" }));
-
-    expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: See you tomorrow]");
   });
 
   it.each([
@@ -497,12 +492,7 @@ describe("buildLineMessageContext", () => {
   it("routes group postback replies to the group id", async () => {
     const event = createPostbackEvent({ type: "group", groupId: "group-2", userId: "user-2" });
 
-    const context = await buildLinePostbackContext({
-      event,
-      cfg,
-      account,
-      commandAuthorized: true,
-    });
+    const context = await buildPostbackContext(event);
 
     expect(context?.ctxPayload.OriginatingTo).toBe("line:group:group-2");
     expect(context?.ctxPayload.To).toBe("line:group:group-2");
@@ -511,12 +501,7 @@ describe("buildLineMessageContext", () => {
   it("routes room postback replies to the room id", async () => {
     const event = createPostbackEvent({ type: "room", roomId: "room-1", userId: "user-3" });
 
-    const context = await buildLinePostbackContext({
-      event,
-      cfg,
-      account,
-      commandAuthorized: true,
-    });
+    const context = await buildPostbackContext(event);
 
     expect(context?.ctxPayload.OriginatingTo).toBe("line:room:room-1");
     expect(context?.ctxPayload.To).toBe("line:room:room-1");
@@ -591,11 +576,8 @@ describe("buildLineMessageContext", () => {
   it("carries the same group skill scope when a postback answers the group", async () => {
     const event = createPostbackEvent({ type: "group", groupId: "group-1", userId: "user-1" });
 
-    const context = await buildLinePostbackContext({
-      event,
-      cfg,
+    const context = await buildPostbackContext(event, {
       account: { ...account, config: { groups: { "group-1": { skills: ["triage"] } } } },
-      commandAuthorized: true,
     });
 
     expect(context?.skillFilter).toEqual(["triage"]);
@@ -671,12 +653,7 @@ describe("buildLineMessageContext", () => {
     async ({ postback, expected }) => {
       const event = createPostbackEvent({ type: "user", userId: "user-pb" }, { postback });
 
-      const context = await buildLinePostbackContext({
-        event,
-        cfg,
-        account,
-        commandAuthorized: true,
-      });
+      const context = await buildPostbackContext(event);
 
       expect(context?.ctxPayload.BodyForAgent).toBe(expected);
       // The callback token stays verbatim so command gating keeps matching on it.
@@ -721,12 +698,7 @@ describe("buildLineMessageContext", () => {
   it("sets CommandAuthorized on postback context", async () => {
     const event = createPostbackEvent({ type: "user", userId: "user-pb" });
 
-    const context = await buildLinePostbackContext({
-      event,
-      cfg,
-      account,
-      commandAuthorized: true,
-    });
+    const context = await buildPostbackContext(event);
 
     expect(context?.ctxPayload.CommandAuthorized).toBe(true);
   });
@@ -844,7 +816,8 @@ describe("buildLineMessageContext", () => {
 
   it("routes LINE conversations through active ACP session bindings", async () => {
     const userId = "U1234567890abcdef1234567890abcdef";
-    await getSessionBindingService().bind({
+    const bindingService = getSessionBindingService();
+    await bindingService.bind({
       targetSessionKey: "agent:codex:acp:binding:line:default:test123",
       targetKind: "session",
       conversation: {
@@ -857,21 +830,69 @@ describe("buildLineMessageContext", () => {
         agentId: "codex",
       },
     });
+    const touchAsync = vi.spyOn(bindingService, "touchAsync").mockImplementation(async () => {});
 
-    const event = createMessageEvent({ type: "user", userId });
-    const context = await buildMessageContext(event);
+    try {
+      const event = createMessageEvent({ type: "user", userId });
+      const context = await buildMessageContext(event);
 
-    expect(context?.route.agentId).toBe("codex");
-    expect(context?.route.sessionKey).toBe("agent:codex:acp:binding:line:default:test123");
-    expect(context?.route.matchedBy).toBe("binding.channel");
-    if (!context) {
-      throw new Error("expected a bound LINE message context");
+      expect(context?.route.agentId).toBe("codex");
+      expect(context?.route.sessionKey).toBe("agent:codex:acp:binding:line:default:test123");
+      expect(context?.route.matchedBy).toBe("binding.channel");
+      if (!context) {
+        throw new Error("expected a bound LINE message context");
+      }
+      const routeMetadataKeys = Object.getOwnPropertySymbols(context.route);
+      expect(routeMetadataKeys).not.toHaveLength(0);
+      for (const key of routeMetadataKeys) {
+        expect(Reflect.get(context.ctxPayload, key)).toBe(Reflect.get(context.route, key));
+      }
+      expect(touchAsync).toHaveBeenCalledOnce();
+    } finally {
+      touchAsync.mockRestore();
     }
-    const routeMetadataKeys = Object.getOwnPropertySymbols(context.route);
-    expect(routeMetadataKeys).not.toHaveLength(0);
-    for (const key of routeMetadataKeys) {
-      expect(Reflect.get(context.ctxPayload, key)).toBe(Reflect.get(context.route, key));
+  });
+
+  it("routes a runtime-bound LINE conversation when ordinary routing is ambiguous", async () => {
+    cfg = {
+      ...cfg,
+      agents: { list: [{ id: "main" }, { id: "codex" }] },
+      bindings: [],
+    };
+    const userId = "U1234567890abcdef1234567890abcdef";
+    const bindingService = getSessionBindingService();
+    await bindingService.bind({
+      targetSessionKey: "agent:codex:acp:binding:line:default:test123",
+      targetKind: "session",
+      conversation: { channel: "line", accountId: "default", conversationId: userId },
+      placement: "current",
+      metadata: { agentId: "codex" },
+    });
+    const touchAsync = vi.spyOn(bindingService, "touchAsync").mockImplementation(async () => {});
+
+    try {
+      const context = await buildMessageContext(createMessageEvent({ type: "user", userId }));
+
+      expect(context?.route.agentId).toBe("codex");
+      expect(context?.route.sessionKey).toBe("agent:codex:acp:binding:line:default:test123");
+      expect(touchAsync).toHaveBeenCalledOnce();
+    } finally {
+      touchAsync.mockRestore();
     }
+  });
+
+  it("keeps ambiguous LINE routing rejected without an active conversation binding", async () => {
+    cfg = {
+      ...cfg,
+      agents: { list: [{ id: "main" }, { id: "codex" }] },
+      bindings: [],
+    };
+
+    await expect(
+      buildMessageContext(
+        createMessageEvent({ type: "user", userId: "U1234567890abcdef1234567890abcdef" }),
+      ),
+    ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
   });
 
   it("gives the agent the sender's and the group's name instead of their ids", async () => {
@@ -925,8 +946,6 @@ describe("buildLineMessageContext", () => {
     expected: string;
     mention?: webhook.TextMessageContent["mention"];
   }>([
-    { text: "()hello", spans: [[0, 2]], expected: "[emoji]hello" },
-    { text: "(hello)", spans: [[0, 7]], expected: "(hello)" },
     {
       text: "😂() (hello)",
       spans: [
@@ -935,7 +954,6 @@ describe("buildLineMessageContext", () => {
       ],
       expected: "😂[emoji] (hello)",
     },
-    { text: "call foo()", spans: [], expected: "call foo()" },
     {
       text: "()a()",
       spans: [

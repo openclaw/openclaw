@@ -44,6 +44,8 @@ it.each(
       );
       expect(assignment).toBeGreaterThanOrEqual(0);
       await expect.element(page.getByText("Assign to…", { exact: true })).toBeVisible();
+      // A resting pointer opens the submenu first; Enter on its owner must not select a row.
+      await userEvent.hover(groups[assignment]!);
       groups[assignment]!.focus();
       await userEvent.keyboard("{Enter}");
     } else {
@@ -81,6 +83,16 @@ it.each(
     }
     const input = page.getByRole("searchbox", { name: "Search people and agents…" });
     await expect.element(input).toBeVisible();
+    if (surface === "assignment") {
+      const submenu = input
+        .element()
+        .closest("wa-dropdown-item")
+        ?.shadowRoot?.querySelector('[part="submenu"]');
+      const style = submenu ? getComputedStyle(submenu) : null;
+      expect(style?.width).toBe("320px");
+      expect(style?.maxHeight).toBe("420px");
+      expect(style?.overflowY).toBe("auto");
+    }
     const selector = surface !== "members" ? '[value^="assign-owner:"]' : '[value^="member:"]';
     await expect.poll(() => root.querySelectorAll(selector).length).toBe(20);
     if (surface === "compact assignment") {

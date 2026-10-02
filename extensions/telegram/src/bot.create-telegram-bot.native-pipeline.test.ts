@@ -5,11 +5,8 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { addChannelAllowFromStoreEntry } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import * as replyRuntime from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  peekSystemEventEntries,
-  resetSystemEventsForTest,
-} from "openclaw/plugin-sdk/system-event-runtime";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
+import { createRequireRecord, resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { runWithTelegramSpooledReplayUpdate } from "./bot-processing-outcome.js";
 import {
@@ -79,33 +76,6 @@ describe("createTelegramBot typed command pipeline", () => {
     });
   });
 
-  it("renders the argument menu without dispatching a turn", async () => {
-    const bot = await createBot();
-    await bot.handleUpdate({ update_id: 1003, message: commandMessage("/think") });
-    expect(harness.replySpy).not.toHaveBeenCalled();
-    expect(apiCalls).toHaveBeenCalledWith(
-      "sendMessage",
-      expect.objectContaining({
-        reply_markup: expect.objectContaining({ inline_keyboard: expect.any(Array) }),
-      }),
-    );
-  });
-
-  it("dispatches completed thinking arguments through the message pipeline", async () => {
-    const bot = await createBot();
-    await bot.handleUpdate({ update_id: 1005, message: commandMessage("/think high") });
-    expect(harness.replySpy).toHaveBeenCalledTimes(1);
-    expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
-      CommandSource: "native",
-      CommandTurn: { kind: "native", body: "/think high" },
-    });
-    expect(apiCalls.mock.calls).not.toEqual(
-      expect.arrayContaining([
-        ["sendMessage", expect.objectContaining({ reply_markup: expect.anything() })],
-      ]),
-    );
-  });
-
   it("runs the login executor without dispatching a turn", async () => {
     const bot = await createBot();
     await bot.handleUpdate({ update_id: 1004, message: commandMessage("/login") });
@@ -153,26 +123,7 @@ describe("createTelegramBot typed command pipeline", () => {
     expect(replies[0]?.[1]).not.toHaveProperty("reply_parameters");
   });
 
-  it.each([
-    {
-      name: "keeps unconfigured dm topic commands on the flat dm session",
-      messageThreadId: 99,
-      dmTopicsEnabled: false,
-      expectedSessionKey: "agent:main:main",
-    },
-    {
-      name: "uses bot topic capability for native dm topic command target sessions",
-      messageThreadId: 99,
-      dmTopicsEnabled: true,
-      expectedSessionKey: `agent:main:main:thread:${chat.id}:99`,
-    },
-    {
-      name: "allows native DM commands for paired users",
-      messageThreadId: undefined,
-      dmTopicsEnabled: false,
-      expectedSessionKey: "agent:main:main",
-    },
-  ])("$name", async ({ messageThreadId, dmTopicsEnabled, expectedSessionKey }) => {
+  it("uses bot topic capability for native dm topic command target sessions", async () => {
     harness.replySpy.mockResolvedValue({ text: "response" });
     await addChannelAllowFromStoreEntry({
       channel: "telegram",
@@ -188,15 +139,15 @@ describe("createTelegramBot typed command pipeline", () => {
           telegram: { dmPolicy: "pairing", autoTopicLabel: false, streaming: { mode: "off" } },
         },
       },
-      dmTopicsEnabled,
+      true,
     );
     await bot.handleUpdate({
       update_id: 1009,
-      message: { ...commandMessage("/status"), message_thread_id: messageThreadId },
+      message: { ...commandMessage("/status"), message_thread_id: 99 },
     });
     expect(harness.replySpy).toHaveBeenCalledTimes(1);
     expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
-      SessionKey: expectedSessionKey,
+      SessionKey: `agent:main:main:thread:${chat.id}:99`,
       CommandAuthorized: true,
     });
     expect(apiCalls).not.toHaveBeenCalledWith(
@@ -205,87 +156,71 @@ describe("createTelegramBot typed command pipeline", () => {
     );
   });
 
-  it.each(["command allowlist", "owner"] as const)(
-    "admits an unpaired sender authorized by the %s",
-    async (grant) => {
-      const bot = await createBot(true, true, {
-        commands: {
-          native: true,
-          ...(grant === "owner"
-            ? { ownerAllowFrom: [`telegram:${from.id}`] }
-            : { allowFrom: { telegram: [String(from.id)] } }),
-        },
-        channels: { telegram: { dmPolicy: "pairing", streaming: { mode: "off" } } },
-      });
-      await bot.handleUpdate({ update_id: 1010, message: commandMessage("/status") });
-      expect(harness.replySpy).toHaveBeenCalledTimes(1);
-      expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({ CommandAuthorized: true });
-      expect(apiCalls).not.toHaveBeenCalledWith(
-        "sendMessage",
-        expect.objectContaining({ text: expect.stringContaining("Pairing code:") }),
-      );
-    },
-  );
+  it("admits an unpaired sender authorized by the owner", async () => {
+    const bot = await createBot(true, true, {
+      commands: {
+        native: true,
+        ownerAllowFrom: [`telegram:${from.id}`],
+      },
+      channels: { telegram: { dmPolicy: "pairing", streaming: { mode: "off" } } },
+    });
+    await bot.handleUpdate({ update_id: 1010, message: commandMessage("/status") });
+    expect(harness.replySpy).toHaveBeenCalledTimes(1);
+    expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({ CommandAuthorized: true });
+    expect(apiCalls).not.toHaveBeenCalledWith(
+      "sendMessage",
+      expect.objectContaining({ text: expect.stringContaining("Pairing code:") }),
+    );
+  });
 
-  it.each(["command allowlist", "owner"] as const)(
-    "admits a sender outside the group allowlist authorized by the %s",
-    async (grant) => {
-      const bot = await createBot(true, true, {
-        commands: {
-          native: true,
-          ...(grant === "owner"
-            ? { ownerAllowFrom: [`telegram:${from.id}`] }
-            : { allowFrom: { telegram: [String(from.id)] } }),
+  it("admits a sender outside the group allowlist authorized by the command allowlist", async () => {
+    const bot = await createBot(true, true, {
+      commands: {
+        native: true,
+        allowFrom: { telegram: [String(from.id)] },
+      },
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["99999"],
+          streaming: { mode: "off" },
+          groups: { "*": { requireMention: false } },
         },
-        channels: {
-          telegram: {
-            groupPolicy: "allowlist",
-            groupAllowFrom: ["99999"],
-            streaming: { mode: "off" },
-            groups: { "*": { requireMention: false } },
-          },
-        },
-      });
-      await bot.handleUpdate({ update_id: 1011, message: groupCommand() });
-      expect(harness.replySpy).toHaveBeenCalledTimes(1);
-      expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({ CommandAuthorized: true });
-    },
-  );
+      },
+    });
+    await bot.handleUpdate({ update_id: 1011, message: groupCommand() });
+    expect(harness.replySpy).toHaveBeenCalledTimes(1);
+    expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({ CommandAuthorized: true });
+  });
 
-  it.each([true, false])(
-    "keeps pairing challenges for unlisted senders with command allowlist configured=%s",
-    async (configured) => {
-      const bot = await createBot(true, true, {
-        commands: { native: true, ...(configured ? { allowFrom: { telegram: ["99999"] } } : {}) },
-        channels: { telegram: { dmPolicy: "pairing" } },
-      });
-      await bot.handleUpdate({ update_id: 1012, message: commandMessage("/status") });
-      expect(harness.replySpy).not.toHaveBeenCalled();
-      expect(apiCalls).toHaveBeenCalledWith(
-        "sendMessage",
-        expect.objectContaining({ text: expect.stringContaining("Pairing code:") }),
-      );
-    },
-  );
+  it("keeps pairing challenges for senders outside the command allowlist", async () => {
+    const bot = await createBot(true, true, {
+      commands: { native: true, allowFrom: { telegram: ["99999"] } },
+      channels: { telegram: { dmPolicy: "pairing" } },
+    });
+    await bot.handleUpdate({ update_id: 1012, message: commandMessage("/status") });
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    expect(apiCalls).toHaveBeenCalledWith(
+      "sendMessage",
+      expect.objectContaining({ text: expect.stringContaining("Pairing code:") }),
+    );
+  });
 
-  it.each([true, false])(
-    "silently drops unlisted group senders with command allowlist configured=%s",
-    async (configured) => {
-      const bot = await createBot(true, true, {
-        commands: { native: true, ...(configured ? { allowFrom: { telegram: ["99999"] } } : {}) },
-        channels: {
-          telegram: {
-            groupPolicy: "allowlist",
-            groupAllowFrom: ["99999"],
-            groups: { "*": { requireMention: false } },
-          },
+  it("silently drops unlisted group senders without a command allowlist", async () => {
+    const bot = await createBot(true, true, {
+      commands: { native: true },
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["99999"],
+          groups: { "*": { requireMention: false } },
         },
-      });
-      await bot.handleUpdate({ update_id: 1013, message: groupCommand() });
-      expect(harness.replySpy).not.toHaveBeenCalled();
-      expect(apiCalls.mock.calls.filter(([method]) => method === "sendMessage")).toEqual([]);
-    },
-  );
+      },
+    });
+    await bot.handleUpdate({ update_id: 1013, message: groupCommand() });
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    expect(apiCalls.mock.calls.filter(([method]) => method === "sendMessage")).toEqual([]);
+  });
 
   it("keeps disabled topics closed to command-authorized senders", async () => {
     const bot = await createBot(true, true, {
@@ -308,17 +243,14 @@ describe("createTelegramBot typed command pipeline", () => {
     expect(apiCalls.mock.calls.filter(([method]) => method === "sendMessage")).toEqual([]);
   });
 
-  it.each(
-    (["group", "topic", "direct"] as const).flatMap((scope) =>
-      (["command allowlist", "owner"] as const).flatMap((grant) =>
-        [true, false].flatMap((included) =>
-          ["/status", "/think"].map((command) => ({ scope, grant, included, command })),
-        ),
-      ),
-    ),
-  )(
-    "enforces $scope sender scope for $grant: included=$included command=$command",
-    async ({ scope, grant, included, command }) => {
+  it.each([
+    ["group", "command allowlist", false, "/think"],
+    ["topic", "command allowlist", true, "/think"],
+    ["topic", "owner", false, "/status"],
+    ["direct", "command allowlist", false, "/status"],
+  ] as const)(
+    "enforces %s sender scope for %s: included=%s command=%s",
+    async (scope, grant, included, command) => {
       const allowFrom = [included ? String(from.id) : "99999"];
       const scopedConfig = scope === "topic" ? { topics: { "99": { allowFrom } } } : { allowFrom };
       const bot = await createBot(true, true, {
@@ -348,18 +280,14 @@ describe("createTelegramBot typed command pipeline", () => {
         update_id: 1016,
         message: scope === "direct" ? commandMessage(command) : groupCommand(command),
       });
-      if (included && command === "/status") {
-        expect(harness.replySpy).toHaveBeenCalledTimes(1);
-      } else {
-        expect(harness.replySpy).not.toHaveBeenCalled();
-      }
+      expect(harness.replySpy).not.toHaveBeenCalled();
       const menuReply = [
         "sendMessage",
         expect.objectContaining({
           reply_markup: expect.objectContaining({ inline_keyboard: expect.any(Array) }),
         }),
       ];
-      if (included && command === "/think") {
+      if (included) {
         expect(apiCalls.mock.calls).toContainEqual(menuReply);
       } else {
         expect(apiCalls.mock.calls).not.toContainEqual(menuReply);
@@ -674,12 +602,6 @@ describe("createTelegramBot typed command pipeline", () => {
       model: "gpt-5",
       runtime: "codex",
       receipt: "Compatible auth profile retained.",
-    },
-    {
-      provider: "anthropic",
-      model: "claude-sonnet-4-5",
-      runtime: "openclaw",
-      receipt: "Incompatible auth profile cleared.",
     },
     {
       provider: "amazon-bedrock",

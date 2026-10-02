@@ -1,6 +1,7 @@
 import type {
   FullReleaseCandidateBinding,
   FullReleaseCandidateRequest,
+  RecordedFullReleaseCandidateBinding,
 } from "../full-release-candidate-contract.mjs";
 
 export class CandidateConstituentUnavailableError extends Error {}
@@ -42,7 +43,7 @@ export function validateCandidateBinding(
     now?: number;
     request?: FullReleaseCandidateRequest;
   },
-): FullReleaseCandidateBinding;
+): RecordedFullReleaseCandidateBinding;
 
 export function resolveCandidateBinding(input: {
   freshBinding?: unknown;
@@ -63,4 +64,4 @@ export function verifySealedFullReleaseCandidate(input: {
   readRunAttempt: (runId: string, runAttempt: string) => Promise<unknown>;
   readWorkflowJobs: (runId: string, runAttempt: string) => Promise<unknown>;
   token: string;
-}): Promise<FullReleaseCandidateBinding>;
+}): Promise<RecordedFullReleaseCandidateBinding>;

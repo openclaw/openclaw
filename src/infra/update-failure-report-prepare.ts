@@ -26,10 +26,8 @@ import {
   selectUpdateFailureReportSteps,
 } from "./update-failure-facts-format.js";
 import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
-import {
-  isPublicUpdateFailureCode,
-  projectPublicUpdateFailureIdentifiers,
-} from "./update-failure-public-identifiers.js";
+import { isPublicUpdateFailureCode } from "./update-failure-public-codes.js";
+import { projectPublicUpdateFailureIdentifiers } from "./update-failure-public-identifiers.js";
 import { formatNpmFailureFacts } from "./update-npm-failure.js";
 import { updatePreflightDetailMessage } from "./update-preflight-details.js";
 import {
@@ -289,7 +287,13 @@ async function renderBoundedDiagnostics(
     ]
       .filter(Boolean)
       .join("\n");
-    const diagnostic = redactPublicSupportDiagnosticLine(message, context);
+    const facts = normalizeUpdateFailureFacts(step.failureFacts ?? [], context.env);
+    const npm = facts.find(
+      (fact) => (fact.check === "npm" || fact.check === "bun") && fact.npmErrorCode,
+    );
+    const diagnostic = npm
+      ? [npm.npmErrorCode, npm.packageSpec].filter(Boolean).join(" ")
+      : redactPublicSupportDiagnosticLine(message, context);
     const exit = `exit ${step.exitCode ?? "unknown"}`;
     const detail =
       diagnostic === "[redacted-diagnostic]"
@@ -298,11 +302,11 @@ async function renderBoundedDiagnostics(
           ? diagnostic
           : `${exit} (${diagnostic})`;
     diagnostics.push(`Failed phase ${phase}: ${detail}${termination}`);
-    diagnostics.push(...formatNpmFailureFacts(step.failureFacts ?? [], context));
+    diagnostics.push(...formatNpmFailureFacts(facts, context));
     diagnostics.push(
       ...(await Promise.all(
-        normalizeUpdateFailureFacts(step.failureFacts ?? [], context.env)
-          .filter((fact) => fact.check !== "npm")
+        facts
+          .filter((fact) => fact.check !== "npm" && fact.check !== "bun")
           .map(async (fact) =>
             formatUpdateFailureFact({
               ...(await projectPublicUpdateFailureIdentifiers(fact)),

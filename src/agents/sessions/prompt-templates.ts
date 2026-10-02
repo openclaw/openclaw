@@ -6,20 +6,12 @@ import {
   substituteArgs,
 } from "../../../packages/agent-core/src/harness/prompt-template-arguments.js";
 import { walkDirectorySync } from "../../infra/fs-safe.js";
-/**
- * Prompt template discovery and loading.
- *
- * Reads markdown prompt templates from user, project, and package sources with frontmatter metadata.
- */
 import { isPathInside } from "../../infra/path-guards.js";
 import { expandTildePath } from "../../shared/tilde-path.js";
 import { CONFIG_DIR_NAME } from "../package-metadata.js";
 import { parsePromptFrontmatter } from "../utils/frontmatter.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 
-/**
- * Represents a prompt template loaded from a markdown file
- */
 export interface PromptTemplate {
   name: string;
   description: string;
@@ -36,16 +28,11 @@ function loadTemplateFromFile(filePath: string, sourceInfo: SourceInfo): PromptT
 
     const name = basename(filePath).replace(/\.md$/, "");
 
-    // Get description from frontmatter or first non-empty line
     let description = frontmatter.description || "";
     if (!description) {
       const firstLine = body.split("\n").find((line) => line.trim());
       if (firstLine) {
-        // Truncate if too long
-        description = truncateUtf16Safe(firstLine, 60);
-        if (firstLine.length > 60) {
-          description += "...";
-        }
+        description = truncateUtf16Safe(firstLine, 60) + (firstLine.length > 60 ? "..." : "");
       }
     }
 
@@ -113,16 +100,16 @@ function resolvePromptPath(p: string, cwd: string): string {
  * 2. Project: cwd/{CONFIG_DIR_NAME}/prompts/
  * 3. Explicit prompt paths
  */
-export function loadPromptTemplates(options: LoadPromptTemplatesOptions): PromptTemplate[] {
-  const resolvedCwd = options.cwd;
-  const resolvedAgentDir = options.agentDir;
-  const promptPaths = options.promptPaths;
-  const includeDefaults = options.includeDefaults;
-
+export function loadPromptTemplates({
+  cwd,
+  agentDir,
+  promptPaths,
+  includeDefaults,
+}: LoadPromptTemplatesOptions): PromptTemplate[] {
   const templates: PromptTemplate[] = [];
 
-  const globalPromptsDir = options.agentDir ? join(options.agentDir, "prompts") : resolvedAgentDir;
-  const projectPromptsDir = resolve(resolvedCwd, CONFIG_DIR_NAME, "prompts");
+  const globalPromptsDir = agentDir ? join(agentDir, "prompts") : agentDir;
+  const projectPromptsDir = resolve(cwd, CONFIG_DIR_NAME, "prompts");
 
   const getSourceInfo = (resolvedPath: string): SourceInfo => {
     if (isPathInside(globalPromptsDir, resolvedPath)) {
@@ -150,9 +137,8 @@ export function loadPromptTemplates(options: LoadPromptTemplatesOptions): Prompt
     templates.push(...loadTemplatesFromDir(projectPromptsDir, getSourceInfo));
   }
 
-  // 3. Load explicit prompt paths
   for (const rawPath of promptPaths) {
-    const resolvedPath = resolvePromptPath(rawPath, resolvedCwd);
+    const resolvedPath = resolvePromptPath(rawPath, cwd);
     if (!existsSync(resolvedPath)) {
       continue;
     }
@@ -180,10 +166,6 @@ export function loadPromptTemplates(options: LoadPromptTemplatesOptions): Prompt
  * Returns the expanded content or the original text if not a template.
  */
 export function expandPromptTemplate(text: string, templates: PromptTemplate[]): string {
-  if (!text.startsWith("/")) {
-    return text;
-  }
-
   const match = text.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/);
   if (!match) {
     return text;

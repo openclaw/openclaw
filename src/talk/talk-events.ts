@@ -32,29 +32,14 @@ export const TALK_EVENT_TYPES = [
   "health.changed",
 ] as const;
 
-/**
- * Talk event name accepted by the event sequencer.
- */
 export type TalkEventType = (typeof TALK_EVENT_TYPES)[number];
 
-/**
- * High-level media mode used to group Talk session telemetry.
- */
 export type TalkMode = "realtime" | "stt-tts" | "transcription";
 
-/**
- * Transport family carrying Talk audio and session control.
- */
 export type TalkTransport = "webrtc" | "provider-websocket" | "gateway-relay" | "managed-room";
 
-/**
- * Brain mode that explains whether Talk output is agent-mediated, tool-only, or passive.
- */
 export type TalkBrain = "agent-consult" | "direct-tools" | "none";
 
-/**
- * Session-level correlation fields copied onto every Talk event.
- */
 export type TalkEventContext = {
   sessionId: string;
   mode: TalkMode;
@@ -63,26 +48,14 @@ export type TalkEventContext = {
   provider?: string;
 };
 
-/**
- * Sequenced Talk event envelope delivered to observers and gateway clients.
- */
-export type TalkEvent<TPayload = unknown> = TalkEventContext & {
-  id: string;
-  type: TalkEventType;
-  turnId?: string;
-  captureId?: string;
-  seq: number;
-  timestamp: string;
-  final?: boolean;
-  callId?: string;
-  itemId?: string;
-  parentId?: string;
-  payload: TPayload;
-};
+export type TalkEvent<TPayload = unknown> = TalkEventContext &
+  TalkEventInput<TPayload> & {
+    id: string;
+    seq: number;
+    timestamp: string;
+  };
 
-/**
- * Caller-supplied event payload before session context, id, sequence, and timestamp are attached.
- */
+/** Session context, id, sequence, and the default timestamp are supplied by the sequencer. */
 export type TalkEventInput<TPayload = unknown> = {
   type: TalkEventType;
   payload: TPayload;
@@ -95,9 +68,6 @@ export type TalkEventInput<TPayload = unknown> = {
   parentId?: string;
 };
 
-/**
- * Per-session event sequencer that enforces correlation ids before emitting events.
- */
 export type TalkEventSequencer = {
   next<TPayload>(input: TalkEventInput<TPayload>): TalkEvent<TPayload>;
 };
@@ -140,9 +110,6 @@ function assertTalkEventCorrelation(input: TalkEventInput): void {
   }
 }
 
-/**
- * Creates a sequencer that stamps Talk events with stable session context and monotonic ids.
- */
 export function createTalkEventSequencer(
   context: TalkEventContext,
   options: { now?: () => Date | string } = {},

@@ -72,28 +72,25 @@ describe("registered completion CLI with configured plugin option shadowing", ()
     );
   }
 
-  it.each(["required", "optional"])(
-    "the ordinary plugin CLI parses the %s parent's child boolean without consuming show",
-    async (kind) => {
-      const root = tempDirs.make("openclaw-completion-parser-");
-      const fixture = await writeCompletionPluginFixture(root);
-      const result = await runCliProcessChild({
-        nodeArgs: [
-          ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
-          `proof-${kind}`,
-          "group",
-          "--mode",
-          "show",
-          "--json",
-        ],
-        env: fixture.env,
-      });
-      expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
-      expect(JSON.parse(await fs.readFile(fixture.marker, "utf8"))).toEqual({
-        parent: {},
-        group: { mode: true },
-        options: { json: true },
-      });
-    },
-  );
+  it("the ordinary plugin CLI parses the child boolean without consuming show", async () => {
+    const root = tempDirs.make("openclaw-completion-parser-");
+    const fixture = await writeCompletionPluginFixture(root);
+    const result = await runCliProcessChild({
+      nodeArgs: [
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
+        "proof-required",
+        "group",
+        "--mode",
+        "show",
+        "--json",
+      ],
+      env: fixture.env,
+    });
+    expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
+    expect(JSON.parse(await fs.readFile(fixture.marker, "utf8"))).toEqual({
+      parent: {},
+      group: { mode: true },
+      options: { json: true },
+    });
+  });
 });

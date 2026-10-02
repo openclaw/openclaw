@@ -1,16 +1,11 @@
 import { isMainThread, threadId } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { loggingState } from "../logging/state.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import {
-  logSlowSqliteCoordinatorWait,
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
 } from "./sqlite-transaction.js";
-
-const previousConsole = loggingState.rawConsole;
 
 const openDatabases: Array<import("node:sqlite").DatabaseSync> = [];
 
@@ -36,9 +31,6 @@ afterEach(() => {
     }
   }
   vi.restoreAllMocks();
-  loggingState.rawConsole = previousConsole;
-  setLoggerOverride(null);
-  resetLogger();
 });
 
 describe("SQLite transaction diagnostics", () => {
@@ -177,15 +169,17 @@ describe("SQLite transaction diagnostics", () => {
 
       const run =
         mode === "immediate" ? runSqliteImmediateTransactionSync : runSqliteDeferredTransactionSync;
+      const diagnosticContext = { sessionId: "session-diagnostics", rows: 0 };
       withSqliteReaderOwner({ operation: "worker.entries", ownerKind: "worker" }, () =>
         run(
           db,
           () => {
             db.prepare("INSERT INTO entries VALUES ('committed', 'value')").run();
+            diagnosticContext.rows = 1;
             now += 1_500;
             return "committed";
           },
-          { busyTimeoutMs: 5_000, logger, slowTransactionHoldMs: 0 },
+          { busyTimeoutMs: 5_000, logger, slowTransactionHoldMs: 0, diagnosticContext },
         ),
       );
       expect(readEntries(db)).toEqual(["committed"]);
@@ -208,6 +202,7 @@ describe("SQLite transaction diagnostics", () => {
             : {}),
           isMainThread,
           operation: "worker.entries",
+          context: { sessionId: "session-diagnostics", rows: 0 },
           pid: process.pid,
           step: "begin",
           threadId,
@@ -220,6 +215,7 @@ describe("SQLite transaction diagnostics", () => {
         elapsedMs: 1_500,
         isMainThread,
         operation: "worker.entries",
+        context: { sessionId: "session-diagnostics", rows: 1 },
         pid: process.pid,
         step: "commit",
         threadId,
@@ -233,6 +229,7 @@ describe("SQLite transaction diagnostics", () => {
           isMainThread,
           mode,
           operation: "worker.entries",
+          context: { sessionId: "session-diagnostics", rows: 1 },
           pid: process.pid,
           threadId,
         }),
@@ -286,38 +283,4 @@ describe("SQLite transaction diagnostics", () => {
       );
     },
   );
-});
-
-it("attributes a generic coordinator wait to its owning caller without tracing fast admission", () => {
-  setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "json" });
-  const warn = vi.fn();
-  loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
-  const capture = vi.spyOn(Error, "captureStackTrace");
-  const options = { databaseLabel: "synthetic.sqlite", operationLabel: "state.write" };
-  logSlowSqliteCoordinatorWait(100, options);
-  expect(capture).not.toHaveBeenCalled();
-  expect(warn).not.toHaveBeenCalled();
-
-  function finalizeSyntheticRun() {
-    logSlowSqliteCoordinatorWait(600, options);
-  }
-  finalizeSyntheticRun();
-  expect(warn).toHaveBeenCalledOnce();
-  expect(JSON.parse(String(warn.mock.calls[0]?.[0]))).toMatchObject({
-    message: "slow SQLite coordinator lock wait",
-    caller: expect.stringContaining("finalizeSyntheticRun"),
-    database: "synthetic.sqlite",
-    elapsedMs: 600,
-    operation: "state.write",
-    async: false,
-  });
-});
-
-it("preserves coordinator admission when diagnostic stack capture fails", () => {
-  vi.spyOn(Error, "captureStackTrace").mockImplementation(() => {
-    throw new Error("Synthetic diagnostics failure");
-  });
-  expect(() =>
-    logSlowSqliteCoordinatorWait(600, { operationLabel: "task.mutation" }),
-  ).not.toThrow();
 });

@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   QuestionAnswerUnconfirmedError,
   QuestionDispatchRefusedError,
@@ -13,21 +14,85 @@ import type {
 import {
   beginReplyMessageInjectionTarget,
   finalizeReplyMessageInjectionAttempt,
-  createReplyOperation,
   replyRunRegistry,
 } from "./reply-run-registry.js";
+import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
 import { testing } from "./reply-run-registry.test-support.js";
 
 afterEach(() => testing.resetReplyRunRegistry());
 
+it("keeps cross-profile question answers out of a backend restricted to its turn owner", async () => {
+  const authority = (profileId: string) =>
+    createAdmittedRunOperatorAuthority({
+      profileId,
+      scopes: ["operator.read", "operator.write"],
+      gatewayAccessGrant: null,
+      assertCurrent() {},
+    });
+  const owner = authority("alice");
+  const other = authority("bob");
+  for (const supportsCrossProfileSteering of [false, true, undefined]) {
+    const operation = createTestReplyOperation();
+    operation.bindToolAuthoritySnapshot({
+      personalToolOwner: { operatorAuthority: owner },
+      fingerprint: () => "same-owner",
+      project: () => "same-owner",
+    });
+    const queueMessage = vi.fn(async () => {});
+    const claimPendingUserInputAnswer = vi.fn(async () => true);
+    operation.attachBackend({
+      kind: "embedded",
+      toolAuthorityFingerprint: "same-owner",
+      supportsCrossProfileSteering,
+      cancel: vi.fn(),
+      messageInjectionV2: {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage,
+        claimPendingUserInputAnswer,
+      },
+    });
+    operation.setPhase("running");
+    try {
+      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
+      const answer = (operatorAuthority: typeof owner) =>
+        beginReplyMessageInjectionTarget(target, "Green", {
+          isInboundUserMessage: true,
+          toolAuthorityFingerprint: "other-route",
+          pendingInputAuthorityFingerprint: "same-owner",
+          personalToolParticipant: { operatorAuthority },
+        }).outcome;
+      await expect(answer(other)).resolves.toMatchObject(
+        supportsCrossProfileSteering === false
+          ? { status: "rejected", reason: "tool_authority_mismatch" }
+          : { status: "accepted" },
+      );
+      expect(claimPendingUserInputAnswer).toHaveBeenCalledTimes(
+        supportsCrossProfileSteering === false ? 0 : 1,
+      );
+      if (supportsCrossProfileSteering === false) {
+        expect(operation.personalToolParticipants?.resolve()?.profileId).toBe("alice");
+        expect(() => operation.personalToolParticipants?.resolve("bob")).toThrow(
+          "User is not a participant",
+        );
+      } else {
+        expect(operation.personalToolParticipants?.resolve("bob")?.profileId).toBe("bob");
+      }
+      await expect(answer(owner)).resolves.toMatchObject({ status: "accepted" });
+      expect(claimPendingUserInputAnswer).toHaveBeenCalledTimes(
+        supportsCrossProfileSteering === false ? 1 : 2,
+      );
+      expect(queueMessage).not.toHaveBeenCalled();
+    } finally {
+      operation.complete();
+    }
+  }
+});
+
 it("leaves new human input for a visible followup instead of a hidden coordination turn", async () => {
   const runId = "hidden-coordination-run";
   const queueMessage = vi.fn(async () => {});
-  const operation = createReplyOperation({
-    sessionKey: "agent:main:coordination",
-    sessionId: "session-coordination",
-    resetTriggered: false,
-  });
+  const operation = createTestReplyOperation();
   operation.attachBackend({
     kind: "embedded",
     runId,
@@ -59,14 +124,10 @@ it("leaves new human input for a visible followup instead of a hidden coordinati
 
 async function withHiddenQuestionRun(
   injection: ReplyBackendMessageInjectionV2,
-  run: (operation: ReturnType<typeof createReplyOperation>) => Promise<void>,
+  run: (operation: ReturnType<typeof createTestReplyOperation>) => Promise<void>,
 ) {
   const runId = "hidden-question-run";
-  const operation = createReplyOperation({
-    sessionKey: "agent:main:hidden-question",
-    sessionId: "session-hidden-question",
-    resetTriggered: false,
-  });
+  const operation = createTestReplyOperation();
   operation.attachBackend({
     kind: "embedded",
     runId,
@@ -85,12 +146,11 @@ async function withHiddenQuestionRun(
 }
 
 it.each([
-  ...(["claim", "image"] as const).flatMap((sink) =>
-    (["unsupported", "refused", "unconfirmed", "wrapped-unconfirmed"] as const).map((failure) => ({
-      sink,
-      failure,
-    })),
-  ),
+  { sink: "claim", failure: "unsupported" },
+  { sink: "claim", failure: "refused" },
+  { sink: "claim", failure: "unconfirmed" },
+  { sink: "image", failure: "unsupported" },
+  { sink: "image", failure: "unconfirmed" },
   { sink: "claim", failure: "accepted" },
   { sink: "claim", failure: "source-closed" },
   { sink: "image", failure: "generic" },
@@ -101,13 +161,9 @@ it.each([
       ? new QuestionDispatchRefusedError("owner refused", { cause: unsupported })
       : failure === "unconfirmed"
         ? new Error("runtime failure", { cause: new QuestionAnswerUnconfirmedError(unsupported) })
-        : failure === "wrapped-unconfirmed"
-          ? new Error("runtime failure", {
-              cause: new QuestionAnswerUnconfirmedError(new Error("confirmation lost")),
-            })
-          : failure === "generic"
-            ? new Error("unknown cancellation failure")
-            : unsupported;
+        : failure === "generic"
+          ? new Error("unknown cancellation failure")
+          : unsupported;
   let sourceCurrent = true;
   const throwFromSink = (
     options: ReplyBackendQueueMessageOptions | undefined,
@@ -154,14 +210,14 @@ it.each([
           status:
             failure === "unsupported"
               ? "rejected"
-              : failure === "unconfirmed" || failure === "wrapped-unconfirmed"
+              : failure === "unconfirmed"
                 ? "indeterminate"
                 : "failed",
           ...(failure === "unsupported" ? { reason: "injection_unavailable" } : {}),
         });
       }
       await expect(attempt.acceptance).resolves.toBe(
-        failure === "accepted" || failure === "unconfirmed" || failure === "wrapped-unconfirmed",
+        failure === "accepted" || failure === "unconfirmed",
       );
       expect(queueMessage).not.toHaveBeenCalled();
       expect(operation.result).toBeNull();
@@ -187,13 +243,16 @@ it.each([
     async (operation) => {
       const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key);
       expect(target).toBeDefined();
+      const onQueueSettled = vi.fn();
       const result = await beginReplyMessageInjectionTarget(target!, "Green", {
         isInboundUserMessage: true,
         toolAuthorityFingerprint: testCase.fingerprint,
         pendingInputAuthorityFingerprint: testCase.pending,
+        onQueueSettled,
       }).outcome;
       const authorized = testCase.fingerprint === "same-owner" || testCase.pending === "same-owner";
       expect(result.status).toBe(authorized && testCase.claimed ? "accepted" : "rejected");
+      expect(onQueueSettled).toHaveBeenCalledTimes(authorized && testCase.claimed ? 1 : 0);
       expect(claimPendingUserInputAnswer).toHaveBeenCalledTimes(authorized ? 1 : 0);
       expect(queueMessage).not.toHaveBeenCalled();
     },
@@ -303,11 +362,7 @@ it.each(["same-owner", "other-owner"])(
 it.each(["same-owner", "different-owner"])(
   "status steering preserves question ownership and caller authority (%s)",
   async (fingerprint) => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:refresh",
-      sessionId: "refresh-session",
-      resetTriggered: false,
-    });
+    const operation = createTestReplyOperation();
     const claim = vi.fn(async () => true);
     const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
       async (_text, options, assertCurrent) => {
@@ -345,11 +400,7 @@ it.each(["same-owner", "different-owner"])(
 it.each([false, true])(
   "only status-only callers preserve work on an uncertain steering receipt (statusOnly=%s)",
   async (statusOnly) => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:receipt",
-      sessionId: "receipt-session",
-      resetTriggered: false,
-    });
+    const operation = createTestReplyOperation();
     operation.attachBackend({
       kind: "embedded",
       runId: "receipt-run",

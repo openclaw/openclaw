@@ -155,6 +155,7 @@ export function preserveInferenceAuthorityFailure(
 export async function joinInferenceOperations(
   operations: Iterable<Promise<unknown>>,
   retainedFailures: Iterable<unknown> = [],
+  aggregateMessage = "Worker inference settlement failed",
 ): Promise<void> {
   const results = await Promise.allSettled(operations);
   const errors = [
@@ -167,7 +168,7 @@ export async function joinInferenceOperations(
     throw errors[0];
   }
   if (errors.length > 1) {
-    throw new AggregateError(errors, "Worker inference settlement failed");
+    throw new AggregateError(errors, aggregateMessage);
   }
 }
 

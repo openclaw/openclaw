@@ -1,10 +1,10 @@
-import { tmpdir } from "node:os";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import { resolveClawHubInstallConfirmation } from "../cli/clawhub-install-confirmation.js";
 import { resolvePluginCapabilityConsentCliOptions } from "../cli/plugin-capability-consent.js";
 import { createPluginInstallLogger } from "../cli/plugins-command-helpers.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { installPluginFromClawHub } from "../plugins/clawhub.js";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
 import { installManagedPlugin } from "../plugins/management-mutations.js";
@@ -130,7 +130,7 @@ async function probeClawPluginArtifact(
     return await probePlugin(request);
   }
   const workspace = await tempWorkspace({
-    rootDir: tmpdir(),
+    rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-claw-plugin-probe-",
   });
   try {
@@ -206,19 +206,22 @@ export async function preflightClawPackage(
     setup: probe.setup,
     env: options.env ?? process.env,
   });
+  const artifact = {
+    integrity,
+    installId: probe.pluginId,
+    ...(requirements.length > 0 ? { requirements } : {}),
+    detectedFormat: probe.artifactInspection.format,
+    mapped: probe.artifactInspection.mapped,
+    unavailable: probe.artifactInspection.unavailable,
+    adapterIdentity: PLUGIN_ARTIFACT_ADAPTER_IDENTITY,
+    ...(probe.warning ? { warning: probe.warning } : {}),
+  };
   if (!result.ok) {
     return {
       ok: false,
       code: result.code,
       installedVersion: result.installedVersion,
-      integrity,
-      installId: probe.pluginId,
-      ...(requirements.length > 0 ? { requirements } : {}),
-      detectedFormat: probe.artifactInspection.format,
-      mapped: probe.artifactInspection.mapped,
-      unavailable: probe.artifactInspection.unavailable,
-      adapterIdentity: PLUGIN_ARTIFACT_ADAPTER_IDENTITY,
-      ...(probe.warning ? { warning: probe.warning } : {}),
+      ...artifact,
       message: `Plugin ${pkg.ref}@${pkg.version} conflicts with installed version ${result.installedVersion}.`,
     };
   }
@@ -237,18 +240,11 @@ export async function preflightClawPackage(
   return {
     ok: true,
     action: result.action,
-    integrity,
-    installId: probe.pluginId,
+    ...artifact,
     ...(result.action === "reuse" && result.installedIntegrity
       ? { installedIntegrity: result.installedIntegrity }
       : {}),
     ...(result.action === "reuse" && result.installedAt ? { installedAt: result.installedAt } : {}),
-    ...(requirements.length > 0 ? { requirements } : {}),
-    detectedFormat: probe.artifactInspection.format,
-    mapped: probe.artifactInspection.mapped,
-    unavailable: probe.artifactInspection.unavailable,
-    adapterIdentity: PLUGIN_ARTIFACT_ADAPTER_IDENTITY,
-    ...(probe.warning ? { warning: probe.warning } : {}),
   };
 }
 

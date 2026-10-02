@@ -11,21 +11,6 @@ type HarnessAuthProfileSelection = {
   authProfileMode?: string;
 };
 
-function resolveProfileAuthFromStore(params: { agentDir: string; profileId: string | undefined }): {
-  provider?: string;
-  mode?: string;
-} {
-  const profileId = params.profileId?.trim();
-  if (!profileId) {
-    return {};
-  }
-  const credential = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-    externalCliProfileIds: [profileId],
-  }).profiles[profileId];
-  return { provider: credential?.provider, mode: credential?.type };
-}
-
 export function resolveHarnessAuthProfileSelection(params: {
   config: OpenClawConfig;
   agentDir: string;
@@ -42,15 +27,15 @@ export function resolveHarnessAuthProfileSelection(params: {
 }): HarnessAuthProfileSelection {
   const sessionAuthProfileId = params.sessionAuthProfileId?.trim();
   if (sessionAuthProfileId) {
-    const profileAuth = resolveProfileAuthFromStore({
-      agentDir: params.agentDir,
-      profileId: sessionAuthProfileId,
-    });
+    const credential = ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
+      externalCliProfileIds: [sessionAuthProfileId],
+    }).profiles[sessionAuthProfileId];
     return {
       authProfileId: sessionAuthProfileId,
       authProfileIdSource: params.sessionAuthProfileSource,
-      authProfileProvider: profileAuth.provider ?? params.authProfileProvider,
-      authProfileMode: profileAuth.mode,
+      authProfileProvider: credential?.provider ?? params.authProfileProvider,
+      authProfileMode: credential?.type,
     };
   }
 

@@ -8,7 +8,7 @@ import type { AgentToolResult } from "openclaw/plugin-sdk/tool-results";
 import { vi } from "vitest";
 import type { GoogleMeetCalendarLookupResult } from "../calendar.js";
 import { listGoogleMeetCalendarEvents } from "../calendar.js";
-import type { GoogleMeetExportManifest } from "../cli-shared.js";
+import type { GoogleMeetExportManifest } from "../cli-export.js";
 import type {
   GoogleMeetArtifactsResult,
   GoogleMeetAttendanceResult,
@@ -195,6 +195,9 @@ export function setupGoogleMeetPlugin(
       gateway: {
         isAvailable: vi.fn(async () => options.gatewayAvailable === true),
         request: gatewayRequest,
+        async readSessionFacts() {
+          throw new Error("Unexpected session facts request");
+        },
       },
       system: {
         runCommandWithTimeout,

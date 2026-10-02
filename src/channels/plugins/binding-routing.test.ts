@@ -6,7 +6,7 @@ import {
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
-import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
+import { resolveAgentRoute, type ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readConversationBindingRouteFacts } from "../conversation-binding-route-facts.js";
 import {
@@ -66,6 +66,102 @@ describe("runtime conversation binding route", () => {
   beforeEach(() => {
     testing.resetSessionBindingAdaptersForTests();
   });
+
+  it.each([
+    { targetSessionKey: "agent:review:home", metadata: { agentId: "other" } },
+    { targetSessionKey: "global", metadata: { agentId: "review" } },
+  ])("constructs the bound owner's route before roster selection ($targetSessionKey)", (target) => {
+    const binding = createBinding(target);
+    registerAdapter(binding);
+    const session = { mainKey: "home", groupScope: "main" as const };
+    const result = resolveRuntimeConversationBindingRoute({
+      conversation: binding.conversation,
+      resolveRoute: ({ boundAgentId }) =>
+        resolveAgentRoute({
+          cfg: boundAgentId
+            ? { session }
+            : { session, agents: { ownership: "explicit", entries: { main: {}, review: {} } } },
+          defaultAgentId: boundAgentId,
+          channel: "demo",
+          peer: { kind: "group", id: "room-1" },
+        }),
+    });
+    expect(result.route).toMatchObject({
+      agentId: "review",
+      sessionKey: target.targetSessionKey,
+      mainSessionKey: "agent:review:home",
+      groupScope: "main",
+      lastRoutePolicy: target.targetSessionKey === "global" ? "session" : "main",
+    });
+    expect(readConversationBindingRouteFacts(result.route)).toMatchObject({
+      kind: "agent",
+      agentId: "review",
+      observedAgentId: "review",
+      bindingId: binding.bindingId,
+    });
+  });
+
+  it.each([
+    null,
+    createBinding({ targetSessionKey: "agent:review:cron:job:run:finished" }),
+    createBinding({
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "demo",
+        pluginRoot: "/synthetic/demo",
+      },
+    }),
+    createBinding({ targetSessionKey: "global" }),
+  ])("does not invent an agent for a binding without an agent owner (%j)", (binding) => {
+    registerAdapter(binding);
+    expect(() =>
+      resolveRuntimeConversationBindingRoute({
+        conversation: { channel: "demo", accountId: "default", conversationId: "room-1" },
+        resolveRoute: ({ boundAgentId }) =>
+          resolveAgentRoute({
+            cfg: { agents: { ownership: "explicit", entries: { main: {}, review: {} } } },
+            channel: "demo",
+            defaultAgentId: boundAgentId,
+          }),
+      }),
+    ).toThrow(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+  });
+
+  it.each(["main", "home"])(
+    "projects the bound agent's main session from a completed ordinary route (%s)",
+    (mainKey) => {
+      const ordinaryRoute = resolveAgentRoute({
+        cfg: {
+          agents: { list: [{ id: "main" }, { id: "review" }] },
+          bindings: [{ agentId: "main", match: { channel: "demo" } }],
+          session: { mainKey },
+        },
+        channel: "demo",
+        peer: { kind: "group", id: "room-1" },
+      });
+      const result = inspectRuntimeConversationBindingRoute({
+        route: ordinaryRoute,
+        inspection: {
+          status: "available",
+          binding: createBinding({ targetSessionKey: `agent:review:${mainKey}` }),
+        },
+      });
+
+      expect(result.route).toMatchObject({
+        agentId: "review",
+        sessionKey: `agent:review:${mainKey}`,
+        mainSessionKey: `agent:review:${mainKey}`,
+        lastRoutePolicy: "main",
+        matchedBy: "binding.channel",
+      });
+      expect(ordinaryRoute).toMatchObject({
+        agentId: "main",
+        sessionKey: "agent:main:demo:group:room-1",
+        mainSessionKey: `agent:main:${mainKey}`,
+        lastRoutePolicy: "session",
+      });
+    },
+  );
 
   it("rechecks the binding after awaiting activity persistence and keeps inspection pure", async () => {
     let binding = createBinding();
@@ -207,7 +303,7 @@ describe("runtime conversation binding route", () => {
       accountId: "default",
       channel: "demo",
       sessionKey: "agent:review:acp:session-1",
-      mainSessionKey: "agent:main:main",
+      mainSessionKey: "agent:review:main",
       lastRoutePolicy: "session",
       matchedBy: "binding.channel",
     });

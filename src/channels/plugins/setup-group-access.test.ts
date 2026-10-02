@@ -46,38 +46,7 @@ describe("promptChannelAccessConfig policy-only entries", () => {
   });
 });
 
-describe("promptChannelAccessConfig skip flow", () => {
-  it("returns null when user skips configuration", async () => {
-    const prompter = createPrompter({
-      confirm: false,
-    });
-
-    const result = await promptChannelAccessConfig({
-      prompter,
-      label: "Slack",
-    });
-
-    expect(result).toBeNull();
-  });
-
-  it("returns allowlist entries when policy is allowlist", async () => {
-    const prompter = createPrompter({
-      confirm: true,
-      select: "allowlist",
-      text: "c1, c2",
-    });
-
-    const result = await promptChannelAccessConfig({
-      prompter,
-      label: "Slack",
-    });
-
-    expect(result).toEqual({
-      policy: "allowlist",
-      entries: ["c1", "c2"],
-    });
-  });
-
+describe("promptChannelAccessConfig policy selection", () => {
   it("returns non-allowlist policy with empty entries", async () => {
     const prompter = createPrompter({
       confirm: true,

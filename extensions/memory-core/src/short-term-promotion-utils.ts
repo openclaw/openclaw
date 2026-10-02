@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS } from "openclaw/plugin-sdk/memory-core-host-status";
-import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  asFiniteNumberInRange,
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+  parseDateStringTimestampMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeUniqueTrimmedStringList,
@@ -30,7 +35,8 @@ const DREAMING_TRANSCRIPT_PROMPT_LINE_RE =
   /\[[^\]]*dreaming-narrative[^\]]*]\s*(?:User|Assistant):\s*Write a dream diary entry from these memory fragments:?/i;
 const RAW_SESSION_METADATA_RE =
   /\bSession Key\b.{0,260}\bSession ID\b|\bSession ID\b.{0,260}\bSession Key\b/i;
-const RAW_CONVERSATION_SUMMARY_RE = /^(?:[-*+]\s*)?Conversation Summary:/i;
+const RAW_CONVERSATION_SUMMARY_RE =
+  /^(?:[-*+]\s*)?Conversation Summary:\s*(?:$|(?:[-*+]\s*)?(?:user|assistant|(?:\*\*)?Session (?:Key|ID)(?:\*\*)?):\s)/i;
 const RAW_TRANSCRIPT_TURN_RE = /^(?:[-*+]\s*)?(?:user|assistant):\s/i;
 const MEMORY_FLUSH_PROMPT_RE =
   /Save important context from this session to the daily memory file\.\s*STRICT RULES:/i;
@@ -54,14 +60,7 @@ export function clampScore(value: number): number {
 }
 
 export function toFiniteScore(value: unknown, fallback: number): number {
-  const num = Number(value);
-  if (!Number.isFinite(num)) {
-    return fallback;
-  }
-  if (num < 0 || num > 1) {
-    return fallback;
-  }
-  return num;
+  return asFiniteNumberInRange(Number(value), { min: 0, max: 1 }) ?? fallback;
 }
 
 export function isGenericDailyHeading(heading: string): boolean {
@@ -150,9 +149,7 @@ function normalizeProjectKeyList(value: unknown): string | undefined {
 }
 
 export function mergeProjectKeyLists(...values: unknown[]): string | undefined {
-  return normalizeProjectKeyList(
-    values.flatMap((value) => normalizeProjectKeyList(value)?.split(";") ?? []).join(";"),
-  );
+  return normalizeProjectKeyList(values.filter((value) => typeof value === "string").join(";"));
 }
 
 export function truncateShortTermSnippet(snippet: string): string {
@@ -199,9 +196,6 @@ function consumeDreamingLeadPrefix(snippet: string): string {
 
 function hasDreamingNarrativeLead(snippet: string): boolean {
   const withoutPrefix = consumeDreamingLeadPrefix(snippet);
-  if (/^(?:Candidate|Reflections?):/i.test(withoutPrefix)) {
-    return true;
-  }
   // Serialized metadata can precede narrative markers; bound the scan to the lead.
   // REM uses a Markdown heading instead of the staged block's colon marker.
   const head = truncateUtf16Safe(withoutPrefix, 200);
@@ -279,21 +273,13 @@ export function mergeRecentDistinct(
   nextValue: string,
   limit: number,
 ): string[] {
-  const seen = new Set<string>();
-  const next = existing.filter((value): value is string => {
-    if (typeof value !== "string" || value.length === 0 || seen.has(value)) {
-      return false;
-    }
-    seen.add(value);
-    return true;
-  });
+  const next = [
+    ...new Set(existing.filter((value) => typeof value === "string" && value.length > 0)),
+  ];
   if (nextValue && !next.includes(nextValue)) {
     next.push(nextValue);
   }
-  if (next.length <= limit) {
-    return next;
-  }
-  return next.slice(next.length - limit);
+  return next.length <= limit ? next : next.slice(next.length - limit);
 }
 
 export function normalizeIsoDay(isoLike: string): string | null {
@@ -316,17 +302,9 @@ export function totalSignalCountForEntry(entry: {
   );
 }
 
-function emptyStore(nowIso: string): ShortTermRecallStore {
-  return {
-    version: 1,
-    updatedAt: nowIso,
-    entries: {},
-  };
-}
-
 export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): ShortTermRecallStore {
   if (!raw || typeof raw !== "object") {
-    return emptyStore(nowIso);
+    return { version: 1, updatedAt: nowIso, entries: {} };
   }
   const record = raw as Record<string, unknown>;
   const entriesRaw = record.entries;
@@ -520,23 +498,11 @@ export function enforceShortTermRecallStoreRetention(store: ShortTermRecallStore
 }
 
 export function toFinitePositive(value: unknown, fallback: number): number {
-  const num = Number(value);
-  if (!Number.isFinite(num) || num <= 0) {
-    return fallback;
-  }
-  return num;
+  return asPositiveFiniteNumber(Number(value)) ?? fallback;
 }
 
-export function toFiniteNonNegativeInt(value: unknown, fallback: number): number {
-  const num = Number(value);
-  if (!Number.isFinite(num)) {
-    return fallback;
-  }
-  const floored = Math.floor(num);
-  if (floored < 0) {
-    return fallback;
-  }
-  return floored;
+export function toFiniteNonNegativeInt(value: unknown, fallback = 0): number {
+  return asNonNegativeFiniteNumber(Math.floor(Number(value))) ?? fallback;
 }
 
 export function normalizeWeights(weights?: Partial<PromotionWeights>): PromotionWeights {
@@ -602,29 +568,21 @@ export function normalizeMemoryPathForWorkspace(workspaceDir: string, rawPath: s
   return normalized;
 }
 
-export function toNonNegativeInt(value: unknown): number {
-  const num = Number(value);
-  if (!Number.isFinite(num)) {
-    return 0;
-  }
-  return Math.max(0, Math.floor(num));
-}
-
 export function parseEntryRangeFromKey(
   key: string,
   fallbackStartLine: unknown,
   fallbackEndLine: unknown,
 ): { startLine: number; endLine: number } {
-  const startLine = toNonNegativeInt(fallbackStartLine);
-  const endLine = toNonNegativeInt(fallbackEndLine);
+  const startLine = toFiniteNonNegativeInt(fallbackStartLine);
+  const endLine = toFiniteNonNegativeInt(fallbackEndLine);
   if (startLine > 0 && endLine > 0) {
     return { startLine, endLine };
   }
   const match = key.match(/:(\d+):(\d+)$/);
   if (match) {
     return {
-      startLine: Math.max(1, toNonNegativeInt(match[1])),
-      endLine: Math.max(1, toNonNegativeInt(match[2])),
+      startLine: Math.max(1, toFiniteNonNegativeInt(match[1])),
+      endLine: Math.max(1, toFiniteNonNegativeInt(match[2])),
     };
   }
   return { startLine: 1, endLine: 1 };

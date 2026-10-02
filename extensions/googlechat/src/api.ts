@@ -62,18 +62,11 @@ async function readGoogleChatErrorResponse(response: Response, label: string): P
   return redactToolPayloadText(text);
 }
 
-const headersToObject = (headers?: HeadersInit): Record<string, string> =>
-  headers instanceof Headers
-    ? Object.fromEntries(headers.entries())
-    : Array.isArray(headers)
-      ? Object.fromEntries(headers)
-      : headers || {};
-
 async function withGoogleChatResponse<T>(
   params: GoogleChatRequestHooks & {
     account: ResolvedGoogleChatAccount;
     url: string;
-    init?: RequestInit;
+    init?: Pick<RequestInit, "method" | "body"> & { headers?: Record<string, string> };
     auditContext: string;
     errorPrefix?: string;
     timeoutMs?: number;
@@ -103,7 +96,7 @@ async function withGoogleChatResponse<T>(
     init: {
       ...init,
       headers: {
-        ...headersToObject(init?.headers),
+        ...init?.headers,
         Authorization: `Bearer ${token}`,
       },
     },
@@ -134,7 +127,7 @@ async function withGoogleChatResponse<T>(
 async function fetchJson<T>(
   account: ResolvedGoogleChatAccount,
   url: string,
-  init: RequestInit,
+  init: Pick<RequestInit, "method" | "body">,
   hooks?: GoogleChatRequestHooks,
 ): Promise<T> {
   return await withGoogleChatResponse({
@@ -144,7 +137,6 @@ async function fetchJson<T>(
     init: {
       ...init,
       headers: {
-        ...headersToObject(init.headers),
         "Content-Type": "application/json",
       },
     },
@@ -198,15 +190,8 @@ export async function downloadGoogleChatMedia(params: {
   });
 }
 
-/**
- * A Google Chat `thread` must be a `spaces/{space}/threads/{thread}` resource
- * name that belongs to the target space. Reply routing sometimes yields other
- * shapes — a bare id, a `spaces/{space}/messages/{message}` name, or a thread
- * from a different (or wrongly-cased) space — and passing any of those makes the
- * Chat API reject the whole send with `400 INVALID_ARGUMENT`. Accept only a
- * well-formed, same-space thread name; callers drop the rest so the message
- * still delivers to the space (as a new thread) instead of failing outright.
- */
+// Invalid or cross-space thread names make Chat reject the entire send. Drop
+// them so the message still reaches the space as a new thread.
 function isUsableGoogleChatThreadName(thread: string, space: string): boolean {
   return /^spaces\/[^/]+\/threads\/[^/]+$/.test(thread) && thread.startsWith(`${space}/threads/`);
 }

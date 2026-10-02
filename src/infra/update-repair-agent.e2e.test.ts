@@ -166,7 +166,7 @@ async function runRepairEnvelope(
                 targetVersion,
                 symptoms,
               },
-              budget: updateRepairBudgetSchema.parse(params.budget),
+              budget: updateRepairBudgetSchema.parse({ ...params.budget, maxTurns: 1 }),
             });
           } else if (message.type === "validate") {
             const validation = await params.validate(controller.signal);
@@ -408,7 +408,7 @@ describe("update repair with a local model provider", () => {
                   installRoot: state.workspaceDir,
                 },
                 context: { error: "Synthetic repair marker is missing.", phase },
-                budget: { maxTurns: 1, wallClockMs: 90_000, perTurnMs: 60_000, maxToolCalls: 2 },
+                budget: { wallClockMs: 90_000, perTurnMs: 60_000, maxToolCalls: 2 },
                 validate: vi.fn(async () => {
                   const text = await fs.readFile(marker, "utf8").catch(() => "");
                   const ok = text === expected;

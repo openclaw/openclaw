@@ -99,19 +99,7 @@ function orientedDimensions(probe: ImageProbe): { width: number; height: number 
     : { width: probe.width, height: probe.height };
 }
 
-/**
- * Resize an image to fit within the inline dimensions and base64 payload limit.
- * Returns null if Rastermill cannot produce output within those limits.
- *
- * Uses Rastermill for image processing. If no Rastermill backend is available,
- * returns null.
- *
- * Strategy for staying under the inline limits:
- * 1. First resize to the maximum dimensions
- * 2. Let Rastermill choose JPEG or PNG for the image transparency profile
- * 3. If still too large, search decreasing quality/compression settings
- * 4. If still too large, progressively reduce dimensions
- */
+/** Returns null when the image processor cannot meet the inline dimensions and payload limit. */
 async function resizeImage(img: ImageBytes): Promise<ResizedImage | null> {
   const inputBuffer = img.data;
   const inputBase64Size = 4 * Math.ceil(inputBuffer.byteLength / 3);
@@ -124,7 +112,6 @@ async function resizeImage(img: ImageBytes): Promise<ResizedImage | null> {
     }
     const { width: originalWidth, height: originalHeight } = orientedDimensions(probe);
 
-    // Check if already within all limits (dimensions AND encoded size)
     if (
       originalWidth <= MAX_IMAGE_WIDTH &&
       originalHeight <= MAX_IMAGE_HEIGHT &&
@@ -174,10 +161,6 @@ async function resizeImage(img: ImageBytes): Promise<ResizedImage | null> {
   }
 }
 
-/**
- * Format a dimension note for resized images.
- * This helps the model understand the coordinate mapping.
- */
 function formatDimensionNote(result: ResizedImage): string | undefined {
   if (!result.wasResized) {
     return undefined;

@@ -1,6 +1,6 @@
 import "./service-definition-backup.mocks.test-support.js";
 import { expect, it } from "vitest";
-import { buildScheduledTaskXml } from "./schtasks-layout.js";
+import { buildScheduledTaskXml } from "./schtasks-xml.js";
 import { auditGatewayServiceConfig } from "./service-audit.js";
 import { fixture, native } from "./service-definition-backup.test-support.js";
 

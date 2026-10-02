@@ -50,7 +50,7 @@ it("reads fresh deletion and surviving-owner facts from its captured source with
     const prepared = prepareAgentDatabaseDeletionSnapshotRead(input);
     input.path = state.statePath("replacement.sqlite");
     input.env.OPENCLAW_STATE_DIR = state.statePath("replacement-state");
-    const observation = observeHostDataSql(state.env);
+    const observation = observeHostDataSql();
     try {
       const { snapshot, assertCurrent } = await prepared.read();
       expect(snapshot).toMatchObject({
@@ -98,7 +98,7 @@ it.each(["source", "maintenance"] as const)(
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const options = { env: state.env };
       const database = openOpenClawStateDatabase(options);
-      const maintenance = createOpenClawDatabaseMaintenanceScope(() => undefined);
+      const maintenance = createOpenClawDatabaseMaintenanceScope();
       try {
         const prepared = maintenance.run(() => prepareAgentDatabaseDeletionSnapshotRead(options));
         const { assertCurrent } = await prepared.read();
@@ -172,7 +172,7 @@ it.each(["runtime", "maintenance"] as const)(
         { env: state.env },
       );
       const prepared = prepareAgentDatabaseDeletionSnapshotRead({ env: state.env }, purpose);
-      const observation = observeHostDataSql(state.env);
+      const observation = observeHostDataSql();
       try {
         const { snapshot, assertCurrent } = await prepared.read();
         expect(snapshot?.retainedDeletions).toEqual(

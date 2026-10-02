@@ -240,22 +240,6 @@ describe("channel plugin catalog", () => {
     );
   });
 
-  it("reloads official generated catalog entries after the explicit plugin metadata lifecycle reset", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-official-catalog-"));
-    tempDirs.push(root);
-    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
-    vi.spyOn(process, "cwd").mockReturnValue(root);
-    const catalogPath = path.join(root, "dist", "channel-catalog.json");
-    const options = { catalogPaths: [path.join(root, "external.json")], env: {} };
-
-    expect(getChannelPluginCatalogEntry("lifecycle-official", options)).toBeUndefined();
-    writeChannelCatalog(catalogPath, "lifecycle-official", "After official update");
-    clearPluginMetadataLifecycleCaches();
-
-    expect(getChannelPluginCatalogEntry("lifecycle-official", options)?.meta.label).toBe(
-      "After official update",
-    );
-  });
   it.each([
     { name: "bundled", origin: "bundled", trusted: false, expected: "/channels/fixture" },
     { name: "official npm global", origin: "global", trusted: true, expected: "/channels/fixture" },

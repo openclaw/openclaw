@@ -1,5 +1,6 @@
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { bindSessionMcpRuntimeTestScheduler } from "../../agents/agent-bundle-mcp-manager.test-support.js";
 import { redactAgentDiagnosticPayload } from "../../agents/diagnostic-redaction.js";
 import { isLiveTestEnabled } from "../../agents/live-test-helpers.js";
 import { resolveAgentRunSessionTarget } from "../../agents/run-session-target.js";
@@ -73,6 +74,11 @@ beforeAll(async () => {
     prefix: "openclaw-live-skill-review-state-",
   });
   workspaceDir = await tempDirs.make("openclaw-live-skill-review-workspace-");
+});
+
+// Gateway startup binds this scheduler in production; the direct review call must bind it here.
+beforeEach(async () => {
+  await bindSessionMcpRuntimeTestScheduler();
 });
 
 function logReviewOutcomes(

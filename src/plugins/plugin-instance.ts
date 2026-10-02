@@ -1,4 +1,4 @@
-import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -9,12 +9,14 @@ import {
   PluginInstanceUnavailableError,
 } from "./plugin-instance-error.js";
 import { pluginInstanceInvocation as invocation } from "./plugin-instance-invocation.js";
+import { PluginCallToken } from "./plugin-instance-owned-values.js";
 import {
   pluginInstanceState,
   pluginInvocationContext,
   resolvePluginInstanceOwner,
   type PluginInstanceOwner,
 } from "./plugin-instance-scope.js";
+import { waitForPluginInstanceSettlement } from "./plugin-instance-settlement.js";
 import { createPluginValueView } from "./plugin-instance-value-views.js";
 import type {
   PluginInstanceCallLease,
@@ -23,7 +25,7 @@ import type {
   PluginInstanceLifecycle,
   PluginModuleLoaderRecovery,
 } from "./plugin-instance.types.js";
-import { resolvePluginReturnPromise } from "./plugin-return-value.js";
+import { mapPluginReturnPromise, resolvePluginReturnPromise } from "./plugin-return-value.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
 import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
@@ -49,7 +51,6 @@ export class PluginInstance {
   private readonly calls = new Map<object, { registry?: PluginRegistry; cleanup: boolean }>();
   private forcedRetirement = false;
   private disposalFailures?: Set<unknown>;
-  private readonly hostCleanupCalls = new WeakSet<object>();
   private timedOutCalls?: {
     remaining: Set<object>;
     settled: ReturnType<typeof createDeferredCore<void>>;
@@ -65,7 +66,6 @@ export class PluginInstance {
   >();
   private readonly cleanups = new Map<() => void | Promise<void>, "plugin" | "module">();
   private readonly waiters = new Set<() => void>();
-  private readonly originalValues = new WeakMap<object, object>();
   readonly wrap = this.createValueView(
     <T>(run: () => T) => this.run(run),
     <T>(run: () => T) => this.runConsumer(run),
@@ -125,6 +125,15 @@ export class PluginInstance {
     return this.activeCall() !== undefined;
   }
 
+  /** A reload has reserved this instance and is draining its admitted work. */
+  get replacementPending(): boolean {
+    return this.replacementReserved;
+  }
+
+  holdsPendingReplacement(token: object): boolean {
+    return this.replacementReserved && this.hasToken(token);
+  }
+
   run<T>(run: () => T): T {
     const current = this.activeCall();
     if (current) {
@@ -158,7 +167,7 @@ export class PluginInstance {
 
   /** Associates an identity-sensitive public value without replacing it with a view. */
   adopt<T>(value: T): T {
-    const seen = new WeakSet<object>();
+    const seen = new Set<object>();
     const visit = (candidate: unknown) => {
       if (
         !candidate ||
@@ -215,37 +224,23 @@ export class PluginInstance {
     );
   }
 
-  /** Observe host settlement without closing the callbacks that retained runs still need. */
-  async waitForRetainedWork(signal: AbortSignal, includeConsumers = true): Promise<void> {
-    await this.waitForSettlement(
-      () => (includeConsumers ? this.retainedWorkCount : this.retainedWork.size) === 0,
-      signal,
-    );
+  get ordinaryCallCount(): number {
+    return [...this.calls.values()].filter((call) => !call.cleanup).length;
   }
 
-  private async waitForSettlement(settled: () => boolean, signal: AbortSignal): Promise<void> {
-    signal.throwIfAborted();
-    if (settled()) {
-      return;
-    }
-    await new Promise<void>((resolve, reject) => {
-      const cleanup = () => {
-        this.waiters.delete(wake);
-        signal.removeEventListener("abort", abort);
-      };
-      const wake = () => {
-        if (settled()) {
-          cleanup();
-          resolve();
-        }
-      };
-      const abort = () => {
-        cleanup();
-        reject(toErrorObject(signal.reason, `Plugin ${this.pluginId} work drain aborted`));
-      };
-      this.waiters.add(wake);
-      signal.addEventListener("abort", abort, { once: true });
-    });
+  /** Observe admitted work without closing callbacks or idle publication custody. */
+  async waitForRetainedWork(
+    signal: AbortSignal,
+    { includeConsumers = true, includeCalls = false } = {},
+  ): Promise<void> {
+    await waitForPluginInstanceSettlement(
+      this.pluginId,
+      this.waiters,
+      () =>
+        (!includeCalls || this.ordinaryCallCount === 0) &&
+        (includeConsumers ? this.retainedWorkCount : this.retainedWork.size) === 0,
+      signal,
+    );
   }
 
   /** Reserve replacement atomically before host owners invalidate or stop this instance. */
@@ -358,7 +353,8 @@ export class PluginInstance {
         const value = run();
         const completion = resolvePluginReturnPromise(value);
         if (completion) {
-          const settled = completion.then(
+          const settled = mapPluginReturnPromise(
+            completion,
             async (result) => {
               await release();
               if (this.forcedRetirement && !cleanup && !this.hasToken(token)) {
@@ -373,10 +369,14 @@ export class PluginInstance {
               throw error;
             },
           );
-          valueInstances.set(settled, this);
+          if (settled.host) {
+            valueInstances.setHost(settled.value, this);
+          } else {
+            valueInstances.set(settled.value, this);
+          }
           // Then getters and assimilation can execute plugin code; retain the admitting scope.
           // SAFETY: Promise-like calls retain their resolved value while joining owner cleanup.
-          return settled as T;
+          return settled.value as T;
         }
         void release();
         if (this.forcedRetirement && !cleanup && !this.hasToken(token)) {
@@ -392,9 +392,12 @@ export class PluginInstance {
   }
 
   private enter<T>(token: object, run: () => T): T {
+    pluginInvocationContext.getStore()?.assertCurrent?.(this);
     const current = invocation.getStore();
     const call =
-      current?.instance === this && current.token === token ? current : { instance: this, token };
+      current?.instance === this && current.token === token
+        ? current
+        : { instance: this, token, parent: current };
     if (!this.owner) {
       const enter = () => invocation.run(call, run);
       // Deferred setup imports use the same SDK resolver facts as their initial load.
@@ -435,13 +438,11 @@ export class PluginInstance {
     if (!registry && current && this.consumers.has(current.token)) {
       return { token: current.token, release: () => undefined };
     }
-    const token = {};
-    if (
+    const token = new PluginCallToken(
+      {},
       (options.cleanup && options.hostCleanup) ||
-      (current && this.hostCleanupCalls.has(current.token))
-    ) {
-      this.hostCleanupCalls.add(token);
-    }
+        (current !== undefined && PluginCallToken.isHostCleanup(current.token)),
+    );
     this.calls.set(token, {
       registry,
       // Not joining disposal never grants teardown authority to ordinary work.
@@ -474,7 +475,6 @@ export class PluginInstance {
     return createPluginValueView(
       {
         instance: this,
-        originalValues: this.originalValues,
         invoke: (run, lease) => this.invoke(run, lease),
         lease: () => this.lease(),
         hasToken: (token) => this.hasToken(token),
@@ -541,7 +541,9 @@ export class PluginInstance {
     try {
       await this.waitForCalls(ownToken, options?.signal);
       if (options?.includeConsumers) {
-        await this.waitForSettlement(
+        await waitForPluginInstanceSettlement(
+          this.pluginId,
+          this.waiters,
           () => this.consumers.size === 0,
           options.signal ?? new AbortController().signal,
         );
@@ -557,7 +559,7 @@ export class PluginInstance {
     const settled = () => [...this.calls.keys()].every((token) => token === ownToken);
     if (signal) {
       // Reload owns its observation budget; disposal keeps its independent deadline.
-      return this.waitForSettlement(settled, signal);
+      return waitForPluginInstanceSettlement(this.pluginId, this.waiters, settled, signal);
     }
     const deadline = new AbortController();
     const timer = setTimeout(() => {
@@ -566,7 +568,7 @@ export class PluginInstance {
       );
     }, SHUTDOWN_TIMEOUT_MS);
     try {
-      await this.waitForSettlement(settled, deadline.signal);
+      await waitForPluginInstanceSettlement(this.pluginId, this.waiters, settled, deadline.signal);
     } finally {
       clearTimeout(timer);
     }
@@ -603,11 +605,7 @@ export class PluginInstance {
     }
     if (!this.disposal) {
       this.quiesce();
-      const terminalFailures = (this.disposalFailures = new DisposalFailures(() => {
-        const current = invocation.getStore();
-        // Async failure observers retain their originating token after its call has returned.
-        return current?.instance === this && this.hostCleanupCalls.has(current.token);
-      }));
+      const terminalFailures = (this.disposalFailures = new DisposalFailures(this));
       const work = new AsyncWorkScope(terminalFailures);
       // Shared state owners still join real cleanup, independently of code-file custody.
       const cleanup = trackAsyncWork(() =>

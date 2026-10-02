@@ -4,7 +4,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as exec from "../process/exec.js";
-import { prepareWorkerGitHubEnvironment } from "./github-binding.runtime.js";
+import {
+  disposeWorkerGitHubEnvironment,
+  prepareWorkerGitHubEnvironment,
+} from "./github-binding.runtime.js";
 
 const { warn, inspectPathPermissions } = vi.hoisted(() => ({
   warn: vi.fn(),
@@ -78,7 +81,7 @@ describe("prepareWorkerGitHubEnvironment", () => {
     prepareWorkerGitHubEnvironment({
       binding,
       stateDir: path.join(root, "state"),
-      runId: "turn",
+      turnId: "turn",
       cwd,
     });
 
@@ -177,7 +180,7 @@ describe("prepareWorkerGitHubEnvironment", () => {
     await prepareWorkerGitHubEnvironment({
       binding,
       stateDir: path.join(root, "state"),
-      runId: "turn",
+      turnId: "turn",
       cwd,
       signal: controller.signal,
     });
@@ -204,7 +207,7 @@ describe("prepareWorkerGitHubEnvironment", () => {
     await prepareWorkerGitHubEnvironment({
       binding,
       stateDir: path.join(root, "state"),
-      runId: "turn",
+      turnId: "turn",
       cwd,
       signal: controller.signal,
     });
@@ -248,7 +251,7 @@ describe("prepareWorkerGitHubEnvironment", () => {
     await prepareWorkerGitHubEnvironment({
       binding: withoutRemote,
       stateDir: path.join(root, "state"),
-      runId: "turn",
+      turnId: "turn",
       cwd,
     });
 
@@ -317,6 +320,39 @@ describe("prepareWorkerGitHubEnvironment", () => {
     expect(JSON.stringify(prepared)).not.toContain(binding.token);
     expect(process.env.GH_TOKEN).toBe("inherited-synthetic-token");
     expect(process.env.GITHUB_TOKEN).toBe("inherited-synthetic-token");
+    const profileDir = prepared?.localIdentityEnv?.GH_CONFIG_DIR;
+    if (!profileDir) {
+      throw new Error("Expected a turn-owned GitHub profile");
+    }
+    await disposeWorkerGitHubEnvironment(path.join(root, "state"), "turn");
+    await expect(fs.access(profileDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("does not remove a newer profile when the previous turn finishes cleanup", async () => {
+    const previous = await prepare();
+    const current = await prepareWorkerGitHubEnvironment({
+      binding,
+      stateDir: path.join(root, "state"),
+      turnId: "next-turn",
+      cwd,
+    });
+    const previousProfile = previous?.localIdentityEnv.GH_CONFIG_DIR;
+    const currentProfile = current?.localIdentityEnv.GH_CONFIG_DIR;
+    expect(previousProfile).toBeTruthy();
+    expect(currentProfile).toBeTruthy();
+    expect(currentProfile).not.toBe(previousProfile);
+    if (!previousProfile || !currentProfile) {
+      throw new Error("Expected both turns' GitHub profiles");
+    }
+    expect(await fs.readFile(path.join(previousProfile, "hosts.yml"), "utf8")).toContain(
+      binding.token,
+    );
+    await disposeWorkerGitHubEnvironment(path.join(root, "state"), "turn");
+    expect(await fs.readFile(path.join(currentProfile, "hosts.yml"), "utf8")).toContain(
+      binding.token,
+    );
+    await disposeWorkerGitHubEnvironment(path.join(root, "state"), "next-turn");
+    await expect(fs.access(currentProfile)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("warns and continues without changing local files when origin cannot be fetched", async () => {

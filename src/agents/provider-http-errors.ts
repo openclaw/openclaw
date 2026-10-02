@@ -394,22 +394,18 @@ export async function createProviderHttpError(
   label: string,
   options?: ProviderHttpErrorOptions,
 ): Promise<ProviderHttpError> {
-  const info = await extractProviderErrorInfo(response, options);
+  const { detail, ...info } = await extractProviderErrorInfo(response, options);
   return new ProviderHttpError(
     formatProviderHttpErrorMessage({
       label,
       status: response.status,
-      detail: info.detail,
+      detail,
       requestId: info.requestId,
       statusPrefix: options?.statusPrefix,
     }),
     {
       status: response.status,
-      code: info.code,
-      type: info.type,
-      body: info.body,
-      requestId: info.requestId,
-      retryAfterMs: info.retryAfterMs,
+      ...info,
     },
   );
 }

@@ -1,6 +1,3 @@
-// Annotation model for the browser panel: freehand strokes drawn over a page
-// screenshot, plus the prepackaged prompt handed to the chat composer so the
-// agent knows what was marked up.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
@@ -274,13 +271,9 @@ export function paintAnnotations(
 }
 
 /** Composites the screenshot and markup into a PNG data URL for the chat attachment. */
-export function composeAnnotatedImage(params: {
-  image: CanvasImageSource;
-  width: number;
-  height: number;
-  strokes: AnnotationStroke[];
-  highlight?: AnnotationRegion | null;
-}): string {
+export function composeAnnotatedImage(
+  params: Parameters<typeof paintAnnotations>[1] & { image: CanvasImageSource },
+): string {
   const canvas = document.createElement("canvas");
   canvas.width = params.width;
   canvas.height = params.height;

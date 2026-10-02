@@ -103,8 +103,9 @@ vi.mock("./realtime-voice.runtime.js", () => ({
   resolveConfiguredRealtimeVoiceProvider: mocks.resolveConfiguredRealtimeVoiceProvider,
 }));
 
-vi.mock("./realtime-fast-context.js", () => ({
-  resolveRealtimeFastContextConsult: mocks.resolveRealtimeFastContextConsult,
+vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/realtime-voice")>()),
+  resolveRealtimeVoiceFastContextConsult: mocks.resolveRealtimeFastContextConsult,
 }));
 
 vi.mock("./webhook/realtime-handler.js", () => ({
@@ -428,20 +429,19 @@ describe("createVoiceCallRuntime lifecycle", () => {
       includeWorkspaceFiles: false,
       files: ["SOUL.md"],
     };
-    const fullConfig = {
-      agents: { list: [{ id: "operator", default: true }, { id: "support" }] },
-    } as OpenClawConfig;
-    const resolveAgentIdentity = vi.fn((_cfg: OpenClawConfig, agentId: string) => ({
-      name: agentId === "support" ? "Support Voice" : "Main Voice",
-    }));
-
+    const fullConfig: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "operator", default: true, identity: { name: "Main Voice" } },
+          { id: "support", identity: { name: "Support Voice" } },
+        ],
+      },
+    };
     const runtime = await createVoiceCallRuntime({
       config,
-      coreConfig: {} as OpenClawConfig,
+      coreConfig: {},
       fullConfig,
-      agentRuntime: {
-        resolveAgentIdentity,
-      } as never,
+      agentRuntime: {} as never,
     });
 
     const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[2];
@@ -460,8 +460,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       to: "+15550002222",
     });
     expect(defaultRegistration.agentId).toBe("operator");
-    expect(defaultRegistration.instructions).toContain("- Agent id: operator");
-    expect(resolveAgentIdentity).toHaveBeenCalledWith(fullConfig, "operator");
+    expect(defaultRegistration.instructions).toContain("- Name: Main Voice");
+    expect(defaultRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
 
     const supportRegistration = resolveCallRegistration({
       callId: "call-support",
@@ -471,7 +471,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       to: "+15550002222",
     });
     expect(supportRegistration.agentId).toBe("support");
-    expect(supportRegistration.instructions).toContain("- Agent id: support");
+    expect(supportRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
     expect(supportRegistration.instructions).toContain("- Name: Support Voice");
     expect(supportRegistration.instructions).not.toContain("Main Voice");
 
@@ -482,7 +482,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       from: "+15550001111",
       to: "+15550002222",
     });
-    expect(unknownRegistration.instructions).not.toContain("OpenClaw agent voice context:");
+    expect(unknownRegistration.instructions).not.toContain("Configured identity:");
+    expect(unknownRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
   });
 
   it.each(["twilio", "telnyx", "plivo"] as const)(
@@ -905,6 +906,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
         debug: console.debug,
       },
       sessionKey: "agent:main:voice:15550001234",
+      labels: {
+        audienceLabel: "caller",
+        contextName: "OpenClaw memory or session context",
+      },
     });
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });

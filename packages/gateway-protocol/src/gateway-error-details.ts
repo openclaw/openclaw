@@ -147,13 +147,6 @@ export type GatewayErrorDetails =
   | TaskWorktreeSourceRequiredErrorDetails
   | { code: typeof GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY };
 
-type GatewayErrorLike = {
-  code?: unknown;
-  gatewayCode?: unknown;
-  message?: unknown;
-  details?: unknown;
-};
-
 const LEGACY_MISSING_SCOPE_PATTERN = /\bmissing scope:\s*([a-z0-9._-]+)/i;
 const SHA256_PATTERN = /^[a-fA-F0-9]{64}$/;
 
@@ -254,17 +247,16 @@ export function readMissingScopeError(error: unknown): MissingScopeErrorDetails 
   if (structured) {
     return structured;
   }
-  const gatewayError = record as GatewayErrorLike;
   const code =
-    typeof gatewayError.gatewayCode === "string"
-      ? gatewayError.gatewayCode
-      : typeof gatewayError.code === "string"
-        ? gatewayError.code
+    typeof record.gatewayCode === "string"
+      ? record.gatewayCode
+      : typeof record.code === "string"
+        ? record.code
         : "";
   if (code !== ErrorCodes.FORBIDDEN && code !== ErrorCodes.INVALID_REQUEST) {
     return null;
   }
-  const message = typeof gatewayError.message === "string" ? gatewayError.message : "";
+  const message = typeof record.message === "string" ? record.message : "";
   const missingScope = message.match(LEGACY_MISSING_SCOPE_PATTERN)?.[1];
   return missingScope
     ? {

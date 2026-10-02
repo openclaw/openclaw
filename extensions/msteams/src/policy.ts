@@ -213,6 +213,7 @@ export function resolveMSTeamsGroupToolPolicy(
 
 type MSTeamsReplyPolicy = {
   requireMention: boolean;
+  requireMentionInBotThreads?: boolean;
   replyStyle: MSTeamsReplyStyle;
 };
 
@@ -236,9 +237,17 @@ export function resolveMSTeamsReplyPolicy(params: {
     params.channelConfig?.replyStyle ??
     params.teamConfig?.replyStyle ??
     params.globalConfig?.replyStyle;
+  const requireMentionInBotThreads =
+    params.channelConfig?.requireMentionInBotThreads ??
+    params.teamConfig?.requireMentionInBotThreads ??
+    params.globalConfig?.requireMentionInBotThreads;
 
   const replyStyle: MSTeamsReplyStyle =
     explicitReplyStyle ?? (requireMention ? "thread" : "top-level");
 
-  return { requireMention, replyStyle };
+  return {
+    requireMention,
+    replyStyle,
+    ...(requireMentionInBotThreads === undefined ? {} : { requireMentionInBotThreads }),
+  };
 }

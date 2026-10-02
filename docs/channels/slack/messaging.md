@@ -66,8 +66,8 @@ reply retains the settings it started with. The same behavior applies to account
 - `off`: disable live preview streaming.
 - `partial`: replace preview text with the latest partial output. Set this to restore the pre-2026.8.1 default, before `progress` became the default ([#122552](https://github.com/openclaw/openclaw/pull/122552)).
 - `block`: append chunked preview updates.
-- `progress` (default): show structured progress in one native task card when Slack supports it, with a Block Kit session-card fallback.
-- `streaming.progress.toolProgress`: `progress` mode is quiet by default (`false`). Set `true` to add one task row (native card) or activity line (Block Kit card) per tool call, plus tool/file/time counters on the Block Kit card. `streaming.preview.toolProgress` controls tool previews in `partial` and `block` modes (default: `true`).
+- `progress` (default): show structured progress in a reply thread using a native task card when Slack supports it, with a Block Kit session-card fallback. Outside reply threads, leave only the final answer by default.
+- `streaming.progress.toolProgress`: `progress` mode is quiet by default (`false`). Set `true` to add one task row per tool call on the native card, or tool activity, the plan checklist, and tool/file/time totals on the Block Kit card. Finished Block Kit cards retain only file diff totals. `streaming.preview.toolProgress` controls tool previews in `partial` and `block` modes (default: `true`).
 - `streaming.preview.commandText` / `streaming.progress.commandText`: `status` keeps compact tool-progress lines while hiding raw command/exec text (default); set `raw` to opt into command text.
 
 Show the tool log while hiding raw command/exec text:
@@ -90,11 +90,17 @@ Show the tool log while hiding raw command/exec text:
 
 `channels.slack.streaming.nativeTransport` controls Slack native text streaming when `channels.slack.streaming.mode` is `partial` (default: `true`).
 
-In `progress` mode, Slack's native agent card is the default: the whole turn is one streamed message that interleaves narration with a live plan/task card and finishes with the assistant's answer in that same message. The card shows authored plan steps when the agent publishes a plan, otherwise one stable work-summary row; approval requests get their own row. Intermediate tool failures and nonzero command exits are hidden by default, so successful answers do not accumulate failure or `Recovered: …` rows. With `progress.toolProgress: true`, it also shows per-tool task rows, including tool failures, alongside any authored plan. Routine updates coalesce at one-second intervals; approvals, visible failures, and completion bypass that delay. The card appears only once a turn does real work — tool or plan activity still running after a short delay — so a plain question is answered without one.
+In `progress` mode, turns without a reply-thread target post no preview or progress message unless you explicitly select a presentation. This includes channel replies with effective `replyToMode: "off"` and plain top-level DMs. These turns use a temporary typing reaction and deliver the final answer once; failures still use normal error delivery. Any explicit `streaming.progress` setting opts top-level turns into a preview, including `commentary: true` or a custom `label`. The sole exception is `nativeTaskCards: true`, which only affects threads. An empty `streaming.progress` object or setting only `streaming.mode: "progress"` keeps the quiet top-level default. This rule applies to the effective settings after merging root and account overrides. Modes `off`, `partial`, and `block` retain their existing behavior.
 
-Set `channels.slack.streaming.progress.nativeTaskCards` to `false` to fall back to the Block Kit session card, which posts a separate message showing title, narration, plan checklist, and authored commentary, and finalizes to success or error. With `progress.toolProgress: true` it also lists recent tool activity, tool/file totals, and elapsed time.
+For threaded turns, including Agent View, Assistant View, and Slack-managed threads, Slack's native agent card remains the default: the whole turn is one streamed message that interleaves narration with a live plan/task card and finishes with the assistant's answer in that same message. The card shows authored plan steps when the agent publishes a plan, otherwise one stable work-summary row; approval requests get their own row. Intermediate tool failures and nonzero command exits are hidden by default, so successful answers do not accumulate failure or `Recovered: …` rows. With `progress.toolProgress: true`, it also shows per-tool task rows, including tool failures, alongside any authored plan. Routine updates coalesce at one-second intervals; approvals, visible failures, and completion bypass that delay. The card appears only once a turn does real work — tool or plan activity still running after a short delay — so a plain question is answered without one.
 
-Set `channels.slack.streaming.progress.style` to `"compact"` for one plain-text progress draft instead of either card surface. Explicitly setting `progress.toolProgress: false` also selects compact style when `style` is unset; leaving both options unset keeps the default quiet card. Set `style: "card"` to keep a card with `toolProgress: false`. Commentary appears as italic text, and authored reasoning and approval requests remain visible. Terminal task errors still use normal error delivery. The final response is posted as a new message, then the temporary preview is deleted after Slack confirms delivery. Older previews displaced by human replies are cleaned up with it; durable messages and videos stay in the conversation.
+Without an authored or explicit headline, native summary rows finish as **Completed** or **Failed**.
+
+Set `channels.slack.streaming.progress.nativeTaskCards` to `false` to fall back to the Block Kit session card. By default, this separate message shows commentary and text, including italic narration and reasoning, plus actionable approval requests. Only an explicitly configured progress `label` appears as a plain title. Finished cards keep the **Open in OpenClaw** or **Open work session** link when available. The card adds no emoji, bold text, or status headings in either mode, except a plain Failed line when the turn fails. A card is posted only once it has something to show, so a turn with only tool activity and no commentary shows no card by default. A working or successful card whose last visible row goes away, such as a resolved approval, is deleted instead of keeping stale rows. Failed turns keep their card marked Failed, even without an error reply; failed turns with no reply post a plain Failed card even if none appeared while working.
+
+Set `progress.toolProgress: true` for the detailed Block Kit card: it adds recent tool activity, a plan checklist with a completed-step count, intermediate error and recovery rows, and tool/file/time totals while working. Finished detailed cards retain only file diff totals in their footer.
+
+Set `channels.slack.streaming.progress.style` to `"compact"` for one plain-text progress draft instead of either card surface. Explicitly setting `progress.toolProgress: false` also selects compact style when `style` is unset. Set `style: "card"` to keep a card with `toolProgress: false`, or to select a Block Kit card for top-level turns. Commentary appears as italic text, and authored reasoning and approval requests remain visible. Terminal task errors still use normal error delivery. The final response is posted as a new message, then the temporary preview is deleted after Slack confirms delivery. Older previews displaced by human replies are cleaned up with it; durable messages and videos stay in the conversation.
 
 For streamed preambles, Slack waits for the first complete preamble before creating the message, so its notification contains the full thought rather than a single token. Once that message exists, later preambles can stream as edits without another notification.
 
@@ -120,9 +126,11 @@ Compact progress always uses normal final delivery, including for media and erro
 
 Both surfaces link the session with **Open in OpenClaw**, but only when that link can work: `gateway.publicOrigin` must be set (the externally reachable Gateway origin) and the Control UI must not be disabled via `gateway.controlUi.enabled: false`. Installations that leave `publicOrigin` unset — where there is no way to reach OpenClaw from Slack — get no link rather than a dead one. If the Control UI is served below a path prefix, also set `gateway.controlUi.basePath`.
 
+When a turn spawns a visible work session, the finished card instead links to that child with **Open work session**. For multiple visible work sessions, it shows up to five links in acceptance order, using their labels or numbered **Open work session** links; hidden subagents do not replace the conversation link.
+
 - A reply thread must be available for native text streaming and Slack session status to appear. Thread selection still follows `replyToMode`.
-- Channel, group-chat, and top-level DM roots can still use the normal draft preview when native streaming is unavailable or no reply thread exists.
-- Top-level Slack DMs stay off-thread by default, so they do not show Slack's thread-style native stream/status preview; OpenClaw posts and edits a draft preview in the DM instead.
+- Channel, group-chat, and top-level DM roots use draft previews when explicitly selected. Default `progress` turns without a reply thread use only the temporary typing reaction.
+- Top-level Slack DMs stay off-thread by default; Agent View and Assistant View retain their thread-based native progress.
 - Custom outbound username/icon settings keep portable previews enabled. OpenClaw keeps the preview or session card app-authored and delivers the customized final separately. Slack does not allow impersonated messages to be deleted.
 - Media and non-text payloads fall back to normal delivery.
 - Outside compact progress, media/error finals cancel pending preview edits; eligible text/block finals flush only when they can edit the preview in place.
@@ -145,7 +153,7 @@ Use draft preview instead of Slack native text streaming:
 }
 ```
 
-Select Slack native progress task cards explicitly:
+Keep Slack native progress task cards enabled for threaded turns:
 
 ```json5
 {
@@ -177,10 +185,12 @@ Resolution order:
 
 - `channels.slack.accounts.<accountId>.typingReaction`
 - `channels.slack.typingReaction`
+- `"hourglass_flowing_sand"` for default `progress` turns without a reply thread or an explicitly selected progress presentation; otherwise no typing reaction.
 
 Notes:
 
 - Slack expects shortcodes (for example `"hourglass_flowing_sand"`).
+- Use `""` to disable the typing reaction, including the default for quiet top-level turns.
 - The reaction is best-effort and cleanup is attempted automatically after the reply or failure path completes.
 
 ## Commands and slash behavior

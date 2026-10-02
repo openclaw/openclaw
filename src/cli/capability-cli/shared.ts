@@ -20,6 +20,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getProviderEnvVarsCore } from "../../secrets/provider-env-vars.js";
+import { resolveModelRefOverride } from "../../shared/model-ref-override.js";
 import { resolveCommandConfigWithSecrets } from "../command-config-resolution.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
@@ -83,16 +84,6 @@ export function resolveCapabilityAgentOption(
     ? rawAgentId
     : inheritOptionFromParent<string>(command, "agent");
 }
-function getAuthProfileIdsForProvider(
-  cfg: OpenClawConfig,
-  providerId: string,
-  agentId: string,
-): string[] {
-  const agentDir = resolveAgentDir(cfg, agentId);
-  const store = loadAuthProfileStoreForRuntime(agentDir);
-  return listProfilesForProvider(store, providerId);
-}
-
 export function providerHasGenericConfig(params: {
   cfg: OpenClawConfig;
   providerId: string;
@@ -112,31 +103,16 @@ export function providerHasGenericConfig(params: {
   const envConfigured = envVars.some((envVar) => Boolean(process.env[envVar]?.trim()));
   return (
     (params.agentId
-      ? getAuthProfileIdsForProvider(params.cfg, params.providerId, params.agentId).length > 0
+      ? listProfilesForProvider(
+          loadAuthProfileStoreForRuntime(resolveAgentDir(params.cfg, params.agentId)),
+          params.providerId,
+        ).length > 0
       : false) ||
     hasOwnKeys(modelsProviders[params.providerId]) ||
     hasOwnKeys(pluginEntries[params.providerId]?.config) ||
     hasOwnKeys(ttsProviders[params.providerId]) ||
     envConfigured
   );
-}
-
-export function resolveModelRefOverride(raw: string | undefined): {
-  provider?: string;
-  model?: string;
-} {
-  const trimmed = raw?.trim();
-  if (!trimmed) {
-    return {};
-  }
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash === trimmed.length - 1) {
-    return { model: trimmed };
-  }
-  return {
-    provider: trimmed.slice(0, slash),
-    model: trimmed.slice(slash + 1),
-  };
 }
 
 export function requireProviderModelOverride(
@@ -211,6 +187,23 @@ export async function resolveLocalCapabilityRuntimeConfig(params: {
   });
   pinRuntimeConfigSnapshot(effectiveConfig);
   return effectiveConfig;
+}
+
+export async function resolveLocalCapabilityAgent(params: {
+  commandName: string;
+  targetIds: Set<string>;
+  agent?: string;
+  surface?: string;
+}) {
+  const cfg = await resolveLocalCapabilityRuntimeConfig(params);
+  const agentId = resolveCapabilityProviderAgentId(
+    cfg,
+    params.agent,
+    params.surface ?? params.commandName,
+  );
+  const { prepareLocalCapabilityAccountSecrets } = await import("./local-account-secrets.js");
+  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
+  return { cfg, agentId, agentDir: resolveAgentDir(cfg, agentId) };
 }
 
 export function pinRuntimeConfigSnapshot(config: OpenClawConfig): void {

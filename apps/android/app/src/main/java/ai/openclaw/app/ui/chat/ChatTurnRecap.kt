@@ -30,11 +30,6 @@ internal data class TurnRecapTranscriptState(
   val completedNewestItemId: String?,
 )
 
-internal data class TurnRecapTokenFormat(
-  val singular: Boolean,
-  val count: String,
-)
-
 /**
  * [baselineEndedAt] is the session row's endedAt when the working indicator appeared: the
  * previous run's terminal stamp, or null once the run-start patch cleared it. Only a row whose
@@ -180,7 +175,6 @@ internal class TurnRecapResolver(
       watches.remove(sessionKey)
       return null
     }
-    watches.remove(sessionKey)
     val settled = watch.pendingTerminal ?: terminal
     watches[sessionKey] =
       watch.copy(
@@ -216,18 +210,12 @@ internal fun ChatTurnRecapRow(recap: TurnRecap) {
 @Composable
 internal fun localizedChatOutputTokens(count: Long): String {
   val locale = LocalConfiguration.current.locales[0]
-  val format = turnRecapTokenFormat(count, locale)
-  return if (format.singular) {
+  return if (count == 1L) {
     nativeStringResource("1 token")
   } else {
-    nativeStringResource("\$count tokens", format.count)
+    nativeStringResource("\$count tokens", formatCompactTokenCount(count, locale))
   }
 }
-
-internal fun turnRecapTokenFormat(
-  count: Long,
-  locale: Locale = Locale.getDefault(),
-): TurnRecapTokenFormat = TurnRecapTokenFormat(singular = count == 1L, count = formatCompactTokenCount(count, locale))
 
 internal fun formatCompactTokenCount(
   count: Long,
@@ -241,21 +229,13 @@ internal fun formatCompactTokenCount(
       roundingMode = RoundingMode.HALF_UP
     }
 
-  fun decimal(value: Double): String = decimalFormat.format(value)
-
-  fun millions(): String {
-    val value = decimal(count / 1_000_000.0)
-    return nativeString("\${decimal(count / 1_000_000.0)}M", value)
-  }
-
   return when {
-    count >= 1_000_000L -> {
-      millions()
+    count >= 999_950L -> {
+      nativeString("\${decimal(count / 1_000_000.0)}M", decimalFormat.format(count / 1_000_000.0))
     }
 
     count >= 1_000L -> {
-      val thousands = decimal(count / 1_000.0)
-      if (count >= 999_950L) millions() else nativeString("\${thousands}k", thousands)
+      nativeString("\${thousands}k", decimalFormat.format(count / 1_000.0))
     }
 
     else -> {

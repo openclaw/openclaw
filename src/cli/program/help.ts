@@ -1,4 +1,3 @@
-// Root Commander help, global options, banner, version, and example formatting.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
@@ -28,7 +27,7 @@ const ROOT_COMMANDS_HINT =
 
 const EXAMPLES = [
   ["openclaw onboard", "Run guided setup for a local Gateway, workspace, auth, and channels."],
-  ["openclaw setup", "Create the baseline config, workspace, and session folders."],
+  ["openclaw setup --baseline", "Create the baseline config, workspace, and session folders."],
   ["openclaw configure", "Change models, Gateway, channels, plugins, skills, and health checks."],
   ["openclaw status", "Check Gateway, channel, model, and recent-session status."],
   ["openclaw doctor --fix", "Repair common config, service, plugin, and channel problems."],

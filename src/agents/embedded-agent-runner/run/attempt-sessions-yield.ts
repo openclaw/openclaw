@@ -1,28 +1,11 @@
 import type { AssistantMessage, AssistantMessageEventStreamLike } from "../../../llm/types.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { buildSessionsYieldContextMessage } from "../../sessions-yield-context.js";
 import type { SessionManager } from "../../sessions/index.js";
-/**
- * Handles sessions-yield interruption, persistence, and artifact cleanup.
- */
+import { buildUsageWithNoCost } from "../../stream-message-shared.js";
 import { isRunnerAbortError } from "../abort.js";
-import { waitForEmbeddedAbortSettle } from "./attempt-subscription-cleanup.js";
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
-
-export async function waitForSessionsYieldAbortSettle(params: {
-  settlePromise: Promise<void> | null;
-  runId: string;
-  sessionId: string;
-}): Promise<void> {
-  await waitForEmbeddedAbortSettle({
-    promise: params.settlePromise,
-    runId: params.runId,
-    sessionId: params.sessionId,
-    reason: "sessions_yield",
-  });
-}
 
 // Return a synthetic aborted response so agent runtime unwinds without a real provider call.
 export function createYieldAbortedResponse(model: {
@@ -37,20 +20,7 @@ export function createYieldAbortedResponse(model: {
     api: model.api ?? "",
     provider: model.provider ?? "",
     model: model.id ?? "",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    },
+    usage: buildUsageWithNoCost({}),
     timestamp: Date.now(),
   };
   return {
@@ -65,7 +35,6 @@ export function createYieldAbortedResponse(model: {
 // own yield checks in attempt.ts and attempt-stream.ts.
 export const SESSIONS_YIELD_ABORT_REASON = { code: "sessions_yield", turnHandoff: true } as const;
 
-/** True when a runner abort error was raised by the sessions_yield handoff. */
 export function isSessionsYieldAbortError(err: unknown): boolean {
   return isRunnerAbortError(err) && err instanceof Error && isSessionsYieldAbortReason(err.cause);
 }
@@ -90,26 +59,6 @@ export function queueSessionsYieldInterruptMessage(activeSession: {
     display: false,
     details: { source: "sessions_yield" },
     timestamp: Date.now(),
-  });
-}
-
-// Append the caller-provided yield payload as a hidden session message once the run is idle.
-export async function persistSessionsYieldContextMessage(
-  activeSession: {
-    sendCustomMessage: (
-      message: {
-        customType: string;
-        content: string;
-        display: boolean;
-        details?: Record<string, unknown>;
-      },
-      options?: { triggerTurn?: boolean },
-    ) => Promise<void>;
-  },
-  message: string,
-) {
-  await activeSession.sendCustomMessage(buildSessionsYieldContextMessage(message), {
-    triggerTurn: false,
   });
 }
 

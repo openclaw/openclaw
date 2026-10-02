@@ -1,11 +1,11 @@
 /** Manual cron wake helper for queueing system events into sessions. */
+import { isSubagentSessionKey, normalizeOptionalAgentId } from "../../routing/session-key.js";
+import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
 import {
-  isSubagentSessionKey,
-  normalizeOptionalAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
-import { resolveCronDeliverySessionKey } from "../session-target.js";
-import type { CronNotificationJob } from "./notification-intents.js";
+  resolveCronNotificationQueueOwner,
+  type CronNotificationJob,
+  type CronNotificationRouting,
+} from "./notification-intents.js";
 import type { CronServiceState } from "./state.js";
 
 /** Keeps safety notices with their creator and limits failure routes to explicit origins. */
@@ -14,13 +14,14 @@ export function enqueueCronNotification(
   job: CronNotificationJob,
   text: string,
   kind: "auto-disabled" | "failure-alert",
+  routing: CronNotificationRouting,
 ): void {
-  const sessionKey = kind === "failure-alert" ? resolveCronDeliverySessionKey(job) : job.sessionKey;
-  const agentId =
-    normalizeOptionalAgentId(job.agentId) ??
-    normalizeOptionalAgentId(parseAgentSessionKey(sessionKey)?.agentId) ??
-    normalizeOptionalAgentId(state.deps.resolveDefaultAgentId?.()) ??
-    normalizeOptionalAgentId(state.deps.defaultAgentId);
+  const owner = resolveCronNotificationQueueOwner(job, kind);
+  const { sessionKey } = owner;
+  const agentId = owner.agentId ?? normalizeOptionalAgentId(routing.defaultAgentId);
+  if (!agentId) {
+    throw new Error(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
+  }
   const deliveryContext =
     sessionKey || (kind === "auto-disabled" && agentId)
       ? state.deps.resolveOriginDeliveryContext?.({ agentId, sessionKey })

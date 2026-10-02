@@ -144,6 +144,16 @@ function mockDoneAnswer(text: string) {
   streamSimpleMock.mockReturnValue(makeAsyncEvents([createDoneEvent(text)]));
 }
 
+function createCliRuntimeConfig(): Parameters<typeof runBtwSideQuestion>[0]["cfg"] {
+  return {
+    agents: {
+      defaults: {
+        models: { "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } } },
+      },
+    },
+  };
+}
+
 function mockCliOutput(output: { text: string; rawText?: string }) {
   const cleanup = vi.fn(async () => undefined);
   const prepared = { prepared: true, preparedBackend: { cleanup } };
@@ -540,6 +550,7 @@ export {
   createDoneEvent,
   createThinkingOnlyDoneEvent,
   mockDoneAnswer,
+  createCliRuntimeConfig,
   mockCliOutput,
   registerCodexSideQuestionHarness,
   supportsPreparedOpenAIAuth,

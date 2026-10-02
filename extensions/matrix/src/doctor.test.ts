@@ -1,16 +1,7 @@
-// Matrix tests cover doctor plugin behavior.
-import fs from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { normalizeCompatibilityConfig } from "./doctor-contract.js";
-import { cleanStaleMatrixPluginConfig, collectMatrixInstallPathWarnings } from "./doctor.js";
 
 describe("matrix doctor", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
   function normalizeMatrixDmConfig(dm: Record<string, unknown>) {
     return normalizeCompatibilityConfig({
       cfg: {
@@ -26,33 +17,6 @@ describe("matrix doctor", () => {
   function expectChangeContaining(changes: readonly string[], fragment: string): void {
     expect(changes.join("\n")).toContain(fragment);
   }
-
-  it("warns on stale custom Matrix plugin paths and cleans them", async () => {
-    const missingPath = path.join(tmpdir(), `openclaw-matrix-missing-${Date.now()}`);
-    await fs.rm(missingPath, { recursive: true, force: true });
-
-    const warnings = await collectMatrixInstallPathWarnings({
-      plugins: {
-        installs: {
-          matrix: { source: "path", sourcePath: missingPath, installPath: missingPath },
-        },
-      },
-    });
-    expect(warnings[0]).toContain("custom path that no longer exists");
-
-    const cleaned = await cleanStaleMatrixPluginConfig({
-      plugins: {
-        installs: {
-          matrix: { source: "path", sourcePath: missingPath, installPath: missingPath },
-        },
-        load: { paths: [missingPath, "/other/path"] },
-        allow: ["matrix", "other-plugin"],
-      },
-    });
-    expect(cleaned.changes[0]).toContain("Removed stale Matrix plugin references");
-    expect(cleaned.config.plugins?.load?.paths).toEqual(["/other/path"]);
-    expect(cleaned.config.plugins?.allow).toEqual(["other-plugin"]);
-  });
 
   it("normalizes legacy Matrix room allow aliases to enabled", () => {
     const result = normalizeCompatibilityConfig({
@@ -78,26 +42,15 @@ describe("matrix doctor", () => {
       } as never,
     });
 
-    const matrixConfig = result.config.channels?.matrix as
-      | {
-          groups?: Record<string, unknown>;
-          accounts?: Record<string, unknown>;
-          network?: { dangerouslyAllowPrivateNetwork?: boolean };
-        }
-      | undefined;
-    const workAccount = matrixConfig?.accounts?.work as
-      | {
-          rooms?: Record<string, unknown>;
-          network?: { dangerouslyAllowPrivateNetwork?: boolean };
-        }
-      | undefined;
-
-    expect(matrixConfig?.groups?.["!ops:example.org"]).toEqual({
+    expect(result.config.channels?.matrix).toHaveProperty(["groups", "!ops:example.org"], {
       enabled: true,
     });
-    expect(workAccount?.rooms?.["!legacy:example.org"]).toEqual({
-      enabled: false,
-    });
+    expect(result.config.channels?.matrix).toHaveProperty(
+      ["accounts", "work", "rooms", "!legacy:example.org"],
+      {
+        enabled: false,
+      },
+    );
     expect(result.changes).toContain(
       "Moved channels.matrix.groups.!ops:example.org.allow → channels.matrix.groups.!ops:example.org.enabled (true).",
     );
@@ -122,22 +75,10 @@ describe("matrix doctor", () => {
       } as never,
     });
 
-    const matrixConfig = result.config.channels?.matrix as
-      | {
-          accounts?: Record<string, unknown>;
-          network?: { dangerouslyAllowPrivateNetwork?: boolean };
-        }
-      | undefined;
-    const workAccount = matrixConfig?.accounts?.work as
-      | {
-          network?: { dangerouslyAllowPrivateNetwork?: boolean };
-        }
-      | undefined;
-
-    expect(matrixConfig?.network).toEqual({
+    expect(result.config.channels?.matrix).toHaveProperty("network", {
       dangerouslyAllowPrivateNetwork: true,
     });
-    expect(workAccount?.network).toEqual({
+    expect(result.config.channels?.matrix).toHaveProperty(["accounts", "work", "network"], {
       dangerouslyAllowPrivateNetwork: false,
     });
     expect(result.changes).toContain(
@@ -149,18 +90,10 @@ describe("matrix doctor", () => {
   });
 
   it("migrates legacy channels.matrix.dm.policy 'trusted' with allowFrom to 'allowlist'", () => {
-    const result = normalizeCompatibilityConfig({
-      cfg: {
-        channels: {
-          matrix: {
-            dm: {
-              enabled: true,
-              policy: "trusted",
-              allowFrom: ["@alice:example.org", "@bob:example.org"],
-            },
-          },
-        },
-      } as never,
+    const result = normalizeMatrixDmConfig({
+      enabled: true,
+      policy: "trusted",
+      allowFrom: ["@alice:example.org", "@bob:example.org"],
     });
 
     const matrixDm = (

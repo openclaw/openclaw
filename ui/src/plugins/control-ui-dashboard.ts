@@ -16,13 +16,6 @@ import {
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import "./control-ui-dashboard.css";
 
-function ensureBoardViewElement(): Promise<void> {
-  return ensureCustomElementDefined(
-    "openclaw-board-view",
-    () => import("../components/board/board-view.ts"),
-  );
-}
-
 class PluginSessionDashboard extends OpenClawLightDomElement {
   @property({ attribute: false }) session: BoardGetParams | null = null;
   @property({ attribute: false }) client: GatewayBrowserClient | null = null;
@@ -52,7 +45,10 @@ class PluginSessionDashboard extends OpenClawLightDomElement {
   }
 
   override updated(): void {
-    this.viewLoad ??= ensureBoardViewElement().catch((error: unknown) => {
+    this.viewLoad ??= ensureCustomElementDefined(
+      "openclaw-board-view",
+      () => import("../components/board/board-view.ts"),
+    ).catch((error: unknown) => {
       this.viewError = error instanceof Error ? error.message : String(error);
     });
     this.synchronizeProvider();

@@ -1,11 +1,13 @@
 import { spawnSync } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readCronJobScratchState, writeCronJobScratch } from "../cron/scratch-store.js";
+import { readCronJobScratchState } from "../cron/scratch-store.js";
+import { writeCronJobScratchForMaintenance } from "../cron/scratch-write.kernel.js";
 import {
   loadCronJobsStore,
   resolveCronJobsStorePath,
@@ -15,6 +17,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   collectHeartbeatScratchMigrationFindings,
   maybeMigrateHeartbeatFilesToScratch,
@@ -147,7 +150,7 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     // Recreate a retired source after an operator edit: doctor must not overwrite it.
     const { monitor, storePath } = await loadMonitor();
     const current = readCronJobScratchState(storePath, monitor.id);
-    writeCronJobScratch({
+    writeCronJobScratchForMaintenance({
       storePath,
       jobId: monitor.id,
       content: "operator scratch\n",
@@ -355,7 +358,7 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     await maybeMigrateHeartbeatFilesToScratch({ cfg: fixture.cfg, shouldRepair: true });
     const { monitor, storePath } = await loadMonitor();
     const state = readCronJobScratchState(storePath, monitor.id);
-    const unset = writeCronJobScratch({
+    const unset = writeCronJobScratchForMaintenance({
       storePath,
       jobId: monitor.id,
       content: null,
@@ -458,6 +461,31 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     expect(readCronJobScratchState(storePath, monitor.id).scratch?.content).toBe(content);
     const workspaceEntries = await fs.readdir(fixture.workspace);
     expect(workspaceEntries.filter((entry) => entry.includes(".doctor-importing-"))).toEqual([]);
+  });
+
+  it("recovers an interrupted migration claim owned by a single-thread zombie", async () => {
+    await withMockedPlatform("linux", async () => {
+      const fixture = await createFixture();
+      const claimPath = `${fixture.heartbeatPath}.doctor-importing-42-deadbeefdead`;
+      await fs.writeFile(claimPath, "interrupted checklist\n", "utf8");
+      vi.spyOn(process, "kill").mockReturnValue(true);
+      const readFileSync = fsSync.readFileSync.bind(fsSync);
+      vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, options) => {
+        if (String(filePath) === "/proc/42/status") {
+          return "Name:\tnode\nState:\tZ (zombie)\nThreads:\t1\n" as never;
+        }
+        return readFileSync(filePath, options as never) as never;
+      });
+
+      const result = await maybeMigrateHeartbeatFilesToScratch({
+        cfg: fixture.cfg,
+        shouldRepair: true,
+      });
+
+      expect(result.warnings).toEqual([]);
+      expect(result.changes).toHaveLength(1);
+      await expect(fs.access(claimPath)).rejects.toMatchObject({ code: "ENOENT" });
+    });
   });
 
   it("refuses to steal a claim held by a live doctor process", async () => {

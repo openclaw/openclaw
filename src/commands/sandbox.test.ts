@@ -279,6 +279,10 @@ describe("sandboxRecreateCommand", () => {
       expect(runtime.log).toHaveBeenCalledWith("  - running-container [docker] (running)");
       expect(runtime.log).toHaveBeenCalledWith("  - stopped-container [docker] (stopped)");
       expect(mocks.removeSandboxContainer).toHaveBeenCalledTimes(2);
+      expect(mocks.clackConfirm).not.toHaveBeenCalled();
+      expectLogContains(runtime, "✓ Removed");
+      expectLogContains(runtime, "2 removed, 0 failed");
+      expectLogContains(runtime, "automatically recreated");
     });
 
     it("should handle browsers when --browser flag set", async () => {
@@ -324,15 +328,6 @@ describe("sandboxRecreateCommand", () => {
       expect(runtime.log).toHaveBeenCalledWith("Cancelled.");
       expect(mocks.removeSandboxContainer).not.toHaveBeenCalled();
     });
-
-    it("should skip confirmation with --force", async () => {
-      mocks.listSandboxContainers.mockResolvedValue([createContainer()]);
-
-      await sandboxRecreateCommand({ all: true, browser: false, force: true }, runtime as never);
-
-      expect(mocks.clackConfirm).not.toHaveBeenCalled();
-      expect(mocks.removeSandboxContainer).toHaveBeenCalled();
-    });
   });
 
   describe("execution", () => {
@@ -376,15 +371,5 @@ describe("sandboxRecreateCommand", () => {
         expect(runtime.exit).toHaveBeenCalledWith(1);
       },
     );
-
-    it("should display success message", async () => {
-      mocks.listSandboxContainers.mockResolvedValue([createContainer()]);
-
-      await sandboxRecreateCommand({ all: true, browser: false, force: true }, runtime as never);
-
-      expectLogContains(runtime, "✓ Removed");
-      expectLogContains(runtime, "1 removed, 0 failed");
-      expectLogContains(runtime, "automatically recreated");
-    });
   });
 });

@@ -4,13 +4,16 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { shouldRejectHardlinkedPluginFiles } from "../../plugins/hardlink-policy.js";
+import type { SkillEntry } from "../types.js";
 import {
   loadSingleSkillDirectory,
   type LoadedLocalSkill,
   type LocalSkillLoadDiagnostic,
 } from "./local-loader.js";
 import type { PluginSkillRoot } from "./plugin-skill-root.js";
+import { createSkillEntry } from "./skill-entry-metadata.js";
 import { compactSkillPath } from "./skill-paths.js";
+import { mergeSkillRecords, type SkillCollision } from "./skill-precedence.js";
 import {
   canonicalSkillDirForSource,
   discoverPluginSkills,
@@ -21,10 +24,15 @@ import {
 } from "./skill-root-discovery.js";
 import { resolveSkillTelemetrySourceValue } from "./source.js";
 import { resolveAllowedSkillSymlinkTargetRealPaths } from "./symlink-targets.js";
+import { resolveWorkspaceSkillDirectories } from "./workspace-skill-roots.js";
+import type {
+  WorkspaceSkillSourcePlan,
+  WorkspaceSkillSources,
+} from "./workspace-skill-sources.types.js";
 
 const skillsLogger = createSubsystemLogger("skills");
 
-export type LoadedSkillRecord = Pick<LoadedLocalSkill, "skill" | "frontmatter"> & {
+type LoadedSkillRecord = Pick<LoadedLocalSkill, "skill" | "frontmatter"> & {
   syncSourceDir?: string;
   syncDirName?: string;
 };
@@ -186,7 +194,7 @@ export function loadSkillRootRecords(params: {
   return loadedSkills;
 }
 
-export function loadGeneratedPluginSkillRecords(params: {
+function loadGeneratedPluginSkillRecords(params: {
   pluginSkillsDir: string;
   pluginSkillRoots: readonly PluginSkillRoot[];
   source: string;
@@ -216,4 +224,67 @@ export function loadGeneratedPluginSkillRecords(params: {
     }
   }
   return loadedSkills;
+}
+
+/** Scan selected roots on their owning host, retaining native precedence and file rules. */
+export function loadWorkspaceSkillSourceEntries(
+  plan: WorkspaceSkillSourcePlan,
+  config?: OpenClawConfig,
+  collisions?: SkillCollision[],
+): WorkspaceSkillSources["entries"] {
+  const grouped = new Map<string, Array<LoadedSkillRecord & { sourceOrder?: number }>>();
+  for (const root of plan.roots) {
+    const records = grouped.get(root.tier) ?? [];
+    for (const record of loadSkillRootRecords({ ...root, config })) {
+      records.push(Object.assign({}, record, { sourceOrder: root.order }));
+    }
+    grouped.set(root.tier, records);
+  }
+  const extra = grouped.get("extra") ?? [];
+  if (plan.pluginSkillsDir) {
+    for (const record of loadGeneratedPluginSkillRecords({
+      pluginSkillsDir: plan.pluginSkillsDir,
+      pluginSkillRoots: plan.pluginSkillRoots,
+      source: "openclaw-extra",
+      limits: resolveSkillDiscoveryLimits(config),
+    })) {
+      extra.push(
+        Object.assign({}, record, {
+          sourceOrder:
+            (plan.roots.find((root) => root.tier !== "extra")?.order ??
+              Math.max(-1, ...plan.roots.map((root) => root.order ?? -1)) + 1) - 0.5,
+        }),
+      );
+    }
+  }
+  grouped.set("extra", extra);
+  // Custodian and bundled records share a tier and deterministic collision order.
+  grouped
+    .get("bundled")
+    ?.sort(
+      (left, right) =>
+        left.skill.name.localeCompare(right.skill.name, "en") ||
+        left.skill.source.localeCompare(right.skill.source, "en"),
+    );
+  return mergeSkillRecords(
+    ["extra", "bundled", "workshop", "managed", "personal", "workspace"].flatMap(
+      (tier) => grouped.get(tier) ?? [],
+    ),
+    JSON.stringify(["sources", plan.workspaceDir]),
+    collisions,
+  ).map(createSkillEntry);
+}
+
+export function loadExecutionSkillEntries(
+  executionWorkspaceDir: string,
+  config?: OpenClawConfig,
+  collisions?: SkillCollision[],
+): SkillEntry[] {
+  return mergeSkillRecords(
+    resolveWorkspaceSkillDirectories(executionWorkspaceDir).flatMap((root) =>
+      loadSkillRootRecords({ ...root, config }),
+    ),
+    JSON.stringify(["execution", executionWorkspaceDir]),
+    collisions,
+  ).map(createSkillEntry);
 }

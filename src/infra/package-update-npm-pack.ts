@@ -64,6 +64,14 @@ async function findPackedTarball(packDir: string): Promise<string | null> {
   return path.join(packDir, tarballs[0] ?? "");
 }
 
+type PreparedNpmInstallSpec = {
+  installSpec: string;
+  installCwd: string | null;
+  packDir: string | null;
+  steps: UpdateStepResult[];
+  failedStep: UpdateStepResult | null;
+};
+
 export async function prepareNpmGitSourceInstallSpec(params: {
   installTarget: ResolvedGlobalInstallTarget;
   installSpec: string;
@@ -72,27 +80,23 @@ export async function prepareNpmGitSourceInstallSpec(params: {
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
   installCwd?: string;
-}): Promise<{
-  installSpec: string;
-  installCwd: string | null;
-  packDir: string | null;
-  steps: UpdateStepResult[];
-  failedStep: UpdateStepResult | null;
-}> {
+}): Promise<PreparedNpmInstallSpec> {
+  const result: PreparedNpmInstallSpec = {
+    installSpec: params.installSpec,
+    installCwd: params.installCwd ?? null,
+    packDir: null,
+    steps: [],
+    failedStep: null,
+  };
   if (
     params.installTarget.manager !== "npm" ||
     !isNpmGitSourceInstallSpec(params.installSpec, params.packageName)
   ) {
-    return {
-      installSpec: params.installSpec,
-      installCwd: params.installCwd ?? null,
-      packDir: null,
-      steps: [],
-      failedStep: null,
-    };
+    return result;
   }
 
   const packDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-pack-"));
+  result.packDir = packDir;
   const packStep = await params.runStep({
     name: "package-pack",
     argv: [
@@ -107,14 +111,10 @@ export async function prepareNpmGitSourceInstallSpec(params: {
     env: params.env,
     timeoutMs: params.timeoutMs,
   });
+  result.steps.push(packStep);
   if (isFailedUpdateStep(packStep)) {
-    return {
-      installSpec: params.installSpec,
-      installCwd: params.installCwd ?? null,
-      packDir,
-      steps: [packStep],
-      failedStep: packStep,
-    };
+    result.failedStep = packStep;
+    return result;
   }
 
   const tarball = await findPackedTarball(packDir);
@@ -128,20 +128,12 @@ export async function prepareNpmGitSourceInstallSpec(params: {
       stdoutTail: null,
       stderrTail: `expected exactly one .tgz from npm pack ${params.installSpec}`,
     };
-    return {
-      installSpec: params.installSpec,
-      installCwd: params.installCwd ?? null,
-      packDir,
-      steps: [packStep, failedStep],
-      failedStep,
-    };
+    result.steps.push(failedStep);
+    result.failedStep = failedStep;
+    return result;
   }
 
-  return {
-    installSpec: tarball,
-    installCwd: packDir,
-    packDir,
-    steps: [packStep],
-    failedStep: null,
-  };
+  result.installSpec = tarball;
+  result.installCwd = packDir;
+  return result;
 }

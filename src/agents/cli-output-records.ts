@@ -3,7 +3,12 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CliBackendConfig } from "../plugins/cli-backend.types.js";
-import type { CliOutput, CliTerminalFailure, CliUsage } from "./cli-output-contracts.js";
+import type {
+  CliOutput,
+  CliTerminalFailure,
+  CliToolUseStartDelta,
+  CliUsage,
+} from "./cli-output-contracts.js";
 import { normalizeUsage, type UsageLike } from "./usage.js";
 
 function isClaudeCliProvider(providerId: string): boolean {
@@ -172,17 +177,10 @@ function collectCliText(value: unknown): string {
   if (!isRecord(value)) {
     return "";
   }
-  if (typeof value.response === "string") {
-    return value.response;
-  }
-  if (typeof value.text === "string") {
-    return value.text;
-  }
-  if (typeof value.result === "string") {
-    return value.result;
-  }
-  if (typeof value.content === "string") {
-    return value.content;
+  for (const field of ["response", "text", "result", "content"] as const) {
+    if (typeof value[field] === "string") {
+      return value[field];
+    }
   }
   if (Array.isArray(value.content)) {
     return value.content.map((entry) => collectCliText(entry)).join("");
@@ -196,20 +194,12 @@ function collectCliText(value: unknown): string {
 function unwrapNestedCliResultText(raw: string): string {
   let text = raw;
   for (let depth = 0; depth < 8; depth += 1) {
-    const trimmed = text.trim();
-    if (!trimmed.startsWith("{")) {
+    const parsed = safeParseJsonRecord(text.trim());
+    if (!parsed || parsed.type !== "result" || typeof parsed.result !== "string") {
       return text;
     }
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (!isRecord(parsed) || parsed.type !== "result" || typeof parsed.result !== "string") {
-        return text;
-      }
-      // Claude can wrap a result payload inside repeated JSON-string result envelopes.
-      text = parsed.result;
-    } catch {
-      return text;
-    }
+    // Claude can wrap a result payload inside repeated JSON-string result envelopes.
+    text = parsed.result;
   }
   return text;
 }
@@ -404,6 +394,66 @@ export function pickCliSessionId(
 // Agent tool result, so parent-lane consumers must skip these records.
 export function isClaudeSubagentRecord(parsed: Record<string, unknown>): boolean {
   return parsed.parent_tool_use_id != null;
+}
+
+const CLAUDE_FOREGROUND_AGENT_TOOL_NAMES = new Set(["Agent", "Task"]);
+
+export function isClaudeForegroundAgentToolName(name: string): boolean {
+  return CLAUDE_FOREGROUND_AGENT_TOOL_NAMES.has(name);
+}
+
+export function isClaudeToolUseBlockType(type: unknown): type is CliToolUseStartDelta["kind"] {
+  return type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use";
+}
+
+export function isClaudeToolResultBlockType(type: unknown): boolean {
+  return typeof type === "string" && (type === "tool_result" || type.endsWith("_tool_result"));
+}
+
+function messageHasToolResult(message: unknown): boolean {
+  if (!isRecord(message) || !Array.isArray(message.content)) {
+    return false;
+  }
+  return message.content.some(
+    (block) => isRecord(block) && isClaudeToolResultBlockType(block.type),
+  );
+}
+
+function isClaudeSemanticSubagentProgressRecord(parsed: Record<string, unknown>): boolean {
+  if (
+    parsed.type === "assistant" &&
+    isRecord(parsed.message) &&
+    Array.isArray(parsed.message.content) &&
+    parsed.message.content.length > 0
+  ) {
+    return true;
+  }
+  if (parsed.type === "user" && messageHasToolResult(parsed.message)) {
+    return true;
+  }
+  if (parsed.type !== "stream_event" || !isRecord(parsed.event)) {
+    return false;
+  }
+  const event = parsed.event;
+  if (event.type !== "content_block_start" || !isRecord(event.content_block)) {
+    return false;
+  }
+  const blockType = event.content_block.type;
+  return isClaudeToolUseBlockType(blockType) || isClaudeToolResultBlockType(blockType);
+}
+
+/** Parent id of a semantic subagent record. Partial deltas and system chatter stay out. */
+export function readClaudeAttributedSubagentProgressId(
+  parsed: Record<string, unknown>,
+): string | undefined {
+  if (typeof parsed.parent_tool_use_id !== "string") {
+    return undefined;
+  }
+  const parentToolUseId = parsed.parent_tool_use_id.trim();
+  if (!parentToolUseId || !isClaudeSemanticSubagentProgressRecord(parsed)) {
+    return undefined;
+  }
+  return parentToolUseId;
 }
 
 export function pickCliResumeCheckpointId(params: {

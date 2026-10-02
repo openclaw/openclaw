@@ -5,8 +5,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "../gateway/worker-environments/workspace-inventory-limits.js";
+import { captureWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
-import { readActualWorkspaceManifest } from "../gateway/worker-environments/workspace-reconcile.js";
 import { runCommandBuffered, runExec } from "../process/exec.js";
 import { runNodeWorkerWorkspaceTransfer } from "./node-worker-transfer-client.js";
 import { listen } from "./node-worker-transfer-client.test-support.js";
@@ -213,7 +213,7 @@ describe("node worker Git transfers", () => {
         await fs.mkdir(path.join(source, "nested"));
         await fs.writeFile(path.join(source, "nested", "file.txt"), "safe nested content\n");
       }
-      const snapshot = await readActualWorkspaceManifest({ root: source, baseCommit: commit });
+      const snapshot = await captureWorkspaceManifest({ root: source, baseCommit: commit });
       const rawManifest = serializeWorkerWorkspaceManifest(snapshot.manifest);
       const packed = await runCommandBuffered(
         ["git", "-C", source, "pack-objects", "--stdout", "--revs"],

@@ -2,8 +2,28 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 
 const require = createRequire(import.meta.url);
+
+/** Availability only; integration assertions still verify the actual kernel scope. */
+export function hasSemanticTestBackend(): boolean {
+  if (process.platform !== "linux") {
+    return false;
+  }
+  try {
+    return (
+      fs
+        .readFileSync("/sys/fs/cgroup/cgroup.controllers", "utf8")
+        .split(/\s+/u)
+        .includes("memory") &&
+      spawnSync("systemctl", ["--user", "show", "--property=Version"], { timeout: 5_000 })
+        .status === 0
+    );
+  } catch {
+    return false;
+  }
+}
 
 /** Native receipts and default libraries must belong to the fixture's own install. */
 export function materializeNativeCompiler(rootDir: string) {
@@ -29,12 +49,7 @@ export function materializeNativeCompiler(rootDir: string) {
     const source = path.dirname(owner.resolve(`${name}/package.json`));
     const destination = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(destination), { recursive: true });
-    fs.cpSync(source, destination, {
-      recursive: true,
-      mode: fs.constants.COPYFILE_FICLONE,
-      // Keep file copies on libuv's close-on-exec path on Node 24.19.
-      filter: () => true,
-    });
+    copyTreeCloseOnExec(source, destination, { dereference: true });
   }
   const bin = path.join(root, "node_modules/.bin/tsgo");
   fs.mkdirSync(path.dirname(bin), { recursive: true });

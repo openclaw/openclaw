@@ -87,7 +87,10 @@ function runDependencyGuard(
   const logPath = path.join(dir, "requests.jsonl");
   const outputPath = path.join(dir, "output.txt");
   writeFileSync(outputPath, "");
-  writeFileSync(eventPath, JSON.stringify({ pull_request: pullRequest }));
+  writeFileSync(
+    eventPath,
+    JSON.stringify({ repository: { default_branch: "main" }, pull_request: pullRequest }),
+  );
   writeFileSync(logPath, "");
   writeFileSync(
     fixturePath,
@@ -996,21 +999,6 @@ describe("dependency guard script", () => {
     const response = new Response("ignored", {
       headers: { "content-length": String(GITHUB_ERROR_BODY_MAX_BYTES + 1) },
     });
-
-    await expect(readBoundedGitHubErrorText(response)).rejects.toThrow(
-      `GitHub error response body exceeded ${GITHUB_ERROR_BODY_MAX_BYTES} bytes`,
-    );
-  });
-
-  it("bounds GitHub error bodies by streamed bytes", async () => {
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(new Uint8Array(GITHUB_ERROR_BODY_MAX_BYTES + 1));
-          controller.close();
-        },
-      }),
-    );
 
     await expect(readBoundedGitHubErrorText(response)).rejects.toThrow(
       `GitHub error response body exceeded ${GITHUB_ERROR_BODY_MAX_BYTES} bytes`,

@@ -24,7 +24,7 @@ import {
 
 let timeoutPartialDataGraceMs = TIMEOUT_PARTIAL_DATA_GRACE_MS;
 
-function readMemoryToolResultEvidence(params: {
+export function readMemoryToolResultEvidence(params: {
   toolName: string;
   result: unknown;
   isError: boolean;
@@ -70,7 +70,7 @@ function extractAssistantTextFromSessionRecord(value: unknown): string {
   return extractTextContent(message.content).trim();
 }
 
-async function readPartialAssistantText(
+export async function readPartialAssistantText(
   source: ActiveMemoryTranscriptSource,
   limits?: TranscriptReadLimits,
 ): Promise<string | null> {
@@ -105,7 +105,7 @@ async function readPartialAssistantText(
   return joined || null;
 }
 
-async function readPartialAssistantTextFromSources(
+export async function readPartialAssistantTextFromSources(
   sources: readonly ActiveMemoryTranscriptSource[],
   limits?: TranscriptReadLimits,
 ): Promise<string | null> {
@@ -118,7 +118,10 @@ async function readPartialAssistantTextFromSources(
   return null;
 }
 
-function attachPartialTimeoutData(error: unknown, data: ActiveMemoryPartialTimeoutData): void {
+export function attachPartialTimeoutData(
+  error: unknown,
+  data: ActiveMemoryPartialTimeoutData,
+): void {
   if (!error || typeof error !== "object") {
     return;
   }
@@ -126,7 +129,7 @@ function attachPartialTimeoutData(error: unknown, data: ActiveMemoryPartialTimeo
   target.activeMemoryPartialData = { ...target.activeMemoryPartialData, ...data };
 }
 
-function readPartialTimeoutData(error: unknown): ActiveMemoryPartialTimeoutData {
+export function readPartialTimeoutData(error: unknown): ActiveMemoryPartialTimeoutData {
   if (!error || typeof error !== "object") {
     return {};
   }
@@ -172,7 +175,7 @@ function normalizeGroundedSummary(
   return summary ? truncateSummary(summary, maxSummaryChars) : null;
 }
 
-async function buildTimeoutRecallResult(
+export async function buildTimeoutRecallResult(
   params: ActiveMemoryPartialTimeoutData & {
     elapsedMs: number;
     maxSummaryChars: number;
@@ -221,7 +224,7 @@ async function buildTimeoutRecallResult(
   return { status: "timeout_partial", elapsedMs: params.elapsedMs, summary, searchDebug };
 }
 
-function buildSubagentRecallResult(params: {
+export function buildSubagentRecallResult(params: {
   subagentResult: RecallSubagentResult;
   fallbackSearchDebug?: ActiveMemorySearchDebug;
   fallbackHasUsableMemoryResult?: boolean;
@@ -248,22 +251,10 @@ function buildSubagentRecallResult(params: {
   return { status, elapsedMs: params.elapsedMs, summary: null, searchDebug };
 }
 
-function resetActiveMemoryTranscriptForTests(): void {
+export function resetActiveMemoryTranscriptForTests(): void {
   timeoutPartialDataGraceMs = TIMEOUT_PARTIAL_DATA_GRACE_MS;
 }
 
-function setTimeoutPartialDataGraceMsForTests(value: number): void {
+export function setTimeoutPartialDataGraceMsForTests(value: number): void {
   timeoutPartialDataGraceMs = Math.max(0, Math.floor(value));
 }
-
-export {
-  attachPartialTimeoutData,
-  buildSubagentRecallResult,
-  buildTimeoutRecallResult,
-  readMemoryToolResultEvidence,
-  readPartialAssistantText,
-  readPartialAssistantTextFromSources,
-  readPartialTimeoutData,
-  resetActiveMemoryTranscriptForTests,
-  setTimeoutPartialDataGraceMsForTests,
-};

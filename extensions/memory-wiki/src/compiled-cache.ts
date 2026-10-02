@@ -1,5 +1,4 @@
-// Memory Wiki compiled cache ownership and persistence.
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import type {
@@ -379,10 +378,6 @@ export function resolveMemoryWikiCompiledCacheGeneration(
   snapshot: MemoryWikiCompiledCacheSnapshot,
 ): string {
   return createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
-}
-
-export function createMemoryWikiCompiledCachePublicationId(): string {
-  return randomUUID();
 }
 
 export function createMemoryWikiCompiledCacheStore(

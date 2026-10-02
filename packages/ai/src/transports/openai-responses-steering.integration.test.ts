@@ -109,6 +109,11 @@ import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-clien
 import type { ResponsesContinuationRequest } from "./openai-responses-continuation.js";
 import { OpenAIResponsesWebSocketPostDispatchError } from "./openai-responses-contracts.js";
 import { responsesLoopbackModel } from "./openai-responses-loopback.test-support.js";
+import {
+  normalizeOpenAIResponsesFunctionCallId,
+  shouldNormalizeOpenAIResponsesToolCallId,
+  splitOpenAIFunctionCallPairing,
+} from "./openai-responses-tool-call-id-shape.js";
 import { createOpenAIResponsesWebSocketStream } from "./openai-responses-websocket.js";
 
 const client = {
@@ -591,68 +596,97 @@ describe("Responses WebSocket steering handoff", () => {
     expect(await control.steer([{ ...update, timestamp: 2 }])).toBe(false);
   });
 
-  it("delivers async tool results once after the automatic steering response finishes", async () => {
-    const harness = start();
-    const control = await harness.control;
-    const admission = control.steer([{ ...update, timestamp: 1 }]);
-    harness.socket.emit(accepted);
-    await admission;
-    const toolCall = {
-      type: "function_call" as const,
-      id: "fc_1",
-      call_id: "call_1",
-      name: "lookup",
-      arguments: "{}",
-      status: "completed" as const,
-      async: true,
-    };
-    const firstAnswer = output("working independently");
-    harness.socket.emit({
-      type: "response.completed",
-      response: { id: "resp_1", status: "completed", output: [toolCall, firstAnswer] },
-    });
-    const automaticAnswer = output("handling the new requirement", "msg_2");
-    harness.socket.emit({ type: "response.created", response: { id: "resp_2" } });
-    harness.socket.emit(completed("resp_2", [automaticAnswer]));
-    await harness.events;
-    harness.first.finish();
+  it.each([
+    { name: "provider-shaped IDs", callId: "call_1", itemId: "fc_1" },
+    {
+      name: "non-canonical IDs",
+      callId: "functions.gateway:0",
+      itemId: "fc_tmp_kegospxl46",
+    },
+  ])(
+    "delivers async tool results once after the automatic steering response finishes ($name)",
+    async ({ callId, itemId }) => {
+      const harness = start();
+      const control = await harness.control;
+      const admission = control.steer([{ ...update, timestamp: 1 }]);
+      harness.socket.emit(accepted);
+      await admission;
+      const toolCall = {
+        type: "function_call" as const,
+        id: itemId,
+        call_id: callId,
+        name: "lookup",
+        arguments: "{}",
+        status: "completed" as const,
+        async: true,
+      };
+      const firstAnswer = output("working independently");
+      harness.socket.emit({
+        type: "response.completed",
+        response: { id: "resp_1", status: "completed", output: [toolCall, firstAnswer] },
+      });
+      const automaticAnswer = output("handling the new requirement", "msg_2");
+      harness.socket.emit({ type: "response.created", response: { id: "resp_2" } });
+      harness.socket.emit(completed("resp_2", [automaticAnswer]));
+      await harness.events;
+      harness.first.finish();
 
-    const toolResult = {
-      type: "function_call_output" as const,
-      call_id: "call_1",
-      output: "lookup result",
-    };
-    const secondInput = [initialUser, toolCall, firstAnswer, toolResult, update];
-    let continuationNeeded: (() => boolean) | undefined;
-    const second = createStream(secondInput, (nextControl) => {
-      continuationNeeded = nextControl.needsContinuation;
-    });
-    await collect(second.stream);
-    second.finish();
-    expect(continuationNeeded?.()).toBe(true);
-    expect(
-      harness.socket.requests.filter((request) => request.type === "response.create"),
-    ).toHaveLength(1);
+      const toolResult = {
+        type: "function_call_output" as const,
+        call_id: callId,
+        output: "lookup result",
+      };
+      const secondInput = [initialUser, toolCall, firstAnswer, toolResult, update];
+      let continuationNeeded: (() => boolean) | undefined;
+      const second = createStream(secondInput, (nextControl) => {
+        continuationNeeded = nextControl.needsContinuation;
+      });
+      await collect(second.stream);
+      second.finish();
+      expect(continuationNeeded?.()).toBe(true);
+      expect(
+        harness.socket.requests.filter((request) => request.type === "response.create"),
+      ).toHaveLength(1);
 
-    // Replay must match delivery: the automatic response never saw the tool result.
-    const third = createStream([
-      initialUser,
-      toolCall,
-      firstAnswer,
-      update,
-      automaticAnswer,
-      toolResult,
-    ]);
-    const thirdEvents = collect(third.stream);
-    harness.socket.emit({ type: "response.created", response: { id: "resp_3" } });
-    harness.socket.emit(completed("resp_3", [output("answer using lookup result", "msg_3")]));
-    await thirdEvents;
-    third.finish();
-    const creates = harness.socket.requests.filter((request) => request.type === "response.create");
-    expect(creates).toHaveLength(2);
-    expect(creates[1]).toMatchObject({ previous_response_id: "resp_2", input: [toolResult] });
-    expect(creates.flatMap((request) => request.input)).toEqual([initialUser, toolResult]);
-  });
+      // Replay must match delivery: the automatic response never saw the tool result.
+      const pairedId = `${callId}|${itemId}`;
+      const replayedId = shouldNormalizeOpenAIResponsesToolCallId(pairedId)
+        ? normalizeOpenAIResponsesFunctionCallId(pairedId)
+        : pairedId;
+      const replayedIds = splitOpenAIFunctionCallPairing(replayedId);
+      const replayedToolCall = {
+        ...toolCall,
+        id: replayedIds.itemId ?? itemId,
+        call_id: replayedIds.callId,
+      };
+      const replayedToolResult = { ...toolResult, call_id: replayedIds.callId };
+      const third = createStream([
+        initialUser,
+        replayedToolCall,
+        firstAnswer,
+        update,
+        automaticAnswer,
+        replayedToolResult,
+      ]);
+      const thirdEvents = collect(third.stream);
+      harness.socket.emit({ type: "response.created", response: { id: "resp_3" } });
+      harness.socket.emit(completed("resp_3", [output("answer using lookup result", "msg_3")]));
+      await thirdEvents;
+      third.finish();
+      const creates = harness.socket.requests.filter(
+        (request) => request.type === "response.create",
+      );
+      expect(creates).toHaveLength(2);
+      expect(creates[1]).toMatchObject({
+        previous_response_id: "resp_2",
+        input: [{ ...toolResult, call_id: callId }],
+      });
+      expect(creates.flatMap((request) => request.input)).toEqual([
+        initialUser,
+        { ...toolResult, call_id: callId },
+      ]);
+    },
+  );
 
   it.each([
     {

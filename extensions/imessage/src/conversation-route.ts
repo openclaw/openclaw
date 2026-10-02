@@ -5,7 +5,7 @@ import {
   resolveConfiguredBindingRoute,
   type ConfiguredBindingRouteResult,
 } from "openclaw/plugin-sdk/conversation-binding-runtime";
-import { parseAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveIMessageInboundConversationId } from "./conversation-id.js";
 
@@ -50,33 +50,25 @@ export async function resolveIMessageConversationRoute(params: {
       "iMessage conversation binding owner is temporarily unavailable; retry the message.",
     );
   }
-  // Classify through the binding owner without consulting the ordinary roster or bindings.
-  // This scope-only route is never dispatched; the selected owner supplies the final agent.
-  const resolveScopeRoute = (agentId?: string) =>
-    resolveAgentRoute({
-      ...routeInput,
-      cfg: { session: params.cfg.session },
-      defaultAgentId: agentId,
-    });
-  const selection = inspectRuntimeConversationBindingRoute({
-    route: resolveScopeRoute(),
+  let bindingResolution: ConfiguredBindingRouteResult["bindingResolution"] = null;
+  const runtimeRoute = inspectRuntimeConversationBindingRoute({
     inspection,
-  });
-  const metadataAgentId = selection.bindingRecord?.metadata?.agentId;
-  const hasBoundAgent =
-    selection.boundSessionKey &&
-    (parseAgentSessionKey(selection.boundSessionKey) ||
-      (typeof metadataAgentId === "string" && metadataAgentId.trim()));
-  const configuredRoute: ConfiguredBindingRouteResult = hasBoundAgent
-    ? { route: resolveScopeRoute(selection.boundAgentId), bindingResolution: null }
-    : resolveConfiguredBindingRoute({
+    resolveRoute: ({ boundAgentId }) => {
+      if (boundAgentId) {
+        return resolveAgentRoute({
+          ...routeInput,
+          cfg: { session: params.cfg.session },
+          defaultAgentId: boundAgentId,
+        });
+      }
+      const configuredRoute = resolveConfiguredBindingRoute({
         cfg: params.cfg,
         route: resolveAgentRoute({ ...routeInput, cfg: params.cfg }),
         conversation,
       });
-  const runtimeRoute = inspectRuntimeConversationBindingRoute({
-    route: configuredRoute.route,
-    inspection,
+      bindingResolution = configuredRoute.bindingResolution;
+      return configuredRoute.route;
+    },
   });
   if (runtimeRoute.bindingRecord) {
     // Keep the captured selection through this await. The reply owner must reject a
@@ -96,6 +88,6 @@ export async function resolveIMessageConversationRoute(params: {
   }
   return {
     route: runtimeRoute.route,
-    bindingResolution: runtimeRoute.bindingRecord ? null : configuredRoute.bindingResolution,
+    bindingResolution: runtimeRoute.bindingRecord ? null : bindingResolution,
   };
 }

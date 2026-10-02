@@ -140,7 +140,7 @@ export function createDiagnosticsEventHandler(params: {
         case "tool.loop":
           return recorders.recordToolLoop(evt);
         case "diagnostic.memory.sample":
-          return recorders.recordMemorySample(evt);
+          return recorders.recordMemoryUsageMetrics(evt);
         case "diagnostic.memory.pressure":
           return recorders.recordMemoryPressure(evt);
         case "diagnostic.async_queue.dropped":

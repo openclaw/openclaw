@@ -1,5 +1,3 @@
-// Shared media-understanding provider, attachment, output, and capability contracts.
-
 /** Kind of media-understanding output produced for an attachment. */
 export type MediaUnderstandingKind =
   | "audio.transcription"

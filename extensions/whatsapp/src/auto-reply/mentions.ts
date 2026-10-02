@@ -41,16 +41,8 @@ function isBotMentionedFromTargets(
   targets: MentionTargets,
 ): boolean {
   const explicitSelfChatOverride = typeof mentionCfg.isSelfChat === "boolean";
-  // `isSelfChatMode` is a config-shaped check ("is the bot's own E.164 in
-  // allowFrom?"), not a conversation-shaped check, so it returns true even
-  // for group conversations whenever the operator put their own number in
-  // allowFrom — which is the common config. The original mention-skip path
-  // was designed to prevent owner-mentioning-self in a true 1:1 self DM
-  // from falsely triggering the bot, so when we derive the flag implicitly
-  // from `allowFrom`, confine the suppression to non-group conversations
-  // and let real group @mentions go through the identity-overlap check
-  // (#49317). Explicit `mentionCfg.isSelfChat` overrides from the caller
-  // are honored as-is so multi-account / precomputed paths keep working.
+  // Having our own number in allowFrom suppresses native self-mentions only in DMs.
+  // Explicit caller overrides also apply to groups.
   const admission = requireWhatsAppInboundAdmission(msg);
   const isGroupConversation = admission.conversation.kind === "group";
   const isSelfChat = explicitSelfChatOverride
@@ -77,23 +69,8 @@ function isBotMentionedFromTargets(
     return false;
   }
 
-  // Fallback: detect body containing our own number (with or without +, spacing)
-  if (targets.self.e164) {
-    const selfDigits = targets.self.e164.replace(/\D/g, "");
-    if (selfDigits) {
-      const bodyDigits = bodyClean.replace(/[^\d]/g, "");
-      if (bodyDigits.includes(selfDigits)) {
-        return true;
-      }
-      const bodyNoSpace = msg.payload.body.replace(/[\s-]/g, "");
-      const pattern = new RegExp(`\\+?${selfDigits}`, "i");
-      if (pattern.test(bodyNoSpace)) {
-        return true;
-      }
-    }
-  }
-
-  return false;
+  const selfDigits = targets.self.e164?.replace(/\D/g, "");
+  return Boolean(selfDigits && bodyClean.replace(/\D/g, "").includes(selfDigits));
 }
 
 export function debugMention(

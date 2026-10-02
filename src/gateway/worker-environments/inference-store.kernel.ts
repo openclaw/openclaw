@@ -13,6 +13,11 @@ import type {
   DB as StateDatabase,
   WorkerInferenceTurns,
 } from "../../state/openclaw-state-db.generated.js";
+import type {
+  WorkerInferenceTurnInput,
+  WorkerInferenceTurnBeginResult,
+  WorkerInferenceRetentionPolicy,
+} from "./inference-store.types.js";
 
 type InferenceDb = Pick<StateDatabase, "worker_inference_turns"> & {
   pragma_encoding: { encoding: string };
@@ -21,31 +26,11 @@ type TurnRow = Selectable<WorkerInferenceTurns>;
 type TurnIdentityRow = Pick<TurnRow, "session_id" | "run_epoch" | "run_id" | "turn_id">;
 type TurnInsert = Insertable<WorkerInferenceTurns>;
 
-export type WorkerInferenceTurnInput = {
-  environmentId: string;
-  sessionId: string;
-  runEpoch: number;
-  runId: string;
-  turnId: string;
-  requestHash: string;
-};
-
-type WorkerInferenceTurnBeginResult =
-  | { kind: "claimed" }
-  | { kind: "recover" }
-  | { kind: "replay"; outcome: WorkerInferenceTerminalOutcome }
-  | { kind: "rejected"; reason: "conflict" };
-
 type NormalizedTurnInput = WorkerInferenceTurnInput & { nowMs: number };
 type WorkerInferenceTurnIdentity = Pick<
   WorkerInferenceTurnInput,
   "sessionId" | "runEpoch" | "runId" | "turnId"
 >;
-export type WorkerInferenceRetentionPolicy = {
-  maxAgeMs: number;
-  maxRows: number;
-  maxBytes: number;
-};
 type ExistingTurnResult = Extract<
   WorkerInferenceTurnBeginResult,
   { kind: "recover" | "replay" | "rejected" }
@@ -260,22 +245,20 @@ export function createWorkerInferenceStoreKernel(options: {
 }) {
   const now = options.now;
   const retention = { ...DEFAULT_RETENTION, ...options.retention };
-  const write = <T>(operation: (db: DatabaseSync) => T): T => operation(options.db);
 
   const begin = (rawInput: WorkerInferenceTurnInput): WorkerInferenceTurnBeginResult => {
     const input = normalizeInput(rawInput, now());
-    return write<WorkerInferenceTurnBeginResult>((db) => {
-      pruneTerminalTurns({ db, nowMs: input.nowMs, policy: retention });
-      const existing = classifyExistingTurn(findTurn(db, input), input);
-      if (existing) {
-        return existing;
-      }
-      if (findPendingTurn(db, input)) {
-        return { kind: "rejected", reason: "conflict" };
-      }
-      insertPendingTurn(db, input);
-      return { kind: "claimed" };
-    });
+    const db = options.db;
+    pruneTerminalTurns({ db, nowMs: input.nowMs, policy: retention });
+    const existing = classifyExistingTurn(findTurn(db, input), input);
+    if (existing) {
+      return existing;
+    }
+    if (findPendingTurn(db, input)) {
+      return { kind: "rejected", reason: "conflict" };
+    }
+    insertPendingTurn(db, input);
+    return { kind: "claimed" };
   };
 
   const complete = (
@@ -283,52 +266,48 @@ export function createWorkerInferenceStoreKernel(options: {
   ): WorkerInferenceTerminalOutcome => {
     const input = normalizeInput(rawInput, now());
     const terminalJson = serializeTerminalOutcome(rawInput.outcome);
-    return write<WorkerInferenceTerminalOutcome>((db) => {
-      const existing = classifyExistingTurn(findTurn(db, input), input);
-      if (!existing) {
-        throw new Error("Worker inference turn must begin before terminal completion");
-      }
-      if (existing.kind === "rejected") {
-        throw new Error(`Worker inference terminal completion rejected: ${existing.reason}`);
-      }
-      if (existing.kind === "replay") {
-        return existing.outcome;
-      }
+    const db = options.db;
+    const existing = classifyExistingTurn(findTurn(db, input), input);
+    if (!existing) {
+      throw new Error("Worker inference turn must begin before terminal completion");
+    }
+    if (existing.kind === "rejected") {
+      throw new Error(`Worker inference terminal completion rejected: ${existing.reason}`);
+    }
+    if (existing.kind === "replay") {
+      return existing.outcome;
+    }
 
-      const update = executeSqliteQuerySync(
-        db,
-        query(db)
-          .updateTable("worker_inference_turns")
-          .set({ state: "terminal", terminal_json: terminalJson, updated_at_ms: input.nowMs })
-          .where("session_id", "=", input.sessionId)
-          .where("run_epoch", "=", input.runEpoch)
-          .where("run_id", "=", input.runId)
-          .where("turn_id", "=", input.turnId)
-          .where("environment_id", "=", input.environmentId)
-          .where("request_hash", "=", input.requestHash)
-          .where("state", "=", "pending"),
-      );
-      if (update.numAffectedRows !== 1n) {
-        throw new Error("Worker inference turn changed during terminal completion");
-      }
-      pruneTerminalTurns({
-        db,
-        nowMs: input.nowMs,
-        policy: retention,
-        preserve: input,
-      });
-      return rawInput.outcome;
+    const update = executeSqliteQuerySync(
+      db,
+      query(db)
+        .updateTable("worker_inference_turns")
+        .set({ state: "terminal", terminal_json: terminalJson, updated_at_ms: input.nowMs })
+        .where("session_id", "=", input.sessionId)
+        .where("run_epoch", "=", input.runEpoch)
+        .where("run_id", "=", input.runId)
+        .where("turn_id", "=", input.turnId)
+        .where("environment_id", "=", input.environmentId)
+        .where("request_hash", "=", input.requestHash)
+        .where("state", "=", "pending"),
+    );
+    if (update.numAffectedRows !== 1n) {
+      throw new Error("Worker inference turn changed during terminal completion");
+    }
+    pruneTerminalTurns({
+      db,
+      nowMs: input.nowMs,
+      policy: retention,
+      preserve: input,
     });
+    return rawInput.outcome;
   };
 
-  const cancelPending = (params: {
-    environmentId: string;
-    sessionId: string;
-    runEpoch: number;
-    runId: string;
-    turnId: string;
-    outcome: WorkerInferenceTerminalOutcome;
-  }): void => {
+  const cancelPending = (
+    params: Omit<WorkerInferenceTurnInput, "requestHash"> & {
+      outcome: WorkerInferenceTerminalOutcome;
+    },
+  ): void => {
     const nowMs = nonNegativeInteger(now(), "timestamp");
     const terminalJson = serializeTerminalOutcome(params.outcome);
     const identity = {
@@ -338,36 +317,34 @@ export function createWorkerInferenceStoreKernel(options: {
       runId: required(params.runId, "run id"),
       turnId: required(params.turnId, "turn id"),
     };
-    write<void>((db) => {
-      executeSqliteQuerySync(
-        db,
-        query(db)
-          .updateTable("worker_inference_turns")
-          .set({ state: "terminal", terminal_json: terminalJson, updated_at_ms: nowMs })
-          .where("session_id", "=", identity.sessionId)
-          .where("run_epoch", "=", identity.runEpoch)
-          .where("run_id", "=", identity.runId)
-          .where("turn_id", "=", identity.turnId)
-          .where("environment_id", "=", identity.environmentId)
-          .where("state", "=", "pending"),
-      );
-      pruneTerminalTurns({ db, nowMs, policy: retention, preserve: identity });
-    });
+    const db = options.db;
+    executeSqliteQuerySync(
+      db,
+      query(db)
+        .updateTable("worker_inference_turns")
+        .set({ state: "terminal", terminal_json: terminalJson, updated_at_ms: nowMs })
+        .where("session_id", "=", identity.sessionId)
+        .where("run_epoch", "=", identity.runEpoch)
+        .where("run_id", "=", identity.runId)
+        .where("turn_id", "=", identity.turnId)
+        .where("environment_id", "=", identity.environmentId)
+        .where("state", "=", "pending"),
+    );
+    pruneTerminalTurns({ db, nowMs, policy: retention, preserve: identity });
   };
 
   const recoverPending = (outcome: WorkerInferenceTerminalOutcome): void => {
     const nowMs = nonNegativeInteger(now(), "timestamp");
     const terminalJson = serializeTerminalOutcome(outcome);
-    write<void>((db) => {
-      executeSqliteQuerySync(
-        db,
-        query(db)
-          .updateTable("worker_inference_turns")
-          .set({ state: "terminal", terminal_json: terminalJson, updated_at_ms: nowMs })
-          .where("state", "=", "pending"),
-      );
-      pruneTerminalTurns({ db, nowMs, policy: retention });
-    });
+    const db = options.db;
+    executeSqliteQuerySync(
+      db,
+      query(db)
+        .updateTable("worker_inference_turns")
+        .set({ state: "terminal", terminal_json: terminalJson, updated_at_ms: nowMs })
+        .where("state", "=", "pending"),
+    );
+    pruneTerminalTurns({ db, nowMs, policy: retention });
   };
 
   return { begin, cancelPending, complete, recoverPending };

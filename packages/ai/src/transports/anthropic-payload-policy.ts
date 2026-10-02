@@ -6,7 +6,12 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { getAiTransportHost } from "../host.js";
 import type { AnthropicContextManagementOptions } from "../provider-options.js";
 import { isAnthropicOAuthApiKey } from "../providers/anthropic-auth-headers.js";
-import { ANTHROPIC_CLAUDE_CODE_VERSION } from "../providers/anthropic-model-contract.js";
+import {
+  ANTHROPIC_CLAUDE_CODE_VERSION,
+  resolveClaudeOpus5ModelIdentity,
+  resolveClaudeSonnet55ModelIdentity,
+  usesClaudeFable5MessagesContract,
+} from "../providers/anthropic-model-contract.js";
 import {
   ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
   ANTHROPIC_SERVER_SIDE_FALLBACKS,
@@ -18,11 +23,6 @@ import {
   stripSystemPromptCacheBoundary,
   stripSystemPromptRelocatableBoundary,
 } from "../utils/system-prompt-cache-boundary.js";
-/**
- * Anthropic-family request payload policy helpers.
- * Applies service-tier and cache-control markers only when provider endpoint
- * capabilities allow them.
- */
 import { resolveProviderEndpoint, resolveProviderRequestCapabilities } from "./host-policy.js";
 import { parsePositiveInteger } from "./transport-utils.js";
 
@@ -72,12 +72,7 @@ function resolveAnthropicCompactThreshold(contextWindow: unknown, configured: un
     return Math.max(ANTHROPIC_COMPACT_THRESHOLD_MIN, configuredThreshold);
   }
   const resolvedContextWindow = parsePositiveInteger(contextWindow);
-  return Math.max(
-    ANTHROPIC_COMPACT_THRESHOLD_MIN,
-    resolvedContextWindow === undefined
-      ? ANTHROPIC_COMPACT_THRESHOLD_MIN
-      : Math.floor(resolvedContextWindow * 0.7),
-  );
+  return Math.max(ANTHROPIC_COMPACT_THRESHOLD_MIN, Math.floor((resolvedContextWindow ?? 0) * 0.7));
 }
 
 /** Resolve the server-compaction gate and effective threshold for an Anthropic route. */
@@ -121,6 +116,16 @@ export function isDirectAnthropicModel(model: { provider?: unknown; baseUrl?: st
   );
 }
 
+// Proxies reject this first-party beta; callers additionally exclude OAuth requests.
+export function supportsAnthropicServerSideFallback(model: Model<"anthropic-messages">): boolean {
+  return (
+    (usesClaudeFable5MessagesContract(model) ||
+      resolveClaudeOpus5ModelIdentity(model) !== undefined ||
+      resolveClaudeSonnet55ModelIdentity(model) !== undefined) &&
+    isDirectAnthropicModel(model)
+  );
+}
+
 export function isAnthropicServerToolClearingEnabled(
   model: { provider?: unknown; api?: unknown; baseUrl?: string },
   apiKey?: string,
@@ -136,11 +141,7 @@ export function isAnthropicServerToolClearingEnabled(
 }
 
 function resolveBaseUrlHostname(baseUrl: string): string | undefined {
-  try {
-    return new URL(baseUrl).hostname;
-  } catch {
-    return undefined;
-  }
+  return URL.parse(baseUrl)?.hostname;
 }
 
 function isLongTtlEligibleEndpoint(baseUrl: string | undefined): boolean {

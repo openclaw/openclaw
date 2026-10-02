@@ -59,10 +59,23 @@ function fixture(incognito = false) {
   return { database, env, options, store, target };
 }
 
+async function holdWriter(options: Parameters<typeof runOpenClawAgentWorkerWrite>[0]) {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const held = runOpenClawAgentWorkerWrite(options, async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await entered.promise;
+  return { release, held };
+}
+
 it("keeps incognito Board mutations on the process-held database without creating its disk path", async () => {
   const { database, options, store, target } = fixture(true);
   const changes: SessionRowChange[] = [];
   const unsubscribe = sessionChanges.subscribe((change) => changes.push(change));
+  const facts: SessionRowChange[] = [];
+  const stopFacts = sessionChanges.subscribeFacts((change) => facts.push(change));
   try {
     expect(existsSync(options.path)).toBe(false);
     await store.putWidget({
@@ -87,16 +100,24 @@ it("keeps incognito Board mutations on the process-held database without creatin
       { sessionKey: target.sessionKey, storePath: options.path },
       { sessionKey: target.sessionKey, storePath: options.path },
     ]);
+    expect(facts).toEqual(
+      changes.map(() => ({
+        sessionKey: target.sessionKey,
+        storePath: options.path,
+        facts: { kind: "unchanged" },
+      })),
+    );
     for (const suffix of ["", "-wal", "-shm"]) {
       expect(existsSync(`${options.path}${suffix}`)).toBe(false);
     }
   } finally {
+    stopFacts();
     unsubscribe();
   }
 });
 
 it("executes Board mutations off the host and publishes each committed change once", async () => {
-  const { database, env, store, target } = fixture();
+  const { database, store, target } = fixture();
   const changes: Array<{ change: SessionRowChange; inTransaction: boolean; revision: number }> = [];
   const unsubscribe = sessionChanges.subscribe((change) => {
     if ("sessionKey" in change && change.sessionKey === target.sessionKey) {
@@ -108,8 +129,14 @@ it("executes Board mutations off the host and publishes each committed change on
       });
     }
   });
+  const facts: SessionRowChange[] = [];
+  const stopFacts = sessionChanges.subscribeFacts((change) => {
+    if ("sessionKey" in change && change.sessionKey === target.sessionKey) {
+      facts.push(change);
+    }
+  });
   clearNodeSqliteKyselyCacheForDatabase(database.db);
-  const host = observeHostDataSql(env);
+  const host = observeHostDataSql();
   const expectPublication = (revision: number) => {
     expect(changes).toEqual([
       {
@@ -118,7 +145,11 @@ it("executes Board mutations off the host and publishes each committed change on
         revision,
       },
     ]);
+    expect(facts).toEqual([
+      { sessionKey: target.sessionKey, storePath: database.path, facts: { kind: "unchanged" } },
+    ]);
     changes.length = 0;
+    facts.length = 0;
   };
   try {
     expect(
@@ -167,6 +198,7 @@ it("executes Board mutations off the host and publishes each committed change on
     expect(changes).toEqual([]);
   } finally {
     host.restore();
+    stopFacts();
     unsubscribe();
   }
 });
@@ -175,13 +207,7 @@ it.each([false, true])(
   "retains queued Board input and rejects revoked authority (revoked: %s)",
   async (revoke) => {
     const { database, options, store, target } = fixture();
-    const release = createDeferredCore();
-    const entered = createDeferredCore();
-    const held = runOpenClawAgentWorkerWrite(options, async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    await entered.promise;
+    const { release, held } = await holdWriter(options);
     const changes: SessionRowChange[] = [];
     const unsubscribe = sessionChanges.subscribe((change) => {
       if ("sessionKey" in change && change.sessionKey === target.sessionKey) {
@@ -305,13 +331,7 @@ it.each([
     const put = (name: string) =>
       store.putWidget({ ...target, name, content: { kind: "html", html: name } });
     await put("initial");
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const held = runOpenClawAgentWorkerWrite(options, async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    await entered.promise;
+    const { release, held } = await holdWriter(options);
     const consumed = store.useSnapshot(target, async () => {
       for (let turn = 0; turn < microtasks; turn++) {
         await Promise.resolve();
@@ -361,13 +381,7 @@ it.each(["mutation", "snapshot", "document"] as const)(
       resolveSession: () => ({ agentId: options.agentId, sessionKey: target.sessionKey }),
       env: mixedEnv,
     });
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const held = runOpenClawAgentWorkerWrite(options, async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    await entered.promise;
+    const { release, held } = await holdWriter(options);
     const pending =
       operation === "mutation"
         ? captured

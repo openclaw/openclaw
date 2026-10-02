@@ -72,27 +72,38 @@ export function inspectSlackConversationRouteOwner(params: {
     return null;
   }
   const enterpriseScope = enterpriseRoute && teamId ? { teamId } : undefined;
-  const route = resolveAgentRoute({
-    cfg: normalizeSlackRouteBindingConfig(params.cfg),
-    channel: "slack",
-    accountId,
-    teamId,
-    peer: {
-      kind: params.conversation.kind,
-      id: qualifySlackRoutePeerId({
-        id: target.id,
-        kind: direct ? "user" : "channel",
-        eventScope: enterpriseScope,
-      }),
-    },
-  });
+  const route = ({
+    boundAgentId,
+    bindingOwnerAvailable,
+  }: {
+    boundAgentId?: string;
+    bindingOwnerAvailable: boolean;
+  }) =>
+    resolveAgentRoute({
+      cfg:
+        boundAgentId || !bindingOwnerAvailable
+          ? { session: params.cfg.session }
+          : normalizeSlackRouteBindingConfig(params.cfg),
+      defaultAgentId: boundAgentId,
+      channel: "slack",
+      accountId,
+      teamId,
+      peer: {
+        kind: params.conversation.kind,
+        id: qualifySlackRoutePeerId({
+          id: target.id,
+          kind: direct ? "user" : "channel",
+          eventScope: enterpriseScope,
+        }),
+      },
+    });
   const baseConversationId = qualifySlackConversationId(
     direct ? `user:${target.id}` : target.id,
     enterpriseScope,
   );
   const bindingRoute = resolveSlackConversationBindingRoute({
     cfg: params.cfg,
-    route,
+    resolveRoute: route,
     accountId,
     baseConversationId,
     runtimeBindingThreadId: params.conversation.threadId,
@@ -106,7 +117,7 @@ export function inspectSlackConversationRouteOwner(params: {
     return {
       kind: "plugin" as const,
       pluginId: bindingRoute.runtimeRoute.pluginId,
-      fallbackAgentId: route.agentId,
+      fallbackAgentId: bindingRoute.route.agentId,
     };
   }
   return {
@@ -114,6 +125,6 @@ export function inspectSlackConversationRouteOwner(params: {
     agentId:
       bindingRoute.runtimeRoute.boundAgentId ??
       bindingRoute.configuredRoute?.boundAgentId ??
-      route.agentId,
+      bindingRoute.route.agentId,
   };
 }

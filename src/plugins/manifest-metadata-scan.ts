@@ -6,7 +6,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { isSourceCheckoutRoot, resolveBundledPluginsDir } from "./bundled-dir.js";
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
@@ -65,7 +65,8 @@ function listChildPluginDirs(
   return dirs;
 }
 
-function readJsonObject(filePath: string): Record<string, unknown> | undefined {
+function readManifestObject(pluginDir: string): Record<string, unknown> | undefined {
+  const filePath = path.join(pluginDir, PLUGIN_MANIFEST_FILENAME);
   const file = readPluginCacheFile({
     rootDir: path.dirname(filePath),
     relativePath: path.basename(filePath),
@@ -108,10 +109,6 @@ function readJsonObject(filePath: string): Record<string, unknown> | undefined {
   return parsed;
 }
 
-function readManifestObject(pluginDir: string): Record<string, unknown> | undefined {
-  return readJsonObject(path.join(pluginDir, PLUGIN_MANIFEST_FILENAME));
-}
-
 function listPersistedIndexPluginDirs(env: NodeJS.ProcessEnv, startOrder: number): CandidateDir[] {
   const index = readPersistedInstalledPluginIndexSync({ env });
   if (!index) {
@@ -133,14 +130,6 @@ function listPersistedIndexPluginDirs(env: NodeJS.ProcessEnv, startOrder: number
     });
   }
   return dirs;
-}
-
-function isSourceCheckoutRoot(packageRoot: string): boolean {
-  return (
-    pluginCacheExistsSync(path.join(packageRoot, "pnpm-workspace.yaml")) &&
-    pluginCacheExistsSync(path.join(packageRoot, "src")) &&
-    pluginCacheExistsSync(path.join(packageRoot, "extensions"))
-  );
 }
 
 function resolvePackageRootsForSourceManifestMetadata(): string[] {
@@ -229,5 +218,5 @@ export function listOpenClawPluginManifestMetadata(
     }
     records.push({ pluginDir: candidate.pluginDir, manifest, origin: candidate.origin });
   }
-  return records.slice();
+  return records;
 }

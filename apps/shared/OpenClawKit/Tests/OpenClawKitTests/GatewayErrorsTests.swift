@@ -53,6 +53,37 @@ struct GatewayErrorsTests {
         }
     }
 
+    @Test(arguments: [
+        (
+            GatewayConnectAuthDetailCode.authBootstrapTokenInvalid,
+            GatewayConnectionProblem.Kind.bootstrapTokenInvalid,
+            "Setup code no longer valid", "Scan QR again"),
+        (
+            GatewayConnectAuthDetailCode.authDeviceTokenMismatch,
+            GatewayConnectionProblem.Kind.deviceTokenMismatch,
+            "This device's saved device token is no longer valid", "Repair pairing"),
+    ])
+    func `invalid device credentials keep distinct actionable problems`(
+        detail: GatewayConnectAuthDetailCode,
+        kind: GatewayConnectionProblem.Kind,
+        title: String,
+        action: String) throws
+    {
+        let error = GatewayConnectAuthError(
+            message: "authentication failed",
+            detailCode: detail.rawValue,
+            canRetryWithDeviceToken: false)
+        let problem = try #require(GatewayConnectionProblemMapper.map(error: error))
+
+        #expect(problem.kind == kind)
+        #expect(problem.titlePresentation == .localized(title))
+        #expect(problem.actionLabelPresentation == .localized(action))
+        #expect(problem.needsCredentialUpdate)
+        #expect(!problem.needsPairingApproval)
+        #expect(!problem.retryable)
+        #expect(problem.pauseReconnect)
+    }
+
     @Test func `connect auth error preserves structured metadata`() {
         let error = GatewayConnectAuthError(
             message: "pairing required",

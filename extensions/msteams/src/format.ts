@@ -383,14 +383,15 @@ export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTable
     linkify: false,
     blockquotePrefix: "",
   });
+  const protectedValues = [
+    { prefix: `${tokenPrefix}e`, values: escapedMarkdown },
+    { prefix: `${tokenPrefix}t`, values: rawTables },
+    { prefix: `${tokenPrefix}m`, values: mentions },
+    { prefix: `${tokenPrefix}i`, values: images },
+    { prefix: `${tokenPrefix}h`, values: entities },
+  ];
   const ir = prefixMSTeamsBlockquotes(
-    protectMSTeamsCode(parsed, tokenPrefix, codeRegions, [
-      { prefix: `${tokenPrefix}e`, values: escapedMarkdown },
-      { prefix: `${tokenPrefix}t`, values: rawTables },
-      { prefix: `${tokenPrefix}m`, values: mentions },
-      { prefix: `${tokenPrefix}i`, values: images },
-      { prefix: `${tokenPrefix}h`, values: entities },
-    ]),
+    protectMSTeamsCode(parsed, tokenPrefix, codeRegions, protectedValues),
   );
   const rendered = renderMarkdownWithMarkers(
     ir,
@@ -406,10 +407,8 @@ export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTable
     },
     MSTEAMS_FORMAT_CAPABILITIES,
   );
-  let restored = restoreTokens(rendered, `${tokenPrefix}c`, codeRegions);
-  restored = restoreTokens(restored, `${tokenPrefix}e`, escapedMarkdown);
-  restored = restoreTokens(restored, `${tokenPrefix}t`, rawTables);
-  restored = restoreTokens(restored, `${tokenPrefix}m`, mentions);
-  restored = restoreTokens(restored, `${tokenPrefix}i`, images);
-  return restoreTokens(restored, `${tokenPrefix}h`, entities);
+  return protectedValues.reduce(
+    (text, { prefix, values }) => restoreTokens(text, prefix, values),
+    restoreTokens(rendered, `${tokenPrefix}c`, codeRegions),
+  );
 }

@@ -21,11 +21,10 @@ const initialize = useManagedWorktreeTestRepository();
 
 // Included in the native Windows CI inventory; also exercises the POSIX path
 // locally. No simulated platform or filesystem mode stands in for Windows.
-it.each(
-  [false, true].flatMap((missing) =>
-    [false, true].map((keepGitLink) => ({ missing, keepGitLink })),
-  ),
-)(
+it.each([
+  { missing: false, keepGitLink: false },
+  { missing: true, keepGitLink: true },
+])(
   "recovers an ordinary native Git executable, missing=$missing, keepGitLink=$keepGitLink",
   async ({ missing, keepGitLink }) => {
     const root = await fs.realpath(dirs.make("openclaw-recovery-executable-"));

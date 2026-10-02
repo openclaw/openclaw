@@ -1,6 +1,5 @@
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   nestedToolActivityFixture,
   nestedToolHistoryFixture,
@@ -14,53 +13,24 @@ import {
 } from "../test/runtime-tool-fixture-helpers.js";
 import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
 
-afterEach(async () => {
-  // The session store keeps the state database open under the temporary root, so
-  // Windows fails the removal with EBUSY unless the cached handle is released first.
-  closeOpenClawAgentDatabasesForTest();
-  resetPluginStateStoreForTests();
-  await cleanupRuntimeToolFixtureTempRoots();
+afterEach(() => {
+  resetPluginStateStoreForTests({ closeDatabase: false });
 });
+afterAll(cleanupRuntimeToolFixtureTempRoots);
 
 describe("nested runtime tool fixture", () => {
   it.each([
-    {
-      label: "correlated success and error",
-      happyError: false,
-      customType: "openclaw.nested-tool.v1",
-      missingResult: false,
-      missingRun: false,
-    },
-    {
-      label: "failed happy receipt",
-      happyError: true,
-      customType: "openclaw.nested-tool.v1",
-      missingResult: false,
-      missingRun: false,
-    },
-    {
-      label: "unrelated custom row",
-      happyError: false,
-      customType: "unrelated",
-      missingResult: false,
-      missingRun: false,
-    },
-    {
-      label: "missing nested result",
-      happyError: false,
-      customType: "openclaw.nested-tool.v1",
-      missingResult: true,
-      missingRun: false,
-    },
-    {
-      label: "missing nested run correlation",
-      happyError: false,
-      customType: "openclaw.nested-tool.v1",
-      missingResult: false,
-      missingRun: true,
-    },
-  ])("validates nested runtime evidence: $label", async (testCase) => {
-    const { happyError, customType, missingResult, missingRun } = testCase;
+    "correlated success and error",
+    "failed happy receipt",
+    "unrelated custom row",
+    "missing nested result",
+    "missing nested run correlation",
+  ])("validates nested runtime evidence: %s", async (testCase) => {
+    const happyError = testCase === "failed happy receipt";
+    const customType =
+      testCase === "unrelated custom row" ? "unrelated" : "openclaw.nested-tool.v1";
+    const missingResult = testCase === "missing nested result";
+    const missingRun = testCase === "missing nested run correlation";
     const env = await makeEnv();
     const receipt = (phase: "happy" | "failure") => {
       const params = {

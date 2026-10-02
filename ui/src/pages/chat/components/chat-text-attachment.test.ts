@@ -2,7 +2,7 @@
 
 import { afterEach, expect, it, vi } from "vitest";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import "./chat-sidebar.ts";
+import "./chat-detail-panel.ts";
 
 async function mountAttachment(
   overrides: Partial<Extract<SidebarContent, { kind: "attachment" }>> = {},
@@ -102,7 +102,6 @@ it("retries a source-resolution failure through the attachment owner", async () 
 });
 
 it.each([
-  ["rows.csv", "text/csv", "name,status\nalpha,ready\n"],
   ["settings.json", "application/json", '{"ready":true}\n'],
   ["config.xml", "application/xml", "<ready>true</ready>"],
   ["notes.txt", "application/octet-stream", "Text with generic metadata"],

@@ -221,16 +221,15 @@ export class QuestionPage extends OpenClawLightDomElement {
   }
 
   private questionStatusLabel(prompt: QuestionPrompt): string {
-    if (prompt.status === "answered") {
-      return t("chat.questions.answered");
-    }
-    if (prompt.status === "cancelled") {
-      return t("chat.questions.skipped");
-    }
-    if (prompt.status === "expired") {
-      return t("chat.questions.expired");
-    }
-    return t("chat.questions.unavailable");
+    return t(
+      {
+        answered: "chat.questions.answered",
+        cancelled: "chat.questions.skipped",
+        expired: "chat.questions.expired",
+        pending: "chat.questions.unavailable",
+        unavailable: "chat.questions.unavailable",
+      }[prompt.status],
+    );
   }
 
   private pageTitle(prompt: QuestionPrompt | undefined): string {
@@ -253,16 +252,9 @@ export class QuestionPage extends OpenClawLightDomElement {
     const prompt = listQuestionPrompts(this.questionState).find(
       (candidate) => candidate.id === this.questionId,
     );
-    const content = this.loading
-      ? html`<div class="approval-page__state" role="status">${t("common.loading")}</div>`
-      : this.requestError
-        ? html`<div class="approval-page__state" role="status">
-            ${
-              this.requestError === "connection"
-                ? t("chat.questions.disconnected")
-                : t("chat.questions.unavailable")
-            }
-          </div>`
+    const content =
+      this.loading || this.requestError
+        ? html`<div class="approval-page__state" role="status">${this.pageTitle(prompt)}</div>`
         : prompt
           ? this.renderQuestion(prompt)
           : nothing;

@@ -85,7 +85,7 @@ export async function fetchSlackScopes(
     if (scopes.length > 0) {
       return { ok: true, scopes, source: method };
     }
-    const error = isRecord(result) ? normalizeOptionalString(result.error) : undefined;
+    const error = normalizeOptionalString(result?.error);
     if (error) {
       errors.push(`${method}: ${error}`);
     }

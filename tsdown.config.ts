@@ -1,6 +1,6 @@
 // tsdown config defines package build entrypoints and output options.
 import fs from "node:fs";
-import { createRequire, isBuiltin } from "node:module";
+import { createRequire } from "node:module";
 import path from "node:path";
 import type { DtsOptions, TsdownPlugin, UserConfig } from "tsdown";
 import {
@@ -11,7 +11,7 @@ import {
   createBundledPluginBuildInventory,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
-import { createManagedHandoffBuildConfig } from "./scripts/lib/managed-handoff-build-config.mts";
+import { createManagedHandoffBuildConfigs } from "./scripts/lib/managed-handoff-build-config.mts";
 import { createPluginInventoryModuleRefsPlugin } from "./scripts/lib/plugin-inventory-module-refs.mts";
 import {
   buildPluginSdkEntrySources,
@@ -243,6 +243,7 @@ function workerDeployBuildConfig(entry: Record<string, string>): UserConfig {
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
     entry,
     outDir: "dist",
+    platform: "node",
     dts: false,
     env,
     define: {
@@ -260,7 +261,8 @@ function workerDeployBuildConfig(entry: Record<string, string>): UserConfig {
       "utf-8-validate": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
     },
     deps: {
-      alwaysBundle: (id) => !isBuiltin(id),
+      // Rolldown's Node target owns builtin resolution, independently of the build host.
+      alwaysBundle: () => true,
       onlyBundle: false,
     },
     fixedExtension: false,
@@ -282,11 +284,12 @@ function workerHelperBuildConfig(
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
     entry,
     outDir: "dist",
+    platform: "node",
     dts: false,
     env,
     define,
     deps: {
-      alwaysBundle: (id) => !isBuiltin(id),
+      alwaysBundle: () => true,
       onlyBundle: false,
     },
     fixedExtension: false,
@@ -446,6 +449,7 @@ function buildCoreDistEntries(): Record<string, string> {
     index: "src/index.ts",
     entry: "src/entry.ts",
     "infra/package-lifecycle": "src/infra/package-lifecycle.ts",
+    "commands/doctor-update-schema-guard": "src/commands/doctor-update-schema-guard.ts",
     "crabbox-wrapper": "scripts/crabbox-wrapper.mts",
     "docker-healthcheck": "src/docker-healthcheck.ts",
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
@@ -455,6 +459,9 @@ function buildCoreDistEntries(): Record<string, string> {
     // Keep long-lived lazy runtime boundaries on stable filenames so rebuilt
     // dist/ trees do not strand already-running gateways on stale hashed chunks.
     "agents/agent-bundle-mcp-runtime": "src/agents/agent-bundle-mcp-runtime.ts",
+    // Published builds lazily import these lifecycle facts from a hashed chunk; update
+    // compatibility bridges need a current chunk that still exports them.
+    "agents/provider-runtime-lifecycle": "src/agents/provider-runtime-lifecycle.ts",
     "agents/mcp-auth-profile.runtime": "src/agents/mcp-auth-profile.runtime.ts",
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
@@ -476,7 +483,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/memory-state": "src/plugins/memory-state.ts",
     "plugins/synthetic-auth.runtime": "src/plugins/synthetic-auth.runtime.ts",
     "subagent-registry.runtime": "src/agents/subagents/registry/subagent-registry.runtime.ts",
-    "task-registry-control.runtime": "src/tasks/task-registry-control.runtime.ts",
     "link-understanding/apply.runtime": "src/link-understanding/apply.runtime.ts",
     "media-understanding/apply.runtime": "src/media-understanding/apply.runtime.ts",
     "commands/status.summary.runtime": "src/status/summary.runtime.ts",
@@ -511,16 +517,17 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     // Mounted Docker harnesses need stable package dist entries for asserted internal modules.
     "agents/agent-bundle-mcp-manager-api": "src/agents/agent-bundle-mcp-manager-api.ts",
     "agents/agent-bundle-mcp-materialize": "src/agents/agent-bundle-mcp-materialize.ts",
+    "agents/agent-tool-definition-adapter": "src/agents/agent-tool-definition-adapter.ts",
     "agents/conversation-capability-profile": "src/agents/conversation-capability-profile.ts",
     "agents/embedded-agent-runner/effective-tool-policy":
       "src/agents/embedded-agent-runner/effective-tool-policy.ts",
-    "agents/embedded-agent-runner/tool-split": "src/agents/embedded-agent-runner/tool-split.ts",
     "agents/embedded-agent-runner/run/runtime-context-prompt":
       "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts",
     "auto-reply/reply/commands-system-agent": "src/auto-reply/reply/commands-system-agent.ts",
     "cli/run-main": "src/cli/run-main.ts",
     "commands/onboard-guided": "src/commands/onboard-guided.ts",
     "config/config": "src/config/config.ts",
+    "infra/gateway-scheduler": "src/infra/gateway-scheduler.ts",
     "infra/sqlite-audit-record-store": "src/infra/sqlite-audit-record-store.ts",
     "state/local-onboarding-state": "src/state/local-onboarding-state.ts",
     "system-agent/audit": "src/system-agent/audit.ts",
@@ -974,7 +981,9 @@ const configs: UserConfig[] = [
   workerDeployBuildConfig({
     "worker/sqlite-store.worker": "src/worker/worker-deploy-sqlite-store.ts",
   }),
-  { ...createManagedHandoffBuildConfig(), name: TSDOWN_UNIFIED_CONFIG_GROUP, env },
+  ...createManagedHandoffBuildConfigs().map((config) =>
+    Object.assign(config, { name: TSDOWN_UNIFIED_CONFIG_GROUP, env }),
+  ),
   nodeBuildConfig(
     {
       name: TSDOWN_UNIFIED_CONFIG_GROUP,

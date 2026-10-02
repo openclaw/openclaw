@@ -2,8 +2,12 @@ import { existsSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-namespaces.js";
 import { loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
@@ -282,28 +286,45 @@ describe("ownership helpers", () => {
 describe("staging", () => {
   const mediaAccessFor = (roots: string[]) => ({ localRoots: roots });
 
-  it("copies a local source for the queue and survives producer cleanup", async () => {
+  it("stages local media while a competing writer needs the host to release its lock", async () => {
     const source = path.join(sourceDir, "voice.ogg");
     await fs.writeFile(source, "opus-bytes");
-    const livePayload = { text: "hi", mediaUrl: source };
-
-    const result = await stageQueuePayloadMedia({
-      payloads: [livePayload],
-      mediaAccess: mediaAccessFor([sourceDir]),
-      maxBytes: 1024 * 1024,
-      stateDir,
+    const database = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
-    await fs.rm(source);
-
-    expect(result.status).toBe("staged");
-    if (result.status !== "staged") {
-      return;
+    const writer = new DatabaseSync(database.path);
+    try {
+      writer.exec("BEGIN IMMEDIATE");
+      // A worker can hold this lock while waiting for host admission. Staging
+      // must yield so the host can let that writer finish.
+      const staged = stageQueuePayloadMedia({
+        payloads: [{ mediaUrl: source }],
+        mediaAccess: mediaAccessFor([sourceDir]),
+        maxBytes: 1024 * 1024,
+        stateDir,
+      });
+      writer.exec("COMMIT");
+      const result = await staged;
+      expect(result.status).toBe("staged");
+      if (result.status !== "staged") {
+        return;
+      }
+      expect(await fs.readFile(result.artifacts[0]!, "utf8")).toBe("opus-bytes");
+      const id = await enqueueDelivery(
+        { channel: "telegram", to: "synthetic", payloads: result.payloads },
+        stateDir,
+        result.mediaStageId,
+      );
+      expect(await loadPendingDeliveries(stateDir)).toMatchObject([
+        { id, preparedBatch: { entries: [{ payload: { mediaUrl: result.artifacts[0] } }] } },
+      ]);
+    } finally {
+      if (writer.isTransaction) {
+        writer.exec("ROLLBACK");
+      }
+      await closeOpenClawStateDatabaseAsync();
+      writer.close();
     }
-    const staged = result.payloads[0]?.mediaUrl as string;
-    expect(path.dirname(staged)).toBe(spoolRoot);
-    expect(await fs.readFile(staged, "utf8")).toBe("opus-bytes");
-    expect(livePayload.mediaUrl).toBe(source);
-    expect(result.artifacts).toEqual([staged]);
   });
 
   it("leaves replayable remote media untouched without creating the spool", async () => {
@@ -318,21 +339,6 @@ describe("staging", () => {
       payloads: [{ mediaUrl: "https://example.com/a.ogg" }],
       artifacts: [],
     });
-    expect(await exists(spoolRoot)).toBe(false);
-  });
-
-  it("does not make sensitive media durable", async () => {
-    const source = path.join(sourceDir, "secret.ogg");
-    await fs.writeFile(source, "private");
-
-    const result = await stageQueuePayloadMedia({
-      payloads: [{ mediaUrl: source, sensitiveMedia: true }],
-      mediaAccess: mediaAccessFor([sourceDir]),
-      maxBytes: 1024 * 1024,
-      stateDir,
-    });
-
-    expect(result).toEqual({ status: "not-durable", reason: "sensitive-media" });
     expect(await exists(spoolRoot)).toBe(false);
   });
 

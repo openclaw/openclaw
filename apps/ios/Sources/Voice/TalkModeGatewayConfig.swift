@@ -54,22 +54,6 @@ struct TalkRuntimeIssue: Equatable {
         if let phase, !phase.isEmpty { parts.append("phase: \(phase)") }
         return parts.joined(separator: " • ")
     }
-
-    static func realtimeUnavailable(
-        message: String,
-        provider: String? = nil,
-        model: String? = nil,
-        transport: String? = nil,
-        phase: String? = nil) -> TalkRuntimeIssue
-    {
-        TalkRuntimeIssue(
-            code: .realtimeUnavailable,
-            message: message,
-            provider: provider,
-            model: model,
-            transport: transport,
-            phase: phase)
-    }
 }
 
 struct TalkVoiceModeDescriptor: Equatable {
@@ -183,7 +167,6 @@ enum TalkModeRuntimeRoute: Equatable {
 
 struct TalkModeResolvedRouting: Equatable {
     let activeProvider: String
-    let executionMode: TalkModeExecutionMode
     let realtimeProvider: String?
     let realtimeModelId: String?
     let route: TalkModeRuntimeRoute
@@ -210,7 +193,6 @@ enum TalkModeRoutingResolver {
 
         return TalkModeResolvedRouting(
             activeProvider: parsed.snapshot.activeProvider,
-            executionMode: parsed.executionMode,
             realtimeProvider: parsed.snapshot.realtime.provider,
             realtimeModelId: parsed.realtimeModelId,
             route: route)
@@ -224,7 +206,6 @@ enum TalkModeRoutingResolver {
 struct TalkModeGatewayConfigState {
     let snapshot: TalkConfigSnapshot
     let executionMode: TalkModeExecutionMode
-    let requiresGatewayRealtimeTransport: Bool
     let defaultVoiceId: String?
     let configuredModelId: String?
     let defaultModelId: String
@@ -275,7 +256,6 @@ enum TalkModeGatewayConfigParser {
         return TalkModeGatewayConfigState(
             snapshot: snapshot,
             executionMode: executionMode,
-            requiresGatewayRealtimeTransport: requiresGatewayRealtimeTransport,
             defaultVoiceId: defaultVoiceId,
             configuredModelId: model,
             defaultModelId: defaultModelId,

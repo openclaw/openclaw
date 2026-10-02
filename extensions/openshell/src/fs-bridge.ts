@@ -1,4 +1,3 @@
-// Openshell plugin module implements fs bridge behavior.
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import {
@@ -16,7 +15,7 @@ import {
   createWritableRenameTargetResolver,
   resolveReadOnlyWorkspaceSkillMounts,
 } from "openclaw/plugin-sdk/sandbox";
-import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
+import { extractErrorCode, FsSafeError } from "openclaw/plugin-sdk/security-runtime";
 import type { OpenShellFsBridgeContext, OpenShellMirrorBackend } from "./backend.types.js";
 import {
   isOpenShellRemotePathInside,
@@ -25,6 +24,7 @@ import {
 } from "./workspace-roots.js";
 
 type ResolvedMountPath = SandboxResolvedPath & {
+  hostPath: string;
   mountHostRoot: string;
   writable: boolean;
 };
@@ -60,7 +60,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
   async readFile(params: Parameters<SandboxFsBridge["readFile"]>[0]): Promise<Buffer> {
     const target = this.resolveTarget(params);
-    const hostPath = this.requireHostPath(target);
+    const hostPath = target.hostPath;
     try {
       const root = await fsRoot(target.mountHostRoot);
       return (
@@ -81,7 +81,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
     params: Parameters<NonNullable<SandboxFsBridge["readDirectory"]>>[0],
   ): Promise<DirectoryEntry[]> {
     const target = this.resolveTarget(params);
-    const hostPath = this.requireHostPath(target);
+    const hostPath = target.hostPath;
     const root = await fsRoot(target.mountHostRoot);
     const entries: DirectoryEntry[] = [];
     for await (const { name, isDirectory } of root.entries(relativeToRoot(target, hostPath), {
@@ -94,7 +94,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
   async writeFile(params: Parameters<SandboxFsBridge["writeFile"]>[0]): Promise<void> {
     const target = this.resolveTarget(params);
-    const hostPath = this.requireHostPath(target);
+    const hostPath = target.hostPath;
     this.ensureWritable(target, "write files");
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
@@ -111,7 +111,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
     params: Parameters<NonNullable<SandboxFsBridge["createFileExclusive"]>>[0],
   ): Promise<"created" | "exists"> {
     const target = this.resolveTarget(params);
-    const hostPath = this.requireHostPath(target);
+    const hostPath = target.hostPath;
     this.ensureWritable(target, "create files");
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
@@ -136,19 +136,17 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
     const target = this.resolveTarget(params);
-    const hostPath = this.requireHostPath(target);
     this.ensureWritable(target, "create directories");
     await assertLocalPathSafety({
       target,
       allowFinalSymlinkForUnlink: false,
     });
     await this.backend.mkdirpRemotePath(target.containerPath, params.signal);
-    await mkdirLocalRootPath({ hostPath, target });
+    await mkdirLocalRootPath(target);
   }
 
   async remove(params: Parameters<SandboxFsBridge["remove"]>[0]): Promise<void> {
     const target = this.resolveTarget(params);
-    const hostPath = this.requireHostPath(target);
     this.ensureWritable(target, "remove files", params.recursive);
     await assertLocalPathSafety({
       target,
@@ -161,7 +159,6 @@ class OpenShellFsBridge implements SandboxFsBridge {
     });
     await removeLocalRootPath({
       force: params.force,
-      hostPath,
       recursive: params.recursive,
       target,
     });
@@ -169,8 +166,6 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
   async rename(params: Parameters<SandboxFsBridge["rename"]>[0]): Promise<void> {
     const { from, to } = this.resolveRenameTargets(params);
-    const fromHostPath = this.requireHostPath(from);
-    const toHostPath = this.requireHostPath(to);
     await assertLocalPathSafety({
       target: from,
       allowFinalSymlinkForUnlink: true,
@@ -179,22 +174,22 @@ class OpenShellFsBridge implements SandboxFsBridge {
       target: to,
       allowFinalSymlinkForUnlink: false,
     });
-    await assertRenameSourceSupported(fromHostPath);
+    await assertRenameSourceSupported(from.hostPath);
     if (from.mountHostRoot !== to.mountHostRoot) {
       throw new Error("OpenShell cross-root mirror renames require pinned fs-safe support");
     }
     await assertSameDeviceRenameSupported({
-      fromHostPath,
+      fromHostPath: from.hostPath,
       root: from.mountHostRoot,
-      toHostPath,
+      toHostPath: to.hostPath,
     });
     await this.backend.renameRemotePath(from.containerPath, to.containerPath, params.signal);
-    await moveLocalRootPath({ from, fromHostPath, to, toHostPath });
+    await moveLocalRootPath({ from, to });
   }
 
   async stat(params: Parameters<SandboxFsBridge["stat"]>[0]): Promise<SandboxFsStat | null> {
     const target = this.resolveTarget(params);
-    const hostPath = this.requireHostPath(target);
+    const hostPath = target.hostPath;
     const stats = await fsPromises.lstat(hostPath).catch(() => null);
     if (!stats) {
       return null;
@@ -237,15 +232,6 @@ class OpenShellFsBridge implements SandboxFsBridge {
       ),
       ...(this.sandbox.readOnlyResourceMounts ?? []),
     ];
-  }
-
-  private requireHostPath(target: ResolvedMountPath): string {
-    if (!target.hostPath) {
-      throw new Error(
-        `OpenShell mirror bridge requires a local host path: ${target.containerPath}`,
-      );
-    }
-    return target.hostPath;
   }
 
   private containerMounts(readOnlyMounts = this.readOnlyMounts()) {
@@ -411,35 +397,31 @@ function expectResolvedContainerTarget(
   return target;
 }
 
-async function mkdirLocalRootPath(params: {
-  target: ResolvedMountPath;
-  hostPath: string;
-}): Promise<void> {
-  const relativePath = relativeToRoot(params.target, params.hostPath);
+async function mkdirLocalRootPath(target: ResolvedMountPath): Promise<void> {
+  const relativePath = relativeToRoot(target, target.hostPath);
   if (!relativePath) {
     return;
   }
-  const root = await fsRoot(params.target.mountHostRoot);
+  const root = await fsRoot(target.mountHostRoot);
   await root.mkdir(relativePath);
 }
 
 async function removeLocalRootPath(params: {
   target: ResolvedMountPath;
-  hostPath: string;
   recursive?: boolean;
   force?: boolean;
 }): Promise<void> {
   const root = await fsRoot(params.target.mountHostRoot);
-  const relativePath = relativeToRoot(params.target, params.hostPath);
+  const relativePath = relativeToRoot(params.target, params.target.hostPath);
   try {
     if (params.force === false) {
-      await fsPromises.lstat(params.hostPath);
+      await fsPromises.lstat(params.target.hostPath);
     }
     // Clearing a mounted root removes its contents while retaining the mount directory.
     const targets =
       params.recursive && !relativePath
         ? (await root.list("")).map((name) =>
-            relativeToRoot(params.target, path.join(params.hostPath, name)),
+            relativeToRoot(params.target, path.join(params.target.hostPath, name)),
           )
         : [relativePath];
     for (const target of targets) {
@@ -460,13 +442,11 @@ async function removeLocalRootPath(params: {
 
 async function moveLocalRootPath(params: {
   from: ResolvedMountPath;
-  fromHostPath: string;
   to: ResolvedMountPath;
-  toHostPath: string;
 }): Promise<void> {
   const root = await fsRoot(params.from.mountHostRoot);
-  const fromRelativePath = relativeToRoot(params.from, params.fromHostPath);
-  const toRelativePath = relativeToRoot(params.to, params.toHostPath);
+  const fromRelativePath = relativeToRoot(params.from, params.from.hostPath);
+  const toRelativePath = relativeToRoot(params.to, params.to.hostPath);
   await mkdirParentPath(root, toRelativePath);
   await root.move(fromRelativePath, toRelativePath, { overwrite: true });
 }
@@ -542,11 +522,7 @@ async function nearestExistingDirectoryStats(params: {
 
 function isNotFoundError(err: unknown): boolean {
   return (
-    (err instanceof FsSafeError && err.code === "not-found") ||
-    (typeof err === "object" &&
-      err !== null &&
-      "code" in err &&
-      (err as { code?: unknown }).code === "ENOENT")
+    (err instanceof FsSafeError && err.code === "not-found") || extractErrorCode(err) === "ENOENT"
   );
 }
 
@@ -555,9 +531,6 @@ async function assertLocalPathSafety(params: {
   allowFinalSymlinkForUnlink: boolean;
 }): Promise<void> {
   const { hostPath, mountHostRoot } = params.target;
-  if (!hostPath) {
-    throw new Error(`Missing local host path for ${params.target.containerPath}`);
-  }
   const unlinkSymlink =
     params.allowFinalSymlinkForUnlink &&
     hostPath !== mountHostRoot &&

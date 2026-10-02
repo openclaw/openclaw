@@ -60,7 +60,7 @@ function prepareTriggerScorer(message: string): (entry: MemorySearchResult) => n
   };
 }
 
-export function isPromotedTrustedMemoryEntry(
+function isPromotedTrustedMemoryEntry(
   entry: Pick<MemorySearchResult, "provenance" | "projectKey" | "source">,
   activeProjectKeys: readonly string[] = [],
 ): boolean {

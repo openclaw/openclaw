@@ -38,6 +38,7 @@ import {
   resolveAgentIdForRequest,
   resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
+import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
 
 // OpenAI-compatible `/v1/embeddings` bridge. It maps OpenClaw agent/model
 // routing onto configured memory embedding providers while preserving the
@@ -322,11 +323,9 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   } catch (err) {
     if (!abortController.signal.aborted && !res.writableEnded && !res.destroyed) {
       logWarn(`openai-compat: embeddings request failed: ${formatErrorMessage(err)}`);
-      sendJson(res, 500, {
-        error: {
-          message: "internal error",
-          type: "api_error",
-        },
+      const mapped = resolveOpenAiCompatError(err);
+      sendJson(res, mapped?.status ?? 500, {
+        error: mapped?.error ?? { message: "internal error", type: "api_error" },
       });
     }
   } finally {

@@ -107,6 +107,104 @@ describe("chat page retained sessions", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each(["web", "visible"] as const)(
+    "suspends once per effective %s presentation transition",
+    async (mode) => {
+      const page = new ChatPage();
+      const { context } = setNavigationContext(page);
+      const presentation = { visible: true, active: true };
+      let notify = () => {};
+      if (mode !== "web") {
+        Object.assign(context, {
+          nativeConversation: {
+            presentation,
+            subscribe(listener: () => void) {
+              notify = listener;
+              return () => {};
+            },
+          },
+        });
+      }
+      page.data = { sessionKey: "agent:main:main" };
+      document.body.append(page);
+      await page.updateComplete;
+      const owner = page as unknown as {
+        retainedSessions: { suspend(): void };
+      };
+      const suspend = vi.spyOn(owner.retainedSessions, "suspend");
+      const present = async (value: boolean) => {
+        if (mode === "web") {
+          page.presented = value;
+        } else {
+          presentation[mode] = value;
+          notify();
+        }
+        await page.updateComplete;
+      };
+      try {
+        await present(false);
+        for (let update = 0; update < 3; update++) {
+          page.requestUpdate();
+          await page.updateComplete;
+        }
+        expect(suspend).toHaveBeenCalledTimes(1);
+        await present(true);
+        await present(false);
+        expect(suspend).toHaveBeenCalledTimes(2);
+      } finally {
+        suspend.mockRestore();
+      }
+    },
+  );
+
+  it("keeps inactive native conversations visible and synchronizes routes selected while hidden", async ({
+    onTestFinished,
+  }) => {
+    const previousHref = window.location.href;
+    const previousState: unknown = window.history.state;
+    onTestFinished(() => window.history.replaceState(previousState, "", previousHref));
+    vi.stubGlobal("__OPENCLAW_NATIVE_EMBED__", {
+      platform: "macos",
+      formFactor: "desktop",
+      surface: "conversation",
+    });
+    const page = new ChatPage();
+    const navigation = setNavigationContext(page);
+    const presentation = { visible: true, active: false };
+    let notify = () => {};
+    Object.assign(navigation.context, {
+      nativeConversation: {
+        presentation,
+        subscribe(listener: () => void) {
+          notify = listener;
+          return () => {};
+        },
+      },
+    });
+    page.data = { sessionKey: "agent:main:main", agentId: "main" };
+    window.history.replaceState({}, "", "/chat/main");
+    document.body.append(page);
+    await page.updateComplete;
+    expect(page.querySelector<RenderedPane>("openclaw-chat-pane")?.presented).toBe(true);
+    presentation.visible = false;
+    notify();
+    await page.updateComplete;
+    window.history.replaceState({}, "", "/chat/research/next");
+    page.data = { sessionKey: "agent:research:next", agentId: "research" };
+    await page.updateComplete;
+    presentation.visible = true;
+    notify();
+    await page.updateComplete;
+    expect(navigation.setAgent).toHaveBeenLastCalledWith("research", { background: true });
+    const pane = page.querySelector<RenderedPane>(".chat-pane-cache__pane--visible");
+    expect(pane?.presented).toBe(true);
+    expect(pane?.onPaneSessionChange?.("p1", "agent:research:forked")).toBe(true);
+    expect(navigation.navigate).toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({ pathname: "/chat/research/forked" }),
+    );
+  });
+
   it("keeps route ownership on the selected split pane while dock input is active", async () => {
     const page = new ChatPage();
     const workSessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";

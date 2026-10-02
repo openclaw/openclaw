@@ -1,13 +1,13 @@
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, describe, expect, it } from "vitest";
+import {
+  isSessionNodePayloadSelect,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { withSessionCompactionPersistence } from "../../agents/sessions/session-compaction-persistence.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   loadSessionEntry,
   loadTranscriptEventsSync,
@@ -20,17 +20,13 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-});
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-compaction-boundary-");
 
 describe("persistCompactionBoundaryWithSessionEntrySync", () => {
   it.each([false, true])(
     "publishes the boundary, count, and byte latch in one commit (incognito=%s)",
     async (incognito) => {
-      const dir = tempDirs.make("openclaw-compaction-boundary-");
+      const dir = sessionDirs.make();
       const scope = {
         agentId: "main",
         sessionId: "session",
@@ -62,7 +58,7 @@ describe("persistCompactionBoundaryWithSessionEntrySync", () => {
             toDatabaseOptions(resolveSqliteTranscriptScope(scope)),
           );
           const reads = trackSqliteStatementExecutions(database.db, ["entry"], (sql) =>
-            sql.startsWith('select * from "session_nodes" where "session_key" = ?')
+            isSessionNodePayloadSelect(sql) && sql.includes('where "session_key" = ?')
               ? "entry"
               : null,
           );
@@ -109,7 +105,7 @@ describe("persistCompactionBoundaryWithSessionEntrySync", () => {
   );
 
   it("rolls back accounting when the prepared boundary identity already exists", async () => {
-    const dir = tempDirs.make("openclaw-compaction-boundary-rollback-");
+    const dir = sessionDirs.make();
     const scope = {
       agentId: "main",
       sessionId: "session",
@@ -167,7 +163,7 @@ describe("persistCompactionBoundaryWithSessionEntrySync", () => {
   });
 
   it("rolls back when the admitted writer rejects the appended boundary", async () => {
-    const dir = tempDirs.make("openclaw-compaction-boundary-owner-");
+    const dir = sessionDirs.make();
     const scope = {
       agentId: "main",
       sessionId: "session",

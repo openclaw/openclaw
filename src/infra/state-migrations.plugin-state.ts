@@ -5,126 +5,12 @@ import {
   createPluginStateKeyedStore,
   registerMigratedPluginStateEntry,
 } from "../plugin-state/plugin-state-store.js";
-import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-state.js";
-import { writePersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store-write.js";
-import {
-  readPersistedInstalledPluginIndexSync,
-  resolveLegacyInstalledPluginIndexStorePath,
-} from "../plugins/installed-plugin-index-store.js";
 import { ensureMigrationDir, migrationFileExists } from "./state-migrations.fs.js";
-import {
-  archiveLegacyImportSource,
-  archiveLegacyInstalledPluginIndex,
-  legacyInstalledPluginIndexMatches,
-  mergeLegacyInstalledPluginIndexRecords,
-  readLegacyInstalledPluginIndex,
-} from "./state-migrations.storage.js";
+import { archiveLegacyImportSource } from "./state-migrations.storage.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
-
-export async function migrateLegacyInstalledPluginIndex(params: {
-  stateDir: string;
-}): Promise<MigrationMessages> {
-  const sourcePath = resolveLegacyInstalledPluginIndexStorePath({ stateDir: params.stateDir });
-  if (!migrationFileExists(sourcePath)) {
-    return { changes: [], warnings: [] };
-  }
-
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  const persistedState = inspectPersistedInstalledPluginIndexInstallRecordsSync({
-    stateDir: params.stateDir,
-  });
-  if (persistedState.status === "invalid") {
-    return {
-      changes,
-      warnings: [
-        `Left plugin install index in place because persisted install records in ${params.stateDir} are invalid`,
-      ],
-    };
-  }
-  const legacy = readLegacyInstalledPluginIndex(sourcePath);
-  if (!legacy) {
-    return {
-      changes,
-      warnings: [`Left plugin install index in place because ${sourcePath} is invalid`],
-    };
-  }
-
-  const storeOptions = { stateDir: params.stateDir };
-  const current = readPersistedInstalledPluginIndexSync(storeOptions);
-  if (current && !legacyInstalledPluginIndexMatches(current, legacy)) {
-    const merged = mergeLegacyInstalledPluginIndexRecords(current, legacy);
-    if (merged.addedCount > 0) {
-      try {
-        writePersistedInstalledPluginIndexSync(merged.merged, storeOptions);
-        changes.push(
-          `Merged ${merged.addedCount} legacy plugin install ${merged.addedCount === 1 ? "record" : "records"} → shared SQLite state`,
-        );
-      } catch (err) {
-        return {
-          changes,
-          warnings: [`Failed merging plugin install index ${sourcePath}: ${String(err)}`],
-        };
-      }
-    }
-    if (merged.conflicts.length > 0) {
-      // SQLite owns the install ledger; discovery can omit disabled or currently unloadable plugins.
-      // Archive the retired JSON for recovery instead of blocking startup on conflicting metadata.
-      archiveLegacyInstalledPluginIndex({ sourcePath, changes, warnings });
-      return {
-        changes,
-        warnings,
-        notices: [
-          `Kept canonical shared SQLite plugin install metadata despite differing legacy records for: ${merged.conflicts.join(", ")}`,
-        ],
-      };
-    }
-  }
-
-  if (!current) {
-    try {
-      writePersistedInstalledPluginIndexSync(legacy, storeOptions);
-      const recordCount = Object.keys(legacy.installRecords).length;
-      changes.push(
-        `Migrated plugin install index ${recordCount} ${recordCount === 1 ? "record" : "records"} → shared SQLite state`,
-      );
-    } catch (err) {
-      return {
-        changes,
-        warnings: [`Failed migrating plugin install index ${sourcePath}: ${String(err)}`],
-      };
-    }
-  }
-
-  archiveLegacyInstalledPluginIndex({ sourcePath, changes, warnings });
-  return { changes, warnings };
-}
-
-export function preflightLegacyInstalledPluginIndexMigration(params: {
-  stateDir: string;
-}): string | null {
-  const persistedState = inspectPersistedInstalledPluginIndexInstallRecordsSync(params);
-  if (persistedState.status === "invalid") {
-    return `State dir migration skipped because persisted plugin install records in ${params.stateDir} are invalid`;
-  }
-  const sourcePath = resolveLegacyInstalledPluginIndexStorePath(params);
-  if (migrationFileExists(sourcePath) && !readLegacyInstalledPluginIndex(sourcePath)) {
-    return `State dir migration skipped because plugin install index ${sourcePath} is invalid`;
-  }
-  return null;
-}
 
 function resolvePluginStateImportTargetKey(scopeKey: string, key: string): string {
   return scopeKey ? `${scopeKey}:${key}` : key;
-}
-
-function findMissingKey(expected: Set<string>, actual: Set<string>): string | undefined {
-  for (const key of expected) {
-    if (!actual.has(key)) {
-      return key;
-    }
-  }
-  return undefined;
 }
 
 function compareImportEntriesNewestFirst(
@@ -286,10 +172,10 @@ export async function runLegacyMigrationPlans(
                 ...(entry.ttlMs != null ? { ttlMs: entry.ttlMs } : {}),
                 ...(entry.timestamp !== undefined ? { createdAtMs: entry.timestamp } : {}),
               });
-              const nextExpectedKeys = new Set(expectedKeys);
-              nextExpectedKeys.add(entry.targetKey);
               const liveKeys = new Set((await store.entries()).map(({ key }) => key));
-              const missingKey = findMissingKey(nextExpectedKeys, liveKeys);
+              const missingKey = [...expectedKeys, entry.targetKey].find(
+                (key) => !liveKeys.has(key),
+              );
               if (missingKey) {
                 // A concurrent write pushed the store over a cap and evicted a row. Roll back
                 // only the entry whose write triggered the eviction, restore the evicted live

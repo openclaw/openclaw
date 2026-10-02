@@ -25,23 +25,6 @@ import { fetchOpenRouterVideoGet, type OpenRouterVideoDispatcherPolicy } from ".
 
 const DEFAULT_HTTP_TIMEOUT_MS = 60_000;
 
-type OpenRouterVideoModel = {
-  allowed_passthrough_parameters?: unknown;
-  canonical_slug?: unknown;
-  created?: unknown;
-  description?: unknown;
-  generate_audio?: unknown;
-  id?: unknown;
-  name?: unknown;
-  pricing_skus?: unknown;
-  seed?: unknown;
-  supported_aspect_ratios?: unknown;
-  supported_durations?: unknown;
-  supported_frame_images?: unknown;
-  supported_resolutions?: unknown;
-  supported_sizes?: unknown;
-};
-
 type OpenRouterVideoModelCatalogCapabilities = VideoGenerationProviderCapabilities & {
   allowedPassthroughParameters?: readonly string[];
   canonicalSlug?: string;
@@ -49,10 +32,6 @@ type OpenRouterVideoModelCatalogCapabilities = VideoGenerationProviderCapabiliti
   description?: string;
   pricingSkus?: Readonly<Record<string, string>>;
 };
-
-type OpenRouterVideoRequestPolicyCacheKey = ReturnType<
-  typeof sanitizeConfiguredModelProviderRequest
->;
 
 type OpenRouterVideoRequestConfig = Parameters<typeof sanitizeConfiguredModelProviderRequest>[0];
 
@@ -125,7 +104,7 @@ function buildOpenRouterVideoModeCapabilities(params: {
 }
 
 function buildOpenRouterVideoModelCapabilities(
-  model: OpenRouterVideoModel,
+  model: Record<string, unknown>,
 ): OpenRouterVideoModelCatalogCapabilities {
   const aspectRatios = normalizeTrimmedStringList(model.supported_aspect_ratios);
   const durations = normalizeNumberArray(model.supported_durations);
@@ -225,10 +204,6 @@ function stableCacheKeyValue(value: unknown): unknown {
   );
 }
 
-function buildRequestPolicyCacheKey(request: OpenRouterVideoRequestPolicyCacheKey): unknown {
-  return stableCacheKeyValue(request ?? null);
-}
-
 function resolveOpenRouterVideoCatalogRequest(params: {
   apiKey: string;
   baseUrl: string | undefined;
@@ -243,12 +218,10 @@ function resolveOpenRouterVideoCatalogRequest(params: {
       defaultBaseUrl: OPENROUTER_BASE_URL,
       defaultHeaders: {
         Authorization: `Bearer ${params.apiKey}`,
-        "HTTP-Referer": "https://openclaw.ai",
-        "X-OpenRouter-Title": "OpenClaw",
       },
       request,
     }),
-    requestPolicyCacheKey: buildRequestPolicyCacheKey(request),
+    requestPolicyCacheKey: stableCacheKeyValue(request ?? null),
   };
 }
 

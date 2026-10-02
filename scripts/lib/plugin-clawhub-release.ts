@@ -1,10 +1,13 @@
-// Plugin Clawhub Release script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.js";
 import { retryClawHubRead } from "../../src/infra/clawhub-retry.js";
 import { runTasksWithConcurrency } from "../../src/utils/run-with-concurrency.js";
 import { readBoundedResponseText } from "./bounded-response.mjs";
+import {
+  classifyClawHubPublication,
+  type ClawHubPublicationState,
+} from "./clawhub-publication-state.mjs";
 import {
   assertPluginReleaseDependencyFreshness,
   collectChangedPathsFromGitRange,
@@ -37,6 +40,7 @@ export {
 export type { PublishablePluginPackage } from "./plugin-publication-collector.ts";
 
 type PluginReleasePlanItem = PublishablePluginPackage & {
+  publication: ClawHubPublicationState;
   alreadyPublished: boolean;
   artifactName: string;
 };
@@ -48,10 +52,8 @@ type PluginReleasePlan = {
   bootstrapCandidates: PluginReleasePlanItem[];
   missingTrustedPublisher: PluginReleasePlanItem[];
   skippedPublished: PluginReleasePlanItem[];
-};
-
-type ClawHubTrustedPublisherDetail = {
-  trustedPublisher?: unknown;
+  pendingPublication: PluginReleasePlanItem[];
+  failedPublication: PluginReleasePlanItem[];
 };
 
 type ClawHubTrustedPublisherConfig = {
@@ -61,6 +63,7 @@ type ClawHubTrustedPublisherConfig = {
 };
 
 export type ClawHubPackageObservation = {
+  publication: ClawHubPublicationState;
   packageExists: boolean;
   alreadyPublished: boolean;
   hasTrustedPublisher: boolean;
@@ -103,6 +106,8 @@ const CLAWHUB_RELEASE_AUTHORITY_PATHS = [
   "scripts/lib/bounded-response.mjs",
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/plugin-clawhub-release.ts",
+  "scripts/lib/clawhub-publication-state.mjs",
+  "scripts/plugin-clawhub-recovery.mjs",
   "scripts/openclaw-npm-release-check.ts",
   "scripts/clawhub-prepared-artifact.mjs",
   "scripts/plugin-clawhub-publish.sh",
@@ -261,31 +266,20 @@ export function collectPluginClawHubReleasePathsFromGitRange(params: {
   rootDir?: string;
   gitRange: GitRangeSelection;
 }): string[] {
-  return collectPluginClawHubReleasePathsFromGitRangeForPathspecs(params, ["extensions"]);
+  return collectChangedPathsFromGitRange({ ...params, pathspecs: ["extensions"] });
 }
 
 function collectPluginClawHubRelevantPathsFromGitRange(params: {
   rootDir?: string;
   gitRange: GitRangeSelection;
 }): string[] {
-  return collectPluginClawHubReleasePathsFromGitRangeForPathspecs(params, [
-    "extensions",
-    ...PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS,
-    ...CLAWHUB_RELEASE_AUTHORITY_PATHS,
-  ]);
-}
-
-function collectPluginClawHubReleasePathsFromGitRangeForPathspecs(
-  params: {
-    rootDir?: string;
-    gitRange: GitRangeSelection;
-  },
-  pathspecs: readonly string[],
-): string[] {
   return collectChangedPathsFromGitRange({
-    rootDir: params.rootDir,
-    gitRange: params.gitRange,
-    pathspecs,
+    ...params,
+    pathspecs: [
+      "extensions",
+      ...PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS,
+      ...CLAWHUB_RELEASE_AUTHORITY_PATHS,
+    ],
   });
 }
 
@@ -400,53 +394,31 @@ export function collectClawHubVersionGateErrors(params: {
   return errors;
 }
 
-async function isPluginVersionPublishedOnClawHub(
+async function readClawHubPublication(
   packageName: string,
   version: string,
   options: ClawHubRetryOptions & { registryBaseUrl?: string } = {},
-): Promise<boolean> {
-  const url = new URL(
-    `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${encodeURIComponent(version)}`,
-    getRegistryBaseUrl(options.registryBaseUrl),
-  );
-  const request = await fetchClawHubRead(url, {
-    fetchImpl: options.fetchImpl,
-    requestTimeoutMs: options.requestTimeoutMs,
-    sleep: options.sleep,
-  });
-  const { response } = request;
-
-  try {
-    if (response.status === 404) {
-      return false;
-    }
-    if (response.ok) {
-      return true;
-    }
-
-    throw await buildClawHubQueryError(
-      `Failed to query ClawHub for ${packageName}@${version}`,
-      request,
-    );
-  } finally {
-    await cancelClawHubResponseBody(response);
-    request.clearTimeout();
+): Promise<ClawHubPublicationState> {
+  const resource = `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${encodeURIComponent(version)}`;
+  const message = `Failed to query ClawHub for ${packageName}@${version}`;
+  const body = await readClawHubJson(`${resource}/publication`, message, options, true);
+  const publication =
+    body === undefined ? null : classifyClawHubPublication(body, { name: packageName, version });
+  if (publication) {
+    return publication;
   }
+  return {
+    state: (await clawHubResourceExists(resource, message, options)) ? "published" : "absent",
+  };
 }
 
-async function doesClawHubPackageExist(
-  packageName: string,
-  options: ClawHubRetryOptions & { registryBaseUrl?: string } = {},
+async function clawHubResourceExists(
+  resource: string,
+  errorMessage: string,
+  options: ClawHubRetryOptions & { registryBaseUrl?: string },
 ): Promise<boolean> {
-  const url = new URL(
-    `/api/v1/packages/${encodeURIComponent(packageName)}`,
-    getRegistryBaseUrl(options.registryBaseUrl),
-  );
-  const request = await fetchClawHubRead(url, {
-    fetchImpl: options.fetchImpl,
-    requestTimeoutMs: options.requestTimeoutMs,
-    sleep: options.sleep,
-  });
+  const url = new URL(resource, getRegistryBaseUrl(options.registryBaseUrl));
+  const request = await fetchClawHubRead(url, options);
   const { response } = request;
 
   try {
@@ -454,7 +426,7 @@ async function doesClawHubPackageExist(
       return false;
     }
     if (!response.ok) {
-      throw await buildClawHubQueryError(`Failed to query ClawHub package ${packageName}`, request);
+      throw await buildClawHubQueryError(errorMessage, request);
     }
 
     return true;
@@ -464,55 +436,33 @@ async function doesClawHubPackageExist(
   }
 }
 
-async function readClawHubTrustedPublisher(
-  packageName: string,
-  options: ClawHubRetryOptions & {
-    registryBaseUrl?: string;
-  } = {},
+async function readClawHubJson(
+  resource: string,
+  message: string,
+  options: ClawHubRetryOptions & { registryBaseUrl?: string },
+  allowMissing = false,
 ): Promise<unknown> {
-  const url = new URL(
-    `/api/v1/packages/${encodeURIComponent(packageName)}/trusted-publisher`,
-    getRegistryBaseUrl(options.registryBaseUrl),
+  const request = await fetchClawHubRead(
+    new URL(resource, getRegistryBaseUrl(options.registryBaseUrl)),
+    options,
   );
-  const request = await fetchClawHubRead(url, options);
-  const { response } = request;
   try {
-    if (!response.ok) {
-      throw await buildClawHubQueryError(
-        `Failed to query ClawHub trusted publisher for ${packageName}`,
-        request,
-      );
+    if (allowMissing && request.response.status === 404) {
+      return undefined;
     }
-
-    let trustedPublisherDetail: ClawHubTrustedPublisherDetail;
-    const text = await readBoundedResponseText(
-      response,
-      `ClawHub trusted publisher ${packageName}`,
-      CLAWHUB_RESPONSE_BODY_MAX_BYTES,
-      {
+    if (!request.response.ok) {
+      throw await buildClawHubQueryError(message, request);
+    }
+    return JSON.parse(
+      await readBoundedResponseText(request.response, message, CLAWHUB_RESPONSE_BODY_MAX_BYTES, {
         signal: request.signal,
         timeoutPromise: request.timeoutPromise,
-      },
+      }),
     );
-    try {
-      trustedPublisherDetail = JSON.parse(text) as ClawHubTrustedPublisherDetail;
-    } catch (error) {
-      throw new Error(`Failed to parse ClawHub trusted publisher ${packageName} response.`, {
-        cause: error,
-      });
-    }
-
-    return trustedPublisherDetail.trustedPublisher;
   } finally {
+    await cancelClawHubResponseBody(request.response);
     request.clearTimeout();
   }
-}
-
-async function hasClawHubTrustedPublisher(
-  packageName: string,
-  options: ClawHubRetryOptions & { registryBaseUrl?: string } = {},
-): Promise<boolean> {
-  return isOpenClawPluginTrustedPublisher(await readClawHubTrustedPublisher(packageName, options));
 }
 
 export async function observeClawHubPackage(
@@ -520,16 +470,32 @@ export async function observeClawHubPackage(
   version: string,
   options: ClawHubRetryOptions & { registryBaseUrl?: string } = {},
 ): Promise<ClawHubPackageObservation> {
-  const packageExists = await doesClawHubPackageExist(packageName, options);
+  const resource = `/api/v1/packages/${encodeURIComponent(packageName)}`;
+  const packageExists = await clawHubResourceExists(
+    resource,
+    `Failed to query ClawHub package ${packageName}`,
+    options,
+  );
   if (!packageExists) {
+    // Public package metadata hides shells containing only staged releases.
+    const publication = await readClawHubPublication(packageName, version, options);
     return {
-      packageExists: false,
-      alreadyPublished: false,
+      packageExists: publication.state !== "absent",
+      publication,
+      alreadyPublished: publication.state === "published",
       hasTrustedPublisher: false,
       trustedPublisher: null,
     };
   }
-  const raw = await readClawHubTrustedPublisher(packageName, options);
+  const detail = await readClawHubJson(
+    `${resource}/trusted-publisher`,
+    `Failed to query ClawHub trusted publisher for ${packageName}`,
+    options,
+  );
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) {
+    throw new Error(`${packageName}: invalid ClawHub trusted-publisher response.`);
+  }
+  const raw = Reflect.get(detail, "trustedPublisher");
   let trustedPublisher: ClawHubPackageObservation["trustedPublisher"] = null;
   if (raw != null) {
     if (typeof raw !== "object" || Array.isArray(raw)) {
@@ -558,9 +524,11 @@ export async function observeClawHubPackage(
       environment: field("environment"),
     };
   }
+  const publication = await readClawHubPublication(packageName, version, options);
   return {
     packageExists,
-    alreadyPublished: await isPluginVersionPublishedOnClawHub(packageName, version, options),
+    publication,
+    alreadyPublished: publication.state === "published",
     hasTrustedPublisher: isOpenClawPluginTrustedPublisher(trustedPublisher),
     trustedPublisher,
   };
@@ -602,7 +570,9 @@ export async function collectPluginClawHubReleasePlan(params?: {
   resolvePackageState?: (
     packageName: string,
     version: string,
-  ) => Promise<ClawHubPackageObservation>;
+  ) => Promise<
+    Omit<ClawHubPackageObservation, "publication"> & { publication?: ClawHubPublicationState }
+  >;
 }): Promise<PluginReleasePlan> {
   const rootDir = params?.rootDir;
   const selection = params?.selection ?? [];
@@ -646,23 +616,15 @@ export async function collectPluginClawHubReleasePlan(params?: {
       requestTimeoutMs: params?.requestTimeoutMs,
       sleep: params?.sleep,
     };
-    let packageExists: boolean;
-    let hasTrustedPublisher: boolean;
-    let alreadyPublished: boolean;
-    if (params?.resolvePackageState) {
-      ({ packageExists, hasTrustedPublisher, alreadyPublished } = await params.resolvePackageState(
-        plugin.packageName,
-        plugin.version,
-      ));
-    } else {
-      packageExists = await doesClawHubPackageExist(plugin.packageName, queryOptions);
-      hasTrustedPublisher = packageExists
-        ? await hasClawHubTrustedPublisher(plugin.packageName, queryOptions)
-        : false;
-      alreadyPublished = packageExists
-        ? await isPluginVersionPublishedOnClawHub(plugin.packageName, plugin.version, queryOptions)
-        : false;
-    }
+    const observation = await (
+      params?.resolvePackageState ??
+      ((name, version) => observeClawHubPackage(name, version, queryOptions))
+    )(plugin.packageName, plugin.version);
+    // Existing digest-bound full-release receipts predate publication detail.
+    const publication: ClawHubPublicationState = observation.publication ?? {
+      state: observation.alreadyPublished ? "published" : "absent",
+    };
+    const { packageExists, hasTrustedPublisher } = observation;
 
     return {
       extensionId: plugin.extensionId,
@@ -673,7 +635,8 @@ export async function collectPluginClawHubReleasePlan(params?: {
       publishTag: plugin.publishTag,
       packageExists,
       hasTrustedPublisher,
-      alreadyPublished,
+      alreadyPublished: publication.state === "published",
+      publication,
       artifactName: formatClawHubPackageArtifactName(plugin),
     } satisfies PluginReleasePlanItemWithPackageState;
   });
@@ -693,14 +656,30 @@ export async function collectPluginClawHubReleasePlan(params?: {
     warnings,
     candidates: planned
       .filter(
-        (plugin) => plugin.packageExists && plugin.hasTrustedPublisher && !plugin.alreadyPublished,
+        (plugin) =>
+          plugin.packageExists &&
+          plugin.hasTrustedPublisher &&
+          plugin.publication.state === "absent",
       )
       .map(stripPackageReleaseState),
     bootstrapCandidates: planned
       .filter((plugin) => !plugin.packageExists)
       .map(stripPackageReleaseState),
     missingTrustedPublisher: planned
-      .filter((plugin) => plugin.packageExists && !plugin.hasTrustedPublisher)
+      .filter(
+        (plugin) =>
+          plugin.packageExists &&
+          !plugin.hasTrustedPublisher &&
+          (plugin.publication.state === "absent" || plugin.publication.state === "published"),
+      )
+      .map(stripPackageReleaseState),
+    // Same-run attempts finalize when their parent succeeds. Other-run attempts
+    // refuse republish and fail if their parent fails; wait/skip is the only action.
+    pendingPublication: planned
+      .filter((plugin) => plugin.publication.state === "pending")
+      .map(stripPackageReleaseState),
+    failedPublication: planned
+      .filter((plugin) => plugin.publication.state === "failed")
       .map(stripPackageReleaseState),
     skippedPublished: planned
       .filter((plugin) => plugin.alreadyPublished)

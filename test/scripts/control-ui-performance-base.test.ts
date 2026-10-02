@@ -47,9 +47,6 @@ it("compares real UI builds with canonical compression and keeps artifacts after
     ]) {
       fs.mkdirSync(path.join(root, directory), { recursive: true });
     }
-    for (const directory of ["node_modules", "ui/node_modules"]) {
-      fs.symlinkSync(path.join(repoRoot, directory), path.join(root, directory), "junction");
-    }
     for (const script of [
       "check-control-ui-performance-base.mts",
       "check-control-ui-performance.mts",
@@ -59,18 +56,37 @@ it("compares real UI builds with canonical compression and keeps artifacts after
       "lib/control-ui-i18n-config.ts",
       "lib/repo-root.mjs",
       "lib/output-root-guard.mjs",
+      "lib/record-shared.mjs",
+      "lib/regexp.mjs",
     ]) {
       fs.copyFileSync(path.join(repoRoot, "scripts", script), path.join(root, "scripts", script));
     }
+    write(
+      "src/gateway/control-ui-route-preloads.ts",
+      fs.readFileSync(path.join(repoRoot, "src/gateway/control-ui-route-preloads.ts"), "utf8"),
+    );
     write("scripts/tsx.mjs", `await import(${JSON.stringify(tsxImport)});\n`);
     write(".gitignore", "node_modules\ndist/\n");
-    write("package.json", '{"name":"ui-budget-proof","version":"1.0.0","type":"module"}');
+    write(
+      "package.json",
+      JSON.stringify({
+        name: "ui-budget-proof",
+        version: "1.0.0",
+        type: "module",
+        dependencies: { "base-only-library": "file:vendor/base-only-library" },
+      }),
+    );
+    write(
+      "vendor/base-only-library/package.json",
+      '{"name":"base-only-library","version":"1.0.0","type":"module","exports":"./index.js"}',
+    );
+    write("vendor/base-only-library/index.js", 'export const value = "base dependency";');
     write("pnpm-workspace.yaml", 'packages: ["ui", "packages/*"]\n');
     write("ui/package.json", '{"name":"ui-budget-proof-ui","type":"module"}');
     write("ui/index.html", '<script type="module" src="/main.js"></script>');
     write(
       "ui/main.js",
-      'import "./style.css"; import { message } from "../packages/styles/main.js"; document.body.textContent = message;',
+      'import "./style.css"; import { message } from "../packages/styles/main.js"; import { value } from "base-only-library"; document.body.textContent = message + "/" + value;',
     );
     write(
       "packages/styles/main.js",
@@ -137,11 +153,26 @@ export default {
 `;
     write("ui/vite.config.ts", config);
     write("ui/style.css", css(1_000));
+    const lockfile = spawnSync(
+      "pnpm",
+      ["install", "--lockfile-only", "--no-frozen-lockfile", "--ignore-scripts", "--offline"],
+      { cwd: root, encoding: "utf8", timeout: 30_000 },
+    );
+    expect(lockfile.status, `${lockfile.stdout}${lockfile.stderr}`).toBe(0);
     git("init", "--quiet");
     git("add", ".");
     git("commit", "--quiet", "-m", "base");
     const base = git("rev-parse", "HEAD");
+    for (const directory of ["node_modules", "ui/node_modules"]) {
+      const target = path.join(root, directory);
+      fs.rmSync(target, { recursive: true, force: true });
+      fs.symlinkSync(path.join(repoRoot, directory), target, "junction");
+    }
     write("package.json", '{"name":"ui-budget-proof","version":"1.0.1","type":"module"}');
+    write(
+      "ui/main.js",
+      'import "./style.css"; import { message } from "../packages/styles/main.js"; document.body.textContent = message;',
+    );
     write("ui/vite.config.ts", config.replace("level: 0", "level: 9"));
     write("packages/workspace-value/index.js", 'export const message = "candidate workspace";');
 
@@ -182,7 +213,7 @@ export default {
       );
     }
 
-    const runComparison = () => {
+    const runComparison = (baseRef = base) => {
       fs.rmSync(identityCapture, { force: true });
       return spawnSync(
         process.execPath,
@@ -190,7 +221,7 @@ export default {
           "--import",
           tsxImport,
           path.join(root, "scripts/check-control-ui-performance-base.mts"),
-          base,
+          baseRef,
         ],
         {
           cwd: root,
@@ -247,12 +278,58 @@ export default {
           runInNewContext(entryCode, { document });
           return document.body.textContent;
         }),
-      ).toEqual(["candidate workspace", "base workspace"]);
+      ).toEqual(["candidate workspace", "base workspace/base dependency"]);
+      expect(fs.realpathSync(path.join(root, "node_modules"))).toBe(
+        fs.realpathSync(path.join(repoRoot, "node_modules")),
+      );
       expect(fs.existsSync(path.join(root, "dist/control-ui/index.html"))).toBe(true);
       expect(
         fs.readdirSync(scratch).filter((name) => name.startsWith("openclaw-ui-performance-base-")),
       ).toEqual([]);
     }
+    write("ui/style.css", css(1_001));
+    write("ui/main.js", "export const = broken;");
+    git("add", ".");
+    git("commit", "--quiet", "-m", "broken base");
+    const brokenBase = git("rev-parse", "HEAD");
+    write(
+      "ui/main.js",
+      'import "./style.css"; import { message } from "../packages/styles/main.js"; document.body.textContent = message;',
+    );
+    git("add", ".");
+    git("commit", "--quiet", "-m", "repair base build");
+    const brokenBaseResult = runComparison(brokenBase);
+    const brokenBaseOutput = `${brokenBaseResult.stdout}${brokenBaseResult.stderr}`;
+    expect(brokenBaseResult.status, brokenBaseOutput).toBe(0);
+    expect(brokenBaseOutput).toContain(
+      "Base Control UI source does not build with the candidate toolchain; enforcing candidate absolute budgets without a differential comparison.",
+    );
+    expect(brokenBaseOutput).not.toContain("startup CSS gzip vs base:");
+    expect(fs.readFileSync(identityCapture, "utf8").trim().split("\n")).toHaveLength(1);
+    const candidateConfig = fs.readFileSync(path.join(root, "ui/vite.config.ts"), "utf8");
+    const signalMarker = path.join(temporaryRoot, "signaled-base-config");
+    write(
+      "ui/vite.config.ts",
+      `import fs from "node:fs";
+fs.writeFileSync(${JSON.stringify(signalMarker)}, "loaded");
+export default { plugins: [{ name: "signal", buildStart() { process.kill(process.pid, "SIGTERM"); } }] };
+`,
+    );
+    git("add", ".");
+    git("commit", "--quiet", "-m", "signaled base");
+    const signaledBase = git("rev-parse", "HEAD");
+    expect(git("show", `${signaledBase}:ui/vite.config.ts`)).toContain("process.kill(process.pid");
+    write("ui/vite.config.ts", candidateConfig);
+    git("add", ".");
+    git("commit", "--quiet", "-m", "repair signaled base");
+    const signaledBaseResult = runComparison(signaledBase);
+    const signaledBaseOutput = `${signaledBaseResult.stdout}${signaledBaseResult.stderr}`;
+    expect(fs.readFileSync(signalMarker, "utf8")).toBe("loaded");
+    expect(signaledBaseResult.status, signaledBaseOutput).toBe(1);
+    expect(signaledBaseOutput).toContain(`${path.basename(process.execPath)} failed (SIGTERM)`);
+    expect(signaledBaseOutput).not.toContain(
+      "Base Control UI source does not build with the candidate toolchain",
+    );
     const protectedRoot = path.join(temporaryRoot, "protected");
     fs.mkdirSync(protectedRoot);
     fs.writeFileSync(path.join(protectedRoot, "sentinel"), "keep");

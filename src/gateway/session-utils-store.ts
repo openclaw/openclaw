@@ -46,8 +46,8 @@ import type { GatewayAgentOwnership } from "./agent-list.js";
 import { resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
+import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
-  type GatewaySessionStoreDiscoveryCache,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
@@ -328,13 +328,15 @@ export async function listAgentsForGateway(
     const avatar = normalizeOptionalString(entry.identity?.avatar);
     const httpAvatar =
       avatar && options?.httpAvatarBasePath !== undefined
-        ? resolveGatewayAssistantAvatar({
-            cfg,
-            identity: { agentId, avatar },
-            httpBasePath: options.httpAvatarBasePath,
-          }).avatar
+        ? (
+            await resolveGatewayAssistantAvatar({
+              cfg,
+              identity: { agentId, avatar },
+              httpBasePath: options.httpAvatarBasePath,
+            })
+          ).avatar
         : undefined;
-    const avatarUrl = httpAvatar ?? resolveAgentAvatarUrlFromSource(cfg, agentId, avatar);
+    const avatarUrl = httpAvatar ?? (await resolveAgentAvatarUrlFromSource(cfg, agentId, avatar));
     const identity = entry.identity
       ? {
           name: normalizeOptionalString(entry.identity.name),

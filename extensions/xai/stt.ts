@@ -1,4 +1,3 @@
-// Xai plugin module implements stt behavior.
 import type {
   AudioTranscriptionRequest,
   AudioTranscriptionResult,

@@ -16,6 +16,7 @@ import {
   buildInboundHistoryFromEntries,
   createChannelHistoryWindow,
 } from "openclaw/plugin-sdk/reply-history";
+import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { buildAgentSessionKey, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
@@ -384,10 +385,7 @@ export async function buildDiscordMessageProcessContext(params: {
   if (!isHistoryCurrent()) {
     return null;
   }
-  const deliverTarget = replyPlan.deliverTarget;
-  const replyTarget = replyPlan.replyTarget;
-  const replyReference = replyPlan.replyReference;
-  const autoThreadContext = replyPlan.autoThreadContext;
+  const { deliverTarget, replyTarget, replyReference, autoThreadContext } = replyPlan;
   const conversationParentId = threadChannel
     ? threadParentId
     : autoThreadContext
@@ -444,6 +442,25 @@ export async function buildDiscordMessageProcessContext(params: {
     return null;
   }
 
+  // Auto-thread creation has finished: the return link belongs to that thread,
+  // while nativeChannelId can still identify the channel where the mention arrived.
+  const conversationThreadId = threadChannel?.id ?? autoThreadContext?.createdThreadId;
+  const conversationChannelId = conversationThreadId ?? messageChannelId;
+  const conversationGuildId = isGuildMessage
+    ? (guildInfo?.id ?? data.guild?.id ?? data.guild_id)
+    : "@me";
+  const conversationLink =
+    /^\d+$/.test(conversationChannelId) &&
+    conversationGuildId &&
+    (conversationGuildId === "@me" || /^\d+$/.test(conversationGuildId))
+      ? {
+          url: `https://discord.com/channels/${conversationGuildId}/${conversationChannelId}`,
+          label: conversationThreadId ? "Discord Thread" : "Discord Conversation",
+        }
+      : undefined;
+
+  const batchMessageIds =
+    ctx.sourceMessageIds && ctx.sourceMessageIds.length > 1 ? [...ctx.sourceMessageIds] : undefined;
   const ctxPayload = await (ctx.buildContext ?? buildChannelInboundEventContext)({
     channelIngress,
     channel: "discord",
@@ -475,6 +492,7 @@ export async function buildDiscordMessageProcessContext(params: {
       }),
       nativeChannelId: messageChannelId,
       avatar: ctx.conversationAvatar,
+      link: conversationLink,
       label: fromLabel,
       spaceId: isGuildMessage
         ? (guildInfo?.id ?? data.guild?.id ?? data.guild_id ?? guildSlug) || undefined
@@ -566,6 +584,13 @@ export async function buildDiscordMessageProcessContext(params: {
       groupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
     },
     extra: {
+      MessageSids: batchMessageIds,
+      MessageSidFirst: batchMessageIds?.[0],
+      MessageSidLast: batchMessageIds?.at(-1),
+      ReplyThreading: resolveBatchedReplyThreadingPolicy(
+        replyToMode,
+        batchMessageIds !== undefined,
+      ),
       GroupThread: ctx.groupThread,
       ...(preflightAudioTranscript !== undefined ? { Transcript: preflightAudioTranscript } : {}),
       GroupSubject: isDirectMessage ? undefined : groupChannel,

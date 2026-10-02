@@ -6,6 +6,11 @@ import type {
   WorkerSessionPlacementRetirement,
   WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import {
+  isFailedWorkerPlacementEnvironmentGone,
+  matchesWorkerPlacementTarget,
+  type WorkerPlacementCancellationTarget,
+} from "./placement-target.js";
 import type {
   WorkerEnvironmentServiceContract,
   WorkerPlacementDispatchContract,
@@ -22,17 +27,8 @@ export type SessionWorkerPlacementContext = {
 type PlacementMutationAction = "fork" | "reset" | "restore" | "rewind" | "switch";
 type Placement = WorkerSessionPlacementRecord;
 type PlacementState = Placement["state"];
-type PlacementOwner = Pick<
-  Placement,
-  | "sessionId"
-  | "sessionKey"
-  | "agentId"
-  | "state"
-  | "generation"
-  | "environmentId"
-  | "activeOwnerEpoch"
-  | "executionMode"
->;
+type PlacementOwner = WorkerPlacementCancellationTarget &
+  Pick<Placement, "sessionId" | "sessionKey" | "agentId" | "executionMode">;
 
 class SessionWorkerPlacementMutationError extends Error {
   constructor(state: PlacementState, action: PlacementMutationAction, key: string) {
@@ -64,41 +60,6 @@ type SessionWorkerPlacementMutationParams = {
 
 type RetirablePlacement = Extract<Placement, { state: "local" | "reclaimed" | "failed" }>;
 type FailedPlacement = Extract<Placement, { state: "failed" }>;
-
-export function isFailedWorkerPlacementEnvironmentGone(params: {
-  environmentService:
-    | {
-        get(
-          environmentId: string,
-        ):
-          | Pick<
-              NonNullable<ReturnType<WorkerEnvironmentServiceContract["get"]>>,
-              "state" | "leaseId"
-            >
-          | undefined;
-      }
-    | undefined;
-  placement: FailedPlacement;
-}): boolean {
-  if (params.placement.environmentId === null) {
-    return true;
-  }
-  // Provisioning persists deterministic allocation intent first; only the configured service
-  // can prove that the corresponding durable environment row was never created or is gone.
-  if (!params.environmentService) {
-    return false;
-  }
-  try {
-    const environment = params.environmentService.get(params.placement.environmentId);
-    return (
-      environment === undefined ||
-      environment.state === "destroyed" ||
-      (environment.state === "failed" && environment.leaseId === null)
-    );
-  } catch {
-    return false;
-  }
-}
 
 export function canRedispatchFailedWorkerPlacement(
   placement: FailedPlacement,
@@ -145,15 +106,6 @@ export function resolveWorkerPlacementArchiveRestoreError(params: {
   return `Session ${params.key} cannot change archive state while cloud worker placement is ${params.placement.state}.`;
 }
 
-function retirementGuard(placement: RetirablePlacement): SessionWorkerPlacementMutationGuard {
-  return {
-    status: "retirement-required",
-    sessionId: placement.sessionId,
-    expectedState: placement.state,
-    expectedGeneration: placement.generation,
-  };
-}
-
 function resolveSessionWorkerPlacementMutationGuard(
   params: SessionWorkerPlacementMutationParams,
 ): SessionWorkerPlacementMutationGuard {
@@ -164,7 +116,12 @@ function resolveSessionWorkerPlacementMutationGuard(
 
   if (isWorkerPlacementSafeForMutation(params.context, placement)) {
     if (params.action === "reset") {
-      return retirementGuard(placement);
+      return {
+        status: "retirement-required",
+        sessionId: placement.sessionId,
+        expectedState: placement.state,
+        expectedGeneration: placement.generation,
+      };
     }
     // History rewrites rotate the session identity and would strand stopped cloud affinity.
     if (placement.state === "local" || params.action === "fork") {
@@ -218,10 +175,7 @@ function samePlacementOwner(
     current?.sessionId === expected?.sessionId &&
     current?.sessionKey === expected?.sessionKey &&
     current?.agentId === expected?.agentId &&
-    current?.state === expected?.state &&
-    current?.generation === expected?.generation &&
-    current?.environmentId === expected?.environmentId &&
-    current?.activeOwnerEpoch === expected?.activeOwnerEpoch &&
+    matchesWorkerPlacementTarget(current, expected) &&
     current?.executionMode === expected?.executionMode
   );
 }

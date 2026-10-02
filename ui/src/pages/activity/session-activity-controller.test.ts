@@ -2,7 +2,212 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
+import { activityPulseBoundaries } from "./activity-pulse-window.ts";
 import { SessionActivityController } from "./session-activity-controller.ts";
+
+it.each([
+  { month: 3, day: 5 },
+  { month: 9, day: 4 },
+])("aligns hourly windows across partial-hour clock changes ($month/$day)", ({ month, day }) => {
+  const now = new Date(2026, month, day, 15, 30);
+  const oldest = new Date(now.getTime() - 24 * 3_600_000);
+  const boundaries = activityPulseBoundaries("24h", now.getTime());
+  expect(boundaries[0]).toBe(
+    new Date(
+      oldest.getFullYear(),
+      oldest.getMonth(),
+      oldest.getDate(),
+      oldest.getHours(),
+    ).getTime(),
+  );
+  expect(boundaries.at(-1)).toBe(new Date(2026, month, day, 16).getTime());
+  expect(boundaries.every((value, index) => index === 0 || value > boundaries[index - 1]!)).toBe(
+    true,
+  );
+});
+
+it("changes pulse boundaries with the selected time window", async () => {
+  vi.useFakeTimers();
+  const now = new Date(2026, 8, 27, 14, 30);
+  vi.setSystemTime(now);
+  const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
+  const request = vi.spyOn(client, "request").mockResolvedValue({
+    ts: 1,
+    path: "",
+    count: 0,
+    sessions: [],
+    defaults: { model: null, modelProvider: null, contextTokens: null },
+  });
+  const controller = new SessionActivityController({
+    addController() {},
+    removeController() {},
+    requestUpdate() {},
+    updateComplete: Promise.resolve(true),
+  });
+  try {
+    const windows = [
+      {
+        time: "24h",
+        count: 26,
+        first: new Date(2026, 8, 26, 14),
+        last: new Date(2026, 8, 27, 15),
+        activeMinutes: 1440,
+      },
+      {
+        time: "7d",
+        count: 9,
+        first: new Date(2026, 8, 20),
+        last: new Date(2026, 8, 28),
+        activeMinutes: 10080,
+      },
+      {
+        time: "30d",
+        count: 32,
+        first: new Date(2026, 7, 28),
+        last: new Date(2026, 8, 28),
+        activeMinutes: 43200,
+      },
+      {
+        time: "all",
+        count: 13,
+        first: new Date(2025, 9, 1),
+        last: new Date(2026, 9, 1),
+        activeMinutes: undefined,
+      },
+    ] as const;
+    for (const [index, window] of windows.entries()) {
+      await controller.load(client, { personId: null, time: window.time, query: "" });
+      expect(request).toHaveBeenCalledTimes(index + 1);
+      const params = request.mock.calls[index]![1] as {
+        activityPulseBoundaries: number[];
+        activeMinutes?: number;
+      };
+      const boundaries = params.activityPulseBoundaries;
+      expect(boundaries).toHaveLength(window.count);
+      expect(boundaries[0]).toBe(window.first.getTime());
+      expect(boundaries.at(-1)).toBe(window.last.getTime());
+      expect(boundaries.every((value, i) => i === 0 || value > boundaries[i - 1]!)).toBe(true);
+      expect(params.activeMinutes).toBe(window.activeMinutes);
+      expect(params).not.toHaveProperty("activityPulseSince");
+      expect(params).not.toHaveProperty("activityPulseUntil");
+      for (const boundary of boundaries) {
+        const date = new Date(boundary);
+        expect([date.getMinutes(), date.getSeconds(), date.getMilliseconds()]).toEqual([0, 0, 0]);
+        if (window.time !== "24h") {
+          expect(date.getHours()).toBe(0);
+        }
+        if (window.time === "all") {
+          expect(date.getDate()).toBe(1);
+        }
+      }
+    }
+  } finally {
+    controller.hostDisconnected();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  }
+});
+
+it.each([
+  { month: 2, day: 10 },
+  { month: 10, day: 3 },
+])(
+  "keeps daily boundaries at local midnight across clock changes ($month/$day)",
+  async ({ month, day }) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, month, day, 12));
+    const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
+    const request = vi.spyOn(client, "request").mockResolvedValue({ sessions: [] });
+    const controller = new SessionActivityController({
+      addController() {},
+      removeController() {},
+      requestUpdate() {},
+      updateComplete: Promise.resolve(true),
+    });
+    try {
+      await controller.load(client, { personId: null, time: "7d", query: "" });
+      const { activityPulseBoundaries: boundaries } = request.mock.calls[0]![1] as {
+        activityPulseBoundaries: number[];
+      };
+      expect(boundaries).toHaveLength(9);
+      for (const [index, boundary] of boundaries.entries()) {
+        expect(boundary).toBe(new Date(2026, month, day - 7 + index).getTime());
+      }
+    } finally {
+      controller.hostDisconnected();
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  },
+);
+
+it.each([
+  { time: "24h", month: 8, day: 27, hour: 14 },
+  { time: "7d", month: 2, day: 8, hour: 23 },
+  { time: "30d", month: 10, day: 1, hour: 23 },
+  { time: "all", month: 8, day: 27, hour: 23 },
+] as const)(
+  "refreshes $time at the bucket end or next midnight and leaves current work unaggregated",
+  async ({ time, month, day, hour }) => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    vi.setSystemTime(new Date(2026, month, day, hour, 59));
+    const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
+    const request = vi.spyOn(client, "request").mockResolvedValue({
+      ts: 1,
+      path: "",
+      count: 0,
+      sessions: [],
+      defaults: { model: null, modelProvider: null, contextTokens: null },
+    });
+    const controller = new SessionActivityController({
+      addController() {},
+      removeController() {},
+      requestUpdate() {},
+      updateComplete: Promise.resolve(true),
+    });
+    const filters = { personId: null, time, query: "" };
+    try {
+      await controller.load(client, filters);
+      const { activityPulseBoundaries: initial } = request.mock.calls[0]![1] as {
+        activityPulseBoundaries: number[];
+      };
+      await controller.load(client, filters);
+      expect(request).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(60_999);
+      expect(request).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(request).toHaveBeenCalledTimes(2);
+      const { activityPulseBoundaries: refreshed } = request.mock.calls[1]![1] as {
+        activityPulseBoundaries: number[];
+      };
+      if (time === "all") {
+        expect(refreshed).toEqual(initial);
+      } else {
+        expect(refreshed.slice(0, -1)).toEqual(initial.slice(1));
+        expect(refreshed.at(-1)).toBeGreaterThan(initial.at(-1)!);
+      }
+
+      await controller.load(client, "current");
+      expect(request).toHaveBeenCalledTimes(3);
+      expect(request.mock.calls[2]?.[1]).not.toHaveProperty("activityPulseBoundaries");
+      await vi.advanceTimersByTimeAsync(24 * 3_600_000);
+      expect(request).toHaveBeenCalledTimes(3);
+
+      await controller.load(client, filters);
+      expect(request).toHaveBeenCalledTimes(4);
+      controller.hostDisconnected();
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(24 * 3_600_000);
+      expect(request).toHaveBeenCalledTimes(4);
+    } finally {
+      controller.hostDisconnected();
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  },
+);
 
 it.each([
   { duration: 1_000, requestsPerMinute: 10 },

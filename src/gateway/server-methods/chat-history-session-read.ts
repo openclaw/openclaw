@@ -178,7 +178,7 @@ export async function prepareChatHistorySessionRead({
         }
       }
       const currentEntry = current.entry;
-      // Task history separately validates its retained transcript; its live run may advance.
+      // Cron history separately validates its retained transcript; its live session may advance.
       if (
         entry &&
         (!currentEntry ||
@@ -245,7 +245,7 @@ export async function prepareChatHistorySessionRead({
             respondChatHistoryUnavailable(
               method,
               respond,
-              "task transcript changed while reading history",
+              "retained transcript changed while reading history",
             );
             return;
           }
@@ -264,7 +264,7 @@ export async function prepareChatHistorySessionRead({
             respondChatHistoryUnavailable(
               method,
               respond,
-              "task session changed while reading history",
+              "retained session changed while reading history",
             );
             return;
           }

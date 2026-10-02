@@ -23,7 +23,6 @@ import {
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
-import { isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
 import type { ExternalizedBundledPluginBridge } from "./externalized-bundled-plugins.js";
 import {
   resolveClawHubInstallSpecsForUpdateChannel,
@@ -165,7 +164,10 @@ export function pluginInstallRecordMayMigrateConfigId(params: {
     (packageName !== undefined &&
       packageName !== params.pluginId &&
       unscopedPackageName(packageName) === params.pluginId) ||
-    officialInstallRecords.hasOfficialNpmIdReplacement(params)
+    officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmInstall({
+      pluginId: params.pluginId,
+      record: params.record,
+    })?.replacementPluginId !== undefined
   );
 }
 
@@ -180,10 +182,7 @@ export function shouldSkipUnchangedNpmInstall(params: {
   };
   metadata: NpmSpecResolution;
 }): boolean {
-  if (!params.currentVersion || !params.metadata.version) {
-    return false;
-  }
-  if (params.currentVersion !== params.metadata.version) {
+  if (!params.currentVersion || params.currentVersion !== params.metadata.version) {
     return false;
   }
   if (
@@ -191,15 +190,6 @@ export function shouldSkipUnchangedNpmInstall(params: {
     !params.record.resolvedSpec ||
     !params.record.resolvedVersion
   ) {
-    return false;
-  }
-  if (!params.metadata.name || !params.metadata.resolvedSpec) {
-    return false;
-  }
-  if (params.metadata.integrity && !params.record.integrity) {
-    return false;
-  }
-  if (params.metadata.shasum && !params.record.shasum) {
     return false;
   }
   return (
@@ -411,14 +401,6 @@ export function isNpmMetadataCompatibleWithCurrentHost(
   return satisfiesPluginApiRange(hostVersion, pluginApiRange);
 }
 
-export function isBundledVersionNewer(bundledVersion: string, installedVersion: string): boolean {
-  return comparePackageUpdateVersions(bundledVersion, installedVersion) > 0;
-}
-
-export function shouldFallbackBetaClawHubUpdate(result: { ok: false; code?: string }): boolean {
-  return isUnavailableClawHubTarget(result);
-}
-
 export function formatBetaChannelFallbackOutcomeSuffix(params: {
   fallbackLabel: string | undefined;
   fallbackSpec: string | undefined;
@@ -453,18 +435,13 @@ function normalizeExactSemverVersion(value: string | undefined): string | undefi
   return trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
 }
 
-export function resolveNpmResultVersion(result: {
-  npmResolution?: NpmSpecResolution;
-}): string | undefined {
-  return result.npmResolution?.version;
-}
-
 export function isTrustedSourceLinkedOfficialNpmUpdate(params: {
   pluginId: string;
   spec: string | undefined;
   record: PluginInstallRecord;
 }): boolean {
-  const officialSpec = officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmSpec(params);
+  const officialSpec =
+    officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmInstall(params)?.npmSpec;
   const officialPackageName = resolveNpmSpecPackageName(officialSpec);
   const requestedPackageName = resolveNpmSpecPackageName(params.spec);
   return Boolean(officialPackageName && requestedPackageName === officialPackageName);

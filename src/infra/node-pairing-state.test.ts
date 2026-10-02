@@ -45,6 +45,14 @@ function pairedNode(overrides: Partial<PairedDevice> = {}): PairedDevice {
   };
 }
 
+function authenticateNode(node: PairedDevice) {
+  return captureAuthenticatedNodePairingState({
+    nodeId: node.deviceId,
+    publicKey: node.publicKey,
+    token: node.tokens!.node!.token,
+  });
+}
+
 describe("node pairing generation", () => {
   beforeEach(() => {
     mocks.getPairedDevice.mockReset();
@@ -76,40 +84,18 @@ describe("node pairing generation", () => {
         }),
       );
 
-    await expect(
-      captureAuthenticatedNodePairingState({
-        nodeId: original.deviceId,
-        publicKey: original.publicKey,
-        token: original.tokens!.node!.token,
-      }),
-    ).resolves.toMatchObject({ generation: { nodeId: original.deviceId } });
-    await expect(
-      captureAuthenticatedNodePairingState({
-        nodeId: original.deviceId,
-        publicKey: original.publicKey,
-        token: original.tokens!.node!.token,
-      }),
-    ).resolves.toBeNull();
-    await expect(
-      captureAuthenticatedNodePairingState({
-        nodeId: original.deviceId,
-        publicKey: original.publicKey,
-        token: original.tokens!.node!.token,
-      }),
-    ).resolves.toBeNull();
+    await expect(authenticateNode(original)).resolves.toMatchObject({
+      generation: { nodeId: original.deviceId },
+    });
+    await expect(authenticateNode(original)).resolves.toBeNull();
+    await expect(authenticateNode(original)).resolves.toBeNull();
   });
 
   it("keeps authenticated pairing identity while first surface approval is pending", async () => {
     const original = pairedNode({ nodeSurface: undefined });
     mocks.getPairedDevice.mockResolvedValueOnce(original);
 
-    await expect(
-      captureAuthenticatedNodePairingState({
-        nodeId: original.deviceId,
-        publicKey: original.publicKey,
-        token: original.tokens!.node!.token,
-      }),
-    ).resolves.toEqual({
+    await expect(authenticateNode(original)).resolves.toEqual({
       identity: {
         nodeId: original.deviceId,
         key: expect.stringMatching(/^[a-f0-9]{64}$/u),
@@ -131,13 +117,7 @@ describe("node pairing generation", () => {
     });
     mocks.getPairedDevice.mockResolvedValueOnce(original);
 
-    await expect(
-      captureAuthenticatedNodePairingState({
-        nodeId: original.deviceId,
-        publicKey: original.publicKey,
-        token: original.tokens!.node!.token,
-      }),
-    ).resolves.toMatchObject({
+    await expect(authenticateNode(original)).resolves.toMatchObject({
       approvedSurface: {
         caps: ["screen"],
         commands: ["screen.snapshot"],

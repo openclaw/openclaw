@@ -51,8 +51,6 @@ type BeforeToolCallResult = {
     scope?: ApprovalScope;
     severity?: "info" | "warning" | "critical";
     timeoutMs?: number;
-    /** @deprecated Unresolved approvals always deny. */
-    timeoutBehavior?: "allow" | "deny";
     allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
     pluginId?: string;
     onResolution?: (

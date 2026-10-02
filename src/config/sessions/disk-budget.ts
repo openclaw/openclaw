@@ -77,11 +77,9 @@ function measureStoreEntryChunkBytes(key: string, entry: SessionEntry): number {
 }
 
 function buildStoreEntryChunkSizeMap(store: Record<string, SessionEntry>): Map<string, number> {
-  const out = new Map<string, number>();
-  for (const [key, entry] of Object.entries(store)) {
-    out.set(key, measureStoreEntryChunkBytes(key, entry));
-  }
-  return out;
+  return new Map(
+    Object.entries(store).map(([key, entry]) => [key, measureStoreEntryChunkBytes(key, entry)]),
+  );
 }
 
 function resolveProjectedPromptBlobHash(entry: SessionEntry | undefined): string | undefined {
@@ -89,28 +87,17 @@ function resolveProjectedPromptBlobHash(entry: SessionEntry | undefined): string
   return ref?.algorithm === "sha256" && typeof ref.hash === "string" ? ref.hash : undefined;
 }
 
-function buildProjectedPromptBlobRefCounts(
+function buildSessionEntryRefCounts(
   store: Record<string, SessionEntry>,
+  resolveReference: (entry: SessionEntry) => string | undefined,
 ): Map<string, number> {
   const counts = new Map<string, number>();
   for (const entry of Object.values(store)) {
-    const hash = resolveProjectedPromptBlobHash(entry);
-    if (!hash) {
+    const reference = resolveReference(entry);
+    if (!reference) {
       continue;
     }
-    counts.set(hash, (counts.get(hash) ?? 0) + 1);
-  }
-  return counts;
-}
-
-function buildSessionIdRefCounts(store: Record<string, SessionEntry>): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const entry of Object.values(store)) {
-    const sessionId = entry?.sessionId;
-    if (!sessionId) {
-      continue;
-    }
-    counts.set(sessionId, (counts.get(sessionId) ?? 0) + 1);
+    counts.set(reference, (counts.get(reference) ?? 0) + 1);
   }
   return counts;
 }
@@ -278,18 +265,6 @@ function isUnreferencedSessionArtifactFile(
 // durable promptRef that is about to be committed by another writer.
 const SESSION_PROMPT_BLOB_UNREFERENCED_GRACE_MS = SESSION_STORE_TEMP_STALE_MS;
 
-function isUnreferencedPromptBlobFileRemovable(
-  file: Pick<SessionsDirFileStat, "name" | "mtimeMs">,
-  projectedPromptBlobRefCounts: ReadonlyMap<string, number>,
-  cutoffMs: number,
-): boolean {
-  if (file.mtimeMs > cutoffMs) {
-    return false;
-  }
-  const hash = resolvePromptBlobFileHash(file);
-  return hash ? !projectedPromptBlobRefCounts.has(hash) : false;
-}
-
 function isPromptBlobArtifactRemovable(
   file: Pick<SessionsDirFileStat, "name" | "mtimeMs">,
   projectedPromptBlobRefCounts: ReadonlyMap<string, number>,
@@ -299,11 +274,11 @@ function isPromptBlobArtifactRemovable(
   if (isSessionPromptBlobTempArtifactName(file.name)) {
     return file.mtimeMs <= tempCutoffMs;
   }
-  return isUnreferencedPromptBlobFileRemovable(
-    file,
-    projectedPromptBlobRefCounts,
-    promptBlobCutoffMs,
-  );
+  if (file.mtimeMs > promptBlobCutoffMs) {
+    return false;
+  }
+  const hash = resolvePromptBlobFileHash(file);
+  return hash ? !projectedPromptBlobRefCounts.has(hash) : false;
 }
 
 function isDiskBudgetRemovableSessionFile(
@@ -397,11 +372,12 @@ export async function pruneUnreferencedSessionArtifacts(params: {
   // prompt blobs are judged against the bytes that would actually hit disk.
   const projectedPromptBlobRefCounts =
     promptBlobFiles.length > 0
-      ? buildProjectedPromptBlobRefCounts(
+      ? buildSessionEntryRefCounts(
           projectSessionStoreForPersistence({
             storePath: params.storePath,
             store: params.store,
           }).store,
+          resolveProjectedPromptBlobHash,
         )
       : new Map<string, number>();
   const storeBasename = path.basename(params.storePath);
@@ -430,11 +406,7 @@ export async function pruneUnreferencedSessionArtifacts(params: {
   const removableFiles = [
     ...removableStoreFiles.map((file) => ({ kind: "store" as const, file })),
     ...removablePromptBlobFiles.map((file) => ({ kind: "promptBlob" as const, file })),
-  ]
-    .filter((file) => {
-      return !params.excludeCanonicalPaths?.has(file.file.canonicalPath);
-    })
-    .toSorted((a, b) => a.file.mtimeMs - b.file.mtimeMs);
+  ].toSorted((a, b) => a.file.mtimeMs - b.file.mtimeMs);
 
   let removedFiles = 0;
   let freedBytes = 0;
@@ -520,7 +492,10 @@ export async function enforceSessionDiskBudget(params: {
       projectedPromptBlobBytesByHash.set(hash, blob.ref.bytes);
     }
   }
-  const projectedPromptBlobRefCounts = buildProjectedPromptBlobRefCounts(projectedStore);
+  const projectedPromptBlobRefCounts = buildSessionEntryRefCounts(
+    projectedStore,
+    resolveProjectedPromptBlobHash,
+  );
   const projectedPromptBlobBytes = [...projectedPromptBlobBytesByHash.values()].reduce(
     (sum, bytes) => sum + bytes,
     0,
@@ -533,7 +508,16 @@ export async function enforceSessionDiskBudget(params: {
     projectedStoreBytes +
     projectedPromptBlobBytes;
   const totalBefore = total;
-  if (total <= maxBytes) {
+  const overBudget = !(total <= maxBytes);
+  if (!overBudget || params.warnOnly) {
+    if (overBudget) {
+      log.warn("session disk budget exceeded (warn-only mode)", {
+        sessionsDir,
+        totalBytes: total,
+        maxBytes,
+        highWaterBytes,
+      });
+    }
     return {
       totalBytesBefore: totalBefore,
       totalBytesAfter: total,
@@ -542,32 +526,20 @@ export async function enforceSessionDiskBudget(params: {
       freedBytes: 0,
       maxBytes,
       highWaterBytes,
-      overBudget: false,
-    };
-  }
-
-  if (params.warnOnly) {
-    log.warn("session disk budget exceeded (warn-only mode)", {
-      sessionsDir,
-      totalBytes: total,
-      maxBytes,
-      highWaterBytes,
-    });
-    return {
-      totalBytesBefore: totalBefore,
-      totalBytesAfter: total,
-      removedFiles: 0,
-      removedEntries: 0,
-      freedBytes: 0,
-      maxBytes,
-      highWaterBytes,
-      overBudget: true,
+      overBudget,
     };
   }
 
   let removedFiles = 0;
   let removedEntries = 0;
   let freedBytes = 0;
+  const recordRemoval = (removal: FileRemovalResult) => {
+    if (removal.ok) {
+      total -= removal.value;
+      freedBytes += removal.value;
+      removedFiles += 1;
+    }
+  };
   const commitEvictedIndex = params.commitEvictedIndex;
 
   const referencedPaths = resolveReferencedSessionArtifactPaths({
@@ -579,14 +551,14 @@ export async function enforceSessionDiskBudget(params: {
   const promptBlobOrphanCutoffMs = Date.now() - SESSION_PROMPT_BLOB_UNREFERENCED_GRACE_MS;
   const storeBasename = path.basename(params.storePath);
   const unreferencedPromptBlobQueue = promptBlobFiles
-    .filter((file) => {
-      return isPromptBlobArtifactRemovable(
+    .filter((file) =>
+      isPromptBlobArtifactRemovable(
         file,
         projectedPromptBlobRefCounts,
         promptBlobOrphanCutoffMs,
         tempStaleCutoffMs,
-      );
-    })
+      ),
+    )
     .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
   // Cheapest cleanup first: orphaned prompt blobs can relieve pressure without losing sessions.
   for (const file of unreferencedPromptBlobQueue) {
@@ -603,12 +575,7 @@ export async function enforceSessionDiskBudget(params: {
       simulatedRemovedPaths,
       onRemovedPath: params.onRemoveFile,
     });
-    if (!removal.ok) {
-      continue;
-    }
-    total -= removal.value;
-    freedBytes += removal.value;
-    removedFiles += 1;
+    recordRemoval(removal);
   }
 
   const removableFileQueue = files
@@ -629,17 +596,15 @@ export async function enforceSessionDiskBudget(params: {
       simulatedRemovedPaths,
       onRemovedPath: params.onRemoveFile,
     });
-    if (!removal.ok) {
-      continue;
-    }
-    total -= removal.value;
-    freedBytes += removal.value;
-    removedFiles += 1;
+    recordRemoval(removal);
   }
 
   if (total > highWaterBytes) {
     const activeSessionKey = normalizeOptionalLowercaseString(params.activeSessionKey);
-    const sessionIdRefCounts = buildSessionIdRefCounts(params.store);
+    const sessionIdRefCounts = buildSessionEntryRefCounts(
+      params.store,
+      (entry) => entry?.sessionId,
+    );
     const entryChunkBytesByKey = buildStoreEntryChunkSizeMap(projectedStore);
     const keys = Object.keys(params.store)
       .filter((key) =>
@@ -720,11 +685,7 @@ export async function enforceSessionDiskBudget(params: {
                 simulatedRemovedPaths,
                 onRemovedPath: dryRun ? undefined : params.onRemoveFile,
               });
-              if (removal.ok) {
-                total -= removal.value;
-                freedBytes += removal.value;
-                removedFiles += 1;
-              }
+              recordRemoval(removal);
             }
           }
         }
@@ -751,12 +712,7 @@ export async function enforceSessionDiskBudget(params: {
           simulatedRemovedPaths,
           onRemovedPath: dryRun ? undefined : params.onRemoveFile,
         });
-        if (!removal.ok) {
-          continue;
-        }
-        total -= removal.value;
-        freedBytes += removal.value;
-        removedFiles += 1;
+        recordRemoval(removal);
       }
     }
   }
@@ -795,4 +751,3 @@ export async function enforceSessionDiskBudget(params: {
     overBudget: true,
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

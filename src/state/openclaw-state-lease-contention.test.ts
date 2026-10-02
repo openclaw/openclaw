@@ -1,39 +1,48 @@
+import { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
-import { tryAcquireExclusiveSqliteCoordinator } from "../infra/sqlite-coordinator.js";
-import {
-  resolveStateDatabaseCoordinatorPath,
-  resolveStateLifecycleRuntimeDirectory,
-} from "../infra/state-database-coordinator.js";
+import { describe, expect, it, vi } from "vitest";
+import * as backoff from "../infra/backoff.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { releaseOpenClawStateLeaseBestEffort } from "./openclaw-state-lease-storage.js";
 import { withOpenClawStateLease } from "./openclaw-state-lease.js";
 
 describe.each([undefined, "existing"] as const)(
-  "lease coordinator contention (%s schema)",
+  "lease SQLite contention (%s schema)",
   (schemaPolicy) => {
-    it.each(["release", "timeout", "abort", "cleanup"] as const)(
-      "preserves the %s contract while an independent writer owns the lifecycle gate",
+    it.each(["release", "timeout", "deadline", "abort", "cleanup"] as const)(
+      "preserves the %s contract while an independent writer holds a native write transaction",
       async (ending) => {
-        await withOpenClawTestState({ label: "lease-coordinator-contention" }, async (state) => {
+        await withOpenClawTestState({ label: "lease-native-contention" }, async (state) => {
           const database = openOpenClawStateDatabase({ env: state.env });
-          const coordinatorPath = resolveStateDatabaseCoordinatorPath({
-            databasePath: database.path,
-            runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-            uid: typeof process.getuid === "function" ? process.getuid() : undefined,
-          });
           const takeWriter = () => {
-            const held = tryAcquireExclusiveSqliteCoordinator(coordinatorPath);
-            if (!held) {
-              throw new Error("independent writer did not acquire its coordinator");
-            }
-            return held;
+            const held = new DatabaseSync(database.path);
+            held.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+            return {
+              release() {
+                if (held.isOpen) {
+                  held.exec("ROLLBACK");
+                  held.close();
+                }
+              },
+            };
           };
           let writer = ending === "cleanup" ? undefined : takeWriter();
           const controller = new AbortController();
-          let entered = false;
+          let entered = 0;
           let cleanupRelease: Promise<void> | undefined;
+          const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+          const retry = vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async () => {
+            if (ending === "release") {
+              writer?.release();
+            } else if (ending === "deadline") {
+              clock.mockReturnValue(5_000);
+            } else if (ending === "abort") {
+              controller.abort(new Error("cancel waiting acquisition"));
+            } else {
+              throw new Error(`Unexpected acquisition retry for ${ending}`);
+            }
+          });
           try {
             const operation = withOpenClawStateLease(
               {
@@ -45,45 +54,48 @@ describe.each([undefined, "existing"] as const)(
                 signal: controller.signal,
               },
               async (lease) => {
-                entered = true;
+                entered += 1;
                 lease.assertOwned();
                 if (ending === "cleanup") {
+                  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
                   writer = takeWriter();
                   cleanupRelease = yieldImmediate().then(() => writer?.release());
                 }
               },
             );
-            if (ending === "timeout" || ending === "abort") {
+            if (ending === "timeout" || ending === "deadline" || ending === "abort") {
               const rejected = expect(operation).rejects.toMatchObject({
                 code:
-                  ending === "timeout"
-                    ? "OPENCLAW_STATE_LEASE_STORAGE_FAILED"
-                    : "OPENCLAW_STATE_LEASE_ABORTED",
+                  ending === "abort"
+                    ? "OPENCLAW_STATE_LEASE_ABORTED"
+                    : "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
                 outcome:
-                  ending === "timeout"
-                    ? { kind: "store-unavailable", reason: "lifecycle-busy" }
-                    : { kind: "aborted", reason: "caller-signal", elapsedMs: expect.any(Number) },
+                  ending === "abort"
+                    ? { kind: "aborted", reason: "caller-signal", elapsedMs: expect.any(Number) }
+                    : { kind: "store-unavailable", reason: "sqlite-busy" },
               });
-              if (ending === "abort") {
-                controller.abort(new Error("cancel waiting acquisition"));
-              }
               await rejected;
-              expect(entered).toBe(false);
+              expect(entered).toBe(0);
             } else {
               if (ending === "release") {
-                expect(entered).toBe(false);
-                writer?.release();
+                expect(entered).toBe(0);
               }
               await operation;
               await cleanupRelease;
-              expect(entered).toBe(true);
+              expect(entered).toBe(1);
             }
+            expect(retry).toHaveBeenCalledTimes(
+              ending === "timeout" || ending === "cleanup" ? 0 : 1,
+            );
             expect(
               database.db
                 .prepare("SELECT owner FROM state_leases WHERE scope = ? AND lease_key = ?")
                 .all("core:test", "contending-writer"),
             ).toEqual([]);
           } finally {
+            retry.mockRestore();
+            clock.mockRestore();
+            vi.useRealTimers();
             writer?.release();
             await cleanupRelease;
           }

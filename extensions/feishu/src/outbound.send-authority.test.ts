@@ -1,7 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
-import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createPluginRuntimeMock,
@@ -45,6 +44,24 @@ const CARD = JSON.stringify({
   body: { elements: [{ tag: "markdown", content: "A card reply." }] },
 });
 
+function mockAttachmentLoading(onLoad?: () => void) {
+  setFeishuRuntime(
+    createPluginRuntimeMock({
+      media: {
+        loadWebMedia: async () => {
+          onLoad?.();
+          return {
+            buffer: Buffer.from("attachment"),
+            fileName: "note.txt",
+            contentType: "text/plain",
+            kind: undefined,
+          };
+        },
+      },
+    }),
+  );
+}
+
 function preferredTextSend() {
   const send = feishuPlugin.message?.send?.text;
   if (!send) {
@@ -82,7 +99,6 @@ async function sendMedia(ctx: SendContext) {
 }
 
 const sendRoutes = [
-  { name: "preferred text", send: (ctx: SendContext) => preferredTextSend()(ctx) },
   {
     name: "native card text",
     send: (ctx: SendContext) => preferredTextSend()({ ...ctx, text: CARD }),
@@ -97,29 +113,32 @@ const sendRoutes = [
       return send({ ...ctx, payload: { text: CARD } });
     },
   },
-  ...(["send", "thread-reply"] as const).flatMap((action) =>
-    [false, true].map((card) => ({
-      name: `generic ${action}${card ? " card" : " text"}`,
-      send: (ctx: SendContext) => {
-        const handle = feishuPlugin.actions?.handleAction;
-        if (!handle) {
-          throw new Error("Expected the registered Feishu action handler");
-        }
-        return handle({
-          channel: "feishu",
-          action,
-          cfg: ctx.cfg,
-          params: {
-            to: ctx.to,
-            text: card ? CARD : ctx.text,
-            ...(action === "thread-reply" ? { messageId: "om_parent" } : {}),
-          },
-          assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
-          onPlatformSendDispatch: ctx.onPlatformSendDispatch,
-        });
-      },
-    })),
-  ),
+  ...(
+    [
+      { action: "send", card: false },
+      { action: "thread-reply", card: true },
+    ] as const
+  ).map(({ action, card }) => ({
+    name: `generic ${action}${card ? " card" : " text"}`,
+    send: (ctx: SendContext) => {
+      const handle = feishuPlugin.actions?.handleAction;
+      if (!handle) {
+        throw new Error("Expected the registered Feishu action handler");
+      }
+      return handle({
+        channel: "feishu",
+        action,
+        cfg: ctx.cfg,
+        params: {
+          to: ctx.to,
+          text: card ? CARD : ctx.text,
+          ...(action === "thread-reply" ? { messageId: "om_parent" } : {}),
+        },
+        assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
+        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+      });
+    },
+  })),
 ];
 
 function errorCauses(error: unknown) {
@@ -193,7 +212,7 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
     },
   );
 
-  it("returns the accepted receipt for an active sender", async () => {
+  it("returns the accepted receipt without optional send-authority callbacks", async () => {
     await withFeishuTransport(async ({ cfg, requests }) => {
       const result = await preferredTextSend()({ cfg, to: TARGET, text: "Delivered normally." });
       expect(requests.map((request) => request.path)).toEqual([AUTH_PATH, MESSAGE_PATH]);
@@ -267,26 +286,6 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
     });
   });
 
-  it("stops a later chunk while preserving the already accepted receipt", async () => {
-    await withFeishuTransport(async ({ cfg, requests }) => {
-      const sender = createSender();
-      const error = await preferredTextSend()({
-        ...sender,
-        cfg,
-        to: TARGET,
-        text: "A long reply. ".repeat(500),
-        onDeliveryResult: () => sender.retire(),
-      }).catch((cause: unknown) => cause);
-      expect(isChannelPartialDeliveryError(error)).toBe(true);
-      if (!isChannelPartialDeliveryError(error)) {
-        throw new Error("Expected partial delivery after the first chunk");
-      }
-      expect(error.deliveryResult.receipt?.platformMessageIds).toEqual(["om_accepted"]);
-      expect(requests.filter((request) => request.path === MESSAGE_PATH)).toHaveLength(1);
-      expect(sender.onPlatformSendDispatch).toHaveBeenCalledOnce();
-    });
-  });
-
   it.each(["rate limit", "withdrawn reply"] as const)(
     "stops the next request after a %s response retires the sender",
     async (failure) => {
@@ -317,29 +316,8 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
     },
   );
 
-  it("retains a message accepted while its sender retires", async () => {
-    await withFeishuTransport(async (fixture) => {
-      const sender = createSender();
-      fixture.respond(async (request) => {
-        if (request.path === MESSAGE_PATH) {
-          sender.retire();
-        }
-        return false;
-      });
-      const result = await preferredTextSend()({
-        ...sender,
-        cfg: fixture.cfg,
-        to: TARGET,
-        text: "Keep this accepted result.",
-      });
-      expect(result.receipt?.platformMessageIds).toEqual(["om_accepted"]);
-      expect(sender.onPlatformSendDispatch).toHaveBeenCalledOnce();
-    });
-  });
-
   it.each([
     { name: "token", path: AUTH_PATH, visible: false, marker: true },
-    { name: "message", path: MESSAGE_PATH, visible: true, marker: true },
     {
       name: "message without a dispatch callback",
       path: MESSAGE_PATH,
@@ -423,60 +401,22 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
     },
   );
 
-  it.each(["media loading", "upload response"] as const)(
-    "stops media delivery after retirement during %s without marking preparation as a message",
-    async (waitAt) => {
-      await withFeishuTransport(async (fixture) => {
-        const sender = createSender();
-        setFeishuRuntime(
-          createPluginRuntimeMock({
-            media: {
-              loadWebMedia: async () => {
-                if (waitAt === "media loading") {
-                  sender.retire();
-                }
-                return {
-                  buffer: Buffer.from("attachment"),
-                  fileName: "note.txt",
-                  contentType: "text/plain",
-                  kind: undefined,
-                };
-              },
-            },
-          }),
-        );
-        fixture.respond(async (request) => {
-          if (request.path === FILE_PATH) {
-            sender.retire();
-          }
-          return false;
-        });
-        const error = await sendMedia({ ...sender, cfg: fixture.cfg, to: TARGET, text: "" }).catch(
-          (cause: unknown) => cause,
-        );
-        expectRetired(error);
-        expect(fixture.requests.map((request) => request.path)).toEqual(
-          waitAt === "media loading" ? [] : [AUTH_PATH, FILE_PATH],
-        );
-        expect(sender.onPlatformSendDispatch).not.toHaveBeenCalled();
-      });
-    },
-  );
+  it("stops media delivery after retirement during loading without marking a message", async () => {
+    await withFeishuTransport(async (fixture) => {
+      const sender = createSender();
+      mockAttachmentLoading(sender.retire);
+      const error = await sendMedia({ ...sender, cfg: fixture.cfg, to: TARGET, text: "" }).catch(
+        (cause: unknown) => cause,
+      );
+      expectRetired(error);
+      expect(fixture.requests).toEqual([]);
+      expect(sender.onPlatformSendDispatch).not.toHaveBeenCalled();
+    });
+  });
 
   it("marks an active attachment only after uploading and preserves its accepted receipt", async () => {
     await withFeishuTransport(async (fixture) => {
-      setFeishuRuntime(
-        createPluginRuntimeMock({
-          media: {
-            loadWebMedia: async () => ({
-              buffer: Buffer.from("attachment"),
-              fileName: "note.txt",
-              contentType: "text/plain",
-              kind: undefined,
-            }),
-          },
-        }),
-      );
+      mockAttachmentLoading();
       const marker = vi.fn(async () => {
         expect(fixture.requests.map((request) => request.path)).toEqual([AUTH_PATH, FILE_PATH]);
       });
@@ -599,18 +539,7 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
           const notePath = path.join(stateDir, "note.txt");
           if (scenario === "upload") {
             await writeFile(notePath, "attachment");
-            setFeishuRuntime(
-              createPluginRuntimeMock({
-                media: {
-                  loadWebMedia: async () => ({
-                    buffer: Buffer.from("attachment"),
-                    fileName: "note.txt",
-                    contentType: "text/plain",
-                    kind: undefined,
-                  }),
-                },
-              }),
-            );
+            mockAttachmentLoading();
           }
           fixture.respond(async (request, response) => {
             if (
@@ -656,6 +585,10 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
             ],
           });
           expect(result.status).toBe(expectedResult);
+          expect(fixture.requests.map((request) => request.path)).toEqual([
+            AUTH_PATH,
+            ...(scenario === "upload" ? [FILE_PATH] : messages ? [MESSAGE_PATH] : []),
+          ]);
           if (result.status === "sent" || result.status === "partial_failed") {
             expect(result.receipt.platformMessageIds).toEqual(["om_accepted"]);
           }

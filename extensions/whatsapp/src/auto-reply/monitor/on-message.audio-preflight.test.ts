@@ -172,8 +172,6 @@ function makeHandler(overrides: Partial<Parameters<typeof createWebOnMessageHand
       debug: () => {},
       error: () => {},
     } as never,
-    baseMentionConfig: {} as never,
-    account: { authDir: "/tmp/auth", accountId: "default" },
     ...overrides,
   });
 }

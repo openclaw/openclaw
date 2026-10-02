@@ -162,7 +162,12 @@ export function renderPluginMetadata(
 
 export function renderPluginCapabilitySection(
   title: string,
-  values: Array<{ name: string; description?: string; onOpen?: () => void }>,
+  values: Array<{
+    name: string;
+    description?: string;
+    onOpen?: () => void;
+    trailing?: TemplateResult;
+  }>,
   icon: TemplateResult,
 ): TemplateResult {
   return html`${
@@ -177,7 +182,7 @@ export function renderPluginCapabilitySection(
                 ><span class="plugin-capability__copy"
                   ><strong>${value.name}</strong
                   >${value.description ? html`<span>${value.description}</span>` : nothing}</span
-                >${open ? icons.chevronRight : nothing}`;
+                >${value.trailing ? html`<span class="plugin-capability__trailing">${value.trailing}</span>` : nothing}${open ? icons.chevronRight : nothing}`;
               return html`<div class="plugin-capability">
                 ${open ? html`<button type="button" @click=${open}>${content}</button>` : html`<div class="plugin-capability__static">${content}</div>`}
               </div>`;

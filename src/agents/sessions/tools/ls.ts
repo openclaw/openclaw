@@ -1,8 +1,3 @@
-/**
- * Built-in ls session tool.
- *
- * Lists directory entries through local or injected operations with bounded output rendering.
- */
 import { readdir } from "node:fs/promises";
 import type { DirectoryEntry } from "../../../infra/directory-entries.js";
 import { toErrorObject } from "../../../infra/errors.js";
@@ -85,16 +80,7 @@ export function createLsToolDefinition(
       "List directory entries in binary filename order, including dotfiles and links. Names are JSON-quoted; / marks actual directories. Pass the returned after cursor with the same path to continue.",
     promptSnippet: "List directory contents",
     parameters: lsSchema,
-    async execute(
-      toolCallId,
-      { path, limit, after }: LsToolInput,
-      signal?: AbortSignal,
-      onUpdate?,
-      ctx?,
-    ) {
-      void toolCallId;
-      void onUpdate;
-      void ctx;
+    async execute(_toolCallId, { path, limit, after }, signal, _onUpdate, _ctx) {
       if (signal?.aborted) {
         throw new Error("Operation aborted");
       }

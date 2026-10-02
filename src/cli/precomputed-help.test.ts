@@ -15,6 +15,21 @@ describe("tryOutputPrecomputedCommandHelp", () => {
     expect(outputBrowserHelp).toHaveBeenCalledOnce();
   });
 
+  it.each([{ args: ["tasks", "--help"] }, { args: ["--log-level", "warn", "tasks", "--help"] }])(
+    "does not read cached help for the retired Tasks command: $args",
+    async ({ args }) => {
+      const outputSubcommandHelp = vi.fn(() => true);
+
+      await expect(
+        tryOutputPrecomputedCommandHelp(["node", "openclaw", ...args], {
+          outputPrecomputedSubcommandHelpText: outputSubcommandHelp,
+          env: {},
+        }),
+      ).resolves.toBe(false);
+      expect(outputSubcommandHelp).not.toHaveBeenCalled();
+    },
+  );
+
   it("falls back when a command option may own --help as its value", async () => {
     const outputBrowserHelp = vi.fn(() => true);
 

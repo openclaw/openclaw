@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
@@ -34,10 +34,6 @@ import { TranscriptsStore, transcriptSessionSelector } from "../transcripts/stor
 import { summarizeTranscripts } from "../transcripts/summary.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
-import {
-  resolveStateDatabaseCoordinatorPath,
-  resolveStateLifecycleRuntimeDirectory,
-} from "./state-database-coordinator.js";
 
 const dirs = useStateDatabaseTempDirs();
 
@@ -59,7 +55,7 @@ async function withoutParentSql<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
-async function withoutParentTranscriptSql(databasePath: string, operation: () => Promise<void>) {
+async function withoutParentTranscriptSql(operation: () => Promise<void>) {
   type ObservedSql = { databasePath: string | null; sql?: string };
   const observed: ObservedSql[] = [];
   const prepared = new WeakMap<object, ObservedSql>();
@@ -125,36 +121,14 @@ async function withoutParentTranscriptSql(databasePath: string, operation: () =>
         }
       }
     }
-    const physicalDatabase = realpathSync(databasePath);
-    expect(
-      observed.filter(
-        (entry) => entry.databasePath && realpathSync(entry.databasePath) === physicalDatabase,
-      ),
-      "caller-thread transcript database activity",
-    ).toEqual([]);
-    const coordinatorPath = resolveStateDatabaseCoordinatorPath({
-      databasePath,
-      runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-      uid: process.getuid?.(),
-    });
     const probes = [
       "SELECT sqlite_version() AS version",
       "SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted",
     ];
-    const control = [
-      "PRAGMA busy_timeout = 0; PRAGMA journal_mode = MEMORY; BEGIN EXCLUSIVE;",
-      "ROLLBACK",
-    ];
     for (const entry of observed) {
-      if (entry.databasePath === null) {
-        if (entry.sql !== undefined) {
-          expect(probes).toContain(entry.sql);
-        }
-      } else {
-        expect(realpathSync(entry.databasePath)).toBe(realpathSync(coordinatorPath));
-        if (entry.sql !== undefined) {
-          expect(control).toContain(entry.sql);
-        }
+      expect(entry.databasePath, "caller-thread file-backed SQLite activity").toBeNull();
+      if (entry.sql !== undefined) {
+        expect(probes).toContain(entry.sql);
       }
     }
   } finally {
@@ -176,8 +150,8 @@ it("keeps cold transcript reads on the canonical worker and preserves store crea
     expect(await store.readSession("missing")).toBeUndefined();
     expect(
       await executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
-        type: "tasks.get",
-        input: { taskId: "missing" },
+        type: "plugins.metadata.read",
+        input: { selector: "installed-index", artifactPreservingReadOnly: true },
       }),
     ).toBeUndefined();
   });
@@ -186,7 +160,7 @@ it("keeps cold transcript reads on the canonical worker and preserves store crea
 });
 
 it("appends immutable speech on the canonical worker with exact-id deduplication and sequence order", async () => {
-  const { env, store } = fixture();
+  const { store } = fixture();
   const session: TranscriptSessionDescriptor = {
     sessionId: "append-worker",
     startedAt: "2026-09-18T12:00:00.000Z",
@@ -204,7 +178,7 @@ it("appends immutable speech on the canonical worker with exact-id deduplication
     metadata: { toJSON },
     final: true,
   };
-  await withoutParentTranscriptSql(resolveOpenClawStateSqlitePath(env), async () => {
+  await withoutParentTranscriptSql(async () => {
     const writing = store.appendUtteranceForSession(session, utterance);
     utterance.text = "Caller changed speech";
     utterance.speaker!.label = "Caller changed speaker";
@@ -241,14 +215,14 @@ it("appends immutable speech on the canonical worker with exact-id deduplication
 });
 
 it("persists session metadata off thread with typed conflicts and durable ID origin", async () => {
-  const { env, store } = fixture();
+  const { store } = fixture();
   const session: TranscriptSessionDescriptor = {
     sessionId: "session-worker",
     startedAt: "2026-09-21T12:00:00.000Z",
     source: { providerId: "manual-transcript" },
     metadata: { sessionIdOrigin: "generated", ignored: () => "host-only", label: "雪" },
   };
-  await withoutParentTranscriptSql(resolveOpenClawStateSqlitePath(env), async () => {
+  await withoutParentTranscriptSql(async () => {
     await store.writeSession(session);
     const revision = await store.readSummaryInputRevision(session);
     await store.writeSession({ ...session, title: "Updated", metadata: { label: "é" } });
@@ -372,8 +346,9 @@ it("publishes captured summary notes without caller-thread transcript SQL", asyn
   await store.appendUtteranceForSession(session, { text: "We agreed to simplify setup." });
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
-  await withoutParentTranscriptSql(resolveOpenClawStateSqlitePath(env), async () => {
+  await withoutParentTranscriptSql(async () => {
     const result = await persistTranscriptSummary({
+      stateDir: env.OPENCLAW_STATE_DIR,
       config: resolveTranscriptsConfig(undefined),
       store,
       session,
@@ -389,7 +364,7 @@ it("publishes captured summary notes without caller-thread transcript SQL", asyn
 it.each(["transaction", "commit"] as const)(
   "retains prior notes when the summary owner is revoked at the worker %s grant",
   async (stage) => {
-    const { store } = fixture();
+    const { env, store } = fixture();
     const session: TranscriptSessionDescriptor = {
       sessionId: `summary-revoked-${stage}`,
       startedAt: "2026-09-20T12:00:00.000Z",
@@ -420,6 +395,7 @@ it.each(["transaction", "commit"] as const)(
     try {
       await expect(
         persistTranscriptSummary({
+          stateDir: env.OPENCLAW_STATE_DIR,
           config: resolveTranscriptsConfig(undefined),
           store,
           session,
@@ -438,7 +414,7 @@ it.each(["transaction", "commit"] as const)(
   },
 );
 
-it("reads populated transcripts after existing-only status and through reopen without parent SQL", async () => {
+it("returns complete stored reads and typed errors after existing-only status and reopen", async () => {
   const { env, store } = fixture();
   const databasePath = resolveOpenClawStateSqlitePath(env);
   const readStatus = () =>
@@ -446,8 +422,8 @@ it("reads populated transcripts after existing-only status and through reopen wi
       captureOpenClawStateWorkerContext({ env }),
       (scope) =>
         scope.execute({
-          type: "tasks.statusSummary",
-          input: { now: Date.now(), preserveSourceArtifacts: false },
+          type: "plugins.conversationBindingApprovals.read",
+          input: undefined,
         }),
       { existingOnly: true },
     );
@@ -456,81 +432,6 @@ it("reads populated transcripts after existing-only status and through reopen wi
   });
   expect(existsSync(databasePath)).toBe(false);
 
-  const session: TranscriptSessionDescriptor = {
-    sessionId: "retained-meeting",
-    title: "Retained meeting",
-    startedAt: "2026-09-13T10:00:00.000Z",
-    stoppedAt: "2026-09-13T10:05:00.000Z",
-    source: { providerId: "manual-transcript", accountId: "synthetic" },
-    metadata: { agentId: "main", sessionIdOrigin: "generated" },
-  };
-  const utterance: TranscriptUtterance = {
-    id: "line-1",
-    text: "Agenda approved.",
-    speaker: { id: "speaker-1", label: "Sam" },
-    final: true,
-    metadata: { language: "en" },
-  };
-  const summary = summarizeTranscripts({ session, utterances: [utterance] });
-  await store.writeSession(session);
-  await store.appendUtteranceForSession(session, utterance);
-  await store.writeSummary(summary, session);
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-
-  const selector = transcriptSessionSelector(session);
-  const started = performance.now();
-  await withoutParentSql(async () => {
-    expect((await readStatus())?.state).toBe("ready");
-    expect(await store.readSession(selector)).toEqual(session);
-    expect(await store.listSessionEntries()).toMatchObject([
-      { session, selector, hasSummary: true },
-    ]);
-    expect((await store.matchSessionEntries(session.sessionId)).unqualified).toMatchObject([
-      { session, selector, hasSummary: true },
-    ]);
-    expect(await store.readUtterancesForSession(session)).toEqual([
-      { ...utterance, sessionId: session.sessionId },
-    ]);
-    expect((await store.readSummary(session)).summary).toEqual(summary);
-    const { transcript: _transcript, ...notes } = summary;
-    expect((await store.readNotes(session)).summary).toEqual(notes);
-    expect(await store.readLatestEntry()).toMatchObject({ session, selector, utteranceCount: 1 });
-    expect(await store.readEntry(selector)).toMatchObject({ session, selector, utteranceCount: 1 });
-    const revision = await store.readSummaryInputRevision(session);
-    expect(revision).toBeTypeOf("string");
-    expect(
-      await store.readRecentStoppedSession(
-        session.source,
-        "2026-09-13T10:04:00.000Z",
-        "2026-09-13T10:06:00.000Z",
-      ),
-    ).toEqual({ session, inputRevision: revision });
-    const page = await getTranscriptLibrary(store, { selector, includeUtterances: true, limit: 2 });
-    expect(page.utterances).toMatchObject([
-      { sequence: 0, text: "Agenda approved.", speakerLabel: "Sam" },
-    ]);
-    expect(page.nextCursor).toBeNull();
-  });
-  const coldReadMs = performance.now() - started;
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-  const reopened = performance.now();
-  await withoutParentSql(async () => {
-    expect(await store.readSession(selector)).toEqual(session);
-    expect((await store.readSummary(session)).summary).toEqual(summary);
-    expect(await store.readUtterancesForSession(session)).toEqual([
-      { ...utterance, sessionId: session.sessionId },
-    ]);
-  });
-  console.info("populated transcript worker read timings", {
-    coldReadMs,
-    reopenReadMs: performance.now() - reopened,
-  });
-});
-
-it("returns complete stored reads and typed library errors through close and reopen", async () => {
-  const { env, store } = fixture();
   const session: TranscriptSessionDescriptor = {
     sessionId: "worker-meeting",
     source: { providerId: "manual-transcript", accountId: "synthetic" },
@@ -556,8 +457,8 @@ it("returns complete stored reads and typed library errors through close and reo
   closeOpenClawStateDatabaseForTest();
 
   const selector = transcriptSessionSelector(session);
-  const coldStarted = performance.now();
   await withoutParentSql(async () => {
+    expect(await readStatus()).toEqual([]);
     expect(await store.readSession(selector)).toEqual(session);
     expect(await store.listSessionEntries()).toMatchObject([
       { session, selector, hasSummary: true },
@@ -593,9 +494,15 @@ it("returns complete stored reads and typed library errors through close and reo
     });
     expect(await store.readLatestEntry()).toMatchObject({ session, selector, utteranceCount: 20 });
     const page = await getTranscriptLibrary(store, { selector, includeUtterances: true, limit: 2 });
-    expect(page.utterances?.map(({ sequence, text }) => ({ sequence, text }))).toEqual([
-      { sequence: 0, text: "Meeting text 0 🦞\\n" },
-      { sequence: 1, text: "Meeting text 1 🦞\\n" },
+    expect(
+      page.utterances?.map(({ sequence, text, speakerLabel }) => ({
+        sequence,
+        text,
+        speakerLabel,
+      })),
+    ).toEqual([
+      { sequence: 0, text: "Meeting text 0 🦞\\n", speakerLabel: "Speaker" },
+      { sequence: 1, text: "Meeting text 1 🦞\\n", speakerLabel: "Speaker" },
     ]);
     expect(page.nextCursor).not.toBeNull();
     expect((await readTranscriptLibraryStatus(store, {})).latestTranscript?.selector).toBe(
@@ -616,15 +523,15 @@ it("returns complete stored reads and typed library errors through close and reo
       }),
     ).toEqual({ ok: true, value: session });
   });
-  const coldReadMs = performance.now() - coldStarted;
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
-  const reopenStarted = performance.now();
   await withoutParentSql(async () => {
     expect((await store.readSummary(session)).summary).toEqual(summary);
     expect(await store.readSession(selector)).toEqual(session);
+    expect(await store.readUtterancesForSession(session)).toEqual(
+      utterances.map((utterance) => Object.assign({}, utterance, { sessionId: session.sessionId })),
+    );
   });
-  const reopenReadMs = performance.now() - reopenStarted;
   await store.writeSession({ ...session, title: "x".repeat(TRANSCRIPTS_RESULT_MAX_BYTES + 1) });
   await withoutParentSql(async () => {
     const result = store.readEntry(selector);
@@ -633,9 +540,5 @@ it("returns complete stored reads and typed library errors through close and reo
       type: "transcript_result_too_large",
       maxBytes: TRANSCRIPTS_RESULT_MAX_BYTES,
     });
-  });
-  console.info("transcript worker read timings", {
-    coldReadMs,
-    reopenReadMs,
   });
 });

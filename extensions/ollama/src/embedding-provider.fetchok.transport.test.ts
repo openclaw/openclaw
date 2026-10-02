@@ -21,25 +21,10 @@ type OllamaServer = {
 };
 
 const servers: Array<{ close: () => Promise<void> }> = [];
-const PROOF_MARKER = "[ollama credential redaction proof]";
 
 function mixPercentEscapeCase(value: string): string {
   return value.replace(/%[0-9A-F]{2}/gu, (escape, offset: number) =>
     offset % 2 === 0 ? escape.toLowerCase() : escape,
-  );
-}
-
-function printProof(params: {
-  status: number;
-  safeMarkerPresent: boolean;
-  customSecretAbsent: boolean;
-  customFormSecretAbsent: boolean;
-  authorizationSecretAbsent: boolean;
-  proxyAuthorizationSecretAbsent: boolean;
-  successVectorControl: boolean;
-}): void {
-  console.info(
-    `${PROOF_MARKER} status=${params.status} safe-marker-present=${params.safeMarkerPresent} custom-secret-absent=${params.customSecretAbsent} custom-form-secret-absent=${params.customFormSecretAbsent} authorization-secret-absent=${params.authorizationSecretAbsent} proxy-authorization-secret-absent=${params.proxyAuthorizationSecretAbsent} success-vector-control=${params.successVectorControl}`,
   );
 }
 
@@ -157,17 +142,6 @@ describe("Ollama embedding provider real transport", () => {
     expect(error?.message).toContain("rate limit exceeded");
     expect(error?.message).not.toContain(authorizationCredential);
     expect(error?.message).not.toContain(proxyAuthorizationCredential);
-    printProof({
-      status: 429,
-      safeMarkerPresent: error?.message.includes("rate limit exceeded") === true,
-      customSecretAbsent: true,
-      customFormSecretAbsent: true,
-      authorizationSecretAbsent: error ? !error.message.includes(authorizationCredential) : false,
-      proxyAuthorizationSecretAbsent: error
-        ? !error.message.includes(proxyAuthorizationCredential)
-        : false,
-      successVectorControl: false,
-    });
   });
 
   it("redacts a form-serialized custom SecretRef header from embed errors", async () => {
@@ -228,15 +202,6 @@ describe("Ollama embedding provider real transport", () => {
     expect(error?.message).not.toContain(formEncodedProxyAuth);
     expect(error?.message).not.toContain(reflectedFormEncodedProxyAuth);
     expect(error?.message).not.toContain("UNIQUEOLLAMAPROXYSECRET");
-    printProof({
-      status: 403,
-      safeMarkerPresent: error?.message.includes("forbidden") === true,
-      customSecretAbsent: error ? !error.message.includes(proxyAuth) : false,
-      customFormSecretAbsent: error ? !error.message.includes(formEncodedProxyAuth) : false,
-      authorizationSecretAbsent: true,
-      proxyAuthorizationSecretAbsent: true,
-      successVectorControl: false,
-    });
   });
 
   it("redacts a configured header prefix split by the 8 KiB error cap", async () => {
@@ -287,15 +252,5 @@ describe("Ollama embedding provider real transport", () => {
     ]);
     expect(vector[0]).toBeCloseTo(0.6, 5);
     expect(vector[1]).toBeCloseTo(0.8, 5);
-    const renderedVector = JSON.stringify(vector);
-    printProof({
-      status: 200,
-      safeMarkerPresent: false,
-      customSecretAbsent: !renderedVector.includes(proxyAuth),
-      customFormSecretAbsent: true,
-      authorizationSecretAbsent: !renderedVector.includes(apiKey),
-      proxyAuthorizationSecretAbsent: true,
-      successVectorControl: vector.length === 2,
-    });
   });
 });

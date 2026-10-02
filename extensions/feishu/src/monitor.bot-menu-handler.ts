@@ -3,7 +3,7 @@ import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "..
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
 import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
 import { claimUnprocessedFeishuMessage, forgetProcessedFeishuMessage } from "./dedup.js";
-import { botNames, botOpenIds } from "./monitor.state.js";
+import { botOpenIds } from "./monitor.state.js";
 import { isFeishuRetryableSyntheticEventError } from "./monitor.synthetic-error.js";
 
 type FeishuBotMenuEvent = {
@@ -55,13 +55,11 @@ export function createFeishuBotMenuHandler(params: {
   isAccountActive?: () => boolean;
   trackTask?: (task: Promise<void>) => void;
   getBotOpenId?: (accountId: string) => string | undefined;
-  getBotName?: (accountId: string) => string | undefined;
 }): (data: unknown) => Promise<void> {
   const { cfg, accountId, runtime, chatHistories, fireAndForget } = params;
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
   const getBotOpenId = params.getBotOpenId ?? ((id) => botOpenIds.get(id));
-  const getBotName = params.getBotName ?? ((id) => botNames.get(id));
 
   const isActive = params.isAccountActive ?? (() => true);
   const handle = async (data: unknown) => {
@@ -124,7 +122,6 @@ export function createFeishuBotMenuHandler(params: {
           cfg,
           event: syntheticEvent,
           botOpenId: getBotOpenId(accountId),
-          botName: getBotName(accountId),
           runtime,
           channelRuntime: params.channelRuntime,
           chatHistories,

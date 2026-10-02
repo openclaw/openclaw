@@ -2,9 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { expect, vi, type Mock } from "vitest";
+import { pathToFileURL } from "node:url";
+import { afterAll, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
 import { waitForFile } from "../../test/helpers/process-wait.js";
-import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../../test/vitest/vitest.timeouts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { writeRestartSentinel } from "./restart-sentinel.js";
 import { writeTriageUpdateFailure } from "./update-failure-report-artifact.js";
@@ -60,10 +66,22 @@ export function createManagedServiceManagerBoundary({
   tempDirs: Set<string>;
   cleanups: Set<() => Promise<void>>;
 }) {
+  let receipts: FixtureReceiptChannel;
+  let testSignal: AbortSignal;
+  beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
+  });
+  beforeEach(({ signal }) => {
+    testSignal = signal;
+  });
+  afterAll(async () => {
+    await receipts?.close();
+  });
   return async function runManagedServiceManagerBoundary(
     kind: "systemd" | "launchd",
     providedOptions?: ManagedServiceBoundaryOptions,
   ): Promise<ManagedServiceManagerBoundaryResult> {
+    const signal = testSignal;
     let options = providedOptions;
     const { spawn } =
       await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -232,6 +250,11 @@ export function createManagedServiceManagerBoundary({
           updaterScript;
       }
       if (options?.controlDisconnect === "transferred") {
+        const receiptClientPath = path.join(root, "fixture-receipts.mjs");
+        await fs.writeFile(
+          receiptClientPath,
+          `${fixtureReceiptClientSource(receipts.endpoint)}\nexport { sendReceipt };\n`,
+        );
         const continuation = options.validationResult
           ? `process.stdout.write(JSON.stringify({root:${JSON.stringify(root)},status:${JSON.stringify(options.validationResult === "failed" ? "error" : "skipped")},mode:"npm",reason:${JSON.stringify(options.validationResult === "failed" ? "candidate-validation-failed" : "already-current")}}));`
           : createManagedServiceActivationScript({
@@ -241,15 +264,18 @@ export function createManagedServiceManagerBoundary({
               updaterScript,
             });
         updaterScript = `
+        void import(${JSON.stringify(pathToFileURL(receiptClientPath).href)}).then(({sendReceipt}) => {
         const validationFs = require("node:fs");
         const validationStartedAt = Date.now();
         validationFs.writeFileSync(${JSON.stringify(validationStartedPath)}, "validating");
         validationFs.writeFileSync(${JSON.stringify(validationStartedPath)}, String(Date.now() - validationStartedAt));
+        sendReceipt(${JSON.stringify(validationStartedPath)}, "validating");
         const gate = setInterval(() => {
           if (!validationFs.existsSync(${JSON.stringify(validationReleasePath)})) return;
           clearInterval(gate);
           ${continuation}
         }, 5);
+        }).catch(error => { console.error(error); process.exit(18); });
       `;
       }
       if (selectedDriverPath) {
@@ -430,20 +456,26 @@ export function createManagedServiceManagerBoundary({
         if (options.controlDisconnect === "transferred") {
           // Configured plugin cold loading shares the suite saturation budget. Only
           // the updater's validation signal permits revocation or activation below.
-          await Promise.race([
-            waitForFile(validationStartedPath, DEFAULT_VITEST_TEST_TIMEOUT_MS),
-            completion.then(() => {
-              throw new Error("Managed helper exited before starting validation");
-            }),
-          ]);
+          await withinTest(
+            Promise.race([
+              receipts.waitFor(validationStartedPath, "validating"),
+              completion.then(async () => {
+                // The record precedes every updater reply; receipt and helper close
+                // use independent pipes, so a late receipt must not fail readiness.
+                if (!(await pathExists(validationStartedPath))) {
+                  throw new Error("Managed helper exited before starting validation");
+                }
+              }),
+            ]),
+            signal,
+          );
           await expect(pathExists(commandsPath)).resolves.toBe(false);
           const validationClockAdvanceMs = options.validationClockAdvanceMs;
           if (validationClockAdvanceMs) {
-            await vi.waitFor(async () => {
-              expect(
-                Number(await fs.readFile(validationStartedPath, "utf8")),
-              ).toBeGreaterThanOrEqual(validationClockAdvanceMs);
-            });
+            // The receipt follows both writes, including the fake-clock elapsed value.
+            expect(Number(await fs.readFile(validationStartedPath, "utf8"))).toBeGreaterThanOrEqual(
+              validationClockAdvanceMs,
+            );
           }
           // A real updater child is now validating, but the service has received no stop.
           expect(parent).toMatchObject({ exitCode: null, signalCode: null });
@@ -470,7 +502,7 @@ export function createManagedServiceManagerBoundary({
               : undefined;
             await fs.writeFile(validationReleasePath, "activate");
             if (selectedDriverPath) {
-              await waitForFile(statePath + ".park-prefix", 5_000);
+              await waitForFile(statePath + ".park-prefix", signal);
               await expect(pathExists(commandsPath)).resolves.toBe(false);
               expect(parent.exitCode).toBeNull();
               expect(parent.signalCode).toBeNull();

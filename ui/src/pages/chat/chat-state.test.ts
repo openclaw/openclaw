@@ -34,7 +34,7 @@ import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatPageStateContext } from "./chat-page.test-support.ts";
-import { removeQueuedMessage } from "./chat-queue.ts";
+import { removeQueuedMessage, keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -53,7 +53,6 @@ import { renderAssistantAttachments } from "./components/chat-message-attachment
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
-import { activatePanel, openSlot } from "./sidebar-layout.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { createHost as createToolStreamHost } from "./tool-stream.test-helpers.ts";
 
@@ -1525,16 +1524,14 @@ describe("canonical session message recovery", () => {
     const { state, request } = createSessionEventState({
       chatMessages: [originalPrompt, abandonedPartial],
       chatRunId: runId,
-      chatQueue: [
-        {
-          id: "placement-local-send-2",
-          text: promptText,
-          createdAt: Date.now(),
-          sendState: "sending",
-          sendRunId: runId,
-          sendAttempts: 1,
-        },
-      ],
+    });
+    keepVolatileQueuedMessage(state, state.sessionKey, {
+      id: "placement-local-send-2",
+      text: promptText,
+      createdAt: Date.now(),
+      sendState: "sending",
+      sendRunId: runId,
+      sendAttempts: 1,
     });
     const expected = [originalPrompt, abandonedPartial, localUser, localFinal].map((message) => ({
       role: message.role,
@@ -1671,7 +1668,7 @@ describe("canonical session message recovery", () => {
             limit: 80,
             maxBytes: 256 * 1024,
           },
-          { signal: expect.any(AbortSignal) },
+          { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
         ),
       );
       await vi.waitFor(() => expect(state.chatLoading).toBe(false));
@@ -1867,7 +1864,7 @@ describe("canonical session message recovery", () => {
       expect(request).toHaveBeenLastCalledWith(
         "chat.history",
         expect.objectContaining({ sessionKey: "global", agentId: "main" }),
-        { signal: expect.any(AbortSignal) },
+        { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
       );
       state.assistantAgentId = "work";
       state.agentsSelectedId = "work";
@@ -2586,37 +2583,35 @@ describe("canonical session message recovery", () => {
     expect(state.chatStream).toBe("Current partial reply");
   });
 
-  it("coalesces distinct live peers into one frame and their stale history into one load", async () => {
+  it("coalesces live peers into one frame and one fresh read after stale history", async () => {
     let renderFrame: FrameRequestCallback | undefined;
     vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
       renderFrame = callback;
       return 1;
     });
-    const { promise: history, resolve: resolveHistory } = createDeferred<{
-      messages: unknown[];
-      sessionId: string;
-      thinkingLevel: null;
-    }>();
+    const { promise: history, resolve: resolveHistory } = createDeferred<ChatHistoryResult>();
+    const messages = ["web", "tui", "cli"].map((client, index) => ({
+      role: "user",
+      content: [{ type: "text", text: "shared prompt" }],
+      __openclaw: {
+        id: `canonical-${client}-same-text`,
+        idempotencyKey: `${client}-same-text-run:user`,
+        seq: index + 1,
+      },
+    }));
+    const snapshot: ChatHistoryResult = { messages, sessionId: "selected-session" };
     const { request, state } = createSessionEventState({ chatDisplayedLeafEntryId: undefined });
-    request.mockReturnValue(history);
+    request.mockReturnValueOnce(history).mockResolvedValue(snapshot);
 
-    for (const [index, client] of ["web", "tui"].entries()) {
+    for (const [index, message] of messages.entries()) {
       handlePageGatewayEvent(state, {
         type: "event",
         event: "session.message",
         payload: {
           sessionKey: state.sessionKey,
-          messageId: `conflicting-${client}-envelope`,
+          messageId: `conflicting-envelope-${index}`,
           messageSeq: 100 + index,
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "shared prompt" }],
-            __openclaw: {
-              id: `canonical-${client}-same-text`,
-              idempotencyKey: `${client}-same-text-run:user`,
-              seq: index + 1,
-            },
-          },
+          message,
         },
       });
 
@@ -2627,18 +2622,16 @@ describe("canonical session message recovery", () => {
     expect(state.requestUpdate).toHaveBeenCalledOnce();
 
     expect(request).toHaveBeenCalledOnce();
-    resolveHistory({
-      messages: [],
-      sessionId: "selected-session",
-      thinkingLevel: null,
-    });
+    const refreshed = loadChatHistory(state);
+    resolveHistory({ ...snapshot, messages: [] });
+    await refreshed;
 
-    await vi.waitFor(() => expect(state.chatLoading).toBe(false));
-
-    expect(request).toHaveBeenCalledOnce();
+    expect(state.chatLoading).toBe(false);
+    expect(request).toHaveBeenCalledTimes(2);
     expect(state.chatMessages).toMatchObject([
       { __openclaw: { id: "canonical-web-same-text", seq: 1 } },
       { __openclaw: { id: "canonical-tui-same-text", seq: 2 } },
+      { __openclaw: { id: "canonical-cli-same-text", seq: 3 } },
     ]);
   });
 
@@ -2872,7 +2865,7 @@ describe("canonical session message recovery", () => {
           limit: 80,
           maxBytes: 256 * 1024,
         },
-        { signal: expect.any(AbortSignal) },
+        { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
       );
     });
     expect(state.chatRunId).toBe("active-run");
@@ -3007,36 +3000,11 @@ describe("ChatStateController render lifecycle", () => {
     } satisfies ReactiveControllerHost;
   }
 
-  function createInputHistoryState(
-    renderLifecycle: NonNullable<ChatPageHost["renderLifecycle"]>,
-    navigateHistory: ReturnType<typeof vi.fn>,
-  ) {
-    return {
-      settings: undefined,
-      assistantAgentId: null,
-      agentsList: null,
-      hello: null,
-      sessionKey: "agent:main:current",
-      chatLoading: false,
-      chatMessages: [],
-      chatQueue: [],
-      renderLifecycle,
-      handleSendChat: vi.fn().mockResolvedValue(undefined),
-      handleChatDraftChange: vi.fn(),
-      handleChatInputHistoryKey: navigateHistory,
-    } as unknown as ChatPageHost;
-  }
-
-  function createInputHistoryKey(
-    selectionStart: number,
-    selectionEnd: number,
-    valueLength: number,
-  ) {
+  function createInputHistoryKey(selectionStart: number, selectionEnd: number) {
     return {
       key: "ArrowUp" as const,
       selectionStart,
       selectionEnd,
-      valueLength,
       altKey: false,
       ctrlKey: false,
       metaKey: false,
@@ -3063,53 +3031,6 @@ describe("ChatStateController render lifecycle", () => {
       ...overrides,
     } as unknown as ChatPageHost;
   }
-
-  it("owns attachment views in Files without replacing Detail content", () => {
-    const state = createPageState(
-      createChatPageStateContext(),
-      { invalidate: vi.fn(), afterCommit: () => () => {} },
-      {
-        dispatchEvent: () => true,
-        getBoundingClientRect: () => new DOMRect(0, 0, 1_440, 0),
-        querySelector: () => null,
-      },
-    );
-    const detailContent = {
-      kind: "markdown" as const,
-      content: "Existing review",
-      rawText: "Existing review",
-    };
-    state.sidebarContent = detailContent;
-    state.sidebarLayout = openSlot(state.sidebarLayout, "detail");
-
-    state.handleOpenSidebar({
-      kind: "attachment",
-      attachmentKind: "document",
-      title: "report.pdf",
-      src: "/media/report.pdf",
-    });
-
-    expect(
-      state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
-    ).toEqual(["detail", "workspace"]);
-    expect(state.sessionWorkspaceState?.previews.at(-1)?.content.kind).toBe("attachment");
-    expect(state.sidebarContent).toBe(detailContent);
-
-    state.sidebarLayout = activatePanel(state.sidebarLayout, "detail");
-    state.handleCloseSidebar("detail");
-
-    expect(
-      state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
-    ).toEqual(["workspace"]);
-    expect(state.sessionWorkspaceState?.previews.at(-1)?.content.kind).toBe("attachment");
-    expect(state.sidebarContent).toBe(detailContent);
-
-    state.handleCloseSidebar("workspace");
-
-    expect(state.sidebarLayout.columns.flatMap((column) => column.panels)).toHaveLength(0);
-    expect(state.sessionWorkspaceState?.previews ?? []).toEqual([]);
-    expect(state.sidebarContent).toBe(detailContent);
-  });
 
   it("keeps the active observer digest when another run streams in the same session", () => {
     const projectedDigest = {
@@ -3512,11 +3433,17 @@ describe("ChatStateController render lifecycle", () => {
       requestUpdate,
     });
 
-    for (const deltaText of ["A", "B", "C"]) {
+    for (const text of ["A", "AB", "ABC"]) {
       handlePageGatewayEvent(state, {
         type: "event",
         event: "chat",
-        payload: { state: "delta", runId: "run-1", sessionKey: "main", deltaText },
+        payload: {
+          state: "delta",
+          runId: "run-1",
+          sessionKey: "main",
+          deltaText: text.slice(-1),
+          message: { role: "assistant", content: [{ type: "text", text }] },
+        },
       });
     }
 
@@ -3532,7 +3459,13 @@ describe("ChatStateController render lifecycle", () => {
     handlePageGatewayEvent(state, {
       type: "event",
       event: "chat",
-      payload: { state: "delta", runId: "run-1", sessionKey: "main", deltaText: "D" },
+      payload: {
+        state: "delta",
+        runId: "run-1",
+        sessionKey: "main",
+        deltaText: "D",
+        message: { role: "assistant", content: [{ type: "text", text: "ABCD" }] },
+      },
     });
     const staleFrame = frames.get(2);
     handlePageGatewayEvent(state, {
@@ -3557,11 +3490,17 @@ describe("ChatStateController render lifecycle", () => {
     const requestUpdate = vi.fn();
     const state = createStreamEventState({ requestUpdate });
 
-    for (const deltaText of ["A", "B", "C"]) {
+    for (const text of ["A", "AB", "ABC"]) {
       handlePageGatewayEvent(state, {
         type: "event",
         event: "chat",
-        payload: { state: "delta", runId: "run-1", sessionKey: "main", deltaText },
+        payload: {
+          state: "delta",
+          runId: "run-1",
+          sessionKey: "main",
+          deltaText: text.slice(-1),
+          message: { role: "assistant", content: [{ type: "text", text }] },
+        },
       });
     }
 
@@ -3697,7 +3636,7 @@ describe("ChatStateController render lifecycle", () => {
     state.realtimeTalkStatus = "listening";
     state.realtimeTalkDetail = "live";
     state.realtimeTalkInputLevel.set(0.8);
-    state.realtimeTalkConversation = [
+    state.realtimeTalkConversationState.entries = [
       { id: "utterance", role: "user", text: "stale", isStreaming: true },
     ];
     state.realtimeTalkVideoStream = {} as MediaStream;
@@ -3714,7 +3653,7 @@ describe("ChatStateController render lifecycle", () => {
     expect(state.realtimeTalkStatus).toBe("idle");
     expect(state.realtimeTalkDetail).toBeNull();
     expect(state.realtimeTalkInputLevel.value).toBe(0);
-    expect(state.realtimeTalkConversation).toEqual([]);
+    expect(state.realtimeTalkConversationState.entries).toEqual([]);
     expect(state.realtimeTalkVideoStream).toBeNull();
     expect(state.realtimeTalkCameraDevices).toEqual([]);
     expect(state.realtimeTalkVideoCapable).toBe(false);
@@ -3811,11 +3750,11 @@ describe("ChatStateController render lifecycle", () => {
   });
 
   it.each([
-    { handled: true, selection: 0, valueLength: 0, decision: "handled:history-up" },
-    { handled: false, selection: 5, valueLength: 10, decision: "blocked:modifier-or-composition" },
+    { handled: true, selection: 0 },
+    { handled: false, selection: 5 },
   ] as const)(
     "invalidates input history only when recall is handled: $handled",
-    ({ handled, selection, valueLength, decision }) => {
+    ({ handled, selection }) => {
       const requestUpdate = vi.fn();
       const controller = new ChatStateController<ChatPageHost>(
         createControllerHost({ requestUpdate }),
@@ -3826,24 +3765,27 @@ describe("ChatStateController render lifecycle", () => {
         handled,
         preventDefault: handled,
         restoreCaret: handled ? "up" : null,
-        decision,
-        historyNavigationActiveBefore: false,
-        historyNavigationActiveAfter: handled,
-        selectionStart: 0,
-        selectionEnd: 0,
-        valueLength: 10,
       });
-      const state = createInputHistoryState(renderLifecycle, navigateHistory);
-      controller.attach(state);
-      const input = createInputHistoryKey(selection, selection, valueLength);
-      const result = state.handleChatInputHistoryKey!(input);
+      const state = createPageState(createChatPageStateContext(), renderLifecycle, {
+        sessionKey: "agent:main:current",
+        dispatchEvent: () => true,
+        querySelector: () => null,
+      });
+      state.handleChatInputHistoryKey = navigateHistory;
+      try {
+        controller.attach(state);
+        const input = createInputHistoryKey(selection, selection);
+        const result = state.handleChatInputHistoryKey!(input);
 
-      expect(result.handled).toBe(handled);
-      expect(navigateHistory).toHaveBeenCalledWith(input);
-      if (handled) {
-        expect(requestUpdate).toHaveBeenCalled();
-      } else {
-        expect(requestUpdate).not.toHaveBeenCalled();
+        expect(result.handled).toBe(handled);
+        expect(navigateHistory).toHaveBeenCalledWith(input);
+        if (handled) {
+          expect(requestUpdate).toHaveBeenCalled();
+        } else {
+          expect(requestUpdate).not.toHaveBeenCalled();
+        }
+      } finally {
+        controller.hostDisconnected();
       }
     },
   );

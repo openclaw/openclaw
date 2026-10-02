@@ -25,6 +25,31 @@ afterEach(() => {
 });
 
 describe("subagent run memory indexes", () => {
+  it("retains a selected registration through its own ACK but rejects a committed replacement ABA", () => {
+    const entry = createRun("selected", "agent:main:subagent:selected");
+    subagentRuns.set(entry.runId, entry);
+    const selected = subagentRuns.captureRegistrationOwnership(entry.childSessionKey, entry);
+    const preparing = subagentRuns.captureRegistrationOwnership(entry.childSessionKey);
+    try {
+      subagentRuns.commitOwnership(entry);
+      expect(selected.assertCurrent).not.toThrow();
+      expect(preparing.assertCurrent).toThrow("owner changed");
+      const replacement = createRun(entry.runId, entry.childSessionKey);
+      replacement.generation = 1;
+      subagentRuns.set(entry.runId, replacement);
+      subagentRuns.commitOwnership(replacement);
+      expect(selected.assertCurrent).toThrow("owner changed");
+      subagentRuns.delete(replacement.runId);
+      subagentRuns.confirmRetirement(replacement);
+      subagentRuns.set(entry.runId, entry);
+      subagentRuns.commitOwnership(entry);
+      expect(selected.assertCurrent).toThrow("owner changed");
+    } finally {
+      selected.release();
+      preparing.release();
+    }
+  });
+
   it("publishes accepted ownership and retirement without exposing provisional map writes", () => {
     const changed = vi.fn();
     const stop = sessionChanges.subscribe(changed);

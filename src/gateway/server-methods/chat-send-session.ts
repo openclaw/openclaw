@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -18,11 +19,9 @@ import {
   SESSION_ROUTING_CHANGED_ERROR_REASON,
 } from "../../config/sessions/main-session.js";
 import { prepareQualifiedSessionEntryTarget } from "../../config/sessions/session-accessor.js";
-import type {
-  CapturedSessionEntryReadSource,
-  QualifiedSessionEntryAccessTarget,
-} from "../../config/sessions/session-accessor.types.js";
+import type { QualifiedSessionEntryAccessTarget } from "../../config/sessions/session-accessor.types.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpanSync } from "../../infra/diagnostics-timeline.js";
@@ -31,6 +30,7 @@ import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-har
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
@@ -39,11 +39,9 @@ import {
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
-import { hasGatewayAdminScope } from "./chat-origin-routing.js";
 import { createRestartSafeChatRequest } from "./chat-restart-recovery.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
-import { normalizeOptionalChatText } from "./chat-text-normalization.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { resolveSessionNativeRuntimeRestriction } from "./sessions-patch-model-selection.js";
@@ -99,7 +97,7 @@ function loadChatSendSessionContext(params: {
   if (!rawSessionKey.trim()) {
     return { ok: false as const, error: "sessionKey must not be blank" };
   }
-  const agentIdOverride = normalizeOptionalChatText(p.agentId);
+  const agentIdOverride = normalizeOptionalString(p.agentId);
   const clientRunId = p.idempotencyKey;
   const pendingChatSendKey = pendingChatSendDedupeKey(clientRunId);
   const runtimeConfig = context.getRuntimeConfig();
@@ -135,11 +133,9 @@ function loadChatSendSessionContext(params: {
   );
   const sessionLoadMs = roundedChatSendTimingMs(performance.now() - sessionLoadStartedAtMs);
   const { cfg, agentId, storePath, entry, canonicalKey: sessionKey, legacyKey } = sessionLoadResult;
-  const expectedSessionRoutingContract = normalizeOptionalChatText(
-    p.expectedSessionRoutingContract,
-  );
+  const expectedSessionRoutingContract = normalizeOptionalString(p.expectedSessionRoutingContract);
   const expectedLeafEntryId =
-    p.expectedLeafEntryId === null ? null : normalizeOptionalChatText(p.expectedLeafEntryId);
+    p.expectedLeafEntryId === null ? null : normalizeOptionalString(p.expectedLeafEntryId);
   const sessionRoutingChanged = (candidateConfig: OpenClawConfig) =>
     expectedSessionRoutingContract !== undefined &&
     expectedSessionRoutingContract.toLowerCase() !== resolveSessionRoutingContract(candidateConfig);
@@ -206,7 +202,7 @@ export function prepareChatSendSession(params: {
     };
   }
 
-  const requestedSessionId = normalizeOptionalChatText(p.sessionId);
+  const requestedSessionId = normalizeOptionalString(p.sessionId);
   const backingSessionId = entry?.sessionId ?? requestedSessionId;
   if (!entry) {
     const creationError = authorizeGatewaySessionCreation({

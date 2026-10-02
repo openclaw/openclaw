@@ -15,6 +15,7 @@ import {
   resolveMemoryDreamingWorkspace,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
   buildCliMemorySearchSessionKey,
   formatAuditCounts,
@@ -357,7 +358,6 @@ function matchesPromotionSelector(
     return false;
   }
   return (
-    candidate.key.toLowerCase() === trimmed ||
     candidate.key.toLowerCase().includes(trimmed) ||
     candidate.path.toLowerCase().includes(trimmed) ||
     candidate.snippet.toLowerCase().includes(trimmed)
@@ -434,10 +434,7 @@ export async function runMemoryPromote(
           });
         }
       }
-      const outputLimit =
-        typeof opts.limit === "number" && Number.isFinite(opts.limit)
-          ? Math.max(0, Math.floor(opts.limit))
-          : candidates.length;
+      const outputLimit = resolveNonNegativeIntegerOption(opts.limit, candidates.length);
       const rejectedCandidates = applyResult
         ? applyResult.rejectedCandidates.slice(
             0,

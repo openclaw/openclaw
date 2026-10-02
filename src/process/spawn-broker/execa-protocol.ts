@@ -25,6 +25,7 @@ export type BrokerExecaOptions = Pick<
   | "windowsHide"
   | "windowsVerbatimArguments"
 > & {
+  executionDeadlineMs?: number;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   input?: string | Uint8Array;

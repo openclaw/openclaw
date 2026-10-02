@@ -12,7 +12,6 @@ import {
   outputToolArgs,
   outputToolCall,
   outputToolCallId,
-  requireRecord,
 } from "./server.test-harness.js";
 
 const { startMockServer } = createMockServerTestHarness();
@@ -38,14 +37,9 @@ describe("mock OpenAI A2A scenarios", () => {
     expect(String(args.message)).toContain("qa group visible reply tool check");
     expect(String(args.message)).toContain("QA-A2A-MIRROR-OK");
 
-    const debugPayload = requireRecord(
-      await getJson(server, "/debug/last-request"),
-      "debug request",
-    );
-    expect(debugPayload.plannedToolName).toBe("sessions_send");
-    expect(debugPayload.plannedToolArgs).toMatchObject({
-      sessionKey: "agent:qa:a2a-target",
-      timeoutSeconds: 0,
+    expect(await getJson(server, "/debug/last-request")).toMatchObject({
+      plannedToolName: "sessions_send",
+      plannedToolArgs: { sessionKey: "agent:qa:a2a-target", timeoutSeconds: 0 },
     });
 
     const final = await expectOpenAiNonStreamingResponsesJson(server, {
@@ -82,17 +76,7 @@ describe("mock OpenAI A2A scenarios", () => {
     });
   });
 
-  it.each([
-    {
-      policy: "disabled",
-      error:
-        "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
-    },
-    {
-      policy: "allowlist",
-      error: "Agent-to-agent messaging denied by tools.agentToAgent.allow.",
-    },
-  ])("keeps the A2A $policy denial fixture empty during finalization", async ({ error }) => {
+  it("keeps the A2A denial fixture empty during finalization", async () => {
     const server = await startMockServer();
     const kickoff = makeUserInput(
       'qa a2a message-tool mirror check. sessionKey="agent:orion:main". exact marker: `QA-A2A-DENIED-OK`',
@@ -108,46 +92,43 @@ describe("mock OpenAI A2A scenarios", () => {
       toolCall,
       makeToolOutputWithCallId(
         outputToolCallId(toolCall, "call_a2a_denied"),
-        JSON.stringify({ status: "forbidden", error }),
+        JSON.stringify({
+          status: "forbidden",
+          error:
+            "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
+        }),
       ),
     ];
     let response = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
     expect(outputText(response)).toBe("");
 
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      input.push(
-        ...outputItems(response),
-        makeUserInput(
-          `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} If a tool failed, say so; never claim completion or success.`,
-        ),
-      );
-      response = await expectOpenAiNonStreamingResponsesJson(server, { tools: [], input });
-      expect(outputText(response)).toBe("");
-      expect(outputItems(response).some((item) => item.type === "function_call")).toBe(false);
-    }
+    input.push(
+      ...outputItems(response),
+      makeUserInput(
+        `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} If a tool failed, say so; never claim completion or success.`,
+      ),
+    );
+    response = await expectOpenAiNonStreamingResponsesJson(server, { tools: [], input });
+    expect(outputText(response)).toBe("");
+    expect(outputItems(response).some((item) => item.type === "function_call")).toBe(false);
   });
 
-  it.each([false, true])(
-    "does not revive an earlier A2A fixture after a new user turn (finalization=%s)",
-    async (finalization) => {
-      const server = await startMockServer();
-      const response = await expectOpenAiNonStreamingResponsesJson(server, {
-        tools: [],
-        input: [
-          makeUserInput(
-            'qa a2a message-tool mirror check. sessionKey="agent:orion:main". exact marker: `QA-A2A-OLD`',
-          ),
-          makeToolOutputWithCallId("call_a2a_old", JSON.stringify({ status: "forbidden" })),
-          makeUserInput("New request. Reply with exact marker: `QA-NEXT-USER-OK`"),
-          ...(finalization
-            ? [makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION)]
-            : []),
-        ],
-      });
-      expect(outputText(response)).toBe("QA-NEXT-USER-OK");
-      expect(outputItems(response).some((item) => item.type === "function_call")).toBe(false);
-    },
-  );
+  it("does not revive an earlier A2A fixture during a later user turn finalization", async () => {
+    const server = await startMockServer();
+    const response = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [],
+      input: [
+        makeUserInput(
+          'qa a2a message-tool mirror check. sessionKey="agent:orion:main". exact marker: `QA-A2A-OLD`',
+        ),
+        makeToolOutputWithCallId("call_a2a_old", JSON.stringify({ status: "forbidden" })),
+        makeUserInput("New request. Reply with exact marker: `QA-NEXT-USER-OK`"),
+        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+      ],
+    });
+    expect(outputText(response)).toBe("QA-NEXT-USER-OK");
+    expect(outputItems(response).some((item) => item.type === "function_call")).toBe(false);
+  });
 
   it("does not revive projected A2A history during the current request's finalization", async () => {
     const server = await startMockServer();

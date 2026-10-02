@@ -1,5 +1,3 @@
-// Webchat media helpers translate reply payload media into assistant content
-// blocks that the control UI can render without unsafe file exposure.
 import path from "node:path";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
@@ -37,30 +35,16 @@ type LocalAudioContentBlock = {
   block: Record<string, unknown>;
 };
 
-type ReplyMediaAudioEmbedding = {
-  url: string;
-  audioBlock?: Record<string, unknown>;
-};
-
 /** Map `mediaUrl` strings to an absolute filesystem path for local embedding (plain paths or `file:` URLs). */
 function resolveLocalMediaPathForEmbedding(raw: string): string | null {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (/^data:/i.test(trimmed)) {
-    return null;
-  }
-  if (/^https?:/i.test(trimmed)) {
+  if (!trimmed || /^(?:data|https?):/i.test(trimmed)) {
     return null;
   }
   if (/^file:/iu.test(trimmed)) {
     try {
       const p = safeFileURLToPath(trimmed);
-      if (!path.isAbsolute(p)) {
-        return null;
-      }
-      return p;
+      return path.isAbsolute(p) ? p : null;
     } catch {
       return null;
     }
@@ -126,28 +110,6 @@ async function readLocalAudioContentBlockForEmbedding(
   }
 }
 
-async function resolveReplyMediaAudioEmbedding(
-  payload: ReplyPayload,
-  raw: string,
-  seenAudio: Set<string>,
-  options: WebchatAudioEmbeddingOptions | undefined,
-): Promise<ReplyMediaAudioEmbedding | null> {
-  const url = raw.trim();
-  if (!url) {
-    return null;
-  }
-  const audio = await readLocalAudioContentBlockForEmbedding(payload, url, options);
-  if (!audio || seenAudio.has(audio.path)) {
-    return { url };
-  }
-  seenAudio.add(audio.path);
-  return { url, audioBlock: audio.block };
-}
-
-function isBase64DataPayload(value: string): boolean {
-  return value.length > 0 && !/[^A-Za-z0-9+/=\t\n\v\f\r ]/u.test(value);
-}
-
 function resolveEmbeddableImageUrl(url: string): string | null {
   const trimmed = url.trim();
   if (!trimmed) {
@@ -163,7 +125,7 @@ function resolveEmbeddableImageUrl(url: string): string | null {
   const metadata = trimmed.slice(0, commaIndex);
   const match = /^data:(image\/[a-z0-9.+-]+);base64$/i.exec(metadata);
   const base64Data = trimmed.slice(commaIndex + 1);
-  if (!match || !isBase64DataPayload(base64Data)) {
+  if (!match || !base64Data || /[^A-Za-z0-9+/=\t\n\v\f\r ]/u.test(base64Data)) {
     return null;
   }
   const mediaType = normalizeLowercaseStringOrEmpty(match[1]);
@@ -188,6 +150,10 @@ function resolveReplyDirectivePrefix(payload: ReplyPayload): string {
   return "";
 }
 
+function mediaReplyText(hasAudio: boolean, hasImage: boolean): string {
+  return hasAudio && hasImage ? "Media reply" : hasAudio ? "Audio reply" : "Image reply";
+}
+
 export async function buildWebchatAssistantMessageFromReplyPayloads(
   payloads: ReplyPayload[],
   options?: WebchatAudioEmbeddingOptions,
@@ -201,8 +167,6 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
   const payloadTexts: Array<string | undefined> = [];
   const seenAudio = new Set<string>();
   const seenImages = new Set<string>();
-  let hasAudio = false;
-  let hasImage = false;
 
   for (const [payloadIndex, payload] of payloads.entries()) {
     if (payload.isReasoning === true) {
@@ -217,23 +181,23 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
     const payloadMediaBlocks: Array<Record<string, unknown>> = [];
     const parts = resolveSendableOutboundReplyParts(payload);
     for (const raw of parts.mediaUrls) {
-      const media = await resolveReplyMediaAudioEmbedding(payload, raw, seenAudio, options);
-      if (!media) {
+      const url = raw.trim();
+      if (!url) {
         continue;
       }
-      if (media.audioBlock) {
-        payloadMediaBlocks.push(media.audioBlock);
-        hasAudio = true;
+      const audio = await readLocalAudioContentBlockForEmbedding(payload, url, options);
+      if (audio && !seenAudio.has(audio.path)) {
+        seenAudio.add(audio.path);
+        payloadMediaBlocks.push(audio.block);
         payloadHasAudio = true;
         continue;
       }
-      const imageUrl = resolveEmbeddableImageUrl(media.url);
+      const imageUrl = resolveEmbeddableImageUrl(url);
       if (!imageUrl || seenImages.has(imageUrl)) {
         continue;
       }
       seenImages.add(imageUrl);
       payloadMediaBlocks.push({ type: "input_image", image_url: imageUrl });
-      hasImage = true;
       payloadHasImage = true;
     }
     const needsSyntheticText =
@@ -242,11 +206,7 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
       transcriptTextParts.length === 0;
     // Media-only replies need stable transcript text so later context is readable.
     const syntheticText = needsSyntheticText
-      ? payloadHasAudio && payloadHasImage
-        ? "Media reply"
-        : payloadHasAudio
-          ? "Audio reply"
-          : "Image reply"
+      ? mediaReplyText(payloadHasAudio, payloadHasImage)
       : undefined;
     const blockText = text ?? syntheticText;
     const fullText = replyDirectivePrefix + (blockText ?? "");
@@ -258,12 +218,12 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
     content.push(...payloadMediaBlocks);
   }
 
-  if (!hasAudio && !hasImage) {
+  if (seenAudio.size === 0 && seenImages.size === 0) {
     return null;
   }
   const transcriptText =
     transcriptTextParts.join("\n\n").trim() ||
-    (hasAudio && hasImage ? "Media reply" : hasAudio ? "Audio reply" : "Image reply");
+    mediaReplyText(seenAudio.size > 0, seenImages.size > 0);
   if (transcriptTextParts.length === 0) {
     content.unshift({ type: "text", text: transcriptText });
   }

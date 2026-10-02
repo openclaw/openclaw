@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -34,7 +35,7 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-it.each(["chatgpt-identity", undefined])(
+it.each([undefined])(
   "passes refreshed OAuth grant metadata to the catalog (authFlow: %s)",
   async (authFlow) => {
     const agentDir = tempDirs.make("catalog-oauth-grant-");

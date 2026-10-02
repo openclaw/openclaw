@@ -261,33 +261,29 @@ function hasLegacyVllmQwenThinkingNormalizedProvider(providers: unknown): boolea
   );
 }
 
-function preserveMigratedVllmQwenReasoning(model: Record<string, unknown>): void {
-  if (model.reasoning === undefined) {
-    model.reasoning = true;
-  }
-}
-
 function removeLegacyVllmQwenThinkingParams(params: Record<string, unknown>): void {
   for (const key of QWEN_THINKING_FORMAT_KEYS) {
     delete params[key];
   }
 }
 
-export function applyLegacyVllmQwenThinkingFormat(params: {
+function applyLegacyVllmQwenThinkingFormat(params: {
   sourcePath: string;
   legacyParams: Record<string, unknown>;
   target: { model: Record<string, unknown>; index: number };
   legacyFormat: NonNullable<ReturnType<typeof getLegacyVllmQwenThinkingFormat>>;
   changes: string[];
-}): boolean {
+}): void {
   if (!params.legacyFormat.compat) {
     removeLegacyVllmQwenThinkingParams(params.legacyParams);
     params.changes.push(
       `Removed ${params.sourcePath}.${params.legacyFormat.key} (unrecognized value ${JSON.stringify(params.legacyFormat.value)}; configure models.providers.vllm.models[].compat.thinkingFormat if needed).`,
     );
-    return true;
+    return;
   }
-  preserveMigratedVllmQwenReasoning(params.target.model);
+  if (params.target.model.reasoning === undefined) {
+    params.target.model.reasoning = true;
+  }
   const compat = ensureRecord(params.target.model, "compat");
   const currentThinkingFormat = compat.thinkingFormat;
   if (typeof currentThinkingFormat === "string" && isModelThinkingFormat(currentThinkingFormat)) {
@@ -295,14 +291,13 @@ export function applyLegacyVllmQwenThinkingFormat(params: {
     params.changes.push(
       `Removed ${params.sourcePath}.${params.legacyFormat.key}; models.providers.vllm.models[${params.target.index}].compat.thinkingFormat is already ${JSON.stringify(currentThinkingFormat)}.`,
     );
-    return true;
+    return;
   }
   compat.thinkingFormat = params.legacyFormat.compat;
   removeLegacyVllmQwenThinkingParams(params.legacyParams);
   params.changes.push(
     `Moved ${params.sourcePath}.${params.legacyFormat.key} to models.providers.vllm.models[${params.target.index}].compat.thinkingFormat (${JSON.stringify(params.legacyFormat.compat)}).`,
   );
-  return true;
 }
 
 export function applyLegacyVllmQwenThinkingFormatToTargets(params: {

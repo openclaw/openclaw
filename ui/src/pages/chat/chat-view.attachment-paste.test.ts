@@ -5,6 +5,7 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
+import { createApplicationConfigCapability } from "../../app/config.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -31,6 +32,7 @@ afterEach(() => {
   resetChatViewState();
   resetTranscriptTestDom();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]>) {
@@ -58,6 +60,41 @@ function getComposerTextarea(container: Element) {
 }
 
 describe("chat attachment paste", () => {
+  it("removes upload controls and rejects file paste/drop while preserving plain text paste", async () => {
+    const uploadConfig = createApplicationConfigCapability({ resourceBasePath: "" });
+    const onAttachmentsChange = vi.fn();
+    const container = renderChatView({ uploadConfig, onAttachmentsChange });
+    expect(container.querySelector("input[type=file]")).not.toBeNull();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ uploadsEnabled: false })),
+    );
+    await uploadConfig.refresh();
+    const disabled = renderChatView({ uploadConfig, onAttachmentsChange });
+    expect(disabled.querySelector("input[type=file]")).toBeNull();
+    expect(disabled.querySelector(".agent-chat__attach-menu-option")).toBeNull();
+    const textarea = getComposerTextarea(disabled);
+    const textPaste = createPasteEvent("ordinary text ".repeat(200));
+    textarea.dispatchEvent(textPaste);
+    expect(textPaste.defaultPrevented).toBe(false);
+    const imagePaste = createPasteEvent("data:image/png;base64,YWJj");
+    textarea.dispatchEvent(imagePaste);
+    expect(imagePaste.defaultPrevented).toBe(true);
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", {
+      value: {
+        types: ["Files"],
+        files: [new File(["proof"], "proof.txt")],
+      },
+    });
+    disabled.querySelector("section.chat")!.dispatchEvent(drop);
+    expect(drop.defaultPrevented).toBe(true);
+    expect(onAttachmentsChange).not.toHaveBeenCalled();
+    // Retained enabled render handlers also consume the current policy.
+    getComposerTextarea(container).dispatchEvent(createPasteEvent("data:image/png;base64,YWJj"));
+    expect(onAttachmentsChange).not.toHaveBeenCalled();
+  });
+
   it("preserves pasted-text presentation and restore behavior across handoff", async () => {
     let attachments: ChatAttachment[] = [];
     const producer = renderAttachmentHarness(
@@ -150,6 +187,54 @@ describe("chat attachment paste", () => {
 });
 
 describe("chat attachment reading", () => {
+  it("retains a failed attachment slot when uploads are disabled during a file read", async () => {
+    const base = createApplicationConfigCapability({ resourceBasePath: "" });
+    const uploadConfig = { ...base, current: { ...base.current, uploadsEnabled: true } };
+    const readers: FileReader[] = [];
+    vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (this: FileReader) {
+      readers.push(this);
+    });
+    const reads = new ChatAttachmentReadLifecycle(() => undefined);
+    const readSignal = reads.readSignal;
+    onTestFinished(() => reads.abortReads());
+    const onAttachmentsChange = vi.fn();
+    const props = {
+      uploadConfig,
+      draft: "Keep this file with the message",
+      attachmentReads: reads,
+      readSignal,
+      getPendingAttachmentReads: () => reads.pendingReads,
+      onPendingReadsChange: (delta: 1 | -1) => reads.updatePending(readSignal, delta),
+      onAttachmentsChange,
+    };
+    const container = renderChatView(props);
+    const input = expectDefined(
+      container.querySelector<HTMLInputElement>(".agent-chat__file-input"),
+      "attachment file input",
+    );
+    Object.defineProperty(input, "files", {
+      value: [new File(["attachment proof"], "proof.png", { type: "image/png" })],
+    });
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(readers).toHaveLength(1);
+    expect(reads.pendingReads).toBe(1);
+
+    uploadConfig.current.uploadsEnabled = false;
+    const reader = expectDefined(readers[0], "pending attachment reader");
+    Object.defineProperty(reader, "result", { value: "data:image/png;base64,YWJj" });
+    reader.dispatchEvent(new ProgressEvent("load"));
+    await Promise.resolve();
+
+    expect(reads.pendingReads).toBe(0);
+    expect(onAttachmentsChange).not.toHaveBeenCalled();
+    const failed = renderChatView(props);
+    expect(failed.querySelectorAll(".chat-attachment-thumb--error")).toHaveLength(1);
+    expect(getComposerTextarea(failed).value).toBe(props.draft);
+    expect(failed.querySelector(".chat-attachment-error")?.getAttribute("aria-label")).toContain(
+      "proof.png",
+    );
+  });
+
   it.each(["clipboard", "file picker", "drop"] as const)(
     "waits for an in-flight %s attachment before accepting an immediate send",
     async (entry) => {

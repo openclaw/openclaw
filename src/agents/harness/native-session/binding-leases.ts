@@ -65,7 +65,7 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
       current: TRecord | undefined,
       leaseToken?: string,
     ) => { next?: TRecord; result: TResult },
-    ttlMs?: number,
+    ttlMs?: number | ((next: TRecord) => number | undefined),
     assertCurrent?: () => void,
   ): Promise<TResult> => {
     const deadline = Date.now() + options.lease.waitMs;
@@ -110,7 +110,7 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
           result = applied.result;
           return {
             next: applied.next,
-            ttlMs,
+            ttlMs: typeof ttlMs === "function" ? applied.next && ttlMs(applied.next) : ttlMs,
             assertCurrent: () => {
               // Row comparison cannot detect elapsed time. Fence owned or newly
               // written leases, while allowing adoption to retain expired metadata.

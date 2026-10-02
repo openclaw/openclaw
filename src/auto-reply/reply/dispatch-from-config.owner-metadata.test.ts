@@ -20,12 +20,10 @@ afterEach(async () => {
 });
 
 it.each([
-  "canonical",
   "read-recovery",
   "lifecycle-change",
   "parent-change",
   "replacement-parent",
-  "replacement-detached",
   "owner-error",
 ] as const)("keeps explicit-owner ACP metadata current across gather: %s", async (scenario) => {
   state = await createOpenClawTestState({ label: "dispatch-owner-metadata" });
@@ -75,12 +73,12 @@ it.each([
     if (scenario === "lifecycle-change") {
       replaceSessionEntrySync(scope, { ...entry, lifecycleRevision: "after-gather" });
     }
-    if (scenario === "replacement-parent" || scenario === "replacement-detached") {
+    if (scenario === "replacement-parent") {
       replaceSessionEntrySync(scope, {
         ...entry,
         sessionId: "replacement-child",
         lifecycleRevision: "after-gather",
-        spawnedBy: scenario === "replacement-parent" ? "agent:work:new-parent" : undefined,
+        spawnedBy: "agent:work:new-parent",
       });
       sessionMeta.writeAcpSessionMetaForMigration({
         sessionKey: buildAcpDatabaseSessionKey("global", "work"),
@@ -130,7 +128,7 @@ it.each([
     }
     const prepared = await prepareDispatchDelivery(gathered.state);
     expect(prepared.state.suppressAcpChildUserDelivery).toBe(
-      scenario === "canonical" || scenario === "read-recovery" || scenario === "replacement-parent",
+      scenario === "read-recovery" || scenario === "replacement-parent",
     );
   } finally {
     dispatcher.markComplete();

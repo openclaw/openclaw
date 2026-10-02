@@ -36,11 +36,7 @@ async function loadPwAiModule(mode: PwAiLoadMode): Promise<PwAiModule | null> {
     loadedPwAiModule = pwAi;
     return pwAi;
   } catch (err) {
-    if (mode === "soft") {
-      loadedPwAiModule = null;
-      return null;
-    }
-    if (isModuleNotFoundError(err)) {
+    if (mode === "soft" || isModuleNotFoundError(err)) {
       loadedPwAiModule = null;
       return null;
     }
@@ -57,13 +53,7 @@ export function getLoadedPwAiModule(): PwAiModule | null | undefined {
 export async function getPwAiModule(opts?: { mode?: PwAiLoadMode }): Promise<PwAiModule | null> {
   const mode: PwAiLoadMode = opts?.mode ?? "soft";
   if (mode === "soft") {
-    if (!pwAiModuleSoft) {
-      pwAiModuleSoft = loadPwAiModule("soft");
-    }
-    return await pwAiModuleSoft;
+    return await (pwAiModuleSoft ??= loadPwAiModule("soft"));
   }
-  if (!pwAiModuleStrict) {
-    pwAiModuleStrict = loadPwAiModule("strict");
-  }
-  return await pwAiModuleStrict;
+  return await (pwAiModuleStrict ??= loadPwAiModule("strict"));
 }

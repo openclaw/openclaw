@@ -130,21 +130,16 @@ describe("OAuthManagerRefreshError", () => {
     }
   });
 
-  it.each([undefined, Symbol("refresh-failed"), () => "refresh-failed"])(
-    "formats non-json refresh failure values without throwing",
-    (cause) => {
-      const error = new OAuthManagerRefreshError({
-        credential: createCredential({
-          access: "sk-nonjsonredaction1234567890zzzz",
-        }),
-        profileId: "openai:oauth",
-        refreshedStore: { version: 1, profiles: {} },
-        cause,
-      });
+  it("formats an undefined refresh failure without throwing", () => {
+    const error = new OAuthManagerRefreshError({
+      credential: createCredential({ access: "sk-nonjsonredaction1234567890zzzz" }),
+      profileId: "openai:oauth",
+      refreshedStore: { version: 1, profiles: {} },
+      cause: undefined,
+    });
 
-      expect(error.message).toContain("OAuth token refresh failed");
-    },
-  );
+    expect(error.message).toContain("OAuth token refresh failed");
+  });
 
   it("redacts overlapping credential secrets longest first", () => {
     const error = new OAuthManagerRefreshError({

@@ -21,16 +21,19 @@ class Base {
   constructor(protected client: StructureClient) {}
 }
 
-export class User<IsPartial extends boolean = false> extends Base {
-  protected rawDataValue: APIUser | null;
+class PartialEntity<Raw extends { id: string }, IsPartial extends boolean> extends Base {
+  protected rawDataValue: Raw | null;
   readonly id: string;
 
-  constructor(client: StructureClient, rawDataOrId: IsPartial extends true ? string : APIUser) {
+  constructor(client: StructureClient, rawDataOrId: IsPartial extends true ? string : Raw);
+  constructor(client: StructureClient, rawDataOrId: string | Raw) {
     super(client);
     this.rawDataValue = typeof rawDataOrId === "string" ? null : rawDataOrId;
     this.id = typeof rawDataOrId === "string" ? rawDataOrId : rawDataOrId.id;
   }
+}
 
+export class User<IsPartial extends boolean = false> extends PartialEntity<APIUser, IsPartial> {
   get rawData(): Readonly<APIUser> {
     if (!this.rawDataValue) {
       throw new Error("Partial Discord user has no raw data");
@@ -60,27 +63,13 @@ export class User<IsPartial extends boolean = false> extends Base {
   }
 }
 
-export class Role<IsPartial extends boolean = false> extends Base {
-  protected rawDataValue: APIRole | null;
-  readonly id: string;
-  constructor(client: StructureClient, rawDataOrId: IsPartial extends true ? string : APIRole) {
-    super(client);
-    this.rawDataValue = typeof rawDataOrId === "string" ? null : rawDataOrId;
-    this.id = typeof rawDataOrId === "string" ? rawDataOrId : rawDataOrId.id;
-  }
+export class Role<IsPartial extends boolean = false> extends PartialEntity<APIRole, IsPartial> {
   get name() {
     return this.rawDataValue?.name ?? "";
   }
 }
 
-export class Guild<IsPartial extends boolean = false> extends Base {
-  protected rawDataValue: APIGuild | null;
-  readonly id: string;
-  constructor(client: StructureClient, rawDataOrId: IsPartial extends true ? string : APIGuild) {
-    super(client);
-    this.rawDataValue = typeof rawDataOrId === "string" ? null : rawDataOrId;
-    this.id = typeof rawDataOrId === "string" ? rawDataOrId : rawDataOrId.id;
-  }
+export class Guild<IsPartial extends boolean = false> extends PartialEntity<APIGuild, IsPartial> {
   get name() {
     return this.rawDataValue?.name ?? "";
   }

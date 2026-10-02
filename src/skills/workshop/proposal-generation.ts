@@ -39,6 +39,7 @@ export function proposalBundleRelativePath(
 }
 
 export async function stageSkillProposalGeneration(params: {
+  assertCommitAllowed?: () => void;
   record: SkillProposalRecord;
   content: string;
   supportFiles?: readonly PreparedSkillProposalSupportFile[];
@@ -49,7 +50,8 @@ export async function stageSkillProposalGeneration(params: {
     throw new Error("Revised Skill Workshop proposals require a generation draft path.");
   }
   const stateDir = resolveSkillWorkshopStateDir(params.store);
-  const stateRoot = await root(stateDir);
+  // fs-safe rechecks after path preparation, immediately before each filesystem mutation.
+  const stateRoot = await root(stateDir, { assertBeforeMutation: params.assertCommitAllowed });
   const proposalDir = proposalRelativeDir(params.record.id);
   const stagingDir = path.join(
     proposalDir,

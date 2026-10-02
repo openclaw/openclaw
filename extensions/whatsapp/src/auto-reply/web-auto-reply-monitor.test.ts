@@ -801,25 +801,6 @@ describe("buildInboundLine", () => {
     expect(line).toContain("[/Replying]");
   });
 
-  it("keeps outbound WhatsApp responsePrefix out of inbound messages", () => {
-    const line = buildInboundLine({
-      msg: createDirectMessage({
-        admission: {
-          conversation: {
-            id: "+1555",
-          },
-        },
-        body: "ping",
-        to: "+2666",
-      }),
-      envelope: { includeTimestamp: false },
-    });
-
-    expect(line).toContain("ping");
-    expect(line).not.toContain("{provider}");
-    expect(line).not.toContain("{model}");
-  });
-
   it("normalizes direct from labels by stripping whatsapp: prefix", () => {
     const line = buildInboundLine({
       msg: createDirectMessage({

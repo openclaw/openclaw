@@ -138,6 +138,11 @@ async function withRecoveryRuntime(
     runtimeMocks.createDispatch.mockImplementation(() => ({
       dispatch: vi.fn(),
       forceDestroyEnvironment: runtimeMocks.destroyEnvironment,
+      getEnvironmentAttachedSessionIds: () => [],
+      readEnvironmentSessionIds: async (environmentId: string) =>
+        [...placements.values()]
+          .filter((placement) => placement.environmentId === environmentId)
+          .map((placement) => placement.sessionId),
       reclaim: vi.fn(),
       reconcile: vi.fn(async () => await options.startup?.(placements)),
       reconcileActive: vi.fn(async () => await options.sweep?.(placements)),
@@ -182,8 +187,8 @@ async function withRecoveryRuntime(
         retireSessionPlacement: ({ sessionId }: { sessionId: string }) => {
           placements.delete(sessionId);
         },
-        pruneOrphanedWorkspaceReconciliations: () => [],
-        listWorkspaceReconciliationOwners: () => [],
+        pruneOrphanedWorkspaceReconciliations: async () => [],
+        listWorkspaceReconciliationOwners: async () => [],
         listPendingWorkspaceResults: () => [],
       } as never,
       environments: environments as never,
@@ -445,7 +450,7 @@ describe("worker placement recovery session events", () => {
     );
   });
 
-  it("reserves reconciliation and coalesces its reporting before the worker snapshot yields", async () => {
+  it("coalesces reconciliation reporting without fencing independent destruction", async () => {
     const snapshot = createDeferredCore<RecoveryPlacement[]>();
     const snapshotStarted = createDeferredCore();
     const operationStarted = createDeferredCore();
@@ -473,9 +478,10 @@ describe("worker placement recovery session events", () => {
           expect(readChangeSnapshot).toHaveBeenCalledOnce();
           expect(started).toEqual([]);
           destroy = runtime.dispatchService.forceDestroyEnvironment("environment-recovered");
+          await destroy;
+          expect(runtimeMocks.destroyEnvironment).toHaveBeenCalledOnce();
           snapshot.resolve([]);
           await operationStarted.promise;
-          expect(runtimeMocks.destroyEnvironment).not.toHaveBeenCalled();
           firstOperation.resolve();
           await Promise.all([first, second, destroy]);
           expect(started).toEqual(["first"]);

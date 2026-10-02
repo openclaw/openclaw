@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto";
 // Doctor health contributions preserve the ordered interactive doctor flow while
 // exposing the same checks to structured lint and repair commands.
 import fs from "node:fs";
+import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import {
   DoctorStateMigrationRefusalError,
   throwIfDoctorStateMigrationRefused,
 } from "../infra/state-migrations.messages.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import {
   runAuthProfileMigration,
   runAuthProfileDiagnostics as runAuthProfileHealth,
@@ -281,7 +283,6 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
         detected: legacyState,
         config: ctx.cfg,
         ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
-        recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
         legacySessionSurfaces,
       });
       recordDoctorHealthWarnings(
@@ -513,6 +514,14 @@ async function runDoctorHealthContributionList(
     preparedAgentCount: ctx.preparedAgentCount,
   });
   const updateDoctorRun = isUpdateDoctorRun(env);
+  const rehearsalInspections = new Set(
+    resolveUpdateRehearsalRoot(env)
+      ? contributions.filter(
+          (entry) =>
+            !entry.required && entry.updateWork?.kind === "inspection" && !entry.updateWork.repairs,
+        )
+      : [],
+  );
   const deferred = updateDoctorRun
     ? contributions.filter((contribution) => contribution.updateWork?.kind === "standalone")
     : [];
@@ -539,7 +548,10 @@ async function runDoctorHealthContributionList(
     for (const contribution of ordered) {
       // Skip before opening a plugin snapshot; these diagnostics cannot establish
       // required migration readiness and have their own standalone invocation.
-      if (updateDoctorRun && contribution.updateWork?.kind === "standalone") {
+      if (
+        rehearsalInspections.has(contribution) ||
+        (updateDoctorRun && contribution.updateWork?.kind === "standalone")
+      ) {
         continue;
       }
       if (
@@ -568,12 +580,14 @@ async function runDoctorHealthContributionList(
             await reportDeferredLegacyState(ctx);
           }
         };
-        if (!runWithPluginMetadataSnapshot) {
-          await run();
-        } else {
-          const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
-          await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, run);
-        }
+        await measureGatewayBootstrapStep(`doctor.contribution.${contribution.id}`, async () => {
+          if (!runWithPluginMetadataSnapshot) {
+            await run();
+          } else {
+            const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
+            await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, run);
+          }
+        });
         if (ctx.configWriteRefusal) {
           // Later repairs consume the candidate. Stop before they persist state
           // derived from config that the writer deliberately left non-durable.
@@ -594,6 +608,12 @@ async function runDoctorHealthContributionList(
       }
     }
   } finally {
+    if (rehearsalInspections.size > 0) {
+      // Scope notices must not displace actionable warnings from the bounded result.
+      ctx.runtime.log(
+        `Deferred advisory inspections during copied-state rehearsal: ${[...rehearsalInspections].map((entry) => entry.id).join(", ")}. The live post-swap Doctor retains these checks.`,
+      );
+    }
     const findings = [...(ctx.updateBudget?.deferred.values() ?? [])];
     // Preserve the deferred set before the existing bounded advisory digest.
     recordDoctorHealthWarnings(ctx, findings, [], { prepend: true });

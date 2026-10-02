@@ -34,6 +34,7 @@ import {
 } from "../shared/device-bootstrap-profile.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import { serializeEventPayload } from "./node-registry.js";
@@ -473,7 +474,7 @@ describe("watch node HTTP transport", () => {
       bootstrapToken: issued.token,
     });
     const connected = await readJson(connectResponse);
-    // Prepare the pending request before starting the invoke's two-second budget.
+    // Prepare the pending pairing request before dispatching the invocation.
     const paired = await getPairedDevice(identity.deviceId, baseDir);
     const repair = await requestDevicePairing(
       {
@@ -488,7 +489,9 @@ describe("watch node HTTP transport", () => {
     const invoke = nodeRegistry.invoke({
       nodeId: identity.deviceId,
       command: "device.info",
-      timeoutMs: 2_000,
+      // Pairing revocation must settle this call; an unrelated wall-clock
+      // deadline can win while the real database and HTTP operations finish.
+      timeoutMs: 0,
     });
     const pollResponse = await fetch(`${baseUrl}/poll`, {
       method: "POST",
@@ -585,7 +588,9 @@ describe("watch node HTTP transport", () => {
       baseDir: abortedBaseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
     });
-    const abortedLimiter = createGatewayAuthRateLimiter(limiterConfig);
+    const abortedLimiter = createGatewayAuthRateLimiter(limiterConfig, {
+      scheduler: createTestGatewayScheduler(),
+    });
     try {
       const abortedRuntime = await startWatchNodeHttpRuntime(abortedBaseDir, cleanups, {
         rateLimiter: abortedLimiter,
@@ -647,7 +652,9 @@ describe("watch node HTTP transport", () => {
       baseDir: completedBaseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
     });
-    const completedLimiter = createGatewayAuthRateLimiter(limiterConfig);
+    const completedLimiter = createGatewayAuthRateLimiter(limiterConfig, {
+      scheduler: createTestGatewayScheduler(),
+    });
     try {
       const completedRuntime = await startWatchNodeHttpRuntime(completedBaseDir, cleanups, {
         rateLimiter: completedLimiter,

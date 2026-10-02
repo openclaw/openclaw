@@ -162,6 +162,7 @@ export async function convergeUpdatePlugins(params: {
         }
         const freshProcessResult = await continuePostCoreUpdateInFreshProcess({
           root: postUpdateRoot,
+          sourceRuntimePrepared: params.result.sourceRuntimePrepared,
           channel: params.channel,
           requestedChannel: params.requestedChannel,
           opts: params.opts,
@@ -215,6 +216,7 @@ export async function convergeUpdatePlugins(params: {
         : await withPluginLifecycleLease({ assertCurrent }, (lease) =>
             completeSourceUpdateRuntime({
               root: postUpdateRoot,
+              sourceRuntimePrepared: params.result.sourceRuntimePrepared,
               timeoutMs: params.updateStepTimeoutMs,
               lease,
               beforePersistentEffect: assertCurrent,
@@ -258,7 +260,7 @@ export async function convergeUpdatePlugins(params: {
         const completedPluginUpdate = await completePostCorePluginUpdate({
           root: postUpdateRoot,
           databaseBackup: params.databaseBackup,
-          onDatabaseWriteStep: (step) => params.result.steps.push(step),
+          onDoctorStep: (step) => params.result.steps.push(step),
           opts: params.opts,
           ...(params.candidateRuntime ? { doctorConfigWrites: true as const } : {}),
           pluginUpdate: producedPluginUpdate,

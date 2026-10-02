@@ -48,15 +48,29 @@ jobs:
         run: |
           set -euo pipefail
           pnpm --silent ci:timings:refit > "$RUNNER_TEMP/ci-test-timings-report.md"
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from "node:fs";
+          import path from "node:path";
+          const report = readFileSync(path.join(process.env.RUNNER_TEMP, "ci-test-timings-report.md"), "utf8");
+          const runIds = report.match(/^Sampled CI and release-check runs with successful timing jobs: ([0-9, ]+)$/mu)?.[1];
+          if (!runIds || runIds.length > 2048 || !/^\d+(?:, \d+)*$/u.test(runIds)) {
+            throw new Error("Missing or oversized sampled-run summary; the full report is retained as an artifact.");
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `run_ids=${runIds}\n`);
+          NODE
           if ! git diff --quiet -- config/ci-test-timings.json; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            delimiter="$(node -p 'crypto.randomUUID()')"
-            {
-              echo "report<<${delimiter}"
-              cat "$RUNNER_TEMP/ci-test-timings-report.md"
-              echo "${delimiter}"
-            } >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Upload full timing refit report
+        id: report
+        if: ${{ !cancelled() && steps.refit.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ci-test-timings-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-test-timings-report.md
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Update standing refit pull request
         if: steps.refit.outputs.changed == 'true'
@@ -78,6 +92,7 @@ jobs:
             scripts/lib/ci-test-timings-refit.mts
             scripts/lib/ci-node-test-groups-codec.mts
             scripts/lib/ci-test-timings-schema.mts
+            scripts/lib/local-check-runtime.mts
             scripts/lib/vitest-shard-metadata.mts
             scripts/lib/direct-run.mjs
             scripts/lib/numeric-options.mjs
@@ -92,11 +107,11 @@ jobs:
           pr-body: |
             ## What Problem This Solves
 
-            Refresh stale CI shard weights from successful jobs in completed main-push workflows and successful release-check runs, plus tooling file weights from successful pull-request CI runs.
+            Refresh stale CI shard weights from successful jobs in completed main-push workflows, successful release-check runs, and exact compact selectors and tooling files from successful pull-request CI runs.
 
             ## Why This Change Was Made
 
-            The daily refit uses medians, rejects outliers and single samples, and keeps existing weights when the new median is within 15% of them. Completed failed main workflows contribute only their successful timing jobs; their missing jobs never supply pruning evidence. Pull-request samples measure their merge-ref and update only PR-only tooling files. Main compact keys absent from every contributing run are removed only when their profile has observations from at least three successful workflows; partial PR inventories never prune tooling files. The table below lists each removal explicitly.
+            The daily refit uses independent-run medians, rejects outliers and single samples, and keeps existing weights within the 15% replacement band. Failed main workflows contribute successful timing jobs without supplying pruning evidence. Pull-request measurements describe the merge-ref: exact compact selector keys, runtime inventory observations, and native tooling file costs can update, but partial plans never reprice unqualified compact parents or prune absent measurements. Worker timing identities must agree with observed admission. Main compact keys absent from every contributing run are removed only after three successful contributing workflows for that profile. The complete artifact report lists every change and removal.
 
             ## User Impact
 
@@ -104,6 +119,6 @@ jobs:
 
             ## Evidence
 
-            Generated with `pnpm ci:timings:refit`:
+            Generated with `pnpm ci:timings:refit` from runs: ${{ steps.refit.outputs.run_ids }}.
 
-            ${{ steps.refit.outputs.report }}
+            [Download the complete timing report](${{ steps.report.outputs.artifact-url }}).

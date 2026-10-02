@@ -252,7 +252,6 @@ describe("prepared plugin npm publication", () => {
       "default",
       "npm-token-bootstrap",
     ],
-    ["alpha OIDC", "2026.9.3-alpha.1", "alpha", "alpha", "default", "npm-oidc"],
     [
       "extended-stable OIDC",
       "2026.9.33",
@@ -281,11 +280,24 @@ describe("prepared plugin npm publication", () => {
     },
   );
 
+  it.each(["npm-oidc", "npm-token-bootstrap"])(
+    "rejects retired alpha preparation on %s",
+    (route) => {
+      expect(() =>
+        createPreparedNpmRelease(
+          preparation(
+            { version: "2026.9.3-alpha.1", channel: "alpha", publishTag: "alpha" },
+            route,
+          ),
+        ),
+      ).toThrow("Alpha releases are retired");
+    },
+  );
+
   it.each([
     ["first extended-stable patch on latest", "2026.9.33", "stable", "latest", "default"],
     ["later extended-stable patch on latest", "2026.9.34", "stable", "latest", "default"],
     ["extended-stable correction on latest", "2026.9.33-1", "stable", "latest", "default"],
-    ["alpha", "2026.9.3-alpha.1", "alpha", "alpha", "default"],
     ["explicit extended-stable", "2026.9.33", "stable", "extended-stable", "extended-stable"],
   ])(
     "rejects bootstrap preparation for %s",

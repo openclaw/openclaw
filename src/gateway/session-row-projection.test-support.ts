@@ -92,6 +92,7 @@ export function createSessionRowProjectionFixture(params: {
       store,
       key: fields.key,
       entry,
+      preparedRepositoryWorkspace: null,
       agentId,
       modelCatalog,
       rowContext,
@@ -109,9 +110,13 @@ export function createSessionRowProjectionFixture(params: {
       fallbackModel: presentation.activeModel,
       membership: new Set(),
       parents: new Set(
-        [entry.spawnedBy, entry.parentSessionKey].filter((parentKey): parentKey is string =>
-          Boolean(parentKey),
-        ),
+        [
+          entry.spawnedBy,
+          entry.parentSessionKey,
+          ...(rowContext.subagentRunsByChildSessionKey.get(fields.key) ?? []).map(
+            (run) => run.controllerSessionKey || run.requesterSessionKey,
+          ),
+        ].filter((parentKey): parentKey is string => Boolean(parentKey)),
       ),
       generation:
         previous &&
@@ -207,6 +212,10 @@ export function createSessionRowProjectionFixture(params: {
       return row;
     },
     ensureMaterialized: () => Promise.resolve(),
+    prepareSelection: () => undefined,
+    withSelectionPreparation: (consume) => consume(),
+    needsSelectionPreparation: () => false,
+    isMaterialized: (query) => describe(query) !== undefined,
     prepareMembership: () => Promise.resolve(),
     needsMembershipPreparation: () => false,
     sessionGroupTargets: () => {

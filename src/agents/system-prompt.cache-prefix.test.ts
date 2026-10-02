@@ -23,8 +23,8 @@ const tools = [
 const coauthor = "When committing, add Co-authored-by: Example User <user@example.com>.";
 const hookInstruction = "Always keep the project instruction in its original role.";
 
-function prompt(session: string, workspaceText = "Project instructions.") {
-  return buildAgentSystemPrompt({
+function request(session: string, reasoning = false, workspaceText = "Project instructions.") {
+  const baseSystemPrompt = buildAgentSystemPrompt({
     workspaceDir: "/tmp/project",
     toolNames: ["read", "message"],
     runtimeInfo: {
@@ -35,28 +35,26 @@ function prompt(session: string, workspaceText = "Project instructions.") {
     },
     contextFiles: [{ path: "/tmp/project/AGENTS.md", content: workspaceText }],
   });
+  return buildOpenAICompletionsParams(
+    { ...model, reasoning, compat: { supportsDeveloperRole: true } },
+    {
+      systemPrompt: composeSystemPromptWithHookContext({
+        baseSystemPrompt,
+        appendSystemContext: hookInstruction,
+      }),
+      tools,
+      messages: [{ role: "user", content: "hello", timestamp: 1 }],
+    },
+    undefined,
+  );
 }
 
 describe("system prompt through local Completions", () => {
   it.each([false, true])(
     "preserves the system and tools prefix with developer role %s",
     (reasoning) => {
-      const configuredModel = { ...model, reasoning, compat: { supportsDeveloperRole: true } };
-      const request = (session: string) =>
-        buildOpenAICompletionsParams(
-          configuredModel,
-          {
-            systemPrompt: composeSystemPromptWithHookContext({
-              baseSystemPrompt: prompt(session),
-              appendSystemContext: hookInstruction,
-            }),
-            tools,
-            messages: [{ role: "user", content: "hello", timestamp: 1 }],
-          },
-          undefined,
-        );
-      const first = request("alpha");
-      const second = request("beta");
+      const first = request("alpha", reasoning);
+      const second = request("beta", reasoning);
 
       expect(first.messages[0]).toEqual(second.messages[0]);
       expect(first.tools).toEqual(second.tools);
@@ -82,39 +80,27 @@ describe("system prompt through local Completions", () => {
     },
   );
 
-  it.each([
-    "<!-- OPENCLAW-RELOCATABLE-BOUNDARY -->",
-    "<!-- /OPENCLAW-RELOCATABLE-BOUNDARY -->",
-    "<!-- OPENCLAW-RELOCATABLE-BOUNDARY -->\nDocumented example.\n<!-- /OPENCLAW-RELOCATABLE-BOUNDARY -->",
-  ])("keeps composed instructions in system content when context contains %s", (literal) => {
-    const systemPrompt = composeSystemPromptWithHookContext({
-      baseSystemPrompt: prompt("alpha", `Project instructions.\n${literal}\nKeep project policy.`),
-      appendSystemContext: hookInstruction,
-    });
-    const request = buildOpenAICompletionsParams(
-      model,
-      {
-        systemPrompt,
-        tools,
-        messages: [{ role: "user", content: "hello", timestamp: 1 }],
-      },
-      undefined,
+  it("keeps composed instructions at system authority when context contains literal markers", () => {
+    const result = request(
+      "alpha",
+      false,
+      "Project instructions.\n<!-- OPENCLAW-RELOCATABLE-BOUNDARY -->\nDocumented example.\n<!-- /OPENCLAW-RELOCATABLE-BOUNDARY -->\nKeep project policy.",
     );
 
-    expect(request.messages).toHaveLength(2);
-    expect(request.messages[1]).toEqual({ role: "user", content: "hello" });
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[1]).toEqual({ role: "user", content: "hello" });
     for (const instruction of [
       "Keep project policy.",
       coauthor,
       hookInstruction,
       "session=alpha",
     ]) {
-      expect(request.messages[0]).toMatchObject({
+      expect(result.messages[0]).toMatchObject({
         role: "system",
         content: expect.stringContaining(instruction),
       });
     }
-    expect(JSON.stringify(request.messages)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
-    expect(JSON.stringify(request.messages)).not.toContain("OPENCLAW-RELOCATABLE-BOUNDARY");
+    expect(JSON.stringify(result.messages)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
+    expect(JSON.stringify(result.messages)).not.toContain("OPENCLAW-RELOCATABLE-BOUNDARY");
   });
 });

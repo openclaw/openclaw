@@ -97,6 +97,13 @@ private struct PushRelaySimulatorProofPayload: Encodable {
     var hmacSha256Base64Url: String
 }
 
+private func pushRelayBase64URL(_ data: Data) -> String {
+    data.base64EncodedString()
+        .replacingOccurrences(of: "+", with: "-")
+        .replacingOccurrences(of: "/", with: "_")
+        .replacingOccurrences(of: "=", with: "")
+}
+
 private final class PushRelayAppAttestService {
     func createProof(
         challenge: String,
@@ -125,7 +132,7 @@ private final class PushRelayAppAttestService {
             keyId: keyID,
             attestationObject: attestationObject,
             assertion: assertion.base64EncodedString(),
-            clientDataHash: Self.base64URL(signedPayloadHash),
+            clientDataHash: pushRelayBase64URL(signedPayloadHash),
             signedPayloadBase64: signedPayload.base64EncodedString())
     }
 
@@ -176,13 +183,6 @@ private final class PushRelayAppAttestService {
             throw error
         }
     }
-
-    private static func base64URL(_ data: Data) -> String {
-        data.base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-    }
 }
 
 private final class PushRelayReceiptProvider {
@@ -222,17 +222,10 @@ private final class PushRelaySimulatorProofProvider {
             using: SymmetricKey(data: Data(secret.utf8)))
         return PushRelaySimulatorProofPayload(
             signedPayloadBase64: signedPayloadBase64,
-            hmacSha256Base64Url: Self.base64URL(Data(signature)))
+            hmacSha256Base64Url: pushRelayBase64URL(Data(signature)))
         #else
         throw PushRelayError.relayMisconfigured("Simulator proof is only available in iOS Simulator")
         #endif
-    }
-
-    private static func base64URL(_ data: Data) -> String {
-        data.base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
     }
 }
 

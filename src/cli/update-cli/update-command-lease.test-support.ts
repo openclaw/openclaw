@@ -158,7 +158,8 @@ export async function runUpdateLeaseChild(): Promise<void> {
     if (scenario.verifyRepairOwner) {
       const runId = process.env.OPENCLAW_UPDATE_RUN_ID;
       assert.ok(runId, "Doctor did not inherit its invoking repair run ID");
-      const { DatabaseSync } = await import("node:sqlite");
+      const { requireNodeSqlite } = await import("../../infra/node-sqlite.js");
+      const { DatabaseSync } = requireNodeSqlite();
       const { readUpdateRunRecord } = await import("../../infra/update-run-read.kernel.js");
       const { resolveOpenClawStateSqlitePath } =
         await import("../../state/openclaw-state-db.paths.js");
@@ -199,7 +200,9 @@ export async function runUpdateLeaseChild(): Promise<void> {
     process.stdout.write("doctor fixture output\n");
     process.stderr.write("doctor fixture diagnostic\n");
     if (scenario.failDoctor === phase) {
-      throw new Error("doctor fixture failure");
+      process.stderr.write("doctor fixture failure\n");
+      process.exitCode = 1;
+      return;
     }
     if (scenario.runDoctorConfigFlow) {
       const { loadAndMaybeMigrateDoctorConfig } =

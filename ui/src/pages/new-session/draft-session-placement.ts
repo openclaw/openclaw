@@ -119,7 +119,7 @@ export async function completeDraftSessionPlacement(params: {
       return;
     }
     const cleanupError = await deleteSessionPlacementDraft(
-      params.client,
+      { client: params.client, describe: params.context.sessions.describe },
       sessionKey,
       params.agentId,
     );

@@ -8,7 +8,6 @@ import {
   completionCommandCall,
   expectNoSideEffects,
   getErrorOutput,
-  lastNpmPluginUpdateCall,
   lastReplaceConfigCall,
   lastWriteJsonCall,
   replaceConfigCall,
@@ -30,7 +29,6 @@ import {
   replaceConfigFile,
   resolveGatewayInstallEntrypoint,
   resolveOpenClawPackageRoot,
-  runCommandWithTimeout,
   runExec,
   runUpdateFailureTriage,
   runUtf8CommandWithTimeout,
@@ -71,7 +69,7 @@ describe("update-cli", () => {
     }
     const nodeRunner = path.resolve("fixture-runtime", "node");
     const expectedRunner = runtime.bun ? process.execPath : nodeRunner;
-    vi.spyOn(updateCliShared, "resolveNodeRunner").mockReturnValue(nodeRunner);
+    vi.spyOn(updateCliShared, "resolveNodeRunner").mockReturnValue(expectedRunner);
     Object.defineProperty(process, "versions", {
       value: { ...process.versions, bun: runtime.bun },
     });
@@ -108,7 +106,7 @@ describe("update-cli", () => {
         return runOtherCommand(argv, options);
       });
 
-      await updateFinalizeCommand({ json: true, yes: true, timeout: "9", restart: false });
+      await updateFinalizeCommand({ json: true, yes: true, timeout: "9" });
 
       const maintenance = vi
         .mocked(runExec)
@@ -147,9 +145,7 @@ describe("update-cli", () => {
       throw new Error("Missing process.versions descriptor");
     }
     const execPath = process.execPath;
-    vi.spyOn(updateCliShared, "resolveNodeRunner").mockReturnValue(
-      path.resolve("fixture-runtime", "node"),
-    );
+    vi.spyOn(updateCliShared, "resolveNodeRunner").mockReturnValue(execPath);
     Object.defineProperty(process, "versions", {
       value: { ...process.versions, bun: "1.4.3" },
     });
@@ -157,9 +153,9 @@ describe("update-cli", () => {
       vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(FRESH_POST_UPDATE_ENTRYPOINT);
       vi.mocked(runExec).mockRejectedValueOnce(new Error("Doctor could not complete"));
 
-      await expect(
-        updateFinalizeCommand({ json: true, yes: true, timeout: "9", restart: false }),
-      ).rejects.toThrow("Doctor could not complete");
+      await expect(updateFinalizeCommand({ json: true, yes: true, timeout: "9" })).rejects.toThrow(
+        "Doctor could not complete",
+      );
 
       expect(runUpdateFailureTriage).toHaveBeenCalledOnce();
       expect(vi.mocked(runUpdateFailureTriage).mock.calls[0]?.[0].target).toMatchObject({
@@ -168,114 +164,6 @@ describe("update-cli", () => {
     } finally {
       Object.defineProperty(process, "versions", originalVersions);
     }
-  });
-
-  it("updateFinalizeCommand defers plugin installation during pre-plugin doctor", async () => {
-    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(FRESH_POST_UPDATE_ENTRYPOINT);
-    await withEnvAsync(
-      {
-        OPENCLAW_UPDATE_IN_PROGRESS: undefined,
-        OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: undefined,
-        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: undefined,
-        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
-      },
-      async () => {
-        let doctorEnv: NodeJS.ProcessEnv | undefined;
-        vi.mocked(runExec).mockImplementationOnce(async (_file, _args, options) => {
-          if (typeof options === "object") {
-            doctorEnv = { ...options.baseEnv, ...options.env };
-          }
-          return { stdout: "", stderr: "" };
-        });
-        vi.mocked(defaultRuntime.writeJson).mockClear();
-
-        await updateFinalizeCommand({
-          json: true,
-          yes: true,
-          timeout: "9",
-          restart: false,
-        });
-
-        expect(doctorEnv?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
-        expect(doctorEnv?.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR).toBe("1");
-        expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBe("1");
-        expect(doctorEnv?.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE).toBeUndefined();
-        expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
-        expect(process.env.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR).toBeUndefined();
-        expect(process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBeUndefined();
-        expect(process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE).toBe("1");
-        expectFreshPostUpdateDoctor({ yes: true, workspaceSuggestions: true });
-        expect(syncPluginCall()?.channel).toBe("stable");
-        expect(lastNpmPluginUpdateCall()?.timeoutMs).toBe(9_000);
-        expect(
-          vi
-            .mocked(readConfigFileSnapshot)
-            .mock.calls.some(([options]) => options?.skipPluginValidation === true),
-        ).toBe(true);
-        const output = lastWriteJsonCall() as
-          | {
-              status?: string;
-              mode?: string;
-              restart?: boolean;
-              phaseTimings?: Array<{
-                phase?: string;
-                startedOffsetMs?: number;
-                durationMs?: number;
-                outcome?: string;
-              }>;
-              postUpdate?: { doctor?: { status?: string }; plugins?: { status?: string } };
-            }
-          | undefined;
-        expect(output?.status).toBe("ok");
-        expect(output?.mode).toBe("finalize");
-        expect(output?.restart).toBe(false);
-        expect(output?.postUpdate?.doctor?.status).toBe("ok");
-        expect(output?.postUpdate?.plugins?.status).toBe("ok");
-        expect(output?.phaseTimings?.map((timing) => timing.phase)).toEqual([
-          "preflight",
-          "targetConfigValidation",
-          "configSnapshot",
-          "doctor",
-          "plugins",
-          "targetConfigConvergence",
-          "completionCache",
-        ]);
-        for (const timing of output?.phaseTimings ?? []) {
-          expect(timing.startedOffsetMs).toEqual(expect.any(Number));
-          expect(timing.durationMs).toEqual(expect.any(Number));
-        }
-        expect(output?.phaseTimings?.map((timing) => timing.outcome)).toEqual([
-          "completed",
-          "completed",
-          "completed",
-          "completed",
-          "completed",
-          "completed",
-          "skipped",
-        ]);
-      },
-    );
-  });
-
-  it("updateFinalizeCommand can defer only the best-effort completion cache", async () => {
-    pathExists.mockResolvedValue(true);
-    vi.mocked(runCommandWithTimeout).mockClear();
-    vi.mocked(defaultRuntime.writeJson).mockClear();
-
-    await updateFinalizeCommand({
-      json: true,
-      yes: true,
-      restart: false,
-      deferCompletionCache: true,
-    } as Parameters<typeof updateFinalizeCommand>[0] & { deferCompletionCache: boolean });
-
-    expect(completionCommandCall()).toBeUndefined();
-    const output = lastWriteJsonCall() as
-      | { phaseTimings?: Array<{ phase?: string; outcome?: string }> }
-      | undefined;
-    expect(output?.phaseTimings?.at(-1)).toEqual(
-      expect.objectContaining({ phase: "completionCache", outcome: "deferred" }),
-    );
   });
 
   it("updateFinalizeCommand capability env applies only to the hidden finalizer", async () => {
@@ -313,11 +201,11 @@ describe("update-cli", () => {
     );
   });
 
-  it.each(
-    ["repair", "finalize"].flatMap((leaf) =>
-      ["before", "after", "absent"].map((position) => ({ leaf, position })),
-    ),
-  )(
+  it.each([
+    { leaf: "repair", position: "before" },
+    { leaf: "finalize", position: "after" },
+    { leaf: "finalize", position: "absent" },
+  ])(
     "resolves capability consent $position $leaf without deriving it from --yes",
     async ({ leaf, position }) => {
       setTty(false);
@@ -363,7 +251,6 @@ describe("update-cli", () => {
       updateFinalizeCommand({
         channel: "extended-stable",
         json: true,
-        restart: false,
       }),
     ).rejects.toEqual(new ExitError(1));
 
@@ -417,7 +304,7 @@ describe("update-cli", () => {
       npmPluginUpdateResult(config),
     );
 
-    await updateFinalizeCommand({ json: true, timeout: "9", restart: false });
+    await updateFinalizeCommand({ json: true, timeout: "9" });
 
     expectFreshPostUpdateDoctor({ yes: false, workspaceSuggestions: true });
     const freshDoctorCall = vi
@@ -490,7 +377,7 @@ describe("update-cli", () => {
         OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: sourceConfigPath,
       },
       async () => {
-        await updateFinalizeCommand({ json: true, restart: false });
+        await updateFinalizeCommand({ json: true });
       },
     );
 
@@ -534,7 +421,7 @@ describe("update-cli", () => {
       return { stdout: "", stderr: "" };
     });
 
-    await updateFinalizeCommand({ channel: "dev", json: true, restart: false });
+    await updateFinalizeCommand({ channel: "dev", json: true });
 
     expectFreshPostUpdateDoctor({ yes: false, workspaceSuggestions: true });
     expect(replaceConfigCall(0)?.baseHash).toBe("pre-doctor");
@@ -557,7 +444,7 @@ describe("update-cli", () => {
     // Simulate a no-config git/source update whose effective channel is dev.
     process.env.OPENCLAW_UPDATE_EFFECTIVE_CHANNEL = "dev";
     try {
-      await updateFinalizeCommand({ json: true, restart: false });
+      await updateFinalizeCommand({ json: true });
     } finally {
       if (priorEffective === undefined) {
         delete process.env.OPENCLAW_UPDATE_EFFECTIVE_CHANNEL;

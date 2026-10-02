@@ -1,9 +1,10 @@
 // Shared sessions_spawn test harness for gateway, registry, and lifecycle mocks.
 import os from "node:os";
 import path from "node:path";
-import { vi, type Mock } from "vitest";
+import { onTestFinished, vi, type Mock } from "vitest";
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
+import { configureMockSubagentRegistryPersistence } from "./subagent-test-fixtures.test-helpers.js";
 import { resolveRequesterStoreKey } from "./subagents/announce/subagent-requester-store-key.js";
 import { supportedSpawnModelChoice } from "./subagents/spawn/subagent-spawn.test-helpers.js";
 
@@ -140,6 +141,7 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
+let persistenceStubInstalled = false;
 let cachedCreateSessionsSpawnTool: CreateSessionsSpawnTool | null = null;
 let cachedSubagentSpawnTesting: SubagentSpawnTesting | null = null;
 const sessionStorePath = path.join(
@@ -236,12 +238,19 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
       },
     }),
   });
-  const persistence = await import("./subagents/registry/subagent-registry-state.js");
-  vi.mocked(persistence.persistSubagentRunsToDisk).mockImplementation(hoisted.notifyEventWaiters);
-  vi.mocked(persistence.persistSubagentRunsToDiskOrThrow).mockImplementation(
-    hoisted.notifyEventWaiters,
-  );
-  vi.mocked(persistence.restoreSubagentRunsFromDisk).mockReturnValue(0);
+  const persistence = await import("./subagents/registry/subagent-registry-persistence.js");
+  vi.mocked(persistence.restoreSubagentRunsFromDisk).mockResolvedValue(0);
+  if (!persistenceStubInstalled) {
+    await configureMockSubagentRegistryPersistence({ persistRegistryRows: () => {} });
+    persistenceStubInstalled = true;
+    const { subscribeSubagentRunChanges } =
+      await import("./subagents/registry/subagent-registry-publication.js");
+    const unsubscribe = subscribeSubagentRunChanges("persistence", hoisted.notifyEventWaiters);
+    onTestFinished(() => {
+      unsubscribe();
+      persistenceStubInstalled = false;
+    });
+  }
   // Prepare the async announcement mock before lifecycle assertions start waiting.
   await import("./subagents/announce/subagent-announce.js");
   if (!cachedCreateSessionsSpawnTool) {
@@ -354,6 +363,7 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 vi.mock("./subagents/registry/subagent-registry-state.js", { spy: true });
+vi.mock("./subagents/registry/subagent-registry-persistence.js", { spy: true });
 vi.mock("../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
 }));
@@ -419,17 +429,8 @@ vi.mock("../config/sessions.js", async () => ({
   },
 }));
 
-vi.mock("../tasks/detached-task-runtime.js", () => ({
-  createQueuedTaskRun: vi.fn(() => ({})),
-  createRunningTaskRun: vi.fn(() => ({})),
-  findDetachedTaskRun: vi.fn(() => ({ lookup: "available" as const })),
-  findDetachedTaskRunAsync: vi.fn<
-    typeof import("../tasks/detached-task-runtime.js").findDetachedTaskRunAsync
-  >(async () => ({ lookup: "available" })),
-}));
-
-vi.mock("../tasks/detached-task-runtime.async.js", () => ({
-  completeTaskRunByRunIdAsync: vi.fn(async () => []),
-  failTaskRunByRunIdAsync: vi.fn(async () => []),
-  setDetachedTaskDeliveryStatusByRunIdAsync: vi.fn(async () => []),
+// Same module, different specifier (used by tools under src/agents/tools/*).
+vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: () => hoisted.state.configOverride,
+  resolveGatewayPort: () => 18789,
 }));

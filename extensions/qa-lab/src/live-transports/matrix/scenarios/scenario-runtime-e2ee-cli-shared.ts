@@ -1,10 +1,8 @@
-// Qa Matrix plugin module implements shared CLI scenario runtime E2EE behavior.
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { MatrixVerificationSummary } from "@openclaw/matrix/test-api.js";
 import { createMatrixQaClient } from "../substrate/client.js";
-import { createMatrixQaE2eeScenarioClient } from "../substrate/e2ee-client.js";
 import type { MatrixQaE2eeScenarioId } from "./scenario-contract.js";
 import {
   formatMatrixQaCliCommand,
@@ -12,8 +10,8 @@ import {
   type MatrixQaCliRunResult,
 } from "./scenario-runtime-cli.js";
 import {
+  createMatrixQaE2eeAccountClient,
   formatMatrixQaSasEmoji,
-  requireMatrixQaE2eeOutputDir,
   requireMatrixQaRegistrationToken,
 } from "./scenario-runtime-e2ee-shared.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
@@ -29,10 +27,15 @@ export type MatrixQaCliVerificationStatus = {
   crossSigningVerified?: boolean;
   encryptionEnabled?: boolean;
   pendingVerifications?: number;
+  error?: string;
+  recoveryKeyAccepted?: boolean;
+  backupUsable?: boolean;
+  deviceOwnerVerified?: boolean;
   recoveryKeyStored?: boolean;
-  serverDeviceKnown?: boolean;
+  serverDeviceKnown?: boolean | null;
   verified?: boolean;
   signedByOwner?: boolean;
+  success?: boolean;
   deviceId?: string | null;
   userId?: string | null;
 };
@@ -61,7 +64,11 @@ export type MatrixQaCliAccountAddStatus = {
 export type MatrixQaCliBackupRestoreStatus = {
   success?: boolean;
   backup?: MatrixQaCliVerificationStatus["backup"];
+  backupVersion?: string | null;
   error?: string;
+  imported?: number;
+  loadedFromSecretStorage?: boolean;
+  total?: number;
 };
 
 export function isMatrixQaCliBackupUsable(
@@ -145,21 +152,34 @@ export async function registerMatrixQaCliE2eeAccount(params: {
   return account;
 }
 
+export async function loginMatrixQaCliDevice(
+  baseUrl: string,
+  account: { password: string; userId: string },
+  deviceName: string,
+  label: string,
+) {
+  const device = await createMatrixQaClient({ baseUrl }).loginWithPassword({
+    deviceName,
+    password: account.password,
+    userId: account.userId,
+  });
+  if (!device.deviceId) {
+    throw new Error(`${label} login did not return a device id`);
+  }
+  return { ...device, deviceId: device.deviceId };
+}
+
 export async function createMatrixQaE2eeCliOwnerClient(params: {
   account: Awaited<ReturnType<typeof registerMatrixQaCliE2eeAccount>>;
   context: MatrixQaScenarioContext;
   scenarioId: MatrixQaE2eeScenarioId;
 }) {
-  return await createMatrixQaE2eeScenarioClient({
+  return await createMatrixQaE2eeAccountClient(params.context, {
     accessToken: params.account.accessToken,
     actorId: `cli-owner-${randomUUID().slice(0, 8)}`,
-    baseUrl: params.context.baseUrl,
     deviceId: params.account.deviceId,
-    observedEvents: params.context.observedEvents,
-    outputDir: requireMatrixQaE2eeOutputDir(params.context),
     password: params.account.password,
     scenarioId: params.scenarioId,
-    timeoutMs: params.context.timeoutMs,
     userId: params.account.userId,
   });
 }
@@ -218,25 +238,18 @@ export function assertMatrixQaCliSasMatches(params: {
   cliSas: ReturnType<typeof parseMatrixQaCliSasText>;
   owner: MatrixVerificationSummary;
 }) {
-  if (params.cliSas.kind === "emoji") {
-    const ownerEmoji = formatMatrixQaSasEmoji(params.owner).join(" | ");
-    if (!ownerEmoji) {
-      throw new Error("Matrix owner client did not expose SAS emoji");
-    }
-    if (params.cliSas.value !== ownerEmoji) {
-      throw new Error("Matrix CLI SAS emoji did not match the owner client");
-    }
-    return ownerEmoji.split(" | ");
+  const emoji = params.cliSas.kind === "emoji";
+  const kind = emoji ? "emoji" : "decimals";
+  const ownerSas = emoji
+    ? formatMatrixQaSasEmoji(params.owner).join(" | ")
+    : params.owner.sas?.decimal?.join(" ");
+  if (!ownerSas) {
+    throw new Error(`Matrix owner client did not expose SAS ${kind}`);
   }
-
-  const ownerDecimal = params.owner.sas?.decimal?.join(" ");
-  if (!ownerDecimal) {
-    throw new Error("Matrix owner client did not expose SAS decimals");
+  if (params.cliSas.value !== ownerSas) {
+    throw new Error(`Matrix CLI SAS ${kind} did not match the owner client`);
   }
-  if (params.cliSas.value !== ownerDecimal) {
-    throw new Error("Matrix CLI SAS decimals did not match the owner client");
-  }
-  return [ownerDecimal];
+  return emoji ? ownerSas.split(" | ") : [ownerSas];
 }
 
 export function isMatrixQaCliOwnerSelfVerification(params: {

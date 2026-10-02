@@ -5,7 +5,11 @@ import {
   formatInvalidConfigRecoveryHint,
   formatPluginPackagingRuntimeOutputRecoveryHint,
 } from "../cli/config-recovery-hints.js";
-import { createInvalidConfigError } from "../config/io.invalid-config.js";
+import {
+  createConfigReadError,
+  createInvalidConfigError,
+  isConfigReadFailure,
+} from "../config/io.invalid-config.js";
 import {
   type ReadConfigFileSnapshotWithPluginMetadataResult,
   readConfigFileSnapshotWithPluginMetadata,
@@ -69,6 +73,12 @@ function assertValidGatewayStartupConfigSnapshot(
     snapshot.issues.length > 0
       ? renderConfigValidationIssueLines(snapshot, "").join("\n")
       : "Unknown validation issue.";
+  if (isConfigReadFailure(snapshot)) {
+    throw createConfigReadError(
+      snapshot.path,
+      `${issues}\nResolve the read error shown above, then retry.`,
+    );
+  }
   const recoveryHint =
     options.includeDoctorHint && isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
       ? `\n${formatPluginPackagingRuntimeOutputRecoveryHint()}`

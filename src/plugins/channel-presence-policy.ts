@@ -1,4 +1,3 @@
-// Resolves channel presence policy advertised by plugin metadata.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
@@ -216,6 +215,16 @@ function normalizeActivationBlockedReason(reason?: string): ConfiguredChannelBlo
   }
 }
 
+function hasChannelPluginOwnerTrust(params: {
+  plugin: PluginManifestRecord;
+  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
+  rootConfig?: OpenClawConfig;
+}): boolean {
+  return params.plugin.origin === "global" || params.plugin.origin === "config"
+    ? hasExplicitManifestOwnerTrust(params)
+    : isActivatedManifestOwner(params);
+}
+
 function isChannelPluginEligibleForScopedOwnership(params: {
   plugin: PluginManifestRecord;
   normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
@@ -242,17 +251,7 @@ function isChannelPluginEligibleForScopedOwnership(params: {
   if (isBundledManifestOwner(params.plugin)) {
     return true;
   }
-  if (params.plugin.origin === "global" || params.plugin.origin === "config") {
-    return hasExplicitManifestOwnerTrust({
-      plugin: params.plugin,
-      normalizedConfig: params.normalizedConfig,
-    });
-  }
-  return isActivatedManifestOwner({
-    plugin: params.plugin,
-    normalizedConfig: params.normalizedConfig,
-    rootConfig: params.rootConfig,
-  });
+  return hasChannelPluginOwnerTrust(params);
 }
 
 function evaluateEffectiveChannelPlugin(params: {
@@ -283,25 +282,12 @@ function evaluateEffectiveChannelPlugin(params: {
   }
 
   if (!isBundledManifestOwner(params.plugin)) {
-    if (params.plugin.origin === "global" || params.plugin.origin === "config") {
-      const trusted = hasExplicitManifestOwnerTrust({
-        plugin: params.plugin,
-        normalizedConfig: params.normalizedConfig,
-      });
-      return trusted
-        ? { effective: true, pluginId: params.plugin.id }
-        : {
-            effective: false,
-            pluginId: params.plugin.id,
-            blockedReason: "untrusted-plugin",
-          };
-    }
-    const activated = isActivatedManifestOwner({
+    const trusted = hasChannelPluginOwnerTrust({
       plugin: params.plugin,
       normalizedConfig: params.normalizedConfig,
       rootConfig: params.activationSource.rootConfig,
     });
-    return activated
+    return trusted
       ? { effective: true, pluginId: params.plugin.id }
       : {
           effective: false,

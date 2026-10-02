@@ -313,7 +313,14 @@ export async function getMetadata(
   if (!stat) {
     throw new JsonRpcProtocolError(JSON_RPC_NOT_FOUND, "file not found");
   }
-  return metadataResponse(stat);
+  return {
+    isDirectory: stat.type === "directory",
+    isFile: stat.type === "file",
+    isSymlink: false,
+    size: stat.size,
+    createdAtMs: 0,
+    modifiedAtMs: stat.mtimeMs ?? 0,
+  };
 }
 
 export async function readDirectory(
@@ -342,7 +349,7 @@ async function listDirectoryEntries(
   }
   const result = await execServer.backend.runShellCommand({
     script:
-      'find "$1" -mindepth 1 -maxdepth 1 -exec sh -c \'for path do name=${path##*/}; if [ -L "$path" ]; then kind=o; elif [ -d "$path" ]; then kind=d; elif [ -f "$path" ]; then kind=f; else kind=o; fi; printf "%s\\t%s\\n" "$kind" "$name"; done\' sh {} +',
+      'find "$1" -mindepth 1 -maxdepth 1 -exec sh -c \'for path do name=${path##*/}; if [ -L "$path" ]; then kind=o; elif [ -d "$path" ]; then kind=d; elif [ -f "$path" ]; then kind=f; else kind=o; fi; printf "%s%s\\000" "$kind" "$name"; done\' sh {} +',
     args: [resolved.containerPath],
     allowFailure: true,
   });
@@ -350,15 +357,16 @@ async function listDirectoryEntries(
     const stderr = result.stderr.toString("utf8").trim();
     throw new Error(stderr || `sandbox directory listing failed with code ${result.code}`);
   }
-  const lines = result.stdout.toString("utf8").split("\n").filter(Boolean);
-  return lines.map((line) => {
-    const [kind = "o", fileName = ""] = line.split("\t");
-    return {
-      fileName,
-      isDirectory: kind === "d",
-      isFile: kind === "f",
-    };
-  });
+  // POSIX basenames can contain tabs and newlines, but never a NUL byte.
+  return result.stdout
+    .toString("utf8")
+    .split("\0")
+    .filter(Boolean)
+    .map((entry) => ({
+      fileName: entry.slice(1),
+      isDirectory: entry[0] === "d",
+      isFile: entry[0] === "f",
+    }));
 }
 
 export async function removePath(
@@ -406,10 +414,6 @@ export async function copyPath(
     "copy destination path",
   );
   const fsSandboxPolicy = resolveFsSandboxPolicy(execServer, record);
-  assertResolvedFsSandboxAccess(fsSandboxPolicy, [
-    { path: sourcePath, access: "read" },
-    { path: destinationPath, access: "write" },
-  ]);
   await copySandboxPath(execServer, {
     sourcePath,
     destinationPath,
@@ -530,15 +534,4 @@ function assertSandboxFileReadWithinLimit(stat: SandboxFsStat): void {
       `file is too large to read through Codex sandbox exec-server: ${stat.size} bytes`,
     );
   }
-}
-
-function metadataResponse(stat: SandboxFsStat | null): JsonObject {
-  return {
-    isDirectory: stat?.type === "directory",
-    isFile: stat?.type === "file",
-    isSymlink: false,
-    size: stat?.size ?? 0,
-    createdAtMs: 0,
-    modifiedAtMs: stat?.mtimeMs ?? 0,
-  };
 }

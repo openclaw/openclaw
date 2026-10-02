@@ -13,19 +13,20 @@ import { createTestBoardStore, readBoardHtml } from "./board-store.test-support.
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(async () => {
+async function closeDatabases() {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
-});
+}
+
+afterEach(closeDatabases);
 
 describe("SqliteBoardStore native widgets", () => {
-  const createStore = createTestBoardStore;
   const boardSession = { sessionKey: "agent:main:board" };
 
   it("replaces omitted plugin props without changing unrelated layout state", async () => {
-    const store = createStore();
+    const store = createTestBoardStore();
     const initial = await store.putWidget({
       ...boardSession,
       name: "work-item",
@@ -35,16 +36,13 @@ describe("SqliteBoardStore native widgets", () => {
         props: { cardId: "card-123", compact: true },
       },
     });
-    await store.putWidget({
-      ...boardSession,
-      name: "left",
-      content: { kind: "plugin", pluginKind: "workboard:card", props: { side: "left" } },
-    });
-    await store.putWidget({
-      ...boardSession,
-      name: "right",
-      content: { kind: "plugin", pluginKind: "workboard:card", props: { side: "right" } },
-    });
+    for (const name of ["left", "right"]) {
+      await store.putWidget({
+        ...boardSession,
+        name,
+        content: { kind: "plugin", pluginKind: "workboard:card", props: { side: name } },
+      });
+    }
 
     expect(initial.widgets[0]).toMatchObject({
       name: "work-item",
@@ -98,7 +96,7 @@ describe("SqliteBoardStore native widgets", () => {
   });
 
   it("rejects oversized plugin props and capability declarations", async () => {
-    const store = createStore();
+    const store = createTestBoardStore();
     await expect(
       store.putWidget({
         ...boardSession,
@@ -154,10 +152,7 @@ describe("SqliteBoardStore native widgets", () => {
     const expectedLegacy = { ...initial.widgets[0]! };
     delete expectedLegacy.instanceId;
 
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await closeDatabases();
     const reopened = createTestBoardStore({ stateDir });
     expect((await reopened.getSnapshot(target)).widgets).toEqual([expectedLegacy]);
     expect(readPersistedWidget()).toEqual(persistedLegacy);
@@ -177,10 +172,7 @@ describe("SqliteBoardStore native widgets", () => {
     expect(instanceId).not.toBe(initial.widgets[0]?.instanceId);
     expect(adopted.widgets).toEqual([{ ...resized.widgets[0], revision: 2, instanceId }]);
 
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await closeDatabases();
     expect((await createTestBoardStore({ stateDir }).getSnapshot(target)).widgets).toEqual(
       adopted.widgets,
     );
@@ -207,10 +199,7 @@ describe("SqliteBoardStore native widgets", () => {
     expect(edited.widgets[0]).toMatchObject({ title: "Updated status", instanceId });
     await store.applyOps(target, [{ kind: "widget_resize", name: "status", sizeW: 8, sizeH: 6 }]);
 
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await closeDatabases();
     const reopened = createTestBoardStore({ stateDir });
     expect((await reopened.getSnapshot(target)).widgets[0]).toMatchObject({
       title: "Updated status",

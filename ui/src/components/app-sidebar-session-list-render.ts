@@ -7,8 +7,10 @@ import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile
 import { t } from "../i18n/index.ts";
 import { renderHoverMarquee } from "../lib/hover-marquee.ts";
 import {
-  isPresenceViewerIdle,
+  presenceViewerActivity,
+  presenceActivityLabel,
   presenceViewerLabel,
+  type PresenceActivity,
   projectPresenceViewers,
 } from "../lib/presence-users.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
@@ -73,7 +75,7 @@ type SessionCatalogRenderSnapshot = {
 };
 
 type PersonHeaders = {
-  presence: ReadonlyMap<string, "active" | "idle">;
+  presence: ReadonlyMap<string, PresenceActivity>;
   selfProfileId?: string;
 };
 
@@ -96,9 +98,7 @@ export function renderSessionSection(params: {
   const personCardKey = personCard
     ? presenceUserKey({ id: personOwner.id, identity: personIdentity })
     : undefined;
-  const presenceLabel = presence
-    ? t(presence === "idle" ? "presence.idle" : "presence.rosterTitle")
-    : undefined;
+  const presenceLabel = presence ? presenceActivityLabel(presence) : undefined;
   // The person button's explicit aria-label hides descendant text, so the live
   // state is exposed as its accessible description via this indicator id.
   const presenceId =
@@ -191,9 +191,7 @@ export function renderSessionSection(params: {
           presence
             ? html`<span
                 id=${presenceId ?? nothing}
-                class="sidebar-session-group-presence ${
-                  presence === "idle" ? "sidebar-session-group-presence--idle" : ""
-                }"
+                class="sidebar-session-group-presence ${`sidebar-session-group-presence--${presence}`}"
                 role="img"
                 aria-label=${presenceLabel}
               ></span>`
@@ -587,14 +585,14 @@ function renderSessionListBody(params: {
       presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
       presenceInstanceId: host.sessionData.presenceInstanceId,
     });
-    const presence = new Map<string, "active" | "idle">();
+    const presence = new Map<string, PresenceActivity>();
     for (const user of projectPresenceViewers(
       host.sessionData.presencePayload,
       selfUser,
       host.sessionData.presenceInstanceId,
     )) {
       if (user.identity?.type === "profile") {
-        presence.set(user.identity.id, isPresenceViewerIdle(user) ? "idle" : "active");
+        presence.set(user.identity.id, presenceViewerActivity(user));
       }
     }
     personHeaders = {

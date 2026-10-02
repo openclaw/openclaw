@@ -6,8 +6,8 @@ struct AgentProTab: View {
     @Environment(\.scenePhase) var scenePhase
     let directRoute: AgentRoute
     let headerSidebarAction: OpenClawSidebarHeaderAction?
-    let headerTitle: String
-    let openSettings: (() -> Void)?
+    let headerTitle = "Agents"
+    let openSettings: () -> Void
     @State var agentRosterFilter: AgentRosterFilter = .all
     @State var agentSearchText = ""
 
@@ -52,18 +52,6 @@ struct AgentProTab: View {
             case .ready: OpenClawBrand.info
             }
         }
-    }
-
-    init(
-        directRoute: AgentRoute,
-        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
-        headerTitle: String = "Agents",
-        openSettings: (() -> Void)? = nil)
-    {
-        self.directRoute = directRoute
-        self.headerSidebarAction = headerSidebarAction
-        self.headerTitle = headerTitle
-        self.openSettings = openSettings
     }
 
     var body: some View {

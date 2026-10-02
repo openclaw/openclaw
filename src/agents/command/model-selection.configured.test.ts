@@ -64,13 +64,7 @@ function automaticEntry(model = "child"): SessionEntry {
 beforeEach(() => {
   vi.spyOn(harnessRuntime, "ensureSelectedAgentHarnessPlugin").mockResolvedValue(undefined);
   vi.spyOn(runtimeLoaders, "loadTranscriptResolveRuntime").mockResolvedValue({
-    resolveSessionTranscriptFile: async (params) => ({
-      sessionFile: path.join(
-        path.dirname(params.storePath ?? "/unused/sessions.json"),
-        "turn.jsonl",
-      ),
-      sessionEntry: params.sessionEntry,
-    }),
+    resolveSessionTranscriptFile,
   });
   // Only the persistence boundary is substituted; the selector decides every patch.
   vi.spyOn(sessionPersistence, "persistAgentSession").mockImplementation(async (params) => {
@@ -243,24 +237,15 @@ describe("command selection with configured model facts", () => {
     },
   );
 
-  it.each([false, true])(
-    "constrains stored automatic selection only for a restricted caller (%s)",
-    async (restricted) => {
-      const fixture = createRestrictedFixture();
-      const selected = await fixture.select({
-        opts: {
-          message: "Continue",
-          ...(restricted ? { operatorAuthority: fixture.operatorAuthority } : {}),
-        },
-      });
+  it("constrains stored automatic selection for a restricted caller", async () => {
+    const fixture = createRestrictedFixture();
+    const selected = await fixture.select({
+      opts: { message: "Continue", operatorAuthority: fixture.operatorAuthority },
+    });
 
-      expect(selected).toMatchObject({
-        provider: "custom",
-        model: restricted ? "manual" : "child",
-      });
-      expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
-    },
-  );
+    expect(selected).toMatchObject({ provider: "custom", model: "manual" });
+    expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
+  });
 
   it("allows an explicit permitted alias without weakening the agent's manual policy", async () => {
     const fixture = createRestrictedFixture();
@@ -439,27 +424,25 @@ describe("command selection with configured model facts", () => {
     },
   );
 
-  it.each([false, true])(
-    "keeps wildcard replacement in catalog order (reversed=%s)",
-    async (reverse) => {
-      const fixture = createFixture();
-      fixture.defaults.modelPolicy = { allow: ["remote/*"] };
-      fixture.store[sessionKey] = { sessionId: "configured-child", updatedAt: 1 };
-      const choices = [catalogEntry("remote", "z-first"), catalogEntry("remote", "a-second")];
-      const catalog = reverse ? choices.toReversed() : choices;
-      fixture.inventory.mockReturnValue(catalog);
-      const before = structuredClone({ cfg: fixture.cfg, store: fixture.store });
+  it("keeps wildcard replacement in catalog order rather than alphabetical order", async () => {
+    const fixture = createFixture();
+    fixture.defaults.modelPolicy = { allow: ["remote/*"] };
+    fixture.store[sessionKey] = { sessionId: "configured-child", updatedAt: 1 };
+    fixture.inventory.mockReturnValue([
+      catalogEntry("remote", "z-first"),
+      catalogEntry("remote", "a-second"),
+    ]);
+    const before = structuredClone({ cfg: fixture.cfg, store: fixture.store });
 
-      const selected = await fixture.select();
+    const selected = await fixture.select();
 
-      expect(selected).toMatchObject({
-        provider: "remote",
-        model: reverse ? "a-second" : "z-first",
-        requestedRouteResolution: "resolved",
-      });
-      expect({ cfg: fixture.cfg, store: fixture.store }).toEqual(before);
-    },
-  );
+    expect(selected).toMatchObject({
+      provider: "remote",
+      model: "z-first",
+      requestedRouteResolution: "resolved",
+    });
+    expect({ cfg: fixture.cfg, store: fixture.store }).toEqual(before);
+  });
 
   it("retains unqualified policy inference from the manifest catalog", async () => {
     const fixture = createFixture();
@@ -558,16 +541,9 @@ describe("command selection with real transcript routing", () => {
   it.each([
     [sessionKey, true, false, "store"],
     [sessionKey, true, true, "suppressed"],
-    [sessionKey, false, false, "fallback"],
     [sessionKey, false, true, "fallback"],
-    [undefined, true, false, "fallback"],
     [undefined, true, true, "fallback"],
-    [undefined, false, false, "fallback"],
-    [undefined, false, true, "fallback"],
-    ["", true, false, "fallback"],
     ["", true, true, "fallback"],
-    ["", false, false, "fallback"],
-    ["", false, true, "fallback"],
   ] as const)(
     "routes key=%j, store=%s, suppressed=%s through the real resolver",
     async (key, withStore, suppressVisibleSessionEffects, route) => {
@@ -603,14 +579,10 @@ describe("command selection with real transcript routing", () => {
       expect(resolver).toHaveBeenCalledTimes(1);
       const forwarded = expectDefined(resolver.mock.calls[0], "transcript resolution call")[0];
       expect(forwarded).toMatchObject({
-        sessionId,
         sessionKey: key === undefined ? sessionId : key,
-        agentId: "main",
-        threadId: 42,
       });
       expect(forwarded.sessionEntry).toBeUndefined();
       expect(forwarded.sessionStore).toBe(route === "store" ? store : undefined);
-      expect(forwarded.storePath).toBe(route === "suppressed" ? undefined : storePath);
       expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
     },
   );

@@ -7,11 +7,13 @@ import {
 } from "../../../state/openclaw-state-db.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
+  persistRegistryFixture,
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
+import {
   clearSubagentRunsReadCacheForTest,
-  persistSubagentRunsToDisk,
   publishSubagentRunsAfterAtomicStore,
 } from "./subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import "./subagent-registry-maintenance.js";
 
@@ -170,31 +172,33 @@ describe("subagent maintenance protection", () => {
     }
   });
 
-  it("retains live overlays and both owner write publication paths", () => {
+  it("retains live overlays and acknowledged row publications", () => {
     const run = createRun();
     saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
     expect(protectedKeys()).toEqual([run.childSessionKey]);
-    persistSubagentRunsToDisk(new Map([[run.runId, { ...run, cleanupCompletedAt: 3 }]]), [
-      run.runId,
-    ]);
+    persistRegistryFixture(new Map([[run.runId, { ...run, cleanupCompletedAt: 3 }]]), [run.runId]);
     expect(protectedKeys()).toEqual([]);
     subagentRuns.set(run.runId, run);
     expect(protectedKeys()).toEqual([run.childSessionKey]);
-    run.cleanupCompletedAt = Number.NaN;
+    const completed = { ...run, cleanupCompletedAt: Number.NaN };
+    subagentRuns.set(run.runId, completed);
     expect(protectedKeys()).toEqual([]);
-    run.killIntent = { requestedAt: Number.NaN, reason: "live pending intent" };
+    subagentRuns.set(run.runId, {
+      ...completed,
+      killIntent: { requestedAt: Number.NaN, reason: "live pending intent" },
+    });
     expect(protectedKeys()).toEqual([run.childSessionKey]);
     subagentRuns.clear();
     const changed = createRun({ expectsCompletionMessage: false });
-    persistSubagentRunsToDisk(new Map([[changed.runId, changed]]), [changed.runId]);
+    persistRegistryFixture(new Map([[changed.runId, changed]]), [changed.runId]);
     // Published memory retains pending delivery; persisted normalization is disk-reader owned.
     expect(protectedKeys()).toEqual([run.childSessionKey]);
-    changed.cleanupCompletedAt = 4;
-    saveSubagentRegistryToSqlite(new Map([[changed.runId, changed]]));
+    const cleaned = { ...changed, cleanupCompletedAt: 4 };
+    saveSubagentRegistryToSqlite(new Map([[cleaned.runId, cleaned]]));
     const events: Array<() => void> = [];
     publishSubagentRunsAfterAtomicStore(
-      new Map([[changed.runId, changed]]),
-      [changed.runId],
+      new Map([[cleaned.runId, cleaned]]),
+      [cleaned.runId],
       events,
     );
     expect(protectedKeys()).toEqual([]);

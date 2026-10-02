@@ -28,6 +28,11 @@ type ContextEngineTurnOutboxDatabase = Pick<
 /** Outbox kernels need only the connection; workers pass their borrowed one. */
 type ContextEngineTurnOutboxConnection = Pick<OpenClawAgentDatabase, "db">;
 
+type OutboxKernelParams<Type extends keyof ContextEngineTurnOutboxWorkerOperations> =
+  ContextEngineTurnOutboxWorkerOperations[Type]["input"] & {
+    database: ContextEngineTurnOutboxConnection;
+  };
+
 type PendingContextEngineTurn = Readonly<{
   advancement_key: string;
   payload_json: string;
@@ -149,11 +154,7 @@ function writeContextEngineTurnOutboxPayload(params: {
       (params.payload.state === "accepted" &&
         existingPayload.state === "admitted" &&
         existingPayload.admission.entryId === admission.entryId) ||
-      (params.payload.state === "blocked" &&
-        existingPayload.state === "accepted" &&
-        existingPayload.boundary.admission.entryId === admission.entryId &&
-        existingPayload.boundary.terminal.entryId === params.payload.boundary.terminal.entryId) ||
-      (params.payload.state === "ready" &&
+      ((params.payload.state === "blocked" || params.payload.state === "ready") &&
         existingPayload.state === "accepted" &&
         existingPayload.boundary.admission.entryId === admission.entryId &&
         existingPayload.boundary.terminal.entryId === params.payload.boundary.terminal.entryId);
@@ -195,13 +196,7 @@ function writeContextEngineTurnOutboxPayload(params: {
   );
 }
 
-export function enqueueContextEngineTurnIntent(params: {
-  admission: TranscriptTurnAdmission;
-  database: ContextEngineTurnOutboxConnection;
-  engineId: string;
-  isHeartbeat: boolean;
-  ownerPluginId?: string;
-}): void {
+export function enqueueContextEngineTurnIntent(params: OutboxKernelParams<"enqueueIntent">): void {
   writeContextEngineTurnOutboxPayload({
     ...params,
     payload: {
@@ -212,14 +207,7 @@ export function enqueueContextEngineTurnIntent(params: {
   });
 }
 
-export function acceptContextEngineTurnIntent(params: {
-  boundary: TranscriptTurnBoundary;
-  database: ContextEngineTurnOutboxConnection;
-  engineId: string;
-  isHeartbeat: boolean;
-  ownerPluginId?: string;
-  runtimeContext?: ContextEngineTurnRuntimeContext;
-}): void {
+export function acceptContextEngineTurnIntent(params: OutboxKernelParams<"acceptIntent">): void {
   writeContextEngineTurnOutboxPayload({
     ...params,
     payload: {
@@ -262,12 +250,7 @@ function blockContextEngineTurnIntent(params: {
   });
 }
 
-function discardContextEngineTurnIntent(params: {
-  admission: TranscriptTurnAdmission;
-  database: ContextEngineTurnOutboxConnection;
-  engineId: string;
-  ownerPluginId?: string;
-}): void {
+function discardContextEngineTurnIntent(params: OutboxKernelParams<"discardIntent">): void {
   const db = outboxDb(params.database);
   executeSqliteQuerySync(
     params.database.db,
@@ -284,16 +267,9 @@ function discardContextEngineTurnIntent(params: {
  * The acceptance commits first in its own transaction, so a failed read or
  * publication leaves the turn accepted and the next recovery advances it.
  */
-function publishClosedContextEngineTurn(params: {
-  boundary: TranscriptTurnBoundary;
-  database: ContextEngineTurnOutboxConnection;
-  engineId: string;
-  isHeartbeat: boolean;
-  maxBytes: number;
-  maxEvents: number;
-  ownerPluginId?: string;
-  runtimeContext?: ContextEngineTurnRuntimeContext;
-}): ClosedTranscriptTurnReadResult["kind"] {
+function publishClosedContextEngineTurn(
+  params: OutboxKernelParams<"publishClosedTurn">,
+): ClosedTranscriptTurnReadResult["kind"] {
   // Recovery may already have advanced or completed this turn in the gap after
   // acceptance; only a still-accepted row is published, so it cannot reappear.
   const existing = executeSqliteQueryTakeFirstSync(
@@ -433,7 +409,6 @@ export type ContextEngineTurnOutboxStore = Readonly<{
   hasPending(filter: ContextEngineTurnOutboxFilter & { sessionId?: string }): Promise<boolean>;
 }>;
 
-/** Lists sessions with advanceable rows, oldest enqueue first. */
 function listPendingContextEngineTurnSessions(
   database: ContextEngineTurnOutboxConnection,
   filter: ContextEngineTurnOutboxFilter & { sessionId?: string; limit: number },
@@ -457,7 +432,6 @@ function listPendingContextEngineTurnSessions(
   ).rows.map(({ session_id }) => session_id);
 }
 
-/** Reads one session's oldest advanceable row. */
 function readNextPendingContextEngineTurn(
   database: ContextEngineTurnOutboxConnection,
   filter: ContextEngineTurnOutboxFilter & { sessionId: string },
@@ -476,7 +450,6 @@ function readNextPendingContextEngineTurn(
   );
 }
 
-/** Removes a row after its engine acknowledged the commit. */
 function completeContextEngineTurn(
   database: ContextEngineTurnOutboxConnection,
   advancementKey: string,
@@ -489,7 +462,6 @@ function completeContextEngineTurn(
   );
 }
 
-/** Keeps a row queued and records its latest failed attempt. */
 function recordContextEngineTurnFailure(
   database: ContextEngineTurnOutboxConnection,
   advancementKey: string,
@@ -509,7 +481,6 @@ function recordContextEngineTurnFailure(
   );
 }
 
-/** Reports whether any advanceable row remains for the filter. */
 function hasPendingContextEngineTurn(
   database: ContextEngineTurnOutboxConnection,
   filter: ContextEngineTurnOutboxFilter & { sessionId?: string },
@@ -531,14 +502,9 @@ function hasPendingContextEngineTurn(
  * advance, records the known admission in the same transaction. The common
  * turn start therefore needs one database round trip.
  */
-function prepareContextEngineTurnRun(params: {
-  admission?: TranscriptTurnAdmission;
-  database: ContextEngineTurnOutboxConnection;
-  engineId: string;
-  isHeartbeat: boolean;
-  ownerPluginId?: string;
-  sessionId: string;
-}): { warnings: string[]; pending: boolean; admitted: boolean } {
+function prepareContextEngineTurnRun(
+  params: OutboxKernelParams<"prepareRun">,
+): ContextEngineTurnOutboxWorkerOperations["prepareRun"]["output"] {
   const warnings: string[] = [];
   recoverContextEngineTurnOutbox({ ...params, warn: (message) => warnings.push(message) });
   const pending = hasPendingContextEngineTurn(params.database, params);
@@ -650,11 +616,9 @@ async function commitPendingContextEngineTurn(params: {
   }
 }
 
-type OutboxOwner = { engineId: string; ownerPluginId?: string };
-
 export type ContextEngineTurnOutboxWorkerOperations = {
   prepareRun: {
-    input: OutboxOwner & {
+    input: ContextEngineTurnOutboxFilter & {
       admission?: TranscriptTurnAdmission;
       isHeartbeat: boolean;
       sessionId: string;
@@ -662,11 +626,11 @@ export type ContextEngineTurnOutboxWorkerOperations = {
     output: { warnings: string[]; pending: boolean; admitted: boolean };
   };
   listPendingSessions: {
-    input: OutboxOwner & { sessionId?: string; limit: number };
+    input: ContextEngineTurnOutboxFilter & { sessionId?: string; limit: number };
     output: string[];
   };
   readNextPending: {
-    input: OutboxOwner & { sessionId: string };
+    input: ContextEngineTurnOutboxFilter & { sessionId: string };
     output: PendingContextEngineTurn | undefined;
   };
   complete: { input: { advancementKey: string }; output: undefined };
@@ -674,13 +638,16 @@ export type ContextEngineTurnOutboxWorkerOperations = {
     input: { advancementKey: string; message: string; attemptedAt: number };
     output: undefined;
   };
-  hasPending: { input: OutboxOwner & { sessionId?: string }; output: boolean };
+  hasPending: { input: ContextEngineTurnOutboxFilter & { sessionId?: string }; output: boolean };
   enqueueIntent: {
-    input: OutboxOwner & { admission: TranscriptTurnAdmission; isHeartbeat: boolean };
+    input: ContextEngineTurnOutboxFilter & {
+      admission: TranscriptTurnAdmission;
+      isHeartbeat: boolean;
+    };
     output: undefined;
   };
   acceptIntent: {
-    input: OutboxOwner & {
+    input: ContextEngineTurnOutboxFilter & {
       boundary: TranscriptTurnBoundary;
       isHeartbeat: boolean;
       runtimeContext?: ContextEngineTurnRuntimeContext;
@@ -688,7 +655,7 @@ export type ContextEngineTurnOutboxWorkerOperations = {
     output: undefined;
   };
   publishClosedTurn: {
-    input: OutboxOwner & {
+    input: ContextEngineTurnOutboxFilter & {
       boundary: TranscriptTurnBoundary;
       isHeartbeat: boolean;
       maxBytes: number;
@@ -698,7 +665,7 @@ export type ContextEngineTurnOutboxWorkerOperations = {
     output: ClosedTranscriptTurnReadResult["kind"];
   };
   discardIntent: {
-    input: OutboxOwner & { admission: TranscriptTurnAdmission };
+    input: ContextEngineTurnOutboxFilter & { admission: TranscriptTurnAdmission };
     output: undefined;
   };
 };

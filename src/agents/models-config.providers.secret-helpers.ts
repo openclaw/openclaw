@@ -7,14 +7,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { resolveNonEnvSecretRefApiKeyMarker } from "../secrets/provider-credential-values.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
-import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveEnvApiKey, type EnvApiKeyLookupOptions } from "./model-auth-env.js";
 import {
   isNonSecretApiKeyMarker,
   resolveEnvSecretRefHeaderValueMarker,
-  resolveNonEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
 
@@ -150,7 +148,7 @@ export function normalizeHeaderValues(params: {
     nextHeaders[headerName] =
       resolvedRef.source === "env"
         ? resolveEnvSecretRefHeaderValueMarker(resolvedRef.id)
-        : resolveNonEnvSecretRefHeaderValueMarker(resolvedRef.source);
+        : resolveNonEnvSecretRefApiKeyMarker(resolvedRef.source);
   }
   if (!mutated) {
     return { headers, mutated: false };
@@ -216,7 +214,6 @@ export function normalizeConfiguredProviderApiKey(params: {
   provider: ProviderConfig;
   sourceInput?: Parameters<typeof resolveConfigSecretRef>[0];
   secretDefaults: SecretDefaults | undefined;
-  profileApiKey: ProfileApiKeyResolution | undefined;
   secretRefManagedProviders?: Set<string>;
 }): ProviderConfig {
   const configuredApiKey = params.sourceInput?.value ?? params.provider.apiKey;
@@ -246,13 +243,6 @@ export function normalizeConfiguredProviderApiKey(params: {
 
   const normalizedConfiguredApiKey = configuredApiKey.trim();
   if (isNonSecretApiKeyMarker(normalizedConfiguredApiKey)) {
-    params.secretRefManagedProviders?.add(params.providerKey);
-  }
-  if (
-    params.profileApiKey &&
-    params.profileApiKey.source !== "plaintext" &&
-    normalizedConfiguredApiKey === params.profileApiKey.apiKey
-  ) {
     params.secretRefManagedProviders?.add(params.providerKey);
   }
   if (normalizedConfiguredApiKey === params.provider.apiKey) {
@@ -301,9 +291,7 @@ export function resolveMissingProviderApiKey(params: {
   providerApiKeyResolver?: (env: NodeJS.ProcessEnv) => string | undefined;
 }): ProviderConfig {
   const hasModels = Array.isArray(params.provider.models) && params.provider.models.length > 0;
-  const normalizedApiKey = normalizeOptionalSecretInput(params.provider.apiKey);
-  const hasConfiguredApiKey = Boolean(normalizedApiKey || params.provider.apiKey);
-  if (!hasModels || hasConfiguredApiKey) {
+  if (!hasModels || params.provider.apiKey) {
     return params.provider;
   }
 

@@ -1,9 +1,11 @@
 import { html, type TemplateResult } from "lit";
+import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
+import { t } from "../../../i18n/index.ts";
+import { ensureLazySidebarElement } from "../chat-pane-sidebar-layout.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import { selectedChatSessionRow } from "../chat-state-route.ts";
 import type { ChatProps } from "../chat-view.ts";
 import { openSlot } from "../sidebar-layout.ts";
-import "./chat-sidebar.ts";
 import "./chat-tool-output.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import { selectSessionWorkspacePreview } from "./chat-session-workspace-state.ts";
@@ -14,6 +16,7 @@ export function renderChatDetailSlot(params: {
   chat: ChatProps;
   content: SidebarContent;
   host: ChatPageHost;
+  requestUpdate: () => void;
 }): TemplateResult {
   const { content, host } = params;
   if (content.kind === "tool-output") {
@@ -23,6 +26,10 @@ export function renderChatDetailSlot(params: {
       .loadFullMessage=${params.chat.loadFullAssistantMessage ?? null}
       .connectionEpoch=${params.chat.connectionEpoch}
     ></openclaw-chat-tool-output>`;
+  }
+  const panelLoad = ensureLazySidebarElement("detail-panel", params.requestUpdate);
+  if (panelLoad !== undefined) {
+    return panelLoad ?? renderPanelLoadingSkeleton("review", t("common.loading"));
   }
   return html`<openclaw-chat-detail-panel
     class="chat-sidebar"

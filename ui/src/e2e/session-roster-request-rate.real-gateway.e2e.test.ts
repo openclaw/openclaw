@@ -149,6 +149,7 @@ suite.define(() => {
           lists.filter(
             ({ params }) =>
               params.includeUnknown === false &&
+              params.includeOwnerSessionCounts !== true &&
               params.includeDerivedTitles === undefined &&
               params.includeLastMessage === undefined,
           );
@@ -188,7 +189,12 @@ suite.define(() => {
         const beforeOther = lists.length;
         await patch(otherKey, "Unrelated rate update");
         await page.clock.runFor(15_000);
-        expect(lists.slice(beforeOther)).toEqual([]);
+        // People counts span agents; only that global facet may refresh here.
+        const afterOther = lists.slice(beforeOther);
+        expect(
+          afterOther.filter(({ params }) => params.includeOwnerSessionCounts !== true),
+        ).toEqual([]);
+        expect(afterOther).toHaveLength(1);
         // A relevant successor proves the quiet interval did not retire the
         // subscription. Both events travel through the same real connection.
         await patch(key, "Relevant after unrelated");

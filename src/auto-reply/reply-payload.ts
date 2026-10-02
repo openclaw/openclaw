@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { FailoverReason } from "../agents/failover/signal.js";
 /** Reply payload contracts and metadata helpers shared by dispatch and channel renderers. */
 import type { ProgressContinuationCapability } from "../channels/progress-continuation.js";
 import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
@@ -34,7 +35,7 @@ export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string 
     return payload.text;
   }
   const formatted = `BTW\nQuestion: ${question}\n\n${text}`;
-  return text === formatted || text.startsWith("BTW\nQuestion:") ? text : formatted;
+  return text.startsWith("BTW\nQuestion:") ? text : formatted;
 }
 
 /** True when a payload has visible or playable content for delivery. */
@@ -305,6 +306,8 @@ export type ReplyPayloadMetadata = {
    * are message-tool-only; sendPolicy deny still wins.
    */
   deliverDespiteSourceReplySuppression?: boolean;
+  /** An independently delivered message does not complete the active turn's answer. */
+  independentDeliveryIntentId?: string;
   /**
    * A message-tool reply to the active internal UI source. The final payload is
    * still the live delivery vehicle; this mirror makes the reply durable for
@@ -326,6 +329,8 @@ export type ReplyPayloadMetadata = {
   beforeAgentRunBlocked?: boolean;
   /** Payload preparation generated this provider error; it is not an authored answer. */
   terminalProviderError?: true;
+  /** Model fallback uses observed failure facts, never the displayed wording. */
+  providerFailure?: { reason: FailoverReason | null; rawError?: string };
   /** The warning owner observed this tool failure; presentation text is not evidence. */
   toolErrorWarning?: { toolName: string };
   /** Warning synthesized from an observed tool error after the run produced assistant output. */
@@ -505,6 +510,7 @@ export function isReplyPayloadStatusNotice(
 export const isReplyPayloadTerminalContent = (payload: ReplyPayload): boolean => {
   const supplement = getReplyPayloadTtsSupplement(payload);
   return (
+    getReplyPayloadMetadata(payload)?.independentDeliveryIntentId === undefined &&
     payload.isReasoning !== true &&
     payload.isCommentary !== true &&
     (!isReplyPayloadStatusNotice(payload) ||

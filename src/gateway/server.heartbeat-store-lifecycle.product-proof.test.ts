@@ -35,7 +35,7 @@ type ProviderRequest = {
 async function startProvider() {
   const requests: ProviderRequest[] = [];
   const errors: unknown[] = [];
-  const heartbeat = createDeferredCore<ProviderRequest>();
+  let heartbeat = createDeferredCore<ProviderRequest>();
   let spawn: Receipt | undefined;
   let spawnRequested = false;
   const server = createServer((request, response) => {
@@ -52,7 +52,7 @@ async function startProvider() {
       if (output) {
         spawn = JSON.parse(output) as Receipt;
       }
-      if (!title && !spawnRequested) {
+      if (!title && !isHeartbeat && !spawnRequested) {
         spawnRequested = true;
         const item = {
           type: "function_call",
@@ -115,7 +115,10 @@ async function startProvider() {
     baseUrl: `http://127.0.0.1:${address.port}/v1`,
     requests,
     errors,
-    heartbeat: heartbeat.promise,
+    armHeartbeatObservation() {
+      heartbeat = createDeferredCore<ProviderRequest>();
+      return heartbeat.promise;
+    },
     get spawn() {
       return spawn;
     },
@@ -242,7 +245,8 @@ describe("heartbeat notification store ownership through the Gateway", () => {
             },
             { expectFinal: false },
           );
-          expect((await wait(followup.runId)).status).toBe("ok");
+          const followupResult = await wait(followup.runId);
+          expect(followupResult.status, JSON.stringify(followupResult)).toBe("ok");
 
           if (transition === "different store") {
             const { hash } = await gateway.client.request<{ hash: string }>("config.get", {});
@@ -269,10 +273,11 @@ describe("heartbeat notification store ownership through the Gateway", () => {
             await gateway.server.close({ reason: "same-store replacement" });
             gateway = undefined;
             const replacementRequestOffset = provider.requests.length;
+            const replacementHeartbeat = provider.armHeartbeatObservation();
             gateway = await start();
             await gateway.server.startupSettled;
             // Await the actual delayed notification; replacement must not need another wake.
-            const heartbeat = await provider.heartbeat;
+            const heartbeat = await replacementHeartbeat;
             expect(provider.requests.indexOf(heartbeat)).toBeGreaterThanOrEqual(
               replacementRequestOffset,
             );

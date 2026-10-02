@@ -4,14 +4,12 @@ import {
   type StreamingMode,
 } from "./streaming-compat.js";
 
-type SlackStreamingMode = StreamingMode;
-
 export function resolveSlackStreamingConfig(params: {
   streaming?: unknown;
   streamMode?: unknown;
   nativeStreaming?: unknown;
 }): {
-  mode: SlackStreamingMode;
+  mode: StreamingMode;
   nativeStreaming: boolean;
 } {
   return {

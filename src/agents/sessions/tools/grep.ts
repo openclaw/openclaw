@@ -1,8 +1,3 @@
-/**
- * Built-in grep session tool.
- *
- * Searches files with ripgrep/local operations, optional context, and bounded output rendering.
- */
 import { statSync } from "node:fs";
 import path from "node:path";
 import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
@@ -10,7 +5,7 @@ import { releaseChildProcessOutputAfterExit } from "../../../process/child-proce
 import { waitForCommandSpawn } from "../../../process/exec-spawn.js";
 import { spawnCommand } from "../../../process/exec.js";
 import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
-import type { AgentTool } from "../../runtime/index.js";
+import type { AgentTool, AgentToolResult } from "../../runtime/index.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { appendBoundedTextTail, formatStderrTail, normalizePositiveLimit } from "./limits.js";
@@ -90,10 +85,7 @@ function formatGrepCall(
 }
 
 function formatGrepResult(
-  result: {
-    content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
-    details?: GrepToolDetails;
-  },
+  result: AgentToolResult<GrepToolDetails>,
   options: ToolRenderResultOptions,
   theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
   showImages: boolean,
@@ -124,31 +116,12 @@ export function createGrepToolDefinition(
     promptSnippet: "Search file contents for patterns (respects .gitignore)",
     parameters: grepSchema,
     async execute(
-      toolCallId,
-      {
-        pattern,
-        path: searchDir,
-        glob,
-        ignoreCase,
-        literal,
-        context,
-        limit,
-      }: {
-        pattern: string;
-        path?: string;
-        glob?: string;
-        ignoreCase?: boolean;
-        literal?: boolean;
-        context?: number;
-        limit?: number;
-      },
-      signal?: AbortSignal,
-      onUpdate?,
-      ctx?,
+      _toolCallId,
+      { pattern, path: searchDir, glob, ignoreCase, literal, context, limit },
+      signal,
+      _onUpdate,
+      _ctx,
     ) {
-      void toolCallId;
-      void onUpdate;
-      void ctx;
       return new Promise((resolve, reject) => {
         // Keep cancellation live from the first await through async result formatting.
         // Settlement owns listener cleanup; spawned children stop without waiting for close.

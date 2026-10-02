@@ -1,4 +1,6 @@
 import type { Result } from "@openclaw/normalization-core/result";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   ErrorCodes,
   errorShape,
@@ -13,14 +15,18 @@ import {
   killAllControlledSubagentRuns,
   resolveSubagentController,
 } from "../../agents/subagents/registry/subagent-control.js";
+import { SUBAGENT_KILL_TASK_ERROR } from "../../agents/subagents/registry/subagent-control.types.js";
+import {
+  getCurrentSubagentRunOwner,
+  subagentRuns,
+} from "../../agents/subagents/registry/subagent-registry-memory.js";
 import {
   getLatestLiveSubagentRunByChildSessionKey,
   isSubagentRunQueued,
 } from "../../agents/subagents/registry/subagent-registry-read.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../infra/agent-events.js";
-import { SUBAGENT_KILL_TASK_ERROR } from "../../tasks/detached-task-runtime-contract.js";
-import { createChatAbortOps } from "../chat-abort-ops.js";
+import { captureWorkerInferenceForSession, createChatAbortOps } from "../chat-abort-ops.js";
 import {
   abortChatRunById,
   isChatAbortControllerEntryAbortable,
@@ -31,12 +37,10 @@ import { abortQueuedChatTurnById } from "../chat-queued-turns.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
+import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveSessionStoreKey } from "../session-utils.js";
-import {
-  captureWorkerInferenceCancellation,
-  type WorkerInferenceCancellation,
-} from "../worker-environments/inference-control-internal.js";
+import type { WorkerInferenceCancellation } from "../worker-environments/inference-control-internal.js";
 import {
   canRequesterAbortChatRun,
   resolveAuthorizedPreRegisteredRunsForSessionKeys,
@@ -56,10 +60,6 @@ import {
   type ChatAbortOrigin,
   type ChatAbortSessionSnapshot,
 } from "./chat-aborted-partial.js";
-import {
-  normalizeOptionalChatText as normalizeOptionalText,
-  normalizeUnknownChatText as normalizeUnknownText,
-} from "./chat-text-normalization.js";
 import { persistAbortedPartials } from "./chat-transcript-persistence.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -131,10 +131,11 @@ export function abortQueuedCollectorSession(
   // visibility and operator.write alone do not own an unstarted child.
   const assertCurrent = () => {
     params.assertCurrent?.();
-    if (entry.execution.status === "queued" && !isSubagentRunQueued(entry)) {
+    const current = getCurrentSubagentRunOwner(subagentRuns, entry);
+    if (!current || (current.execution.status === "queued" && !isSubagentRunQueued(current))) {
       throw new Error("Queued collector reservation changed; retry Stop.");
     }
-    const ownershipError = ensureSubagentControllerOwnsRun({ cfg, controller, entry });
+    const ownershipError = ensureSubagentControllerOwnsRun({ cfg, controller, entry: current });
     if (ownershipError) {
       throw new Error(ownershipError);
     }
@@ -200,6 +201,7 @@ export function abortQueuedCollectorSession(
       const captured = agentId
         ? projection?.capture({ agentId, key: params.sessionKey })
         : undefined;
+      let publicationRows: SessionRowReadView | undefined;
       await killSubagentRunAdmin(
         {
           cfg,
@@ -253,36 +255,48 @@ export function abortQueuedCollectorSession(
                   sessionId: params.sessionId,
                   reason: "abort",
                 },
-                { preparedPublication: true },
+                { preparedPublication: true, sessionRows: publicationRows },
               );
             }
             outcome = {
               ok: true,
               value: {
                 aborted: aborted || selected?.result.aborted === true,
-                runIds: [
-                  ...new Set([
-                    ...(aborted ? [result.runId] : []),
-                    ...(selected?.result.runIds ?? []),
-                  ]),
-                ],
+                runIds: uniqueStrings([
+                  ...(aborted ? [result.runId] : []),
+                  ...(selected?.result.runIds ?? []),
+                ]),
               },
             };
           },
         },
         {
           assertCurrent,
-          preparePublication: {
-            needsPreparation: () => projection?.needsMaterialization === true,
-            prepare: async () => {
-              await projection?.ensureMaterialized();
-              if (captured && !projection?.isCurrent(captured)) {
-                throw new Error(
-                  "Queued collector session changed before cancellation publication; retry Stop.",
+          preparePublication: (publish) =>
+            publish(async (publishResult) => {
+              const publishPrepared = (read?: SessionRowReadView) => {
+                if (captured && !projection?.isCurrent(captured)) {
+                  throw new Error(
+                    "Queued collector session changed before cancellation publication; retry Stop.",
+                  );
+                }
+                publicationRows = read;
+                try {
+                  return publishResult();
+                } finally {
+                  publicationRows = undefined;
+                }
+              };
+              if (projection && agentId) {
+                return await withReadySessionRows(
+                  projection,
+                  () => [{ agentId, key: params.sessionKey }],
+                  publishPrepared,
+                  { includeAncestors: true },
                 );
               }
-            },
-          },
+              return publishPrepared();
+            }),
           beforeSessionKill: () => {
             // Resolve Gateway owners under the kill runtime's session fence.
             // Signal them only after this collector's FIFO reservation is held.
@@ -343,22 +357,6 @@ export function abortQueuedCollectorSession(
     }
     return outcome;
   })();
-}
-
-export function captureWorkerInferenceForSession(params: {
-  context: GatewayRequestContext;
-  sessionId?: string;
-  runId?: string;
-}): WorkerInferenceCancellation | undefined {
-  const sessionId = normalizeOptionalText(params.sessionId);
-  if (!sessionId) {
-    return undefined;
-  }
-  return captureWorkerInferenceCancellation(
-    params.context.workerEnvironmentService,
-    sessionId,
-    params.runId,
-  );
 }
 
 type ChatSessionAbortParams = {
@@ -617,7 +615,7 @@ function prepareChatSessionAbort(
           runId,
           stopReason,
           endedAt,
-          attemptId: normalizeUnknownText(payload.attemptId),
+          attemptId: normalizeOptionalString(payload.attemptId),
           expectedPayload: payload,
         })
       ) {

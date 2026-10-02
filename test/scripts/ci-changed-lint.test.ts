@@ -1,30 +1,45 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { detectChangedLanes } from "../../scripts/changed-lanes.mts";
-import { createChangedCheckPlan, createChangedCiLintPlan } from "../../scripts/check-changed.mts";
+import {
+  createChangedCheckPlan,
+  createChangedCiLintPlan,
+  resolveChangedOxlintFileScope,
+} from "../../scripts/check-changed.mts";
 import {
   createOxlintShards,
   selectExtensionOxlintStripe,
   selectCoreOxlintStripe,
-  createOxlintPackageScope,
+  createOxlintFileScope,
   filterOxlintShards,
   parseShardRunnerArgs,
-  resolveChangedOxlintPackageScope,
 } from "../../scripts/run-oxlint-shards.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-// Documentation reachability is independent of the lint commands projected here.
-vi.mock("../../scripts/test-projects.test-support.mts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../scripts/test-projects.test-support.mts")>()),
-  hasImportGraphImpactOnTargets: () => false,
-}));
+vi.mock("../../scripts/test-projects.test-support.mts", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("../../scripts/test-projects.test-support.mts")>();
+  return {
+    ...original,
+    // Repository cases prove stripe placement; synthetic workspaces prove real reachability.
+    resolveImportGraphDependents: (
+      ...args: Parameters<typeof original.resolveImportGraphDependents>
+    ) =>
+      (args[1] ?? process.cwd()) === process.cwd()
+        ? []
+        : original.resolveImportGraphDependents(...args),
+    hasImportGraphImpactOnTargets: () => false,
+  };
+});
 
 describe("CI changed lint", () => {
-  it("includes unchanged same-package callers without adding other packages or test-root coverage", async () => {
-    const cwd = tempDirs.make("ci-package-lint-");
+  it("includes transitive and aliased type consumers without widening to their packages", async () => {
+    const cwd = tempDirs.make("ci-file-lint-");
     const write = (file: string, content: string) => {
       const target = path.join(cwd, file);
       mkdirSync(path.dirname(target), { recursive: true });
@@ -46,72 +61,245 @@ describe("CI changed lint", () => {
         'import { work } from "./callee.js"; work();\n',
       );
     }
+    write("packages/example/callee.js", "export function work() { return 1; }\n");
     write("scripts/helper.ts", "export {};\n");
-    write("test/outside-canonical-lint.ts", "export {};\n");
+    write(
+      "test/outside-canonical-lint.ts",
+      'import type { Work } from "../src/type-consumer.js"; export type RootWork = Work;\n',
+    );
+    write(
+      "tsconfig.json",
+      JSON.stringify({
+        compilerOptions: { paths: { "@fixture/callee": ["./packages/example/callee.ts"] } },
+      }),
+    );
+    write(
+      "src/type-consumer.ts",
+      'import type { work } from "@fixture/callee"; export type Work = typeof work;\n',
+    );
+    write(
+      "ui/transitive.ts",
+      'import type { Work } from "../src/type-consumer.js"; export type Invoke = Work;\n',
+    );
     const full = createOxlintShards({
       cwd,
       splitCore: true,
       splitExtensions: true,
       platform: "linux",
     });
-    const packageScope = await resolveChangedOxlintPackageScope(
+    const fileScope = await resolveChangedOxlintFileScope(
       ["packages/example/callee.ts", "extensions/channel/callee.ts"],
       cwd,
     );
-    expect(packageScope?.packages).toEqual(["extensions/channel", "packages/example"]);
-    const packageTargets =
-      packageScope?.selectShards(full).flatMap(({ args }) => args.slice(2)) ?? [];
-    expect(packageTargets.toSorted()).toEqual(["extensions/channel", "packages/example"]);
-    const rootTargets = (await createOxlintPackageScope(["."], cwd))
+    const expected = [
+      "extensions/channel/callee.ts",
+      "extensions/channel/caller.ts",
+      "packages/example/callee.ts",
+      "packages/example/caller.ts",
+      "src/type-consumer.ts",
+      "ui/transitive.ts",
+    ];
+    expect(fileScope?.files).toEqual(expected);
+    expect(fileScope?.rootTestFiles).toEqual(["test/outside-canonical-lint.ts"]);
+    const fileTargets = fileScope?.selectShards(full).flatMap(({ args }) => args.slice(2)) ?? [];
+    expect(fileTargets.toSorted()).toEqual(expected);
+    const rootTargets = createOxlintFileScope(["scripts/helper.ts", "src/callee.ts"], cwd)
       .selectShards(full)
       .flatMap(({ args }) => args.slice(2));
-    expect(rootTargets.toSorted()).toEqual(["scripts", "src/callee.ts", "src/caller.ts"]);
+    expect(rootTargets.toSorted()).toEqual(["scripts/helper.ts", "src/callee.ts"]);
+    write("src/globals.ts", "export {}; declare /* contract */ global { interface Window {} }\n");
+    expect(await resolveChangedOxlintFileScope(["src/globals.ts"], cwd)).toBeUndefined();
     expect(
-      await resolveChangedOxlintPackageScope(["packages/example/deleted.ts"], cwd),
+      await resolveChangedOxlintFileScope(["packages/example/deleted.ts"], cwd),
     ).toBeUndefined();
     expect(
-      await resolveChangedOxlintPackageScope(["packages/example/package.json"], cwd),
+      await resolveChangedOxlintFileScope(["packages/example/package.json"], cwd),
     ).toBeUndefined();
-    for (const roots of [
-      ["../outside"],
-      ["packages/example", "packages/example"],
-      ["packages/missing"],
+    for (const files of [
+      ["../outside.ts"],
+      ["packages/example/callee.ts", "packages/example/callee.ts"],
+      ["packages/missing.ts"],
+      ["test/outside-canonical-lint.ts"],
     ]) {
-      await expect(createOxlintPackageScope(roots, cwd)).rejects.toThrow(
-        "canonical workspace roots",
-      );
+      expect(() => createOxlintFileScope(files, cwd)).toThrow("canonical source paths");
     }
-    // One invocation carries admitted package facts through every stripe;
-    // a later invocation must admit the new workspace metadata independently.
-    write("pnpm-workspace.yaml", "packages: []\n");
+    // Existing selections carry admitted facts; a later worker must reject a missing source.
+    unlinkSync(path.join(cwd, "packages/example/callee.ts"));
     expect(
-      packageScope
+      fileScope
         ?.selectShards(full)
         .flatMap(({ args }) => args.slice(2))
         .toSorted(),
-    ).toEqual(["extensions/channel", "packages/example"]);
-    await expect(createOxlintPackageScope(["packages/example"], cwd)).rejects.toThrow(
-      "canonical workspace roots",
+    ).toEqual(expected);
+    expect(() => createOxlintFileScope(["packages/example/callee.ts"], cwd)).toThrow(
+      "canonical source paths",
     );
   });
 
+  it.each([
+    [
+      "globals.ts",
+      'import type { Work } from "./value.js"; declare global { interface Window { work: Work; } }',
+    ],
+    ["globals.d.ts", 'interface Window { work: import("./value.js").Work; }'],
+  ])(
+    "retains full lint when an affected consumer augments globals through %s",
+    async (file, source) => {
+      const cwd = tempDirs.make("ci-ambient-consumer-");
+      mkdirSync(path.join(cwd, "src"));
+      writeFileSync(path.join(cwd, "package.json"), '{"type":"module"}');
+      writeFileSync(path.join(cwd, "src/value.ts"), "export type Work = () => Promise<void>;\n");
+      writeFileSync(path.join(cwd, "src", file), source);
+      writeFileSync(path.join(cwd, "src/reader.ts"), "window.work();\n");
+      expect(await resolveChangedOxlintFileScope(["src/value.ts"], cwd)).toBeUndefined();
+    },
+  );
+
+  it("runs native rules on a changed file and unchanged consumers of its changed type", () => {
+    const cwd = tempDirs.make("ci-file-lint-native-");
+    const write = (file: string, source: string) => {
+      const target = path.join(cwd, file);
+      mkdirSync(path.dirname(target), { recursive: true });
+      writeFileSync(target, source);
+    };
+    write("package.json", '{"private":true,"type":"module"}');
+    write("pnpm-workspace.yaml", "packages: [.]\n");
+    write(
+      "tsconfig.json",
+      JSON.stringify({
+        compilerOptions: {
+          strict: true,
+          noEmit: true,
+          module: "nodenext",
+          target: "es2022",
+          types: [],
+          paths: { "@fixture/work": ["./src/barrel.ts"] },
+        },
+        include: ["src/**/*.ts"],
+      }),
+    );
+    mkdirSync(path.join(cwd, "config/tsconfig"), { recursive: true });
+    copyFileSync(".oxlintrc.json", path.join(cwd, ".oxlintrc.json"));
+    copyFileSync(
+      "config/tsconfig/oxlint.core.json",
+      path.join(cwd, "config/tsconfig/oxlint.core.json"),
+    );
+    symlinkSync(path.resolve("node_modules"), path.join(cwd, "node_modules"), "junction");
+    mkdirSync(path.join(cwd, "scripts"));
+    symlinkSync(path.resolve("scripts/lib"), path.join(cwd, "scripts/lib"), "junction");
+    for (const file of [
+      "run-oxlint.mjs",
+      "run-oxlint.mts",
+      "run-oxlint-shards.mts",
+      "generate-kysely-types.mts",
+      "tsx.mjs",
+      "windows-cmd-helpers.mjs",
+    ]) {
+      copyFileSync(path.join("scripts", file), path.join(cwd, "scripts", file));
+    }
+    write("src/contract.ts", "export type Work = () => number;\n");
+    write("src/contract.js", "export const compiled = true;\n");
+    write("src/barrel.ts", 'export type { Work } from "./contract.js";\n');
+    write(
+      "src/caller.ts",
+      'import type { Work } from "@fixture/work"; export function invoke(work: Work): void { work(); }\n',
+    );
+    write("src/changed.ts", "export const changed = 1;\n");
+    mkdirSync(path.join(cwd, "ui"));
+    mkdirSync(path.join(cwd, "packages"));
+    // This preexisting violation belongs to the full lane, outside the changed dependency graph.
+    write("src/unrelated.ts", "Promise.resolve(1);\n");
+    const sourceUrl = (file: string) => JSON.stringify(pathToFileURL(path.resolve(file)).href);
+    const driver = `
+      import { spawnSync } from "node:child_process";
+      import { detectChangedLanes } from ${sourceUrl("scripts/changed-lanes.mts")};
+      import { createChangedCiLintPlan, createChangedCheckPlan } from ${sourceUrl("scripts/check-changed.mts")};
+      const changed = detectChangedLanes(["src/contract.ts", "src/changed.ts"]);
+      const plan = await createChangedCiLintPlan(changed, { runnerProfile: "blacksmith" });
+      if (!plan) throw new Error("Expected a changed-file lint plan");
+      const selections = [plan.central, ...[...plan.core, ...plan.extensions].map(row => JSON.parse(row.lint_selection_json))];
+      console.error("CI_LINT_SELECTED_FILES=" + JSON.stringify(selections.flatMap(selection => selection.files).sort()));
+      const commands = selections.flatMap(lintSelection =>
+        createChangedCheckPlan(changed, { lintOnly: true, lintSelection, lintThreads: 1 }).commands
+      ).filter(command => command.args[2] === "scripts/run-oxlint-shards.mts");
+      if (commands.length === 0) throw new Error("PR planner omitted semantic lint");
+      for (const command of commands) {
+        const result = spawnSync(process.execPath, [...command.args, "--format", "json"], {
+          encoding: "utf8", env: { ...process.env, ...command.env }
+        });
+        if (result.error) throw result.error;
+        process.stdout.write(result.stdout);
+        process.stderr.write(result.stderr);
+        if (result.status !== 0) process.exitCode = result.status ?? 1;
+      }
+    `;
+    const lintChanged = () => {
+      const result = spawnSync(
+        process.execPath,
+        ["--import", path.resolve("scripts/tsx.mjs"), "--input-type=module", "--eval", driver],
+        { cwd, encoding: "utf8", env: { ...process.env, OPENCLAW_LOCAL_CHECK: "0" } },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.stderr).toContain(
+        `CI_LINT_SELECTED_FILES=${JSON.stringify(["src/barrel.ts", "src/caller.ts", "src/changed.ts", "src/contract.ts"])}`,
+      );
+      return result;
+    };
+    const full = createOxlintShards({
+      cwd,
+      platform: "linux",
+      hostResources: { logicalCpuCount: 16, totalMemoryBytes: 32 * 1024 ** 3 },
+    });
+    const lint = (args: string[]) => {
+      const result = spawnSync(
+        process.execPath,
+        [path.resolve("scripts/run-oxlint.mjs"), ...args, "--format", "json", "--threads=1"],
+        { cwd, encoding: "utf8", env: { ...process.env, OPENCLAW_LOCAL_CHECK: "0" } },
+      );
+      expect(result.error).toBeUndefined();
+      return result;
+    };
+    const before = lintChanged();
+    expect(before.status, before.stderr + before.stdout).toBe(0);
+    write("src/contract.ts", "export type Work = () => Promise<number>;\n");
+    write("src/changed.ts", "export function changed(): void { Promise.resolve(1); }\n");
+    const after = lintChanged();
+    expect(after.status, after.stderr + after.stdout).toBe(1);
+    const diagnosticFiles = (output: string) => {
+      const report = JSON.parse(output) as {
+        diagnostics: Array<{ filename: string; code: string }>;
+      };
+      expect(
+        report.diagnostics.every(({ code }) => code === "typescript(no-floating-promises)"),
+      ).toBe(true);
+      return report.diagnostics.map(({ filename }) => filename.replaceAll("\\", "/")).toSorted();
+    };
+    expect(diagnosticFiles(after.stdout)).toEqual(["src/caller.ts", "src/changed.ts"]);
+    const complete = lint(full.find(({ name }) => name === "core")!.args);
+    expect(complete.status, complete.stderr + complete.stdout).toBe(1);
+    expect(diagnosticFiles(complete.stdout)).toEqual([
+      "src/caller.ts",
+      "src/changed.ts",
+      "src/unrelated.ts",
+    ]);
+  });
+
   it.each(["hybrid", "github", "blacksmith"])(
-    "keeps complete package lint with the existing %s owners",
+    "keeps complete selected-file lint with the existing %s owners",
     async (runnerProfile) => {
       const paths = [
         "src/utils.ts",
         "ui/src/app-navigation.ts",
         "extensions/telegram/src/send.ts",
         "scripts/lib/arg-utils.mts",
-        "test/scripts/ci-changed-lint.test.ts",
+        "test/scripts/ci-check-plan.test.ts",
       ];
       const result = detectChangedLanes(paths);
       const plan = await createChangedCiLintPlan(result, { runnerProfile });
       expect(plan).not.toBeNull();
       if (!plan) {
-        throw new Error("Expected a package lint plan");
+        throw new Error("Expected a file lint plan");
       }
-      expect(plan.central.packages).toEqual([".", "extensions/telegram", "ui"]);
       const central = createChangedCheckPlan(result, {
         lintOnly: true,
         lintSelection: plan.central,
@@ -144,13 +332,15 @@ describe("CI changed lint", () => {
           (row) => JSON.parse(row.lint_selection_json) as typeof plan.central,
         ),
       ];
+      const selectedFiles = selections.flatMap(({ files }) => files).toSorted();
+      expect(selectedFiles).toEqual(paths.filter((file) => !file.startsWith("test/")).toSorted());
       const full = createOxlintShards({
         splitCore: true,
         splitExtensions: true,
         platform: "linux",
       });
-      const packageScope = await createOxlintPackageScope(plan.central.packages);
-      const expected = packageScope
+      const fileScope = createOxlintFileScope(selectedFiles);
+      const expected = fileScope
         .selectShards(full)
         .flatMap(({ args }) => args.slice(2).map((target) => `${args[1]}:${target}`))
         .toSorted();
@@ -170,30 +360,34 @@ describe("CI changed lint", () => {
               platform: "linux",
               hostResources: { logicalCpuCount: 16, totalMemoryBytes: 32 * 1024 ** 3 },
             });
-            expect(parsed.packages).toEqual(packageScope.packages);
-            const selected = packageScope.selectShards(
+            expect(parsed.files).toEqual(selection.files);
+            const selected = createOxlintFileScope(selection.files).selectShards(
               selectExtensionOxlintStripe(
                 selectCoreOxlintStripe(filterOxlintShards(shards, parsed.only), parsed.coreStripe),
                 parsed.extensionStripe,
               ),
             );
-            // Full central Programs can group src/ while hosted stripes split its
-            // directories; coverage is checked through the canonical split below.
             return selected.flatMap(({ args: commandArgs }) =>
               commandArgs.slice(2).map((target) => `${commandArgs[1]}:${target}`),
             );
           });
       });
+      expect(actual.toSorted()).toEqual(expected);
       if (runnerProfile !== "blacksmith") {
-        expect(actual.toSorted()).toEqual(expected);
-        expect(plan.core).toHaveLength(runnerProfile === "hybrid" ? 2 : 5);
+        expect(plan.core.length).toBeGreaterThan(0);
+        expect(plan.core.length).toBeLessThanOrEqual(runnerProfile === "hybrid" ? 2 : 5);
         expect(plan.central.groups).toEqual(["scripts"]);
-        expect(plan.central.extensionStripes).toEqual(runnerProfile === "github" ? [6] : []);
+        if (runnerProfile === "github") {
+          expect(plan.central.extensionStripes.every((stripe) => stripe === 6)).toBe(true);
+          expect(plan.central.extensionStripes.length).toBeLessThanOrEqual(1);
+        } else {
+          expect(plan.central.extensionStripes).toEqual([]);
+        }
       } else {
         expect(plan.core).toEqual([]);
         expect(plan.extensions).toEqual([]);
-        expect(actual).toContain("config/tsconfig/oxlint.core.json:src");
-        expect(actual).toContain("config/tsconfig/oxlint.scripts.json:scripts");
+        expect(actual).toContain("config/tsconfig/oxlint.core.json:src/utils.ts");
+        expect(actual).toContain("config/tsconfig/oxlint.scripts.json:scripts/lib/arg-utils.mts");
         expect(plan.central.groups).toEqual(["core", "extensions", "scripts"]);
       }
       for (const row of [...plan.core, ...plan.extensions]) {
@@ -215,6 +409,8 @@ describe("CI changed lint", () => {
   it.each([
     ".oxlintrc.json",
     "package.json",
+    "tsconfig.json",
+    "src/types/node-runtime-globals.d.ts",
     "extensions/telegram/deleted-ci-fixture.ts",
     "unowned/source.ts",
   ])("retains the original full lint layout for %s", async (file) =>

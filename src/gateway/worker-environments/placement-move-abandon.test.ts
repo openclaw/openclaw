@@ -11,6 +11,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { NODE_WORKSPACE_DRAIN_COMMAND } from "../../worker/node-workspace-protocol.js";
 import { environmentsHandlers } from "../server-methods/environments.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
@@ -22,10 +23,10 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "./placement-target.js";
 import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { createWorkerEnvironmentService } from "./service.js";
 import { BUNDLE_ARTIFACT, createProvider } from "./service.test-support.js";
-import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -134,6 +135,7 @@ describe("offline device placement abandonment", () => {
     }
     const provider = createProvider({ id: providerId, destroy: vi.fn(async () => {}) });
     const environments = createWorkerEnvironmentService({
+      scheduler: createTestGatewayScheduler(),
       store,
       getConfig: () => ({}),
       resolveProvider: () => provider,
@@ -378,7 +380,7 @@ describe("offline device placement abandonment", () => {
           ownerEpoch: active.activeOwnerEpoch,
         },
       });
-      placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+      await placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
       if (pendingAt === "before") {
         placements.markWorkspaceResultPending(claim);
       } else {
@@ -421,7 +423,7 @@ describe("offline device placement abandonment", () => {
         "Cannot update stale worker workspace result",
       );
       expect(
-        placements.completeWorkerSessionToolOperation({
+        await placements.completeWorkerSessionToolOperation({
           sourceSessionId: claim.sessionId,
           sourceClaimId: claim.claimId,
           toolCallId: "late-tool-result",

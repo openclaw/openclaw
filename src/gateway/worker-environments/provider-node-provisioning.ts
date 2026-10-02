@@ -69,18 +69,34 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     provider: WorkerProvider,
     signal?: AbortSignal,
     beforeProvision?: () => void,
-  ) => {
-    if (!provider.requiresNodeEnrollment || !options.prepareNodeBootstrap) {
+  ): Promise<
+    | { identity: WorkerNodeRuntimeIdentity; installation: WorkerInstallationArtifact | undefined }
+    | undefined
+  > => {
+    const prepareNodeBootstrap = options.prepareNodeBootstrap;
+    if (!provider.requiresNodeEnrollment || !prepareNodeBootstrap) {
       return undefined;
     }
     let identity: WorkerNodeRuntimeIdentity;
     let installation: WorkerInstallationArtifact | undefined;
     // Replay also identifies the requested bytes; it must not relabel a previously enrolled node.
     try {
-      const nodeBootstrapSha256 = await options.prepareNodeBootstrap(record, signal);
-      if (record.profileSnapshot.project) {
-        installation = await prepareBundle(undefined, signal);
+      const [bootstrapResult, installationResult] = await racePromiseWithAbortSignal(
+        Promise.allSettled([
+          Promise.resolve().then(() => prepareNodeBootstrap(record, signal)),
+          record.profileSnapshot.project ? prepareBundle(undefined, signal) : undefined,
+        ]),
+        signal,
+      );
+      signal?.throwIfAborted();
+      if (bootstrapResult.status === "rejected") {
+        throw bootstrapResult.reason;
       }
+      if (installationResult.status === "rejected") {
+        throw installationResult.reason;
+      }
+      const nodeBootstrapSha256 = bootstrapResult.value;
+      installation = installationResult.value;
       const preparation = readWorkerProjectPreparation(record.profileSnapshot.project);
       if (
         preparation &&
@@ -327,6 +343,8 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         !(await options.store.hasSessionAttachment(record.environmentId));
       assertCurrent();
       nodeBuild = await options.ensureNodeWorkerBundle({
+        reason: "provision",
+        environmentId: record.environmentId,
         deviceId: lease.node.deviceId,
         artifact,
         prewarm,

@@ -35,6 +35,12 @@ export function logContains(file, needle) {
 
   const scan = (text) => {
     for (const character of text) {
+      // `script` can record a Docker TTY with CRLF between every emitted byte.
+      // Keep control-sequence state across those separators or CSI letters leak
+      // into the visible-text window and hide the prompt currently on screen.
+      if (ansiState !== "plain" && (character === "\r" || character === "\n")) {
+        continue;
+      }
       if (ansiState === "osc") {
         if (character === "\u0007") {
           ansiState = "plain";

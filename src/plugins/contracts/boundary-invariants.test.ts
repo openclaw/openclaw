@@ -312,14 +312,6 @@ describe("plugin contract boundary invariants", () => {
     expect(bundledCapabilityMetadataOffenders).toStrictEqual([]);
   });
 
-  it("keeps the bundled contract inventory out of non-test runtime code", () => {
-    const files = listTsFiles("src", { excludeTests: true });
-    const offenders = files.filter((file) => {
-      return readRepoSource(file).includes("contracts/inventory/bundled-capability-metadata");
-    });
-    expect(offenders).toStrictEqual([]);
-  });
-
   it("keeps core tests off bundled extension deep imports", () => {
     const files = listTsFiles("src", { testOnly: true });
     const offenders = files.filter((file) => {

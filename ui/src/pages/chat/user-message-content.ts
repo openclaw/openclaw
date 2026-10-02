@@ -13,6 +13,7 @@ type UserChatMessageContentBlock = {
   type: string;
   text?: string;
   url?: string;
+  fileName?: string;
   source?: unknown;
   attachment?: {
     url: string;
@@ -48,6 +49,7 @@ function buildUserChatMessageContentBlocks(
       blocks.push({
         type: "image",
         url: previewUrl,
+        ...(attachment.fileName ? { fileName: attachment.fileName } : {}),
         source: { type: "url", url: previewUrl },
       });
       continue;

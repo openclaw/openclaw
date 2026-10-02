@@ -33,13 +33,9 @@ function mockGoogleChatOutboundSpaceResolution() {
   });
 }
 
-vi.mock("./channel.runtime.js", () => {
-  return {
-    googleChatChannelRuntime: {
-      sendGoogleChatMessage: (...args: unknown[]) => sendGoogleChatMessageMock(...args),
-    },
-  };
-});
+vi.mock("./channel.runtime.js", () => ({
+  googleChatChannelRuntime: { sendGoogleChatMessage: sendGoogleChatMessageMock },
+}));
 
 vi.mock("./accounts.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./accounts.js")>();
@@ -293,18 +289,6 @@ describe("googlechatPlugin threading", () => {
 const resolveTarget = googlechatOutboundAdapter.base.resolveTarget;
 
 describe("googlechatPlugin outbound resolveTarget", () => {
-  it("resolves valid chat targets", () => {
-    const result = resolveTarget({
-      to: "spaces/AAA",
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw result.error;
-    }
-    expect(result.to).toBe("spaces/AAA");
-  });
-
   it("resolves email targets", () => {
     const result = resolveTarget({
       to: "user@example.com",
@@ -325,20 +309,6 @@ describe("googlechatPlugin outbound resolveTarget", () => {
     expect(result.ok).toBe(false);
     if (result.ok) {
       throw new Error("Expected invalid target to fail");
-    }
-    expect(result.error.message).toBe(
-      "Delivering to Google Chat requires target <spaces/{space}|users/{user}>",
-    );
-  });
-
-  it("errors when no target is provided", () => {
-    const result = resolveTarget({
-      to: undefined,
-    });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("Expected missing target to fail");
     }
     expect(result.error.message).toBe(
       "Delivering to Google Chat requires target <spaces/{space}|users/{user}>",

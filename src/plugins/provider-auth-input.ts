@@ -190,23 +190,16 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
   });
 
   if (selectedMode === "ref") {
-    if (typeof params.prompter.select !== "function") {
-      const fallback = resolveRefFallbackInput({
-        config: params.config,
-        provider: params.provider,
-        preferredEnvVar: envKey?.source ? extractEnvVarFromSourceLabel(envKey.source) : undefined,
-        env,
-      });
-      await params.setCredential(fallback.ref, selectedMode);
-      return fallback.resolvedValue;
-    }
-    const resolved = await promptSecretRef({
+    const refParams = {
       provider: params.provider,
       config: params.config,
-      prompter: params.prompter,
       preferredEnvVar: envKey?.source ? extractEnvVarFromSourceLabel(envKey.source) : undefined,
       env,
-    });
+    };
+    const resolved =
+      typeof params.prompter.select !== "function"
+        ? resolveRefFallbackInput(refParams)
+        : await promptSecretRef({ ...refParams, prompter: params.prompter });
     await params.setCredential(resolved.ref, selectedMode);
     return resolved.resolvedValue;
   }

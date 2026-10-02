@@ -29,7 +29,6 @@ export async function readRestartSentinelStartupSnapshot(params: {
   pendingUpdate?: PendingUpdateSentinelIdentity;
   shouldRun?: () => boolean;
   warn?: (message: string) => void;
-  trackImport?: (work: Promise<unknown>) => void;
 }) {
   if (params.shouldRun?.() === false) {
     return null;
@@ -46,13 +45,11 @@ export async function readRestartSentinelStartupSnapshot(params: {
     return null;
   }
   if (params.shouldRun) {
-    const importing = importLegacyUpdateRestartSentinel({
+    const imported = await importLegacyUpdateRestartSentinel({
       context: params.context.workerContext,
       shouldRun: params.shouldRun,
       ...(sentinel ? { expectedRevision: sentinel.revision } : {}),
     });
-    params.trackImport?.(importing);
-    const imported = await importing;
     if (!params.shouldRun()) {
       return null;
     }

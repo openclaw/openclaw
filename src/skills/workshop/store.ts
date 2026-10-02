@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { FsSafeError, root, type Root } from "../../infra/fs-safe.js";
+import { retainMutationAuthority } from "../../infra/mutation-authority.js";
 import { logWarn } from "../../logger.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import {
@@ -83,12 +84,8 @@ export function createSkillProposalId(name: string, now = new Date()): string {
   return `${normalized.slice(0, 60)}-${date}-${suffix}`;
 }
 
-function contentSizeBytes(content: string): number {
-  return Buffer.byteLength(content, "utf8");
-}
-
 function assertSkillProposalContentSize(content: string): void {
-  if (contentSizeBytes(content) > MAX_PROPOSAL_BYTES) {
+  if (Buffer.byteLength(content, "utf8") > MAX_PROPOSAL_BYTES) {
     throw new Error("Skill proposal is too large.");
   }
 }
@@ -111,7 +108,7 @@ export function prepareSkillProposalSupportFiles(
       throw new Error(`Duplicate support file path: ${filePath}`);
     }
     seen.add(filePath);
-    const sizeBytes = contentSizeBytes(file.content);
+    const sizeBytes = Buffer.byteLength(file.content, "utf8");
     if (sizeBytes > MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES) {
       throw new Error(`Support file is too large: ${filePath}`);
     }
@@ -249,6 +246,7 @@ export async function readSkillProposalRecord(
 }
 
 export async function writeSkillProposal(request: {
+  assertCommitAllowed?: () => void;
   record: SkillProposalRecord;
   content: string;
   supportFiles?: readonly PreparedSkillProposalSupportFile[];
@@ -260,6 +258,9 @@ export async function writeSkillProposal(request: {
   assertProposalId(request.record.id);
   assertSkillProposalContentSize(request.content);
   const params = {
+    assertCommitAllowed: request.assertCommitAllowed
+      ? retainMutationAuthority(request.assertCommitAllowed)
+      : undefined,
     ...structuredClone({
       record: request.record,
       content: request.content,
@@ -283,6 +284,7 @@ export async function writeSkillProposal(request: {
         event: params.event,
       },
       params.store,
+      params.assertCommitAllowed,
     );
   } catch (error) {
     const committed = await readCommittedSkillProposalTransition({
@@ -305,6 +307,7 @@ export async function writeSkillProposal(request: {
 }
 
 export async function replaceSkillProposalDraft(request: {
+  assertCommitAllowed?: () => void;
   expected: SkillProposalRecord;
   record: SkillProposalRecord;
   content: string;
@@ -315,6 +318,9 @@ export async function replaceSkillProposalDraft(request: {
   assertProposalId(request.record.id);
   assertSkillProposalContentSize(request.content);
   const params = {
+    assertCommitAllowed: request.assertCommitAllowed
+      ? retainMutationAuthority(request.assertCommitAllowed)
+      : undefined,
     ...structuredClone({
       expected: request.expected,
       record: request.record,
@@ -336,6 +342,7 @@ export async function replaceSkillProposalDraft(request: {
       record: params.record,
       event: params.event,
       store: params.store,
+      assertCommitAllowed: params.assertCommitAllowed,
       operationLabel: "skill-workshop.revision.commit",
       invalidateRollback: true,
     });
@@ -387,38 +394,32 @@ export async function updateSkillProposalRecord(params: {
   );
 }
 
-function listStoredProposals(options: SkillWorkshopStoreOptions, scope: SkillProposalLookupScope) {
-  return executeSkillWorkshopOperation(
-    "workshop.proposals.list",
-    { agentId: scope.agentId },
-    options,
-  );
-}
-
 export async function readSkillProposalManifest(
   sourceOptions: SkillWorkshopDirectoryStoreOptions,
-  lookupScope: SkillProposalLookupScope = {},
+  lookupScope: SkillProposalLookupScope & { status?: SkillProposalRecord["status"] } = {},
 ): Promise<SkillProposalManifest> {
   const options = captureSkillWorkshopStoreOptions(sourceOptions);
-  const scope = { agentId: lookupScope.agentId };
-  const before = await listStoredProposals(options, scope);
+  const scope = { agentId: lookupScope.agentId, status: lookupScope.status };
+  const before = await executeSkillWorkshopOperation(
+    "workshop.proposals.list",
+    { agentId: scope.agentId, status: "pending" },
+    options,
+  );
   await Promise.all(
-    before
-      .filter(({ record }) => record.status === "pending")
-      .map(({ record, row }) =>
-        reconcileInterruptedApply(record.id, {
-          ...options,
-          ...(scope.agentId
-            ? { agentId: scope.agentId }
-            : row.owner_agent_id
-              ? { agentId: row.owner_agent_id }
-              : {}),
-        }),
-      ),
+    before.map(({ record, row }) =>
+      reconcileInterruptedApply(record.id, {
+        ...options,
+        ...(scope.agentId
+          ? { agentId: scope.agentId }
+          : row.owner_agent_id
+            ? { agentId: row.owner_agent_id }
+            : {}),
+      }),
+    ),
   );
-  const proposals = (await listStoredProposals(options, scope)).map(({ record }) =>
-    manifestEntryFromRecord(record),
-  );
+  const proposals = (
+    await executeSkillWorkshopOperation("workshop.proposals.list", scope, options)
+  ).map(({ record }) => manifestEntryFromRecord(record));
   return {
     schema: SKILL_WORKSHOP_MANIFEST_SCHEMA,
     updatedAt: proposals[0]?.updatedAt ?? new Date(0).toISOString(),
@@ -467,7 +468,7 @@ async function readProposalSupportFiles(
       symlinks: "reject",
     });
     const content = read.buffer.toString("utf8");
-    const sizeBytes = contentSizeBytes(content);
+    const sizeBytes = Buffer.byteLength(content, "utf8");
     const hash = hashSkillProposalContent(content);
     if (file.sizeBytes !== sizeBytes || file.hash !== hash) {
       throw new Error(`Proposal support file changed without updating metadata: ${filePath}`);

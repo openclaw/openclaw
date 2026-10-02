@@ -1,4 +1,3 @@
-// Signal API module exposes the plugin doctor contract.
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
@@ -8,29 +7,7 @@ import { defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor-
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { repairSignalAccountKeys } from "./src/account-key-repair.js";
 import { migrateLegacySignalTransportConfigSync } from "./src/config-compat.js";
-
-const RETIRED_SIGNAL_ACCOUNT_TRANSPORT_FIELDS = [
-  "configPath",
-  "httpUrl",
-  "httpHost",
-  "httpPort",
-  "cliPath",
-  "autoStart",
-  "startupTimeoutMs",
-  "receiveMode",
-  "ignoreStories",
-] as const;
-
-function hasRetiredSignalAccountTransportFields(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    RETIRED_SIGNAL_ACCOUNT_TRANSPORT_FIELDS.some((field) => Object.hasOwn(value, field))
-  );
-}
-
-function hasRetiredSignalAccountMapTransportFields(value: unknown): boolean {
-  return isRecord(value) && Object.values(value).some(hasRetiredSignalAccountTransportFields);
-}
+import { hasLegacySignalTransportFields } from "./src/legacy-transport.js";
 
 // Signal's nested streaming schema is delivery-only ({chunkMode, block}); it
 // has no preview mode, so only the delivery flat aliases are legal legacy
@@ -50,14 +27,13 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     message:
       'Signal transport config is now account-owned; run "openclaw doctor --fix" to migrate retired channels.signal transport fields.',
     match: (value) =>
-      isRecord(value) &&
-      (Object.hasOwn(value, "apiMode") || hasRetiredSignalAccountTransportFields(value)),
+      isRecord(value) && (Object.hasOwn(value, "apiMode") || hasLegacySignalTransportFields(value)),
   },
   {
     path: ["channels", "signal", "accounts"],
     message:
       'Signal transport config is now account-owned; run "openclaw doctor --fix" to migrate retired per-account transport fields.',
-    match: hasRetiredSignalAccountMapTransportFields,
+    match: (value) => isRecord(value) && Object.values(value).some(hasLegacySignalTransportFields),
   },
 ];
 

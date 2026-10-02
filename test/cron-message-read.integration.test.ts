@@ -27,9 +27,9 @@ import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../src/gateway/
 import { getActiveMcpLoopbackRuntime } from "../src/gateway/mcp-http.loopback-runtime.js";
 import {
   disconnectGatewayClient,
-  getGatewayE2ePortBlock,
   startGatewayWithClient,
 } from "../src/gateway/test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock } from "../src/gateway/test-helpers.listener.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { formatErrorMessage } from "../src/infra/errors.js";
 import { redactToolPayloadText } from "../src/logging/redact.js";
@@ -352,13 +352,17 @@ describe("scheduled message actions", () => {
         ]) {
           vi.stubEnv(key, "1");
         }
-        // Minimal mode suppresses channel startup; the skip flags would also
+        // Minimal mode suppresses initial channel startup; the skip flags would also
         // remove channel credentials from the published runtime config.
         vi.stubEnv("OPENCLAW_SKIP_CHANNELS", undefined);
         vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", undefined);
         vi.stubEnv("OPENCLAW_GATEWAY_URL", undefined);
         vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", undefined);
-        const gatewayPort = await getGatewayE2ePortBlock();
+        const gatewayPortClaim = await acquireGatewayE2ePortBlock();
+        const gatewayPort = gatewayPortClaim.port;
+        // Released here until Gateway startup owns the claim.
+        let unstartedGatewayPortClaim: typeof gatewayPortClaim | undefined = gatewayPortClaim;
+        cleanup.push(() => unstartedGatewayPortClaim?.release());
         const gatewayToken = "synthetic-scheduled-read-gateway-token";
         vi.stubEnv("OPENCLAW_SCHEDULED_READ_ARGUMENTS", JSON.stringify(actionParams));
         vi.stubEnv("OPENCLAW_SCHEDULED_CREATE_JOB", undefined);
@@ -566,6 +570,8 @@ describe("scheduled message actions", () => {
           channels: {
             discord: {
               enabled: true,
+              // Advancing the grant clock must not start an unrelated Discord transport.
+              healthMonitor: { enabled: false },
               ...(nativeCreator
                 ? {
                     token: "synthetic-unused-default-token",
@@ -645,8 +651,9 @@ describe("scheduled message actions", () => {
         cleanup.push(() => resetPreparedModelRuntimeSnapshotsForTest());
         const finished = createDeferred<Record<string, unknown>>();
         const scheduledJob: { id?: string } = {};
+        unstartedGatewayPortClaim = undefined;
         const gateway = await startGatewayWithClient({
-          port: gatewayPort,
+          portClaim: gatewayPortClaim,
           cfg,
           configPath,
           token: gatewayToken,

@@ -3,19 +3,13 @@ import type { ReplyPayload } from "../../shared/reply-payload.types.js";
 
 /** Derived sendability facts for text/media outbound payload delivery. */
 export type SendableOutboundReplyParts = {
-  /** Raw text selected for delivery before trimming. */
   text: string;
-  /** Text after trimming whitespace for sendability checks. */
   trimmedText: string;
   /** Normalized non-empty media URLs. */
   mediaUrls: string[];
-  /** Number of normalized media URLs. */
   mediaCount: number;
-  /** Whether trimmed text is sendable. */
   hasText: boolean;
-  /** Whether at least one media URL is sendable. */
   hasMedia: boolean;
-  /** Whether the payload has any sendable text or media. */
   hasContent: boolean;
 };
 
@@ -40,17 +34,14 @@ export function resolveOutboundMediaUrls(payload: {
   return payload.mediaUrl ? [payload.mediaUrl] : [];
 }
 
-/** Count outbound media items after legacy single-media fallback normalization. */
 export function countOutboundMedia(payload: { mediaUrls?: string[]; mediaUrl?: string }): number {
   return resolveOutboundMediaUrls(payload).length;
 }
 
-/** Check whether an outbound payload includes any media after normalization. */
 export function hasOutboundMedia(payload: { mediaUrls?: string[]; mediaUrl?: string }): boolean {
   return countOutboundMedia(payload) > 0;
 }
 
-/** Check whether an outbound payload includes text, optionally trimming whitespace first. */
 export function hasOutboundText(payload: { text?: string }, options?: { trim?: boolean }): boolean {
   const text = options?.trim ? payload.text?.trim() : payload.text;
   return Boolean(text);

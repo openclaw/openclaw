@@ -62,6 +62,8 @@ export type IMessageAccountConfig = Omit<
       string,
       {
         requireMention?: boolean;
+        /** Override mention gating in native reply threads whose root this account sent. */
+        requireMentionInBotThreads?: boolean;
         tools?: GroupToolPolicyConfig;
         toolsBySender?: GroupToolPolicyBySenderConfig;
         /**

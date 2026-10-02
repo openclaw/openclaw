@@ -24,11 +24,19 @@ const enLogin = {
     toggleSecretVisibility: "Toggle Gateway secret visibility",
     failure: {
       rawError: "Raw error",
+      busy: {
+        title: "Gateway busy, retrying…",
+        summary:
+          "The Gateway is reachable, but the connection could not be opened. This page will retry automatically.",
+        countdown: "Retrying in {seconds}s…",
+        retrying: "Retrying now…",
+      },
       profileUnavailable: {
-        title: "Profile verification unavailable",
+        title: "Couldn't verify your account",
+        summary: "OpenClaw couldn't check your account right now. Please try again shortly.",
         stepRetry: "Retry shortly.",
         stepAdmin:
-          "If this continues, ask a Gateway administrator to check the identity provider and GitHub API credential.",
+          "If this continues, ask the person who manages OpenClaw to check account access.",
       },
       verifiedUserRequired: {
         title: "Verified identity required",
@@ -38,6 +46,16 @@ const enLogin = {
           "Reconnect through the trusted proxy or Tailscale so the Gateway can verify your identity.",
         stepSharedSecret:
           "For trusted local operator access, use the shared Gateway token or password.",
+      },
+      accessDenied: {
+        title: "No access to this Gateway",
+        summary:
+          "You're signed in, but this Gateway hasn't granted your account access, or that access has ended.",
+        stepAdmin:
+          "Ask a Gateway administrator to assign your profile a role, or to grant or restore your access.",
+        stepFindProfile:
+          "Administrators can find your profile with openclaw users list --json, then assign a role with users.setRole.",
+        stepReconnect: "This page reconnects on its own once access is granted.",
       },
       authRequired: {
         title: "This Gateway expects its token",
@@ -57,6 +75,15 @@ const enLogin = {
         stepDashboard:
           "Run openclaw dashboard --no-open for a fresh URL, or openclaw gateway auth-token --show to recover the token.",
         stepReplace: "Replace the Gateway secret with the token for this Gateway URL.",
+      },
+      bootstrapInvalid: {
+        title: "Pairing link is no longer valid",
+        summary:
+          "This one-time dashboard link may have expired or already been used. Request a fresh link instead of changing the Gateway secret.",
+        stepOpen:
+          "Open the fresh link that the command opens or copies in this browser. Pairing links can be used only once and expire after ten minutes.",
+        stepJson:
+          "If the browser or clipboard is unavailable, run openclaw dashboard --json on the Gateway host and open its browserUrl in this browser.",
       },
       trustedProxy: {
         title: "Proxy authentication required",

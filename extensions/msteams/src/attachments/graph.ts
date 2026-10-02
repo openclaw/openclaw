@@ -3,6 +3,7 @@ import {
   readProviderJsonArrayFieldResponse,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
+import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist as resolveMediaSsrfPolicy,
   isHttpsUrlAllowedByHostnameSuffixAllowlist as isUrlAllowed,
@@ -32,7 +33,6 @@ import {
   normalizeContentType,
   resolveMSTeamsMediaKind,
   resolveAttachmentFetchPolicy,
-  resolveRequestUrl,
   safeFetchWithPolicy,
 } from "./shared.js";
 import type {
@@ -156,16 +156,11 @@ function normalizeGraphAttachment(att: MSTeamsAttachmentLike): MSTeamsAttachment
   };
 }
 
-/**
- * Download all hosted content from a Teams message (images, documents, etc.).
- * Renamed from downloadGraphHostedImages to support all file types.
- */
 async function downloadGraphHostedContent(params: {
   accessToken: string;
   messageUrl: string;
   maxBytes: number;
   fetchFn?: typeof fetch;
-  preserveFilenames?: boolean;
   ssrfPolicy?: SsrFPolicy;
   logger?: MSTeamsAttachmentDownloadLogger;
   deadline?: MSTeamsRequestDeadline;
@@ -425,7 +420,6 @@ export async function downloadMSTeamsGraphMedia(params: {
     messageUrl,
     maxBytes: params.maxBytes,
     fetchFn: params.fetchFn,
-    preserveFilenames: params.preserveFilenames,
     ssrfPolicy,
     logger: params.logger,
     deadline: params.deadline,

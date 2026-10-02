@@ -1,10 +1,9 @@
-// Model auth status methods report provider credential health, profile expiry,
-// usage windows, cleanup actions, and auth-state refreshes.
 import {
   findNormalizedProviderKey,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   ErrorCodes,
   errorShape,
@@ -37,10 +36,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
 import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { formatForLog } from "../ws-log.js";
-import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
+import { resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import { modelsAuthRefreshHandlers } from "./models-auth-refresh.js";
 import { readModelAuthStatusFacts } from "./models-auth-status-facts.js";
 import {
@@ -57,16 +56,6 @@ import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-export type {
-  ModelAuthExpiry,
-  ModelAuthLogoutResult,
-  ModelAuthOrderSetResult,
-  ModelAuthStatusProfile,
-  ModelAuthStatusProvider,
-  ModelAuthStatusResult,
-  ModelProviderCapability,
-} from "./models-auth-status.types.js";
 
 const log = createSubsystemLogger("models-auth-status");
 function resolveAuthRefreshScope(cfg: OpenClawConfig): {
@@ -103,17 +92,12 @@ function readLogoutProfileSelection(params: Record<string, unknown>): LogoutProf
   if (!Array.isArray(params.profileIds) || params.profileIds.length === 0) {
     return { ok: false, message: "profileIds must be a non-empty string array" };
   }
-  const profileIds: string[] = [];
   for (const value of params.profileIds) {
     if (typeof value !== "string" || !value.trim()) {
       return { ok: false, message: "profileIds must be a non-empty string array" };
     }
-    const profileId = value.trim();
-    if (!profileIds.includes(profileId)) {
-      profileIds.push(profileId);
-    }
   }
-  return { ok: true, profileIds };
+  return { ok: true, profileIds: normalizeUniqueStringEntries(params.profileIds) };
 }
 
 function createAuthLogoutAbortOps(context: GatewayRequestContext): ChatAbortOps {
@@ -356,7 +340,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const config = context.getRuntimeConfig();
       const scope = resolveModelAuthAgentScope(config, params.agentId);
       if (!scope.ok) {
-        respond(false, undefined, modelAuthAgentScopeError(scope));
+        respond(false, undefined, scope.error);
         return;
       }
       const { saveModelProviderApiKey } = await import("../../commands/models/auth-api-key.js");
@@ -403,7 +387,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const cfg = context.getRuntimeConfig();
       const scope = resolveModelAuthAgentScope(cfg, params.agentId);
       if (!scope.ok) {
-        respond(false, undefined, modelAuthAgentScopeError(scope));
+        respond(false, undefined, scope.error);
         return;
       }
       const { agentDir } = scope;
@@ -463,8 +447,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
   "models.authStatus": async ({ params, respond, context, client }) => {
     const now = Date.now();
     const refreshRequested = Boolean(params.refresh);
-    const includeProfileIdentity =
-      Array.isArray(client?.connect?.scopes) && client.connect.scopes.includes(ADMIN_SCOPE);
+    const includeProfileIdentity = hasGatewayAdminScope(client);
     const resolveScope = (cfg: OpenClawConfig) =>
       resolveModelAuthAgentScope(
         cfg,
@@ -476,7 +459,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       let cfg = context.getRuntimeConfig();
       let scope = resolveScope(cfg);
       if (!scope.ok) {
-        respond(false, undefined, modelAuthAgentScopeError(scope));
+        respond(false, undefined, scope.error);
         return;
       }
       if (refreshRequested) {
@@ -485,7 +468,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         cfg = context.getRuntimeConfig();
         scope = resolveScope(cfg);
         if (!scope.ok) {
-          respond(false, undefined, modelAuthAgentScopeError(scope));
+          respond(false, undefined, scope.error);
           return;
         }
       }

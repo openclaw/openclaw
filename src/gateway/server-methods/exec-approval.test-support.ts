@@ -2,6 +2,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi, type TestContext } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createPreparedTestApprovalManager,
   createTestApprovalFixture,
@@ -247,12 +252,13 @@ export async function waitExecApproval(params: {
 
 export async function createExecApprovalFixture(
   testContext: TestContext,
-  opts?: { config?: OpenClawConfig; preparePersistence?: boolean },
+  opts?: { config?: OpenClawConfig; preparePersistence?: boolean; scheduler?: GatewayScheduler },
 ) {
+  const managerOptions = { scheduler: opts?.scheduler };
   const fixture =
     opts?.preparePersistence === false
-      ? createTestApprovalFixture(testContext)
-      : await createPreparedTestApprovalManager(testContext);
+      ? createTestApprovalFixture(testContext, managerOptions)
+      : await createPreparedTestApprovalManager(testContext, managerOptions);
   const { manager } = fixture;
   const handlers = createExecApprovalHandlers(manager);
   const broadcasts: Array<{ event: string; payload: unknown }> = [];
@@ -382,16 +388,38 @@ export async function requestExecApprovalForTest(
   request: Record<string, unknown>,
   fixtureOptions?: Parameters<typeof createExecApprovalFixture>[1],
 ) {
-  const fixture = await createExecApprovalFixture(testContext, fixtureOptions);
-  return await fixture.run(async () => {
-    await requestExecApproval({
-      handlers: fixture.handlers,
-      respond: fixture.respond,
-      context: fixture.context,
-      params: request,
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const fixture = await createExecApprovalFixture(testContext, { ...fixtureOptions, scheduler });
+  try {
+    return await fixture.run(async () => {
+      const { pending } = await waitForApprovalRequested(
+        fixture.context,
+        "exec.approval.requested",
+        () =>
+          fixture.track(
+            requestExecApproval({
+              handlers: fixture.handlers,
+              respond: fixture.respond,
+              context: fixture.context,
+              params: request,
+            }),
+          ),
+      );
+      const payload = getRequestedExecApprovalPayload(fixture.broadcasts);
+      const record = expectDefined(
+        fixture.manager.getLocalSnapshot(payload.id),
+        "registered approval deadline",
+      );
+      using dateNow = vi.spyOn(Date, "now");
+      dateNow.mockImplementation(clock.clock.now);
+      await clock.advanceTo(record.expiresAtMs);
+      await pending;
+      return { ...fixture, ...payload };
     });
-    return { ...fixture, ...getRequestedExecApprovalPayload(fixture.broadcasts) };
-  });
+  } finally {
+    await scheduler.stop();
+  }
 }
 
 export async function createForwardingExecApprovalFixture(
@@ -409,7 +437,10 @@ export async function createForwardingExecApprovalFixture(
     };
   },
 ) {
-  const fixture = await createPreparedTestApprovalManager(testContext);
+  // Prepare persistence before forwarding tests replace the host's timers.
+  const scheduler = createTestGatewayScheduler("fake-timers");
+  testContext.onTestFinished(() => scheduler.stop());
+  const fixture = await createPreparedTestApprovalManager(testContext, { scheduler });
   const { manager } = fixture;
   const forwarder = {
     handleRequested: vi.fn(async () => false),

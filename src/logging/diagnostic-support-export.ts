@@ -49,8 +49,7 @@ const DEFAULT_LOG_MAX_BYTES = 1_000_000;
 const SUPPORT_EXPORT_CONFIG_MAX_BYTES = 8 * 1024 * 1024;
 const SUPPORT_EXPORT_PREFIX = "openclaw-diagnostics-";
 const SUPPORT_EXPORT_SUFFIX = ".zip";
-type Awaitable<T> = T | Promise<T>;
-type SupportSnapshotReader = () => Awaitable<unknown>;
+type SupportSnapshotReader = () => unknown;
 
 type DiagnosticSupportExportOptions = {
   outputPath?: string;
@@ -639,15 +638,6 @@ function renderSummary(params: {
   ].join("\n");
 }
 
-function defaultOutputPath(options: { now: Date; stateDir: string }): string {
-  return path.join(
-    options.stateDir,
-    "logs",
-    "support",
-    `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`,
-  );
-}
-
 function resolveOutputPath(options: {
   outputPath?: string;
   cwd: string;
@@ -655,9 +645,10 @@ function resolveOutputPath(options: {
   stateDir: string;
   now: Date;
 }): string {
+  const filename = `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`;
   const raw = options.outputPath?.trim();
   if (!raw) {
-    return defaultOutputPath(options);
+    return path.join(options.stateDir, "logs", "support", filename);
   }
   const resolved =
     path.isAbsolute(raw) || raw.startsWith("~")
@@ -665,10 +656,7 @@ function resolveOutputPath(options: {
       : path.resolve(options.cwd, raw);
   try {
     if (fs.statSync(resolved).isDirectory()) {
-      return path.join(
-        resolved,
-        `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`,
-      );
+      return path.join(resolved, filename);
     }
   } catch {
     // Non-existing output paths are treated as files.

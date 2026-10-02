@@ -29,7 +29,6 @@ describe("memory index", () => {
     getFreshManager,
     getPersistentManager,
     seedSessionTranscript: seedMemoryIndexSessionTranscript,
-    trackManager,
   } = fixture;
 
   it("keeps a dirty status manager read-only while searching published results", async () => {
@@ -123,8 +122,8 @@ describe("memory index", () => {
     expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
   });
 
-  it("fails search after bounded query embedding retries are exhausted", async () => {
-    const cfg = createCfg({});
+  it("fails search after bounded query embedding retries are exhausted for an explicit provider", async () => {
+    const cfg = createCfg({ provider: "openai" });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
 
@@ -151,6 +150,38 @@ describe("memory index", () => {
 
     await expect(manager.search("alpha")).rejects.toThrow("fetch failed");
     expect(queryCalls).toBe(3);
+  });
+
+  it("falls back to keyword results after bounded query embedding retries are exhausted with unset provider", async () => {
+    const cfg = createCfg({});
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    let queryCalls = 0;
+    (
+      manager as unknown as {
+        provider: EmbeddingProvider;
+      }
+    ).provider = {
+      id: "mock",
+      model: "mock-embed",
+      embed: async () => {
+        queryCalls += 1;
+        throw new Error("TypeError: fetch failed | other side closed");
+      },
+      embedBatch: async (texts) => texts.map(() => [1, 0, 0, 0]),
+      close: async () => {},
+    };
+    (
+      manager as unknown as {
+        waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
+      }
+    ).waitForEmbeddingRetry = async () => {};
+
+    const results = await manager.search("alpha");
+
+    expect(queryCalls).toBe(3);
+    expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
   });
 
   it("keeps a healthy local provider active when the caller cancels search", async () => {
@@ -451,7 +482,6 @@ describe("memory index", () => {
       minScore: 0,
     });
     const manager = await getFreshManager(cfg);
-    trackManager(manager);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -639,10 +669,8 @@ describe("memory index", () => {
     const servingFields = manager as unknown as {
       dirty: boolean;
       memoryFullRetryDirty: boolean;
-      fileWatcher: { closeNativeMemoryWatchPairs: () => void };
       awaitManagerIdle: () => Promise<void>;
     };
-    servingFields.fileWatcher.closeNativeMemoryWatchPairs();
 
     const sessionId = "automatic-maintenance-purge";
     const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
@@ -650,7 +678,7 @@ describe("memory index", () => {
       memoryPath,
       "# Memory\n<!-- openclaw-memory-promotion:private-entry -->\n- Private violet alpha fragment.\n",
     );
-    recordMemoryEntryOrigins({
+    await recordMemoryEntryOrigins({
       agentId: "main",
       origins: [
         {

@@ -189,35 +189,22 @@ export function prepareProjectedSessionSharing(params: {
   const profile = identity && retained?.aliases.has(identity.id) ? retained : undefined;
   const roleProfile =
     actor?.kind === "operator" && retained?.aliases.has(actor.profileId) ? retained : undefined;
-  const sessionCap =
+  const policy =
     actor?.kind === "system"
       ? undefined
       : resolveOperatorRolePolicyForAssignment(
           roleProfile?.profileId,
           roleProfile?.role ?? null,
           cfg,
-        )?.sessions.others;
-  return prepareSessionSharing(params, {
-    aliases: profile?.aliases ?? new Set(),
-    sessionCap,
-    isMember,
-  });
-}
-
-/** Deleted metadata cannot establish a profile's child-session entitlement. */
-export function canReadSessionWithoutSharingMetadata(params: {
-  cfg: OpenClawConfig;
-  client: GatewayClient | null;
-  sessionKey: string;
-}): boolean {
-  const sharing = prepareProjectedSessionSharing({ ...params, isMember: () => false });
-  // Match the existing missing-row event policy: no creator and draft visibility.
-  return (
-    sharing.entryFilter?.(params.sessionKey, {
-      visibility: "draft",
-      incognito: isIncognitoSessionKey(params.sessionKey) ? true : undefined,
-    }) ?? true
-  );
+        );
+  return {
+    ...prepareSessionSharing(params, {
+      aliases: profile?.aliases ?? new Set(),
+      sessionCap: policy?.sessions.others,
+      isMember,
+    }),
+    policy,
+  };
 }
 
 export function createSessionListEntryFilter(

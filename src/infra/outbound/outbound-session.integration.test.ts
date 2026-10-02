@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildConversationIdentity } from "../../config/sessions/conversation-identity.js";
@@ -18,12 +17,12 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
   disposeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
@@ -40,21 +39,20 @@ import {
 describe("outbound session persistence", () => {
   let storePath: string;
 
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-outbound-session-");
 
   beforeEach(() => {
-    storePath = path.join(tempDirs.make("openclaw-outbound-session-"), "sessions.json");
+    storePath = path.join(sessionDirs.make(), "sessions.json");
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    closeOpenClawAgentDatabasesForTest();
   });
 
   it.each([" External ", "internal"])(
     "resolves home paths before carrying only normalized state context (%s)",
     (supervisorMode) => {
-      const root = tempDirs.make("openclaw-outbound-binding-context-");
+      const root = sessionDirs.make();
       const captured = captureOutboundSessionBinding({
         cfg: { session: { store: "~/sessions/{agentId}.json" } },
         scope: {
@@ -82,7 +80,7 @@ describe("outbound session persistence", () => {
   );
 
   it("keeps destination and source policy stores separate across asynchronous routing", async () => {
-    const root = tempDirs.make("openclaw-outbound-binding-");
+    const root = sessionDirs.make();
     const env = { ...process.env, OPENCLAW_STATE_DIR: root };
     const destinationPath = path.join(root, "destination.sqlite");
     openOpenClawAgentDatabase({ agentId: "keeper", path: destinationPath, env });
@@ -177,7 +175,7 @@ describe("outbound session persistence", () => {
   it.each([false, true])(
     "rechecks route authority after its captured writer queue waits (revoked: %s)",
     async (revoked) => {
-      const root = tempDirs.make("openclaw-outbound-binding-queue-");
+      const root = sessionDirs.make();
       const env = { ...process.env, OPENCLAW_STATE_DIR: root };
       const destinationPath = path.join(root, "destination.sqlite");
       const scope = {
@@ -255,7 +253,7 @@ describe("outbound session persistence", () => {
   );
 
   it("refuses a replacement physical source owner with the same logical session", async () => {
-    const root = tempDirs.make("openclaw-outbound-source-owner-");
+    const root = sessionDirs.make();
     const env = { ...process.env, OPENCLAW_STATE_DIR: root };
     const cfg: OpenClawConfig = { session: { store: path.join(root, "{agentId}.sqlite") } };
     const sourcePath = path.join(root, "source.sqlite");
@@ -401,7 +399,7 @@ describe("outbound session persistence", () => {
       established!.entry.updatedAt + 1,
     );
 
-    const discovered = listConversations({ agentId: "main", storePath }, { channel: "reef" });
+    const discovered = await listConversations({ agentId: "main", storePath }, { channel: "reef" });
     expect(discovered[0]?.conversationRef).toBe(threadlessIdentity!.conversationRef);
     expect(discovered[0]).not.toMatchObject({ sessionId: expect.any(String) });
 

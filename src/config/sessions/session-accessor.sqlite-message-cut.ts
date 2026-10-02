@@ -16,7 +16,6 @@ import {
   withSqliteSessionContextReset,
 } from "./session-accessor.sqlite-deletion.js";
 import {
-  collectSessionEntryLookupKeys,
   readSessionEntryRow,
   readSessionIdentitySnapshot,
   writeSessionEntry,
@@ -24,7 +23,6 @@ import {
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
-  normalizeSqliteSessionKey,
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
@@ -48,6 +46,7 @@ import {
   SYNC_REBUILD_MAX_BYTES,
   SYNC_REBUILD_MAX_ROWS,
 } from "./session-transcript-index.js";
+import { collectSessionEntryLookupKeys, normalizeStoreSessionKey } from "./store-entry.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
   isSessionTranscriptLeafControl,
@@ -116,10 +115,10 @@ async function mutateSqliteSessionAtMessage(
   mode: SessionTranscriptMutationMode,
   expectedState?: SessionEntryExpectedState,
 ): Promise<SessionTranscriptMutationResult> {
-  const canonicalSourceKey = normalizeSqliteSessionKey(params.sessionKey);
-  const sourceKey = normalizeSqliteSessionKey(params.sessionStoreKey ?? params.sessionKey);
+  const canonicalSourceKey = normalizeStoreSessionKey(params.sessionKey);
+  const sourceKey = normalizeStoreSessionKey(params.sessionStoreKey ?? params.sessionKey);
   const targetKey =
-    mode === "fork" ? normalizeSqliteSessionKey(params.targetKey ?? params.sessionKey) : sourceKey;
+    mode === "fork" ? normalizeStoreSessionKey(params.targetKey ?? params.sessionKey) : sourceKey;
   const resolved = resolveSqliteScope({
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.env ? { env: params.env } : {}),
@@ -157,8 +156,8 @@ async function mutateSqliteSessionAtMessage(
             assertPreparedCurrent?.();
             params.commitGuard?.();
             const identityKeys = uniqueStrings([
-              ...collectSessionEntryLookupKeys(database, sourceKey),
-              ...collectSessionEntryLookupKeys(database, targetKey),
+              ...collectSessionEntryLookupKeys(sourceKey),
+              ...collectSessionEntryLookupKeys(targetKey),
             ]);
             previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
             const mutationResult = mutateSqliteSessionAtMessageInTransaction(database, resolved, {
@@ -185,6 +184,7 @@ async function mutateSqliteSessionAtMessage(
             };
           },
           toDatabaseOptions(resolved),
+          { operationLabel: "session.transcript.message-cut" },
         );
         if (result.status === "created") {
           invalidateSessionBranchCache(databasePath, [
@@ -276,7 +276,7 @@ function mutateSqliteSessionAtMessageInTransaction(
     version: findSessionTranscriptHeader(events)?.version ?? MIN_READABLE_SESSION_VERSION,
   });
   const nextEvents =
-    params.mode === "fork" && cut?.status === "cut"
+    params.mode === "fork" && cut
       ? [header, ...cut.prefix]
       : [
           header,
@@ -338,13 +338,9 @@ function mutateSqliteSessionAtMessageInTransaction(
     status: "created",
     key: params.targetKey,
     entry: nextEntry,
-    ...(cut?.status === "cut" && cut.editorText ? { editorText: cut.editorText } : {}),
-    ...(cut?.status === "cut" && cut.editorAttachments
-      ? { editorAttachments: cut.editorAttachments }
-      : {}),
-    ...(cut?.status === "cut" && cut.editorMediaRefs
-      ? { editorMediaRefs: cut.editorMediaRefs }
-      : {}),
+    ...(cut?.editorText ? { editorText: cut.editorText } : {}),
+    ...(cut?.editorAttachments ? { editorAttachments: cut.editorAttachments } : {}),
+    ...(cut?.editorMediaRefs ? { editorMediaRefs: cut.editorMediaRefs } : {}),
   };
 }
 

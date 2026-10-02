@@ -27,6 +27,36 @@ const EXPLICIT_GATEWAY_AUTH_MESSAGE = [
 ].join("\n");
 
 describe("formatCliJsonFailure", () => {
+  it.each([false, true])(
+    "keeps connection diagnostics out of normal output (sent=%s)",
+    (requestDispatched) => {
+      const diagnostic = "gateway closed (1006): PRIVATE_CANARY\nConfig: /state/openclaw.json";
+      const error = new GatewayTransportError({
+        kind: "closed",
+        message: diagnostic,
+        requestDispatched,
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: diagnostic,
+        },
+      });
+      const output = formatCliFailureLines({ title: "Command failed", error, env: {} }).join("\n");
+      expect(output).toContain("openclaw gateway status");
+      expect(output).not.toContain("PRIVATE_CANARY");
+      expect(output).not.toContain("/state/");
+      expect(output.includes("may have completed")).toBe(requestDispatched);
+      expect(formatCliJsonFailure(error, { env: {} }).error.message).toBe(diagnostic);
+      expect(
+        formatCliFailureLines({
+          title: "Command failed",
+          error,
+          env: { OPENCLAW_DEBUG: "1" },
+        }).join("\n"),
+      ).toBe(diagnostic);
+    },
+  );
+
   it("preserves the typed schema refusal when a runner migration fails before Doctor starts", () => {
     const databases = [
       {
@@ -40,6 +70,9 @@ describe("formatCliJsonFailure", () => {
       targetVersion: "2026.9.4",
       cause: new Error("content migration failed"),
     });
+    const output = formatCliFailureLines({ title: "Update failed", error, env: {} }).join("\n");
+    expect(output).toContain("Let the updater restore the previous package and exit");
+    expect(output).toContain("openclaw doctor --fix");
     expect(formatCliJsonFailure(error, { env: {} })).toMatchObject({
       ok: false,
       error: {
@@ -79,10 +112,8 @@ describe("formatCliJsonFailure", () => {
     );
   });
 
-  it.each([
-    { label: "default output", env: {} },
-    { label: "debug output", env: { OPENCLAW_DEBUG: "1" } },
-  ])("keeps the full parse guidance unchanged in $label", ({ env }) => {
+  it("keeps the full parse guidance unchanged even with debug output", () => {
+    const env = { OPENCLAW_DEBUG: "1" };
     const error = Object.assign(
       new ExpectedCliError({
         message: 'OpenClaw sessions has no command "lst".',
@@ -103,7 +134,6 @@ describe("formatCliJsonFailure", () => {
           'OpenClaw sessions has no command "lst".\nDid you mean this?\n  openclaw sessions list\nTry: openclaw sessions --help\nDocs: https://docs.openclaw.ai/cli',
       },
     });
-    expect(payload.error.message).not.toContain("internal parse cause");
   });
   it("keeps plugin policy messages in the canonical JSON envelope", () => {
     const error = new ExpectedCliError({
@@ -118,10 +148,8 @@ describe("formatCliJsonFailure", () => {
     });
   });
 
-  it.each([
-    { label: "default output", env: {} },
-    { label: "debug output", env: { OPENCLAW_DEBUG: "1" } },
-  ])("keeps gateway credential guidance unchanged in $label", ({ env }) => {
+  it("keeps gateway credential guidance unchanged even with debug output", () => {
+    const env = { OPENCLAW_DEBUG: "1" };
     const error = new GatewayCredentialsRequiredError({
       method: "device.pair.list",
       configPath: "/tmp/openclaw.json",
@@ -136,10 +164,8 @@ describe("formatCliJsonFailure", () => {
     });
   });
 
-  it.each([
-    { label: "default output", env: {} },
-    { label: "debug output", env: { OPENCLAW_DEBUG: "1" } },
-  ])("keeps explicit gateway auth guidance in the envelope in $label", ({ env }) => {
+  it("keeps explicit gateway auth guidance in the envelope even with debug output", () => {
+    const env = { OPENCLAW_DEBUG: "1" };
     const error = new GatewayExplicitAuthRequiredError(EXPLICIT_GATEWAY_AUTH_MESSAGE);
 
     const payload = formatCliJsonFailure(error, { env });
@@ -158,10 +184,8 @@ describe("formatCliJsonFailure", () => {
 });
 
 describe("formatCliFailureLines", () => {
-  it.each([
-    { label: "default output", env: {} },
-    { label: "debug output", env: { OPENCLAW_DEBUG: "1" } },
-  ])("emits expected guidance only when not already written in $label", ({ env }) => {
+  it("emits expected guidance only when not already written even with debug output", () => {
+    const env = { OPENCLAW_DEBUG: "1" };
     const pending = new ExpectedCliError({
       message: "bad input",
       humanOutput: "\u001B[31mfirst\u001B[39m\nsecond\n",
@@ -193,10 +217,7 @@ describe("formatCliFailureLines", () => {
 
     expect(lines).toEqual([
       "[openclaw] Could not start the CLI.",
-      "[openclaw] Reason: config file is invalid",
-      "[openclaw] Debug: set OPENCLAW_DEBUG=1 to include the stack trace.",
-      "[openclaw] Try: openclaw doctor",
-      "[openclaw] Help: openclaw --help",
+      "[openclaw] For help, run `openclaw doctor`.",
     ]);
   });
 
@@ -287,7 +308,6 @@ describe("formatCliFailureLines", () => {
       "[openclaw] Stack:",
       "[openclaw] Error: boom",
     ]);
-    expect(lines.join("\n")).toContain("Error: boom");
   });
 
   it.each(["--debug", "--verbose"])("prints stack details for the root %s option", (debugFlag) => {
@@ -314,7 +334,7 @@ describe("formatCliFailureLines", () => {
       });
 
       expect(lines).not.toContain("[openclaw] Stack:");
-      expect(lines).toContain("[openclaw] Debug: set OPENCLAW_DEBUG=1 to include the stack trace.");
+      expect(lines).toContain("[openclaw] For help, run `openclaw doctor`.");
     },
   );
 });

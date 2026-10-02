@@ -13,7 +13,9 @@ import type {
   SessionEntryArchiveReason,
   SessionRow,
 } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
-import type { ModelAuthStatusResult } from "../../../src/gateway/server-methods/models-auth-status.js";
+import type { CronListPageResult } from "../../../src/cron/service/list-page-types.js";
+import type { CronStatusSummary } from "../../../src/cron/service/state.js";
+import type { ModelAuthStatusResult } from "../../../src/gateway/server-methods/models-auth-status.types.js";
 import type {
   GatewaySessionRow as GatewayWireSessionRow,
   GatewaySessionsDefaults as GatewayWireSessionsDefaults,
@@ -248,6 +250,7 @@ export type SessionsListResult = SessionsListResultBase<
 
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
+  label?: GatewaySessionRow["label"];
   category?: GatewaySessionRow["category"];
   updatedAt?: number;
   createdAt?: number;
@@ -255,6 +258,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   lastReadAt?: number;
   lastActivityAt?: number;
   lastInteractionAt?: number;
+  agentStatus?: GatewayWireSessionsPatchResult["entry"]["agentStatus"];
   permissionMode?: GatewaySessionRow["permissionMode"];
   nativeRuntimeConsent?: string;
   modelOverrideSource?: GatewayWireSessionsPatchResult["entry"]["modelOverrideSource"];
@@ -288,36 +292,13 @@ export type CronRunsStatusFilter = NonNullable<CronRunsParams["status"]>;
 export type CronSortDir = NonNullable<CronListParams["sortDir"]>;
 export type CronPayload = ProtocolCronJob["payload"];
 
-export type CronStatus = {
-  enabled: boolean;
-  triggersEnabled: boolean;
-  jobs: number;
-  nextWakeAtMs?: number | null;
-};
+export type CronStatus = Pick<CronStatusSummary, "enabled" | "triggersEnabled" | "jobs"> &
+  Partial<Pick<CronStatusSummary, "nextWakeAtMs">>;
 
-export type CronRunResult =
-  | { ok: true; ran: true }
-  | { ok: true; enqueued: true; runId: string }
-  | {
-      ok: true;
-      ran: false;
-      reason:
-        | "not-due"
-        | "already-running"
-        | "restart-recovery-pending"
-        | "invalid-spec"
-        | "stopped";
-    }
-  | { ok: false };
+export type { CronServiceRunResult as CronRunResult } from "../../../src/cron/service-contract.js";
 
-export type CronJobsListResult<Row = ProtocolCronJob> = {
+export type CronJobsListResult<Row = ProtocolCronJob> = Omit<CronListPageResult, "jobs"> & {
   jobs: Row[];
-  snapshotRevision: string;
-  total: number;
-  limit: number;
-  offset: number;
-  nextOffset: number | null;
-  hasMore: boolean;
 };
 
 export type CronRunsResult = {
@@ -343,7 +324,7 @@ export type {
   ModelAuthStatusProvider,
   ModelAuthStatusProfile,
   ModelAuthStatusResult,
-} from "../../../src/gateway/server-methods/models-auth-status.js";
+} from "../../../src/gateway/server-methods/models-auth-status.types.js";
 export type ProviderLoginOption = NonNullable<
   NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number]["loginOptions"]
 >[number];

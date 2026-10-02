@@ -11,6 +11,7 @@ import {
   readChatPaneMutationAccess,
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
+import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import * as modelControls from "./components/chat-model-controls.ts";
 import {
@@ -100,6 +101,7 @@ it.each(
       });
     });
     const { sessions, mount, context } = createMountedPanes(rows, "main", undefined, {
+      "models.list": () => ({ models: [model] }),
       "sessions.list": () => ({
         ...sessionsResult(rows, 1),
         defaults: {
@@ -122,7 +124,7 @@ it.each(
       await sessions.refresh({ agentId: "main", force: true });
       const pane = mount(key);
       await refreshPane(pane);
-      pane.state.chatModelCatalog = [model];
+      await refreshChatModelCatalogOnDemand(pane.state);
       const container = document.createElement("div");
       const draw = () => {
         const access = readChatPaneMutationAccess(context.gateway.snapshot, key);
@@ -220,7 +222,7 @@ it.each(
         });
         latestReply.resolve({ ok: true, key, path: "", entry: committed });
         await expect(latestOperation).resolves.toBe(true);
-        expect(selectedChatSessionRow(pane.state)).toMatchObject(committed);
+        expect(selectedChatSessionRow(pane.state)).toEqual(committed);
       } else {
         reply.reject(new Error("Synthetic unmaterialized selection rejection"));
         await expect(operation).resolves.toBe(false);

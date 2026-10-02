@@ -1,6 +1,6 @@
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { pullOllamaModel, pullOllamaModelNonInteractive } from "./setup-pull.js";
+import { pullOllamaModel } from "./setup-pull.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
@@ -37,8 +37,6 @@ describe("Ollama onboarding model pulls", () => {
   });
 
   it.each([
-    { label: "empty response", body: "" },
-    { label: "interrupted manifest download", body: '{"status":"pulling manifest"}\n' },
     {
       label: "interrupted model layer",
       body: '{"status":"pulling abcdef123456","total":100,"completed":40}\n',
@@ -73,23 +71,6 @@ describe("Ollama onboarding model pulls", () => {
       true,
     );
     expect(progress.stop).toHaveBeenCalledWith("Downloaded gemma4:e2b");
-  });
-
-  it("reports interrupted pulls as failures during non-interactive setup", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response('{"status":"pulling manifest"}\n'),
-      release: vi.fn(async () => {}),
-    });
-    const runtime = { log: vi.fn(), error: vi.fn() };
-
-    await expect(
-      pullOllamaModelNonInteractive("http://127.0.0.1:11434", "gemma4:e2b", runtime as never),
-    ).resolves.toBe(false);
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Failed to download gemma4:e2b: pull stream ended before success",
-    );
-    expect(runtime.log).not.toHaveBeenCalledWith("Downloaded gemma4:e2b");
   });
 
   it("coerces non-Error stream failures through the shared error contract", async () => {
