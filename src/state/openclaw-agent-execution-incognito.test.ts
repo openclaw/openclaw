@@ -124,7 +124,7 @@ it("converges creating opens, pins released stores, reads only existing targets,
   const sentinel = resolveIncognitoOpenClawAgentSqlitePath(options);
   expect(await captureIncognito(options, authority, { existingOnly: true })).toBeUndefined();
   expect(fs.readdirSync(stateRoot)).toEqual([]);
-  const creating = [open(), open()];
+  const creating = [open(), open()] as const;
   expect(await captureIncognito(options, authority, { existingOnly: true })).toBeUndefined();
   const [first, second] = await Promise.all(creating);
   expect(first.identity).toEqual(second.identity);

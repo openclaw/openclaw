@@ -1,7 +1,9 @@
+import type { IncognitoSessionOperations } from "../config/sessions/session-incognito-contract.js";
 import type {
   SqliteWalPeriodicRequest,
   SqliteWalPeriodicResult,
 } from "../infra/sqlite-wal-write-admission.js";
+import type { SqliteWorkerEphemeralTarget } from "../infra/sqlite-worker-contract.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import type {
   SqliteWorkerAdmissionFactory,
@@ -46,11 +48,7 @@ export type AgentDatabaseFileExecutionOpen = {
 };
 
 /** Process-private locators; neither a handle nor its incarnation grants authority. */
-export type AgentDatabaseIncognitoIdentity = Readonly<{
-  kind: "ephemeral";
-  handle: string;
-  incarnation: string;
-}>;
+export type AgentDatabaseIncognitoIdentity = Readonly<SqliteWorkerEphemeralTarget>;
 
 export type AgentDatabaseIncognitoOpen = {
   kind: "ephemeral";
@@ -72,8 +70,8 @@ type AgentDatabaseIncognitoMemory = {
   pageSize: number;
 };
 
-/** P1 deliberately admits no session-domain operation before its complete caller cutover. */
-export type AgentDatabaseIncognitoOperations = {
+/** Inactive actor operations; production routing changes only at the complete cutover. */
+export type AgentDatabaseIncognitoOperations = IncognitoSessionOperations & {
   "database.incognito.memory": { input: undefined; output: AgentDatabaseIncognitoMemory };
 };
 

@@ -61,11 +61,42 @@ Maintainer decisions accepted for this staged migration:
   session throws an actionable error naming the async replacement. Durable
   targets keep working until the removal major.
 
-P2 adds session facts, creation, and authority; P3 adds side-data adapters;
+### Incognito session facts and authority (P2, inactive)
+
+The actor now admits exact session reads and creation through its original FIFO
+writer queue. Creation reuses the canonical entry and transcript-header kernels
+in one synchronous worker transaction. Existing-only capture and missing entry
+reads never create a store or row. Reads run with SQLite `query_only` on the
+retained memory connection; they do not open a second connection or repeat
+schema admission.
+
+Host facts retain only committed sharing metadata, membership, revisions, and
+the original expiry. Full entries belong to their read result. Actor-bound
+claims reject replaced session generations and closed or lost actors; they
+never follow a sentinel to a successor. Pending or uncertain publications
+cannot authorize other work. The host reconciles the native commit receipt
+inside the FIFO interval, even if result delivery fails, and never replays a
+creation to recover its reply.
+
+Transaction and immediate pre-commit grants recheck live caller authority.
+Grant callbacks consume bounded worker facts synchronously; same-actor requests
+from a grant are refused immediately to prevent deadlocks. Staged postimages
+remain private to the grant and do not become general sharing permission.
+Read disclosure rechecks authority after worker settlement.
+
+Private-row and deadline adapters accept captured source assertions instead of
+requiring a connection. The execution owner's separate, inactive topology view
+lists only its live actors in the captured state root. Production discovery,
+private reads, and expiry acquisition still use the host owner until P7; no
+configuration flag selects between writers. Actor deadlines remain 24 hours
+from the original creation time and are never renewed by reads or repeated
+creation. Deletion and transcript lifecycle routing remain later stages.
+
+P3 adds side-data adapters;
 P4 migrates transcript mutation and lifecycle; P5 adds history and compute
 routing; P6 completes ACP and the shared-owner audit. P7 switches all reachable
 callers together and deletes the host incognito routes. The existing 24-hour,
-nonrenewing session deadline and restart loss remain unchanged. P1 has no update
+nonrenewing session deadline and restart loss remain unchanged. P1 and P2 have no update
 behavior, schema change, migration, or operator action because it is inactive.
 
 ### Existing worker flows

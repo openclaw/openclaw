@@ -528,10 +528,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     onSessionIdentityMutation(generations.mutate),
   ];
   function isCurrent(row: records.Row) {
-    const current = isIncognitoSessionKey(row.key)
-      ? lookup({ ...row, storePath: row.storeTarget.storePath })
-      : rows.get(records.identity(row));
-    return records.isCurrentGeneration(row, current);
+    return row.privateSource
+      ? records.isPrivateSourceCurrent(row.privateSource)
+      : records.isCurrentGeneration(row, rows.get(records.identity(row)));
   }
   function prepareRead() {
     if (topologyDirty) {

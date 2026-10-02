@@ -76,6 +76,12 @@ export type Row = {
   membership: ReadonlySet<string>;
   parents: Set<string>;
   generation: string | symbol;
+  /** Exact private reads retain their session claim only for the consuming frame. */
+  privateSource?: { identity: string | symbol; assertCurrent(): void };
+  preparedPrivate?: {
+    entries: Record<string, SessionEntry>;
+    databaseFacts: PreparedSessionRowDatabaseFacts;
+  };
 };
 
 /** Sharing fences every publication; selection holds only unchanged metadata. */
@@ -213,6 +219,42 @@ export function create(target: RowTarget, entry?: SessionEntry): Row {
     generation: Symbol("row"),
     databaseFactsRevision: 0,
   };
+}
+
+/** Native acquisition and prepared worker facts share one transient row constructor. */
+export function createIncognitoSessionRow(params: {
+  cfg: Inputs["cfg"];
+  key: string;
+  agentId: string;
+  storePath: string;
+  entry: NonNullable<Row["storedEntry"]>;
+  membership?: ReadonlySet<string>;
+  source: NonNullable<Row["privateSource"]>;
+  prepared?: {
+    relatedEntries?: Record<string, NonNullable<Row["storedEntry"]>>;
+    databaseFacts: PreparedSessionRowDatabaseFacts;
+  };
+}): Row {
+  const { cfg, key, agentId, storePath, source, entry: storedEntry } = params;
+  source.assertCurrent();
+  const row = create({ key, agentId, storeTarget: { agentId, storePath } });
+  const entry = projectGatewaySessionEntry(cfg, storedEntry);
+  return Object.assign(row, {
+    generation: source.identity,
+    privateSource: source,
+    storedEntry,
+    entry,
+    membership: new Set(params.membership),
+    selection: readSessionListSelectionFacts(key, entry),
+    ...(params.prepared
+      ? {
+          preparedPrivate: {
+            entries: { ...params.prepared.relatedEntries, [key]: storedEntry },
+            databaseFacts: params.prepared.databaseFacts,
+          },
+        }
+      : {}),
+  });
 }
 
 /** Seed the complete identity inventory before any row selects its stored lineage. */
@@ -455,6 +497,15 @@ export function changesRowStructure(row: Row, entry: Row["storedEntry"]): boolea
     previous.incognito !== entry.incognito ||
     previous.archivedAt !== entry.archivedAt
   );
+}
+
+export function isPrivateSourceCurrent(source: NonNullable<Row["privateSource"]>): boolean {
+  try {
+    source.assertCurrent();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function isCurrentGeneration(row: Row, current: Row | undefined): boolean {
