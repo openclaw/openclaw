@@ -12,6 +12,7 @@ import { markGatewayRestartDraining } from "../process/gateway-work-admission.js
 import { createDeferredCore } from "../shared/deferred.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
+import { respondToNodeShutdown } from "./node-shutdown.test-support.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import { installGatewayTestHooks, startServer, writeSessionStore } from "./test-helpers.js";
 import { testState } from "./test-helpers.runtime-state.js";
@@ -102,18 +103,11 @@ test("settles an idle paired worker's rootless stop reply during Gateway shutdow
         if (isStop) {
           stopRequests.push(JSON.parse(frame.paramsJSON));
         }
-        const result = node!.request(
-          "node.invoke.result",
-          {
-            id: frame.id,
-            nodeId: frame.nodeId,
-            ok: true,
-            payloadJSON: JSON.stringify(
-              isStop ? null : { applied: true, deleted: 0, hasMore: false },
-            ),
-          },
-          { timeoutMs: 5_000 },
-        );
+        const result = respondToNodeShutdown(node!, frame);
+        if (!result) {
+          stopped.reject(new Error(`unexpected shutdown command: ${frame.command}`));
+          return;
+        }
         if (isStop) {
           void result.then(stopped.resolve, stopped.reject);
         } else {
