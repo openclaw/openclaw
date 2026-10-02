@@ -14,7 +14,9 @@ import {
   resolveManagedLlamaServerPaths,
   selectLlamaServerAsset,
   type LlamaServerAsset,
+  type WindowsVcRuntimeDependency,
 } from "./llama-server-assets.js";
+import { extractWindowsVcRuntime } from "./llama-server-vc-runtime.js";
 
 export {
   resolveManagedLlamaServerPaths,
@@ -64,8 +66,11 @@ function assertSupportedLinuxRuntime(asset: LlamaServerAsset): void {
   }
 }
 
-function assetUrl(asset: LlamaServerAsset): string {
-  return `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_SERVER_RELEASE}/${asset.name}`;
+function assetUrl(asset: Pick<LlamaServerAsset, "name"> & { url?: string }): string {
+  return (
+    asset.url ??
+    `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_SERVER_RELEASE}/${asset.name}`
+  );
 }
 
 export async function sha256File(filePath: string): Promise<string> {
@@ -238,13 +243,7 @@ function formatRuntimeDependencyError(error: unknown): Error {
   return new Error(`The verified llama-server build could not start: ${detail}`, { cause: error });
 }
 
-async function validateInstalledServer(command: string): Promise<void> {
-  let version: string;
-  try {
-    version = await runVersion(command);
-  } catch (error) {
-    throw formatRuntimeDependencyError(error);
-  }
+function validateServerVersionOutput(command: string, version: string): void {
   const versionLine = version.split(/\r?\n/u, 1)[0]?.trim() ?? "";
   const match = versionLine.match(/^version: .+ \(build (\d+), commit ([a-f\d]{9})\)$/u);
   const build = match?.[1] ? Number(match[1]) : undefined;
@@ -254,6 +253,54 @@ async function validateInstalledServer(command: string): Promise<void> {
       `Unexpected llama-server build at ${command}: expected ${LLAMA_SERVER_RELEASE} (${LLAMA_SERVER_COMMIT.slice(0, 9)}), got ${version || "no version output"}`,
     );
   }
+}
+
+async function validateInstalledServer(command: string): Promise<void> {
+  let version: string;
+  try {
+    version = await runVersion(command);
+  } catch (error) {
+    throw formatRuntimeDependencyError(error);
+  }
+  validateServerVersionOutput(command, version);
+}
+
+async function stageWindowsVcRuntime(params: {
+  dependency: WindowsVcRuntimeDependency;
+  extractDir: string;
+  extractedRoot: string;
+  index: number;
+}): Promise<void> {
+  const archivePath = path.join(params.extractDir, params.dependency.name);
+  await downloadVerifiedFile({
+    url: params.dependency.url,
+    destination: archivePath,
+    expectedSha256: params.dependency.sha256,
+    expectedSize: params.dependency.size,
+  });
+  const dependencyExtractDir = path.join(params.extractDir, `dependency-${params.index}`);
+  const dependencyRoot = await extractWindowsVcRuntime({
+    bundlePath: archivePath,
+    destDir: dependencyExtractDir,
+    asset: params.dependency,
+  });
+  for (const file of params.dependency.files) {
+    await fsp.copyFile(
+      path.join(dependencyRoot, file.target),
+      path.join(params.extractedRoot, file.target),
+      fs.constants.COPYFILE_EXCL,
+    );
+  }
+}
+
+function formatVcRuntimeFallbackError(startupError: unknown, fallbackError: unknown): Error {
+  const startupDetail = startupError instanceof Error ? startupError.message : String(startupError);
+  const fallbackDetail =
+    fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+  return new Error(
+    `The extracted llama-server could not start with the installed Windows runtime, and its app-local Visual C++ runtime fallback did not restore it. Initial startup detail: ${startupDetail} Fallback detail: ${fallbackDetail}`,
+    { cause: fallbackError },
+  );
 }
 
 async function installLlamaServer(asset: LlamaServerAsset): Promise<string> {
@@ -287,7 +334,23 @@ async function installLlamaServer(asset: LlamaServerAsset): Promise<string> {
     const extractedCommand = await findExecutable(extractDir, asset.executable);
     const extractedRoot = path.dirname(extractedCommand);
     await fsp.chmod(extractedCommand, 0o755);
-    await validateInstalledServer(extractedCommand);
+    let version: string;
+    try {
+      version = await runVersion(extractedCommand);
+    } catch (startupError) {
+      if (!asset.dependencies?.length) {
+        throw formatRuntimeDependencyError(startupError);
+      }
+      try {
+        for (const [index, dependency] of asset.dependencies.entries()) {
+          await stageWindowsVcRuntime({ dependency, extractDir, extractedRoot, index });
+        }
+        version = await runVersion(extractedCommand);
+      } catch (fallbackError) {
+        throw formatVcRuntimeFallbackError(startupError, fallbackError);
+      }
+    }
+    validateServerVersionOutput(extractedCommand, version);
     await fsp.mkdir(path.dirname(installDir), { recursive: true });
     await fsp.rm(installDir, { recursive: true, force: true });
     await fsp.rename(extractedRoot, installDir);

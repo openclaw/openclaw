@@ -190,6 +190,18 @@ describe("downloadVerifiedFile", () => {
 });
 
 describe("ensureLlamaServerInstalled", () => {
+  it.each(["x64", "arm64"])("pins an app-local Visual C++ runtime for Windows %s", (arch) => {
+    const asset = selectLlamaServerAsset("win32", arch);
+
+    expect(asset.dependencies).toEqual([
+      expect.objectContaining({
+        archive: "vc-redist",
+        sha256: expect.stringMatching(/^[a-f\d]{64}$/u),
+        url: expect.stringMatching(/^https:\/\/download\.visualstudio\.microsoft\.com\//u),
+      }),
+    ]);
+  });
+
   it("accepts only the pinned build and commit from the version line", async () => {
     const command = await createInstalledServer();
     mockVersionOutput(
