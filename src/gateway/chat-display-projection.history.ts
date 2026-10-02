@@ -564,7 +564,7 @@ function resolveForwardedSenderSession(
     : undefined;
 }
 
-function readForwardedCronJobIds(messages: readonly unknown[]) {
+export function readForwardedCronJobIds(messages: readonly unknown[]) {
   return messages.flatMap((value) => {
     const message = readRecord(value);
     if (!message || (!isForwardedUserMessage(message) && !isProjectedForwardedMessage(message))) {

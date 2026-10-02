@@ -1,7 +1,18 @@
+import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import type {
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
 } from "../config/sessions/session-history-types.js";
+import { createCronJobNameResolver } from "../cron/store/job-name.js";
+import { getUserProfileDisplays } from "../state/user-profile-list.js";
+import { createCurrentUserProfileMessageProjector } from "./chat-display-projection.core.js";
+import {
+  projectForwardedMessages,
+  readForwardedCronJobIds,
+} from "./chat-display-projection.history.js";
+import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { resolveGatewaySessionStoreReadSources } from "./session-utils-store-sources.js";
@@ -176,12 +187,34 @@ export async function readSessionHistoryRequest(
       await import("./server-methods/chat-history-page-kernel.js");
     const { encodeChatHistoryResponsePage } =
       await import("./server-methods/chat-history-response-page.js");
+    const page = await readChatHistoryPageKernel(request.params, options);
+    const messages = page.messages.filter(
+      (message): message is Record<string, unknown> => asOptionalRecord(message) !== undefined,
+    );
+    const profileIds = messages.flatMap((message) => {
+      const identity = readTranscriptSenderIdentity(
+        asOptionalRecord(message["__openclaw"])?.senderIdentity,
+      );
+      return message.role === "user" && identity?.type === "profile" ? [identity.id] : [];
+    });
+    const { path, environment: env } = expectDefined(
+      readTarget.stateDatabase,
+      "RPC history requires its captured shared-state owner",
+    );
+    const state = { path, env };
+    let profiles: ReturnType<typeof getUserProfileDisplays> | undefined;
+    const project = createCurrentUserProfileMessageProjector((id) =>
+      resolveCurrentUserProfileDisplay(id, (senderId) =>
+        (profiles ??= getUserProfileDisplays(profileIds, state)).get(senderId),
+      ),
+    );
+    page.messages = projectForwardedMessages(
+      messages,
+      createCronJobNameResolver(readForwardedCronJobIds(messages), state),
+    ).map(project);
     return {
       kind: "rpc",
-      page: encodeChatHistoryResponsePage(
-        await readChatHistoryPageKernel(request.params, options),
-        request.params,
-      ),
+      page: encodeChatHistoryResponsePage(page, request.params),
     };
   }
   const { readSessionHistorySnapshotKernel } = await import("./session-history-snapshot.js");

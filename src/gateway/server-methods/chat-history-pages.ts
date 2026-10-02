@@ -1,20 +1,15 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readTranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
+import { readLegacyCompactionMetrics } from "../../config/sessions/legacy-compaction-history.js";
 import type {
   ChatHistoryPage,
   ChatHistoryPageParams,
 } from "../../config/sessions/session-history-types.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { augmentChatHistoryWithCanvasBlocks } from "../chat-display-projection.canvas.js";
-import {
-  projectChatDisplayMessagesWithState,
-  createCurrentUserProfileMessageProjector,
-} from "../chat-display-projection.core.js";
-import {
-  dropPreSessionStartAnnouncePairs,
-  projectForwardedMessages,
-} from "../chat-display-projection.history.js";
+import { projectChatDisplayMessagesWithState } from "../chat-display-projection.core.js";
+import { dropPreSessionStartAnnouncePairs } from "../chat-display-projection.history.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { createSessionHistorySubagentProjection } from "../session-history-subagent-projection.js";
 import { readChatHistoryMessageId } from "../session-history-tail.js";
@@ -79,47 +74,21 @@ export async function readChatHistoryPage(
     isIncognitoSessionKey(params.canonicalKey) ||
     getCliSessionBinding(params.entry, "claude-cli")?.sessionId
   ) {
-    const page = await readChatHistoryPageLocal(params);
-    return { ...page, messages: refreshForwardedLabels(page.messages) };
+    return readChatHistoryPageLocal(params);
   }
   const { readSessionHistoryPageInWorker } =
     await import("../../config/sessions/session-history-worker-runtime.js");
-  const page = await readSessionHistoryPageInWorker(
+  return readSessionHistoryPageInWorker(
     {
       kind: "rpc",
       params: {
         ...params,
+        compactionMetrics: readLegacyCompactionMetrics(params.entry),
         sessionId: params.sessionId,
         storePath: params.storePath,
-        entry: params.entry
-          ? {
-              sessionId: params.entry.sessionId,
-              updatedAt: params.entry.updatedAt,
-              sessionStartedAt: params.entry.sessionStartedAt,
-            }
-          : undefined,
       },
     },
     signal,
-  );
-  if (page.encodedResponse) {
-    return page;
-  }
-  const project = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
-  return {
-    ...page,
-    messages: refreshForwardedLabels(page.messages).map((message) => {
-      const record = asOptionalRecord(message);
-      return record ? project(record) : message;
-    }),
-  };
-}
-
-function refreshForwardedLabels(messages: unknown[]): unknown[] {
-  return projectForwardedMessages(
-    messages.filter(
-      (message): message is Record<string, unknown> => asOptionalRecord(message) !== undefined,
-    ),
   );
 }
 

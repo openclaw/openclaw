@@ -680,16 +680,15 @@ serveOwnedWorkerTasks(
         return [];
       }
       const value = reply.value;
-      if (
-        typeof value !== "object" ||
-        value === null ||
-        !("kind" in value) ||
-        value.kind !== "artifacts" ||
-        value.result.kind !== "download-response"
-      ) {
+      if (typeof value !== "object" || value === null || !("kind" in value)) {
         return [];
       }
-      const body = value.result.response?.body;
+      const body =
+        value.kind === "rpc"
+          ? value.page.encodedResponse?.messages
+          : value.kind === "artifacts" && value.result.kind === "download-response"
+            ? value.result.response?.body
+            : undefined;
       return body ? [body.buffer] : [];
     },
     closeResource: (key) => {

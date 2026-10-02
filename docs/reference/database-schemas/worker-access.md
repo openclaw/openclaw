@@ -957,6 +957,15 @@ history reads, publishing the response in that synchronous frame. Cron run
 history keeps its recorded transcript when the live session advances. Responses
 own their nested metadata independently of resident rows.
 
+Durable RPC history pages resolve profile avatars, automation labels, and legacy
+compaction metrics before the worker serializes the bounded message array. Its
+owned UTF-8 buffer transfers once to the host; coalesced readers share those
+immutable bytes while retaining independent page metadata. The WebSocket owner
+embeds the array in its text frame without parsing it. Internal object consumers
+and current operator model restrictions retain their existing presentation
+contracts. Cursor deltas and HTTP history keep their existing readers. This
+changes no stored transcript bytes, schema, retention, or update behavior.
+
 Pending-input history and exact pending-message reads use the same history worker
 for durable stores. Pages retain the 20-item and payload byte limits, ordering,
 and consumed-input filtering. Stale interruption commits through the agent writer,
