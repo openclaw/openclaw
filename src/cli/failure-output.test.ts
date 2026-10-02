@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import { ConfigReadOnlyError, NixModeConfigMutationError } from "../config/config-write-guard.js";
+import { createInvalidConfigError } from "../config/io.invalid-config.js";
 import {
   GatewayCredentialsRequiredError,
   GatewayExplicitAuthRequiredError,
@@ -220,6 +221,28 @@ describe("formatCliFailureLines", () => {
       "[openclaw] For help, run `openclaw doctor`.",
     ]);
   });
+
+  it.each([false, true])(
+    "preserves config validation details without repeating emitted diagnostics (emitted=%s)",
+    (diagnosticEmitted) => {
+      const error = Object.assign(
+        createInvalidConfigError("/custom/openclaw.json", "- gateway.port: Expected a number"),
+        { diagnosticEmitted, cause: new Error("internal config loader detail") },
+      );
+
+      expect(
+        formatCliFailureLines({ title: "The CLI command failed.", error, argv: [], env: {} }),
+      ).toEqual([
+        "[openclaw] The CLI command failed.",
+        ...(diagnosticEmitted
+          ? []
+          : [
+              "[openclaw] Reason: Invalid config at /custom/openclaw.json:\n- gateway.port: Expected a number",
+            ]),
+        "[openclaw] For help, run `openclaw doctor`.",
+      ]);
+    },
+  );
 
   it.each([
     {

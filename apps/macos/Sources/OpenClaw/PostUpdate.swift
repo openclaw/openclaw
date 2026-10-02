@@ -236,11 +236,11 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
     }
 
     func openUpdateGuide() {
-        NSWorkspace.shared.open(Self.updateGuideURL)
+        AppActivation.shared.open(Self.updateGuideURL)
     }
 
     func openDiscord() {
-        NSWorkspace.shared.open(Self.discordURL)
+        AppActivation.shared.open(Self.discordURL)
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -251,8 +251,8 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
     private func show() {
         if let window {
             DockIconManager.shared.temporarilyShowDock()
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            AppActivation.shared.makeKeyAndOrderFront(window: window)
+            AppActivation.shared.activate()
             return
         }
         let hosting = NSHostingController(rootView: PostUpdateView(model: model))
@@ -269,8 +269,8 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         window.delegate = self
         window.center()
         DockIconManager.shared.temporarilyShowDock()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.shared.makeKeyAndOrderFront(window: window)
+        AppActivation.shared.activate()
         self.window = window
     }
 

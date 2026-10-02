@@ -3,10 +3,6 @@ import {
   withOwnedSessionTranscriptWrites,
   SessionTranscriptWriterClaimReboundError,
 } from "../../../config/sessions/transcript-write-context.js";
-import {
-  bindContextEngineCompaction,
-  inheritRuntimeCompactionDelegate,
-} from "../../../context-engine/compaction-watchdog.js";
 import type { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import {
   resolveCompactionSuccessorTranscript,
@@ -46,6 +42,7 @@ type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionProm
 type CompactionResult = Awaited<ReturnType<ContextEngine["compact"]>>;
 
 export type EmbeddedRunCompactionRecoveryInput = {
+  runInput?: PreparedEmbeddedRunInput;
   runParams: RunEmbeddedAgentParams;
   state: EmbeddedRunContextRecoveryState;
   contextEngine: ContextEngine;
@@ -205,14 +202,11 @@ export async function compactEmbeddedRunForRecovery(
   };
   let result: CompactionResult;
   try {
-    const compact = bindContextEngineCompaction(input.contextEngine);
     result = await compactContextEngineWithSafetyTimeout(
       {
         info: input.contextEngine.info,
-        compact: inheritRuntimeCompactionDelegate(compact, (backendParams) =>
+        compact: (backendParams) =>
           owner.withTranscriptWrites(backendParams.abortSignal, () => {
-            // The watchdog may copy runtimeContext to install its progress callback.
-            // Attach private facts to the object the delegate actually receives.
             if (backendParams.runtimeContext) {
               attachCompactionAccountingRecorder(backendParams.runtimeContext, {
                 requestBudget: input.state.compactionRequestBudget,
@@ -236,9 +230,8 @@ export async function compactEmbeddedRunForRecovery(
                 },
               });
             }
-            return compact(backendParams);
+            return input.contextEngine.compact(backendParams);
           }),
-        ),
       },
       compactParams,
       resolveCompactionTimeoutMs(runParams.config),

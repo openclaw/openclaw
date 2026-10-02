@@ -82,6 +82,14 @@ function writeCards(cards: WorkboardCard[], options: JsonOptions): void {
   }
 }
 
+function writeCard(card: WorkboardCard, options: JsonOptions): void {
+  if (options.json) {
+    writeJson({ card: redactClaimToken(card) });
+  } else {
+    writeLine(formatCardLine(card));
+  }
+}
+
 async function callWorkboardGateway(
   method: string,
   options: GatewayOptions,
@@ -194,11 +202,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
           labels: splitLabels(options.labels),
           workspaceAccess: { unrestricted: true },
         });
-        if (options.json) {
-          writeJson({ card: redactClaimToken(card) });
-        } else {
-          writeLine(formatCardLine(card));
-        }
+        writeCard(card, options);
       },
     );
 
@@ -213,13 +217,9 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
       if (!card) {
         throw new Error(error);
       }
-      if (options.json) {
-        writeJson({ card: redactClaimToken(card) });
-      } else {
-        writeLine(formatCardLine(card));
-        if (card.notes) {
-          writeLine(card.notes);
-        }
+      writeCard(card, options);
+      if (!options.json && card.notes) {
+        writeLine(card.notes);
       }
     });
 
@@ -239,11 +239,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
         throw new Error(error);
       }
       const updated = await params.store.move(card.id, options.status, undefined);
-      if (options.json) {
-        writeJson({ card: redactClaimToken(updated) });
-      } else {
-        writeLine(formatCardLine(updated));
-      }
+      writeCard(updated, options);
     });
 
   addGatewayClientOptions(

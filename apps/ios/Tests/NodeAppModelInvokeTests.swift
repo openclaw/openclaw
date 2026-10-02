@@ -1488,11 +1488,11 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `session key extracts canonical agent ID`() {
-        #expect(SessionKey.agentId(from: "agent:rust-claw:mattermost:channel:w6g") == "rust-claw")
-        #expect(SessionKey.agentId(from: " agent:main:main ") == "main")
-        #expect(SessionKey.agentId(from: "main") == nil)
-        #expect(SessionKey.agentId(from: "agent::main") == nil)
-        #expect(SessionKey.agentId(from: nil) == nil)
+        #expect(OpenClawChatSessionKey.agentID(from: "agent:rust-claw:mattermost:channel:w6g") == "rust-claw")
+        #expect(OpenClawChatSessionKey.agentID(from: " agent:main:main ") == "main")
+        #expect(OpenClawChatSessionKey.agentID(from: "main") == nil)
+        #expect(OpenClawChatSessionKey.agentID(from: "agent::main") == nil)
+        #expect(OpenClawChatSessionKey.agentID(from: nil) == nil)
     }
 
     @Test @MainActor func `chat agent name uses focused canonical session agent`() {

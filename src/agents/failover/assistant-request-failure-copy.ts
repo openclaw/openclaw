@@ -5,7 +5,6 @@ import {
   formatTransportErrorCopy,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
-import { isNonProviderRuntimeCoordinationError } from "../failover-error.js";
 import { classifyFailoverSignalCore } from "./classify-core.js";
 import { isContextOverflowErrorFromTables } from "./context-overflow-tables.js";
 import {
@@ -115,14 +114,9 @@ export function renderAssistantRequestFailureCopy(
   return `⚠️ OpenClaw couldn't finish this reply. ${ERROR_DETAILS_HINT}`;
 }
 
-export function renderRuntimeCoordinationFailureCopy(
-  error: unknown,
-  code: string | undefined,
-): string | undefined {
-  if (!code || !isNonProviderRuntimeCoordinationError(error)) {
-    return undefined;
-  }
-  const copy = RUNTIME_COORDINATION_FAILURE_CODE_COPY[code];
+/** Render already-classified coordination facts without loading provider runtime. */
+export function renderRuntimeCoordinationFailureCopy(code: string | undefined): string | undefined {
+  const copy = code ? RUNTIME_COORDINATION_FAILURE_CODE_COPY[code] : undefined;
   return copy ? `⚠️ ${copy}` : undefined;
 }
 

@@ -144,6 +144,17 @@ applicable policy also requires fresh publication admission.
     `details`, retry metadata, and the Gateway error code for recovery flows. Use `isAvailable()`
     before choosing this path from tools that can also run in standalone agent processes.
 
+    `await api.runtime.gateway.openPluginPanel({ panelId, sessionKey, agentId })`
+    opens this plugin's registered native session panel in the requesting
+    Control UI. Unlike arbitrary `request`, this narrow capability is also
+    available to user-installed plugins. The host binds the plugin ID, keeps
+    the caller's existing `operator.write` authority, and targets only the
+    browser that requested the current action or agent turn. It rejects after
+    plugin retirement, caller revocation, or requester disconnection; a session
+    key never selects someone else's browser. `{ ok: true }` confirms command
+    delivery, not completion of a plugin's asynchronous document load. Native
+    UI must be enabled and the plugin must register the named panel.
+
     `await api.runtime.gateway.readSessionFacts({ sessionKeys })` reads at most
     40 sessions and returns typed `{ sessions, warnings? }` data. Each session
     includes its key, identity, agent, bounded redacted title and message preview,

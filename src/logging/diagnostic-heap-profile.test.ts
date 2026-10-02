@@ -153,7 +153,27 @@ describe("diagnostic heap profile owner", () => {
   });
 
   it.each<[DiagnosticsHeapProfileParams, number, number]>([
-    [{ durationMs: 90000, samplingIntervalBytes: 1 }, 30000, 4096],
+    [{ durationMs: 900_000, samplingIntervalBytes: 1 }, 900_000, 4096],
+    [
+      {
+        durationMs: 1_000_000,
+        includeObjectsCollectedByMajorGC: false,
+        includeObjectsCollectedByMinorGC: false,
+      },
+      900_000,
+      32768,
+    ],
+    [{ durationMs: 900_000, includeObjectsCollectedByMajorGC: true }, 30_000, 32768],
+    [{ durationMs: 900_000, includeObjectsCollectedByMinorGC: true }, 30_000, 32768],
+    [
+      {
+        durationMs: 900_000,
+        includeObjectsCollectedByMajorGC: true,
+        includeObjectsCollectedByMinorGC: true,
+      },
+      30_000,
+      32768,
+    ],
     [{ durationMs: 1, samplingIntervalBytes: 65536 }, 1, 65536],
     [{ includeObjectsCollectedByMajorGC: true }, 5000, 32768],
     [{ includeObjectsCollectedByMinorGC: true }, 5000, 32768],
@@ -172,7 +192,7 @@ describe("diagnostic heap profile owner", () => {
     });
   });
 
-  it("rejects heap and CPU overlap, stops on cancellation, and releases ownership", async () => {
+  it("rejects overlap, cancels a long retention window, and releases ownership", async () => {
     const waiting = createDeferred();
     const controller = new AbortController();
     native.wait.mockImplementationOnce((_ms, _value, { signal }: { signal: AbortSignal }) => {
@@ -181,19 +201,25 @@ describe("diagnostic heap profile owner", () => {
         signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
       });
     });
-    const active = capture({}, controller.signal);
+    const active = capture({ durationMs: 900_000 }, controller.signal);
     await waiting.promise;
+    expect(native.wait).toHaveBeenCalledWith(900_000, undefined, { signal: controller.signal });
     expect(await capture()).toMatchObject({ status: "unavailable", reason: "busy" });
     const { captureDiagnosticCpuProfile } = await import("./diagnostic-cpu-profile.js");
     expect(
       await captureDiagnosticCpuProfile({ signal: controller.signal, hasAuthority: () => true }),
     ).toMatchObject({ status: "unavailable", reason: "busy" });
     controller.abort();
-    expect(await active).toMatchObject({ status: "unavailable", reason: "cancelled" });
+    expect(await active).toEqual({
+      status: "unavailable",
+      reason: "cancelled",
+      cleanupFailed: false,
+    });
     expect(native.disconnect).toHaveBeenCalledOnce();
     expect(
       native.post.mock.calls.filter(([method]) => method === "HeapProfiler.stopSampling"),
     ).toHaveLength(1);
+    expect(native.post).toHaveBeenCalledWith("HeapProfiler.disable");
     expect((await capture()).status).toBe("complete");
   });
 

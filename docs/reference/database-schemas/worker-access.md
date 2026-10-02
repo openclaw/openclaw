@@ -16,6 +16,21 @@ paths are migration debt, not a pattern to extend. The
 [migration inventory](/reference/database-schemas/worker-access-inventory) separates
 candidate main-thread paths from SQL already executing in workers.
 
+Inventory classifications describe counted operations, not whole-module runtime
+safety. Reviewed mixed modules use named operation paths rather than line numbers;
+unreviewed operations retain their conservative file classification. Trace every
+production caller before adding an operation exception, and update existing
+reviewed overrides instead of shadowing them with worker-module entries. The
+ratchet applies the same classification rules to the base and candidate sources,
+so metadata corrections alone do not offset unrelated T1 growth.
+
+Canonical-repair mutations are T2 Doctor work, but its exact-row reader remains
+runtime debt through the Gateway's legacy-main agent-creation check. Claw
+provenance's counted CLI writes do not cover its raw Gateway SQL reads. Shared
+incognito category readers and native approval SDK compatibility retain their
+existing classifications. A metadata reclassification changes neither execution
+nor update behavior.
+
 Runtime cache-TTL, bootstrap, prompt-error, and provider replay markers append
 through the existing transcript writer worker. Custom-message appends use the
 same worker and adopt their committed view before notifying observers. Bootstrap
@@ -544,6 +559,19 @@ receipts publish claim authority and release observers before callers continue,
 including when ordinary reply delivery fails. Local forced completion and final
 cleanup join the same pending release. Restart recovery, schemas, persisted
 fields, and update behavior are unchanged.
+
+Worker transcript replay-ledger begin, completion, and exact discard use typed
+`placementTranscript` commands in the existing shared-state registry. The
+placement mutation owner captures physical store identity before yielding,
+rechecks live host authority at transaction and commit admission, and returns
+acknowledged receipts through the existing keyed session queue. Pending records
+commit before agent transcript effects; terminal results commit before the RPC
+reply. Lost replies use native commit receipts, never write replay. Unknown
+outcomes retain pending recovery. Only the invocation holding a fresh claim may
+discard after a known rollback, using its original store and exact row identity
+even if request authority has since ended. Database close joins accepted work.
+The agent transcript writer, schema, stored bytes, retention, and update behavior
+are unchanged.
 
 Staged workspace-result pointers also commit through that placement worker. The
 same transaction checks the pending-result claim, immutable staged ref, and exact
@@ -1108,6 +1136,15 @@ worker; visibility and public-share mutations use the same prepared authority
 through their existing entry-patch owner. Participant and category writes retain
 their existing collaboration worker, and incognito retains its native owner.
 This changes no schema, permission, retention, or update contract.
+
+Session-scoped command and skill discovery uses those same current sharing facts.
+It captures the session and physical source before membership readiness yields,
+refuses dirty membership, and rechecks caller, role, session, and source authority
+after discovery. Exact row preparation carries pinned skill selections separately
+from compact sharing facts; response publication compares the current selections
+in the same synchronous consuming frame. Personal skill-library storage, exec-policy
+eligibility, and process-held incognito ownership remain with their existing owners.
+This changes no SDK, RPC schema, stored data, permission, or update contract.
 
 For writes, shared-state domain operations registered by
 `src/state/openclaw-state-worker-runtime.ts` reuse the broker and publish results

@@ -237,14 +237,7 @@ export {
 
 function hasScopedMatrixEnvConfig(accountId: string, env: NodeJS.ProcessEnv): boolean {
   const scoped = resolveScopedMatrixEnvConfig(accountId, env);
-  return Boolean(
-    scoped.homeserver ||
-    scoped.userId ||
-    scoped.accessToken ||
-    scoped.password ||
-    scoped.deviceId ||
-    scoped.deviceName,
-  );
+  return Object.values(scoped).some(Boolean);
 }
 
 function readMatrixConfigStrings(params: {
@@ -466,7 +459,6 @@ export async function resolveMatrixAuth(params?: {
       ? cached
       : null;
 
-  // If we have an access token, we can fetch userId via whoami if not provided
   if (accessToken) {
     let userId = resolved.userId;
     const hasMatchingCachedToken = cachedCredentials?.accessToken === accessToken;

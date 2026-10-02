@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import type { SessionTranscriptMessageEntry } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readCodexAsyncQuestions } from "./async-questions.js";
 import {
@@ -42,15 +42,6 @@ type ProjectedCodexHistoryMessage = {
   messageBytes: number;
 };
 
-function historyAssistantFields(provider: string) {
-  return {
-    api: "openai-chatgpt-responses" as const,
-    provider,
-    model: "native-history",
-    usage: CODEX_HISTORY_ZERO_USAGE,
-  };
-}
-
 function projectCodexHistoryMessage(
   message: Extract<AgentMessage, { role: "user" | "assistant" }>,
   text: string,
@@ -79,10 +70,7 @@ function projectCodexHistoryMessage(
 }
 
 function normalizeImportedHistoryText(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const text = value.trim();
+  const text = normalizeOptionalString(value);
   if (!text) {
     return undefined;
   }
@@ -99,11 +87,10 @@ export function projectCodexUserItemText(item: Record<string, unknown>): string 
     return undefined;
   }
   const parts: string[] = [];
-  for (const value of item.content) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
+  for (const input of item.content) {
+    if (!isRecord(input)) {
       continue;
     }
-    const input = value as Record<string, unknown>;
     if (input.type === "text") {
       const text = normalizeImportedHistoryText(input.text);
       if (text) {
@@ -159,11 +146,15 @@ function projectCodexThreadHistory(params: {
   includeErrorOnlyTurns?: boolean;
 }): ProjectedCodexHistoryMessage[] {
   const projected: ProjectedCodexHistoryMessage[] = [];
-  const assistantFields = historyAssistantFields(
-    normalizeOptionalString(params.modelProvider) ??
+  const assistantFields = {
+    api: "openai-chatgpt-responses" as const,
+    provider:
+      normalizeOptionalString(params.modelProvider) ??
       normalizeOptionalString(params.thread.modelProvider) ??
       CODEX_HISTORY_ASSISTANT_PROVIDER,
-  );
+    model: "native-history",
+    usage: CODEX_HISTORY_ZERO_USAGE,
+  };
   const threadTimestamp =
     typeof params.thread.createdAt === "number" && Number.isFinite(params.thread.createdAt)
       ? params.thread.createdAt * 1000

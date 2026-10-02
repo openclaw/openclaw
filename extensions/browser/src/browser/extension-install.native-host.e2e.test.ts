@@ -185,7 +185,13 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
       },
     );
     expect(child.status).toBe(1);
-    expect(child.stderr.toString("utf8")).toContain("Invalid config at");
+    const stderr = child.stderr.toString("utf8");
+    expect(stderr).toContain("[openclaw] The CLI command failed.");
+    expect(stderr).toContain(`Invalid config at ${config}:`);
+    expect(stderr).toContain(
+      "- <root>: JSON5 parse failed: SyntaxError: JSON5: invalid character 'c' at 1:11",
+    );
+    expect(stderr).toContain("[openclaw] For help, run `openclaw doctor`.");
     expect(await fs.readFile(config, "utf8")).toBe("{ invalid config");
   });
 

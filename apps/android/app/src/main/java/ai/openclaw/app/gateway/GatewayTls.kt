@@ -236,10 +236,7 @@ internal fun buildGatewayTlsConfig(
   onStore: ((String) -> Unit)? = null,
 ): GatewayTlsConfig {
   val expectedInput = params.expectedFingerprint?.takeIf { it.isNotBlank() }
-  val expected =
-    expectedInput
-      ?.let(::normalizeGatewayTlsFingerprint)
-      ?.takeIf { it.isNotBlank() }
+  val expected = expectedInput?.let(::normalizeGatewayTlsFingerprintInput)
   val effectiveFingerprint = AtomicReference(expected)
   val usesPlatformTrust = expectedInput == null && !params.allowTOFU
 
@@ -595,9 +592,6 @@ fun normalizeGatewayTlsFingerprintInput(raw: String): String? {
     value.length == 64 && value.all { it in '0'..'9' || it in 'a'..'f' }
   }
 }
-
-/** Normalizes internal fingerprint text; invalid values become empty. */
-fun normalizeGatewayTlsFingerprint(raw: String): String = normalizeGatewayTlsFingerprintInput(raw).orEmpty()
 
 private fun normalizedGatewayTlsDnsHost(rawHost: String): String? {
   val trimmed = rawHost.trim()

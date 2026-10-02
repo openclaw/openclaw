@@ -57,7 +57,6 @@ function readTargetUrlParam(params: Record<string, unknown>) {
   return targetUrl;
 }
 
-/** Run tab actions against the prepared host, node, or sandbox route. */
 export async function executeBrowserTabAction(context: {
   action: string;
   actRequest?: Parameters<typeof browserAct>[1];

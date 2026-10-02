@@ -325,11 +325,11 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     }
     epoch++;
     const presentationOnly = metadata.invalidate(change) && !change.factsInvalidated;
+    const catalogOnly = "all" in change && change.scope === "catalog" && !change.factsInvalidated;
     if (!presentationOnly) {
-      revisions.invalidate(true);
+      revisions.invalidate(!catalogOnly);
     }
     if ("all" in change) {
-      const catalogOnly = change.scope === "catalog" && !change.factsInvalidated;
       if (!presentationOnly && !catalogOnly) {
         databaseRevision++;
       }

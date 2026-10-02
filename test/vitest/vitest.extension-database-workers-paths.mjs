@@ -137,6 +137,8 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/node-exec-server.test.ts",
   "extensions/codex/src/node-exec-server.readiness.test.ts",
   "extensions/codex/src/app-server/dynamic-tool-build.test.ts",
+  "extensions/codex/src/app-server/dynamic-tool-build.memory-audience.test.ts",
+  "extensions/codex/src/app-server/run-attempt.prompt-hook-audience.test.ts",
   "extensions/codex/src/app-server/dynamic-tool-build.prompt.test.ts",
   "extensions/codex/src/app-server/native-subagent-monitor.close.test.ts",
   "extensions/codex/src/app-server/native-subagent-monitor.completion-delivery.test.ts",

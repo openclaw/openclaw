@@ -179,11 +179,14 @@ The Code Mode executor runs with Vitest on Bun using the fork's
 copy-on-write diagnostics-channel subscriber handling. Markdown render-aware
 chunking stays on Node because the pinned WebKit lacks the `Intl.Segmenter`
 surrogate-boundary fix needed by that suite.
-The complete fake-timer lane, plugin and proxy retention tests, and Control UI
-support Bun. UI retains its six GC assertions in `chat-pane-retention.test.ts`,
-`chat-thread-retention.test.ts`, and `usage-page-retention.test.ts`; they use
-runtime-neutral collection and WeakRef checks. V8-specific heap and worker-limit
-assertions and the remaining qualified Node-only selections still run on Node.
+The complete fake-timer lane, plugin and proxy retention tests, and other
+Control UI tests support Bun. Control UI WeakRef-collection proofs in
+`desktop-mobile-keyboard.test.ts`, `chat-pane-retention.test.ts`,
+`chat-thread-retention.test.ts`, `session-snapshot-store.test.ts`, and
+`usage-page-retention.test.ts` stay on Node because JavaScriptCore's
+conservative stack scanning can keep an unreachable target alive after a forced
+collection. V8-specific heap and worker-limit assertions and the remaining
+qualified Node-only selections still run on Node.
 The missing-Docker test also runs on Bun, using an empty executable directory
 instead of an empty `PATH`, which Bun resolves through its default search path.
 Other families retain Node until they pass on the pinned fork within their
@@ -927,6 +930,15 @@ remains the explicit operator override for attempting a different budget.
 sizes. Budget violations do not prevent artifact generation. The separate
 `control-ui-performance` job enforces the budgets without blocking other jobs
 from building or testing the same source.
+
+The report counts retained identity bytes: asset-manifest entries minus `.br`/`.gz`
+sidecars, which the Gateway keeps for already-open tabs after an update. The limit
+is 48 MiB, half the 96 MiB retention budget in
+`src/gateway/control-ui-asset-manifest.ts`, so the current and previous builds
+stay retained. Like the other size limits, it fails locally and warns in GitHub
+Actions; `--base-dist` reports the delta. Exceeding it means shrinking retained
+assets (locale catalogs are the largest share) or deliberately changing the
+retention budget.
 
 Startup CSS has a 45 KiB advisory target and a 50 KiB hard ceiling. Growth below
 1 KiB passes; an increase of 1 KiB or more in either startup CSS or the largest

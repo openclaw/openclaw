@@ -248,6 +248,9 @@ export async function executeWorkerTurn(
       promptCacheContext: {
         boundaryCount: manager.getBoundaryCount(),
         promptCacheKey: turn.promptCacheKey,
+        fastMode: turn.fastMode,
+        fastModeStartedAtMs: turn.fastModeStartedAtMs,
+        fastModeAutoOnSeconds: turn.fastModeAutoOnSeconds,
       },
       assertSourceCurrent,
     });

@@ -350,6 +350,9 @@ export async function prepareVisitorPublicationFixture(f: {
   );
   const gateway: PluginRuntime["gateway"] = {
     isAvailable: async () => true,
+    async openPluginPanel() {
+      throw new Error("Unexpected plugin panel request");
+    },
     async readSessionFacts() {
       throw new Error("Unexpected session facts request");
     },

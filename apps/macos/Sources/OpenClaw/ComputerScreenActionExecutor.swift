@@ -478,6 +478,12 @@ final class ComputerScreenActionExecutor {
     #endif
 
     private func resolveDisplay(params: OpenClawComputerActParams) async throws -> ResolvedDisplay {
+        guard AppLaunchRuntimePlan.current.allowsActivation ||
+            PermissionManager.screenRecordingPermissions.checkScreenRecordingPermission()
+        else {
+            throw ComputerActionError.refused(
+                "Screen Recording permission required; relaunch without --no-activate and retry")
+        }
         // Match ScreenSnapshotService display ordering so a computer.act
         // screenIndex targets the same display the model saw in screen.snapshot.
         let content = try await SCShareableContent.current

@@ -134,14 +134,14 @@ enum GatewaySettingsStore {
 
     static func currentInstanceID(defaults: UserDefaults = .standard) -> String {
         self.bootstrapPersistence()
-        return self.normalizedCredential(defaults.string(forKey: self.instanceIdDefaultsKey))
+        return defaults.string(forKey: self.instanceIdDefaultsKey)?.trimmedNonEmpty
             ?? self.loadStableInstanceID() ?? ""
     }
 
     static func loadStableInstanceID() -> String? {
-        self.normalizedCredential(GenericPasswordKeychainStore.loadString(
+        GenericPasswordKeychainStore.loadString(
             service: self.nodeService,
-            account: self.instanceIdAccount))
+            account: self.instanceIdAccount)?.trimmedNonEmpty
     }
 
     static func saveStableInstanceID(_ instanceId: String) {
@@ -370,9 +370,9 @@ enum GatewaySettingsStore {
             self.gatewayPasswordAccount(instanceId: trimmedInstanceID),
         ]
         let hasLegacyCredentials = legacyAccounts.contains { account in
-            self.normalizedCredential(GenericPasswordKeychainStore.loadString(
+            GenericPasswordKeychainStore.loadString(
                 service: self.gatewayService,
-                account: account)) != nil
+                account: account)?.trimmedNonEmpty != nil
         }
         guard hasLegacyCredentials else { return true }
 
@@ -386,8 +386,8 @@ enum GatewaySettingsStore {
             return true
         }
 
-        let relayToken = self.normalizedCredential(token)
-        let relayPassword = self.normalizedCredential(password)
+        let relayToken = token?.trimmedNonEmpty
+        let relayPassword = password?.trimmedNonEmpty
         guard relayToken != nil || relayPassword != nil else {
             self.deleteLegacyGatewayCredentials(instanceId: trimmedInstanceID)
             return true
@@ -762,9 +762,9 @@ enum GatewaySettingsStore {
         let bundle = GatewayCredentialBundle(
             gatewayStableID: decodedStableID,
             suppressStoredDeviceAuth: decoded.suppressStoredDeviceAuth,
-            token: self.normalizedCredential(decoded.token),
-            bootstrapToken: self.normalizedCredential(decoded.bootstrapToken),
-            password: self.normalizedCredential(decoded.password))
+            token: decoded.token?.trimmedNonEmpty,
+            bootstrapToken: decoded.bootstrapToken?.trimmedNonEmpty,
+            password: decoded.password?.trimmedNonEmpty)
         if canonicalJSON == nil,
            let migratedData = try? JSONEncoder().encode(bundle),
            let migratedJSON = String(data: migratedData, encoding: .utf8),
@@ -818,11 +818,6 @@ enum GatewaySettingsStore {
         !stableID.hasPrefix("v2.") && stableID.unicodeScalars.allSatisfy(\.isASCII)
     }
 
-    private static func normalizedCredential(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
     private static func deleteLegacyGatewayCredentials(instanceId: String) {
         _ = GenericPasswordKeychainStore.delete(
             service: self.gatewayService,
@@ -841,7 +836,7 @@ enum GatewaySettingsStore {
     private static func ensureStableInstanceID() {
         let defaults = UserDefaults.standard
 
-        if let existing = self.normalizedCredential(defaults.string(forKey: self.instanceIdDefaultsKey)) {
+        if let existing = defaults.string(forKey: self.instanceIdDefaultsKey)?.trimmedNonEmpty {
             if self.loadStableInstanceID() == nil {
                 self.saveStableInstanceID(existing)
             }
@@ -985,9 +980,9 @@ extension GatewaySettingsStore {
         let bundle = GatewayCredentialBundle(
             gatewayStableID: stableID,
             suppressStoredDeviceAuth: suppressStoredDeviceAuth,
-            token: self.normalizedCredential(token),
-            bootstrapToken: self.normalizedCredential(bootstrapToken),
-            password: self.normalizedCredential(password))
+            token: token?.trimmedNonEmpty,
+            bootstrapToken: bootstrapToken?.trimmedNonEmpty,
+            password: password?.trimmedNonEmpty)
         let account = self.gatewayCredentialBundleAccount(
             instanceId: trimmedInstanceID,
             stableID: stableID)

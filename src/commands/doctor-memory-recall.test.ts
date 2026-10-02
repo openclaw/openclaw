@@ -11,6 +11,11 @@ const resolveAgentWorkspaceDir = vi.hoisted(() =>
   vi.fn((_cfg: OpenClawConfig, agentId: string) => `/tmp/${agentId}/workspace`),
 );
 const getActiveMemorySearchManagerCore = vi.hoisted(() => vi.fn());
+const resolveActiveMemoryBackendConfig = vi.hoisted(() =>
+  vi.fn<() => { backend: "builtin" } | { backend: "provider-runtime"; providerId: string }>(() => ({
+    backend: "builtin",
+  })),
+);
 const auditDreamingArtifacts = vi.hoisted(() => vi.fn());
 const auditShortTermPromotionArtifacts = vi.hoisted(() => vi.fn());
 const repairDreamingArtifacts = vi.hoisted(() => vi.fn());
@@ -23,7 +28,10 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentDir,
   resolveAgentWorkspaceDir,
 }));
-vi.mock("../plugins/memory-runtime.js", () => ({ getActiveMemorySearchManagerCore }));
+vi.mock("../plugins/memory-runtime.js", () => ({
+  getActiveMemorySearchManagerCore,
+  resolveActiveMemoryBackendConfig,
+}));
 vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
   auditDreamingArtifacts,
   auditShortTermPromotionArtifacts,
@@ -63,6 +71,7 @@ function dreamingAudit(overrides: Record<string, unknown> = {}) {
 }
 
 function resetMemoryRecallMocks() {
+  resolveActiveMemoryBackendConfig.mockReset().mockReturnValue({ backend: "builtin" });
   auditShortTermPromotionArtifacts.mockReset().mockResolvedValue(shortTermAudit());
   auditDreamingArtifacts.mockReset().mockResolvedValue(dreamingAudit());
   repairDreamingArtifacts.mockReset().mockResolvedValue({
@@ -109,6 +118,21 @@ describe("memory recall doctor integration", () => {
         },
       };
     });
+  });
+
+  it("notes that Memory Core recall audits do not apply to native providers", async () => {
+    resolveActiveMemoryBackendConfig.mockReturnValue({
+      backend: "provider-runtime",
+      providerId: "records",
+    });
+
+    await noteMemoryRecallHealth(cfg);
+
+    expect(String(note.mock.calls[0]?.[0] ?? "")).toContain(
+      "Not applicable: records uses the provider runtime; see its health.",
+    );
+    expect(auditShortTermPromotionArtifacts).not.toHaveBeenCalled();
+    expect(getActiveMemorySearchManagerCore).not.toHaveBeenCalled();
   });
 
   function createPrompter(): DoctorPrompter {

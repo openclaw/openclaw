@@ -238,25 +238,25 @@ final class TailscaleService {
 
     func openTailscaleApp() {
         if let url = URL(string: "file:///Applications/Tailscale.app") {
-            NSWorkspace.shared.open(url)
+            AppActivation.shared.open(url)
         }
     }
 
     func openAppStore() {
         if let url = URL(string: "https://apps.apple.com/us/app/tailscale/id1475387142") {
-            NSWorkspace.shared.open(url)
+            AppActivation.shared.open(url)
         }
     }
 
     func openDownloadPage() {
         if let url = URL(string: "https://tailscale.com/download/macos") {
-            NSWorkspace.shared.open(url)
+            AppActivation.shared.open(url)
         }
     }
 
     func openSetupGuide() {
         if let url = URL(string: "https://tailscale.com/kb/1017/install/") {
-            NSWorkspace.shared.open(url)
+            AppActivation.shared.open(url)
         }
     }
 

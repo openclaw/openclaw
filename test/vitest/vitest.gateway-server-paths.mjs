@@ -352,6 +352,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/store-worker.test.ts",
   "src/gateway/worker-environments/store.benchmark.test.ts",
   "src/gateway/worker-environments/store.test.ts",
+  "src/gateway/worker-environments/transcript-commit-store.test.ts",
   "src/gateway/worker-environments/transcript-commit.lazy.test.ts",
   "src/gateway/worker-environments/transcript-commit.test.ts",
   "src/gateway/worker-environments/worker-portal-tool-executor.test.ts",

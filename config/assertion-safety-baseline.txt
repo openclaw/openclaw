@@ -52,12 +52,11 @@ extensions/browser/src/browser/chrome.diagnostics.ts	1
 extensions/browser/src/browser/chrome.executables.ts	1
 extensions/browser/src/browser/chrome.ts	4
 extensions/browser/src/browser/client-fetch.ts	2
-extensions/browser/src/browser/config-mutations.ts	1
 extensions/browser/src/browser/errors.ts	4
 extensions/browser/src/browser/extension-install-layout.ts	4
 extensions/browser/src/browser/extension-relay/auth-v2.ts	4
 extensions/browser/src/browser/extension-relay/relay-bridge.ts	8
-extensions/browser/src/browser/extension-relay/relay-protocol.ts	2
+extensions/browser/src/browser/extension-relay/relay-protocol.ts	1
 extensions/browser/src/browser/output-files.ts	1
 extensions/browser/src/browser/paths.ts	1
 extensions/browser/src/browser/playwright-core.runtime.ts	2
@@ -117,7 +116,6 @@ extensions/clickclack/src/setup-claim.ts	1
 extensions/clickclack/src/setup-core.ts	5
 extensions/clickclack/src/setup-surface.ts	8
 extensions/clickclack/src/setup-verify.ts	4
-extensions/codex/doctor-contract-api.ts	1
 extensions/codex/harness.ts	1
 extensions/codex/index.ts	5
 extensions/codex/src/app-server/attempt-diagnostics.ts	2
@@ -159,7 +157,6 @@ extensions/codex/src/app-server/startup-binding.ts	1
 extensions/codex/src/app-server/thread-lifecycle-run.ts	1
 extensions/codex/src/app-server/tool-abort-terminal-reason.ts	1
 extensions/codex/src/app-server/tool-progress-normalization.ts	1
-extensions/codex/src/app-server/transcript-history-projection.ts	1
 extensions/codex/src/app-server/transcript-mirror.ts	1
 extensions/codex/src/app-server/transport-stdio.ts	1
 extensions/codex/src/app-server/upstream-fork-boundary.ts	1
@@ -227,11 +224,10 @@ extensions/discord/src/accounts.ts	2
 extensions/discord/src/actions/handle-action.ts	2
 extensions/discord/src/actions/runtime.guild.ts	1
 extensions/discord/src/actions/runtime.messaging.send.ts	2
-extensions/discord/src/actions/runtime.messaging.shared.ts	6
+extensions/discord/src/actions/runtime.messaging.shared.ts	4
 extensions/discord/src/actions/runtime.presence.ts	1
 extensions/discord/src/actions/runtime.shared.ts	1
 extensions/discord/src/activities/discord-api.ts	1
-extensions/discord/src/activities/http.ts	1
 extensions/discord/src/activities/register.ts	1
 extensions/discord/src/activities/store.ts	1
 extensions/discord/src/api.ts	3
@@ -243,8 +239,8 @@ extensions/discord/src/component-custom-id.ts	1
 extensions/discord/src/components-registry-state.ts	2
 extensions/discord/src/components-registry.ts	3
 extensions/discord/src/components.builders.ts	1
-extensions/discord/src/components.parse.ts	12
-extensions/discord/src/doctor-contract.ts	4
+extensions/discord/src/components.parse.ts	6
+extensions/discord/src/doctor-contract.ts	2
 extensions/discord/src/internal/api.guild.ts	3
 extensions/discord/src/internal/api.messages.ts	5
 extensions/discord/src/internal/api.reactions.ts	1
@@ -266,7 +262,7 @@ extensions/discord/src/internal/interaction-options.ts	2
 extensions/discord/src/internal/interaction-response.ts	2
 extensions/discord/src/internal/interactions.ts	2
 extensions/discord/src/internal/modal-fields.ts	4
-extensions/discord/src/internal/rest-body.ts	9
+extensions/discord/src/internal/rest-body.ts	6
 extensions/discord/src/internal/rest-errors.ts	1
 extensions/discord/src/internal/rest-scheduler.ts	1
 extensions/discord/src/internal/rest.ts	1
@@ -314,7 +310,7 @@ extensions/discord/src/pluralkit.ts	1
 extensions/discord/src/probe.ts	1
 extensions/discord/src/security-audit.ts	5
 extensions/discord/src/send.messages.ts	2
-extensions/discord/src/send.outbound.ts	2
+extensions/discord/src/send.outbound.ts	1
 extensions/discord/src/send.shared.ts	2
 extensions/discord/src/send.webhook.ts	1
 extensions/discord/src/setup-account-state.ts	1
@@ -518,14 +514,14 @@ extensions/matrix/src/matrix/poll-types.ts	7
 extensions/matrix/src/matrix/probe.ts	1
 extensions/matrix/src/matrix/reaction-common.ts	1
 extensions/matrix/src/matrix/sdk.ts	8
-extensions/matrix/src/matrix/sdk/client-base.ts	6
+extensions/matrix/src/matrix/sdk/client-base.ts	4
 extensions/matrix/src/matrix/sdk/client-core.ts	14
 extensions/matrix/src/matrix/sdk/client-event-bridge.ts	2
 extensions/matrix/src/matrix/sdk/client-support.ts	1
 extensions/matrix/src/matrix/sdk/client-sync-quiesce.ts	2
 extensions/matrix/src/matrix/sdk/client-verification.ts	4
 extensions/matrix/src/matrix/sdk/crypto-bootstrap.ts	1
-extensions/matrix/src/matrix/sdk/crypto-facade.ts	5
+extensions/matrix/src/matrix/sdk/crypto-facade.ts	4
 extensions/matrix/src/matrix/sdk/crypto-node.runtime.ts	1
 extensions/matrix/src/matrix/sdk/decrypt-bridge.ts	1
 extensions/matrix/src/matrix/sdk/event-helpers.ts	1
@@ -548,7 +544,6 @@ extensions/matrix/src/setup-dm-policy.ts	5
 extensions/matrix/src/test-runtime.ts	9
 extensions/matrix/src/tool-actions.ts	1
 extensions/mattermost/src/channel.ts	5
-extensions/mattermost/src/gateway-auth-bypass.ts	3
 extensions/mattermost/src/mattermost/client.ts	6
 extensions/mattermost/src/mattermost/directory.ts	2
 extensions/mattermost/src/mattermost/interactions.ts	3
@@ -557,7 +552,7 @@ extensions/mattermost/src/mattermost/monitor-slash.ts	1
 extensions/mattermost/src/mattermost/monitor-websocket.ts	1
 extensions/mattermost/src/mattermost/monitor.ts	1
 extensions/mattermost/src/mattermost/slash-commands.ts	1
-extensions/mattermost/src/mattermost/slash-state.ts	3
+extensions/mattermost/src/mattermost/slash-state.ts	1
 extensions/mattermost/src/session-route.ts	1
 extensions/mattermost/src/setup-core.ts	2
 extensions/memory-core/index.ts	4
@@ -851,7 +846,7 @@ extensions/signal/src/monitor/event-handler.ts	1
 extensions/signal/src/probe.ts	1
 extensions/signal/src/send.ts	1
 extensions/signal/src/signal-ingress.ts	2
-extensions/slack/src/accounts.ts	6
+extensions/slack/src/accounts.ts	2
 extensions/slack/src/action-runtime.ts	1
 extensions/slack/src/actions.ts	3
 extensions/slack/src/approval-actions.ts	1
@@ -862,7 +857,7 @@ extensions/slack/src/blocks-input.ts	2
 extensions/slack/src/blocks-render.ts	1
 extensions/slack/src/channel-actions.ts	1
 extensions/slack/src/channel-type.ts	1
-extensions/slack/src/channel.ts	7
+extensions/slack/src/channel.ts	5
 extensions/slack/src/client-delivery.ts	4
 extensions/slack/src/client-options.ts	2
 extensions/slack/src/doctor.ts	1
@@ -872,7 +867,6 @@ extensions/slack/src/http/registry.ts	2
 extensions/slack/src/modal-metadata.ts	1
 extensions/slack/src/monitor/context.ts	2
 extensions/slack/src/monitor/event-scope.ts	1
-extensions/slack/src/monitor/events/agent.ts	1
 extensions/slack/src/monitor/events/assistant.ts	1
 extensions/slack/src/monitor/events/channels.ts	1
 extensions/slack/src/monitor/events/home.ts	1
@@ -926,10 +920,9 @@ extensions/telegram/src/audit-membership-runtime.ts	1
 extensions/telegram/src/audit.ts	1
 extensions/telegram/src/bot-core.ts	1
 extensions/telegram/src/bot-deps.ts	1
-extensions/telegram/src/bot-handlers.callback-router-controls.ts	4
+extensions/telegram/src/bot-handlers.callback-router-controls.ts	2
 extensions/telegram/src/bot-handlers.callback-router.ts	1
 extensions/telegram/src/bot-handlers.inbound-authorization.ts	1
-extensions/telegram/src/bot-handlers.inbound-buffer.ts	1
 extensions/telegram/src/bot-handlers.inbound-media.ts	2
 extensions/telegram/src/bot-handlers.inbound-pipeline.ts	2
 extensions/telegram/src/bot-handlers.message-context.ts	1
@@ -940,7 +933,6 @@ extensions/telegram/src/bot-message-context.session.ts	2
 extensions/telegram/src/bot-message-context.ts	3
 extensions/telegram/src/bot-message-dispatch-reply.ts	1
 extensions/telegram/src/bot-message-dispatch-session.ts	1
-extensions/telegram/src/bot-message-dispatch-turn.ts	2
 extensions/telegram/src/bot-native-command-dispatch.ts	1
 extensions/telegram/src/bot-native-command-plugins.ts	1
 extensions/telegram/src/bot/body-helpers.ts	1
@@ -1014,15 +1006,12 @@ extensions/voice-call/doctor-contract-api.ts	1
 extensions/voice-call/index.ts	2
 extensions/voice-call/setup-api.ts	1
 extensions/voice-call/src/config.ts	2
-extensions/voice-call/src/manager.ts	1
 extensions/voice-call/src/manager/outbound.ts	2
 extensions/voice-call/src/media-stream.ts	1
 extensions/voice-call/src/providers/shared/guarded-json-api.ts	2
 extensions/voice-call/src/providers/shared/response-body.ts	1
-extensions/voice-call/src/providers/twilio/api.ts	2
 extensions/voice-call/src/response-generator.ts	3
 extensions/voice-call/src/runtime.ts	1
-extensions/voice-call/src/tts-provider-voice.ts	1
 extensions/voice-call/src/webhook.ts	7
 extensions/voyage/embedding-batch.ts	1
 extensions/web-readability/web-content-extractor.ts	2
@@ -1057,7 +1046,6 @@ extensions/workboard/browser/lib/workboard/metadata-contract-normalization.ts	1
 extensions/workboard/browser/lib/workboard/normalization.ts	5
 extensions/workboard/browser/pages/workboard/view-card-actions.ts	2
 extensions/workboard/browser/pages/workboard/view-card-modal.ts	1
-extensions/workboard/doctor-contract-api.ts	1
 extensions/workboard/src/cli.ts	2
 extensions/workboard/src/command.ts	1
 extensions/workboard/src/store-automation.ts	1
@@ -2552,11 +2540,9 @@ src/plugin-sdk/memory-host-core.ts	2
 src/plugin-sdk/migration-runtime.ts	2
 src/plugin-sdk/migration.ts	8
 src/plugin-sdk/plugin-test-api.ts	1
-src/plugin-sdk/provider-auth-copilot-cache.ts	1
 src/plugin-sdk/provider-auth-login-flow-runtime.ts	2
 src/plugin-sdk/provider-auth-result.ts	3
 src/plugin-sdk/provider-auth-runtime.ts	1
-src/plugin-sdk/provider-auth.ts	1
 src/plugin-sdk/provider-catalog-shared.ts	1
 src/plugin-sdk/provider-entry.ts	3
 src/plugin-sdk/provider-onboard.ts	3

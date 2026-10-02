@@ -1,11 +1,14 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.i18n.nativeString
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.material3.AlertDialogDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.ModalBottomSheetProperties
 import androidx.compose.material3.SheetState
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
@@ -73,6 +76,29 @@ internal fun AppAlertDialog(
     title = title?.let { windowContent(density, it) },
     text = text?.let { windowContent(density, it) },
     containerColor = containerColor,
+  )
+}
+
+@Composable
+internal fun AppConfirmationDialog(
+  title: String,
+  confirmLabel: String,
+  onConfirm: () -> Unit,
+  onDismiss: () -> Unit,
+  confirmEnabled: Boolean = true,
+  dismissLabel: String = nativeString("Cancel"),
+  text: @Composable () -> Unit,
+) {
+  AppAlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text(title) },
+    text = text,
+    confirmButton = {
+      TextButton(onClick = onConfirm, enabled = confirmEnabled) { Text(confirmLabel) }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss) { Text(dismissLabel) }
+    },
   )
 }
 

@@ -355,14 +355,14 @@ final class RealtimeTalkOutput: @unchecked Sendable {
         let (stream, continuation) = AsyncThrowingStream<Data, Error>.makeStream(
             bufferingPolicy: .bufferingOldest(RealtimeTalkRelaySession.maxBufferedOutputChunks))
         self.outputContinuation = continuation
-        // The real backend registers its generation under the output lock, so a stop
-        // cannot race a delayed task that starts an already-retired reply. Actor-bound legacy
-        // players remain supported for existing clients/fakes, but are not the realtime backend.
+        // Both paths check the generation under the output lock, so a stop cannot race a delayed
+        // task that starts an already-retired reply; cancellation through the detached owner below
+        // waits for a pool thread. Actor-bound legacy players remain for existing clients/fakes.
         let playback: Task<StreamingPlaybackResult, Never> = if let player {
             player.beginPlayback(stream: stream, sampleRate: sampleRate)
         } else {
-            Task { @MainActor [legacyPlayer] in
-                guard !Task.isCancelled else {
+            Task { @MainActor [weak self, legacyPlayer] in
+                guard self?.withLock({ $0.outputSessionId == sessionId && !$0.isClosed }) == true else {
                     return StreamingPlaybackResult(finished: false, interruptedAt: nil)
                 }
                 return await legacyPlayer.play(stream: stream, sampleRate: sampleRate)

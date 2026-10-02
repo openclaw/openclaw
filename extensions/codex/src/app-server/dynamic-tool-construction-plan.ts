@@ -12,24 +12,18 @@ export function resolveCodexToolConstructionPlan(
   nativeToolSurfaceEnabled: boolean | undefined,
   requireWorkspaceOnly: boolean | undefined,
 ): OpenClawCodingToolsOptions["toolConstructionPlan"] {
-  if (!isCodexPairedNodeRemoteExecPlacementSandbox(sandbox) || sandbox?.backendId !== "node") {
-    return requireWorkspaceOnly
-      ? {
-          includeBaseCodingTools: true,
-          includeChannelTools: true,
-          includeOpenClawTools: true,
-          includePluginTools: true,
-          includeShellTools: false,
-        }
-      : undefined;
+  const nodeExecution =
+    isCodexPairedNodeRemoteExecPlacementSandbox(sandbox) && sandbox?.backendId === "node";
+  if (!nodeExecution && !requireWorkspaceOnly) {
+    return undefined;
   }
-  if (!nativeToolSurfaceEnabled) {
+  if (nodeExecution && !nativeToolSurfaceEnabled) {
     throw new Error(
       "Codex node execution requires its native exec-server tool surface; adjust the session tool policy and start a fresh attempt.",
     );
   }
   return {
-    includeBaseCodingTools: false,
+    includeBaseCodingTools: !nodeExecution,
     includeShellTools: false,
     includeChannelTools: true,
     includeOpenClawTools: true,

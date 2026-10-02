@@ -357,6 +357,11 @@ final class VoiceWakeTester {
     }
 
     private nonisolated static func ensurePermissions() async throws -> Bool {
+        guard AppLaunchRuntimePlan.current.allowsActivation else {
+            let granted = PermissionManager.voiceWakePermissionsGranted()
+            if !granted { PermissionManager.reportDeferredRequest() }
+            return granted
+        }
         let speechStatus = SFSpeechRecognizer.authorizationStatus()
         if speechStatus == .notDetermined {
             let granted = await withCheckedContinuation { continuation in

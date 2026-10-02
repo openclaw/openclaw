@@ -696,4 +696,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["mcp.app.subscribeResource", "mcp-app", "operator.read", "2026.9"],
   ["mcp.app.unsubscribeResource", "mcp-app", "operator.read", "2026.9"],
   ["mcp.app.openFile", "mcp-app", "operator.read", "2026.9"],
+  // Provider-neutral reads append without changing legacy method indices or payloads.
+  ["memory.get", "memory-search", "operator.read", "2026.9"],
+  ["memory.status", "memory-search", "operator.read", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
