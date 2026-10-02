@@ -881,6 +881,36 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     },
   );
 
+  it.each(["release/2026.9.6", "release/2026.9.7"])(
+    "keeps the %s source inventory frozen before VC runtime extraction",
+    async (targetContextRef) => {
+      const packageName = "@openclaw/llama-cpp-provider";
+      const probe =
+        'import { execFile } from "node:child_process";\nexecFile("/usr/bin/vm_stat", []);\n';
+      const artifact = writePluginArtifact({
+        extensionId: "llama-cpp",
+        files: {
+          "src/hardware.ts": probe,
+          "src/llama-server-install.ts": probe,
+        },
+        packageName,
+      });
+      const frozen = await scanPublishablePluginPackages([artifact.artifact], targetContextRef);
+      expect(frozen.scanErrors).toEqual([]);
+      expect(frozen.packageResults[0]?.unexpectedCriticalFindings).toEqual([]);
+      const report = buildPluginNpmSecurityScanReport({
+        candidateSha: CANDIDATE_SHA,
+        packageResults: [
+          ...frozen.packageResults,
+          syntheticResult("@openclaw/codex", { reviewedCriticalFindings: currentLayoutFindings() }),
+        ],
+        targetContextRef,
+        toolingSha: TOOLING_SHA,
+      });
+      expect(report.errors.filter((error) => error.startsWith(`${packageName}:`))).toEqual([]);
+    },
+  );
+
   it("scans checked-in malicious code without running candidate hooks or helpers", async () => {
     const candidateRoot = tempDirs.make("openclaw-plugin-security-inert-pack-");
     const artifactRoot = tempDirs.make("openclaw-plugin-security-inert-artifacts-");
