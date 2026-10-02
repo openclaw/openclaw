@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { bindForegroundUserRequest } from "../agents/foreground-request.js";
 import type { ExecutionIdentityAdmissionFacts } from "../audit/execution-identity-admission.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import type { GatewayAuthResult } from "./auth.js";
@@ -156,5 +157,17 @@ export function transferGatewayLocalUserIngress(source: object, target: object):
   const ingress = ingressByOwner.get(source);
   if (ingress) {
     ingressByOwner.set(target, ingress);
+  }
+}
+
+/** Direct request owners call this after excluding system and delegated input. */
+export function bindGatewayForegroundUserRequest(
+  source: object | undefined | null,
+  target: object,
+  assertCurrent: () => void,
+): void {
+  const facts = readGatewayLocalUserIngressFacts(getGatewayLocalUserIngress(source));
+  if (facts?.ingress.state === "present" && facts.invoker?.state !== "unknown") {
+    bindForegroundUserRequest(target, assertCurrent);
   }
 }

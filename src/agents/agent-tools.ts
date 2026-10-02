@@ -57,6 +57,7 @@ import { filterRequesterYieldTools } from "./openclaw-tools.requester-yield.js";
 import { applySwarmCollectorToolContract } from "./openclaw-tools.swarm.js";
 import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { resolveSandboxFileIdentity } from "./sandbox/file-mutation-identity.js";
+import { readForegroundSandboxCustody } from "./sandbox/foreground-owner.js";
 import { createEmbeddedMessageInvocationPolicy } from "./scheduled-message-invocation.js";
 import { resolveScheduledToolCallerContext } from "./scheduled-tool-policy.js";
 import { projectEffectiveExecPolicy } from "./session-permission-exec-mode.js";
@@ -156,12 +157,15 @@ export function createOpenClawCodingToolsInternal(
   ];
   const sandboxWorkspaceMediaReadAllowed = isConversationToolAllowed(capabilityProfile, "read");
   // Borrowed tool restrictions do not transfer ownership of the policy session's processes.
-  const scopeKey = resolveProcessToolScopeKey({
-    scopeKey: options?.exec?.scopeKey,
-    sessionKey: executionSessionKey,
-    sessionId: options?.sessionId,
-    agentId: executionAgentId,
-  });
+  const foreground = readForegroundSandboxCustody(sandbox?.backend);
+  const scopeKey =
+    foreground?.runtimeKey ??
+    resolveProcessToolScopeKey({
+      scopeKey: options?.exec?.scopeKey,
+      sessionKey: executionSessionKey,
+      sessionId: options?.sessionId,
+      agentId: executionAgentId,
+    });
   if (options?.oneShotCliRun && scopeKey && options.registerRunCleanup) {
     const supervisor = getProcessSupervisor();
     // Sandbox runtimes retain their configured lifetime; host commands still
@@ -489,7 +493,29 @@ export function createOpenClawCodingToolsInternal(
       ? tools.find((tool) => tool.name === "structured_output")
       : undefined;
   const toolsForMemoryFlush = projectMemoryFlushTools(
-    tools,
+    foreground
+      ? tools
+          .filter(
+            (tool) =>
+              ![
+                "create_goal",
+                "sessions_spawn",
+                "sessions_send",
+                "image_generate",
+                "music_generate",
+                "video_generate",
+              ].includes(tool.name),
+          )
+          .map((tool) =>
+            tool.name === "cron"
+              ? copyAgentToolMetadata(tool, {
+                  ...tool,
+                  description:
+                    "Inspect or retire existing automations. This foreground request can list, get, inspect history, remove, or disable a job with only enabled:false. Starting, scheduling, or changing execution is unavailable; send a fresh message in this thread to continue work.",
+                })
+              : tool,
+          )
+      : tools,
     isMemoryFlushRun && memoryFlushWritePath
       ? {
           root: memoryFlushWriteRoot,
@@ -506,7 +532,9 @@ export function createOpenClawCodingToolsInternal(
   const unavailableCoreToolReason =
     isMemoryFlushRun && memoryFlushWritePath
       ? "memory-triggered compaction runs expose only read and append-only write"
-      : undefined;
+      : foreground
+        ? "foreground requests cannot schedule work or start unjoined child sessions"
+        : undefined;
   const toolsForMessageProvider = filterToolsByMessageProvider(
     toolsForMemoryFlush,
     options?.toolPolicyMessageProvider ?? options?.messageProvider,

@@ -17,7 +17,11 @@ export function captureAgentTurnPrincipal(client: GatewayClient | null): AgentTu
     authenticatedUserProfile: client.authenticatedUserProfile,
     connId: client.connId,
     connect: client.connect,
+    connectionSignal: client.connectionSignal,
     internal: client.internal,
+    get invalidated() {
+      return client.invalidated;
+    },
     isDeviceTokenAuth: client.isDeviceTokenAuth,
   };
   transferGatewayLocalUserIngress(client, principal);

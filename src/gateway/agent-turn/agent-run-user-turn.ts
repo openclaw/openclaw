@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import {
   claimExecApprovalFollowupRuntimeHandoff,
@@ -130,6 +131,7 @@ export function recordAgentRunUserTurnParticipant(
 }
 
 export async function prepareAgentRunUserTurn(params: {
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   assertCurrent: () => void;
   assertCompletionCurrent?: () => void;
   privateCompletion?: true;
@@ -285,6 +287,11 @@ export async function prepareAgentRunUserTurn(params: {
         ...(slots.length > 0 ? { mediaImageLayout: { slots } } : {}),
       };
       recorder = createUserTurnTranscriptRecorder({
+        foregroundOnlyRunId:
+          params.operatorAuthority?.rolePolicy?.execution === "foreground-only" ||
+          params.sessionEntry?.execution === "foreground-only"
+            ? params.runId
+            : undefined,
         trackInputCompletion: params.privateCompletion,
         pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,

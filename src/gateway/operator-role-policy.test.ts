@@ -17,7 +17,7 @@ import {
   authorizeCurrentOperatorRoleScopes,
   invalidateOperatorRolePolicy,
   publishOperatorRoleConfigChange,
-  resolveCreatorSandbox,
+  resolveCreatorSessionPolicy,
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicy,
   resolveOperatorRolePolicyForAssignment,
@@ -562,32 +562,38 @@ describe("operator role policy", () => {
 
       for (const source of ["profile", "channel", "unknown"] as const) {
         expect(
-          resolveCreatorSandbox(cfg, { actor: { type: "human", source, id: profile.id } }),
+          resolveCreatorSessionPolicy(cfg, { actor: { type: "human", source, id: profile.id } })
+            .sandbox,
         ).toBe("required");
       }
       expect(
-        resolveCreatorSandbox(cfg, {
+        resolveCreatorSessionPolicy(cfg, {
           actor: { type: "human", source: "profile", id: GATEWAY_OWNER_PROFILE_ID },
-        }),
+        }).sandbox,
       ).toBeUndefined();
       expect(
-        resolveCreatorSandbox(cfg, { actor: { type: "agent", id: profile.id } }),
+        resolveCreatorSessionPolicy(cfg, { actor: { type: "agent", id: profile.id } }).sandbox,
       ).toBeUndefined();
       expect(
-        resolveCreatorSandbox(cfg, { actor: { type: "system", id: profile.id } }),
+        resolveCreatorSessionPolicy(cfg, { actor: { type: "system", id: profile.id } }).sandbox,
       ).toBeUndefined();
       expect(
-        resolveCreatorSandbox(cfg, { actor: { type: "human", source: "unknown" } }),
+        resolveCreatorSessionPolicy(cfg, { actor: { type: "human", source: "unknown" } }).sandbox,
       ).toBeUndefined();
       expect(
-        resolveCreatorSandbox({}, { actor: { type: "human", source: "profile", id: profile.id } }),
+        resolveCreatorSessionPolicy(
+          {},
+          { actor: { type: "human", source: "profile", id: profile.id } },
+        ).sandbox,
       ).toBeUndefined();
 
       setUserProfileRole(profile.id, "maintainer");
       invalidateOperatorRolePolicy(profile.id);
 
       expect(
-        resolveCreatorSandbox(cfg, { actor: { type: "human", source: "profile", id: profile.id } }),
+        resolveCreatorSessionPolicy(cfg, {
+          actor: { type: "human", source: "profile", id: profile.id },
+        }).sandbox,
       ).toBeUndefined();
     });
   });

@@ -89,7 +89,12 @@ type SandboxRuntimeStatusParams = {
   classificationSessionKey?: string;
   classificationAgentId?: string;
   /** Trusted canonical candidate for the classification identity; null means no stored entry. */
-  preparedSessionEntry?: Pick<SessionEntry, "sandbox" | "sandboxMode" | "createdActor"> | null;
+  preparedSessionEntry?: Pick<
+    SessionEntry,
+    "sandbox" | "sandboxMode" | "createdActor" | "execution"
+  > | null;
+  /** Restriction already captured from the original admitted input. */
+  execution?: "foreground-only";
 };
 
 export function resolveSandboxRuntimeStatus(params: SandboxRuntimeStatusParams) {
@@ -231,6 +236,7 @@ function resolveSandboxRuntimeStatusWithRead(
   mainSessionKey: string;
   mode: SandboxConfig["mode"];
   sandboxed: boolean;
+  execution?: "foreground-only";
   toolPolicy: SandboxToolPolicyResolved;
 } & SandboxRuntimeIsolation {
   const {
@@ -260,15 +266,17 @@ function resolveSandboxRuntimeStatusWithRead(
             { readOnly: true },
           )
         : undefined;
-  const sandboxRequired = session?.existing?.sandbox === "required";
+  const execution = params.execution ?? session?.existing?.execution;
+  const sandboxRequired =
+    session?.existing?.sandbox === "required" || execution === "foreground-only";
   const profileId = sessionCreatorProfileId(session?.existing?.createdActor)?.trim();
   const isolation: SandboxRuntimeIsolation = sandboxRequired
     ? {
         sandboxRequired: true,
-        createdActor: session.existing?.createdActor,
+        createdActor: session?.existing?.createdActor,
         isolationSubject: profileId
           ? { kind: "profile", profileId }
-          : { kind: "session", sessionKey: session.normalizedKey },
+          : { kind: "session", sessionKey: session?.normalizedKey ?? comparableSessionKey },
         workspaceAccess: sandboxCfg.workspaceAccess === "rw" ? "ro" : sandboxCfg.workspaceAccess,
       }
     : { sandboxRequired: false };
@@ -290,6 +298,7 @@ function resolveSandboxRuntimeStatusWithRead(
     mode: sandboxCfg.mode,
     ...isolation,
     sandboxed,
+    ...(execution ? { execution } : {}),
     toolPolicy: resolveSandboxToolPolicyForAgent(cfg, classificationAgentId),
   };
 }

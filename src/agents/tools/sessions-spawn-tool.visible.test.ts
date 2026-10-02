@@ -1,5 +1,6 @@
 import "./sessions-spawn-tool.mocks.test-support.js";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withForegroundPromotedCaller } from "../run-execution-policy.test-support.js";
 import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
 import { countActiveRunsForSessionFromRuns } from "../subagents/registry/subagent-registry-queries.js";
 import {
@@ -18,7 +19,34 @@ describe("sessions_spawn visible work receipts", () => {
   beforeEach(() => {
     hoisted.prepareModelChoiceMock.mockReset().mockImplementation(supportedSpawnModelChoice);
     hoisted.inProcessCreationMock.mockReset();
+    hoisted.spawnSubagentDirectMock.mockClear();
+    hoisted.spawnAcpDirectMock.mockClear();
   });
+
+  it.each(["role", "session"] as const)(
+    "refuses independent children under original %s lifetime before effects",
+    async (restriction) => {
+      const registerRun = vi.fn();
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        config: { agents: { defaults: { model: "mock-provider/primary" }, entries: { main: {} } } },
+        registerRun,
+        countActiveRuns: () => 0,
+      });
+      await withForegroundPromotedCaller(restriction, async (profileId) => {
+        for (const choice of [{ visible: true }, { visible: false }, { runtime: "acp" }]) {
+          await expect(
+            tool.execute("foreground-child", { task: "inspect", ...choice, user: profileId }),
+          ).rejects.toThrow("cannot outlive this foreground request");
+        }
+      });
+      expect(hoisted.prepareModelChoiceMock).not.toHaveBeenCalled();
+      expect(hoisted.inProcessCreationMock).not.toHaveBeenCalled();
+      expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+      expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+      expect(registerRun).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps visible child quotas separate for agents sharing a bare requester key", async () => {
     hoisted.prepareModelChoiceMock.mockResolvedValue({

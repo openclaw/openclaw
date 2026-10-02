@@ -30,7 +30,10 @@ export async function createInitialSubagentSession(params: {
   incognito: boolean;
   requesterInternalKey: string;
   assertActive?: () => void;
-  creationPolicy: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
+  creationPolicy: Pick<
+    Parameters<typeof buildSessionCreationStamp>[0],
+    "actor" | "sandbox" | "execution"
+  >;
   completionOwnerSessionKey: string;
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;

@@ -1,7 +1,18 @@
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
-import type { AgentHarnessV2 } from "./types.js";
+import type { AgentHarness, AgentHarnessV2 } from "./types.js";
 
-/** Shared descriptor facts; invocation and built-in identity stay with the factory. */
+const builtInOpenClawHarnesses = new WeakSet<object>();
+
+export function registerBuiltInOpenClawAgentHarness(harness: AgentHarness): void {
+  builtInOpenClawHarnesses.add(harness);
+}
+
+/** Public runtime ids do not establish the host-owned execution boundary. */
+export function isBuiltInOpenClawAgentHarness(harness: AgentHarness): boolean {
+  return builtInOpenClawHarnesses.has(harness);
+}
+
+/** Shared descriptor facts; invocation stays with the factory. */
 export const BUILTIN_AGENT_HARNESS_METADATA: Pick<
   AgentHarnessV2,
   "id" | "label" | "contextEngineHostCapabilities" | "supports" | "deliveryDefaults"

@@ -33,6 +33,31 @@ afterEach(async () => {
 });
 
 describe("session creation snapshot", () => {
+  it("preserves foreground creation policy across adoption and replacement writes", async () => {
+    const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-foreground-") };
+    const scope = { agentId: "main", env, sessionKey: "agent:main:bounded" };
+    replaceSessionEntrySync(scope, {
+      sessionId: "original",
+      updatedAt: 1,
+      execution: "foreground-only",
+      sandbox: "required",
+    });
+    replaceSessionEntrySync(scope, { sessionId: "reset", updatedAt: 2 });
+    expect(loadSessionEntry(scope)).toMatchObject({
+      sessionId: "reset",
+      execution: "foreground-only",
+      sandbox: "required",
+    });
+    const adopted = await createSessionEntryWithTranscript(scope, () => ({
+      ok: true,
+      entry: { sessionId: "reset", updatedAt: 3 },
+    }));
+    expect(adopted).toMatchObject({ ok: true });
+    expect(loadSessionEntry(scope)).toMatchObject({
+      execution: "foreground-only",
+      sandbox: "required",
+    });
+  });
   it.each([undefined, 3, 99])(
     "preserves adopted history without selecting a new projection (header=%s)",
     async (version) => {

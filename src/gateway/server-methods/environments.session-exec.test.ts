@@ -31,6 +31,7 @@ vi.mock("./environments.session-exec-approval.js", () => ({
   approveSessionEnvironmentCommand: mocks.approve,
 }));
 vi.mock("../../agents/tools/gateway-caller-context.js", () => ({
+  isGatewayToolForegroundOnly: () => false,
   getGatewayToolCallerIdentity: () =>
     mocks.ambient
       ? {

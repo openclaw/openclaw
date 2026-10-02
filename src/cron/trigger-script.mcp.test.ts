@@ -4,12 +4,15 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { registerAdmittedRunCleanup } from "../agents/admitted-run-context.js";
 import {
   disposeAllSessionMcpRuntimes,
   getSessionMcpRuntimeManagerForTesting,
   setSessionMcpRuntimeScheduler,
 } from "../agents/agent-bundle-mcp-manager-api.js";
 import { testing as mcpRuntimeTesting } from "../agents/agent-bundle-mcp-runtime.js";
+import { ToolSearchRuntime } from "../agents/tool-search-runtime.js";
+import { resolveToolSearchConfig, type ToolSearchCatalogRef } from "../agents/tool-search.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -104,6 +107,50 @@ return {
 `;
 
 describe("cron script MCP namespace", () => {
+  it("retires MCP, deadline and catalog even when admitted resource cleanup fails", async () => {
+    const fixture = createMcpFixture();
+    let catalog: ToolSearchCatalogRef | undefined;
+    let signal: AbortSignal | undefined;
+    let pid = 0;
+    const runtime = createCronScriptRuntime({
+      config: fixture.config,
+      runHeadless: async (input) => {
+        catalog = input.ctx.catalogRef;
+        signal = input.signal;
+        const tools = new ToolSearchRuntime(
+          input.ctx,
+          resolveToolSearchConfig(input.ctx.runtimeConfig),
+          { prepareInput: true, validateInput: true },
+        );
+        const result = await tools.callValue("sources__list_sources", {});
+        pid = (result as { structuredContent: { pid: number } }).structuredContent.pid;
+        expect(isProcessAlive(pid)).toBe(true);
+        return { status: "completed", value: {}, output: [], toolCallCount: 1 };
+      },
+    });
+    await expect(
+      runtime.executePayload({
+        jobId: "cleanup-failure",
+        script: QUIET_HOUR_SCRIPT,
+        state: null,
+        toolsAllow: ["sources__list_sources"],
+        executionIdentity: {
+          ingress: { kind: "schedule", boundary: "cron.script", state: "present" },
+          onPostAdmission: (context) => {
+            registerAdmittedRunCleanup(context, async () => {
+              throw new Error("resource exit unconfirmed");
+            });
+          },
+        },
+      }),
+    ).rejects.toThrow("admitted run resource cleanup failed");
+    expect(pid).toBeGreaterThan(0);
+    expect(isProcessAlive(pid)).toBe(false);
+    expect(getSessionMcpRuntimeManagerForTesting().listRuntimeKeys()).toEqual([]);
+    expect(catalog?.current).toBeUndefined();
+    expect(signal?.aborted).toBe(true);
+  });
+
   it.each(["trigger", "payload"] as const)(
     "calls an exactly named MCP tool, hides the rest, and retires the runtime (%s)",
     async (mode) => {

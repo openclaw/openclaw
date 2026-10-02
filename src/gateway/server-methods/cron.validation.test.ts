@@ -582,7 +582,9 @@ describe("cron method validation", () => {
     );
 
     expect(context.cron.readJob).toHaveBeenCalledWith("cron-42");
-    expect(context.cron.enqueueRun).toHaveBeenCalledWith("cron-42", "force");
+    expect(context.cron.enqueueRun).toHaveBeenCalledWith("cron-42", "force", {
+      commitGuard: expect.any(Function),
+    });
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ ok: true, enqueued: true, runId: "run-1" }),
@@ -2737,6 +2739,7 @@ describe("cron method validation", () => {
     );
 
     expect(context.cron.updateWithPrecondition.mock.calls[0]?.[3]).toEqual({
+      commitGuard: expect.any(Function),
       scheduledToolPolicy: {
         version: 1,
         mode: "account",

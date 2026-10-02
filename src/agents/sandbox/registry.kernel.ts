@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Insertable, Selectable, Updateable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -8,6 +9,9 @@ import type { SandboxBrowserRegistryEntry, SandboxRegistryEntry } from "./regist
 
 export type SandboxRegistryInsert = Insertable<DB["sandbox_registry_entries"]>;
 export type SandboxRegistryWrite =
+  | { operation: "foreground-reserve"; entry: SandboxRegistryEntry }
+  | { operation: "foreground-record"; previous: SandboxRegistryEntry; entry: SandboxRegistryEntry }
+  | { operation: "foreground-retire"; entry: SandboxRegistryEntry }
   | { operation: "update"; entry: SandboxRegistryEntry }
   | { operation: "complete"; entry: SandboxRegistryEntry; retired: boolean }
   | { operation: "remove"; containerName: string; preserveRemovalIntent?: boolean };
@@ -62,14 +66,32 @@ function removeContainerRegistryRowInDatabase(db: DatabaseSync, containerName: s
   );
 }
 
+export function assertForegroundSandboxReservationCurrent(
+  current: SandboxRegistryEntry | null,
+  expected: SandboxRegistryEntry,
+): asserts current is SandboxRegistryEntry {
+  if (!current?.foreground || !expected.foreground) {
+    throw new Error("Foreground sandbox allocation receipt is missing; custody is retained.");
+  }
+  const { lastUsedAtMs: _currentUse, ...currentGeneration } = current;
+  const { lastUsedAtMs: _expectedUse, ...expectedGeneration } =
+    normalizeSandboxRegistryEntry(expected);
+  if (!isDeepStrictEqual(currentGeneration, expectedGeneration)) {
+    throw new Error("Foreground sandbox allocation receipt changed; custody is retained.");
+  }
+}
+
 export function writeSandboxRegistryInDatabase(
   db: DatabaseSync,
   write: SandboxRegistryWrite,
 ): void {
   if (write.operation === "remove") {
+    const row = readSandboxRegistryRowInDatabase(db, "container", write.containerName);
+    const current = row ? rowToContainerEntry(row) : null;
+    if (current?.foreground) {
+      throw new Error("Foreground sandbox requires confirmed owner retirement before removal.");
+    }
     if (write.preserveRemovalIntent) {
-      const row = readSandboxRegistryRowInDatabase(db, "container", write.containerName);
-      const current = row ? rowToContainerEntry(row) : null;
       if (current?.runtimeState === "removing" || current?.runtimeState === "removing-pending") {
         return;
       }
@@ -80,6 +102,71 @@ export function writeSandboxRegistryInDatabase(
   const { entry } = write;
   const row = readSandboxRegistryRowInDatabase(db, "container", entry.containerName);
   const existing = row ? rowToContainerEntry(row) : null;
+  if (write.operation === "foreground-reserve") {
+    if (!entry.foreground || !entry.workspaceDir || row) {
+      throw new Error("Foreground sandbox requires a new, fully identified allocation.");
+    }
+    // Workspace custody spans scopes and backend choices. A new name cannot
+    // bypass an unfinished allocation left by another turn or Gateway process.
+    if (
+      readSandboxRegistryInDatabase(db).some(
+        (current) => current.workspaceDir === entry.workspaceDir,
+      )
+    ) {
+      throw new Error(
+        "Workspace has an unfinished sandbox allocation; cleanup must complete before retrying.",
+      );
+    }
+    insertSandboxRegistryRowInDatabase(db, containerEntryToRow(entry));
+    return;
+  }
+  if (write.operation === "foreground-record" || write.operation === "foreground-retire") {
+    assertForegroundSandboxReservationCurrent(
+      existing,
+      write.operation === "foreground-record" ? write.previous : entry,
+    );
+    if (write.operation === "foreground-retire") {
+      removeContainerRegistryRowInDatabase(db, entry.containerName);
+    } else {
+      const {
+        foreground: prior,
+        runtimeState: _priorState,
+        lastUsedAtMs: _priorUse,
+        ...owner
+      } = existing;
+      const {
+        foreground: next,
+        runtimeState: _nextState,
+        lastUsedAtMs: _nextUse,
+        ...nextOwner
+      } = normalizeSandboxRegistryEntry(entry);
+      if (
+        !prior ||
+        !next ||
+        !isDeepStrictEqual(owner, nextOwner) ||
+        prior.runId !== next.runId ||
+        prior.instanceId !== next.instanceId ||
+        !isDeepStrictEqual(prior.engineIdentity, next.engineIdentity) ||
+        (prior.containerId !== undefined && prior.containerId !== next.containerId) ||
+        (prior.namespace !== undefined && prior.namespace !== next.namespace) ||
+        (prior.createAttempted && !next.createAttempted) ||
+        (prior.startAttempted && !next.startAttempted) ||
+        (prior.createNotDispatched && !next.createNotDispatched) ||
+        (prior.startNotDispatched && !next.startNotDispatched) ||
+        (next.createNotDispatched &&
+          (!next.createAttempted || next.containerId !== undefined || next.startAttempted)) ||
+        (next.startNotDispatched && (!next.startAttempted || next.containerId === undefined)) ||
+        (prior.cleanupUncertain && !next.cleanupUncertain)
+      ) {
+        throw new Error("Foreground allocation identity and uncertainty cannot be replaced.");
+      }
+      insertSandboxRegistryRowInDatabase(db, containerEntryToRow(entry));
+    }
+    return;
+  }
+  if (entry.foreground || existing?.foreground) {
+    throw new Error("Foreground sandbox allocation can only be changed by its owner.");
+  }
   if (write.operation === "update") {
     if (entry.runtimeState === "pending" && existing?.runtimeState !== undefined) {
       assertSandboxRegistryReservationCurrent(existing, entry);

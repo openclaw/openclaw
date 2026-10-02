@@ -425,6 +425,9 @@ export async function prepareAgentRunDispatch(
   let userTurn: PreparedAgentRunUserTurn;
   const assertInputOwnerCurrent = (terminal = false) => {
     assertInputAdmissionCurrent?.();
+    if (!terminal) {
+      capturedOperator?.authority?.assertCurrent();
+    }
     assertRequesterCurrent?.();
     followupCompletion?.assertCurrent();
     if (followupSuccessor) {
@@ -450,7 +453,16 @@ export async function prepareAgentRunDispatch(
   };
   try {
     assertInputAdmissionCurrent?.();
+    // Capture the original restriction before accepted input becomes durable.
+    // Preaccept cleanup owns this retained source if input staging fails.
+    capturedOperator = await retainGatewayOperatorRun({ ...params, entry: activeRunAbort.entry });
+    const operatorAdmission = revalidateAdmission();
+    if (operatorAdmission !== true) {
+      return await operatorAdmission;
+    }
+    assertInputOwnerCurrent();
     userTurn = await prepareAgentRunUserTurn({
+      operatorAuthority: capturedOperator.authority,
       assertCurrent: () => {
         assertInputOwnerCurrent();
         activeRunAbort.controller.signal.throwIfAborted();
@@ -520,14 +532,11 @@ export async function prepareAgentRunDispatch(
     return undefined;
   }
   try {
-    // The transport request ends at acceptance; execution retains this exact caller.
-    capturedOperator = await retainGatewayOperatorRun({ ...params, entry: activeRunAbort.entry });
     const operatorAdmission = revalidateAdmission(userTurn);
     if (operatorAdmission !== true) {
       return await operatorAdmission;
     }
     assertInputOwnerCurrent();
-    capturedOperator.authority?.assertCurrent();
   } catch (error) {
     const failure = releasePreparedAgentRunUserTurnAfterFailure(userTurn, error);
     return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.INVALID_REQUEST, failure));

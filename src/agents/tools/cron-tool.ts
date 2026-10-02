@@ -62,6 +62,7 @@ import type {
   CronToolOptions,
 } from "./cron-tool.types.js";
 import {
+  assertGatewayToolMayContinue,
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
@@ -291,6 +292,9 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
       };
       const params = args as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
+      if (["add", "run", "wake", "next_check"].includes(action)) {
+        assertGatewayToolMayContinue("Scheduling work after this request");
+      }
       if (
         managementAuthority?.managementOnly &&
         !CRON_MANAGEMENT_METHODS.some((method) => method === `cron.${action}`)
@@ -592,6 +596,11 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               throw new Error("displayName must be a non-empty string or null");
             }
             const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;
+            if (
+              !(patch.enabled === false && Object.keys(patch).every((key) => key === "enabled"))
+            ) {
+              assertGatewayToolMayContinue("Changing scheduled execution");
+            }
             if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
               throw new Error("job required");
             }

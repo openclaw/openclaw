@@ -48,6 +48,8 @@ export type AgentRuntimeIdentity = {
   sessionKey: string;
   operationalRunInstance: OperationalRunInstanceRef;
   delegatedAuthority: AgentRuntimeDelegatedAuthority;
+  /** Original foreground restriction, authenticated with the exact run identity. */
+  execution?: "foreground-only";
   approvalOwnerPluginId?: string;
   executionIdentity?: ExecutionIdentityAdmissionToken;
   turnSourceChannel?: string;
@@ -214,6 +216,7 @@ const agentRuntimeIdentityTokenPayloadSchema = z.object({
   sessionKey: z.string(),
   operationalRunInstance: operationalRunInstanceSchema,
   delegatedAuthority: delegatedAuthoritySchema,
+  execution: z.literal("foreground-only").optional(),
   approvalOwnerPluginId: z.string().optional().catch(undefined),
   executionIdentity: z.unknown().optional(),
   turnSourceChannel: z.string().optional().catch(undefined),
@@ -394,6 +397,7 @@ function parsePayload(value: unknown, nowMs: number): AgentRuntimeIdentityTokenP
       sessionKey,
       operationalRunInstance,
       delegatedAuthority,
+      ...(raw.execution ? { execution: raw.execution } : {}),
       ...(approvalOwnerPluginId ? { approvalOwnerPluginId } : {}),
       ...(turnSourceChannel ? { turnSourceChannel } : {}),
       ...(turnSourceLocal ? { turnSourceLocal } : {}),
@@ -524,6 +528,7 @@ function prepareAgentRuntimeIdentityTokenPayload(
       runId: operationalRunId,
     },
     delegatedAuthority,
+    ...(params.execution ? { execution: params.execution } : {}),
     ...(normalizeOptionalString(params.approvalOwnerPluginId)
       ? { approvalOwnerPluginId: normalizeOptionalString(params.approvalOwnerPluginId) }
       : {}),

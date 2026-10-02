@@ -22,6 +22,10 @@ import {
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  prepareForegroundUserRequestClaim,
+  type ForegroundUserRequest,
+} from "./foreground-request.js";
 import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
 /** Operational lifecycle correlation. This is never identity or authorization evidence. */
@@ -55,6 +59,7 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   rolePolicy?: Readonly<{
     sessionAccessCap: GatewayOperatorRoleDefinition["sessions"]["others"];
     sandboxRequired: boolean;
+    execution?: "foreground-only";
     workspace?: Readonly<{
       projects: readonly string[];
       worktreeBaseRef: string;
@@ -238,15 +243,18 @@ export type PreparedAgentRunAdmission = Readonly<{
   assertSourceCurrent: () => void;
   /** Host-only source restriction available before the runtime prepares its tools. */
   readOperatorAuthority?: () => AdmittedRunOperatorAuthority | undefined;
-  /** Closes admission immediately; await in-flight preparation before releasing the source. */
+  /** Closes admission immediately; await resource settlement before releasing the run owner. */
   close: () => Promise<void>;
 }>;
 
 type DelegatedAuthorityLease = {
   authority: AgentRunDelegatedAuthority;
   foregroundClosed: boolean;
+  assertForegroundRequest?: () => void;
   assertSourceCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  cleanups?: Array<() => Promise<void>>;
+  settlement?: Promise<void>;
 };
 
 const delegatedAuthorityLeases = new WeakMap<AdmittedRunContext, DelegatedAuthorityLease>();
@@ -260,6 +268,7 @@ function bindAdmittedRunDelegatedAuthority(
   context: AdmittedRunContext,
   assertSourceCurrent?: () => void,
   operatorAuthority?: AdmittedRunOperatorAuthority,
+  assertForegroundRequest?: () => void,
 ): void {
   const authority = claimAgentRunDelegatedAuthority(
     context.operationalRunInstance,
@@ -268,7 +277,13 @@ function bindAdmittedRunDelegatedAuthority(
   const previousRecovery = activeNativeHookRecoveryLeases.get(context.operationalRunInstance.runId);
   activeNativeHookRecoveryLeases.delete(context.operationalRunInstance.runId);
   previousRecovery?.releaseOperatorAuthority?.();
-  const lease = { authority, foregroundClosed: false, assertSourceCurrent, operatorAuthority };
+  const lease = {
+    authority,
+    foregroundClosed: false,
+    assertSourceCurrent,
+    operatorAuthority,
+    assertForegroundRequest,
+  };
   delegatedAuthorityLeases.set(context, lease);
   if (!admittedContextsByAuthority.has(authority)) {
     admittedContextsByAuthority.set(authority, context);
@@ -283,6 +298,17 @@ export function getAdmittedRunDelegatedAuthority(
   return lease && !lease.foregroundClosed && validateAgentRunDelegatedAuthority(lease.authority)
     ? lease.authority
     : undefined;
+}
+
+/** Only a consumed host input capability can authorize restricted execution. */
+export function assertAdmittedRunForegroundRequest(context: AdmittedRunContext): void {
+  const lease = delegatedAuthorityLeases.get(context);
+  if (!lease?.assertForegroundRequest || !getAdmittedRunDelegatedAuthority(context)) {
+    throw new Error(
+      "Foreground execution requires a fresh authenticated user request. Send a new message in this thread.",
+    );
+  }
+  lease.assertForegroundRequest();
 }
 
 /** Captures the operator's source lifetime from a live run, including for detached children. */
@@ -347,14 +373,44 @@ export function resolveAdmittedRunActiveAssertion(
   };
 }
 
-/** Only the prepared owner closes admission and then joins its in-flight preparation. */
-function closeAdmittedRunDelegatedAuthority(context: AdmittedRunContext): void {
+/** Registers resource custody before exposing that resource to the admitted run. */
+export function registerAdmittedRunCleanup(
+  context: AdmittedRunContext,
+  cleanup: () => Promise<void>,
+): void {
   const lease = delegatedAuthorityLeases.get(context);
-  if (!lease || lease.foregroundClosed) {
-    return;
+  if (!lease || !getAdmittedRunDelegatedAuthority(context)) {
+    throw new Error("admitted run resource owner is no longer active");
   }
+  (lease.cleanups ??= []).push(cleanup);
+}
+
+/** Close execution admission immediately, then join the exact resources it acquired. */
+async function closeAdmittedRunDelegatedAuthority(context: AdmittedRunContext): Promise<boolean> {
+  const lease = delegatedAuthorityLeases.get(context);
+  if (!lease) {
+    return false;
+  }
+  if (lease.foregroundClosed) {
+    await lease.settlement;
+    return false;
+  }
+  const completion = createDeferredCore();
+  lease.settlement = completion.promise;
   lease.foregroundClosed = true;
   releaseAgentRunDelegatedAuthority(lease.authority);
+  const cleanups = lease.cleanups?.splice(0) ?? [];
+  void (async () => {
+    const settled = await Promise.allSettled(cleanups.map(async (cleanup) => await cleanup()));
+    const failures = settled.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "admitted run resource cleanup failed");
+    }
+  })().then(completion.resolve, completion.reject);
+  await lease.settlement;
+  return true;
 }
 
 type AdmittedRunBeforeToolCallRecovery = Readonly<{
@@ -475,6 +531,7 @@ export function prepareSystemAgentRunAdmission(
 export function prepareAgentRunAdmission(params: {
   cfg: OpenClawConfig;
   admissionSource?: AdmittedRunContext["admissionSource"];
+  foregroundRequest?: ForegroundUserRequest;
   facts: Omit<ExecutionIdentityAdmissionFacts, "runtime">;
   operationalRunInstance: OperationalRunInstanceRef;
   recovery?: ExecutionIdentityRecoveryAdmission;
@@ -537,14 +594,15 @@ export function prepareAgentRunAdmission(params: {
       closed = true;
       // Revoke synchronously, including while the admission callback is still
       // acquiring resources. That callback must settle before its source can retire.
-      if (admittedContext) {
-        closeAdmittedRunDelegatedAuthority(admittedContext);
-      }
+      const cleanup = admittedContext
+        ? closeAdmittedRunDelegatedAuthority(admittedContext)
+        : Promise.resolve(false);
       void (async () => {
         try {
-          // The admission caller observes its error; close owns joining that
-          // producer before its original authority can be released.
-          await admitted?.catch(() => undefined);
+          const [resources] = await Promise.allSettled([cleanup, admitted]);
+          if (resources.status === "rejected") {
+            throw resources.reason;
+          }
         } finally {
           releaseOperatorAuthority?.();
         }
@@ -578,16 +636,27 @@ export function prepareAgentRunAdmission(params: {
           runtimeInstanceId: admittedRuntimeInstanceId,
           ...(params.recovery ? { recovery: params.recovery } : {}),
         });
-        bindAdmittedRunDelegatedAuthority(context, assertSourceCurrent, operatorAuthority);
+        const foregroundRequest = !params.recovery
+          ? prepareForegroundUserRequestClaim(params.foregroundRequest, operationalRunInstance)
+          : undefined;
+        bindAdmittedRunDelegatedAuthority(
+          context,
+          assertSourceCurrent,
+          operatorAuthority,
+          foregroundRequest,
+        );
         admittedContext = context;
         try {
+          if (operatorAuthority?.rolePolicy?.execution === "foreground-only") {
+            assertAdmittedRunForegroundRequest(context);
+          }
           await params.onAdmitted?.(context);
           if (closed || !getAdmittedRunDelegatedAuthority(context)) {
             throw new Error("prepared execution authority closed during admission");
           }
           return context;
         } catch (error) {
-          closeAdmittedRunDelegatedAuthority(context);
+          await closeAdmittedRunDelegatedAuthority(context);
           throw error;
         }
       });

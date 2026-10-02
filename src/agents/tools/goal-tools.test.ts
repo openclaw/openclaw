@@ -12,6 +12,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withForegroundPromotedCaller } from "../run-execution-policy.test-support.js";
 import { createCreateGoalTool, createGetGoalTool, createUpdateGoalTool } from "./goal-tools.js";
 
 async function createStoreConfig(): Promise<{ config: OpenClawConfig; template: string }> {
@@ -44,6 +45,56 @@ async function upsertSessionEntry(params: {
 }
 
 describe("goal tools", () => {
+  it.each(["role", "session"] as const)(
+    "retains original %s lifetime after selecting a maintainer",
+    async (restriction) => {
+      const { config, template } = await createStoreConfig();
+      const storePath = resolveSessionStorePathCore(template, { agentId: "main" });
+      const sessionKey = "agent:main:main";
+      await upsertSessionEntry({
+        storePath,
+        sessionKey,
+        entry: { sessionId: "foreground-session", updatedAt: 1 },
+      });
+      const options = { config, agentSessionKey: sessionKey };
+      const before = structuredClone(getSessionEntry({ storePath, sessionKey }));
+      await withForegroundPromotedCaller(restriction, async () => {
+        await expect(
+          createCreateGoalTool(options).execute("foreground-create", {
+            objective: "continue later",
+          }),
+        ).rejects.toThrow("cannot outlive this foreground request");
+        await expect(
+          createGetGoalTool(options).execute("foreground-read", {}),
+        ).resolves.toBeDefined();
+        expect(getSessionEntry({ storePath, sessionKey })).toEqual(before);
+      });
+      await createCreateGoalTool(options).execute("fresh-independent", {
+        objective: "authorized independent work",
+      });
+      await withForegroundPromotedCaller(restriction, async () => {
+        await createUpdateGoalTool(options).execute("foreground-complete", { status: "complete" });
+      });
+      expect(getSessionEntry({ storePath, sessionKey })?.goal?.status).toBe("complete");
+    },
+  );
+
+  it("keeps immutable conversation lifetime when a fresh caller has no role restriction", async () => {
+    const { config, template } = await createStoreConfig();
+    const storePath = resolveSessionStorePathCore(template, { agentId: "main" });
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "foreground-session", updatedAt: 1, execution: "foreground-only" },
+    });
+    await expect(
+      createCreateGoalTool({ config, agentSessionKey: sessionKey }).execute("fresh-create", {
+        objective: "continue later",
+      }),
+    ).rejects.toThrow("fresh message");
+    expect(getSessionEntry({ storePath, sessionKey })?.goal).toBeUndefined();
+  });
   it("keeps get_goal read-only when accounting changes are projected", async () => {
     // Budget-limited status can be derived for display without mutating the
     // stored active goal record.

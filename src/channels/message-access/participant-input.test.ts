@@ -1,6 +1,11 @@
 import { expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { getForegroundUserRequest } from "../../agents/foreground-request.js";
+import { requireAdmittedRunForeground } from "../../agents/run-execution-policy.js";
+import { prepareChannelRunAdmission } from "../../auto-reply/reply/channel-run-admission.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   buildChannelInboundEventContext,
   type BuildChannelInboundEventContextParams,
@@ -18,6 +23,102 @@ const recordParticipant = vi.hoisted(() => vi.fn());
 vi.mock("../../sessions/session-participant-recording.js", () => ({
   recordSessionParticipantBestEffort: recordParticipant,
 }));
+
+it.each(["user", "heartbeat", "system", "retired", "retired-role"] as const)(
+  "admits foreground work only from current verified channel input with audit disabled: %s",
+  async (kind) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      let live = true;
+      const gateway = { getRuntimeConfig: () => ({}) } as GatewayRequestContext;
+      const owner = { channelId: "test", isLive: () => live, resolveGatewayContext: () => gateway };
+      const sessionKey = "agent:main:test:dm:foreground";
+      const ingress = await createHostChannelIngressRuntime(owner).resolveStable({
+        channelId: "test",
+        accountId: "local",
+        identity: { authentication: "verified" },
+        subject: { stableId: "sender" },
+        conversation: { kind: "direct", id: "foreground" },
+        contextBinding: {
+          agentId: "main",
+          sessionKey,
+          messageId: "input",
+          inboundEventKind: "user_request",
+        },
+        dmPolicy: "open",
+        groupPolicy: "disabled",
+        allowFrom: ["*"],
+        useDefaultPairingStore: false,
+      });
+      const context = await createHostChannelInboundEventContextBuilder(
+        (params: BuildChannelInboundEventContextParams) => {
+          const built = buildChannelInboundEventContext(params);
+          if (kind === "heartbeat") {
+            built.InternalTurnSource = "heartbeat";
+          }
+          if (kind === "system") {
+            built.InputProvenance = { kind: "internal_system", sourceTool: "fixture" };
+          }
+          return built;
+        },
+        owner,
+      )({
+        channel: "test",
+        accountId: "local",
+        messageId: "input",
+        from: "test:foreground",
+        sender: { id: "sender" },
+        conversation: { kind: "direct", id: "foreground" },
+        route: { agentId: "main", routeSessionKey: sessionKey },
+        reply: { to: "test:foreground" },
+        message: { rawBody: "hello" },
+        channelIngress: ingress,
+      });
+      expect(readChannelContextAdmissionEvidence(context)).toBeUndefined();
+      live = !kind.startsWith("retired");
+      const admission = prepareChannelRunAdmission({
+        cfg: {},
+        runId: `channel-${kind}`,
+        agentId: "main",
+        ingressKind: "channel",
+        boundary: "test",
+        foregroundRequest: getForegroundUserRequest({ ...context }),
+        operatorAuthority:
+          kind === "retired-role"
+            ? createAdmittedRunOperatorAuthority({
+                profileId: "source",
+                scopes: ["operator.write"],
+                assertCurrent() {},
+                rolePolicy: {
+                  sessionAccessCap: "none",
+                  sandboxRequired: true,
+                  agents: "*",
+                  execution: "foreground-only",
+                },
+              })
+            : undefined,
+      });
+      try {
+        if (kind === "retired-role") {
+          await expect(admission.admit("embedded")).rejects.toThrow("no longer active");
+        } else {
+          const admitted = await admission.admit("embedded");
+          if (kind === "retired") {
+            expect(() => requireAdmittedRunForeground(admitted)).toThrow("no longer active");
+          } else if (kind === "user") {
+            expect(() => requireAdmittedRunForeground(admitted)).not.toThrow();
+          } else {
+            expect(() => requireAdmittedRunForeground(admitted)).toThrow(
+              "fresh authenticated user request",
+            );
+          }
+        }
+      } finally {
+        live = false;
+        await admission.close();
+      }
+    });
+  },
+);
 
 it.each([
   "qualified",

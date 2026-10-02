@@ -26,6 +26,9 @@ import {
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import {
   completeSandboxRegistryReservation,
+  reserveForegroundSandboxRegistryEntry,
+  recordForegroundSandboxReceipt,
+  retireForegroundSandboxRegistryEntry,
   readBrowserRegistry,
   assertSandboxBrowserRegistryEntryCurrent,
   readRegisteredSandboxRuntimeIds,
@@ -94,6 +97,98 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("registry race safety", () => {
+  it("retains a foreground receipt across database reopen and refuses ordinary retirement", async () => {
+    const entry = containerEntry({
+      backendId: "docker",
+      workspaceDir: "/workspace/project",
+      runtimeState: "pending",
+      foreground: {
+        runId: "run-1",
+        instanceId: "instance-1",
+        engineIdentity: { kind: "docker", id: "daemon-1" },
+        createAttempted: false,
+        startAttempted: false,
+      },
+    });
+    await reserveForegroundSandboxRegistryEntry(entry);
+    const created = {
+      ...entry,
+      foreground: { ...entry.foreground!, createAttempted: true, containerId: "a".repeat(64) },
+    };
+    await recordForegroundSandboxReceipt(entry, created);
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    await expect(readRegistryEntry(entry.containerName)).resolves.toMatchObject(created);
+    await expect(updateRegistry({ ...entry, lastUsedAtMs: 2 })).rejects.toThrow("owner");
+    await expect(removeRegistryEntry(entry.containerName)).rejects.toThrow(
+      "confirmed owner retirement",
+    );
+    await expect(completeSandboxRegistryReservation(entry, true)).rejects.toThrow("owner");
+    await expect(
+      recordForegroundSandboxReceipt(created, {
+        ...created,
+        foreground: { ...created.foreground, containerId: "b".repeat(64) },
+      }),
+    ).rejects.toThrow("cannot be replaced");
+    await expect(retireForegroundSandboxRegistryEntry(entry)).rejects.toThrow("receipt changed");
+    await retireForegroundSandboxRegistryEntry(created);
+    await expect(readRegistryEntry(entry.containerName)).resolves.toBeNull();
+  });
+
+  it("retains proven non-dispatch monotonically without accepting a conflicting create ID", async () => {
+    const entry = containerEntry({
+      backendId: "docker",
+      workspaceDir: "/workspace/project",
+      foreground: {
+        runId: "stopped",
+        instanceId: "stopped-instance",
+        engineIdentity: { kind: "docker", id: "daemon-1" },
+        createAttempted: false,
+        startAttempted: false,
+      },
+    });
+    await reserveForegroundSandboxRegistryEntry(entry);
+    const stopped = {
+      ...entry,
+      foreground: { ...entry.foreground!, createAttempted: true, createNotDispatched: true },
+    } satisfies SandboxRegistryEntry;
+    await recordForegroundSandboxReceipt(entry, stopped);
+    await expect(
+      recordForegroundSandboxReceipt(stopped, {
+        ...stopped,
+        foreground: { ...stopped.foreground, createNotDispatched: undefined },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      recordForegroundSandboxReceipt(stopped, {
+        ...stopped,
+        foreground: { ...stopped.foreground, containerId: "a".repeat(64) },
+      }),
+    ).rejects.toThrow();
+    expect(await readRegistryEntry(entry.containerName)).toMatchObject(stopped);
+    await retireForegroundSandboxRegistryEntry(stopped);
+  });
+
+  it("admits only one foreground owner per workspace even with different names", async () => {
+    const entry = containerEntry({
+      backendId: "docker",
+      workspaceDir: "/workspace/project",
+      foreground: {
+        runId: "run-1",
+        instanceId: "instance-1",
+        engineIdentity: { kind: "docker", id: "daemon-1" },
+        createAttempted: false,
+        startAttempted: false,
+      },
+    });
+    const results = await Promise.allSettled([
+      reserveForegroundSandboxRegistryEntry(entry),
+      reserveForegroundSandboxRegistryEntry({ ...entry, containerName: "container-b" }),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect((await readRegistry()).entries).toHaveLength(1);
+  });
   it("retains exact browser workspace custody and rejects a rebound owner", async () => {
     await updateBrowserRegistry(browserEntry({ workspaceDir: "/private/workspace" }));
     await updateBrowserRegistry(browserEntry({ lastUsedAtMs: 2 }));

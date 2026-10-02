@@ -20,6 +20,8 @@ type BashSandboxWorkdirMount = {
 };
 
 export type BashSandboxConfig = {
+  /** Preserve the exact backend identity that owns foreground execution custody. */
+  backend?: SandboxBackendHandle;
   containerName: string;
   workspaceDir: string;
   containerWorkdir: string;

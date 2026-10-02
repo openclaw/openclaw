@@ -86,6 +86,7 @@ export function submitFinalProviderToolResult(params: {
   result: unknown;
   options?: RealtimeVoiceToolResultOptions;
   onAccepted?: () => void;
+  assertCurrent?: () => void;
 }): void | Promise<void> {
   const epoch = params.session.toolResultEpoch;
   const providerCallId = resolveRelayProviderToolCallId(params.session, params.callId);
@@ -102,8 +103,12 @@ export function submitFinalProviderToolResult(params: {
   if (pending) {
     return pending;
   }
-  const submit = () =>
-    params.session.bridge.submitToolResult(providerCallId, params.result, params.options);
+  const submit = () => {
+    // A final result can wait behind a provider acknowledgement. Keep the
+    // requesting session's execution ceiling until the actual provider handoff.
+    params.assertCurrent?.();
+    return params.session.bridge.submitToolResult(providerCallId, params.result, params.options);
+  };
   const working = params.session.pendingWorkingToolResults.get(params.callId);
   const submitAfterWorking = async () => {
     if (relaySessions.get(params.session.id) !== params.session) {

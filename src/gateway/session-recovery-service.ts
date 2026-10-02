@@ -32,7 +32,7 @@ import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 import {
   authorizeGatewaySessionCreation,
-  resolveCreatorSandbox,
+  resolveCreatorSessionPolicy,
   resolveOperatorRolePolicyForProfile,
 } from "./operator-role-policy.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
@@ -392,7 +392,7 @@ export async function recoverGatewaySession(params: {
                   projectId: requiredWorkspace.projectId,
                   sandboxRequired:
                     currentSource.sandbox === "required" ||
-                    resolveCreatorSandbox(params.cfg, params) === "required",
+                    resolveCreatorSessionPolicy(params.cfg, params).sandbox === "required",
                 })
               : undefined;
           if (preparedWorkspace && !preparedWorkspace.ok) {
@@ -405,11 +405,13 @@ export async function recoverGatewaySession(params: {
             // Recovery cannot relax the source's isolation or change its creator
             // namespace merely because a maintainer launches the successor.
             creation: {
+              ...resolveCreatorSessionPolicy(params.cfg, params),
               ...inheritSessionCreationPolicy(
                 currentSource,
                 currentSource.requiredWorkspace ? currentSource.createdActor : params.actor,
               ),
-              sandbox: currentSource.sandbox ?? resolveCreatorSandbox(params.cfg, params),
+              sandbox:
+                currentSource.sandbox ?? resolveCreatorSessionPolicy(params.cfg, params).sandbox,
               requiredWorkspace,
             },
             ...(workspace

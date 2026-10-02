@@ -10,6 +10,7 @@ import {
 import { isCanonicalTerminalUploadBase64 } from "../../../packages/gateway-protocol/src/schema/terminal-constants.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
+import { captureForegroundContinuationGuard } from "./foreground-execution.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -37,15 +38,24 @@ export const terminalUploadHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const assertMayContinue = captureForegroundContinuationGuard(
+        opts,
+        "An unconfined terminal upload",
+      );
+      assertMayContinue();
+      const assertUploadCurrent = captureGatewayClientUploadCommitGuard({
+        method: "terminal.upload",
+        requestParams: params,
+        client: opts.client,
+        context,
+      });
       const result = await context.terminalSessions.upload(connId, params.sessionId, {
         name: params.name,
         contentBase64: params.contentBase64,
-        assertCommitAllowed: captureGatewayClientUploadCommitGuard({
-          method: "terminal.upload",
-          requestParams: params,
-          client: opts.client,
-          context,
-        }),
+        assertCommitAllowed: () => {
+          assertMayContinue();
+          assertUploadCurrent?.();
+        },
       });
       if (!result) {
         respond(

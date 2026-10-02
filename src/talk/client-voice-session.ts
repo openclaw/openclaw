@@ -245,7 +245,10 @@ export async function ensureClientVoiceAgentSessionEntry(params: {
   storePath?: string;
   deadlineAt?: number;
   assertCommitAllowed?: () => void;
-  creation?: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
+  creation?: Pick<
+    Parameters<typeof buildSessionCreationStamp>[0],
+    "actor" | "sandbox" | "execution"
+  >;
 }): Promise<string> {
   const created = await patchSessionEntryCore(
     params,
@@ -260,6 +263,7 @@ export async function ensureClientVoiceAgentSessionEntry(params: {
         via: "talk",
         actor: params.creation?.actor ?? { type: "human", source: "unknown" },
         sandbox: params.creation?.sandbox,
+        execution: params.creation?.execution,
       });
     },
     {

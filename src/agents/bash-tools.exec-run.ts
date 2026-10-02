@@ -74,10 +74,15 @@ import {
   createExecToolExecutionTimeoutResolver,
   resolveExecDefaultTimeoutSec,
 } from "./exec-tool-timeout.js";
+import { isAdmittedRunForegroundOnly } from "./run-execution-policy.js";
+import { readForegroundSandboxCustody } from "./sandbox/foreground-owner.js";
 import { resolveStoredSubagentCapabilities } from "./subagents/spawn/subagent-capabilities.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
-import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  withoutGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 
 type GatewayApprovalResult = Awaited<ReturnType<typeof processGatewayAllowlist>>;
 
@@ -86,8 +91,17 @@ const BACKGROUND_EXEC_FOLLOW_UP =
 
 /** Creates an exec tool instance with runtime defaults and approval policy wiring. */
 export function createExecTool(
-  defaults?: ExecToolDefaults,
+  inputDefaults?: ExecToolDefaults,
 ): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
+  const foreground = readForegroundSandboxCustody(inputDefaults?.sandbox?.backend);
+  const defaults = foreground
+    ? {
+        ...inputDefaults,
+        sandboxRequired: true,
+        scopeKey: foreground.runtimeKey,
+        notifyOnExit: false,
+      }
+    : inputDefaults;
   const secretEgressEnabled = isSecretEgressProxyActive();
   const cleanupMs = defaults?.cleanupMs;
   const preparedRunEnvironment = resolveExecPreparedRunEnvironment(defaults);
@@ -112,7 +126,8 @@ export function createExecTool(
     120_000,
   );
   const backgroundAvailable =
-    defaults?.processToolAvailabilityRef?.value ?? defaults?.allowBackground ?? true;
+    !foreground &&
+    (defaults?.processToolAvailabilityRef?.value ?? defaults?.allowBackground ?? true);
   const defaultTimeoutSec = resolveExecDefaultTimeoutSec(defaults?.timeoutSec);
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
   const {
@@ -193,7 +208,23 @@ export function createExecTool(
     getExecutionTimeoutMs: createExecToolExecutionTimeoutResolver(defaults),
     prepareBeforeToolCallParams: requestPreparation.prepareBeforeToolCallParams,
     finalizeBeforeToolCallParams: requestPreparation.finalizeBeforeToolCallParams,
-    execute: async (toolCallId, args, signal, onUpdate) => {
+    execute: async (toolCallId, args, inputSignal, onUpdate) => {
+      const restricted = isAdmittedRunForegroundOnly(
+        getGatewayToolCallerIdentity()?.admittedRunContext,
+      );
+      if (restricted && !foreground) {
+        throw new Error(
+          "Foreground execution requires its owned sandbox; host and node execution are unavailable for this request.",
+        );
+      }
+      if (foreground) {
+        foreground.assertCurrent();
+      }
+      const signal = foreground
+        ? inputSignal
+          ? AbortSignal.any([inputSignal, foreground.signal])
+          : foreground.signal
+        : inputSignal;
       signal?.throwIfAborted();
       const assertSourceActive = captureAgentToolSourceExecutionGuard(signal);
       assertSupportedExecParams(args);

@@ -17,6 +17,7 @@ import {
   readPositiveIntegerParam,
   readToolStringParam,
 } from "./common.js";
+import { assertGatewayToolMayContinue } from "./gateway-caller-context.js";
 
 type GoalToolOptions = {
   agentSessionKey?: string;
@@ -90,6 +91,7 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
       "Create a goal only when explicitly requested by the user or system instructions. Set a positive token_budget only when a budget is explicitly requested; otherwise omit it or pass null. Fails if a goal already exists; the user must clear it before starting another.",
     parameters: CreateGoalToolSchema,
     execute: async (_toolCallId, args) => {
+      assertGatewayToolMayContinue("Creating an automatically continued goal");
       const params = args as Record<string, unknown>;
       const objective = readToolStringParam(params, "objective", { required: true });
       const tokenBudget = readPositiveIntegerParam(params, "token_budget", {

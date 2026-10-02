@@ -14,7 +14,7 @@ import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lif
 import type { UserModelAccountSelection } from "../model-account-authority.js";
 import {
   authorizeGatewayUnpreparedSessionCreation,
-  resolveCreatorSandbox,
+  resolveCreatorSessionPolicy,
 } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { recordSessionStatusModelPatchOutcome } from "../session-model-patch-origin.js";
@@ -87,8 +87,7 @@ export async function executeSessionPatchMutations(params: {
   const getCurrentConfig = params.context.getRuntimeConfig;
   const cfg = getCurrentConfig();
   const operatorCreation = resolveOperatorSessionCreation(client);
-  const sandbox = resolveCreatorSandbox(cfg, operatorCreation);
-  const creation = { ...operatorCreation, ...(sandbox ? { sandbox } : {}) };
+  const creation = { ...operatorCreation, ...resolveCreatorSessionPolicy(cfg, operatorCreation) };
   const archiveActor = gatewayClientSessionCreator(client);
   const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   const callerIsAdmin = client === null || callerScopes.includes(ADMIN_SCOPE);

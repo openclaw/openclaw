@@ -16,6 +16,7 @@ import {
   operatorSessionCap,
   resolveGatewayOperatorRoleActor,
 } from "./operator-role-policy.js";
+import { captureForegroundContinuationGuard } from "./server-methods/foreground-execution.js";
 import {
   authenticatedProfileUnavailableError,
   gatewayClientSessionCreator,
@@ -155,6 +156,48 @@ export function resolveSessionMutationAuthorization(params: {
   sessionRowRead?: SessionRowReadView;
 }): { authorization?: SessionMutationAuthorization; error: ErrorShape | null } {
   const authorizesAgentRun = isAgentRunStartMethod(params.method, params.requestParams);
+  // Talk provider sessions have no joined foreground owner. Status/cancel and
+  // transcript delivery remain usable, including after the source role changes.
+  const authorizesTalkExecution =
+    [
+      "talk.client.create",
+      "talk.client.toolCall",
+      "talk.session.create",
+      "talk.session.appendAudio",
+      "talk.session.submitToolResult",
+    ].includes(params.method) ||
+    (["talk.client.steer", "talk.session.steer"].includes(params.method) &&
+      !(
+        isRecord(params.requestParams) &&
+        ["status", "cancel"].includes(String(params.requestParams.mode))
+      ));
+  const assertTalkSource = authorizesTalkExecution
+    ? captureForegroundContinuationGuard(params, "Talk sessions")
+    : undefined;
+  const talkExecutionError = (execution?: "foreground-only", revalidate = false) => {
+    if (!assertTalkSource) {
+      return null;
+    }
+    try {
+      assertTalkSource();
+      if (revalidate) {
+        captureForegroundContinuationGuard(params, "Talk sessions")();
+      }
+      if (!execution) {
+        return null;
+      }
+    } catch {
+      // Original source restrictions survive a later broader personal selection.
+    }
+    return errorShape(
+      ErrorCodes.FORBIDDEN,
+      "Talk sessions cannot confirm foreground cleanup. Send a new chat message on this Gateway.",
+    );
+  };
+  const talkSourceError = talkExecutionError();
+  if (talkSourceError) {
+    return { error: talkSourceError };
+  }
   const authorizesRead =
     resolveSessionMethodScope(params.method, params.requestParams) === "operator.sessions.read";
   const patch =
@@ -168,7 +211,8 @@ export function resolveSessionMutationAuthorization(params: {
   // Capture this boundary for admins too so delayed writes cannot revive a reset card.
   const bindsProgressLifecycle =
     params.method === "progressCard.put" || params.method === "progressCard.refresh";
-  const adminBypass = isGatewayAdmin(params.client) && !authorizesAgentRun;
+  const adminBypass =
+    isGatewayAdmin(params.client) && !authorizesAgentRun && !authorizesTalkExecution;
   if (adminBypass && !bindsProgressLifecycle && !params.expectedTarget) {
     return { error: null };
   }
@@ -351,7 +395,9 @@ export function resolveSessionMutationAuthorization(params: {
       context: params.context,
     }) ??
     // Creation may not have a row yet, but it must retain its original person until commit.
-    (bindsOwnProfile && !isRequiredSessionTargetMethod(params.method) ? [] : undefined);
+    ((bindsOwnProfile && !isRequiredSessionTargetMethod(params.method)) || authorizesTalkExecution
+      ? []
+      : undefined);
   if (params.expectedTarget && targetRefs?.length !== 1) {
     return {
       error: sessionMutationTargetChanged(params.method, params.expectedTarget.sessionKey).error,
@@ -398,6 +444,7 @@ export function resolveSessionMutationAuthorization(params: {
         target,
         expectedProfileId: ownSessionProfileId,
       }) ??
+      talkExecutionError(target?.entry.execution) ??
       (target && authorizesAgentRun
         ? authorizeSessionAgentRun({
             cfg: getPolicyConfig(),
@@ -453,6 +500,10 @@ export function resolveSessionMutationAuthorization(params: {
       const targetChanged = (sessionKey: string) =>
         sessionMutationTargetChanged(params.method, sessionKey);
       const assertTalkTargetCurrent = (cfg: OpenClawConfig) => {
+        const sourceError = talkExecutionError(undefined, true);
+        if (sourceError) {
+          throw new SessionMutationAuthorizationChangedError(sourceError);
+        }
         if (!talkInput || !talkSessionTarget) {
           return;
         }
@@ -591,6 +642,7 @@ export function resolveSessionMutationAuthorization(params: {
           VISIBILITY_AUTHORIZED_METHODS.has(params.method) &&
           (operatorSessionCap(params.client, policyConfig) ?? "write") === "write";
         const error =
+          talkExecutionError(current.entry.execution) ??
           (authorizesAgentRun
             ? authorizeSessionAgentRun({
                 cfg: policyConfig,

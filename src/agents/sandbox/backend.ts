@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
@@ -11,12 +12,14 @@ import type {
   SandboxBackendRegistration,
   SandboxBackendWorkdirResolver,
 } from "./backend.types.js";
+import type { NativeSandboxCustody } from "./container-engine.js";
 import {
   createDockerSandboxBackend,
   createPodmanSandboxBackend,
   dockerSandboxBackendManager,
   podmanSandboxBackendManager,
 } from "./docker-backend.js";
+import { bindForegroundSandboxBackend } from "./foreground-owner.js";
 import { SandboxRuntimeRetiredError } from "./provisioning-error.js";
 import {
   assertSandboxRegistryEntryCurrent,
@@ -54,6 +57,13 @@ export type {
 } from "./backend-handle.types.js";
 
 const SANDBOX_BACKEND_FACTORIES_STATE_KEY = Symbol.for("openclaw.sandboxBackendFactories");
+const foregroundBackends = new WeakMap<
+  NativeSandboxCustody,
+  {
+    params: Omit<CreateSandboxBackendParams, "assertRuntimeCurrent" | "registeredRuntimeIds">;
+    backend: Promise<SandboxBackendHandle>;
+  }
+>();
 
 type SandboxBackendRegistrationGeneration = {
   registration: RegisteredSandboxBackend;
@@ -169,8 +179,41 @@ export function requireSandboxBackendFactory(id: string): SandboxBackendFactory 
 export async function createSandboxBackend(
   params: CreateSandboxBackendParams,
   operatorAuthority?: AdmittedRunOperatorAuthority,
+  custody?: NativeSandboxCustody,
 ): Promise<SandboxBackendHandle> {
   const factory = requireSandboxBackendFactory(params.cfg.backend);
+  if (custody) {
+    const {
+      assertRuntimeCurrent: _assertCurrent,
+      registeredRuntimeIds: _runtimeIds,
+      ...binding
+    } = params;
+    custody.assertCurrent();
+    if (factory !== createDockerSandboxBackend && factory !== createPodmanSandboxBackend) {
+      throw new Error(
+        "Foreground execution requires the built-in Docker or Podman allocation owner.",
+      );
+    }
+    const existing = foregroundBackends.get(custody);
+    if (existing) {
+      if (!isDeepStrictEqual(existing.params, binding)) {
+        throw new Error(
+          "Foreground execution cannot change its workspace or sandbox configuration.",
+        );
+      }
+      return existing.backend;
+    }
+    const backend = custody.runProducer(async () => {
+      const handle =
+        factory === createDockerSandboxBackend
+          ? await createDockerSandboxBackend(params, operatorAuthority, custody)
+          : await createPodmanSandboxBackend(params, operatorAuthority, custody);
+      bindForegroundSandboxBackend(handle, custody);
+      return handle;
+    });
+    foregroundBackends.set(custody, { params: structuredClone(binding), backend });
+    return backend;
+  }
   const reserveRuntimeId = resolveSandboxBackendRegistration(params.cfg.backend)?.reserveRuntimeId;
   const toEntry = (backend: SandboxBackendHandle): SandboxRegistryEntry => ({
     containerName: backend.runtimeId,

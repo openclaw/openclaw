@@ -8,6 +8,7 @@ import type {
   CurrentInboundPromptContext,
   RunEmbeddedAgentParams,
 } from "../../../agents/embedded-agent-runner/run/params.js";
+import type { ForegroundUserRequest } from "../../../agents/foreground-request.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
 import type { ScheduledToolPolicyContext } from "../../../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../../../agents/subagents/announce/subagent-announce-handoff.js";
@@ -127,6 +128,7 @@ export type FollowupRun = {
   channelAdmissionEvidence?: ChannelAdmissionEvidence;
   /** Frozen original attach evidence; diagnostic only and never restored from durable queue state. */
   gatewayLocalUserIngress?: GatewayLocalUserIngress;
+  foregroundRequest?: ForegroundUserRequest;
   /** Explicit current-turn context that should be visible for this run but not persisted as user text. */
   currentInboundContext?: CurrentInboundPromptContext;
   /** Explicit skills resolved from the authenticated inbound message. */

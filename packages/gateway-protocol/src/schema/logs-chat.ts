@@ -74,6 +74,7 @@ export const ChatPendingInputsPageSchema = closedObject({
       message: Type.Unknown(),
       acceptedAt: Type.Number(),
       state: Type.String({ enum: ["queued", "cancelled", "interrupted"] }),
+      replayBlockedReason: Type.Optional(Type.Literal("foreground-restart")),
       queued: Type.Optional(Type.Literal(true)),
     }),
     { maxItems: 20 },

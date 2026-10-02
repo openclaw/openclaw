@@ -483,6 +483,24 @@ serveOwnedWorkerTasks(
           ),
         };
       }
+      if (request.kind === "session-submitted-input") {
+        const { readSessionSubmittedInput } = await import("./session-accessor.pending-inputs.js");
+        const scope = {
+          agentId: request.agentId,
+          sessionKey: request.sessionKey,
+          sessionId: request.sessionId,
+          storePath: request.database.path,
+          env: cloneEnvWithPlatformSemantics(request.env),
+        };
+        // Gateway inputs use run:user; channel inputs retain their transport turn key.
+        const options = { requireReadSuccess: true };
+        return {
+          kind: "session-submitted-input" as const,
+          message:
+            readSessionSubmittedInput(scope, `${request.runId}:user`, options) ??
+            readSessionSubmittedInput(scope, request.runId, options),
+        };
+      }
       if (request.kind === "session-progress-card") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");

@@ -16,6 +16,10 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import {
+  readUserTurnForegroundOnlyLifecycleGeneration,
+  readUserTurnForegroundOnlyRunId,
+} from "../../sessions/user-turn-transcript.metadata.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -150,9 +154,22 @@ export function bindSessionPendingInputSources(
     receipts.flatMap((receipt) => readMessageClientSources(receipt.message)),
   );
   const collectedMessage = { ...message };
+  const foregroundSource = receipts.find((receipt) =>
+    readUserTurnForegroundOnlyRunId(receipt.message),
+  );
+  if (foregroundSource) {
+    // Collection may combine callers, but it cannot discard a source's no-replay restriction.
+    collectedMessage["__openclaw"] = {
+      ...collectedMessage["__openclaw"],
+      foregroundOnlyRunId: readUserTurnForegroundOnlyRunId(foregroundSource.message),
+      foregroundOnlyLifecycleGeneration: readUserTurnForegroundOnlyLifecycleGeneration(
+        foregroundSource.message,
+      ),
+    };
+  }
   if (clients.length) {
     collectedMessage["__openclaw"] = {
-      ...message["__openclaw"],
+      ...collectedMessage["__openclaw"],
       transport: { ...asOptionalRecord(message["__openclaw"]?.transport), clients },
     };
   }
@@ -296,6 +313,14 @@ export async function stageSessionPendingInput(
           throw new Error("Pending input is already admitted; wait for its current turn");
         }
         if (
+          existing.lifecycle_generation !== lifecycleGeneration &&
+          readUserTurnForegroundOnlyRunId(parseSessionPendingInputMessage(existing.message_json))
+        ) {
+          throw new Error(
+            "Foreground-only work stopped after a Gateway restart. Submit a new message to continue.",
+          );
+        }
+        if (
           (!options.requestFingerprint && !options.trackCompletion) ||
           (existing.state !== "queued" && existing.state !== "interrupted") ||
           (existing.lifecycle_generation === lifecycleGeneration && !options.trackCompletion)
@@ -311,6 +336,16 @@ export async function stageSessionPendingInput(
       );
       if (committed) {
         const committedMessage = parseSessionPendingInputMessage(JSON.stringify(committed.message));
+        // Single-source promotion retires its pending row. The original accepted
+        // payload still fences execution; a fresh role cannot rebind that source.
+        if (
+          readUserTurnForegroundOnlyRunId(committedMessage) &&
+          readUserTurnForegroundOnlyLifecycleGeneration(committedMessage) !== lifecycleGeneration
+        ) {
+          throw new Error(
+            "Foreground-only work stopped after a Gateway restart. Submit a new message to continue.",
+          );
+        }
         if (options.trackCompletion) {
           const committedRequestHash = resolveCommittedPendingInputRequestHash(
             {
@@ -333,6 +368,9 @@ export async function stageSessionPendingInput(
           inputId: committed.messageId,
           message: committedMessage,
           run: (operation) => {
+            if (readUserTurnForegroundOnlyRunId(committedMessage)) {
+              assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+            }
             options.assertCurrent();
             return operation();
           },
@@ -603,6 +641,7 @@ export function claimSessionPendingInputDedupeRecovery(
 export function readSessionSubmittedInput(
   scope: PendingInputScope,
   idempotencyKey: string,
+  options: { requireReadSuccess?: boolean } = {},
 ): PersistedUserTurnMessage | undefined {
   try {
     const resolved = resolveSqliteTranscriptScope(scope);
@@ -642,6 +681,9 @@ export function readSessionSubmittedInput(
           let messageJson: string | undefined;
           if (pending) {
             if (pending.bytes > MAX_PAYLOAD_BYTES) {
+              if (options.requireReadSuccess) {
+                throw new Error("Accepted input exceeds the Gateway payload limit");
+              }
               return undefined;
             }
             messageJson = readSessionPendingInputByKey(
@@ -652,6 +694,9 @@ export function readSessionSubmittedInput(
           } else {
             // Stale projections cannot establish retry identity. Their owning writer repairs them.
             if (sessionTranscriptIndexNeedsReconcile(database.db, resolved.sessionId)) {
+              if (options.requireReadSuccess) {
+                throw new Error("Accepted input transcript projection is unavailable");
+              }
               return undefined;
             }
             const transcript = executeSqliteQueryTakeFirstSync(
@@ -669,6 +714,9 @@ export function readSessionSubmittedInput(
                 .orderBy("identity.seq", "desc")
                 .limit(1),
             );
+            if (transcript && transcript.bytes > MAX_PAYLOAD_BYTES && options.requireReadSuccess) {
+              throw new Error("Accepted input exceeds the Gateway payload limit");
+            }
             if (!transcript || transcript.bytes > MAX_PAYLOAD_BYTES) {
               return undefined;
             }
@@ -678,18 +726,33 @@ export function readSessionSubmittedInput(
               idempotencyKey,
               "scan",
             );
+            if (!committed && options.requireReadSuccess) {
+              throw new Error("Accepted input transcript payload is unavailable");
+            }
             messageJson = committed ? JSON.stringify(committed.message) : undefined;
           }
           if (!messageJson) {
+            if (options.requireReadSuccess && pending) {
+              throw new Error("Accepted input payload is unavailable");
+            }
             return undefined;
           }
           const message = parseSessionPendingInputMessage(messageJson);
+          if (options.requireReadSuccess && readMessageIdempotencyKey(message) !== idempotencyKey) {
+            throw new Error("Accepted input payload does not match its source identity");
+          }
           return readMessageIdempotencyKey(message) === idempotencyKey ? message : undefined;
         }),
       toDatabaseOptions(resolved),
     );
+    if (!result.found && options.requireReadSuccess) {
+      throw new Error("Accepted input storage is unavailable");
+    }
     return result.found ? result.value : undefined;
-  } catch {
+  } catch (error) {
+    if (options.requireReadSuccess) {
+      throw error;
+    }
     // Unavailable or corrupt storage supplies no proof of the original submitted bytes.
     return undefined;
   }

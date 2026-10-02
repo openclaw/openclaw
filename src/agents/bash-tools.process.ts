@@ -45,6 +45,7 @@ import type { AgentToolResult } from "./runtime/index.js";
 import { attachInternalToolResultAcknowledgement } from "./runtime/internal-hooks.js";
 import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
+import { assertGatewayToolMayContinue } from "./tools/gateway-caller-context.js";
 import { textResult } from "./tools/tool-results.js";
 
 /** Defaults injected by tests, agent scopes, and scoped process registries. */
@@ -545,6 +546,7 @@ export function createProcessTool(
         case "send-keys":
         case "submit":
         case "paste": {
+          assertGatewayToolMayContinue("Writing to a background process");
           const inputAction = params.action;
           const resolved = resolveBackgroundedWritableStdin();
           if (!resolved.ok) {

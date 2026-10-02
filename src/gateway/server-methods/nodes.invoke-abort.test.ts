@@ -1,5 +1,6 @@
 /** Ensures caller cancellation composes with, but never replaces, node pairing ownership. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withForegroundPromotedCaller } from "../../agents/run-execution-policy.test-support.js";
 import { NODE_WORKER_SUPERVISOR_STATUS_COMMAND } from "../../infra/node-commands.js";
 import { isNodeWakeLifecycleCurrent } from "../node-wake-state.js";
 import { resetNodeWakeStateForTest } from "../node-wake-state.test-support.js";
@@ -301,5 +302,57 @@ describe("node.invoke caller cancellation", () => {
         }),
       }),
     );
+  });
+});
+
+describe("foreground node request authority", () => {
+  it.each(["role", "session"] as const)(
+    "denies unowned remote effects after personal promotion (%s)",
+    async (restriction) => {
+      await withForegroundPromotedCaller(restriction, async () => {
+        for (const command of [
+          "system.run",
+          "system.run.prepare",
+          "browser.proxy",
+          "mcp.tools.call.v1",
+          "computer.act",
+          "ollama.chat",
+        ]) {
+          const invoke = vi.fn();
+          const { invocation, respond } = startNodeInvoke({ invoke, command });
+          await invocation;
+          expect(respond).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              message: expect.stringContaining("cannot outlive this foreground request"),
+              details: { nodeCommandDispatched: false },
+            }),
+          );
+          expect(invoke).not.toHaveBeenCalled();
+        }
+        expect(mocks.captureNodePairingGeneration).not.toHaveBeenCalled();
+        expect(mocks.applyPluginNodeInvokePolicy).not.toHaveBeenCalled();
+        expect(mocks.sanitizeNodeInvokeParamsForForwarding).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it("retains fixed observation without granting arbitrary remote execution", async () => {
+    await withForegroundPromotedCaller("role", async () => {
+      const invoke = vi.fn(async () => ({ ok: true, payload: { bins: {} } }));
+      const { invocation, respond } = startNodeInvoke({
+        invoke,
+        command: "system.which",
+        commands: ["system.which"],
+      });
+      await invocation;
+      expect(invoke).toHaveBeenCalledOnce();
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ command: "system.which" }),
+        undefined,
+      );
+    });
   });
 });

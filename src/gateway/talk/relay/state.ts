@@ -85,6 +85,7 @@ export type ForcedTerminalProviderResult = {
   turnId: string;
   epoch: number;
   nativeCallIds?: readonly string[];
+  assertCurrent?: () => void;
 };
 
 export type RelayAgentControlProviderSubmission = {

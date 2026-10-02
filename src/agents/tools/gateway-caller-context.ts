@@ -33,6 +33,10 @@ import {
   type EmbeddedRunToolAuthorityBinding,
 } from "../embedded-agent-runner/run-state.js";
 import {
+  assertExecutionMayContinue,
+  isAdmittedRunForegroundOnly,
+} from "../run-execution-policy.js";
+import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
 } from "../runtime/internal-hooks.js";
@@ -49,6 +53,9 @@ type GatewayToolCallerIdentity = {
   /** Prepared requesting-tool posture; absent authority never bypasses approvals. */
   fullPermission?: boolean;
   operationalRunInstance?: OperationalRunInstanceRef;
+  /** Original host-issued admission; personal tool selection cannot replace its execution policy. */
+  admittedRunContext?: AdmittedRunContext;
+  execution?: "foreground-only";
   embeddedRunToolAuthorityBinding?: EmbeddedRunToolAuthorityBinding;
   /** Exact run authority used to fence delegated system-agent approvals. */
   approvalAuthority?: AgentRunDelegatedAuthority;
@@ -192,6 +199,7 @@ export function createAdmittedGatewayToolCallerIdentity(
     agentId,
     sessionKey,
     operationalRunInstance: params.admittedRunContext.operationalRunInstance,
+    admittedRunContext: params.admittedRunContext,
     ...(delegatedAuthority ? { approvalAuthority: delegatedAuthority } : {}),
     ...(operatorAuthority ? { operatorAuthority } : {}),
     ...(params.receiptAuthority ? { approvalAuthorityCheck: params.receiptAuthority } : {}),
@@ -220,6 +228,18 @@ export function createAdmittedGatewayToolCallerIdentity(
 
 export function getGatewayToolCallerIdentity(): GatewayToolCallerIdentity | undefined {
   return gatewayToolCallerStorage.getStore();
+}
+
+export function isGatewayToolForegroundOnly(caller = getGatewayToolCallerIdentity()): boolean {
+  return (
+    caller?.execution === "foreground-only" ||
+    caller?.operatorAuthority?.rolePolicy?.execution === "foreground-only" ||
+    isAdmittedRunForegroundOnly(caller?.admittedRunContext)
+  );
+}
+
+export function assertGatewayToolMayContinue(activity: string): void {
+  assertExecutionMayContinue(isGatewayToolForegroundOnly(), activity);
 }
 
 /** Selection is model input; only the turn's host-owned participants grant a target. */
@@ -376,6 +396,7 @@ export async function withGatewayToolCallerIdentity<T>(
   const inheritedOwner = !suppliedRun || inheritedRun === suppliedRun ? inherited : undefined;
   const operationalRunInstance =
     inheritedOwner?.operationalRunInstance ?? identity.operationalRunInstance;
+  const admittedRunContext = inheritedOwner?.admittedRunContext ?? identity.admittedRunContext;
   const embeddedRunToolAuthorityBinding =
     identity.embeddedRunToolAuthorityBinding ?? inheritedOwner?.embeddedRunToolAuthorityBinding;
   // Same-run wrappers can narrow a prepared posture, never erase a restriction.
@@ -476,6 +497,11 @@ export async function withGatewayToolCallerIdentity<T>(
         inheritedOwner?.personalToolSelection ?? identity.personalToolSelection,
       ...(fullPermission !== undefined ? { fullPermission } : {}),
       ...(operationalRunInstance ? { operationalRunInstance } : {}),
+      ...(admittedRunContext ? { admittedRunContext } : {}),
+      ...((inheritedOwner && isGatewayToolForegroundOnly(inheritedOwner)) ||
+      isGatewayToolForegroundOnly(identity)
+        ? { execution: "foreground-only" as const }
+        : {}),
       ...(embeddedRunToolAuthorityBinding ? { embeddedRunToolAuthorityBinding } : {}),
       ...(approvalAuthority ? { approvalAuthority } : {}),
       ...(operatorAuthority ? { operatorAuthority } : {}),

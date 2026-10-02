@@ -127,6 +127,27 @@ afterEach(() => {
 
 describe("agent runtime identity token", () => {
   it.each(["signed", "direct"] as const)(
+    "retains original foreground policy in %s identities",
+    async (mode) => {
+      useTempHome();
+      const runtimeToken = await importRuntimeTokenModule();
+      const params: AgentRuntimeIdentityTokenParams = {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        ...operationalRun(),
+        execution: "foreground-only",
+      };
+      expect(await createIdentity(runtimeToken, mode, params)).toMatchObject({
+        execution: "foreground-only",
+      });
+      const token = await runtimeToken.mintAgentRuntimeIdentityToken(params);
+      const invalid = rewriteSignedPayload(token, (payload) => {
+        payload.execution = "unrestricted";
+      });
+      await expect(runtimeToken.verifyAgentRuntimeIdentityToken(invalid)).resolves.toBeUndefined();
+    },
+  );
+  it.each(["signed", "direct"] as const)(
     "retains a worker approval scope through delayed first %s use",
     async (mode) => {
       useTempHome();

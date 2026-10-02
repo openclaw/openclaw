@@ -36,7 +36,7 @@ import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { errorShapeFromError } from "../error-shape.js";
 import {
   authorizeGatewayUnpreparedSessionCreation,
-  resolveCreatorSandbox,
+  resolveCreatorSessionPolicy,
 } from "../operator-role-policy.js";
 import {
   assertExpectedExistingSession,
@@ -349,16 +349,15 @@ export async function persistAgentSessionPhase(params: {
                     },
                   }
                 : params.creation;
-            const sandbox = freshEntry
-              ? undefined
-              : resolveCreatorSandbox(params.cfg, delegatedCreation);
+
             const effectivePatch = freshEntry
               ? { ...lifecyclePatch, ...rotationLineage }
               : {
                   ...lifecyclePatch,
-                  ...buildSessionCreationStamp(
-                    sandbox ? { ...delegatedCreation, sandbox } : params.creation,
-                  ),
+                  ...buildSessionCreationStamp({
+                    ...delegatedCreation,
+                    ...resolveCreatorSessionPolicy(params.cfg, delegatedCreation),
+                  }),
                 };
             createdNewEntry = freshEntry === undefined;
             const merged = mergeSessionEntry(entryForPatch, effectivePatch);

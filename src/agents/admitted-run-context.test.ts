@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   configureExecutionIdentityAdmissionSink,
   createExecutionIdentityAdmissionToken,
@@ -23,6 +24,7 @@ import {
   prepareAgentRunAdmission,
   readAdmittedRunOperatorAuthority,
   readPreparedRunOperatorAuthority,
+  registerAdmittedRunCleanup,
   retainAdmittedRunBeforeToolCallRecovery,
   resolveAdmittedRunActiveAssertion,
   resolvePreparedRunAdmission,
@@ -46,6 +48,62 @@ afterEach(() => {
 });
 
 describe("prepared run admission", () => {
+  it("closes admission before joining owned resources and retains the source until settlement", async () => {
+    const resource = createDeferred();
+    const started = createDeferred();
+    const release = vi.fn();
+    const prepared = prepareAgentRunAdmission({
+      cfg: {},
+      facts,
+      operationalRunInstance: createOperationalRunInstanceRef(facts.runId),
+      operatorAuthority: createAdmittedRunOperatorAuthority({
+        profileId: "foreground-owner",
+        scopes: ["operator.sessions.write"],
+        assertCurrent() {},
+        retain: () => release,
+      }),
+    });
+    const context = await prepared.admit("embedded");
+    registerAdmittedRunCleanup(context, async () => {
+      started.resolve();
+      await resource.promise;
+    });
+    const closing = prepared.close();
+    await started.promise;
+    expect(getAdmittedRunDelegatedAuthority(context)).toBeUndefined();
+    expect(() => registerAdmittedRunCleanup(context, async () => {})).toThrow("no longer active");
+    expect(release).not.toHaveBeenCalled();
+    expect(prepared.close()).toBe(closing);
+    resource.resolve();
+    await closing;
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("joins every cleanup and preserves a failed settlement on repeated close", async () => {
+    const resource = createDeferred();
+    const started = createDeferred();
+    const failure = new Error("container exit unconfirmed");
+    const prepared = prepareAgentRunAdmission({
+      cfg: {},
+      facts,
+      operationalRunInstance: createOperationalRunInstanceRef(facts.runId),
+    });
+    const context = await prepared.admit("plugin-harness");
+    registerAdmittedRunCleanup(context, async () => {
+      throw failure;
+    });
+    registerAdmittedRunCleanup(context, async () => {
+      started.resolve();
+      await resource.promise;
+    });
+    const closing = prepared.close();
+    const rejected = expect(closing).rejects.toMatchObject({ errors: [failure] });
+    await started.promise;
+    resource.resolve();
+    await rejected;
+    await expect(prepared.close()).rejects.toMatchObject({ errors: [failure] });
+  });
+
   it.each([false, true])(
     "owns real fixture authority across module resets and runner settlement (reject=%s)",
     async (reject) => {
@@ -557,6 +615,7 @@ describe("prepared run admission", () => {
     let releaseHook: (() => void) | undefined;
     let authority: ReturnType<typeof getAdmittedRunDelegatedAuthority>;
     const releaseSource = vi.fn();
+    const reclaimLateResource = vi.fn();
     const hookPending = new Promise<void>((resolve) => {
       releaseHook = resolve;
     });
@@ -573,6 +632,13 @@ describe("prepared run admission", () => {
       onAdmitted: async (context) => {
         authority = getAdmittedRunDelegatedAuthority(context);
         await hookPending;
+        try {
+          registerAdmittedRunCleanup(context, async () => {});
+        } catch (error) {
+          // Acquisition lost admission; its producer still owns reclamation.
+          reclaimLateResource();
+          throw error;
+        }
       },
     });
     const admission = prepared.admit(runtime.kind);
@@ -588,8 +654,9 @@ describe("prepared run admission", () => {
     expect(settled).not.toHaveBeenCalled();
     expect(releaseSource).not.toHaveBeenCalled();
     releaseHook?.();
-    await expect(admission).rejects.toThrow("closed during admission");
+    await expect(admission).rejects.toThrow("resource owner is no longer active");
     await closing;
+    expect(reclaimLateResource).toHaveBeenCalledOnce();
     expect(releaseSource).toHaveBeenCalledOnce();
   });
 });

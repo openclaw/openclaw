@@ -201,6 +201,8 @@ export const SessionRowSchema = Type.Object(
     permissionMode: Type.Optional(SessionPermissionModeSchema),
     /** Authorized per-chat containment opt-out; omission follows configured sandbox policy. */
     sandboxMode: Type.Optional(Type.Literal("off")),
+    /** Immutable execution ceiling captured when the conversation was created. */
+    execution: Type.Optional(Type.Literal("foreground-only")),
     /** Administrator consent to the exact external runtime's own permissions for this incarnation. */
     nativeRuntimeConsent: Type.Optional(NonEmptyString),
     permissionModePending: Type.Optional(Type.Boolean()),

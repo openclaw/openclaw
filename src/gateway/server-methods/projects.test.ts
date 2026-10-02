@@ -47,6 +47,36 @@ function withProjectState(run: (state: OpenClawTestState) => Promise<void>) {
   return withOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" }, run);
 }
 
+test.each([{ scopes: ["operator.sessions.read"] }, { scopes: ["operator.write"] }])(
+  "projects.list exposes execution-only creation policy with scopes %j",
+  async ({ scopes }) => {
+    await withProjectState(async () => {
+      const profile = ensureProfileForEmail("foreground-picker@example.test");
+      const cfg: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "bounded",
+            definitions: {
+              bounded: {
+                execution: "foreground-only",
+                sessions: { others: "view" },
+                agents: "*",
+                scopes: ["operator.sessions.read", "operator.write"],
+              },
+            },
+          },
+        },
+      };
+      const response = await invokeProjectMethod("projects.list", {}, cfg, scopes, profile.id);
+      expect(response).toMatchObject({
+        ok: true,
+        payload: { creationPolicy: { execution: "foreground-only" } },
+      });
+      expect(response?.payload).not.toHaveProperty("creationPolicy.workspaceRequired");
+    });
+  },
+);
+
 test("workspace-required discovery returns only approved descriptors, including an empty policy", async () => {
   await withProjectState(async (state) => {
     const repo = await initializeRepository(state.root);

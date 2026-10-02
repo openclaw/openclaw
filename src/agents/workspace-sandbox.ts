@@ -3,6 +3,10 @@ import { resolveUserPath } from "../utils.js";
 import { resolveAdmittedRunActiveAssertion } from "./admitted-run-context.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
+import {
+  isAdmittedRunForegroundOnly,
+  requireAdmittedRunForeground,
+} from "./run-execution-policy.js";
 import { resolveSandboxContext } from "./sandbox.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
@@ -79,20 +83,29 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
     agentId: params.agentId,
   });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
-  await fs.mkdir(resolvedWorkspace, { recursive: true });
-  assertCurrent();
   const sessionKey = params.sessionKey?.trim() || params.sessionId;
   const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
-  const sandboxRuntimeStatus = params.placementSandbox
-    ? undefined
-    : resolveSandboxRuntimeStatus({
-        cfg: params.config,
-        // Independent policy sessions keep their own owner.
-        agentId:
-          params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined),
-        sessionKey: sandboxSessionKey,
-      });
-  const sandbox = sandboxRuntimeStatus
+  const sandboxRuntimeStatus = resolveSandboxRuntimeStatus({
+    cfg: params.config,
+    // Independent policy sessions keep their own owner.
+    agentId:
+      params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined),
+    sessionKey: sandboxSessionKey,
+    execution: isAdmittedRunForegroundOnly(params.admittedRunContext)
+      ? "foreground-only"
+      : undefined,
+  });
+  if (sandboxRuntimeStatus?.execution === "foreground-only") {
+    requireAdmittedRunForeground(params.admittedRunContext);
+  }
+  if (params.placementSandbox && isAdmittedRunForegroundOnly(params.admittedRunContext)) {
+    throw new Error(
+      "Foreground execution requires a local Docker or Podman allocation with joined cleanup; remote placement is unavailable for this request.",
+    );
+  }
+  await fs.mkdir(resolvedWorkspace, { recursive: true });
+  assertCurrent();
+  const sandbox = !params.placementSandbox
     ? await resolveSandboxContext({
         config: params.config,
         agentId: sandboxRuntimeStatus.agentId,
@@ -102,6 +115,7 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
         workspaceDir: resolvedWorkspace,
         assertCurrent,
         admittedRunContext: params.admittedRunContext,
+        abortSignal: params.abortSignal,
         preparedRuntimeStatus: sandboxRuntimeStatus,
       })
     : null;
@@ -152,7 +166,7 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
     sessionPermissionRoot,
     sessionPermissionPolicy,
     sandbox,
-    sandboxReport: sandboxRuntimeStatus
+    sandboxReport: !params.placementSandbox
       ? { mode: sandboxRuntimeStatus.mode, sandboxed: sandboxRuntimeStatus.sandboxed }
       : undefined,
     sandboxSessionKey,

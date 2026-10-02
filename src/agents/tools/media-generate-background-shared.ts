@@ -47,7 +47,10 @@ import {
 import { tryResolveSubagentRequesterAgentId } from "../subagents/announce/subagent-announce-delivery.runtime.js";
 import { resolveAnnounceOrigin } from "../subagents/announce/subagent-announce-origin.js";
 import { resolveRequesterStoreKey } from "../subagents/announce/subagent-requester-store-key.js";
-import { captureGatewayToolCallerAssertion } from "./gateway-caller-context.js";
+import {
+  assertGatewayToolMayContinue,
+  captureGatewayToolCallerAssertion,
+} from "./gateway-caller-context.js";
 import {
   retainBlockedMediaCompletion,
   retainBlockedMediaReferences,
@@ -208,6 +211,8 @@ async function createMediaGenerationTaskRun(
     queuedProgressSummary: string;
   },
 ): Promise<MediaGenerationTaskHandle | null> {
+  // A policy denial must not become the untracked inline fallback in the catch below.
+  assertGatewayToolMayContinue("Background media generation");
   const sessionKey = params.sessionKey?.trim();
   if (!sessionKey) {
     return null;

@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import {
   loadSessionEntry,
   type SessionTranscriptTurnExpectedState,
@@ -10,6 +11,7 @@ import { appendAssistantMessageToSessionTranscript } from "../../config/sessions
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
+import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
 import type { MainSessionRecoveryObservation } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import { resolveRestartRecoveryDeliveryContext } from "./main-session-restart-recovery-delivery.js";
@@ -22,6 +24,76 @@ const TOMBSTONED_SESSION_NOTICE =
   "I couldn't continue this session after a gateway restart. " +
   "Your transcript is safe. In WebChat, use Resume in new session to continue it; " +
   "in other channels, use /new or /reset to start a replacement session.";
+
+const FOREGROUND_STOPPED_NOTICE =
+  "This foreground-only request stopped after a Gateway restart and was not resumed. " +
+  "Your conversation and workspace are preserved. Send a new message to continue; " +
+  "the execution environment must finish cleanup before it can be reused.";
+
+/** Terminalize the interrupted input, not the conversation or its execution cleanup receipt. */
+export async function stopForegroundOnlyRestartWithNotice(params: {
+  agentId: string;
+  entry: SessionEntry;
+  observation: MainSessionRecoveryObservation;
+  foregroundOnlyRunId?: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<"notice_failed" | "skipped" | "stopped"> {
+  const { entry, observation } = params;
+  if (
+    entry.mainRestartRecovery?.cycleId !== observation.cycleId ||
+    entry.mainRestartRecovery.revision !== observation.revision ||
+    entry.status !== "running" ||
+    entry.abortedLastRun !== true
+  ) {
+    return "skipped";
+  }
+  const sourceRunId =
+    normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ??
+    params.foregroundOnlyRunId ??
+    normalizeOptionalString(entry.lifecycleRunId) ??
+    normalizeOptionalString(entry.activeWriterRunId);
+  const now = Date.now();
+  const result = await appendAssistantMessageToSessionTranscript({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    expectedSessionId: entry.sessionId,
+    expectedLifecycleRevision: entry.lifecycleRevision ?? null,
+    expectedSessionState: buildRestartRecoveryExpectedState(entry, observation),
+    text: FOREGROUND_STOPPED_NOTICE,
+    idempotencyKey: `foreground-restart:${sourceRunId ?? observation.cycleId}:stopped`,
+    // The notice and source tombstone commit together. A newer foreground
+    // claim must not inherit a false notice or lose its restart ownership.
+    sessionLifecyclePatch: {
+      ...buildRestartRecoveryClaimCleanupPatch({
+        entry,
+        recordTerminalSource: true,
+        terminalSourceRunId: sourceRunId,
+        terminalRunId: entry.restartRecoveryDeliveryRunId,
+      }),
+      ...buildMainSessionRecoveryClearPatch(entry),
+      endedAt: now,
+      lifecycleRunId: undefined,
+      lastRunId: sourceRunId,
+      lastRunError: undefined,
+      pendingFinalDelivery: undefined,
+      runtimeMs: Math.max(0, now - (entry.startedAt ?? now)),
+      status: "killed",
+      updatedAt: now,
+    },
+  }).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
+  if (result.ok) {
+    return "stopped";
+  }
+  if ("code" in result && result.code === "session-rebound") {
+    return "skipped";
+  }
+  mainSessionRecoveryLog.warn(
+    `failed to record foreground restart stop ${params.sessionKey}: ${result.reason}`,
+  );
+  return "notice_failed";
+}
 
 function buildRestartRecoveryTombstoneNoticeKey(entry: SessionEntry): string {
   const interruptedRunId =

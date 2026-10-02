@@ -322,6 +322,8 @@ function resolveReplySessionRolloverState(
     createdVia: entry.createdVia,
     createdActor: entry.createdActor,
     createdAt: entry.createdAt,
+    execution: entry.execution,
+    requiredWorkspace: entry.requiredWorkspace,
     // Chat preferences survive rollover; native-runtime consent belongs to the old incarnation.
     permissionMode: entry.permissionMode,
     sandboxMode: entry.sandboxMode,

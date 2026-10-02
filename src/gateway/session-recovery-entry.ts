@@ -11,7 +11,7 @@ export function buildRestartRecoverySuccessorEntry(params: {
   source: InternalSessionEntry;
   creation: Pick<
     Parameters<typeof buildSessionCreationStamp>[0],
-    "actor" | "sandbox" | "requiredWorkspace"
+    "actor" | "sandbox" | "requiredWorkspace" | "execution"
   >;
   workspace?: Pick<
     InternalSessionEntry,

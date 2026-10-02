@@ -4,9 +4,11 @@ import {
   validateEnvironmentsSessionExecParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveExecDefaults } from "../../agents/exec-defaults.js";
+import { assertExecutionMayContinue } from "../../agents/run-execution-policy.js";
 import { approveSessionEnvironmentCommand } from "./environments.session-exec-approval.js";
 import { captureSessionEnvironmentToolPolicy } from "./environments.session-tool-policy.js";
 import { resolveSessionEnvironmentCaller } from "./environments.session.js";
+import { captureForegroundContinuationGuard } from "./foreground-execution.js";
 import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
@@ -19,6 +21,12 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
       const { params, respond, context } = options;
       try {
         const caller = resolveSessionEnvironmentCaller(options, params);
+        const action = params.action ?? "run";
+        const mutatesExecution = action === "run" || action === "start";
+        const assertMayContinue = mutatesExecution
+          ? captureForegroundContinuationGuard(options, "Attached environment execution")
+          : undefined;
+        assertMayContinue?.();
         const service = context.workerEnvironmentService;
         const binding = service?.getSessionAttachment(caller.identity.sessionId);
         if (
@@ -28,7 +36,6 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
         ) {
           throw new Error("No matching environment is attached to this conversation");
         }
-        const action = params.action ?? "run";
         const command = {
           argv: params.argv ? [...params.argv] : ["openclaw-internal-workspace-process"],
           input: params.input,
@@ -55,9 +62,21 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
           });
         };
         const assertCurrent = () => {
+          assertMayContinue?.();
           toolPolicy.assertAllowed();
           service.assertSessionAttachment(binding);
           const defaults = resolvePolicy();
+          if (mutatesExecution) {
+            const target = loadAccessorSessionEntryForGatewayTarget({
+              cfg: context.getRuntimeConfig(),
+              key: caller.identity.sessionKey,
+              agentId: caller.identity.agentId,
+            });
+            assertExecutionMayContinue(
+              target.entry?.execution === "foreground-only",
+              "Attached environment execution",
+            );
+          }
           if (defaults.security === "deny") {
             throw new Error("Conversation policy denies environment command execution");
           }

@@ -368,6 +368,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     createdActor?: SessionCreatedActor;
     /** Creation-only sandbox requirement; existing unstamped sessions always remain unstamped. */
     sandbox?: "required";
+    /** Creation-owned lifetime ceiling retained across fresh requests and session rotations. */
+    execution?: "foreground-only";
     /** Immutable selected-project/worktree requirement, retained across role changes and resets. */
     requiredWorkspace?: RequiredSessionWorkspace;
     /** Mutable responsibility, projected from SQLite; absent means createdActor owns the session. */
@@ -784,6 +786,7 @@ function mergeSessionEntryWithPolicy(
   }
   next.inheritedGitContributorProfileIds = existing.inheritedGitContributorProfileIds;
   next.requiredWorkspace = existing.requiredWorkspace;
+  next.execution = existing.execution;
   if (existing.requiredWorkspace) {
     next.worktree = existing.worktree;
     next.sessionRoot = existing.sessionRoot;

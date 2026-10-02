@@ -5,6 +5,7 @@ import {
   validateEnvironmentsSessionDestroyParams,
   validateEnvironmentsSessionStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { assertExecutionMayContinue } from "../../agents/run-execution-policy.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
@@ -15,6 +16,7 @@ import { authorizeSessionSharingTarget } from "../session-sharing.js";
 import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
 import type { WorkerEnvironmentSessionIdentity } from "../worker-environments/session-attachment.js";
 import { captureSessionEnvironmentToolPolicy } from "./environments.session-tool-policy.js";
+import { captureForegroundContinuationGuard } from "./foreground-execution.js";
 import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { dispatchUiCommandToRequester } from "./ui-command.js";
@@ -147,6 +149,24 @@ export const environmentsSessionHandlers: GatewayRequestHandlers = {
       const { params, respond, context } = options;
       try {
         const caller = resolveSessionEnvironmentCaller(options, params);
+        const assertMayContinue = captureForegroundContinuationGuard(
+          options,
+          "Creating an independently owned environment",
+        );
+        const assertEnvironmentAllowed = () => {
+          assertMayContinue();
+          const target = loadAccessorSessionEntryForGatewayTarget({
+            cfg: context.getRuntimeConfig(),
+            key: caller.identity.sessionKey,
+            agentId: caller.identity.agentId,
+          });
+          assertExecutionMayContinue(
+            target.entry?.execution === "foreground-only",
+            "Creating an independently owned environment",
+          );
+          caller.assertCurrent();
+        };
+        assertEnvironmentAllowed();
         const { presentation, ...request } = params;
         if (presentation) {
           try {
@@ -158,9 +178,13 @@ export const environmentsSessionHandlers: GatewayRequestHandlers = {
             );
           }
         }
-        const assertAllowed = presentation
+        const assertPresentation = presentation
           ? captureSessionEnvironmentToolPolicy(options, caller, "screen").assertAllowed
           : caller.assertCurrent;
+        const assertAllowed = () => {
+          assertEnvironmentAllowed();
+          assertPresentation();
+        };
         assertAllowed();
         const service = context.workerEnvironmentService;
         if (!service) {

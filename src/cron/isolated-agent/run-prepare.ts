@@ -8,8 +8,9 @@ import {
   loadPublishedGatewayReplyDispatchRuntime,
   type PreparedModelRuntimeLease,
 } from "../../agents/prepared-model-runtime.js";
+import { assertExecutionMayContinue } from "../../agents/run-execution-policy.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
-import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
+import { resolveCreatorSessionPolicy } from "../../gateway/operator-role-policy.js";
 import { isCronSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
@@ -154,7 +155,9 @@ export async function prepareCronRunContext(params: {
 
   const isGmailHook = hookExternalContentSource === "gmail";
   const now = Date.now();
-  const sandbox = resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor });
+  const creatorPolicy = resolveCreatorSessionPolicy(runtimeCfg, { actor: input.job.createdActor });
+  assertExecutionMayContinue(creatorPolicy.execution === "foreground-only", "Scheduled execution");
+  const sandbox = creatorPolicy.sandbox;
   const cronSession = await prepareCronSession({
     cfg: runtimeCfg,
     sessionKey: agentSessionKey,

@@ -493,6 +493,7 @@ export function writeSessionEntry(
   if (
     !options.allowStoredAliases ||
     canonicalPreviousEntry?.sandbox === "required" ||
+    canonicalPreviousEntry?.execution === "foreground-only" ||
     canonicalPreviousEntry?.requiredWorkspace
   ) {
     normalizedEntry = preserveCreationStamp(normalizedEntry, canonicalPreviousEntry);

@@ -15,8 +15,11 @@ import {
   discardPreparedInboundMedia,
   persistInboundImagesForTranscript,
 } from "../chat-attachments.js";
-import { transferGatewayLocalUserIngress } from "../local-user-ingress.js";
-import { resolveCreatorSandbox } from "../operator-role-policy.js";
+import {
+  bindGatewayForegroundUserRequest,
+  transferGatewayLocalUserIngress,
+} from "../local-user-ingress.js";
+import { resolveCreatorSessionPolicy } from "../operator-role-policy.js";
 import { resolveGatewayInputParticipant } from "../session-input-participant.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
@@ -213,7 +216,7 @@ export function prepareChatSendUserTurn(params: {
         params.getConfig ?? session.cfg ?? {},
         resolveOperatorSessionCreation(client),
       );
-  const sandbox = session.cfg ? resolveCreatorSandbox(session.cfg, creation) : undefined;
+  const creationPolicy = resolveCreatorSessionPolicy(session.cfg ?? {}, creation);
   // Current and historical turns must reach the single LLM timestamp boundary
   // with identical bare text. Stamping this live turn would bust the prompt cache.
   const ctx: MsgContext = {
@@ -245,7 +248,7 @@ export function prepareChatSendUserTurn(params: {
         },
     ...(request.suppressCommandInterpretation ? { CommandInterpretationSuppressed: true } : {}),
     MessageSid: session.clientRunId,
-    SessionCreation: { ...creation, ...(sandbox ? { sandbox } : {}) },
+    SessionCreation: { ...creation, ...creationPolicy },
     ...resolveChatSendCallerContext(client, request.clientInfo, originatingChannel),
     GatewayRunToolBindings: request.toolBindings,
     GatewayUiCommandTarget: gatewayUiCommandTarget,
@@ -282,6 +285,17 @@ export function prepareChatSendUserTurn(params: {
   }
   if (client) {
     transferGatewayLocalUserIngress(client, ctx);
+    if (
+      !isSyntheticGatewayCaller(client) &&
+      (!request.systemInputProvenance || request.systemInputProvenance.kind === "external_user")
+    ) {
+      bindGatewayForegroundUserRequest(client, ctx, () => {
+        admission.assertWorkAdmissionCurrent?.();
+        if (client.invalidated || client.connectionSignal?.aborted) {
+          throw new Error("Foreground user connection is no longer active.");
+        }
+      });
+    }
   }
   if (attachments.mediaPathOffloads.length > 0) {
     // Pre-staged offloads must use structured facts and marker text so the

@@ -40,7 +40,10 @@ import {
 import type { DeviceIdentity } from "../../infra/device-identity.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
-import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  isGatewayToolForegroundOnly,
+} from "./gateway-caller-context.js";
 import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import { getGatewaySessionSpawnParentExecutionIdentityToken } from "./gateway-session-spawn-execution-identity.js";
 import {
@@ -470,6 +473,7 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
           : activeAuthority;
       const prepared: AgentRuntimeIdentityTokenParams = {
         ...identity,
+        ...(isGatewayToolForegroundOnly(identity) ? { execution: "foreground-only" as const } : {}),
         operationalRunInstance: identity.operationalRunInstance,
         approvalAuthority,
         ...(lineageHandoff ? { executionIdentityToken: undefined } : {}),
@@ -584,6 +588,7 @@ async function resolveMessageActionIdentity<T>(
       };
   return await createIdentity({
     ...identity,
+    ...(isGatewayToolForegroundOnly(identity) ? { execution: "foreground-only" as const } : {}),
     sessionKey: turnCapabilitySessionKey,
     operationalRunInstance: identity.operationalRunInstance,
     messageActionContext: resolvedMessageActionContext,

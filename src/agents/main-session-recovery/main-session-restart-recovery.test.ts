@@ -113,6 +113,7 @@ import {
 import { dispatchRestartRecoveryUntilStarted } from "./main-session-restart-dispatch-start.js";
 import { readStartupRecoveryWarning } from "./main-session-restart-recovery-diagnostics.js";
 import { createRestartRecoveryTranscriptFixture } from "./main-session-restart-recovery-fixture.test-support.js";
+import { readMainSessionRecoveryCheckpoint } from "./main-session-restart-recovery-replay-safety.js";
 import { discoverRestartRecoveryStoreTargets } from "./main-session-restart-recovery-shared.js";
 import { recoverStore } from "./main-session-restart-recovery-store.js";
 import {
@@ -454,6 +455,241 @@ function getHarnessRecoveryFixture() {
 }
 
 describe("main-session-restart-recovery", () => {
+  it.each([false, true])(
+    "resolves accepted pending policy from shutdown fences without stopping an unrelated active source (%s)",
+    async (hasUnrestrictedSource) => {
+      const sessionKey = "agent:main:main";
+      const sourceRunId = "pending-foreground-source";
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const sessionsDir = await writePreparedMainSessionTranscript(
+        [
+          makeUserMessage("Earlier unrestricted input", {
+            idempotencyKey: "unrestricted-source:user",
+            provenance: { kind: "external_user" },
+          }),
+          codeModeCheckpointMessage(),
+        ],
+        {
+          status: hasUnrestrictedSource ? "running" : "done",
+          abortedLastRun: false,
+          ...(hasUnrestrictedSource
+            ? {
+                restartRecoveryDeliveryRunId: "unrestricted-source",
+                restartRecoveryDeliverySourceRunId: "unrestricted-source",
+                restartRecoverySourceIngress: "control-ui" as const,
+                restartRecoveryDeliveryRequestFingerprint: "original-fingerprint",
+              }
+            : {}),
+        },
+      );
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const scope = { agentId: "main", sessionId: "main-session", sessionKey, storePath };
+      const pending = await sessionAccessor.stageSessionPendingInput(scope, {
+        runId: sourceRunId,
+        assertCurrent: () => {},
+        message: {
+          role: "user",
+          content: "Accepted before shutdown, still awaiting promotion",
+          timestamp: Date.now(),
+          idempotencyKey: `${sourceRunId}:user`,
+          __openclaw: {
+            foregroundOnlyRunId: sourceRunId,
+            foregroundOnlyLifecycleGeneration: lifecycleGeneration,
+          },
+        },
+      });
+      const admission = await beginSessionWorkAdmission({
+        resolveGatewayContext,
+        scope: storePath,
+        identities: [sessionKey, "main-session"],
+        assertAllowed: () => undefined,
+      });
+      // Runtime preparation registers the accepted run before input promotion.
+      registerAgentRunContext(sourceRunId, { sessionKey, sessionId: "main-session" });
+      try {
+        await expect(
+          markRestartAbortedMainSessions({
+            resolveGatewayContext,
+            stateDir: tmpDir,
+            activeRuns: [
+              activeRestartRun(sessionKey, "main-session", {
+                runId: sourceRunId,
+                observedAt: Date.now(),
+              }),
+            ],
+          }),
+        ).resolves.toEqual({ marked: 1, skipped: 0 });
+      } finally {
+        admission.release();
+        pending?.finish("interrupted");
+      }
+      expect(loadSessionEntry(scope)?.restartRecoveryRuns).toEqual(
+        expect.arrayContaining([{ runId: sourceRunId, lifecycleGeneration }]),
+      );
+      rotateAgentEventLifecycleGeneration();
+      const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+      expect(result.failed).toBe(0);
+      if (hasUnrestrictedSource) {
+        expect(callGateway).toHaveBeenCalled();
+        expect(loadSessionEntry(scope)?.status).not.toBe("killed");
+      } else {
+        expect(result.settled).toBe(1);
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(loadSessionEntry(scope)).toMatchObject({
+          status: "killed",
+          restartRecoveryTerminalRunIds: [sourceRunId],
+        });
+      }
+      expect(sessionAccessor.listSessionPendingInputs(scope)).toMatchObject({
+        items: [
+          {
+            runId: sourceRunId,
+            state: "interrupted",
+            replayBlockedReason: "foreground-restart",
+          },
+        ],
+      });
+    },
+  );
+
+  it.each(["accepted-source", "creation"] as const)(
+    "stops interrupted foreground-only %s work once without retiring the conversation",
+    async (policyOwner) => {
+      const sourceRunId = "foreground-source";
+      const worktree = { id: "task-tree", branch: "task/parser", repoRoot: "/projects/parser" };
+      const sessionsDir = await writePreparedMainSessionTranscript(
+        [
+          makeUserMessage("Keep my changes", {
+            idempotencyKey: `${sourceRunId}:user`,
+            provenance: { kind: "external_user" },
+            ...(policyOwner === "accepted-source"
+              ? { __openclaw: { foregroundOnlyRunId: sourceRunId } }
+              : {}),
+          }),
+          codeModeCheckpointMessage(),
+          ...Array.from({ length: 24 }, () => makeToolResultMessage()),
+          makeUserMessage("Maintainer steering must not replace the source policy", {
+            idempotencyKey: "maintainer-steer:user",
+            __openclaw: { steerTargetRunId: sourceRunId },
+          }),
+        ],
+        {
+          ...(policyOwner === "creation" ? { execution: "foreground-only" as const } : {}),
+          worktree,
+          lifecycleRunId: sourceRunId,
+          restartRecoveryDeliveryRunId: sourceRunId,
+          restartRecoveryDeliverySourceRunId: sourceRunId,
+          restartRecoverySourceIngress: "control-ui",
+          restartRecoveryDeliveryRequestFingerprint: "source-fingerprint",
+        },
+      );
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const before = await loadTestTranscript(sessionKey, storePath);
+
+      await expectRecovery({ started: 0, settled: 1, failed: 0, skipped: 0 });
+      expect(callGateway).not.toHaveBeenCalled();
+      const entry = loadSessionEntry({ sessionKey, storePath });
+      expect(entry).toMatchObject({
+        sessionId: "main-session",
+        status: "killed",
+        abortedLastRun: false,
+        lastRunId: sourceRunId,
+        restartRecoveryTerminalRunIds: [sourceRunId],
+        worktree,
+      });
+      expect(entry?.mainRestartRecovery).toBeUndefined();
+      expect(entry?.restartRecoveryDeliveryRunId).toBeUndefined();
+      expect(configSessions.resolveSessionWorkStartError(sessionKey, entry)).toBeUndefined();
+      const after = await loadTestTranscript(sessionKey, storePath);
+      expect(after.slice(0, before.length)).toEqual(before);
+      expect(after).toHaveLength(before.length + 1);
+      expect(after.at(-1)?.message).toMatchObject({
+        role: "assistant",
+        idempotencyKey: `foreground-restart:${sourceRunId}:stopped`,
+        content: [expect.objectContaining({ text: expect.stringContaining("Send a new message") })],
+      });
+
+      await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 0 });
+      expect(await loadTestTranscript(sessionKey, storePath)).toEqual(after);
+      if (policyOwner === "accepted-source") {
+        await writeTranscript(sessionsDir, "main-session", [
+          makeUserMessage("A new authorized request", { idempotencyKey: "fresh-source:user" }),
+        ]);
+        expect(
+          await readMainSessionRecoveryCheckpoint(
+            { agentId: "main", sessionKey, sessionId: "main-session", storePath },
+            "fresh-source",
+          ),
+        ).toMatchObject({ foregroundOnly: false });
+      }
+      // The source receipt prevents replay; a new authenticated request can still
+      // acquire the same conversation through the ordinary foreground owner.
+      const claim = await claimMainSessionRecoveryOwner({
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        sessionId: "main-session",
+        target: { sessionKey, storePath },
+      });
+      expect(claim.kind).not.toBe("invalidated");
+    },
+  );
+
+  it("never dispatches a restricted source when its stopped receipt fails, then records it once", async () => {
+    const sessionsDir = await writePreparedMainSessionTranscript(
+      [
+        makeUserMessage("Preserve this accepted input", {
+          __openclaw: { foregroundOnlyRunId: "stopped-source" },
+        }),
+      ],
+      { restartRecoveryDeliverySourceRunId: "stopped-source" },
+    );
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const before = await loadTestTranscript(sessionKey, storePath);
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockRejectedValueOnce(
+      new Error("transcript write unavailable"),
+    );
+    await expectRecovery({ started: 0, settled: 0, failed: 1, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(await loadTestTranscript(sessionKey, storePath)).toEqual(before);
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      status: "running",
+      abortedLastRun: true,
+      restartRecoveryDeliverySourceRunId: "stopped-source",
+    });
+    await expectRecovery({ started: 0, settled: 1, failed: 0, skipped: 0 });
+    expect(await loadTestTranscript(sessionKey, storePath)).toHaveLength(before.length + 1);
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("does not stop a fresh foreground owner that wins the stopped-notice commit race", async () => {
+    const sessionsDir = await writePreparedMainSessionTranscript([
+      makeUserMessage("Interrupted source", {
+        __openclaw: { foregroundOnlyRunId: "old-source" },
+      }),
+    ]);
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const before = await loadTestTranscript(sessionKey, storePath);
+    const append =
+      transcriptMocks.appendAssistantMessageToSessionTranscript.getMockImplementation()!;
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockImplementationOnce(
+      async (params) => {
+        const claim = await claimMainSessionRecoveryOwner({
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          sessionId: "main-session",
+          target: { sessionKey, storePath },
+        });
+        expect(claim.kind).not.toBe("invalidated");
+        return append(params);
+      },
+    );
+    await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
+    expect(await loadTestTranscript(sessionKey, storePath)).toEqual(before);
+    expect(loadSessionEntry({ sessionKey, storePath })?.status).not.toBe("killed");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("preserves exact restart identities against stale same-id rows", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");

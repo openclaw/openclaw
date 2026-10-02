@@ -10,7 +10,7 @@ import {
 import type { registerChatAbortController } from "../chat-abort.js";
 import {
   authorizeGatewayUnpreparedSessionCreation,
-  resolveCreatorSandbox,
+  resolveCreatorSessionPolicy,
 } from "../operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { loadSessionEntry } from "../session-utils.js";
@@ -200,7 +200,8 @@ export function createChatSendGoalCommitGuard(
       const creation = resolveOperatorSessionCreation(client);
       if (
         creation.actor?.id !== initialEntry.createdActor?.id ||
-        resolveCreatorSandbox(currentConfig, creation) !== initialEntry.sandbox
+        resolveCreatorSessionPolicy(currentConfig, creation).sandbox !== initialEntry.sandbox ||
+        resolveCreatorSessionPolicy(currentConfig, creation).execution !== initialEntry.execution
       ) {
         throw new Error("Session creation policy changed before Goal admission; retry.");
       }

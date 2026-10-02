@@ -7,6 +7,14 @@ import type {
   SandboxBackendManager,
 } from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+import {
+  bindNativeSandboxEngineTarget,
+  captureNativeSandboxEngine,
+  readNativeSandboxExecution,
+  resolveNativeDockerTarget,
+  runNativeSandboxCleanup,
+  type NativeSandboxCustody,
+} from "./container-engine.js";
 import { containerHasTerminated } from "./container-inspect.js";
 import {
   captureSandboxContainerTermination,
@@ -83,8 +91,10 @@ async function createContainerSandboxBackend(
   engine: SandboxContainerEngine,
   params: CreateSandboxBackendParams,
   operatorAuthority?: AdmittedRunOperatorAuthority,
+  custody?: NativeSandboxCustody,
 ): Promise<SandboxBackendHandle> {
   const assertCurrent = () => {
+    custody?.assertCurrent();
     operatorAuthority?.assertCurrent();
     params.assertRuntimeCurrent?.();
   };
@@ -94,9 +104,22 @@ async function createContainerSandboxBackend(
       "Podman sandboxing does not support browser sandboxes. Install Docker and select the docker backend, or disable sandbox.browser.enabled.",
     );
   }
-  const podmanTarget =
-    engine.id === "podman" ? (await resolvePodmanSandboxRuntimeInfo()).target : undefined;
-  const boundEngine = podmanTarget ? bindPodmanSandboxEngine(podmanTarget) : engine;
+  if (custody && params.cfg.browser.enabled) {
+    throw new Error(
+      "Foreground execution requires sandbox.browser.enabled=false; browser allocations do not yet have joined foreground custody.",
+    );
+  }
+  const podmanRuntimeInfo =
+    engine.id === "podman" ? await resolvePodmanSandboxRuntimeInfo() : undefined;
+  const podmanTarget = podmanRuntimeInfo?.target;
+  let boundEngine = podmanTarget ? bindPodmanSandboxEngine(podmanTarget) : engine;
+  if (custody) {
+    const captured = captureNativeSandboxEngine(boundEngine, custody);
+    boundEngine = bindNativeSandboxEngineTarget(
+      captured,
+      podmanTarget ?? (await resolveNativeDockerTarget(captured)),
+    );
+  }
   const { containerName, containerId } = await ensureSandboxContainer({
     engine: boundEngine,
     ...(podmanTarget ? { podmanTarget } : {}),
@@ -109,6 +132,9 @@ async function createContainerSandboxBackend(
     skillsWorkspaceDir: params.skillsWorkspaceDir,
     readOnlyResourceMounts: params.readOnlyResourceMounts,
     cfg: params.cfg,
+    ...(custody
+      ? { native: { custody, engine: boundEngine }, nativePodmanRuntimeInfo: podmanRuntimeInfo }
+      : {}),
     ...(params.requireCurrentConfig !== undefined
       ? { requireCurrentConfig: params.requireCurrentConfig }
       : {}),
@@ -133,6 +159,7 @@ async function createContainerSandboxBackend(
     image: params.cfg.docker.image,
     podmanTarget,
     assertCurrent,
+    foreground: Boolean(custody),
   });
   handle.createFsBridge = ({ sandbox }) => createSandboxFsBridge({ sandbox, containerOnlyMounts });
   return handle;
@@ -141,15 +168,27 @@ async function createContainerSandboxBackend(
 export async function createDockerSandboxBackend(
   params: CreateSandboxBackendParams,
   operatorAuthority?: AdmittedRunOperatorAuthority,
+  custody?: NativeSandboxCustody,
 ): Promise<SandboxBackendHandle> {
-  return await createContainerSandboxBackend(DOCKER_SANDBOX_ENGINE, params, operatorAuthority);
+  return await createContainerSandboxBackend(
+    DOCKER_SANDBOX_ENGINE,
+    params,
+    operatorAuthority,
+    custody,
+  );
 }
 
 export async function createPodmanSandboxBackend(
   params: CreateSandboxBackendParams,
   operatorAuthority?: AdmittedRunOperatorAuthority,
+  custody?: NativeSandboxCustody,
 ): Promise<SandboxBackendHandle> {
-  return await createContainerSandboxBackend(PODMAN_SANDBOX_ENGINE, params, operatorAuthority);
+  return await createContainerSandboxBackend(
+    PODMAN_SANDBOX_ENGINE,
+    params,
+    operatorAuthority,
+    custody,
+  );
 }
 
 function createContainerSandboxBackendHandle(params: {
@@ -161,6 +200,7 @@ function createContainerSandboxBackendHandle(params: {
   image: string;
   podmanTarget?: SandboxContainerEngineTarget;
   assertCurrent?: () => void;
+  foreground?: boolean;
 }): SandboxBackendHandle {
   const run = (command: SandboxBackendCommandParams, assertCurrent?: () => void) =>
     runContainerSandboxShellCommand({
@@ -169,6 +209,7 @@ function createContainerSandboxBackendHandle(params: {
       podmanTarget: params.podmanTarget,
       ...command,
       assertCurrent,
+      foreground: params.foreground,
     });
   return {
     id: params.engine.id,
@@ -183,13 +224,16 @@ function createContainerSandboxBackendHandle(params: {
       readOnlyResourceMounts: true,
     },
     async buildExecSpec({ command, workdir, env, usePty }) {
-      await validateSandboxContainerEngineTarget(params.engine, params.podmanTarget);
+      if (!params.foreground) {
+        await validateSandboxContainerEngineTarget(params.engine, params.podmanTarget);
+      }
       params.assertCurrent?.();
       const envFile = await createContainerEnvFile(resolveContainerExecEnv(env));
       try {
         params.assertCurrent?.();
+        const execution = params.foreground ? readNativeSandboxExecution(params.engine) : undefined;
         const argv = [
-          params.engine.command,
+          execution?.executable ?? params.engine.command,
           ...(params.engine.globalArgs ?? []),
           ...buildContainerExecArgs({
             containerName: params.containerId,
@@ -202,7 +246,9 @@ function createContainerSandboxBackendHandle(params: {
         ];
         return {
           argv,
-          env: process.env,
+          env: execution?.env ?? process.env,
+          ...(execution ? { cwd: execution.cwd } : {}),
+          assertCurrent: params.assertCurrent,
           stdinMode: usePty ? "pipe-open" : "pipe-closed",
           finalizeToken: envFile.cleanup satisfies ContainerExecFinalizeToken,
         };
@@ -231,6 +277,13 @@ function createContainerSandboxBackendHandle(params: {
         (command) => run(command, params.assertCurrent),
         env,
         async (command) => {
+          if (params.foreground) {
+            // Per-command termination remains best effort. The foreground owner
+            // joins this transport before retiring the whole private namespace.
+            return runNativeSandboxCleanup(params.engine, (exec) =>
+              exec(containerShellCommandArgs(params.containerId, command), command.allowFailure),
+            );
+          }
           const settled = { code: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
           try {
             if (wasTerminated()) {
@@ -271,21 +324,13 @@ async function runContainerSandboxShellCommand(
     containerName: string;
     podmanTarget?: SandboxContainerEngineTarget;
     assertCurrent?: () => void;
+    foreground?: boolean;
   } & SandboxBackendCommandParams,
 ) {
-  await validateSandboxContainerEngineTarget(params.engine, params.podmanTarget);
-  const dockerArgs = [
-    "exec",
-    "-i",
-    params.containerName,
-    "sh",
-    "-c",
-    params.script,
-    "openclaw-sandbox-fs",
-  ];
-  if (params.args?.length) {
-    dockerArgs.push(...params.args);
+  if (!params.foreground) {
+    await validateSandboxContainerEngineTarget(params.engine, params.podmanTarget);
   }
+  const dockerArgs = containerShellCommandArgs(params.containerName, params);
   // The engine-target probe above can outlive the admitted workspace owner.
   params.assertCurrent?.();
   return execContainerRaw(params.engine, dockerArgs, {
@@ -293,6 +338,19 @@ async function runContainerSandboxShellCommand(
     allowFailure: params.allowFailure,
     signal: params.signal,
   });
+}
+
+function containerShellCommandArgs(containerId: string, params: SandboxBackendCommandParams) {
+  return [
+    "exec",
+    "-i",
+    containerId,
+    "sh",
+    "-c",
+    params.script,
+    "openclaw-sandbox-fs",
+    ...(params.args ?? []),
+  ];
 }
 
 export function runDockerSandboxShellCommand(

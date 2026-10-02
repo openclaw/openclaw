@@ -31,7 +31,7 @@ import { assertPreparedSkillLibrarySelection } from "../../skills/library/select
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
 import {
   authorizeGatewayUnpreparedSessionCreation,
-  resolveCreatorSandbox,
+  resolveCreatorSessionPolicy,
 } from "../operator-role-policy.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -76,7 +76,7 @@ export function prepareChatSendSessionEntry(params: {
     entry: {
       ...buildSessionCreationStamp({
         ...creation,
-        sandbox: resolveCreatorSandbox(cfg, creation),
+        ...resolveCreatorSessionPolicy(cfg, creation),
         now: createdAt,
       }),
       sessionId,
@@ -354,7 +354,7 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
     entry ??
     buildSessionCreationStamp({
       ...creation,
-      sandbox: resolveCreatorSandbox(cfg, creation),
+      ...resolveCreatorSessionPolicy(cfg, creation),
       now: session.now,
     });
   const restriction = resolveSessionNativeRuntimeRestriction({
@@ -445,7 +445,10 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
         current.canonicalKey !== sessionKey ||
         session.sessionRoutingChanged(currentConfig) ||
         currentCreation.actor?.id !== prepared.entry.createdActor?.id ||
-        resolveCreatorSandbox(currentConfig, currentCreation) !== prepared.entry.sandbox ||
+        resolveCreatorSessionPolicy(currentConfig, currentCreation).sandbox !==
+          prepared.entry.sandbox ||
+        resolveCreatorSessionPolicy(currentConfig, currentCreation).execution !==
+          prepared.entry.execution ||
         currentModel.provider !== resolvedSessionModel.provider ||
         currentModel.model !== resolvedSessionModel.model ||
         currentRestriction?.reason !== details.reason ||

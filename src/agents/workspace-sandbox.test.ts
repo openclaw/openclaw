@@ -5,8 +5,41 @@ import { expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
+import { isAdmittedRunForegroundOnly } from "./run-execution-policy.js";
+import { prepareForegroundTestAdmission } from "./run-execution-policy.test-support.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
 import { resolveAttemptWorkspaceSandbox, resolveHarnessWorkspace } from "./workspace-sandbox.js";
+
+it("carries immutable foreground creation policy into a fresh admitted turn before remote effects", async () => {
+  await withOpenClawTestState({ label: "foreground-creation-bridge" }, async (state) => {
+    const sessionKey = "agent:main:bounded";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      { sessionId: "bounded", updatedAt: 1, execution: "foreground-only", sandbox: "required" },
+    );
+    const admission = prepareForegroundTestAdmission("fresh-maintainer");
+    const admittedRunContext = await admission.admit("embedded");
+    const workspaceDir = state.path("must-not-be-created");
+    try {
+      expect(isAdmittedRunForegroundOnly(admittedRunContext)).toBe(false);
+      await expect(
+        resolveAttemptWorkspaceSandbox({
+          config: {},
+          agentId: "main",
+          sessionId: "bounded",
+          sessionKey,
+          workspaceDir,
+          admittedRunContext,
+          placementSandbox: createSandboxTestContext(),
+        }),
+      ).rejects.toThrow("remote placement is unavailable");
+      expect(isAdmittedRunForegroundOnly(admittedRunContext)).toBe(true);
+      await expect(fs.stat(workspaceDir)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await admission.close();
+    }
+  });
+});
 
 it("keeps cwd authority with the selected local or remote workspace owner", () => {
   const sandbox = createSandboxTestContext({

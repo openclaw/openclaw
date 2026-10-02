@@ -70,6 +70,7 @@ import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { readForegroundSandboxCustody } from "./sandbox/foreground-owner.js";
 import { createSessionSlug } from "./session-slug.js";
 import { createStreamingBinaryOutputSanitizer } from "./shell-utils.js";
 import { registerTrustedToolNoStartError } from "./tool-result-error.js";
@@ -866,7 +867,12 @@ export async function runExecProcess({
     usingPty = spawnSpec.mode === "pty";
     const spawnBase = {
       runId: sessionId,
-      ...(opts.sandbox ? { cleanupOwnership: "external" as const, exactEnv: true as const } : {}),
+      ...(opts.sandbox ? { exactEnv: true as const } : {}),
+      // Foreground custody owns both the local transport tree and the native namespace.
+      // Treating its transport as external prevents shutdown from confirming cleanup.
+      ...(opts.sandbox && !readForegroundSandboxCustody(opts.sandbox.backend)
+        ? { cleanupOwnership: "external" as const }
+        : {}),
       scopeKey: opts.scopeKey,
       cwd: spawnSpec.cwd ?? opts.workdir,
       env: spawnSpec.env,

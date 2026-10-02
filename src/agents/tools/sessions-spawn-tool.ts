@@ -52,6 +52,7 @@ import {
   ToolInputError,
 } from "./common.js";
 import {
+  assertGatewayToolMayContinue,
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
   wrapGatewayPersonalToolExecution,
@@ -354,6 +355,7 @@ export function createSessionsSpawnTool(
     parameters: opts?.workerPlacement ? PlacedSessionsSpawnSchema : parameters,
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args, signal) =>
       withToolEffectBoundary(async (onSpawnEffectsStart) => {
+        assertGatewayToolMayContinue("Starting an independently scheduled child");
         const operatorSelection = resolveGatewayToolOperatorSelection();
         const executionSignal =
           signal && opts?.signal

@@ -297,7 +297,9 @@ it("does not create a hosted question on another person's shared session", async
 it("does not register another hosted question after the original operator source closes", async () => {
   await withHostedQuestion(async (fixture) => {
     fixture.revoke();
-    await expect(fixture.ask()).rejects.toThrow("original question source revoked");
+    await expect(fixture.ask()).rejects.toThrow(
+      "admitted run operator authority is no longer active",
+    );
     expect(fixture.request).not.toHaveBeenCalled();
     expect(fixture.manager.list()).toEqual([]);
   });

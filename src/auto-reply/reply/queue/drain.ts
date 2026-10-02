@@ -869,6 +869,7 @@ async function runSyntheticOverflowSummary(params: {
     explicitSkillSelections: runtimeMetadata.explicitSkillSelections,
     channelAdmissionEvidence: runtimeMetadata.channelAdmissionEvidence,
     gatewayLocalUserIngress: runtimeMetadata.gatewayLocalUserIngress,
+    foregroundRequest: runtimeMetadata.foregroundRequest,
     operatorAuthority: runtimeMetadata.operatorAuthority,
     personalBootstrapEligible: runtimeMetadata.personalBootstrapEligible,
     toolsAllow: runtimeMetadata.toolsAllow,

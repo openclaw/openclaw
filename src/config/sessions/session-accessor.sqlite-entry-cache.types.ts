@@ -31,6 +31,7 @@ export type SessionSharingEntry = Pick<
   | "createdActor"
   | "owner"
   | "sandbox"
+  | "execution"
   | "spawnedBy"
   | "spawnDepth"
   | "parentSessionKey"
@@ -67,6 +68,7 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry): Session
         }
       : undefined,
     sandbox: entry.sandbox,
+    execution: entry.execution,
     spawnedBy: entry.spawnedBy,
     spawnDepth: entry.spawnDepth,
     parentSessionKey: entry.parentSessionKey,

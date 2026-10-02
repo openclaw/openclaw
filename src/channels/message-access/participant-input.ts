@@ -1,3 +1,4 @@
+import { bindForegroundUserRequest } from "../../agents/foreground-request.js";
 import {
   bindCommandOwnerAuthority,
   captureCommandOwnerAssertion,
@@ -64,6 +65,20 @@ export function bindChannelParticipantInput(params: {
   ) {
     return;
   }
+  if (
+    !params.context.InternalTurnSource &&
+    (!params.context.InputProvenance || params.context.InputProvenance.kind === "external_user")
+  ) {
+    bindForegroundUserRequest(params.context, () => {
+      if (
+        !params.owner.isLive() ||
+        params.owner.resolveGatewayContext?.() !== gateway ||
+        batch.some((input) => input?.requesterProfile && !input.requesterProfile.isCurrent())
+      ) {
+        throw new Error("Foreground channel input is no longer active.");
+      }
+    });
+  }
   const requester = batch.at(-1)?.requesterProfile;
   if (
     requester &&
@@ -96,14 +111,21 @@ export function bindChannelParticipantInput(params: {
   const assertCurrent = captureCommandOwnerAssertion(params.context);
   const commandOwner = getCommandOwnerAuthority(params.context);
   if (authority.operatorProfile && assertCurrent && commandOwner) {
-    bindCommandOwnerAuthority(params.context, {
-      ...commandOwner,
-      operatorAuthority: captureChannelOperatorRunAuthority({
-        ...authority.operatorProfile,
-        getRuntimeConfig: () => gateway.getRuntimeConfig(),
-        assertCurrent,
-        signal: authority.signal,
-      }),
+    const operatorAuthority = captureChannelOperatorRunAuthority({
+      ...authority.operatorProfile,
+      getRuntimeConfig: () => gateway.getRuntimeConfig(),
+      assertCurrent,
+      signal: authority.signal,
     });
+    bindCommandOwnerAuthority(params.context, { ...commandOwner, operatorAuthority });
+    if (operatorAuthority.rolePolicy?.execution === "foreground-only") {
+      params.context.SessionCreation = {
+        via: "channel",
+        ...params.context.SessionCreation,
+        actor: { type: "human", source: "profile", id: operatorAuthority.profileId },
+        sandbox: "required",
+        execution: "foreground-only",
+      };
+    }
   }
 }

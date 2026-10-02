@@ -135,6 +135,7 @@ export function buildSessionCreationStamp(params: {
   actor?: SessionCreatedActor;
   now?: number;
   sandbox?: "required";
+  execution?: "foreground-only";
   requiredWorkspace?: RequiredSessionWorkspace;
   incognito?: boolean;
   skillLibrarySelections?: SkillLibrarySelection[];
@@ -144,6 +145,7 @@ export function buildSessionCreationStamp(params: {
   createdActor?: SessionCreatedActor;
   createdAt: number;
   sandbox?: "required";
+  execution?: "foreground-only";
   requiredWorkspace?: RequiredSessionWorkspace;
   skillLibrarySelections?: SkillLibrarySelection[];
   inheritedGitContributorProfileIds?: string[];
@@ -152,7 +154,10 @@ export function buildSessionCreationStamp(params: {
     createdVia: params.via,
     ...(params.actor ? { createdActor: params.actor } : {}),
     createdAt: params.now ?? Date.now(),
-    ...(params.sandbox === "required" ? { sandbox: "required" as const } : {}),
+    ...(params.sandbox === "required" || params.execution === "foreground-only"
+      ? { sandbox: "required" as const }
+      : {}),
+    ...(params.execution ? { execution: params.execution } : {}),
     ...(params.requiredWorkspace ? { requiredWorkspace: { ...params.requiredWorkspace } } : {}),
     ...(params.via === "spawn" && !params.incognito && params.inheritedGitContributorProfileIds
       ? { inheritedGitContributorProfileIds: [...params.inheritedGitContributorProfileIds] }
@@ -179,6 +184,7 @@ export function preserveCreationStamp<
         createdAt: authoritative.createdAt,
         inheritedGitContributorProfileIds: authoritative.inheritedGitContributorProfileIds,
         requiredWorkspace: authoritative.requiredWorkspace,
+        execution: authoritative.execution,
         ...(authoritative.sandbox === "required" ? { sandbox: authoritative.sandbox } : {}),
       }
     : entry;
@@ -190,6 +196,7 @@ export function inheritSessionCreationPolicy(
     | {
         createdActor?: SessionCreatedActor;
         sandbox?: "required";
+        execution?: "foreground-only";
         requiredWorkspace?: RequiredSessionWorkspace;
         skillLibrarySelections?: SkillLibrarySelection[];
       }
@@ -198,10 +205,12 @@ export function inheritSessionCreationPolicy(
 ): {
   actor?: SessionCreatedActor;
   sandbox?: "required";
+  execution?: "foreground-only";
   requiredWorkspace?: RequiredSessionWorkspace;
   skillLibrarySelections?: SkillLibrarySelection[];
 } {
   return {
+    ...(source?.execution ? { execution: source.execution } : {}),
     ...(source?.requiredWorkspace ? { requiredWorkspace: { ...source.requiredWorkspace } } : {}),
     ...(source?.sandbox === "required"
       ? { actor: source.createdActor, sandbox: "required" as const }
