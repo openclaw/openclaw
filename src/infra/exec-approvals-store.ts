@@ -211,11 +211,10 @@ function updateExecApprovalsInTransaction(
       if (params.baseHash !== undefined && current.hash !== params.baseHash) {
         return null;
       }
-      const updated = params.update(structuredClone(current.file));
-      if (updated === null) {
+      const next = params.update(structuredClone(current.file));
+      if (next === null) {
         return current;
       }
-      const next = normalizeExecApprovalsInternal(updated);
       assertExecApprovalsMutationAllowed({
         db,
         current: current.file,
@@ -226,10 +225,10 @@ function updateExecApprovalsInTransaction(
       if (current.exists && current.raw === raw) {
         return current;
       }
-      writeExecApprovalsConfigRow({ db, file: next, raw });
+      const persistedRaw = writeExecApprovalsConfigRow({ db, file: next });
       return snapshotFromExecApprovalsRow({
         path: current.path,
-        row: { raw_json: raw },
+        row: { raw_json: persistedRaw },
       });
     },
     options,

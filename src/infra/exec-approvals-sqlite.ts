@@ -195,12 +195,16 @@ export function writeExecApprovalsConfigRow(params: {
   file: ExecApprovalsFile;
   raw?: string;
   now?: number;
-}): void {
+}): string {
   const normalized = normalizeExecApprovalsInternal(params.file);
   const authored = params.raw ?? serializeExecApprovals(params.file);
+  const parsed = parsePersistedExecApprovals(authored);
+  // Malformed policy must remain visible to the fail-closed reader, not become partial defaults.
   const raw =
     params.raw ??
-    (parsePersistedExecApprovals(authored).ok ? authored : serializeExecApprovals(normalized));
+    (!parsed.ok && parsed.error === LEGACY_EXEC_APPROVALS_DIAGNOSTIC
+      ? serializeExecApprovals(normalized)
+      : authored);
   const values = {
     config_key: EXEC_APPROVALS_CONFIG_KEY,
     raw_json: raw,
@@ -227,6 +231,7 @@ export function writeExecApprovalsConfigRow(params: {
         }),
       ),
   );
+  return raw;
 }
 
 export function deleteExecApprovalsConfigRow(db: DatabaseSync): void {
