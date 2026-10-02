@@ -356,7 +356,14 @@ describe("combined security review entry point", () => {
     }
   });
 
-  it("preserves a failed cleanup mutation when the PR then closes", () => {
+  it.each([
+    { name: "cleanup mutation", response: { httpError: 500 }, noticeFailure: false },
+    {
+      name: "cleanup notice",
+      response: { data: { createCommitOnBranch: { commit: { oid: "e".repeat(40) } } } },
+      noticeFailure: true,
+    },
+  ])("preserves a failed $name when the PR then closes", ({ response, noticeFailure }) => {
     const cleanupPr = {
       ...pr,
       changed_files: 1,
@@ -385,21 +392,25 @@ describe("combined security review entry point", () => {
           encoding: "base64",
           content: Buffer.from("lockfileVersion: '9.0'\n").toString("base64"),
         },
-        "POST /graphql": { httpError: 500 },
+        "POST /graphql": response,
+        ...(noticeFailure
+          ? { "POST /repos/openclaw/openclaw/issues/7/comments": { httpError: 500 } }
+          : {}),
       },
       "autoscrub",
     );
     expect(result.status).toBe(1);
+    expect(result.waits).toEqual([]);
     expect(result.stderr).toContain("Dependency lockfile autoscrub failed");
     expect(result.stderr).toContain("Fixture API failure");
     expect(result.requests.filter((entry) => entry.path === "/graphql")).toHaveLength(1);
     expect(result.combined).not.toContain("success");
   });
 
-  it("does not replay a failed notice write when a sibling read later times out", () => {
+  it("does not replay a rejected notice write when a sibling read later times out", () => {
     const commentPath = "/repos/openclaw/openclaw/issues/7/comments";
     const result = evaluate({
-      [`POST ${commentPath}`]: { httpError: 500 },
+      [`POST ${commentPath}`]: { httpError: 400 },
       [rolePath]: {
         responses: [
           { role_name: "maintain" },
@@ -414,7 +425,7 @@ describe("combined security review entry point", () => {
       result.requests.filter((entry) => entry.method === "POST" && entry.path === commentPath),
     ).toHaveLength(1);
     expect(result.combined.at(-1)).toBe("failure");
-    expect(result.stderr).toContain(`GitHub API POST ${commentPath} failed: 500`);
+    expect(result.stderr).toContain(`GitHub API POST ${commentPath} failed: 400`);
   });
 
   it("bounds persistent read deadlines without granting approval", () => {
@@ -843,21 +854,146 @@ describe("combined security review entry point", () => {
     { name: "comment only", statusReplies: [{}] },
     { name: "failure report also fails", statusReplies: [{}, {}, {}, {}, {}, { httpError: 500 }] },
     { name: "sibling status also fails", statusReplies: [{}, {}, {}, { httpError: 500 }, {}] },
-  ])("does not restart evaluation for a failed comment publication: $name", ({ statusReplies }) => {
+  ])(
+    "does not restart evaluation for a rejected comment publication: $name",
+    ({ statusReplies }) => {
+      const commentPath = "/repos/openclaw/openclaw/issues/7/comments";
+      const result = evaluate({
+        [statusPath]: { responses: statusReplies },
+        [`GET ${pullPath}`]: { ...pr, changed_files: 1 },
+        [`GET ${pullPath}/files`]: [files[1]],
+        [`POST ${commentPath}`]: { httpError: 400 },
+      });
+      expect(result.status).toBe(1);
+      expect(result.waits).toEqual([]);
+      expect(
+        result.requests.filter((entry) => entry.method === "POST" && entry.path === commentPath),
+      ).toHaveLength(1);
+      expect(result.combined.at(-1)).toBe("failure");
+      expect(result.stderr).toContain(`GitHub API POST ${commentPath} failed: 400`);
+    },
+  );
+
+  it.each([
+    { name: "dependency", file: files[1] },
+    { name: "security-sensitive", file: files[0] },
+  ])("recovers a failed $name notice without creating a duplicate", ({ file }) => {
+    const commentPath = "/repos/openclaw/openclaw/issues/7/comments";
+    for (const accepted of [false, true]) {
+      const result = evaluate({
+        [`GET ${pullPath}`]: { ...pr, changed_files: 1 },
+        [`GET ${pullPath}/files`]: [file],
+        [`POST ${commentPath}`]: {
+          responses: [{ httpError: 500, recordCommentBeforeError: accepted }, {}],
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.waits).toEqual([1_000]);
+      const afterWait = result.requests.slice(
+        result.requests.findIndex((entry) => entry.method === "WAIT") + 1,
+      );
+      expect(afterWait[0]).toMatchObject({ method: "GET", path: pullPath });
+      const commentRead = afterWait.findIndex(
+        (entry) => entry.method === "GET" && entry.path === commentPath,
+      );
+      const commentWrite = afterWait.findIndex((entry) => entry.body?.body);
+      expect(commentRead).toBeGreaterThanOrEqual(0);
+      expect(commentWrite).toBeGreaterThan(commentRead);
+      expect(afterWait[commentWrite]).toMatchObject({
+        method: accepted ? "PATCH" : "POST",
+        path: accepted ? "/repos/openclaw/openclaw/issues/comments/321" : commentPath,
+      });
+      expect(
+        result.requests.filter((entry) => entry.method === "POST" && entry.path === commentPath),
+      ).toHaveLength(accepted ? 1 : 2);
+      expect(result.combined.at(-1)).toBe("success");
+    }
+  });
+
+  it("rereads author authority while recovering an accepted notice write", () => {
     const commentPath = "/repos/openclaw/openclaw/issues/7/comments";
     const result = evaluate({
-      [statusPath]: { responses: statusReplies },
       [`GET ${pullPath}`]: { ...pr, changed_files: 1 },
-      [`GET ${pullPath}/files`]: [files[1]],
+      [`GET ${pullPath}/files`]: [files[0]],
+      [`POST ${commentPath}`]: { httpError: 500, recordCommentBeforeError: true },
+      [rolePath]: {
+        settlesAt: "2026-01-02T00:00:01Z",
+        before: { role_name: "maintain" },
+        after: { role_name: "read" },
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toEqual([1_000]);
+    expect(result.combined.at(-1)).toBe("failure");
+    const notice = result.requests.findLast((entry) => entry.method === "PATCH");
+    expect(notice?.body?.body).toContain("/allow-security-sensitive-change");
+    expect(notice?.body?.body).not.toContain("informational");
+    expect(
+      result.reviews.findLast(
+        (entry) => entry.body?.context === "openclaw/security-sensitive-review",
+      )?.body?.state,
+    ).toBe("failure");
+  });
+
+  it("recovers a failed sticky-notice update while preserving missing approval", () => {
+    const commentPath = "/repos/openclaw/openclaw/issues/comments/321";
+    const result = evaluate({
+      [`GET ${pullPath}`]: { ...pr, changed_files: 1 },
+      [`GET ${pullPath}/files`]: [files[0]],
+      "GET /repos/openclaw/openclaw/issues/7/comments": [
+        {
+          id: 321,
+          user: { login: "github-actions[bot]", type: "Bot" },
+          body: "<!-- openclaw:security-sensitive-guard -->\nOld notice",
+        },
+      ],
+      [`PATCH ${commentPath}`]: { responses: [{ httpError: 503 }, {}] },
+      [rolePath]: { role_name: "read" },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toEqual([1_000]);
+    expect(result.requests.filter((entry) => entry.method === "PATCH")).toHaveLength(2);
+    expect(
+      result.requests.some((entry) => entry.method === "POST" && entry.path.endsWith("/comments")),
+    ).toBe(false);
+    expect(result.combined.at(-1)).toBe("failure");
+    expect(result.stdout).toContain("awaiting maintainer approval");
+  });
+
+  it("stops notice recovery when a newer head supersedes the review", () => {
+    const result = evaluate({
+      [`GET ${pullPath}`]: {
+        settlesAt: "2026-01-02T00:00:01Z",
+        before: pr,
+        after: { ...pr, head: { ...pr.head, sha: "d".repeat(40) } },
+      },
+      "POST /repos/openclaw/openclaw/issues/7/comments": { httpError: 500 },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toEqual([1_000]);
+    const afterWait = result.requests.slice(
+      result.requests.findIndex((entry) => entry.method === "WAIT") + 1,
+    );
+    expect(afterWait).toEqual([{ method: "GET", path: pullPath }]);
+    expect(result.stdout).toContain("Superseded");
+    expect(result.combined).not.toContain("success");
+  });
+
+  it("bounds persistent notice publication failures", () => {
+    const commentPath = "/repos/openclaw/openclaw/issues/7/comments";
+    const result = evaluate({
+      [`GET ${pullPath}`]: { ...pr, changed_files: 1 },
+      [`GET ${pullPath}/files`]: [files[0]],
       [`POST ${commentPath}`]: { httpError: 500 },
+      [rolePath]: { role_name: "read" },
     });
     expect(result.status).toBe(1);
-    expect(result.waits).toEqual([]);
+    expect(result.waits).toEqual([1_000, 2_000, 4_000]);
     expect(
       result.requests.filter((entry) => entry.method === "POST" && entry.path === commentPath),
-    ).toHaveLength(1);
-    expect(result.combined.at(-1)).toBe("failure");
-    expect(result.stderr).toContain(`GitHub API POST ${commentPath} failed: 500`);
+    ).toHaveLength(4);
+    expect(result.combined).not.toContain("success");
+    expect(result.stderr).toContain("recovery budget exhausted");
   });
 
   it("recovers rate-limited notice writes instead of treating them as missing permissions", () => {
@@ -1093,38 +1229,50 @@ describe("combined security review entry point", () => {
     expect(result.stdout).toContain("src/gateway/auth.ts");
   });
 
-  it("retains the original dependency base when a merge arrives during diff recovery", () => {
-    const result = evaluate({
-      [`GET ${pullPath}`]: {
-        responses: [pr, { ...mergedPr, base: { ...pr.base, sha: "e".repeat(40) } }],
-      },
-      [`GET ${pullPath}/files`]: {
-        responses: [
-          files.slice(0, 1),
-          [files[0], { filename: "package.json", status: "modified" }],
-        ],
-      },
-      [`GET /repos/openclaw/openclaw/compare/${pr.base.sha}...${head}`]: {
-        base_commit: { sha: pr.base.sha },
-        merge_base_commit: { sha: pr.base.sha },
-      },
-      [`GET /repos/openclaw/openclaw/dependency-graph/compare/${pr.base.sha}...${head}`]: [],
-      [`GET /repos/openclaw/openclaw/contents/package.json?ref=${pr.base.sha}`]: {
-        type: "file",
-        content: Buffer.from('{"dependencies":{"fixture":"1"}}').toString("base64"),
-      },
-      [`GET /repos/openclaw/openclaw/contents/package.json?ref=${head}`]: {
-        type: "file",
-        content: Buffer.from('{"dependencies":{"fixture":"2"}}').toString("base64"),
-      },
-      [rolePath]: { role_name: "read" },
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.waits).toEqual([30_000, 30_000]);
-    expect(result.combined.at(-1)).toBe("failure");
-    expect(result.stdout).toContain("package.json");
-    expect(result.stdout).toContain("/allow-dependencies-change");
-  });
+  it.each(["diff", "notice"])(
+    "retains the original dependency base when a merge arrives during %s recovery",
+    (kind) => {
+      const result = evaluate({
+        [`GET ${pullPath}`]: {
+          settlesAt: kind === "diff" ? "2026-01-02T00:00:30Z" : "2026-01-02T00:00:01Z",
+          before: pr,
+          after: { ...mergedPr, base: { ...pr.base, sha: "e".repeat(40) } },
+        },
+        [`GET ${pullPath}/files`]: {
+          responses: [
+            ...(kind === "diff" ? [files.slice(0, 1)] : []),
+            [files[0], { filename: "package.json", status: "modified" }],
+          ],
+        },
+        [`GET /repos/openclaw/openclaw/compare/${pr.base.sha}...${head}`]: {
+          base_commit: { sha: pr.base.sha },
+          merge_base_commit: { sha: pr.base.sha },
+        },
+        [`GET /repos/openclaw/openclaw/dependency-graph/compare/${pr.base.sha}...${head}`]: [],
+        [`GET /repos/openclaw/openclaw/contents/package.json?ref=${pr.base.sha}`]: {
+          type: "file",
+          content: Buffer.from('{"dependencies":{"fixture":"1"}}').toString("base64"),
+        },
+        [`GET /repos/openclaw/openclaw/contents/package.json?ref=${head}`]: {
+          type: "file",
+          content: Buffer.from('{"dependencies":{"fixture":"2"}}').toString("base64"),
+        },
+        [rolePath]: { role_name: "read" },
+        ...(kind === "notice"
+          ? {
+              "POST /repos/openclaw/openclaw/issues/7/comments": {
+                responses: [{ httpError: 500, recordCommentBeforeError: true }, {}],
+              },
+            }
+          : {}),
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.waits).toEqual(kind === "diff" ? [30_000, 30_000] : [1_000]);
+      expect(result.combined.at(-1)).toBe("failure");
+      expect(result.stdout).toContain("package.json");
+      expect(result.stdout).toContain("/allow-dependencies-change");
+    },
+  );
 
   it.each(["before cleanup", "before commit"])(
     "preserves merged lockfiles %s and still reports their missing approval",

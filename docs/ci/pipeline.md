@@ -597,8 +597,12 @@ HTTP `500`, `502`, `503`, and `504` responses and recognized connection failures
 use one-, two-, and four-second delays, sharing the three-restart limit and job
 deadline with rate-limit recovery. GitHub may have accepted the failed write, so
 the review rereads current PR, approval, role, and CI data instead of replaying an
-old decision. This recovery applies only to commit-status publication; other
-uncertain writes, cancellation, and write request timeouts remain errors.
+old decision. During enforcement, the same bounded recovery handles transient
+sticky-notice creation and update failures. Each restart rereads comments and
+updates an existing owned notice if GitHub accepted the earlier write, rather
+than blindly posting another comment. Required approval remains required.
+Automatic lockfile cleanup, other uncertain writes, cancellation, and write
+request timeouts remain outside this publication recovery.
 
 Separately, read-only `GET` and `HEAD` requests retry HTTP `500`, `502`, `503`,
 and `504` responses and recognized transient connection failures before headers

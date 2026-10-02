@@ -119,6 +119,7 @@ export async function reviewSecuritySensitiveChanges(prepared) {
     repo,
     issuePath,
     labelNames: new Set(labels.map((label) => label.name)),
+    recoverCommentWrites: true,
   });
   const allowed = await finishGuard(
     guard,
