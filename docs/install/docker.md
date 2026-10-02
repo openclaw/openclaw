@@ -265,6 +265,11 @@ capture is recaptured; a missing or damaged member of a completed group stops
 migration and preserves the surviving snapshots for recovery. Repeated
 failed attempts therefore do not create another full backup group each time.
 Older backup groups remain available for operator-managed rollback.
+Doctor records these originals for `openclaw update cleanup --dry-run`. They stay
+protected until Doctor verifies that the migration completed and a later update
+finishes successfully. Cleanup can then retire the recorded group after your
+confirmation. Older unrecorded `.bak` files are listed as protected. Keep these
+files with your pre-upgrade backups while you still need the matching rollback.
 
 On FUSE filesystems such as Unraid's `shfs`, a missing native no-replace rename
 does not require an operator step. The migration owner publishes a complete,

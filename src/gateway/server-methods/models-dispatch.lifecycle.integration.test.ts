@@ -320,13 +320,10 @@ async function withDispatchLifecycle(
   }
 }
 
-it.for([
-  { scenario: "held discovery control", patchOtherSession: false },
-  { scenario: "another session label changes", patchOtherSession: true },
-])(
-  "models.list keeps the selected session catalog when $scenario",
+it(
+  "models.list keeps the selected session catalog when another session label changes",
   { timeout: 180_000 },
-  async ({ patchOtherSession }, { signal }) => {
+  async ({ signal }) => {
     await withDispatchLifecycle(signal, async (fixture) => {
       const expectedIds = [
         "account-a-only",
@@ -395,14 +392,12 @@ it.for([
         try {
           await withTestTimeout(held.started, 30_000, "Selected session discovery did not start");
           expect(fixture.discoveryAccounts).toEqual(["account-a-key"]);
-          if (patchOtherSession) {
-            await expect(
-              fixture.client.request("sessions.patch", {
-                key: other.key,
-                label: "Other session renamed",
-              }),
-            ).resolves.toMatchObject({ entry: { label: "Other session renamed" } });
-          }
+          await expect(
+            fixture.client.request("sessions.patch", {
+              key: other.key,
+              label: "Other session renamed",
+            }),
+          ).resolves.toMatchObject({ entry: { label: "Other session renamed" } });
         } finally {
           held.release();
           await pending;

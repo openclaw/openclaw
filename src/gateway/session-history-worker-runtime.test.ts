@@ -278,7 +278,7 @@ it.each([false, true])(
   },
 );
 
-it.each(["rpc", "http", "delta"] as const)(
+it.each(["rpc", "http", "delta", "inline-visibility"] as const)(
   "retains auxiliary registry refusal for %s lineage projection",
   async (kind) => {
     const failure = new AgentDatabaseRegistryChangedError();
@@ -295,7 +295,12 @@ it.each(["rpc", "http", "delta"] as const)(
         ? readSessionHistoryPageInWorker(rpc)
         : kind === "http"
           ? readSessionHistoryPageInWorker({ kind, params: { target, maxChars: 8000, limit: 10 } })
-          : readSessionHistoryPageInWorker({ kind, params: { target, limits: {} } });
+          : kind === "inline-visibility"
+            ? readSessionHistoryPageInWorker({
+                kind,
+                params: { target, lookup: { kind: "run", runId: "run", messageSeq: 1 } },
+              })
+            : readSessionHistoryPageInWorker({ kind, params: { target, limits: {} } });
     await expect(pending).rejects.toBe(failure);
     expect(runWorker).not.toHaveBeenCalled();
   },
@@ -419,22 +424,32 @@ it.each(["rpc", "http"] as const)(
   },
 );
 
-it.each(["delta", "message-lookup", "recent", "message-by-id", "message-count"] as const)(
-  "captures %s selectors and target before asynchronous dispatch",
-  async (kind) => {
-    const target = {
-      agentId: "main",
-      sessionId: "history-worker",
-      sessionKey: "agent:main:history-worker",
-      storePath: "/tmp/history-worker-fixture/sessions.json",
-      sessionEntry: { sessionId: "history-worker" },
-      env: { OPENCLAW_STATE_DIR: "/tmp/captured-history-state", UNRELATED_SECRET: "synthetic" },
-    };
-    const supplied =
-      kind === "delta"
+it.each([
+  "delta",
+  "inline-visibility",
+  "message-lookup",
+  "recent",
+  "message-by-id",
+  "message-count",
+] as const)("captures %s selectors and target before asynchronous dispatch", async (kind) => {
+  const target = {
+    agentId: "main",
+    sessionId: "history-worker",
+    sessionKey: "agent:main:history-worker",
+    storePath: "/tmp/history-worker-fixture/sessions.json",
+    sessionEntry: { sessionId: "history-worker" },
+    env: { OPENCLAW_STATE_DIR: "/tmp/captured-history-state", UNRELATED_SECRET: "synthetic" },
+  };
+  const supplied =
+    kind === "delta"
+      ? {
+          kind,
+          params: { target, limits: { cursor: "original", maxBytes: 8000, maxEvents: 10 } },
+        }
+      : kind === "inline-visibility"
         ? {
             kind,
-            params: { target, limits: { cursor: "original", maxBytes: 8000, maxEvents: 10 } },
+            params: { target, lookup: { kind: "run" as const, runId: "original", messageSeq: 7 } },
           }
         : kind === "recent"
           ? {
@@ -457,56 +472,60 @@ it.each(["delta", "message-lookup", "recent", "message-by-id", "message-count"] 
                   },
                 }
               : { kind, params: { target, messageId: "original" } };
-    const expected = structuredClone(supplied);
-    const pending = readSessionHistoryPageInWorker(supplied);
-    target.sessionId = "successor";
-    target.sessionEntry.sessionId = "successor";
-    target.env.OPENCLAW_STATE_DIR = "/tmp/successor-history-state";
-    if (supplied.kind === "delta") {
-      supplied.params.limits.cursor = "successor";
-      supplied.params.limits.maxEvents = 1;
-    } else if (supplied.kind === "recent") {
-      supplied.params.maxMessages = 1;
-      supplied.params.maxLines = 2;
-      supplied.params.allowResetArchiveFallback = false;
-    } else if (supplied.kind === "message-by-id") {
-      supplied.params.messageId = "successor";
-      supplied.params.options.maxBytes = 1;
-      supplied.params.options.allowResetArchiveFallback = false;
-    } else if (supplied.kind === "message-lookup") {
-      supplied.params.messageId = "successor";
-    }
-    await waitForReaderAdmission(1);
-    const input = queued[0]!.prepare();
-    queued[0]!.result.resolve(
-      kind === "delta"
-        ? {
-            kind,
-            delta: { kind: "reset", cursor: "next", reason: "invalid_cursor" },
-            subagentCoordination: { sessions: [], runMessages: [] },
-          }
+  const expected = structuredClone(supplied);
+  const pending = readSessionHistoryPageInWorker(supplied);
+  target.sessionId = "successor";
+  target.sessionEntry.sessionId = "successor";
+  target.env.OPENCLAW_STATE_DIR = "/tmp/successor-history-state";
+  if (supplied.kind === "delta") {
+    supplied.params.limits.cursor = "successor";
+    supplied.params.limits.maxEvents = 1;
+  } else if (supplied.kind === "inline-visibility") {
+    supplied.params.lookup.runId = "successor";
+    supplied.params.lookup.messageSeq = 8;
+  } else if (supplied.kind === "recent") {
+    supplied.params.maxMessages = 1;
+    supplied.params.maxLines = 2;
+    supplied.params.allowResetArchiveFallback = false;
+  } else if (supplied.kind === "message-by-id") {
+    supplied.params.messageId = "successor";
+    supplied.params.options.maxBytes = 1;
+    supplied.params.options.allowResetArchiveFallback = false;
+  } else if (supplied.kind === "message-lookup") {
+    supplied.params.messageId = "successor";
+  }
+  await waitForReaderAdmission(1);
+  const input = queued[0]!.prepare();
+  queued[0]!.result.resolve(
+    kind === "delta"
+      ? {
+          kind,
+          delta: { kind: "reset", cursor: "next", reason: "invalid_cursor" },
+          subagentCoordination: { sessions: [], runMessages: [] },
+        }
+      : kind === "inline-visibility"
+        ? { kind, subagentCoordination: { sessions: [], runMessages: [["original", 7, false]] } }
         : kind === "message-by-id"
           ? { kind, result: { found: false, oversized: false } }
           : kind === "message-count"
             ? { kind, count: 0 }
             : { kind, messages: [] },
-    );
-    await pending;
-    expect(input.request).toMatchObject({
-      kind,
-      params: {
-        ...expected.params,
-        target: {
-          ...expected.params.target,
-          env: { OPENCLAW_STATE_DIR: "/tmp/captured-history-state" },
-        },
+  );
+  await pending;
+  expect(input.request).toMatchObject({
+    kind,
+    params: {
+      ...expected.params,
+      target: {
+        ...expected.params.target,
+        env: { OPENCLAW_STATE_DIR: "/tmp/captured-history-state" },
       },
-    });
-    expect(
-      input.request.kind === "rpc" ? undefined : input.request.params.target,
-    ).not.toHaveProperty("env.UNRELATED_SECRET");
-  },
-);
+    },
+  });
+  expect(input.request.kind === "rpc" ? undefined : input.request.params.target).not.toHaveProperty(
+    "env.UNRELATED_SECRET",
+  );
+});
 
 it.each([false, true])(
   "keeps delta followers and their captured authority separate (deferred error: %s)",

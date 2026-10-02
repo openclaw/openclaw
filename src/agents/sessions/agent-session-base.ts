@@ -81,6 +81,7 @@ export abstract class AgentSessionBase {
   protected autoCompactionAbortController: AbortController | undefined = undefined;
   protected overflowRecoveryAttempts = 0;
   protected contextOverflowRecoveryOwner: "session" | "caller";
+  protected resolveCompactionThinkingLevel?: AgentSessionConfig["resolveCompactionThinkingLevel"];
 
   protected branchSummaryAbortController: AbortController | undefined = undefined;
   private extensionModifiedToolResultIds = new Set<string>();
@@ -142,6 +143,7 @@ export abstract class AgentSessionBase {
     };
     this.withExternalSessionWriteSettlement = config.withSessionWriteSettlement;
     this.contextOverflowRecoveryOwner = config.contextOverflowRecoveryOwner ?? "session";
+    this.resolveCompactionThinkingLevel = config.resolveCompactionThinkingLevel;
     this.cleanupProviderSessionResourcesOnDispose =
       config.cleanupProviderSessionResourcesOnDispose ?? true;
   }

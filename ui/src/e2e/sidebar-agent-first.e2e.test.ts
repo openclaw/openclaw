@@ -90,7 +90,7 @@ suite.define(() => {
               localStorage.setItem(key, JSON.stringify(prefs));
               localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
               localStorage.setItem(
-                "openclaw:control-ui:community-invite",
+                "openclaw:control-ui:community-invite:v2",
                 JSON.stringify({ dismissedAtMs: Date.now() }),
               );
             },

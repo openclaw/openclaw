@@ -12,6 +12,7 @@ import {
   resolveTimerTimeoutMs,
 } from "../packages/normalization-core/src/number-coercion.ts";
 import { normalizeCsvOrLooseStringList } from "../packages/normalization-core/src/string-normalization.ts";
+import { chunkItems } from "../src/utils/chunk-items.ts";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import { hasUnjoinedWork, runManagedCommand } from "./lib/managed-child-process.mts";
 import {
@@ -369,14 +370,6 @@ function sourceOpenclawCommand(repoRoot: string, args: string[]) {
     command: process.execPath,
     args: [path.join(repoRoot, "scripts", "run-node.mjs"), ...args],
   };
-}
-
-function chunkArray<Value>(values: Value[], chunkSize: number) {
-  const chunks: Value[][] = [];
-  for (let index = 0; index < values.length; index += chunkSize) {
-    chunks.push(values.slice(index, index + chunkSize));
-  }
-  return chunks;
 }
 
 export function toRepoRelativePath(repoRoot: string, absolutePath: string) {
@@ -798,7 +791,7 @@ async function runSlashHelpProbes(params: GauntletContext) {
 async function runQaChunks(params: GauntletContext) {
   const chunks = [
     ...(params.qaBaseline ? [{ label: "baseline", plugins: [] }] : []),
-    ...chunkArray(params.plugins, params.qaPluginChunkSize).map((plugins, index) => ({
+    ...chunkItems(params.plugins, params.qaPluginChunkSize).map((plugins, index) => ({
       label: `chunk-${String(index).padStart(2, "0")}`,
       plugins,
     })),

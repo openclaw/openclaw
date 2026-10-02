@@ -1803,19 +1803,16 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
 
   it("rejects a successful packaged update followed by an old self-swapped process import miss", () => {
     expect(() =>
-      verifyPackagedUpgradeUpdateResult(
-        {
-          exitCode: 1,
-          stdout: JSON.stringify({
-            status: "ok",
-            after: { version: "2026.4.27" },
-            steps: [{ name: "global update", exitCode: 0 }],
-          }),
-          stderr:
-            "[openclaw] Failed to start CLI: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/prefix/lib/node_modules/openclaw/dist/memory-state-old.js'",
-        },
-        { candidateVersion: "2026.4.27" },
-      ),
+      verifyPackagedUpgradeUpdateResult({
+        exitCode: 1,
+        stdout: JSON.stringify({
+          status: "ok",
+          after: { version: "2026.4.27" },
+          steps: [{ name: "global update", exitCode: 0 }],
+        }),
+        stderr:
+          "[openclaw] Failed to start CLI: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/prefix/lib/node_modules/openclaw/dist/memory-state-old.js'",
+      }),
     ).toThrow(/Packaged upgrade failed/u);
   });
 

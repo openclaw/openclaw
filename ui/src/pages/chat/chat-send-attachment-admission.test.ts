@@ -5,7 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import * as outboxPayloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
 import {
   readStoredOutboxStore,
-  storageTargetForGateway,
+  storageTargetForComposer,
   subscribeStoredChatOutboxChanges,
 } from "../../lib/chat/outbox-store.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
@@ -212,7 +212,7 @@ describe("chat attachment admission", () => {
         ]);
         if (outcome === "metadata failure") {
           const write = sessionStorage.setItem.bind(sessionStorage);
-          const target = storageTargetForGateway(host.settings?.gatewayUrl);
+          const target = storageTargetForComposer(host);
           vi.spyOn(sessionStorage, "setItem").mockImplementation((key, value) => {
             if (key === target.key) {
               throw new DOMException("quota exceeded", "QuotaExceededError");
@@ -354,7 +354,7 @@ describe("chat attachment admission", () => {
       chatAttachments: attachments,
     });
     const client = expectDefined(host.client, "recovery client");
-    const target = storageTargetForGateway(host.settings?.gatewayUrl);
+    const target = storageTargetForComposer(host);
     const recovery = vi.spyOn(client, "recoveryScope", "get");
     const originalRecovery = client.recoveryScope;
     const cleanup = vi.spyOn(outboxPayloadStore, "removeOutboxPayloads");

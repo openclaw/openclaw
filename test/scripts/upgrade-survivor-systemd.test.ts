@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -21,6 +21,7 @@ import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
+  openFixtureReleaseFifo,
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
 import { withinTest } from "../helpers/promise.js";
@@ -556,7 +557,8 @@ sendReceipt(${JSON.stringify(record)}, "started");
           status: 0,
           stdout: "enabled\n",
         });
-        const restarted = spawnSync(
+        const terminalRelease = await openFixtureReleaseFifo(home, "terminal-release");
+        const terminal = spawn(
           "python3",
           [
             "-c",
@@ -571,8 +573,8 @@ status = pty.spawn(["bash", "-c", sys.argv[1], "fixture", sys.argv[2]], master_r
 code = os.waitstatus_to_exitcode(status)
 raise SystemExit(code if code >= 0 else 128 - code)
 `,
-            'set -e; systemctl --user restart openclaw-gateway.service; for _ in {1..200}; do [ -s "$1" ] && exit 0; sleep 0.01; done; exit 1',
-            record,
+            'set -e; systemctl --user restart openclaw-gateway.service; read -r _ < "$1"',
+            terminalRelease.path,
           ],
           {
             env: {
@@ -581,12 +583,42 @@ raise SystemExit(code if code >= 0 else 128 - code)
               XDG_RUNTIME_DIR: undefined,
               DBUS_SESSION_BUS_ADDRESS: "unix:path=/fixture/stale-bus",
             },
-            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
             timeout: 40_000,
           },
         );
-        expect(restarted.status, restarted.stdout + restarted.stderr).toBe(0);
-        await waitForStarts(1);
+        let terminalOutput = "";
+        terminal.stdout.on("data", (data: Buffer) => (terminalOutput += data.toString()));
+        terminal.stderr.on("data", (data: Buffer) => (terminalOutput += data.toString()));
+        const terminalClosed = new Promise<number | null>((done, reject) => {
+          terminal.once("error", reject);
+          terminal.once("close", done);
+        });
+        try {
+          await withinTest(
+            Promise.race([
+              receipts.waitFor(record, "started"),
+              terminalClosed.then(() => {
+                // The service records startup before notifying over the independent socket.
+                expect(records(), terminalOutput).toHaveLength(1);
+              }),
+            ]),
+            signal,
+          );
+          await terminalRelease.release();
+          expect(await withinTest(terminalClosed, signal), terminalOutput).toBe(0);
+          await waitForStarts(1);
+        } finally {
+          try {
+            await terminalRelease.release();
+            if (terminal.exitCode === null && terminal.signalCode === null) {
+              terminal.kill("SIGKILL");
+            }
+            await terminalClosed;
+          } finally {
+            await terminalRelease.close();
+          }
+        }
         const firstRuntime = await readLoadedSystemdServiceRuntime(env);
         expect(firstRuntime).toMatchObject({
           status: "running",

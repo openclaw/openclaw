@@ -24,6 +24,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { VERSION } from "../version.js";
+import { releaseAgentCreationClaimHandle } from "./agent-creation-claim.js";
 import { releaseAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
 import type {
   OpenClawAgentDatabase,
@@ -140,14 +141,6 @@ export function deferOpenClawAgentPostCommitPublication(
     ...(lease ? { env: { ...lease.env } } : {}),
   };
   return deferSqlitePostCommitPublication(database.db, () => publish(options));
-}
-
-/** Runtime reads and opens share the generation-aware process-local damage latch. */
-export function assertAgentDatabaseTerminalOpenAllowed(pathname: string): void {
-  const failure = cache.terminal.get(pathname);
-  if (failure) {
-    throw failure;
-  }
 }
 
 function logResourceCloseFailure(pathname: string, error: unknown): void {
@@ -397,6 +390,7 @@ export function closeCachedOpenClawAgentDatabase(
     cache.leases.delete(database.path);
   }
   releaseAgentDeletionDatabaseCleanup(database);
+  releaseAgentCreationClaimHandle(database);
   clearTimeout(cache.idleTimers.get(database.db));
   cache.idleTimers.delete(database.db);
 }

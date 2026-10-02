@@ -4,6 +4,18 @@ The `agentsapi` harness runs commands and file operations in an OpenAI-hosted Li
 VM by default, while OpenClaw handles channel messaging and configured Gateway
 tools. It uses OpenAI API-key authentication.
 
+API keys authenticate requests and are not part of the native conversation's
+identity. Rotating the key used by the harness preserves existing session IDs;
+subsequent attempts use the newly resolved key. The replacement key must have API
+access to those sessions. Authentication or permission errors surface normally
+without resetting the saved binding. The hosted service currently requires the
+original API key to submit input to an existing hosted session, even when another
+key can read it. If the service rejects input for this reason, restore the
+creating key to continue the same session.
+
+Model, environment, and effective HTTP MCP configuration changes still require a
+session reset. Bindings created before this change are not migrated or supported.
+
 Start with the [setup and supported features guide](https://docs.openclaw.ai/plugins/agentsapi).
 Enable the `agentsapi` plugin and select it for the model through
 `agents.defaults.models["openai/<model>"].agentRuntime.id: "agentsapi"`.
@@ -285,7 +297,8 @@ whose backend startup remains unresolved.
 Saved sessions keep their native conversation, workspace, and original tool
 declarations when Gateway tools are added. Fresh sessions receive the current
 Gateway tool declarations. Reset an existing session to adopt the new tool
-surface; changing its model or API key still requires a reset.
+surface. Changing its model still requires a reset; changing its API key does not
+reset the saved binding and remains subject to the service permissions above.
 
 Child sessions use the same Gateway tool-policy filtering as other OpenClaw
 runtimes, including inherited restrictions and the child's role. Denied session

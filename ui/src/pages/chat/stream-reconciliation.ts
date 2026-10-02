@@ -29,6 +29,7 @@ import {
   readLiveTerminalAfterBoundaryRunId,
   readLiveTerminalRunId,
 } from "./terminal-message-identity.ts";
+import type { LiveToolStreamState } from "./tool-stream-contract.ts";
 import {
   extractToolMessageRefs,
   resolveLiveToolStreamRefs,
@@ -36,15 +37,14 @@ import {
 } from "./tool-stream-identity.ts";
 import { canResetToolStream, resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
 
-type StreamReconciliationState = StreamCausalBoundaryState & {
-  chatStream: string | null;
-  chatStreamStartedAt: number | null;
-};
+type StreamReconciliationState = StreamCausalBoundaryState &
+  LiveToolStreamState & {
+    chatStream: string | null;
+    chatStreamStartedAt: number | null;
+  };
 
 export type ToolStreamReconciliationState = StreamReconciliationState & {
   chatToolMessages?: unknown[];
-  toolStreamById?: Map<string, unknown>;
-  toolStreamOrder?: unknown[];
 };
 
 type VisibleAssistantStreamPart = {
@@ -70,12 +70,6 @@ type MaterializeVisibleStreamOptions = {
   isHiddenAssistantMessage: AssistantMessageVisibility;
   isHiddenStreamText: StreamVisibility;
 };
-
-export function currentLiveToolCallIds(state: ToolStreamReconciliationState): string[] {
-  return Array.isArray(state.toolStreamOrder)
-    ? state.toolStreamOrder.filter((v): v is string => normalizeOptionalString(v) !== undefined)
-    : [];
-}
 
 function lastUserMessageIndex(messages: unknown[]): number {
   for (let index = messages.length - 1; index >= 0; index--) {

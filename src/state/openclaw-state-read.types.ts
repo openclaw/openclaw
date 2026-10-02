@@ -57,12 +57,12 @@ import type { WorkerSessionPlacementChangeSnapshot } from "../gateway/worker-env
 import type {
   WorkspaceJournalReadCommand,
   WorkspaceJournalReadResult,
-} from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
+} from "../gateway/worker-environments/placement-workspace-journal.types.js";
 import type {
   WorkerEnvironmentFacts,
   WorkerEnvironmentPrunePage,
   WorkerEnvironmentPruneReadInput,
-} from "../gateway/worker-environments/store-worker-contract.js";
+} from "../gateway/worker-environments/store.types.js";
 import type {
   DevicePairingReadCommand,
   DevicePairingReadReply,

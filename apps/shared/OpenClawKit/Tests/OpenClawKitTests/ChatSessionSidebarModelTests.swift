@@ -440,6 +440,20 @@ struct ChatSessionSidebarModelTests {
         #expect(sections.flatMap(\.nodes).map(\.session.key) == ["main"])
     }
 
+    @Test func `archive query presentation opts in without changing default visibility`() throws {
+        let rows = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
+        {"sessions":[{"key":"active","archived":false},{"key":"archived","archived":true}]}
+        """#.utf8)).sessions
+        func keys(_ options: ChatSessionSidebarModel.ViewOptions?) -> Set<String> {
+            Set(ChatSessionSidebarModel.sections(
+                sessions: rows, currentSessionKey: "active", query: "", viewOptions: options)
+                .flatMap(\.nodes).map(\.session.key))
+        }
+        #expect(keys(nil) == ["active"])
+        #expect(keys(.init()) == ["active"])
+        #expect(keys(.init(showArchived: true)) == ["active", "archived"])
+    }
+
     @Test func `active session gets a placeholder row before lists load`() {
         let sections = ChatSessionSidebarModel.sections(
             sessions: [],

@@ -7,7 +7,9 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -18,6 +20,8 @@ import {
 } from "../../state/openclaw-agent-goal-operations-schema.js";
 import type {
   SessionGoalOperation,
+  SessionGoalOperationErrorCode,
+  SessionGoalOperationLookup,
   SessionGoalOperationResult,
   SessionTranscriptTurnMutationResult,
 } from "./goals-operations.types.js";
@@ -46,18 +50,10 @@ const OPERATION_FUTURE_SKEW_MS = 5 * 60 * 1000;
 const MAX_SESSION_RECEIPTS = 4096;
 
 type GoalOperationScope = SessionAccessScope & { expectedSessionId: string };
-type OperationErrorCode =
-  | "expired"
-  | "operation-conflict"
-  | "session-rebound"
-  | "goal-rebound"
-  | "capacity"
-  | "receipt-invalid"
-  | "invalid";
 
 export class SessionGoalOperationError extends Error {
   constructor(
-    readonly code: OperationErrorCode,
+    readonly code: SessionGoalOperationErrorCode,
     message: string,
   ) {
     super(message);
@@ -65,7 +61,7 @@ export class SessionGoalOperationError extends Error {
   }
 }
 
-function assertOperationTime(operation: SessionGoalOperation, now: number): void {
+export function assertSessionGoalOperationTime(operation: SessionGoalOperation, now: number): void {
   if (
     !Number.isSafeInteger(operation.issuedAtMs) ||
     operation.issuedAtMs > now + OPERATION_FUTURE_SKEW_MS
@@ -99,34 +95,30 @@ function operationFingerprint(operation: SessionGoalOperation): string {
   );
 }
 
-/** Read a durable receipt before transient chat dedupe or busy checks, without creating tables. */
-export function lookupSessionGoalOperation(
-  options: GoalOperationScope & { operation: SessionGoalOperation },
+/** Read the receipt and its session generation from one admitted snapshot. */
+export function readSessionGoalOperationInDatabase(
+  database: OpenClawAgentReadOnlyDatabase,
+  options: SessionGoalOperationLookup,
 ): SessionGoalOperationResult | undefined {
-  assertOperationTime(options.operation, Date.now());
-  const resolved = resolveSqliteScope(options);
-  const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    const { db } = database;
-    const table = executeSqliteQueryTakeFirstSync(
-      db,
-      getSessionKysely(db)
-        .selectFrom("sqlite_schema")
-        .select("name")
-        .where("type", "=", "table")
-        .where("name", "=", SESSION_GOAL_OPERATIONS_TABLE),
-    );
-    if (!table) {
+  assertSessionGoalOperationTime(options.operation, Date.now());
+  const { db } = database;
+  return runSqliteDeferredTransactionSync(db, () => {
+    const schema = getAdmittedSqliteSchemaFacts(db);
+    if (!schema) {
+      throw new Error("Goal receipt reads require admitted schema facts");
+    }
+    if (!schema.tables.has(SESSION_GOAL_OPERATIONS_TABLE)) {
       return undefined;
     }
     const receipt = readSessionGoalOperationReceipt(
       db,
-      resolved.sessionKey,
+      options.sessionKey,
       options.expectedSessionId,
       options.operation,
     );
     if (
       receipt &&
-      readSessionEntryRow(database, resolved.sessionKey)?.entry.sessionId !==
+      readSessionEntryRow(database, options.sessionKey)?.entry.sessionId !==
         options.expectedSessionId
     ) {
       throw new SessionGoalOperationError(
@@ -135,8 +127,7 @@ export function lookupSessionGoalOperation(
       );
     }
     return receipt;
-  }, toDatabaseOptions(resolved));
-  return result.found ? result.value : undefined;
+  });
 }
 
 /** The caller has installed the schema before BEGIN; this read participates in its transaction. */
@@ -146,7 +137,7 @@ export function readSessionGoalOperationReceipt(
   sessionId: string,
   operation: SessionGoalOperation,
 ): SessionGoalOperationResult | undefined {
-  assertOperationTime(operation, Date.now());
+  assertSessionGoalOperationTime(operation, Date.now());
   const row = executeSqliteQueryTakeFirstSync(
     db,
     getSessionKysely(db)
@@ -242,7 +233,7 @@ export function writeSessionGoalOperationReceipt(
   runId?: string,
 ): SessionGoalOperationResult {
   const now = Date.now();
-  assertOperationTime(operation, now);
+  assertSessionGoalOperationTime(operation, now);
   const kysely = getSessionKysely(db);
   executeSqliteQuerySync(
     db,

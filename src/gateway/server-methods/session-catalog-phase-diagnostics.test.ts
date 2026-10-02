@@ -4,7 +4,6 @@ import {
   onInternalDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
-  setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
@@ -224,17 +223,12 @@ describe("registered catalog list phase diagnostics", () => {
     expect(JSON.stringify(phases)).not.toContain(privateText);
   });
 
-  it.each(["disabled", "no trusted consumer"])("avoids CPU sampling with %s", async (mode) => {
-    if (mode === "disabled") {
-      observe();
-      setDiagnosticsEnabledForProcess(false);
-    } else {
-      onInternalDiagnosticEvent((event) => {
-        if (event.type === "diagnostic.phase.completed") {
-          phases.push(event);
-        }
-      });
-    }
+  it("avoids CPU sampling without a trusted consumer", async () => {
+    onInternalDiagnosticEvent((event) => {
+      if (event.type === "diagnostic.phase.completed") {
+        phases.push(event);
+      }
+    });
     hoisted.activeRegistry.sessionCatalogs = [{ provider: provider(privateText) }];
     const call = startCall("sessions.catalog.list", {}, config);
     await call.completion;

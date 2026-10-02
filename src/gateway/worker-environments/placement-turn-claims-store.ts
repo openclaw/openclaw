@@ -15,10 +15,11 @@ import {
 import { prepareWorkerTurnClaimClosed } from "./placement-turn-claim-events.js";
 import { ActiveTurnClaimError, type createPlacementTurnClaimOps } from "./placement-turn-claims.js";
 import type {
+  PlacementAckCursorInput,
   PlacementTurnClaimCurrentCheck,
   PlacementTurnClaimReceipt,
-  PlacementTurnClaimWorkerOperations,
-} from "./placement-turn-claims.worker-contract.js";
+} from "./placement-turn-claims.types.js";
+import type { PlacementTurnClaimWorkerOperations } from "./placement-turn-claims.worker-contract.js";
 import { createPlacementWorkerMutation } from "./placement-worker-mutation.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 
@@ -111,6 +112,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
           }
           prepared = facts;
           if (
+            command.type === "placementTurns.updateAckCursors" ||
             command.type === "placementTurns.recordStagedResult" ||
             command.type === "placementTurns.updateWorkspaceBaseManifest"
           ) {
@@ -141,6 +143,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         },
         async recoverUnknown(error, publication) {
           if (
+            command.type === "placementTurns.updateAckCursors" ||
             command.type === "placementTurns.handoffRuntimeRefreshResult" ||
             command.type === "placementTurns.recordStagedResult" ||
             command.type === "placementTurns.updateWorkspaceBaseManifest"
@@ -251,6 +254,26 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
     }
   }
   return {
+    async updateAckCursors(input: PlacementAckCursorInput, assertCurrent?: () => void) {
+      const receipt = await execute(
+        {
+          type: "placementTurns.updateAckCursors",
+          input: { ...input, gatewayInstanceId: runtime.instanceId, nowMs: runtime.now?.() },
+        },
+        assertCurrent,
+        {
+          assertPlacementCurrent(placement) {
+            if (!placement || !isCurrentPlacementTurnClaim(placement, input.claim)) {
+              throw new Error(`Cannot ACK stale worker turn for session ${input.claim.sessionId}`);
+            }
+          },
+        },
+      );
+      if (!receipt.placement) {
+        throw new Error("Worker ACK receipt is missing its placement");
+      }
+      return receipt.placement;
+    },
     async updateWorkspaceBaseManifest(
       input: Parameters<Claims["updateWorkspaceBaseManifest"]>[0],
       assertCurrent?: () => void,

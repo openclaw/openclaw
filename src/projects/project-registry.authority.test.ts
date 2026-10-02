@@ -11,7 +11,7 @@ import { OpenClawStateLeaseError } from "../state/openclaw-state-lease-error.js"
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { removeClonedProjectCheckout } from "./project-clone.js";
 import { selectStoredProjectRegistry } from "./project-registry.js";
-import type { ProjectRegistryRecord } from "./project-registry.kernel.js";
+import type { ProjectRegistryRecord } from "./project-registry.types.js";
 
 const fixture = vi.hoisted(() => ({
   expiresAt: 40_000,

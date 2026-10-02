@@ -124,8 +124,8 @@ function renderTranscriptShell(
         class="chat-thread ${projection.isDirectThread ? "chat-thread--direct" : ""} ${
           routeLoading ? "chat-thread--route-loading" : ""
         } ${commentPins ? "chat-thread--comment-pins" : ""}"
-        ${markdownBlocks(props.transcriptVisible ?? true)}
-        ${linkReaderPrefetch(props.sessionKey, (props.transcriptVisible ?? true) && !projection.showLoadingSkeleton, Boolean(props.gatewayClient?.connected))}
+        ${markdownBlocks(props.transcriptVisible ?? true, props.transcriptPresentation)}
+        ${linkReaderPrefetch(props.sessionKey, (props.transcriptVisible ?? true) && !projection.showLoadingSkeleton, Boolean(props.gatewayClient?.connected), props.transcriptPresentation)}
         ${ref((element) => {
           if (element instanceof HTMLElement) {
             hydrateLinkFavicons(element, props.fetchLinkFavicon);

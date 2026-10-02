@@ -29,6 +29,7 @@ import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { parseUpgradeSurvivorScenarios } from "../../scripts/lib/upgrade-survivor-policy.mjs";
 import { createReleaseWorkflowMatrixPlan } from "../../scripts/plan-release-workflow-matrix.mjs";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
   fullReleaseCandidateArtifact,
@@ -41,7 +42,6 @@ import {
 } from "../helpers/release-workflow-timeouts.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { evaluateWorkflowExpression, evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
-import { copyNativeCompilerPackage } from "./native-boundary-fixture.js";
 
 const PACKAGE_ACCEPTANCE_WORKFLOW = ".github/workflows/package-acceptance.yml";
 const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
@@ -399,8 +399,12 @@ function frozenWorkflowFixture(
     const installedParser = createRequire(import.meta.url).resolve("typescript/package.json");
     const nativeName = `@typescript/typescript-${process.platform}-${process.arch}`;
     const installedNative = createRequire(installedParser).resolve(`${nativeName}/package.json`);
-    copyNativeCompilerPackage(dirname(installedParser), join(tooling, "node_modules/typescript"));
-    copyNativeCompilerPackage(dirname(installedNative), join(tooling, "node_modules", nativeName));
+    copyTreeCloseOnExec(dirname(installedParser), join(tooling, "node_modules/typescript"), {
+      dereference: true,
+    });
+    copyTreeCloseOnExec(dirname(installedNative), join(tooling, "node_modules", nativeName), {
+      dereference: true,
+    });
   }
   return {
     root,

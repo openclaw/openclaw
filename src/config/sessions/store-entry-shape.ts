@@ -5,6 +5,7 @@ import {
   normalizeSessionColorValue,
   normalizeSessionIconValue,
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import { normalizeSessionConversationLink } from "./conversation-link.js";
 import { SessionStoreMigrationRequiredError } from "./migration-required.js";
 import { hasLegacySessionEntryState } from "./session-entry-state-format.js";
 import type { PendingTranscriptRepairState, SessionEntry } from "./types.js";
@@ -47,6 +48,10 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
       delete canonicalValue[key];
     }
   };
+  setOptionalField(
+    "conversationLink",
+    normalizeSessionConversationLink(canonicalValue.conversationLink),
+  );
   const icon =
     typeof canonicalValue.icon === "string" ? normalizeSessionIconValue(canonicalValue.icon) : null;
   setOptionalField("icon", icon);

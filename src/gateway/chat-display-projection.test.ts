@@ -94,7 +94,7 @@ describe("multimodal display privacy", () => {
     );
   });
 
-  it("keeps sanitized legacy media in projection and incremental SSE", () => {
+  it("keeps sanitized legacy media in projection and incremental SSE", async () => {
     const data = Buffer.from("inline payload").toString("base64");
     const rawMessage = {
       role: "user",
@@ -143,7 +143,8 @@ describe("multimodal display privacy", () => {
     });
     for (const message of [
       projectChatDisplayMessages([rawMessage])[0],
-      state.appendInlineMessage({ message: rawMessage, messageId: "media-message" })?.message,
+      (await state.prepareInlineMessage({ message: rawMessage, messageId: "media-message" }))()
+        ?.message,
     ]) {
       expect(message?.role).toBe("user");
       expect(JSON.stringify(message)).not.toContain(data);

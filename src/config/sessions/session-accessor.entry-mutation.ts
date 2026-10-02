@@ -6,28 +6,14 @@ import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { registerOpenClawAgentDatabaseReadCandidateResource } from "../../state/openclaw-agent-db-resources.js";
 import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
-import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
   type OpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { loadSessionEntry, patchSessionEntryCore } from "./session-accessor.entry.js";
-import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
-import {
-  assertSessionCreationLabelAvailable,
-  readSessionCreationSnapshotInDatabase,
-} from "./session-accessor.sqlite-creation-read.js";
-import { createSessionEntryWithTranscriptInWorker } from "./session-accessor.sqlite-creation-worker.js";
+import { createSessionEntryWithTranscriptInScope } from "./session-accessor.sqlite-creation.js";
 import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
-import {
-  withSessionEntryCreationPublication,
-  runWithSessionEntryCreationPublication,
-} from "./session-accessor.sqlite-entry-cache.js";
-import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import "./session-accessor.sqlite-entry.js";
 import "./session-accessor.sqlite-parent-session.js";
 import { prepareSessionEntryReplacementDatabase } from "./session-accessor.sqlite-replacement-worker.js";
@@ -35,12 +21,8 @@ import {
   captureLifecycleDatabaseScope,
   resolveSqliteScope,
   prepareSqliteScope,
-  resolveSqliteTranscriptScope,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
-import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   SessionAccessScope,
   SessionEntryUpdateOptions,
@@ -398,122 +380,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
   const resolved = captureLifecycleDatabaseScope(
     isMainThread ? await prepareSqliteScope(target) : resolveSqliteScope(target),
   );
-  if (
-    isMainThread &&
-    supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(resolved)) &&
-    !hasPreparedNativeSessionDeletion()
-  ) {
-    return createSessionEntryWithTranscriptInWorker(resolved, createEntry, options);
-  }
-  // Process-held, already executing, maintenance, and native rollback scopes keep their kernels.
-  const storeScope = { agentId, env: resolved.env, storePath: resolved.path };
-  // The resolved path is a physical locator, not the original logical store selector.
-  // Re-resolving a missing custom-agent suffix as a shared store would assign it to main.
-  const creationDatabase = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const { normalizedKey, legacyKeys, ...context } = readSessionCreationSnapshotInDatabase(
-    creationDatabase,
-    captured.sessionKey,
-    options.label,
-  );
-  return await withSessionEntryCreationPublication<SessionEntryCreateWithTranscriptResult<TError>>(
-    { database: creationDatabase, agentId, sessionKey: normalizedKey, bind: options.bindCreation },
-    async (operation) => {
-      options.onPhase?.("entry");
-      const created = await createEntry(context);
-      if (!created.ok) {
-        return { ok: false, error: created.error, phase: "entry" };
-      }
-      const ownerAssignment = options.resolveOwnerAssignment?.();
-      const { cwd, commitGuard, withCommit: withSourceCommit, onLifecycleCommitted } = options;
-      const withCommit: typeof options.withCommit = withSourceCommit
-        ? (run) =>
-            withSourceCommit((assertCurrent) =>
-              runWithSessionEntryCreationPublication(operation, () => run(assertCurrent)),
-            )
-        : undefined;
-
-      const initializeTranscript = async (assertSourceCurrent?: () => void) => {
-        try {
-          const transcriptScope = resolveSqliteTranscriptScope({
-            ...storeScope,
-            sessionId: created.entry.sessionId,
-            sessionKey: normalizedKey,
-          });
-          await runExclusiveSqliteSessionWrite(
-            transcriptScope,
-            async () => {
-              runOpenClawAgentWriteTransaction(
-                (database) => {
-                  commitGuard?.();
-                  assertSourceCurrent?.();
-                  ensureTranscriptHeader(database, transcriptScope, cwd);
-                },
-                toDatabaseOptions(transcriptScope),
-                { operationLabel: "session.entry.create-transcript" },
-              );
-            },
-            "session.entry.create-with-transcript",
-          );
-          return undefined;
-        } catch (err) {
-          // Reassert while source custody is still held; acquisition and unwind errors
-          // must escape instead of becoming ordinary transcript failures.
-          commitGuard?.();
-          assertSourceCurrent?.();
-          return formatErrorMessage(err);
-        }
-      };
-      options.onPhase?.("transcript");
-      const transcriptError = created.transcriptEvents
-        ? undefined
-        : withCommit
-          ? await withCommit(initializeTranscript)
-          : await initializeTranscript();
-      if (transcriptError !== undefined) {
-        return {
-          ok: false,
-          error: transcriptError,
-          phase: "transcript",
-        };
-      }
-
-      const entry = created.entry;
-      options.onPhase?.("commit");
-      await applySessionEntryLifecycleMutation({
-        ...storeScope,
-        removals: legacyKeys.map((sessionKey) => ({ sessionKey })),
-        upserts: [{ sessionKey: normalizedKey, entry }],
-        skipMaintenance: true,
-        beforeCommitInTransaction: () => {
-          commitGuard?.();
-          assertSessionCreationLabelAvailable(creationDatabase, normalizedKey, options.label);
-        },
-        ...(withCommit ? { withCommit } : {}),
-        afterFreshUpsertsInTransaction: (database) => {
-          if (created.transcriptEvents) {
-            appendTranscriptEventsInTransaction(
-              database,
-              { ...resolved, sessionKey: normalizedKey, sessionId: entry.sessionId },
-              created.transcriptEvents,
-            );
-          }
-          if (
-            ownerAssignment &&
-            !replaceSessionOwnerInTransaction(database, normalizedKey, ownerAssignment)
-          ) {
-            throw new Error(`Session owner assignment lost its target: ${normalizedKey}`);
-          }
-        },
-        ...(onLifecycleCommitted
-          ? { onLifecycleCommitted: () => onLifecycleCommitted(entry) }
-          : {}),
-        ...(options.afterCommitted
-          ? { afterCommitted: (source) => options.afterCommitted!(entry, source) }
-          : {}),
-      });
-      return { ok: true, entry, sessionFile: normalizedKey };
-    },
-  );
+  return createSessionEntryWithTranscriptInScope(resolved, createEntry, options);
 }
 
 export function cloneSessionEntries(

@@ -39,7 +39,10 @@ import {
   captureWorkerTurnFinishing,
   type WorkerTurnTranscriptSource,
 } from "./placement-turn-claim-events.js";
-import { captureWorkerTurnLiveEventOwner } from "./worker-turn-run-owner.js";
+import {
+  captureWorkerTurnLiveEventOwner,
+  type WorkerTurnLiveEventOwner,
+} from "./worker-turn-run-owner.js";
 
 const DEFAULT_WINDOW_SIZE = 128;
 const DEFAULT_MAX_PENDING_BYTES = 512 * 1024;
@@ -67,18 +70,6 @@ function invalidEvent(): WorkerLiveEventFailure {
 
 function capacityExceeded(): WorkerLiveEventFailure {
   return { ok: false, details: { reason: "capacity-exceeded" } };
-}
-
-function isCancelledFinishing(
-  request: WorkerLiveEventParams,
-  owner: PendingLiveEvent["runOwner"],
-): boolean {
-  return (
-    owner?.isCancelled() === true &&
-    request.event.kind === "lifecycle" &&
-    request.event.payload.phase === "finishing" &&
-    request.event.payload.aborted === true
-  );
 }
 
 export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOptions = {}) {
@@ -329,7 +320,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
   ): WorkerLiveEventFailure | undefined => {
     const { request, recordApplied, runOwner, source } = publication;
     if (runOwner?.isCancelled()) {
-      if (!isCancelledFinishing(request, runOwner)) {
+      if (!runOwner.isCancelledFinishing(request)) {
         return invalidEvent();
       }
       // Cancellation retires live publication before the worker finishes.
@@ -473,6 +464,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       request: WorkerLiveEventParams;
       source: WorkerTurnTranscriptSource;
     },
+    runOwner: WorkerTurnLiveEventOwner | undefined,
   ): WorkerLiveEventApplicationResult => {
     if (params.request.seq <= window.ackedSeq) {
       return { ok: true, result: { ackedSeq: window.ackedSeq } };
@@ -480,7 +472,6 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if (params.request.lastAckedSeq > window.ackedSeq) {
       return resyncWindow(window);
     }
-    const runOwner = captureWorkerTurnLiveEventOwner(params.identity);
     const recordFinishing = captureWorkerTurnFinishing(params.identity, params.request);
     const recordApplied: PendingLiveEvent["recordApplied"] = (event) => {
       runOwner?.record(event);
@@ -532,20 +523,19 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if ("ok" in window) {
       return window;
     }
+    const runOwner = captureWorkerTurnLiveEventOwner(params.identity);
     window.activeApplications += 1;
     try {
       let result: WorkerLiveEventApplicationResult;
       try {
-        result = applyToWindow(window, params);
+        result = applyToWindow(window, params, runOwner);
       } finally {
         // Snapshot this accepted prefix, including duplicate ACKs, even if a later
         // callback throws. Later requests own their own writes.
         await Promise.all(window.trajectoryWrites);
       }
       if (result.ok) {
-        if (
-          !isCancelledFinishing(params.request, captureWorkerTurnLiveEventOwner(params.identity))
-        ) {
+        if (!runOwner?.isCancelledFinishing(params.request)) {
           try {
             params.source.receiptAuthority();
           } catch {

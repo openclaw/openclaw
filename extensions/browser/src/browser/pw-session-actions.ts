@@ -146,14 +146,10 @@ export async function closePlaywrightBrowserConnection(opts?: { cdpUrl?: string 
 }
 
 function cdpSocketNeedsAttach(wsUrl: string): boolean {
-  try {
-    const pathname = new URL(wsUrl).pathname;
-    return (
-      pathname === "/cdp" || pathname.endsWith("/cdp") || pathname.includes("/devtools/browser/")
-    );
-  } catch {
-    return false;
-  }
+  const pathname = URL.parse(wsUrl)?.pathname ?? "";
+  return (
+    pathname === "/cdp" || pathname.endsWith("/cdp") || pathname.includes("/devtools/browser/")
+  );
 }
 
 async function tryTerminateExecutionViaCdp(opts: {
