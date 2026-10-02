@@ -59,7 +59,8 @@ function buildContextEngineMaintenanceRuntimeContext(
             ...(runtimeStorePath ? { storePath: runtimeStorePath } : {}),
           });
           params.assertActive?.();
-          sessionManager = SessionManager.open(runtimeTarget);
+          sessionManager = await SessionManager.openAsync(runtimeTarget);
+          params.assertActive?.();
         }
         const manager = sessionManager;
         return await withSessionManagerWrite(manager, () => {

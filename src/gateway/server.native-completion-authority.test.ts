@@ -425,11 +425,11 @@ describe("native completion final-effect authority", () => {
       const sessionManager = SessionManager.open(completion.sessionScope);
       guardSessionManager(sessionManager);
       if (boundary === "automatic compaction") {
-        appendHistory(
+        await appendHistory(
           sessionManager,
           createAssistant(testModel, [{ type: "text", text: "Previous result" }]),
         );
-        appendHistory(
+        await appendHistory(
           sessionManager,
           createAssistant(testModel, [{ type: "text", text: "Latest result" }]),
         );

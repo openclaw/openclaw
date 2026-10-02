@@ -2,7 +2,7 @@ import { realpathSync, symlinkSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
-import { listSessionSuggestions } from "../../config/sessions/session-suggestion-store.js";
+import { listSessionSuggestions } from "../../config/sessions/session-suggestion-store.read.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
@@ -133,7 +133,7 @@ describe("session suggestion store binding", () => {
             }),
           }),
         );
-        expect(listSessionSuggestions(scope)).toEqual([
+        expect(await listSessionSuggestions(scope)).toEqual([
           expect.objectContaining({ id, state: "accepted" }),
         ]);
       });

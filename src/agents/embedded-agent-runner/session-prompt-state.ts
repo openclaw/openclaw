@@ -163,7 +163,7 @@ export function hashToolResultProjectionSnapshot(
 
 export async function persistToolResultProjections(
   state: ToolResultPromptProjectionState,
-  appendEntry: (customType: string, data: unknown) => unknown,
+  appendEntry: (customType: string, data: unknown) => Promise<unknown>,
 ): Promise<void> {
   if (state.frozen.size === 0) {
     return;

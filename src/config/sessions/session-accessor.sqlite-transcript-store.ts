@@ -380,6 +380,8 @@ export function replaceSqliteTranscriptEventsInTransaction(
     createdAtByIndex?: readonly number[];
     /** Keep maintenance rewrites at their existing recency while invalidating stale projections. */
     preserveSessionWindowRecency?: boolean;
+    scheduleProjectionReconcile?: boolean;
+    onProjectionReconcileNeeded?: () => void;
   } = {},
 ): void {
   const rebuildSynchronously =
@@ -445,7 +447,8 @@ export function replaceSqliteTranscriptEventsInTransaction(
     if (rebuildSynchronously) {
       reconcileSessionTranscriptIndexInTransaction(database.db, resolved.sessionId);
     } else {
-      scheduleTranscriptProjectionReconcile(database, resolved.sessionId, true, {});
+      options.onProjectionReconcileNeeded?.();
+      scheduleTranscriptProjectionReconcile(database, resolved.sessionId, true, options);
     }
   }
 }

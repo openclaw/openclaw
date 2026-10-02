@@ -106,7 +106,8 @@ export function assertLockedTranscriptWriteAllowed(
   assertOwnedTranscriptWriteCommit(fencedScope);
   if (
     fencedScope.expectedLifecycleRevision === undefined &&
-    fencedScope.expectedWriterRunId === undefined
+    fencedScope.expectedWriterRunId === undefined &&
+    fencedScope.expectedOwner === undefined
   ) {
     return undefined;
   }

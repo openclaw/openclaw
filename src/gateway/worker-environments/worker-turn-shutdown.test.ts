@@ -51,9 +51,9 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
       path.join(request.plan.assignment.workspaceDir, "restart-proof.txt"),
       "slept-ok\n",
     );
-    fixture
-      .openSessionManager()
-      .appendMessage(makeTextToolResult("sleep", "exec", "slept-ok", false, 1));
+    await (
+      await fixture.openSessionManager()
+    ).appendMessageAsync(makeTextToolResult("sleep", "exec", "slept-ok", false, 1));
     edited.resolve();
     await finish.promise;
     return {

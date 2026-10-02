@@ -2,7 +2,11 @@ import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-c
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { validateSessionId } from "../../../config/sessions/paths.js";
-import { LEGACY_SESSION_ENTRY_STATE_FIELDS } from "../../../config/sessions/session-entry-state-format.js";
+import {
+  hasLegacySessionProviderState,
+  LEGACY_SESSION_ENTRY_STATE_FIELDS,
+  LEGACY_SESSION_PROVIDER_FIELDS,
+} from "../../../config/sessions/session-entry-state-format.js";
 import {
   normalizePendingFinalDelivery,
   normalizeFallbackNotice,
@@ -21,12 +25,20 @@ function normalizeCount(value: unknown): number | undefined {
   return number === undefined ? undefined : Math.floor(number);
 }
 
-/** Doctor preserves the July scalar-state contract before removing its old keys. */
+/** Doctor preserves July routing and scalar-state contracts before removing their old keys. */
 export function migrateLegacySessionEntryState(
   value: Record<string, unknown>,
   updatedAt: unknown = value.updatedAt,
 ): Record<string, unknown> {
   const next = { ...value };
+  if (hasLegacySessionProviderState(value)) {
+    for (const [legacy, current] of LEGACY_SESSION_PROVIDER_FIELDS) {
+      if (typeof value[current] !== "string" && typeof value[legacy] === "string") {
+        next[current] = value[legacy];
+        delete next[legacy];
+      }
+    }
+  }
   for (const field of LEGACY_SESSION_ENTRY_STATE_FIELDS) {
     delete next[field];
   }

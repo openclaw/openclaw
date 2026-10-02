@@ -50,9 +50,20 @@ stub repair, run `openclaw doctor --fix` on `2026.9.7` before upgrading. Current
 
 OpenClaw `v2026.9.7` can still write ownerless and mode-less cron jobs, and its
 migration/import writers can preserve null, `deliver`, or mixed-case delivery
-modes. Those cron repairs remain supported; this change retires no cron format.
+modes. Those cron repairs remain supported. JSON quarantine files also remain supported:
+`v2026.7.35` still writes them.
 
-Doctor refuses these retired inputs:
+Cron JSON job stores (`jobs.json`), split runtime state (`jobs-state.json`), and
+per-job `runs/*.jsonl` history were last written by stable `v2026.5.28`; the
+May 30 SQLite cutover removed those writers. Doctor refuses these files before
+repairing cron or changing config, preserving their original bytes and any
+supported quarantine sidecar. Install `2026.9.7`, run `openclaw doctor --fix`, then
+upgrade to the latest version. Candidate update admission checks the original
+live files and reports the upgrade requirement before activation, including when
+a published updater omits those files from its later rehearsal snapshot. Existing SQLite cron stores,
+including their owner and delivery repairs, keep their normal update path.
+
+Doctor also refuses these retired config inputs:
 
 - `agents.defaults.llm`, agent `embeddedPi`, `embeddedHarness`, whole-agent
   `agentRuntime`, `systemPromptOverride`, and `sandbox.perSession`.
@@ -88,11 +99,10 @@ unchanged. Doctor saves a verified SQLite backup and rechecks the stored owner
 and definition before committing. If ownership cannot be repaired, it preserves
 the roster marker and reports the condition to resolve.
 
-When legacy import or delivery normalization precedes ownership repair, each
-stage saves its own verified snapshot. The earliest backup preserves the original
-persisted cron definitions, ownership, and runtime state; the later backup also
-includes imported jobs before their owners are pinned. Archived legacy JSON keeps
-its original bytes.
+When delivery normalization precedes ownership repair, each stage saves its own
+verified snapshot. The earliest backup preserves the original persisted cron
+definitions, ownership, and runtime state. Archived supported quarantine JSON
+keeps its original bytes.
 
 An owner recorded only in the SQLite owner column is copied into the job's
 canonical definition by Doctor. Its agent identity and runtime state stay the
@@ -109,11 +119,11 @@ default marker. Explicit creator and agent-qualified session ownership keep thei
 existing sharing checks. Deleting another agent leaves unresolved rows intact.
 The normal `openclaw update` Doctor phase performs this repair before saving
 the migrated config, including its early preflight and include-recovery writes.
-During the earlier update rehearsal, Doctor can import and normalize cron rows in
-the private database copy. It preserves uncopied legacy files, including linked
-state, quarantine, and run-log files, and reports their deferred archival. The
-live Doctor phase imports those sources and archives them after package installation. This
-also protects updates started by supported older releases.
+During the earlier update rehearsal, Doctor can import quarantine rows and
+normalize cron definitions in the private database copy. It preserves uncopied
+quarantine files, including linked files, and reports their deferred archival.
+The live Doctor phase imports those sources and archives them after package
+installation. This also protects updates started by supported older releases.
 
 ## Legacy cron delivery settings
 
