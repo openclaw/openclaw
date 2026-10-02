@@ -151,6 +151,7 @@ export async function patchSessionEntryInWorker(params: {
     },
     undefined,
     undefined,
+    undefined,
     (facts) => {
       if (!committing || !isRecord(facts)) {
         return;

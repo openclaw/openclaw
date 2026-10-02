@@ -5235,8 +5235,18 @@ function createCompactNodeTestShardBundles(
     }
   }
 
-  // Settle Gateway admission before runtime placement reads the recipient's policy.
+  // Runtime placement compares required runner capacity and settled Gateway admission.
   for (const job of compactJobs) {
+    // Memory-gated plans need the measured 8-CPU/30.95-GiB allocation, even alone.
+    // Normalize the previous two-worker allowance onto their unmeasured siblings below.
+    if (
+      usesBlacksmithCapacity(job.runner) &&
+      job.runner !== EXTRA_LARGE_NODE_TEST_RUNNER &&
+      job.groups.some((group) => group.minTotalMemoryBytes !== undefined)
+    ) {
+      job.runner = EXTRA_LARGE_NODE_TEST_RUNNER;
+      job.env = { ...job.env, ...PINNED_COMPACT_GROUP_ENV };
+    }
     if (
       job.planConcurrency !== 2 ||
       !job.groups.some((group) => group.configs.some(isExclusiveCiTestConfig))
@@ -5308,16 +5318,6 @@ function createCompactNodeTestShardBundles(
   }
 
   for (const job of compactJobs) {
-    // Memory-gated plans need the measured 8-CPU/30.95-GiB allocation, even alone.
-    // Normalize the previous two-worker allowance onto their unmeasured siblings below.
-    if (
-      usesBlacksmithCapacity(job.runner) &&
-      job.runner !== EXTRA_LARGE_NODE_TEST_RUNNER &&
-      job.groups.some((group) => group.minTotalMemoryBytes !== undefined)
-    ) {
-      job.runner = EXTRA_LARGE_NODE_TEST_RUNNER;
-      job.env = { ...job.env, ...PINNED_COMPACT_GROUP_ENV };
-    }
     if (
       job.env?.OPENCLAW_VITEST_MAX_WORKERS !== "2" ||
       !job.groups.some((group) => usesMeasuredCompactWorkers(group, options.runnerBackend))

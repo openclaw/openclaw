@@ -293,10 +293,6 @@ export async function runReclamationWorkerPort(
                 prepared = opened.value;
               }
             }
-            const maintenanceOwner =
-              request.type === "reclaim" && request.plan.kind === "maintenance-plan"
-                ? await import("./session-accessor.sqlite-maintenance-transaction.js")
-                : undefined;
             const assertExpectedSource =
               request.type === "prepare"
                 ? () =>
@@ -341,13 +337,6 @@ export async function runReclamationWorkerPort(
                     "SQLite reclamation native source differs from its opening expectation",
                   );
                 }
-                const maintenance =
-                  request.type === "reclaim" && request.plan.kind === "maintenance-plan"
-                    ? maintenanceOwner?.prepareSessionMaintenanceInWorker(database, {
-                        ...request.plan,
-                        databaseOptions: options,
-                      })
-                    : undefined;
                 try {
                   if (request.type === "prepare") {
                     if (typeof nativeIdentity.identity !== "string") {
@@ -412,23 +401,14 @@ export async function runReclamationWorkerPort(
                           options,
                           { operationLabel: "session.canonical-validation.certify" },
                         )
-                      : request.plan.kind === "maintenance-plan" && maintenanceOwner
-                        ? maintenanceOwner.reclaimSessionMaintenanceInTransaction(
-                            { ...request.plan, databaseOptions: options },
-                            {
-                              beforeMutation: currentClaim.assertCurrent,
-                              onCommit: authorizeCommit,
-                            },
-                            maintenance,
-                          )
-                        : reclaimSqliteSessionInTransaction(
-                            { ...request.plan, databaseOptions: options },
-                            {
-                              beforeMutation: currentClaim.assertCurrent,
-                              onCommit: authorizeCommit,
-                              afterCommit: () => markSqliteReclamationSettled(request.commitGate),
-                            },
-                          );
+                      : reclaimSqliteSessionInTransaction(
+                          { ...request.plan, databaseOptions: options },
+                          {
+                            beforeMutation: currentClaim.assertCurrent,
+                            onCommit: authorizeCommit,
+                            afterCommit: () => markSqliteReclamationSettled(request.commitGate),
+                          },
+                        );
                   // Warm results must not revive proof invalidated by the parent between requests.
                   if (openedForRequest) {
                     validation = getOpenClawAgentDatabaseValidation(database);
@@ -442,13 +422,6 @@ export async function runReclamationWorkerPort(
                   clearNodeSqliteKyselyCacheForDatabase(database.db);
                 }
               },
-              request.type === "reclaim" && request.plan.kind === "maintenance-plan"
-                ? (protection) => {
-                    if (request.plan.kind === "maintenance-plan") {
-                      Object.assign(request.plan.input, protection);
-                    }
-                  }
-                : undefined,
               assertExpectedSource,
             );
             return {

@@ -45,7 +45,9 @@ describe("session groups catalog", () => {
   beforeEach(async () => {
     const tempRoot = await fs.realpath(os.tmpdir());
     root = await fs.mkdtemp(path.join(tempRoot, "openclaw-session-groups-"));
-    env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    // Agent entry helpers and the group catalog must borrow the same shared-state owner.
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    env = { ...process.env };
     await ensureSessionGroupCatalog(env);
   });
 
@@ -56,6 +58,7 @@ describe("session groups catalog", () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
+    vi.unstubAllEnvs();
   });
 
   async function seedSessionStore(

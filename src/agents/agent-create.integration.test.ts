@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -36,10 +35,6 @@ import {
 } from "../plugins/provider-auth-persistence.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import {
-  readAgentDeletionRecoveryHolds,
-  reconstructAgentDeletionJournal,
-} from "../state/agent-deletion-journal-recovery.js";
-import {
   beginAgentDeletionJournal,
   completeAgentDeletionJournalInDatabase,
   readAgentDeletionJournal,
@@ -62,12 +57,11 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { executeSystemAgentOperation } from "../system-agent/operations-execute.js";
 import { createSystemAgentTestRuntime } from "../system-agent/system-agent.runtime.test-support.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { nodeFilePath } from "../test-utils/node-file-path.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+  installWorkspacePreparationPause,
+  prepareRecoveryHolds,
+} from "./agent-create.integration.test-support.js";
 import { createAgent } from "./agent-create.js";
 import { isAgentDeletionBlocked } from "./agent-lifecycle-registry.js";
 import { resolveSharedAuthStorePath } from "./auth-profiles/path-resolve.js";
@@ -79,45 +73,6 @@ import {
   ensureAgentWorkspace,
   isWorkspaceBootstrapPending,
 } from "./workspace.js";
-
-async function prepareRecoveryHolds(
-  state: OpenClawTestState,
-  agentId: string,
-  held = [
-    { agentId, path: path.join(state.agentDir(agentId), "openclaw-agent.sqlite") },
-    { agentId, path: state.path("parked", "openclaw-agent.sqlite") },
-    { agentId: "kept", path: path.join(state.agentDir("kept"), "openclaw-agent.sqlite") },
-  ],
-) {
-  for (const target of held) {
-    runOpenClawAgentWriteTransaction(
-      (database) =>
-        writeSessionEntry(
-          database,
-          `agent:${target.agentId}:main`,
-          {
-            sessionId: `preserved-${target.agentId}`,
-            updatedAt: 1,
-          },
-          { previousEntry: null },
-        ),
-      { ...target, env: state.env },
-    );
-  }
-  closeOpenClawAgentDatabasesForTest();
-  runOpenClawStateWriteTransaction(
-    (database) => {
-      database.db.exec("DROP TABLE agent_deletion_journal");
-      reconstructAgentDeletionJournal(database, held);
-    },
-    { env: state.env },
-  );
-  return {
-    held,
-    bytes: await Promise.all(held.map((target) => fs.readFile(target.path))),
-    readHolds: () => readAgentDeletionRecoveryHolds(openOpenClawStateDatabase({ env: state.env })),
-  };
-}
 
 it("restores only the configured held store after explicit creation, never through bootstrap or retargeting", async () => {
   const state = await createOpenClawTestState({ scenario: "minimal", label: "held-agent-restore" });
@@ -515,43 +470,7 @@ it.for(["workspace", "workspace-write", "config"] as const)(
       entered.resolve(pausedPhase);
       await resume.promise;
     };
-    const nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
-    if (phase === "workspace-write") {
-      setTestEnvValue("FS_SAFE_NATIVE_MODE", "off");
-    }
-    const realAccess = fs.access.bind(fs);
-    const access = vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
-      if (phase === "workspace" && file === path.join(workspace, "AGENTS.md")) {
-        await pause("workspace");
-      }
-      return await realAccess(file, mode);
-    });
-    const realOpen = fs.open.bind(fs);
-    const restoreWrites: Array<() => void> = [];
-    let writePaused = false;
-    const open = vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
-      const handle = await realOpen(file, flags, mode);
-      const filePath = nodeFilePath(file);
-      if (
-        phase === "workspace-write" &&
-        filePath &&
-        path.dirname(filePath) === workspace &&
-        typeof flags === "number" &&
-        (flags & fsConstants.O_EXCL) !== 0
-      ) {
-        const realWrite = handle.write.bind(handle);
-        const write = vi.spyOn(handle, "write").mockImplementation(async (...args) => {
-          const result = await realWrite(...args);
-          if (!writePaused) {
-            writePaused = true;
-            await pause("workspace-write");
-          }
-          return result;
-        });
-        restoreWrites.push(() => write.mockRestore());
-      }
-      return handle;
-    });
+    const restoreWorkspacePreparation = installWorkspacePreparationPause(workspace, phase, pause);
     const commit = vi.fn();
     const rollback = vi.fn(async () => await fs.rm(stagedFile));
     const prepareConfigCommit = vi.fn(async () => {
@@ -607,12 +526,7 @@ it.for(["workspace", "workspace-write", "config"] as const)(
     } finally {
       resume.resolve();
       await outcome;
-      open.mockRestore();
-      for (const restore of restoreWrites) {
-        restore();
-      }
-      access.mockRestore();
-      nativeModeEnv.restore();
+      restoreWorkspacePreparation();
       releaseAgentRunDelegatedAuthority(authority);
       closeOpenClawStateDatabaseForTest();
       await state.cleanup();

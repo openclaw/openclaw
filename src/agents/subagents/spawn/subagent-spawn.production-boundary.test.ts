@@ -117,7 +117,7 @@ let stateDir = "";
 let runtimeConfig: OpenClawConfig;
 let settleRootWork: ReturnType<typeof observeRootWork>;
 
-async function writeTestConfig() {
+async function writeTestConfig(maxChildrenPerAgent?: number) {
   const config = {
     logging: { audit: { enabled: true, executionIdentity: true } },
     tools: { swarm: { enabled: true, maxConcurrent: 1 } },
@@ -127,6 +127,7 @@ async function writeTestConfig() {
         workspace: stateDir,
         systemAgent: { agentId: "main" },
         model: { primary: "custom/test-model" },
+        ...(maxChildrenPerAgent !== undefined ? { subagents: { maxChildrenPerAgent } } : {}),
       },
       entries: { main: { workspace: stateDir } },
     },
@@ -217,8 +218,12 @@ afterEach(async ({ task }) => {
 
 async function createBoundParent(
   operatorAuthority?: AdmittedRunOperatorAuthority,
-  guestProfileId?: string,
+  settings: { maxChildrenPerAgent?: number; guestProfileId?: string } = {},
 ) {
+  const { maxChildrenPerAgent, guestProfileId } = settings;
+  if (maxChildrenPerAgent !== undefined) {
+    runtimeConfig = await writeTestConfig(maxChildrenPerAgent);
+  }
   if (guestProfileId) {
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: parentSessionKey },
@@ -380,7 +385,9 @@ async function createGuestParent(audit = true) {
       readCurrentRoleAssignment: () => "guest",
     },
   );
-  const bound = await createBoundParent(source.authority, source.authority.profileId);
+  const bound = await createBoundParent(source.authority, {
+    guestProfileId: source.authority.profileId,
+  });
   expect(
     loadSessionEntry({ storePath: bound.storePath, sessionKey: parentSessionKey }),
   ).toMatchObject({

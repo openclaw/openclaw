@@ -532,7 +532,7 @@ it.each([false, true])(
   (foreign) => {
     const { database, options, storePath } = createStore(1, Date.now() - 31 * DAY_MS);
     const operation = createPlanningOperation(options);
-    const prepared = prepareSessionMaintenanceInWorker(database, operation);
+    const prepared = prepareSessionMaintenanceInWorker(operation);
     const writer = foreign ? new DatabaseSync(database.path) : database.db;
     try {
       expect(database.db.isTransaction).toBe(false);
@@ -560,26 +560,31 @@ it.each([false, true])(
       expect(loadSessionEntry({ storePath, sessionKey: key(0) })?.label).toBe("newer");
       expect(loadSessionEntry({ storePath, sessionKey: key(0) })?.archivedAt).toBeUndefined();
     } finally {
+      prepared.release();
       if (foreign) {
         writer.close();
       }
     }
-    const fresh = prepareSessionMaintenanceInWorker(database, operation);
-    expect(reclaimSessionMaintenanceInTransaction(operation, {}, fresh)).toMatchObject({
-      kind: "maintenance-plan",
-      value: { archived: 1 },
-    });
-    expect(loadSessionEntry({ storePath, sessionKey: key(0) })).toMatchObject({
-      label: "newer",
-      archiveReason: "age-retention",
-    });
+    const fresh = prepareSessionMaintenanceInWorker(operation);
+    try {
+      expect(reclaimSessionMaintenanceInTransaction(operation, {}, fresh)).toMatchObject({
+        kind: "maintenance-plan",
+        value: { archived: 1 },
+      });
+      expect(loadSessionEntry({ storePath, sessionKey: key(0) })).toMatchObject({
+        label: "newer",
+        archiveReason: "age-retention",
+      });
+    } finally {
+      fresh.release();
+    }
   },
 );
 
 it("commits a prepared plan after an unrelated foreign write", () => {
   const { database, options } = createStore(1, Date.now() - 31 * DAY_MS);
   const operation = createPlanningOperation(options);
-  const prepared = prepareSessionMaintenanceInWorker(database, operation);
+  const prepared = prepareSessionMaintenanceInWorker(operation);
   const writer = new DatabaseSync(database.path);
   try {
     writer.exec("CREATE TABLE maintenance_unrelated_noise (value INTEGER)");
@@ -588,6 +593,7 @@ it("commits a prepared plan after an unrelated foreign write", () => {
       value: { archived: 1 },
     });
   } finally {
+    prepared.release();
     writer.close();
   }
 });
@@ -599,25 +605,29 @@ it.each(["transcript append", "protected parent"] as const)(
     const activeKey = key(1);
     writeSessionEntry(database, activeKey, { sessionId: "cadence-1", updatedAt: Date.now() });
     const operation = createPlanningOperation(options, { activeSessionKeys: [activeKey] });
-    const prepared = prepareSessionMaintenanceInWorker(database, operation);
-    if (mutation === "transcript append") {
-      expect(
-        appendTranscriptEventSync(
-          { storePath, sessionKey: key(0), sessionId: "cadence-0" },
-          { type: "custom", id: "concurrent-event", data: { synthetic: true } },
-        ).ok,
-      ).toBe(true);
-    } else {
-      writeSessionEntry(database, activeKey, {
-        sessionId: "cadence-1",
-        updatedAt: Date.now(),
-        parentSessionKey: key(0),
+    const prepared = prepareSessionMaintenanceInWorker(operation);
+    try {
+      if (mutation === "transcript append") {
+        expect(
+          appendTranscriptEventSync(
+            { storePath, sessionKey: key(0), sessionId: "cadence-0" },
+            { type: "custom", id: "concurrent-event", data: { synthetic: true } },
+          ).ok,
+        ).toBe(true);
+      } else {
+        writeSessionEntry(database, activeKey, {
+          sessionId: "cadence-1",
+          updatedAt: Date.now(),
+          parentSessionKey: key(0),
+        });
+      }
+      expect(reclaimSessionMaintenanceInTransaction(operation, {}, prepared)).toEqual({
+        kind: "maintenance-plan-stale",
       });
+      expect(loadSessionEntry({ storePath, sessionKey: key(0) })?.archivedAt).toBeUndefined();
+    } finally {
+      prepared.release();
     }
-    expect(reclaimSessionMaintenanceInTransaction(operation, {}, prepared)).toEqual({
-      kind: "maintenance-plan-stale",
-    });
-    expect(loadSessionEntry({ storePath, sessionKey: key(0) })?.archivedAt).toBeUndefined();
   },
 );
 
@@ -634,16 +644,20 @@ it.each(["active ancestor", "provider", "work-id", "lifecycle-id"] as const)(
     const operation = createPlanningOperation(options, {
       preservation: { providerKeys: [], workIdentities: [], lifecycleIdentities: [] },
     });
-    const prepared = prepareSessionMaintenanceInWorker(database, operation);
-    operation.input.activeSessionKeys = protection === "active ancestor" ? [childKey] : [];
-    operation.input.preservation = {
-      providerKeys: protection === "provider" ? [key(0)] : [],
-      workIdentities: protection === "work-id" ? ["cadence-0"] : [],
-      lifecycleIdentities: protection === "lifecycle-id" ? ["cadence-0"] : [],
-    };
-    expect(reclaimSessionMaintenanceInTransaction(operation, {}, prepared)).toEqual({
-      kind: "maintenance-plan-stale",
-    });
-    expect(loadSessionEntry({ storePath, sessionKey: key(0) })?.archivedAt).toBeUndefined();
+    const prepared = prepareSessionMaintenanceInWorker(operation);
+    try {
+      operation.input.activeSessionKeys = protection === "active ancestor" ? [childKey] : [];
+      operation.input.preservation = {
+        providerKeys: protection === "provider" ? [key(0)] : [],
+        workIdentities: protection === "work-id" ? ["cadence-0"] : [],
+        lifecycleIdentities: protection === "lifecycle-id" ? ["cadence-0"] : [],
+      };
+      expect(reclaimSessionMaintenanceInTransaction(operation, {}, prepared)).toEqual({
+        kind: "maintenance-plan-stale",
+      });
+      expect(loadSessionEntry({ storePath, sessionKey: key(0) })?.archivedAt).toBeUndefined();
+    } finally {
+      prepared.release();
+    }
   },
 );

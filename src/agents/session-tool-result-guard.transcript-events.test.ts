@@ -242,7 +242,7 @@ describe("guardSessionManager transcript updates", () => {
       if (!approved) {
         throw new Error("Expected approved steering input");
       }
-      const pending = listSessionPendingInputs(target);
+      const pending = await listSessionPendingInputs(target);
       expect(pending.total).toBe(1);
       const guarded = guardSessionManager(SessionManager.open(target, root), {
         agentId: target.agentId,
@@ -264,7 +264,7 @@ describe("guardSessionManager transcript updates", () => {
       expect(guarded.getEntry(entryId)).toMatchObject({ message: approved });
       expect(source.getAdmissionReceipt()).toMatchObject({ entryId });
       expect(source.getPersistedMessage?.()).toEqual(approved);
-      expect(listSessionPendingInputs(target)).toEqual({ items: [], total: 0 });
+      expect(await listSessionPendingInputs(target)).toEqual({ items: [], total: 0 });
       expect(approvalHook).toHaveBeenCalledOnce();
 
       const unstagedId = guarded.appendMessage(makeUserMessage("Unstaged source", 3));

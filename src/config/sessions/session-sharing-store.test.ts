@@ -20,6 +20,7 @@ import {
 } from "./session-accessor.js";
 import * as sqliteArchive from "./session-accessor.sqlite-archive.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
+import { createSessionMaintenanceFinalizationOperation } from "./session-accessor.sqlite-reclamation.js";
 import { isSessionMember, listSessionMembers } from "./session-sharing-store.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 
@@ -84,10 +85,21 @@ describe("session sharing store", () => {
         sql.restore();
       }
       expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
+      await expect(
+        reclamation.runSqliteSessionReclamation({
+          forceInProcess: false,
+          plan: createSessionMaintenanceFinalizationOperation({
+            agentId: scope.agentId,
+            databaseOptions: scope,
+            entries: [],
+            materializedPlans: [],
+          }),
+        }),
+      ).resolves.toMatchObject({ kind: "maintenance-finalize" });
       expect(workers).toHaveLength(1);
       const worker = workers[0];
       if (!worker) {
-        throw new Error("Expected the automatic maintenance worker");
+        throw new Error("Expected the archive maintenance worker");
       }
       // Parent-owned lease cleanup still needs the original store after native exit.
       await worker.terminate();

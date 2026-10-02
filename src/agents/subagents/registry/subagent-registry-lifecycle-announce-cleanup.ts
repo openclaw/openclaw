@@ -465,11 +465,13 @@ export const startSubagentAnnounceCleanupFlow = (
     prepareChildSessionEffects,
     isCompletionDeliveryAllowed: () => {
       assertPersistenceCurrent();
-      return isSubagentCompletionDeliveryAllowed(
-        context,
-        entry,
-        cleanupGeneration,
-        committedDeliveryOwner,
+      return (
+        isSubagentCompletionDeliveryAllowed(
+          context,
+          entry,
+          cleanupGeneration,
+          committedDeliveryOwner,
+        ) && subagentRuns.runWithCompletionAuthority(entry, () => true)
       );
     },
     isCompletionOwnedByRequesterYield: requesterOwnsCompletion,
