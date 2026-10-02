@@ -1,14 +1,14 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { coerceErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
-import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { isPathInside, isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { createQaArtifactRunId } from "./artifact-run-id.js";
 import type { QaProviderMode } from "./model-selection.js";
 import { resolveQaForwardedLiveEnv, resolveQaLiveProviderConfigPath } from "./providers/env.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
@@ -64,10 +64,6 @@ function createOutputStamp() {
   return new Date().toISOString().replaceAll(":", "").replaceAll(".", "").replace("T", "-");
 }
 
-function createVmSuffix() {
-  return `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
-}
-
 async function execFileAsync(file: string, args: string[], options: ExecFileOptions = {}) {
   try {
     return await runExec(file, args, {
@@ -102,7 +98,7 @@ function resolveExistingPath(value: string) {
 
 function resolveMountedOutputPath(repoRoot: string, hostPath: string) {
   const relativePath = path.relative(repoRoot, hostPath);
-  if (relativePath.startsWith("..") || path.isAbsolute(relativePath) || relativePath.length === 0) {
+  if (!isPathStrictlyInside(repoRoot, hostPath)) {
     throw new Error(
       `qa suite --runner multipass requires --output-dir to stay under the repo root (${repoRoot}), got ${hostPath}.`,
     );
@@ -193,7 +189,7 @@ function createQaMultipassPlan(params: {
     liveProviderConfig && fs.existsSync(liveProviderConfig.path)
       ? liveProviderConfig.path
       : undefined;
-  const vmName = `openclaw-qa-${createVmSuffix()}`;
+  const vmName = `openclaw-qa-${createQaArtifactRunId()}`;
   const guestOutputDir = resolveMountedOutputPath(params.repoRoot, outputDir);
   const qaCommand = [
     "pnpm",
