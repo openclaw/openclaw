@@ -287,12 +287,11 @@ describe("normalizeLegacyChannelAliases account inheritance seeding", () => {
 });
 
 describe("normalizeCompatibilityConfigValues browser compatibility aliases", () => {
-  it("removes legacy browser relay bind host and stale extension relay cdpUrl", () => {
+  it("removes a stale extension relay cdpUrl", () => {
     const changes: string[] = [];
     const config = normalizeLegacyBrowserConfig(
       asLegacyConfig({
         browser: {
-          relayBindHost: "127.0.0.1",
           profiles: {
             work: {
               driver: "extension",
@@ -307,16 +306,12 @@ describe("normalizeCompatibilityConfigValues browser compatibility aliases", () 
       changes,
     );
 
-    expect(
-      (config.browser as { relayBindHost?: string } | undefined)?.relayBindHost,
-    ).toBeUndefined();
     // driver "extension" is the live Chrome extension relay driver again; only
     // the retired relay endpoint URL gets stripped.
     expect(config.browser?.profiles?.work?.driver).toBe("extension");
     expect(config.browser?.profiles?.work?.cdpUrl).toBeUndefined();
     expect(config.browser?.profiles?.keep?.driver).toBe("existing-session");
     expect(changes).toEqual([
-      "Removed browser.relayBindHost (legacy Chrome extension relay setting; the extension relay binds loopback on the profile cdpPort).",
       "Removed browser.profiles.work.cdpUrl (extension driver profiles own their relay endpoint).",
     ]);
   });

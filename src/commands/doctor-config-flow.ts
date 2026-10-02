@@ -14,11 +14,9 @@ import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { CONFIG_PATH } from "../config/paths.js";
-import { inspectShippedPluginInstallConfigRecords } from "../config/plugin-install-config-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
-import { withoutPluginInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import {
@@ -30,7 +28,6 @@ import {
   noteOpencodeProviderOverrides,
   noteSandboxOriginProxyWarning,
 } from "./doctor-config-analysis.js";
-import { shouldSkipPluginValidationForDoctorConfigPreflight } from "./doctor-config-preflight-plugin-index.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { createWorkspaceAliasMigrationRepair } from "./doctor-workspace-alias.js";
@@ -50,11 +47,9 @@ import {
   type DoctorConfigMutationState,
 } from "./doctor/shared/config-mutation-state.js";
 import { listDoctorConfiguredChannelIds } from "./doctor/shared/configured-channel-ids.js";
-import { containsAuthoredInclude } from "./doctor/shared/include-migration-ownership.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 import type { DoctorPluginMetadataSnapshotState } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
 import { canWriteDoctorInclude } from "./doctor/shared/roster-include-write.js";
-import { shouldSkipLegacyUpdateDoctorConfigWrite } from "./doctor/shared/update-phase.js";
 
 async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
   for (const request of [
@@ -77,7 +72,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   prompter?: DoctorPrompter;
 }) {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
-  let preflight = await withProgress(
+  const preflight = await withProgress(
     {
       label: "Checking OpenClaw state…",
       enabled: params.options.nonInteractive !== true && params.options.json !== true,
@@ -104,33 +99,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         },
       }),
   );
-  const { importShippedPluginInstallConfigForDoctor } =
-    await import("./doctor/shared/plugin-registry-migration.js");
-  const pluginInstallConfigImport =
-    !shouldSkipLegacyUpdateDoctorConfigWrite(process.env) &&
-    inspectShippedPluginInstallConfigRecords(preflight.snapshot.sourceConfig).status === "valid"
-      ? await importShippedPluginInstallConfigForDoctor(preflight.snapshot)
-      : undefined;
-  if (pluginInstallConfigImport?.pluginInventoryChanged) {
-    const { readConfigPreflightSnapshot } = await import("./config-preflight-snapshot.js");
-    const refreshed = await readConfigPreflightSnapshot({
-      allowCurrentPluginMetadata: false,
-      includePluginMetadata: true,
-      preparePluginMetadataSnapshot: true,
-      skipPluginValidation: shouldSkipPluginValidationForDoctorConfigPreflight(),
-    });
-    preflight = {
-      ...preflight,
-      snapshot: refreshed.snapshot,
-      baseConfig: refreshed.snapshot.sourceConfig,
-      pluginMetadataSnapshot: refreshed.pluginMetadataSnapshot,
-    };
-  }
   const { snapshot, baseConfig: baseCfg } = preflight;
   const referenceSource = prepareDoctorConfigReferenceSource(snapshot);
   const pluginMetadataSnapshotState: DoctorPluginMetadataSnapshotState = {
     current: preflight.pluginMetadataSnapshot,
-    inventoryChanged: pluginInstallConfigImport?.pluginInventoryChanged,
   };
   const { createDoctorPluginMetadataSnapshotScope } =
     await import("./doctor/shared/plugin-metadata-snapshot-scope.js");
@@ -624,18 +596,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(unknownStep.warnings.join("\n"), "Doctor warnings");
   }
 
-  if (inspectShippedPluginInstallConfigRecords(state.candidate).status === "valid") {
-    applyConfigMutation(
-      {
-        config: withoutPluginInstallRecords(state.candidate, {
-          preserveEmptyPlugins: containsAuthoredInclude(snapshot.parsed),
-        }),
-        changes: ["Removed retired plugins.installs after preserving plugin install records."],
-      },
-      { fixHint: `Run "${doctorFixCommand}" to migrate retired plugin install records.` },
-    );
-  }
-
   const finalized = await finalizeDoctorConfigFlow({
     ...state,
     snapshot,
@@ -701,7 +661,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         }
       : {}),
     ...(referenceSource ? { referenceSource } : {}),
-    ...(pluginInstallConfigImport ? { pluginInstallConfigImport } : {}),
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig,
     ...(configRepairWarnings.length ? { warnings: [...new Set(configRepairWarnings)] } : {}),

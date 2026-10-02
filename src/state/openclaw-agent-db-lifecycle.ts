@@ -24,6 +24,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { VERSION } from "../version.js";
+import { releaseAgentCreationClaimHandle } from "./agent-creation-claim.js";
 import { releaseAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
 import type {
   OpenClawAgentDatabase,
@@ -389,6 +390,7 @@ export function closeCachedOpenClawAgentDatabase(
     cache.leases.delete(database.path);
   }
   releaseAgentDeletionDatabaseCleanup(database);
+  releaseAgentCreationClaimHandle(database);
   clearTimeout(cache.idleTimers.get(database.db));
   cache.idleTimers.delete(database.db);
 }

@@ -1,4 +1,3 @@
-// Memory Core helpers for safe managed DREAMS.md updates.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
@@ -290,10 +289,7 @@ function normalizeDiaryBlockFingerprint(block: string): string {
     bodyLines.push(line);
   }
   const normalizedDate = dateLine.replace(/\s+/g, " ").trim();
-  const normalizedBody = bodyLines
-    .join("\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .trim();
+  const normalizedBody = bodyLines.join("\n");
   return `${normalizedDate}\n${normalizedBody}`;
 }
 
