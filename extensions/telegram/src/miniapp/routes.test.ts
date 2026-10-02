@@ -253,7 +253,7 @@ describe("registerTelegramMiniAppRoutes", () => {
         registerHttpRoute: (route) => routes.push(route),
       }),
     );
-    const command = commands.find((entry) => entry.name === "dashboard");
+    const command = commands.find((entry) => entry.name === "controlui");
     const route = routes.find((entry) => entry.path === "/__openclaw_tg_miniapp/");
     if (!command || !route) {
       throw new Error("expected registered Mini App command and route");
@@ -262,7 +262,7 @@ describe("registerTelegramMiniAppRoutes", () => {
       channel: "telegram",
       isAuthorizedSender: true,
       senderIsOwner: false,
-      commandBody: "/dashboard",
+      commandBody: "/controlui",
       config: cfg,
       accountId: "ops",
       from: "telegram:123456",

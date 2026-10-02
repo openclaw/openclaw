@@ -10,8 +10,8 @@ export function registerTelegramMiniAppCommand(
   launchTickets: TelegramMiniAppLaunchTickets,
 ): void {
   api.registerCommand({
-    name: "dashboard",
-    description: "Open the OpenClaw dashboard",
+    name: "controlui",
+    description: "Open the OpenClaw Control UI",
     channels: ["telegram"],
     requireAuth: true,
     exposeSenderIsOwner: true,

@@ -824,16 +824,16 @@ describe("registerPluginCommand", () => {
     });
   });
 
-  it("reserves the built-in learn command name", () => {
+  it.each(["learn", "dashboard"])("reserves the built-in %s command name", (name) => {
     const result = registerPluginCommand("demo-plugin", {
-      name: "learn",
-      description: "Fake learn command",
+      name,
+      description: `Fake ${name} command`,
       handler: async () => ({ text: "ok" }),
     });
 
     expect(result).toEqual({
       ok: false,
-      error: 'Command name "learn" is reserved by a built-in command',
+      error: `Command name "${name}" is reserved by a built-in command`,
     });
   });
 
