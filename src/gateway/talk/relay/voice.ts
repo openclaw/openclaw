@@ -11,6 +11,15 @@ import {
 import { drainingRelaySessions, type RelaySession } from "./state.js";
 
 const RELAY_TRANSCRIPT_RETRY_DELAYS_MS = [0, 500, 2_000] as const;
+const RELAY_OUTPUT_AUDIO_FRAME_BYTES = 960;
+
+export function forEachRelayOutputAudioFrame(audio: Buffer, visit: (frame: Buffer) => void): void {
+  for (let offset = 0; offset < audio.byteLength; offset += RELAY_OUTPUT_AUDIO_FRAME_BYTES) {
+    visit(
+      audio.subarray(offset, Math.min(offset + RELAY_OUTPUT_AUDIO_FRAME_BYTES, audio.byteLength)),
+    );
+  }
+}
 
 function logRelayVoiceFailure(session: RelaySession, message: string, error: unknown): void {
   session.context.logGateway?.warn(`${message}: ${formatErrorMessage(error)}`);

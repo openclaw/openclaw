@@ -59,12 +59,8 @@ import {
   MAX_RELAY_TOOL_CALL_IDENTITY_BYTES,
   RelayToolCallLedger,
 } from "./tool-call-ledger.js";
-import { enqueueRelayVoiceTranscript } from "./voice.js";
+import { enqueueRelayVoiceTranscript, forEachRelayOutputAudioFrame } from "./voice.js";
 
-// The relay contract is 20 ms of 24 kHz mono PCM16 per browser event.
-const RELAY_OUTPUT_AUDIO_FRAME_BYTES = 960;
-
-/** Creates a realtime voice relay session and returns the browser audio contract. */
 export function createTalkRealtimeRelaySession(
   params: CreateTalkRealtimeRelaySessionParams,
 ): TalkRealtimeRelaySessionResult {
@@ -121,8 +117,7 @@ export function createTalkRealtimeRelaySession(
     return relay && relaySessions.get(relay.id) === relay ? relay : undefined;
   };
   const clearPlayback = (reason?: RealtimeVoiceAudioClearReason) => {
-    // Released clients match clear to the audio sent, which can outlive response completion
-    // and remain queued after a newer response starts without sending audio.
+    // Released clients match clear to queued audio, which can outlive response completion.
     const turnId = playbackTurnId;
     playbackTurnId = undefined;
     emit(
@@ -255,11 +250,7 @@ export function createTalkRealtimeRelaySession(
         if (!outputTurnId) {
           return;
         }
-        for (let offset = 0; offset < audio.byteLength; offset += RELAY_OUTPUT_AUDIO_FRAME_BYTES) {
-          const frame = audio.subarray(
-            offset,
-            Math.min(offset + RELAY_OUTPUT_AUDIO_FRAME_BYTES, audio.byteLength),
-          );
+        forEachRelayOutputAudioFrame(audio, (frame) => {
           playbackTurnId = outputTurnId;
           emit(
             {
@@ -275,7 +266,7 @@ export function createTalkRealtimeRelaySession(
               payload: { byteLength: frame.byteLength },
             },
           );
-        }
+        });
       },
       clearAudio: clearPlayback,
       sendMark: (markName) => {

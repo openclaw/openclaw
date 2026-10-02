@@ -12,7 +12,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
-import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -45,6 +44,7 @@ import {
   invokeSessionDispatch,
   makeDispatchTestContext,
   makeFailedPlacement,
+  makePairedNode,
   makeSessionTarget,
 } from "./sessions-dispatch.test-support.js";
 
@@ -74,25 +74,6 @@ function useDeviceSession(agentRuntimeOverride?: string): void {
     ownerKind: "session",
     ownerId: dispatchTestSessionKey,
   });
-}
-
-function pairedNode(deviceId: string): PairedDevice {
-  return {
-    deviceId,
-    publicKey: `public-key-${deviceId}`,
-    role: "node",
-    roles: ["node"],
-    tokens: {
-      node: {
-        token: "fixture-token",
-        role: "node",
-        scopes: [],
-        createdAtMs: 1,
-      },
-    },
-    createdAtMs: 1,
-    approvedAtMs: 1,
-  };
 }
 
 function connectedNode(deviceId: string, available: number): NodeWorkerSupervisorNodeProof {
@@ -1007,7 +988,7 @@ describe("sessions.dispatch device targets", () => {
         const placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
         const harness = createHarness(database, placements);
         const runtime = createDeviceWorkerRuntime({
-          getPairedDevice: async (deviceId) => pairedNode(deviceId),
+          getPairedDevice: async (deviceId) => makePairedNode(deviceId),
         });
         runtime.bindNodeTransport({
           getCurrentNode: async (nodeId) => nodes.find((node) => node.nodeId === nodeId),

@@ -6,6 +6,7 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { SessionsReclaimParams } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { bindDeviceWorkerAvailability } from "../worker-environments/device-provider.js";
@@ -56,6 +57,25 @@ export function getSessionDispatchHandler() {
 
 export const dispatchTestSessionKey = "agent:main:cloud-test";
 export const dispatchTestSessionId = "session-cloud-test";
+
+export function makePairedNode(deviceId: string): PairedDevice {
+  return {
+    deviceId,
+    publicKey: `public-key-${deviceId}`,
+    role: "node",
+    roles: ["node"],
+    tokens: {
+      node: {
+        token: "fixture-token",
+        role: "node",
+        scopes: [],
+        createdAtMs: 1,
+      },
+    },
+    createdAtMs: 1,
+    approvedAtMs: 1,
+  };
+}
 
 export function makeReclaimedPlacement(): Extract<
   WorkerSessionPlacementRecord,
