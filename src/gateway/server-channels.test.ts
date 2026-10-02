@@ -241,7 +241,7 @@ describe("server-channels auto restart", () => {
     resetGatewayWorkAdmission();
     previousRegistry = getActivePluginRegistry();
     vi.useRealTimers();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     hoisted.sleepWithAbort.mockClear();
     hoisted.startChannelApprovalHandlerBootstrap.mockReset();
     hoisted.startChannelApprovalHandlerBootstrap.mockResolvedValue(async () => {});

@@ -66,7 +66,7 @@ import {
 } from "./openclaw-agent-db-schema-helpers.js";
 import {
   backfillSessionConversations,
-  dropLegacyRuntimeJournalSchemas,
+  assertSupportedRuntimeJournalSchemas,
   dropLegacySessionTranscriptSearchSchema,
   ensureSessionAdditiveColumns,
   ensureSessionEntryValidityProjection,
@@ -336,6 +336,9 @@ function ensureAgentSchema(
           `OpenClaw agent database ${pathname} uses schema version ${previousVersion}; expected at most ${targetVersion} for this migration.`,
         );
       }
+      if (previousVersion < targetVersion) {
+        assertSupportedRuntimeJournalSchemas(db, pathname);
+      }
       const isEmptyDatabase =
         previousVersion === 0 &&
         readExistingAgentSchemaMeta(db) === null &&
@@ -444,13 +447,11 @@ function ensureAgentSchema(
       // Structure-gated helpers converge both legacy memory schema lineages.
       dropLegacyMemoryIndexSchema(db);
       dropLegacySessionTranscriptSearchSchema(db);
-      dropLegacyRuntimeJournalSchemas(db);
       maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
       migrateMemoryIndexSourcesIdentity(db);
       migrateOpenClawAgentSchema(db);
       migrateConversationDeliveryTargetColumn(db);
       backfillOpenClawAgentSchema(db, previousVersion);
-      // Remove after 2026-10-01: drop the pre-v11 conversation backfill once schema 11 is the support floor.
       if (previousVersion < 11) {
         backfillSessionConversations(db);
       }

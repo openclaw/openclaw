@@ -15,7 +15,7 @@ import type { PluginOrigin } from "./plugin-origin.types.js";
 import { isPluginSdkAliasSpecifier } from "./sdk-alias.js";
 
 function getBunConditions(requireMode: boolean): Set<string> {
-  const conditions = new Set(["bun", "node", requireMode ? "require" : "import"]);
+  const conditions = new Set(["bun", "node", "module-sync", requireMode ? "require" : "import"]);
   if (!process.execArgv.includes("--no-addons")) {
     conditions.add("node-addons");
   }
@@ -97,6 +97,11 @@ export function bindNativePluginInstanceModuleLoader(
           }
         : {}),
       prepare(request, parent, kind) {
+        // Bun previews literal require calls as imports while compiling CommonJS.
+        // The require-call hook owns acquisition when that operation executes.
+        if (kind === "import-statement" && artifact.isRequirePreview(parent, request)) {
+          return undefined;
+        }
         // Resolved URLs and built relative imports retain the selected host SDK's identity.
         const original = artifact.sourceForCaptured(parent);
         const sdkTarget = hostSdkTarget(request, original);
@@ -115,11 +120,17 @@ export function bindNativePluginInstanceModuleLoader(
           artifact.prepareModule(source);
           let target: string | undefined;
           const requireMode = kind === "require-call" || kind === "require-resolve";
-          const conditions = ["node", requireMode ? "require" : "import"];
+          const conditions = [...getBunConditions(requireMode)];
           if (source === parent && request.startsWith(".")) {
             // Jiti implements computed imports through require.resolve; relative source capture
             // still follows the authored import graph rather than that internal mechanism.
-            const captured = artifact.captureModule(parent, request, ["node", "import"]);
+            const captured = artifact.captureModule(
+              parent,
+              request,
+              kind === "require-resolve" && !artifact.isRequireReference(parent, request)
+                ? ["node", "module-sync", "import"]
+                : conditions,
+            );
             if (captured && "target" in captured) {
               target =
                 captured.target.search || captured.target.hash
@@ -130,7 +141,6 @@ export function bindNativePluginInstanceModuleLoader(
             source === parent &&
             !path.isAbsolute(request) &&
             !request.startsWith("file:") &&
-            !request.startsWith("#") &&
             !isBuiltin(request)
           ) {
             const captured = artifact.captureModule(parent, request, conditions);
@@ -231,7 +241,11 @@ export function bindNativePluginInstanceModuleLoader(
               }
               return captured;
             }
-            const captured = artifact.captureModule(parent, request, ["node", "require"]);
+            const captured = artifact.captureModule(parent, request, [
+              "node",
+              "module-sync",
+              "require",
+            ]);
             return captured && "target" in captured ? fileURLToPath(captured.target) : undefined;
           }),
         );

@@ -140,6 +140,12 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
       target: capturedTarget,
       options: structuredClone(options),
     });
+    if (request.kind === "active-accounting") {
+      return { kind: request.kind, params: captureOptions(request.params.options) };
+    }
+    if (request.kind === "bounded-tail") {
+      return { kind: request.kind, params: captureOptions(request.params.options) };
+    }
     if (request.kind === "message-page") {
       return { kind: request.kind, params: captureOptions(request.params.options) };
     }
@@ -409,16 +415,18 @@ export async function readSessionHistoryPageInWorker(
         capturedRequest.kind === "recent-page" &&
         capturedRequest.params.exactArchivePath !== undefined;
       const readOnly =
-        capturedRequest.kind === "artifacts"
-          ? capturedRequest.params.query.kind === "image-page"
-          : exactArchiveRead
-            ? true
-            : capturedRequest.kind === "message-page" ||
-                capturedRequest.kind === "around-id" ||
-                capturedRequest.kind === "source-messages" ||
-                capturedRequest.kind === "recent-page"
-              ? capturedRequest.params.options.readOnly
-              : false;
+        capturedRequest.kind === "active-accounting" || capturedRequest.kind === "bounded-tail"
+          ? true
+          : capturedRequest.kind === "artifacts"
+            ? capturedRequest.params.query.kind === "image-page"
+            : exactArchiveRead
+              ? true
+              : capturedRequest.kind === "message-page" ||
+                  capturedRequest.kind === "around-id" ||
+                  capturedRequest.kind === "source-messages" ||
+                  capturedRequest.kind === "recent-page"
+                ? capturedRequest.params.options.readOnly
+                : false;
       let retriedProjection = false;
       const readPage = () => readQueuedHistory(input, `${owner.generation}:${key}`, owner, signal);
       try {
@@ -437,6 +445,18 @@ export async function readSessionHistoryPageInWorker(
               try {
                 page = await readPage();
               } catch (error) {
+                if (
+                  (capturedRequest.kind === "active-accounting" ||
+                    (capturedRequest.kind === "bounded-tail" &&
+                      !capturedRequest.params.options.readOnly)) &&
+                  isSessionTranscriptProjectionUnavailableError(error)
+                ) {
+                  assertCurrent();
+                  startSessionTranscriptIndexReconcile({
+                    ...databaseOptions,
+                    preferredSessionId: preparedTarget.sessionId,
+                  });
+                }
                 if (
                   readOnly ||
                   retriedProjection ||

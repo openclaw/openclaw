@@ -27,10 +27,11 @@ backup.
 
 ## Upgrading very old versions
 
-For installations older than June 2026, upgrade to **`2026.9.5` first**, run its
+For installations older than July 2026, upgrade to **`2026.9.5` first**, run its
 Doctor migrations, and then upgrade to `latest`. The bridge release still
 imports the old `tasks/runs.sqlite`, `flows/registry.sqlite`, and
-`plugin-state/state.sqlite` databases, imports pre-June plugin JSON state and
+`plugin-state/state.sqlite` databases, imports the JSON plugin install index,
+pre-June plugin JSON state, and
 `credentials/oauth.json`, repairs retired agent and channel config keys, and
 includes the old runtime aliases. The retired plugin imports cover Telegram,
 iMessage, Active Memory, Nostr, and Microsoft Teams; see

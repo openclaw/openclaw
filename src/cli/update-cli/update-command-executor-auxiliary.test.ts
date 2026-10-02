@@ -2,7 +2,13 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { getGatewayServiceUpdateNativeCommand } from "../../daemon/service-update-authority.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
@@ -25,6 +31,13 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 const nodeExecPath = resolveTestNodeExecPath();
 let root: string;
 let serviceRoot: string;
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts?.close();
+});
 beforeEach(() => {
   const base = fs.realpathSync(dirs.make("auxiliary-node-owner-"));
   root = path.join(base, "package-B");
@@ -36,6 +49,21 @@ beforeEach(() => {
   vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
 });
 afterEach(() => vi.restoreAllMocks());
+
+// A receipt may arrive after the command settles; the fixture writes its marker first.
+function fixtureReadyBeforeSettlement(marker: string, operation: PromiseLike<unknown>) {
+  const settled = Promise.resolve(operation).then(
+    () => {
+      expect(fs.existsSync(marker)).toBe(true);
+    },
+    (error: unknown) => {
+      if (!fs.existsSync(marker)) {
+        throw error;
+      }
+    },
+  );
+  return Promise.race([receipts.waitFor(marker, "ready"), settled]);
+}
 
 function runBoundChild(
   _grant: UpdateCommandChildGrant,
@@ -64,12 +92,12 @@ function preloadFixture(kind: "require" | "import") {
   return { marker, env: { ...process.env, NODE_OPTIONS: `--${kind}=${JSON.stringify(value)}` } };
 }
 
-it.each([
+it.for([
   { phase: "initializing", fragmented: false },
   { phase: "admitted", fragmented: true },
 ] as const)(
   "preserves direct preflight release through a healthy installer child and active drain: $phase/fragmented=$fragmented",
-  async ({ phase, fragmented }) => {
+  async ({ phase, fragmented }, { signal }) => {
     const runId = randomUUID();
     const ready = path.join(root, "ready");
     const proceed = path.join(root, "proceed");
@@ -104,13 +132,15 @@ it.each([
       const installing = recovery.installCommand(
         nodeExecPath,
         [
+          "--input-type=module",
           "-e",
-          `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},JSON.stringify({pid:process.pid,nodeOptions:process.env.NODE_OPTIONS}));const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(proceed)})){clearInterval(timer)}},10);`,
+          `${fixtureReceiptClientSource(receipts.endpoint)}
+          import fs from 'node:fs';fs.writeFileSync(${JSON.stringify(ready)},JSON.stringify({pid:process.pid,nodeOptions:process.env.NODE_OPTIONS}));sendReceipt(${JSON.stringify(ready)},"ready");const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(proceed)})){clearInterval(timer)}},10);`,
         ],
         preload.env,
       );
       try {
-        await vi.waitFor(() => expect(fs.existsSync(ready)).toBe(true), { timeout: 5000 });
+        await withinTest(fixtureReadyBeforeSettlement(ready, installing), signal);
         expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow(
           "The update process is still running.",
         );
@@ -269,11 +299,14 @@ it("keeps B extra-child custody after partial preflight release without reactiva
   expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
 });
 
-it("preserves eligible preflight release until a healthy auxiliary descendant drain joins", async () => {
+it("preserves eligible preflight release until a healthy auxiliary descendant drain joins", async ({
+  signal,
+}) => {
   const ready = path.join(root, "draining");
   const proceed = path.join(root, "finish-drain");
-  const descendant = `const fs=require('node:fs');process.on('SIGTERM',()=>{fs.writeFileSync(${JSON.stringify(ready)},'draining');const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(proceed)})){clearInterval(timer);process.exit(0)}},10)});setInterval(()=>{},1000);process.send('ready');`;
-  const program = `const child=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:['ignore','ignore','ignore','ipc']});child.once('message',()=>{child.disconnect();child.unref()});`;
+  const descendant = `${fixtureReceiptClientSource(receipts.endpoint)}
+  import fs from 'node:fs';process.on('SIGTERM',()=>{fs.writeFileSync(${JSON.stringify(ready)},'draining');sendReceipt(${JSON.stringify(ready)},"ready");const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(proceed)})){clearInterval(timer);process.exit(0)}},10)});setInterval(()=>{},1000);process.send('ready');`;
+  const program = `const child=require('node:child_process').spawn(process.execPath,['--input-type=module','-e',${JSON.stringify(descendant)}],{stdio:['ignore','ignore','ignore','ipc']});child.once('message',()=>{child.disconnect();child.unref()});`;
   await withUpdateCommandExecutor(randomUUID(), async (executor) => {
     const fence = await executor.enter(root, { serviceRoot, preflight: true });
     const pending = withUpdateCommandExecutorChild(
@@ -291,7 +324,7 @@ it("preserves eligible preflight release until a healthy auxiliary descendant dr
       { auxiliaryPreflight: true },
     );
     try {
-      await vi.waitFor(() => expect(fs.existsSync(ready)).toBe(true), { timeout: 5000 });
+      await withinTest(fixtureReadyBeforeSettlement(ready, pending), signal);
       expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow(
         "The update process is still running.",
       );

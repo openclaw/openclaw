@@ -2,6 +2,7 @@
  * Gateway post-attach startup task tests.
  */
 import "./server-worker-free.test-support.js";
+import "./server-startup-background.test-support.js";
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -149,10 +150,6 @@ const hoisted = vi.hoisted(() => {
     scheduleGatewayHandlerPrewarm,
   };
 });
-
-vi.mock("../agents/session-dirs.js", () => ({
-  resolveAgentSessionDirs: vi.fn(async () => []),
-}));
 
 vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
   activateSubagentRegistry: hoisted.activateSubagentRegistry,

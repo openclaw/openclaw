@@ -48,12 +48,21 @@ type AncestryFixture = {
   target: string;
 };
 
+function ancestryGitEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    // Detached Git maintenance can keep writing after the fixture starts cleanup.
+    GIT_CONFIG_PARAMETERS:
+      `${process.env.GIT_CONFIG_PARAMETERS ?? ""} 'maintenance.auto=false' 'gc.auto=0'`.trim(),
+  };
+}
+
 function fixtureGit(cwd: string, args: string[], input?: string) {
   const result = spawnSync("git", args, {
     cwd,
     encoding: "utf8",
     env: {
-      ...process.env,
+      ...ancestryGitEnv(),
       GIT_AUTHOR_EMAIL: "fixture@example.invalid",
       GIT_AUTHOR_NAME: "fixture",
       GIT_COMMITTER_EMAIL: "fixture@example.invalid",
@@ -215,7 +224,7 @@ function runReleaseAncestry(
     cwd: checkout,
     encoding: "utf8",
     env: {
-      ...process.env,
+      ...ancestryGitEnv(),
       RELEASE_ANCESTRY_MODE: mode,
       RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
       ...env,

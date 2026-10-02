@@ -16,7 +16,10 @@ const MAIN_KEY = "agent:main:main";
 const legacyEntry = {
   sessionId: " session-1 ",
   updatedAt: 1,
-  provider: "slack",
+  channel: "slack",
+  provider: false,
+  lastProvider: false,
+  room: false,
   pendingFinalDeliveryAttemptCount: -1,
 };
 let root: string;
@@ -138,7 +141,7 @@ it("normalizes file-era rows and drops malformed entries", async () => {
     malformed: null,
     [MAIN_KEY]: {
       ...legacyEntry,
-      lastProvider: "telegram",
+      lastChannel: "telegram",
       pluginExtensions: { " demo ": { " valid ": { ok: true }, invalid: undefined } },
     },
   });
@@ -158,6 +161,9 @@ it("normalizes compatibility writes before persistence", async () => {
     malformed: null,
     [MAIN_KEY]: {
       ...legacyEntry,
+      provider: "obsolete-provider",
+      lastProvider: "obsolete-provider",
+      lastChannel: "slack",
       skillsSnapshot: {
         ...skillsSnapshot,
         resolvedSkills: [{ name: "demo", description: "runtime-only catalog" }],
@@ -172,6 +178,7 @@ it("normalizes compatibility writes before persistence", async () => {
   expectNormalized(persisted, "slack");
   expect(persisted[MAIN_KEY]?.skillsSnapshot).toMatchObject(skillsSnapshot);
   expect(persisted[MAIN_KEY]?.skillsSnapshot).not.toHaveProperty("resolvedSkills");
+  expectNormalized(loadLegacySessionStore(storePath), "slack");
 });
 
 it("repairs a stale session file whose header straddles the read chunk boundary", async () => {
