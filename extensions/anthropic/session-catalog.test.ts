@@ -1738,7 +1738,7 @@ describe("Claude session catalog", () => {
       size: originalStat.size,
     });
 
-    watches.change(transcriptPath, "rename");
+    watches.change(transcriptPath);
     expect((await listLocalClaudeSessionPage({}, home)).sessions[0]?.name).toBe("Bravo");
   });
 
