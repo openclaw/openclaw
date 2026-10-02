@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { listAgentIds } from "../agents/agent-scope.js";
 import { listSubagentSessionListRunsForControllers } from "../agents/subagents/registry/subagent-registry-read.js";
 import { resolveAgentMainSessionKey, type SessionEntry } from "../config/sessions.js";
+import { collectCanonicalSessionLookupKeys } from "../config/sessions/main-session-key.js";
 import { listSessionChildEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntryListScope } from "../config/sessions/session-accessor.types.js";
 import type { SessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
@@ -39,29 +40,6 @@ import type {
   GatewaySessionStoreTargetWithStore,
 } from "./session-utils-store.types.js";
 export type { GatewaySessionStoreCache } from "./session-utils-store-read.js";
-
-function buildGatewaySessionStoreScanTargets(params: {
-  cfg: OpenClawConfig;
-  key: string;
-  canonicalKey: string;
-  agentId: string;
-}): string[] {
-  const targets = new Set<string>();
-  if (params.canonicalKey) {
-    targets.add(params.canonicalKey);
-  }
-  if (params.key && params.key !== params.canonicalKey) {
-    targets.add(params.key);
-  }
-  if (params.canonicalKey === "global" || params.canonicalKey === "unknown") {
-    return [...targets];
-  }
-  const agentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
-  if (params.canonicalKey === agentMainKey) {
-    targets.add(`agent:${params.agentId}:main`);
-  }
-  return [...targets];
-}
 
 type GatewaySessionStoreLookupParams = {
   env?: NodeJS.ProcessEnv;
@@ -250,7 +228,12 @@ function prepareGatewaySessionStoreTarget(
   }
   const storeKeys = params.preserveQualifiedAddress
     ? [canonicalKey]
-    : buildGatewaySessionStoreScanTargets({ ...params, canonicalKey, agentId });
+    : collectCanonicalSessionLookupKeys({
+        agentId,
+        canonicalKey,
+        mainKey: params.cfg.session?.mainKey,
+        requestedKey: key,
+      });
   const lookup = prepareGatewaySessionStoreLookup({ ...params, canonicalKey, agentId }, storeKeys);
   return {
     reads: lookup.reads,

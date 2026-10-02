@@ -94,8 +94,6 @@ const runtimePartitions = new Map<
         // Asserts V8 used_heap_size deltas, cachedDataVersionTag stability, explicit GC,
         // and Worker resourceLimits.maxOldGenerationSizeMb propagation.
         "src/infra/worker-task-pool.memory.test.ts",
-        // queryObjects collection assertions require Node V8.
-        "src/plugin-sdk/provider-catalog-shared.retention.test.ts",
         "src/process/spawn-broker/callback-context.test.ts",
         "src/process/spawn-broker/cleanup.test.ts",
         "src/process/spawn-broker/handoff.test.ts",

@@ -237,12 +237,16 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `17c9ecf9eb4aa0b60ae1a2c9f28c1b6dc0f4c8ac` with WebKit
+The pinned build pairs Bun `fc90aa4d9c5dac37f7a63a04f8bd2e25df930c60` with WebKit
 `fb1167ebf2cb9edc1f6771a2c11771b024693ae0` in prerelease
-`openclaw-v1.4.3-20261001-17c9ecf9eb-webkit-fb1167ebf2`.
-It syncs upstream Bun through `4b02e1031d`, moving WebKit from `f20ce77445`
-to `fb1167ebf2`, and includes fixes for thread-safe function ownership,
-shared-environment deletion, and a module-key crash.
+`openclaw-v1.4.3-20261001-fc90aa4d9c-webkit-fb1167ebf2`.
+WebKit is unchanged from the previous `17c9ecf9eb` pin. The build adds fixes for
+compile-cache idle wakeups, `v8.queryObjects`, idempotent native readable
+`ref`/`unref`, the default `module-sync` condition, and `process.once` wrapper identity.
+It retains the upstream Bun sync through `4b02e1031d` and fixes for thread-safe
+function ownership, shared-environment deletion, and a module-key crash.
+The shared provider-catalog retention test is qualified on this build and runs
+on Bun; tests that assert V8 heap behavior continue to run on Node.
 The fork keeps the lifecycle-script `node` shim in a per-user directory, with a
 private fallback when that directory is unusable. This lets several accounts on
 one host run Bun installs without Node.

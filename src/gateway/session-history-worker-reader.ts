@@ -23,6 +23,18 @@ export async function readSessionHistoryRequest(
     deferProfileDisplay: true,
     resolveCronJobName: () => undefined,
   };
+  if (request.kind === "active-accounting") {
+    return {
+      kind: "active-accounting",
+      result: options.readers.readTranscriptAccounting(request.params.options),
+    };
+  }
+  if (request.kind === "bounded-tail") {
+    return {
+      kind: "bounded-tail",
+      result: options.readers.readBoundedMessageTail(request.params.options),
+    };
+  }
   if (request.kind === "artifacts") {
     const { selectSessionArtifacts } = await import("./session-artifact-read.js");
     const query = request.params.query;
