@@ -24,7 +24,6 @@ import { getPluginRegistryVersion } from "../plugins/runtime-state.js";
 import { waitForPluginRegistryRetirement } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
-import { startPluginServices, type PluginServicesHandle } from "../plugins/services.js";
 import {
   getGatewayRestartDrainSignal,
   waitForGatewayRestartFenceSettlement,
@@ -46,6 +45,7 @@ import {
   createPluginReloadRecovery,
   resolvePluginReloadReplacementIds,
 } from "./server-plugin-reload-recovery.js";
+import { startGatewayPluginServices, type PluginServicesHandle } from "./server-plugin-services.js";
 import {
   GatewayConfigReloadSupersededError,
   type GatewayReloadHandlerParams,
@@ -354,7 +354,7 @@ export async function reloadGatewayPlugins(
     await params.checkpoint?.();
     assertCurrent();
     const startedServices = await withPluginRegistryPreparationScope(nextRegistry, () =>
-      startPluginServices({
+      startGatewayPluginServices({
         registry: nextRegistry,
         config: params.nextConfig,
         workspaceDir: pluginWorkspaceDir,
@@ -570,7 +570,7 @@ export async function reloadGatewayPlugins(
             );
             await withPluginRegistryPreparationScope(restoredRegistry, async () => {
               await attempt(recoveryErrors, async () => {
-                await startPluginServices({
+                await startGatewayPluginServices({
                   registry: restoredRegistry,
                   config: previousConfig,
                   workspaceDir: pluginWorkspaceDir,

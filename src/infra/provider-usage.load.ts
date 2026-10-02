@@ -33,6 +33,7 @@ type UsageSummaryOptions = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   fetch?: typeof fetch;
+  signal?: AbortSignal;
 };
 
 async function fetchProviderUsageSnapshot(params: {
@@ -124,8 +125,12 @@ export async function loadProviderUsageSummary(
     (authStore ??= ensureAuthProfileStore(opts.agentDir, { allowKeychainPrompt: false }));
   const tasks = descriptors.map(({ provider }) => {
     return raceUsageTimeout(
-      (signal) =>
+      (timeoutSignal) =>
         trackAsyncWork(async () => {
+          const signal = opts.signal
+            ? AbortSignal.any([timeoutSignal, opts.signal])
+            : timeoutSignal;
+          signal.throwIfAborted();
           let authError: unknown;
           const auth =
             opts.auth?.find((candidate) => candidate.provider === provider) ??

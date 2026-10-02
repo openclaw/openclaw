@@ -195,6 +195,10 @@ const CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map(
   FROZEN_RELEASE_2026_9_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
 );
 CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/diagnostics-prometheus:dangerous-exec:src/provider-usage-lifecycle.release.e2e.test.ts",
+  2,
+);
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
   "@openclaw/codex:dangerous-exec:src/doctor.test.ts",
   1,
 );

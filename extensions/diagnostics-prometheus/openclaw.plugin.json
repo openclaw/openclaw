@@ -3,12 +3,29 @@
   "categories": ["infrastructure"],
   "name": "Diagnostics Prometheus",
   "description": "OpenClaw diagnostics Prometheus exporter for runtime metrics.",
+  "uiHints": {
+    "providerUsage.enabled": {
+      "label": "Provider usage polling",
+      "help": "Poll configured providers for allowance metrics. This uses the default agent's provider credentials and makes background provider requests."
+    }
+  },
   "activation": {
     "onStartup": true
   },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "providerUsage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      }
+    }
   }
 }
