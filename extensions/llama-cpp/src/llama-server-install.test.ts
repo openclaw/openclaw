@@ -416,7 +416,7 @@ describe("ensureLlamaServerInstalled", () => {
     );
   });
 
-  it("stages the app-local VC runtime before validating a fresh CPU ZIP", async () => {
+  it("stages the app-local VC runtime only after the fresh CPU ZIP cannot start", async () => {
     const { root, asset, runtime } = await createCpuArchive();
     const calls: Array<{ command: string; args: string[]; timeout?: number }> = [];
     mocks.execFile.mockImplementation(
@@ -453,6 +453,7 @@ describe("ensureLlamaServerInstalled", () => {
       })),
     ).toEqual([
       { published: false, args: ["--version"], timeout: 120_000 },
+      { published: false, args: ["--version"], timeout: 120_000 },
       { published: true, args: ["--version"], timeout: 15_000 },
       { published: true, args: ["--version"], timeout: 15_000 },
     ]);
@@ -466,6 +467,67 @@ describe("ensureLlamaServerInstalled", () => {
       expect.objectContaining({ url: runtime.url }),
     );
     expect((await fs.readdir(root)).every((entry) => !entry.startsWith("."))).toBe(true);
+  });
+
+  it("does not fetch the VC runtime when the fresh CPU ZIP already starts", async () => {
+    const { root, asset, runtime } = await createCpuArchive();
+    mockVersionOutput(
+      `version: 0.1.0-dev (build ${LLAMA_SERVER_BUILD}, commit ${LLAMA_SERVER_COMMIT.slice(0, 9)})`,
+    );
+
+    const { command } = resolveManagedLlamaServerPaths(asset);
+    await expect(ensureLlamaServerInstalled({ asset })).resolves.toMatchObject({ command });
+
+    expect(mocks.extractWindowsVcRuntime).not.toHaveBeenCalled();
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalledWith(
+      expect.objectContaining({ url: runtime.url }),
+    );
+    for (const file of runtime.files) {
+      await expect(fs.stat(path.join(path.dirname(command), file.target))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
+    expect(await fs.readFile(command, "utf8")).toBe("server");
+    expect((await fs.readdir(root)).every((entry) => !entry.startsWith("."))).toBe(true);
+  });
+
+  it("does not fetch the VC runtime when the fresh CPU ZIP reports a different build", async () => {
+    const { root, asset, runtime } = await createCpuArchive();
+    mockVersionOutput("version: 0.1.0-dev (build 1, commit deadbeef0)");
+
+    await expect(ensureLlamaServerInstalled({ asset })).rejects.toThrow(
+      `expected b${LLAMA_SERVER_BUILD} (${LLAMA_SERVER_COMMIT.slice(0, 9)})`,
+    );
+
+    expect(mocks.extractWindowsVcRuntime).not.toHaveBeenCalled();
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalledWith(
+      expect.objectContaining({ url: runtime.url }),
+    );
+    expect(await fs.readdir(root)).toEqual([]);
+  });
+
+  it("preserves both launch errors when the VC runtime fallback cannot start the server", async () => {
+    const { root, asset } = await createCpuArchive();
+    let attempt = 0;
+    mocks.execFile.mockImplementation(
+      (
+        command: string,
+        _args: string[],
+        _options: unknown,
+        callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
+      ) => {
+        const detail = attempt++ === 0 ? "initial launch failed" : "fallback launch failed";
+        const error = new Error(detail) as ExecFileException;
+        error.cmd = `${command} --version`;
+        callback(error, "", "");
+      },
+    );
+
+    await expect(ensureLlamaServerInstalled({ asset })).rejects.toThrow(
+      /Initial startup detail: .*initial launch failed.*Fallback detail: .*fallback launch failed/u,
+    );
+    expect(mocks.extractWindowsVcRuntime).toHaveBeenCalledTimes(1);
+    expect(await fs.readdir(root)).toEqual([]);
   });
 
   it("aborts fresh validation and removes the unpublished CPU ZIP files", async () => {
@@ -512,6 +574,10 @@ describe("ensureLlamaServerInstalled", () => {
       if (runtime.archive === "vc-redist") {
         throw new Error("expected the CUDA dependency archive before the Visual C++ runtime");
       }
+      const vcRuntime = source.dependencies![1]!;
+      if (vcRuntime.archive !== "vc-redist") {
+        throw new Error("expected the CUDA asset to include the Visual C++ runtime");
+      }
       const serverZip = new JSZip()
         .file(source.executable, "server")
         .file("ggml-cuda.dll", "backend");
@@ -534,6 +600,7 @@ describe("ensureLlamaServerInstalled", () => {
                 ? "0".repeat(64)
                 : createHash("sha256").update(runtimeBytes).digest("hex"),
           },
+          ...(outcome === "no-device" ? [vcRuntime] : []),
         ],
       };
       const controller = new AbortController();
@@ -603,6 +670,10 @@ describe("ensureLlamaServerInstalled", () => {
             { args: ["--version"], timeout: 120_000 },
             { args: ["--list-devices"], timeout: 15_000 },
           ]);
+          expect(mocks.extractWindowsVcRuntime).not.toHaveBeenCalled();
+          expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalledWith(
+            expect.objectContaining({ url: vcRuntime.url }),
+          );
         } else {
           expect(commandCalls).toEqual([]);
         }
@@ -682,6 +753,18 @@ describe("CUDA runtime selection", () => {
 });
 
 describe("Windows VC runtime selection", () => {
+  it.each([
+    ["darwin", "x64"],
+    ["linux", "arm64"],
+    ["linux", "x64"],
+  ] as const)("does not add a VC runtime dependency on %s/%s", (platform, arch) => {
+    const asset = selectLlamaServerAsset(platform, arch, { kind: "cpu" });
+
+    expect(asset.dependencies?.some((dependency) => dependency.archive === "vc-redist")).not.toBe(
+      true,
+    );
+  });
+
   it.each([
     [
       "arm64",
