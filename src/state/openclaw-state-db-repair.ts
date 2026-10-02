@@ -53,11 +53,11 @@ import {
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { assertOpenClawStateSchemaRepairAllowed } from "./openclaw-state-db-schema-policy.js";
 import {
+  assertCanonicalAgentDatabasesPrimaryKey,
   assertCanonicalStateSchemaShape,
   dropLegacyStateTables,
   migrateAgentDatabaseRelativePaths as migrateAgentPaths,
   migrateWorkerPlacementExecutionModeSchema,
-  repairAgentDatabasesCompositePrimaryKey,
   repairLegacyGatewayRestartHandoffsForStrictMigration,
 } from "./openclaw-state-db-schema-repair.js";
 import { ensureOpenClawStateRuntimeSchema } from "./openclaw-state-db-schema-runtime.js";
@@ -95,6 +95,7 @@ export function repairStateSchema(
       scope === "automatic" ? undefined : openDoctorStateSchemaReadAdmission(db);
     try {
       assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+      assertCanonicalAgentDatabasesPrimaryKey(db, pathname);
     } finally {
       closeReadAdmission?.();
     }
@@ -227,9 +228,6 @@ export function repairStateSchema(
         applied.push(
           ...describeAgentPathMigration(migrateAgentPaths(db, previousVersion, pathname)),
         );
-        if (repairAgentDatabasesCompositePrimaryKey(db)) {
-          applied.push(`Migrated shared state agent database registry primary key → agent_id,path`);
-        }
         if (repairAuditEventsSchema(db)) {
           applied.push(
             `Migrated shared state audit event ledger → versioned message lifecycle schema`,

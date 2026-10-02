@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-completion";
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { defineCodexBuildState } from "../build-state.js";
 import { interruptCodexTurnAndWaitBestEffort } from "./attempt-client-cleanup.js";
 import {
   claimCodexAppServerLiveThread,
@@ -50,7 +51,12 @@ export const defaultNativeSubagentMonitorRuntime: NativeSubagentMonitorRuntime =
 export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorConstructor>(
   Monitor: T,
 ) {
-  const monitors = new WeakMap<CodexAppServerClient, NativeMonitor>();
+  // Retirement and model admission must reach the original monitor's custody
+  // when another same-build module copy receives the shared physical client.
+  const monitors = defineCodexBuildState(
+    "openclaw.codexNativeSubagentMonitors",
+    () => new WeakMap<CodexAppServerClient, NativeMonitor>(),
+  )();
 
   async function registerMonitor({
     client,

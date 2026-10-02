@@ -3840,65 +3840,14 @@ describe("disposeSession timeout", () => {
     { timeout: 15_000 },
     async () => {
       testing.setBundleMcpDisposeTimeoutMsForTest(50);
-      const sessionId = "test-session-" + Date.now();
-      const server = http.createServer((req, res) => {
-        if (req.method === "GET") {
-          res.writeHead(405).end();
-          return;
-        }
-        if (req.method === "DELETE") {
-          // Never respond — simulates a hung terminateSession() DELETE.
-          return;
-        }
-        if (req.method !== "POST") {
-          res.writeHead(405).end();
-          return;
-        }
-        let body = "";
-        req.on("data", (chunk: Buffer) => {
-          body += chunk.toString();
-        });
-        req.on("end", () => {
-          const message = JSON.parse(body);
-          res.setHeader("content-type", "application/json");
-          res.setHeader("mcp-session-id", sessionId);
-          if (message.method === "initialize") {
-            res.writeHead(200).end(
-              JSON.stringify({
-                jsonrpc: "2.0",
-                id: message.id,
-                result: {
-                  protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
-                  capabilities: { tools: {} },
-                  serverInfo: { name: "hanging-delete-server", version: "1.0.0" },
-                },
-              }),
-            );
-          } else if (message.method === "notifications/initialized") {
-            res.writeHead(202).end();
-          } else if (message.method === "tools/list") {
-            res.writeHead(200).end(
-              JSON.stringify({
-                jsonrpc: "2.0",
-                id: message.id,
-                result: {
-                  tools: [{ name: "probe", description: "probe", inputSchema: { type: "object" } }],
-                },
-              }),
-            );
-          } else {
-            res.writeHead(200).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {} }));
-          }
-        });
+      const manager = createSessionMcpRuntimeManager();
+      const termination = createDeferred();
+      const server = await startCatalogRecoveryMcpServer("hanging-delete-server", {
+        holdTermination: termination.promise,
       });
-
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const addr = server.address() as { port: number };
 
       try {
-        const runtime = await getOrCreateSessionMcpRuntime({
+        const runtime = await manager.getOrCreate({
           sessionId: "session-streamable-http-dispose",
           sessionKey: "agent:test:session-streamable-http-dispose",
           workspaceDir: "/workspace",
@@ -3906,7 +3855,7 @@ describe("disposeSession timeout", () => {
             mcp: {
               servers: {
                 hangingDelete: {
-                  url: `http://127.0.0.1:${addr.port}/mcp`,
+                  url: server.url,
                   transport: "streamable-http",
                 },
               },
@@ -3923,10 +3872,9 @@ describe("disposeSession timeout", () => {
         const elapsed = Date.now() - start;
 
         expect(elapsed).toBeLessThan(1_000);
-        await retireSessionMcpRuntime({
-          sessionId: runtime.sessionId,
-          reason: "external retirement before final run cleanup",
-        });
+        expect(server.terminationCount()).toBe(1);
+        await manager.disposeSession(runtime.sessionId);
+        expect(manager.listRuntimeKeys()).toEqual([]);
         const cleanupScope = createAgentCleanupScope();
         await cleanupScope.run(async () => {
           await expect(materialized.dispose()).rejects.toThrow("could not confirm closure");
@@ -3934,7 +3882,9 @@ describe("disposeSession timeout", () => {
         });
         expect(cleanupScope.outcome).toBe("uncertain");
       } finally {
-        server.close();
+        termination.resolve();
+        await manager.disposeAll();
+        await server.close();
       }
     },
   );

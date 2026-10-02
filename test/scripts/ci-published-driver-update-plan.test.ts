@@ -350,6 +350,8 @@ describe("published-driver update selection", () => {
       writeFileSync(
         path.join(helpers, "docker-e2e-image.sh"),
         String.raw`
+# The real helper sources the package helper; the cell script relies on that.
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 docker_e2e_resolve_image() { printf '%s\n' "$1"; }
 docker_e2e_build_or_reuse() {
   [ "$(cat "$IMAGE_STATE")" = "$1" ] || return 91

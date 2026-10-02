@@ -206,6 +206,7 @@ describe("chat pane model controls", () => {
           queueMode: "steer",
           idempotencyKey: steer.sendRunId,
         }),
+        { timeoutMs: 30_000 },
       ),
     );
     expect(state.chatSending).toBe(true);

@@ -111,6 +111,7 @@ describe("pending send composer ownership", () => {
       const handoff = new ChatPaneComposerHandoff(source.context, {
         state: () => pane.state,
         owner: () => transport.client,
+        presentationOwner: () => pane.controller.composerPersistence.presentationOwner,
         region: () => region,
         presented: visible,
         pause: () => pane.controller.composerPersistence.stop(),

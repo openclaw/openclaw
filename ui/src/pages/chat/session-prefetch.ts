@@ -20,7 +20,7 @@ import {
   type ChatMessageCache,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
-import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
+import { resolveChatSnapshotKey, resolveChatSnapshotSessionKey } from "./session-snapshot-key.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
 const SESSION_PREFETCH_COUNT = 2;
@@ -34,7 +34,9 @@ type ChatSnapshotKeyHost = Parameters<typeof resolveChatSnapshotKey>[0];
 
 type SessionPrefetchContext = {
   readonly gateway: {
-    readonly snapshot: Pick<ApplicationGatewaySnapshot, "assistantAgentId" | "hello">;
+    readonly connection?: { gatewayUrl: string };
+    readonly snapshot: Pick<ApplicationGatewaySnapshot, "assistantAgentId" | "hello"> &
+      Partial<Pick<ApplicationGatewaySnapshot, "client">>;
     subscribe: (listener: () => void) => () => void;
   };
   readonly agents: { readonly state: Pick<AgentCapability["state"], "agentsList"> };
@@ -64,6 +66,7 @@ type SessionPrefetchCandidate = {
   activityAt: number;
   sessionKey: string;
   snapshotKey: string;
+  canonicalSessionKey: string;
   sessionId: GatewaySessionRow["sessionId"];
   activeLeafEntryId: GatewaySessionRow["activeLeafEntryId"];
   updatedAt: GatewaySessionRow["updatedAt"];
@@ -298,7 +301,7 @@ class SessionPrefetcher {
     }
     try {
       let existing = readChatSessionSnapshot(this.cache, snapshot.snapshotHost, {
-        sessionKey: candidate.snapshotKey,
+        sessionKey: candidate.canonicalSessionKey,
       });
       if (!existing && this.snapshotStore.readSavedAt(candidate.snapshotKey) !== null) {
         existing = await this.snapshotStore.read(candidate.snapshotKey);
@@ -309,7 +312,7 @@ class SessionPrefetcher {
           cacheChatSessionSnapshot(
             this.cache,
             snapshot.snapshotHost,
-            { sessionKey: candidate.snapshotKey },
+            { sessionKey: candidate.canonicalSessionKey },
             existing,
           );
           ownsCache = this.snapshotStore.captureReadScope(candidate.snapshotKey);
@@ -320,7 +323,7 @@ class SessionPrefetcher {
       this.lastAttemptAt.set(candidate.snapshotKey, Date.now());
       let result = await requestChatSessionSnapshot(
         client,
-        candidate.snapshotKey,
+        candidate.canonicalSessionKey,
         this,
         mayRequest,
         existing?.deltaCursor,
@@ -334,7 +337,7 @@ class SessionPrefetcher {
           cacheChatSessionSnapshot(
             this.cache,
             snapshot.snapshotHost,
-            { sessionKey: candidate.snapshotKey },
+            { sessionKey: candidate.canonicalSessionKey },
             withoutCursor,
           );
           existing = withoutCursor;
@@ -343,7 +346,12 @@ class SessionPrefetcher {
         if (!mayRequest()) {
           return;
         }
-        result = await requestChatSessionSnapshot(client, candidate.snapshotKey, this, mayRequest);
+        result = await requestChatSessionSnapshot(
+          client,
+          candidate.canonicalSessionKey,
+          this,
+          mayRequest,
+        );
         if (!isCurrent()) {
           return;
         }
@@ -361,13 +369,13 @@ class SessionPrefetcher {
           appendChatMessageToCache(
             this.cache,
             snapshot.snapshotHost,
-            { sessionKey: candidate.snapshotKey },
+            { sessionKey: candidate.canonicalSessionKey },
             event.message,
             event,
           );
         }
         const updated = readChatSessionSnapshot(this.cache, snapshot.snapshotHost, {
-          sessionKey: candidate.snapshotKey,
+          sessionKey: candidate.canonicalSessionKey,
         });
         if (!updated) {
           return;
@@ -390,12 +398,12 @@ class SessionPrefetcher {
       cacheChatSessionSnapshot(
         this.cache,
         snapshot.snapshotHost,
-        { sessionKey: candidate.snapshotKey },
+        { sessionKey: candidate.canonicalSessionKey },
         cached,
       );
     } catch (error) {
       console.debug(
-        `[chat-session-prefetch] history fetch failed for ${candidate.snapshotKey}`,
+        `[chat-session-prefetch] history fetch failed for ${candidate.canonicalSessionKey}`,
         error,
       );
     }
@@ -452,6 +460,10 @@ class SessionPrefetcher {
       candidates.push({
         activityAt,
         sessionKey: row.key,
+        canonicalSessionKey: resolveChatSnapshotSessionKey(snapshot.snapshotHost, {
+          sessionKey: row.key,
+          agentId: row.agentId,
+        }),
         snapshotKey,
         sessionId: row.sessionId,
         activeLeafEntryId: row.activeLeafEntryId,
@@ -635,6 +647,8 @@ export class SessionPrefetchController implements ReactiveController {
       ),
       rows: context.sessions.state.result?.sessions ?? null,
       snapshotHost: {
+        settings: context.gateway.connection,
+        client: context.gateway.snapshot.client,
         assistantAgentId: context.gateway.snapshot.assistantAgentId,
         agentsList: context.agents.state.agentsList,
         hello: context.gateway.snapshot.hello,

@@ -13,7 +13,9 @@ auth health, sandbox images, and plugin installs.
 
 <AccordionGroup>
   <Accordion title="3. Legacy state migrations (disk layout)">
-    Doctor can migrate older on-disk layouts into the current structure:
+    Supported upgrade sources are state shapes written by releases shipped on or after July 1, 2026. Session rows that still need `provider`, `lastProvider`, or `room` converted to their current fields are refused without changing the original store. Preserve a backup and use an older OpenClaw release to migrate those rows before upgrading. Rows with current fields remain supported even when obsolete metadata remains alongside them. July-era `sessions.json` and JSONL transcript imports remain supported.
+
+    Doctor can migrate supported on-disk layouts into the current structure:
 
     - Session rows and transcripts: import legacy `sessions.json` and JSONL history from `~/.openclaw/sessions/` or per-agent `sessions/` directories into `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
     - Agent dir: from `~/.openclaw/agent/` to `~/.openclaw/agents/<agentId>/agent/`

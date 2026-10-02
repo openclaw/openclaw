@@ -12,6 +12,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { resolveAgentsDirFromSessionStorePath } from "../config/sessions/paths.js";
 import { resolvePersistedSessionStoreOwner } from "../config/sessions/session-store-owner.js";
+import { assertSupportedSessionStoreEntry } from "../config/sessions/supported-session-store.js";
 import {
   listConfiguredSessionStoreAgentIds,
   resolveAllAgentSessionStoreTargetsSync,
@@ -239,17 +240,14 @@ export function normalizeSessionEntry(
   entry: SessionEntryLike,
   sessionKey?: string,
 ): SessionEntry | null {
-  const { room, ...entryWithoutRoom } = entry;
-  const shaped = normalizePersistedSessionEntryShape(entryWithoutRoom, { sessionKey });
+  assertSupportedSessionStoreEntry(entry);
+  const shaped = normalizePersistedSessionEntryShape(entry, { sessionKey });
   if (!shaped) {
     return null;
   }
   const normalized = { ...shaped };
   if (typeof normalized.sessionId === "string") {
     normalized.updatedAt = asFiniteNumber(normalized.updatedAt) ?? Date.now();
-  }
-  if (typeof normalized.groupChannel !== "string" && typeof room === "string") {
-    normalized.groupChannel = room;
   }
   return normalized;
 }

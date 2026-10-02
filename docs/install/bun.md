@@ -116,11 +116,13 @@ export PATH="/path/to/node-24/bin:$PATH"
 
 Use your actual absolute paths and the same installation prefix, profile, and
 state/configuration as your Gateway. Wait for the Node Gateway to be ready, then
-update with your chosen target tarball:
+run the normal update:
 
 ```sh
-"$runtime" "$package/openclaw.mjs" update --tag /path/to/openclaw-target.tgz --yes --json
+"$runtime" "$package/openclaw.mjs" update --yes
 ```
+
+To target a specific version or a local package, add `--tag <version>` or `--tag ./openclaw.tgz` (see [Update](/cli/update)).
 
 Only after the update succeeds, restore Bun:
 

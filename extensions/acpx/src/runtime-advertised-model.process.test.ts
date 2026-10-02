@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAgentRegistry, createFileSessionStore, type AcpProcessStarted } from "acpx/runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it } from "vitest";
 import { AcpxRuntime } from "./runtime.js";
@@ -20,7 +22,7 @@ function isAlive(pid: number): boolean {
 async function withRuntime(
   run: (
     runtime: AcpxRuntime,
-    spawned: AcpProcessStarted[],
+    spawned: Array<AcpProcessStarted & { exited: Promise<void> }>,
     restart: () => AcpxRuntime,
   ) => Promise<void>,
   cursor = true,
@@ -39,7 +41,8 @@ async function withRuntime(
         await fs.symlink(process.execPath, executable);
       }
     }
-    const spawned: AcpProcessStarted[] = [];
+    const spawned: Array<AcpProcessStarted & { exited: Promise<void> }> = [];
+    const exits = new Map<string, () => void>();
     const runtimes: AcpxRuntime[] = [];
     const create = () => {
       const created = new AcpxRuntime({
@@ -48,7 +51,17 @@ async function withRuntime(
         agentRegistry: createAgentRegistry({ overrides: { catalog: [executable, script] } }),
         permissionMode: "deny-all",
         timeoutMs: 10_000,
-        processLifecycle: { onSpawned: (started) => void spawned.push(started) },
+        processLifecycle: {
+          onSpawned: (started) => {
+            const exited = createDeferred<void>();
+            exits.set(started.launchId, exited.resolve);
+            spawned.push({ ...started, exited: exited.promise });
+          },
+          onExit: ({ launchId }) => {
+            exits.get(launchId)?.();
+            exits.delete(launchId);
+          },
+        },
       });
       runtimes.push(created);
       return created;
@@ -160,7 +173,9 @@ it("rejects a model that becomes ambiguous on reconnect and preserves the conver
   });
 });
 
-it("releases rejected startup attempts when an advertised model cannot be selected", async () => {
+it("releases rejected startup attempts when an advertised model cannot be selected", async ({
+  signal,
+}) => {
   await withRuntime(async (runtime, spawned) => {
     await expect(
       runtime.ensureSession({
@@ -173,7 +188,8 @@ it("releases rejected startup attempts when an advertised model cannot be select
     ).rejects.toThrow(/not available on this plan/);
     // The original reference and stripped retry both failed before session publication.
     expect(spawned).toHaveLength(2);
-    await expect.poll(() => spawned.filter(({ pid }) => isAlive(pid))).toEqual([]);
+    await withinTest(Promise.all(spawned.map(({ exited }) => exited)), signal);
+    expect(spawned.filter(({ pid }) => isAlive(pid))).toEqual([]);
   });
 });
 

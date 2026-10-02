@@ -15,6 +15,7 @@ import { lt as semverLt, valid as validSemver } from "semver";
 import { z } from "zod";
 import { isRecord as isJsonRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.ts";
+import { isRecoverableOpenClawNpmRegistryReadbackFailure } from "../openclaw-npm-resume-run.mts";
 import {
   compareCodeUnits,
   readPublicationArtifactArchive,
@@ -1200,6 +1201,7 @@ function verifyWorkflowRun(params: {
   expectedHeadSha?: string;
   allowedHeadBranches?: string[];
   rerunFailed?: boolean;
+  acceptFailedRun?: (run: JsonRecord, jobs: JsonRecord[]) => boolean;
   observe?: (run: JsonRecord, failedJobCount: number) => void;
 }): WorkflowRunSummary {
   const raw = runReleaseVerifierCommand("gh", [
@@ -1258,14 +1260,19 @@ function verifyWorkflowRun(params: {
       jobConclusion !== undefined && jobConclusion !== "success" && jobConclusion !== "skipped"
     );
   });
+  const acceptedFailure = conclusion === "failure" && params.acceptFailedRun?.(run, jobs) === true;
   params.observe?.(run, failedJobs.length);
-  if (failedJobs.length > 0 && params.rerunFailed) {
+  if (failedJobs.length > 0 && params.rerunFailed && !acceptedFailure) {
     runReleaseVerifierCommand("gh", ["run", "rerun", params.id, "--repo", params.repo, "--failed"]);
     throw new Error(
       `${params.label}: reran ${failedJobs.length} failed job(s); rerun verifier after it finishes.`,
     );
   }
-  if (status !== "completed" || conclusion !== "success" || failedJobs.length > 0) {
+  if (
+    status !== "completed" ||
+    (conclusion !== "success" && !acceptedFailure) ||
+    (failedJobs.length > 0 && !acceptedFailure)
+  ) {
     const failedNames = failedJobs
       .map((job) => normalizeOptionalString(job.name) ?? "<unnamed>")
       .join(", ");
@@ -2131,6 +2138,10 @@ export async function verifyBetaRelease(
             ? undefined
             : requirePositiveSafeInteger(originalAttempt, "original npm publisher attempt"),
         expectedHeadSha: process.env.OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA,
+        acceptFailedRun:
+          originalAttempt === undefined
+            ? undefined
+            : (_run, jobs) => isRecoverableOpenClawNpmRegistryReadbackFailure(jobs),
         expectedHeadBranch:
           process.env.OPENCLAW_NPM_EXPECTED_WORKFLOW_REF?.replace(/^refs\/(?:tags|heads)\//u, "") ??
           args.workflowRef,

@@ -43,7 +43,7 @@ describe("Gateway and node-host MCP live process parity", () => {
   it(
     "connects, filters, inventories, invokes, withdraws, and cleans up all real transports",
     { timeout: TEST_TIMEOUT_MS },
-    async () => {
+    async ({ signal }) => {
       const repoRoot = process.cwd();
       const taskRoot = tempDirs.make("openclaw-gateway-node-mcp-");
       const taskPath = (...parts: string[]) => path.join(taskRoot, ...parts);
@@ -84,10 +84,19 @@ describe("Gateway and node-host MCP live process parity", () => {
         const sessionEnv = createChildEnv({ home: sessionHome, tempDir: sessionTempDir });
         const nodeFixtureEnv = createChildEnv({ home: nodeHome, tempDir: nodeTempDir });
         phase = "starting HTTP MCP fixtures";
-        [sessionHttpFixture, nodeHttpFixture] = await Promise.all([
-          startHttpFixture({ fixturePath, labelPrefix: "session", env: sessionEnv }),
-          startHttpFixture({ fixturePath, labelPrefix: "node", env: nodeFixtureEnv }),
-        ]);
+        // Retain each child before the next startup can fail or be aborted.
+        sessionHttpFixture = await startHttpFixture({
+          fixturePath,
+          labelPrefix: "session",
+          env: sessionEnv,
+          signal,
+        });
+        nodeHttpFixture = await startHttpFixture({
+          fixturePath,
+          labelPrefix: "node",
+          env: nodeFixtureEnv,
+          signal,
+        });
         const sessionMcpServers = createMcpServers({
           placement: "session",
           fixture: sessionHttpFixture,
