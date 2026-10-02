@@ -138,6 +138,10 @@ session key. Legacy runs without a recorded owner use current configuration to
 resolve one agent and clear only that agent's queues. The optional binding stays
 in `payload_json` when an older build rewrites the run.
 
+Owner-aware child lookups keep watched follow-ups, steering, and run generations
+separate when agents share a raw key. Rows without a recorded owner and callers
+without an explicit owner retain their existing key-only lookup behavior.
+
 Stop also retires pending completion continuations for the selected work, even
 when a child has already finished. Cancelling a completion turn retires its
 matching child batch, so automatic delivery retries cannot start it again under

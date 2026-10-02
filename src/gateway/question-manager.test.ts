@@ -690,6 +690,66 @@ describe("QuestionManager", () => {
 });
 
 describe("answer canonicalization", () => {
+  const valuedOptions = [
+    { label: "Blue", value: "blue-1" },
+    { label: "Red", value: "red-1" },
+  ];
+  const duplicateLabels = [
+    { label: "Blue", value: "blue-1" },
+    { label: "Blue", value: "blue-2" },
+  ];
+  const valuedAnswerCases: Array<
+    [string, Partial<Question>, Question["options"], string, string | undefined]
+  > = [
+    ["installed form label", { presentation: "form" }, valuedOptions, "Blue", "blue-1"],
+    ["form value", { presentation: "form" }, valuedOptions, "blue-1", "blue-1"],
+    ["unknown form label", { presentation: "form" }, valuedOptions, "Green", undefined],
+    ["inexact form label", { presentation: "form" }, valuedOptions, " Blue ", undefined],
+    [
+      "value before a conflicting label",
+      { presentation: "form" },
+      [
+        { label: "a", value: "b" },
+        { label: "b", value: "c" },
+      ],
+      "b",
+      "b",
+    ],
+    ["trimmed ordinary label", {}, valuedOptions, "  Blue  ", "blue-1"],
+    ["ordinary value", {}, valuedOptions, "blue-1", "blue-1"],
+    ["secret label", { isSecret: true }, valuedOptions, "Blue", "blue-1"],
+    ["inexact secret label", { isSecret: true }, valuedOptions, " Blue ", undefined],
+    ["Other form label", { presentation: "form", isOther: true }, valuedOptions, "Blue", "blue-1"],
+    [
+      "Other form text preserves exact bytes",
+      { presentation: "form", isOther: true },
+      valuedOptions,
+      "\tanything else\n",
+      "\tanything else\n",
+    ],
+    ["ambiguous form label", { presentation: "form" }, duplicateLabels, "Blue", undefined],
+    ["first duplicate-label value", { presentation: "form" }, duplicateLabels, "blue-1", "blue-1"],
+    ["second duplicate-label value", { presentation: "form" }, duplicateLabels, "blue-2", "blue-2"],
+    ["ambiguous trimmed ordinary label", {}, duplicateLabels, " Blue ", undefined],
+  ];
+  it.each(valuedAnswerCases)("resolves %s", (_name, overrides, options, submitted, expected) => {
+    const record = manager.request({
+      questions: [{ ...questions[0]!, options, isOther: false, ...overrides }],
+      timeoutMs: 10_000,
+    });
+    const resolve = () => manager.resolve(record.id, { answers: { choice: [submitted] } });
+    if (expected === undefined) {
+      expect(resolve).toThrowError(
+        expect.objectContaining({ code: QuestionManagerErrorCodes.INVALID_ANSWER }),
+      );
+    } else {
+      expect(resolve()).toEqual({
+        status: "answered",
+        answers: { answers: { choice: [expected] } },
+      });
+    }
+  });
+
   it.each(["\tsynthetic-secret\n", "   "])(
     "preserves exact secret bytes while normalizing ordinary answers: %j",
     async (value) => {

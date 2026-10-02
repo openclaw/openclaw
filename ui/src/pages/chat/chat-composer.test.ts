@@ -13,6 +13,7 @@ import {
 } from "./chat-composer.test-support.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
+import type { ChatQuestionCard } from "./components/chat-question-card.ts";
 import * as realtimeTalkInput from "./talk/input.ts";
 
 const discoverRealtimeTalkInputsMock = vi.fn();
@@ -550,21 +551,16 @@ describe("renderChatComposer status", () => {
     });
 
     render(renderChatComposer(composerProps), container);
-    let panel = container.querySelector("openclaw-chat-question-panel") as HTMLElement & {
-      props: {
-        model: { questions: Array<{ question: string }>; requestPosition?: unknown };
-        onNextRequest?: () => void;
-      };
-    };
-    expect(panel.props.model.questions[0]?.question).toBe("First prompt");
-    expect(panel.props.model.requestPosition).toEqual({ current: 1, total: 2 });
+    let panel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
+    expect(panel.props!.model.questions[0]?.question).toBe("First prompt");
+    expect(panel.props!.model.requestPosition).toEqual({ current: 1, total: 2 });
 
-    panel.props.onNextRequest?.();
+    panel.props!.onNextRequest?.();
     expect(onRequestUpdate).toHaveBeenCalledOnce();
     render(renderChatComposer(composerProps), container);
-    panel = container.querySelector("openclaw-chat-question-panel") as typeof panel;
-    expect(panel.props.model.questions[0]?.question).toBe("Second prompt");
-    expect(panel.props.model.requestPosition).toEqual({ current: 2, total: 2 });
+    panel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
+    expect(panel.props!.model.questions[0]?.question).toBe("Second prompt");
+    expect(panel.props!.model.requestPosition).toEqual({ current: 2, total: 2 });
   });
 
   it("floats a fresh interrupted status above the composer", () => {

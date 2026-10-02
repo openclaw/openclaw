@@ -791,8 +791,7 @@ private actor LocalFixtureChatStore {
         text: String,
         timestamp: Double,
         transcriptMessageID: String,
-        idempotencyKey: String? = nil,
-        details: AnyCodable? = nil) -> OpenClawChatMessage
+        idempotencyKey: String? = nil) -> OpenClawChatMessage
     {
         OpenClawChatMessage(
             role: role,
@@ -804,8 +803,7 @@ private actor LocalFixtureChatStore {
             timestamp: timestamp,
             transcriptMessageID: transcriptMessageID,
             idempotencyKey: idempotencyKey,
-            stopReason: role == "assistant" ? "stop" : nil,
-            details: details)
+            stopReason: role == "assistant" ? "stop" : nil)
     }
 
     private static func normalizedSessionKey(_ value: String, fallback: String) -> String {

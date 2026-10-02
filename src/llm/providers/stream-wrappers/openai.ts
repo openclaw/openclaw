@@ -46,7 +46,9 @@ import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { streamSimple } from "../../stream.js";
 import type { SimpleStreamOptions } from "../../types.js";
 import {
+  normalizeOpenAIFastMode,
   normalizeOpenAIServiceTier,
+  type OpenAIFastMode,
   supportsOpenAIResponsesFastMode,
   type OpenAIServiceTier,
 } from "../openai-fast-mode.js";
@@ -55,7 +57,7 @@ import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 const log = createSubsystemLogger("llm/providers/stream-wrappers");
 
-type DynamicFastMode = boolean | (() => boolean | undefined);
+type DynamicFastMode = OpenAIFastMode | (() => OpenAIFastMode | undefined);
 type OpenClawSimpleStreamOptions = SimpleStreamOptions & {
   openclawCodeModeToolSurface?: boolean;
   openclawCodeModeAllowedHostedToolTypes?: Set<string>;
@@ -280,18 +282,10 @@ export function resolveOpenAIServiceTier(
   return normalized;
 }
 
-function normalizeOpenAIFastMode(value: unknown): boolean | undefined {
-  if (typeof value === "function") {
-    return normalizeOpenAIFastMode((value as () => unknown)());
-  }
-  const fastMode = normalizeFastMode(value);
-  return fastMode === "auto" ? undefined : fastMode === "ultrafast" ? true : fastMode;
-}
-
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function resolveOpenAIFastMode(
   extraParams: Record<string, unknown> | undefined,
-): boolean | undefined {
+): OpenAIFastMode | undefined {
   const raw = extraParams?.fastMode ?? extraParams?.fast_mode;
   const normalized = normalizeOpenAIFastMode(raw);
   if (
@@ -467,12 +461,13 @@ export function createOpenAIFastModeWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (normalizeOpenAIFastMode(enabled) !== true || !supportsOpenAIResponsesFastMode(model)) {
+    const fastMode = normalizeOpenAIFastMode(enabled);
+    if (!fastMode || !supportsOpenAIResponsesFastMode(model)) {
       return underlying(model, context, options);
     }
     return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
       if (payload.service_tier === undefined && shouldApplyOpenAIServiceTier(model)) {
-        payload.service_tier = "priority";
+        payload.service_tier = fastMode === "ultrafast" ? "ultrafast" : "priority";
       }
     });
   };

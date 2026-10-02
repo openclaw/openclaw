@@ -33,6 +33,7 @@ import { installDistEsmResolveFastPath } from "./entry.esm-resolve-fast-path.js"
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { normalizeEnv } from "./infra/env.js";
+import { fsSafeEnvInput } from "./infra/fs-safe-env.js";
 import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
@@ -142,7 +143,7 @@ if (
   if (earlyProfile.ok && earlyProfile.profile) {
     applyCliProfileEnv({ profile: earlyProfile.profile });
   }
-  const startupEnv = { ...process.env };
+  const startupEnv = { ...fsSafeEnvInput(process.env) };
   const { assertSupportedRuntime, isCurrentRuntimeSupported } =
     await import("./infra/runtime-guard.js");
   if (!(await isCurrentRuntimeSupported())) {
