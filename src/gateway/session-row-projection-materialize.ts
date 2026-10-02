@@ -25,7 +25,7 @@ import {
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
-import { isColdSessionRow } from "./session-row-projection-archive.js";
+import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import * as records from "./session-row-projection-record.js";
 import type { prepareSessionRowScopes } from "./session-row-scope.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
@@ -296,7 +296,7 @@ export function createSessionRowMaterializer(owner: {
     facts?: records.PreparedSessionRowDatabaseFacts,
   ) => boolean;
   forgetBackfill: (id: string) => void;
-  retainMaterialized: (row: records.MaterializedRow, needsBackfill: boolean) => void;
+  retainArchived: (row: records.MaterializedRow) => void;
 }) {
   function refresh(ids: readonly string[], accepted = false) {
     if (!owner.isActive()) {
@@ -322,8 +322,7 @@ export function createSessionRowMaterializer(owner: {
         }
         const row =
           current && (accepted ? current : owner.acquireEntry(current, owner.readEntry(current)));
-        const cold = row !== undefined && isColdSessionRow(row);
-        if (row && cold && !accepted) {
+        if (row && isColdArchivedSessionRow(row) && !accepted) {
           owner.dirty.delete(id);
           owner.forgetBackfill(id);
           continue;
@@ -335,9 +334,10 @@ export function createSessionRowMaterializer(owner: {
         ) {
           row.pendingDatabaseFacts = undefined;
           owner.dirty.delete(id);
-          // Bulk and exact reads share the same residency limit and read pins.
-          if (records.ready(row)) {
-            owner.retainMaterialized(row, cold || (accepted && row.entry.archivedAt !== undefined));
+          // A bulk slice may finish an exact read's accepted archive row. Keep its
+          // residency under the archive owner's pins and bounded cache either way.
+          if (accepted && records.ready(row) && row.entry.archivedAt !== undefined) {
+            owner.retainArchived(row);
           }
         }
         if (owner.revision() !== revision) {
@@ -388,7 +388,7 @@ export function createSessionRowMaterializer(owner: {
           if (row && databaseFacts) {
             row.preparedAcpMeta = databaseFacts.acpMeta;
           }
-          if (row && isColdSessionRow(row) && !options.archived) {
+          if (row && isColdArchivedSessionRow(row) && !options.archived) {
             owner.dirty.delete(id);
             owner.forgetBackfill(id);
           } else if (row) {

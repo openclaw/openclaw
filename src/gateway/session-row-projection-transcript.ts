@@ -1,6 +1,5 @@
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { isColdSessionRow } from "./session-row-projection-archive.js";
 import { identity, type Query, type Row } from "./session-row-projection-record.js";
 
 const TRANSCRIPT_REFRESH_WINDOW_MS = 1_000;
@@ -64,7 +63,7 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
       if (pending) {
         params.refresh(id);
       }
-      if (isColdSessionRow(row)) {
+      if (row.entry?.archivedAt !== undefined && !row.materialized) {
         continue;
       }
       const window = windows.get(id);

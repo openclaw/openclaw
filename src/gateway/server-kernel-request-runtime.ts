@@ -10,8 +10,6 @@ import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
 import { readPreparedServerMethodModelCatalogs } from "./server-methods/optional-model-catalog.js";
 import type { GatewayHostLifecycle } from "./server-public.js";
-import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
-import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
 
 type GatewayCoreRuntime = Awaited<ReturnType<typeof startGatewayCoreRuntime>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -75,16 +73,6 @@ export async function prepareGatewayKernelRequestRuntime(params: {
             ),
           context: gatewayRequestContext,
           placementFactsReader: runtime.workerEnvironmentStartup?.placementStore,
-          isSessionSubscribed: ({ key, agentId }) =>
-            resolveSessionSubscriptionKeys(
-              key,
-              agentId,
-              tryResolveSessionCompatibilityOwnerAgentId(getRuntimeConfig(), key),
-            ).some(
-              (subscriptionKey) =>
-                runtime.sessionMessageSubscribers.get(subscriptionKey).size > 0 ||
-                runtime.nodeHasSessionSubscribers(subscriptionKey),
-            ),
         });
       });
   const projectionLifetime: { closing: boolean; detach?: () => void } = { closing: false };

@@ -29,9 +29,10 @@ import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js"
 import type { RespondFn } from "./server-methods/types.js";
 import { makeGatewayClient } from "./server-request-context.test-support.js";
 import * as projectionWork from "./session-projection-work.js";
-import { withReadySessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
+import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as materialization from "./session-row-projection-materialize.js";
+import { ready } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { seedSessionRowProjectionTranscriptFixture } from "./session-row-projection.transcript-fixture.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
@@ -460,19 +461,15 @@ it("reuses the subagent index across a 2,048-session drain with unrelated writes
       await Promise.all([producer, drain]);
       // The bounded drain may finish before all producer turns; join its later publications too.
       await projection.ensureMaterialized();
-      expect(projection.selectEntries()).toHaveLength(count);
+      expect(projection.selectEntries().filter(ready)).toHaveLength(count);
       expect(projection.dirtyRowCount).toBe(0);
       expect(writes).toBe(32);
       expect(writesDuringDrain).toBeGreaterThan(0);
-      const latest = { agentId: "main", key: "agent:main:legacy-2047" };
-      const completed = { agentId: "main", key: "agent:main:legacy-1" };
-      await withReadySessionRows(
-        projection,
-        () => [latest, completed],
-        () => {
-          expect(projection.snapshot(latest).row?.label).toBe("Update 32");
-          expect(projection.snapshot(completed).row?.status).toBe("done");
-        },
+      expect(
+        projection.snapshot({ agentId: "main", key: "agent:main:legacy-2047" }).row?.label,
+      ).toBe("Update 32");
+      expect(projection.snapshot({ agentId: "main", key: "agent:main:legacy-1" }).row?.status).toBe(
+        "done",
       );
       expect(builds).toHaveBeenCalledTimes(1);
     } finally {

@@ -27,7 +27,7 @@ import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import * as rowRelations from "./session-row-projection-ancestors.js";
 import {
   createSessionRowProjectionArchive,
-  isColdSessionRow as isCold,
+  isColdArchivedSessionRow as isCold,
 } from "./session-row-projection-archive.js";
 import { createSessionRowProjectionBackfill } from "./session-row-projection-backfill.js";
 import { createSessionRowProjectionCatalog } from "./session-row-projection-catalog.js";
@@ -141,7 +141,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   const archive = createSessionRowProjectionArchive({
     rows,
     dirty,
-    isSessionSubscribed: params.isSessionSubscribed,
     put,
     config: () => cfg,
     context: () => metadata.current,
@@ -173,9 +172,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       rows.delete(id);
       // Cold dependents reselect only after the removed parent is absent from the inventory.
       markRelated(row);
-      placementFacts.update(undefined, row, (sessionId) =>
-        [...(byKey.get(`id:${sessionId}`) ?? [])].flatMap((relatedId) => rows.get(relatedId) ?? []),
-      );
+      if (row.entry && !byKey.has(`id:${row.entry.sessionId}`)) {
+        placementFacts.forget(row.entry.sessionId);
+      }
     }
     dirty.delete(id);
     backfill.remove(id);
@@ -420,7 +419,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     revisions.invalidate(row.hasBoard !== prepared.hasBoard);
     Object.assign(row, prepared, {
       materializedSequence: ++materializedCount,
-      displayEvicted: undefined,
       ...metadata.materializedRevisions,
     });
     return true;
@@ -462,11 +460,10 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     readEntry: readSessionRowEntry,
     materialize,
     forgetBackfill: backfill.remove,
-    retainMaterialized(row, needsBackfill) {
+    retainArchived(row) {
+      // Exact preparation participates in the archive owner's existing bounded cache.
       archive.describe(row);
-      if (needsBackfill) {
-        backfill.enqueue(records.identity(row));
-      }
+      backfill.enqueue(records.identity(row));
     },
   });
   function needsMaterialization() {
