@@ -28,6 +28,7 @@ describe("doctor config persistence", () => {
       name: "Telegram",
       channels: {
         telegram: {
+          groupMentionsOnly: false,
           dm: {},
           direct: { "42": { threadReplies: "always" } },
           accounts: {
@@ -49,6 +50,7 @@ describe("doctor config persistence", () => {
         },
       },
       fields: [
+        "channels.telegram.groupMentionsOnly",
         "channels.telegram.dm",
         "channels.telegram.direct.42.threadReplies",
         "channels.telegram.accounts.native.streaming.preview.nativeToolProgress",
