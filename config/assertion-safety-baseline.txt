@@ -1370,7 +1370,6 @@ src/agents/embedded-agent-runner/model.provider-hooks.ts	8
 src/agents/embedded-agent-runner/model.registry-resolution.ts	3
 src/agents/embedded-agent-runner/model.ts	5
 src/agents/embedded-agent-runner/openrouter-model-capabilities.ts	2
-src/agents/embedded-agent-runner/prompt-cache-observability.ts	2
 src/agents/embedded-agent-runner/replay-history.ts	20
 src/agents/embedded-agent-runner/run-entry.ts	2
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts	4

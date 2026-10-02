@@ -10,10 +10,8 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import {
-  addSessionSuggestion,
-  listSessionSuggestions,
-} from "../../config/sessions/session-suggestion-store.js";
+import { addSessionSuggestion } from "../../config/sessions/session-suggestion-store.js";
+import { listSessionSuggestions } from "../../config/sessions/session-suggestion-store.read.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -171,7 +169,7 @@ describe("suggestions queued behind provider review", () => {
             ]);
           }
           if (action === "add") {
-            expect(listSessionSuggestions(scope)).toEqual([]);
+            expect(await listSessionSuggestions(scope)).toEqual([]);
           } else {
             expect(
               database.db

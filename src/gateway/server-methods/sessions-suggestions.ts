@@ -33,6 +33,7 @@ import {
   getSessionRowProjection,
   requireSessionRowProjection,
 } from "../session-row-projection-access.js";
+import { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
 import {
   authorizeIncognitoSessionTarget,
   canManageSessionSharing,
@@ -192,36 +193,87 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
   "session.suggestions.list": defineValidatedGatewayHandler(
     "session.suggestions.list",
     validateSessionSuggestionsListParams,
-    ({ params, respond, client, context }) => {
-      const cfg = (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)();
-      const target = requireSuggestionTarget({ client, context, ...params, respond });
-      if (!target) {
-        return;
-      }
-      const role = requireVisibleSuggestionRole({
-        client,
-        cfg,
-        sessionKey: params.sessionKey,
-        target,
-        respond,
-      });
-      if (role === null) {
+    async ({ params, respond, client, context, signal, hasCurrentClientAuthority }) => {
+      const cfg = context.getRuntimeConfig();
+      const requested = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
+      if (!requested.ok) {
+        respond(false, undefined, requested.error);
         return;
       }
       const identity = gatewayClientSessionCreator(client);
-      const stored =
-        role === "viewer"
-          ? identity
-            ? listSessionSuggestions(suggestionScope(target), { authorId: identity.id })
-            : []
-          : listSessionSuggestions(suggestionScope(target)).filter(
-              (suggestion) =>
-                suggestion.state === "pending" || suggestion.authorId === identity?.id,
-            );
-      respond(true, {
-        role,
-        suggestions: stored.map((suggestion) => protocolSuggestion(target, suggestion)),
+      const facts = await prepareSessionMutationFacts({
+        cfg,
+        sessionKey: params.sessionKey,
+        agentId: requested.agentId,
+        allowMissing: true,
       });
+      try {
+        const readCurrent = () => {
+          if (
+            signal?.aborted ||
+            client?.invalidated ||
+            client?.connectionSignal?.aborted ||
+            hasCurrentClientAuthority?.() === false ||
+            gatewayClientSessionCreator(client)?.id !== identity?.id
+          ) {
+            respond(
+              false,
+              undefined,
+              errorShape(ErrorCodes.FORBIDDEN, "suggestion reader authority changed"),
+            );
+            return null;
+          }
+          const current = facts.readCurrent(context.getRuntimeConfig());
+          const policy = (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)();
+          const sharing = prepareProjectedSessionSharing({
+            cfg: policy,
+            client,
+            isMember: (_target, id) => current.membership.has(id),
+          });
+          const target = current.target;
+          if (
+            !target ||
+            (hasOperatorBoundary(client, policy) &&
+              sharing.entryFilter?.(target.storeKey, target.entry) === false)
+          ) {
+            respond(
+              false,
+              undefined,
+              errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.sessionKey}`),
+            );
+            return null;
+          }
+          const role = requireVisibleSuggestionRole({
+            client,
+            cfg: policy,
+            sessionKey: params.sessionKey,
+            target,
+            respond,
+            sharing,
+          });
+          return role === null ? null : { target, role };
+        };
+        const initial = readCurrent();
+        if (!initial) {
+          return;
+        }
+        const stored = await listSessionSuggestions(suggestionScope(initial.target));
+        const current = readCurrent();
+        if (!current) {
+          return;
+        }
+        const visible = stored.filter(
+          (suggestion) =>
+            suggestion.authorId === identity?.id ||
+            (current.role !== "viewer" && suggestion.state === "pending"),
+        );
+        respond(true, {
+          role: current.role,
+          suggestions: visible.map((suggestion) => protocolSuggestion(current.target, suggestion)),
+        });
+      } finally {
+        facts.release();
+      }
     },
   ),
 

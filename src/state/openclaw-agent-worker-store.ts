@@ -33,11 +33,11 @@ import {
 } from "./openclaw-agent-db-lifecycle.js";
 import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
-import {
-  captureOpenClawAgentDatabaseExecution,
-  type OpenClawAgentDatabaseExecution,
-} from "./openclaw-agent-execution.js";
+import type {
+  AgentDatabaseRequestExecutionSource,
+  OpenClawAgentDatabaseExecution,
+} from "./openclaw-agent-execution-contract.js";
+import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,

@@ -78,6 +78,22 @@ serveOwnedWorkerTasks(
     const readRequest = async (): Promise<
       SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]
     > => {
+      if (request.kind === "lifecycle-artifact-plan") {
+        const { readSessionLifecycleArtifactCleanup } =
+          await import("./session-accessor.sqlite-lifecycle-artifacts.js");
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (database) =>
+            readSessionLifecycleArtifactCleanup(database, request.input, request.expectedSource),
+          { ...request.database, env: request.env },
+        );
+        return {
+          kind: request.kind,
+          plan: result.found ? result.value : { entries: [], deletePlans: [] },
+          diagnostics: request.input.diagnostics,
+        };
+      }
       if (request.kind === "prewarm") {
         await Promise.all([
           import("../../gateway/session-history-worker-reader.js"),
@@ -436,6 +452,21 @@ serveOwnedWorkerTasks(
           { ...request.database, env: request.env },
         );
         return result.found ? result.value : [];
+      }
+      if (request.kind === "session-suggestions") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { listSessionSuggestionsInDatabase } =
+          await import("./session-suggestion-store.kernel.js");
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (database) =>
+            listSessionSuggestionsInDatabase(database, request.sessionKey, request.params),
+          { ...request.database, env: request.env },
+        );
+        return {
+          kind: "session-suggestions" as const,
+          suggestions: result.found ? result.value : [],
+        };
       }
       if (request.kind === "session-pending-input-receipts") {
         const { listSessionPendingInputReceipts } =

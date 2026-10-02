@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import {
-  openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
@@ -20,7 +19,6 @@ import {
   addSessionSuggestionInDatabase,
   claimSessionSuggestionDispatchInDatabase,
   finalizeSessionSuggestionClaimInDatabase,
-  listSessionSuggestionsInDatabase,
   releaseSessionSuggestionDispatchInDatabase,
 } from "./session-suggestion-store.kernel.js";
 import { SessionWorkStartInvalidatedError } from "./work-start-error.js";
@@ -78,16 +76,6 @@ export function addSessionSuggestion(
     { operationLabel: "session.suggestion.add" },
   );
   return suggestion;
-}
-
-export function listSessionSuggestions(
-  scope: SessionAccessScope,
-  params: Parameters<typeof listSessionSuggestionsInDatabase>[2] = {},
-): StoredSessionSuggestion[] {
-  const options = resolveDatabaseOptions(scope);
-  const database = openOpenClawAgentDatabase(options);
-  const sessionKey = resolveSqliteScope(scope).sessionKey;
-  return listSessionSuggestionsInDatabase(database, sessionKey, params);
 }
 
 export function claimSessionSuggestionDispatch(

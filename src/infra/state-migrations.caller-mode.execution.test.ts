@@ -97,7 +97,7 @@ function writeAliasedSessionStore(params: {
   fs.writeFileSync(standardStorePath, `${JSON.stringify(params.store)}\n`);
   fs.linkSync(standardStorePath, configuredStorePath);
   const cfg: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
     session: { store: configuredStorePath },
   };
   fs.writeFileSync(params.fixture.configPath, `${JSON.stringify(cfg)}\n`);
@@ -412,8 +412,14 @@ describe("legacy state migration caller execution", () => {
     const fixture = await makeFixture();
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "healthy", default: true }, { id: "broken" }],
+        ownership: "explicit",
+        defaults: {
+          heartbeat: { agentId: "healthy" },
+          systemAgent: { agentId: "healthy" },
+        },
+        entries: { healthy: {}, broken: {} },
       },
+      talk: { agentId: "healthy" },
     };
     fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
     createLegacyDatabaseFixture({
