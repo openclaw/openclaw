@@ -124,6 +124,34 @@ func revealedOpacities(
     return ChatStreamingRevealFrame(fading: fading)
 }
 
+func chatStreamingRevealWordRanges(in text: String) -> [Range<Int>] {
+    var ranges: [Range<Int>] = []
+    var offset = text.count
+    var wordEnd: Int?
+
+    // Only the reveal tail needs ranges. Walk backward to avoid allocating a
+    // range for every earlier word, keeping offsets in grapheme clusters.
+    for character in text.reversed() {
+        offset -= 1
+        if character.isWhitespace {
+            if let end = wordEnd {
+                ranges.append((offset + 1)..<end)
+                wordEnd = nil
+                if ranges.count == ChatStreamingRevealConstants.maximumFadingWords {
+                    break
+                }
+            }
+        } else if wordEnd == nil {
+            wordEnd = offset + 1
+        }
+    }
+    if let wordEnd {
+        ranges.append(0..<wordEnd)
+    }
+    ranges.reverse()
+    return ranges
+}
+
 func chatStreamingWordRanges(in text: String) -> [Range<Int>] {
     var ranges: [Range<Int>] = []
     var wordStart: Int?

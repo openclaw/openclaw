@@ -2,6 +2,25 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatStreamingRevealTests {
+    private static let revealWindowCases: [(String, [Range<Int>])] = [
+        ("", []),
+        (" \n\t", []),
+        ("\r\n one\t", [2..<5]),
+        ("one  two\n\nthree\tfour  ", [0..<3, 5..<8, 10..<15, 16..<20]),
+        ("\u{1F44B}\u{1F3FD}e\u{301}  \u{4E2D}\u{6587}\tend", [0..<2, 4..<6, 7..<10]),
+        (String(repeating: "a ", count: 24), (0..<24).map { (2 * $0)..<(2 * $0 + 1) }),
+        (String(repeating: "a ", count: 26), (2..<26).map { (2 * $0)..<(2 * $0 + 1) }),
+        (String(repeating: "a", count: 64), [0..<64]),
+    ]
+
+    @Test(arguments: ChatStreamingRevealTests.revealWindowCases)
+    func `reveal window keeps whole trailing words and original character offsets`(
+        text: String,
+        expected: [Range<Int>])
+    {
+        #expect(chatStreamingRevealWordRanges(in: text) == expected)
+    }
+
     @Test func `word boundaries use whitespace and preserve gaps`() {
         let text = "one  two\n\nthree\tfour"
         let words = chatStreamingWordRanges(in: text).map { range in
