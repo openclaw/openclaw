@@ -11,6 +11,7 @@ import {
   type RegistrationCleanup,
 } from "./registry-registration-resources.js";
 import type { PluginRegistry } from "./registry-types.js";
+import { createRecoverablePluginRelease } from "./runtime-close-error.js";
 
 // Registrars and loaders can come from different source/built module copies.
 const inspections = resolveGlobalSingleton(
@@ -24,7 +25,11 @@ export function getPluginRegistryInspectionResources(registry: PluginRegistry) {
 
 function throwDisposalFailures(failures: Error[]): void {
   if (failures.length > 0) {
-    throw new AggregateError(failures, "Plugin inspection resources could not all be disposed");
+    const error = new AggregateError(
+      failures,
+      "Plugin inspection resources could not all be disposed",
+    );
+    throw error;
   }
 }
 
@@ -40,6 +45,9 @@ export class PluginRegistryInspectionResources {
   #registry?: PluginRegistry;
   #adoptedInvocations?: PluginInvocationScope;
   #release?: Promise<void>;
+  readonly #releaseClaim = createRecoverablePluginRelease(() =>
+    this.#claim.release().then(throwDisposalFailures),
+  );
 
   constructor(
     private readonly retire: (
@@ -150,17 +158,18 @@ export class PluginRegistryInspectionResources {
       throw new Error("Plugin inspection resources have been released");
     }
     const claim = this.#source.acquireClaim("borrower");
-    let release: Promise<void> | undefined;
-    return { release: () => (release ??= claim.release().then(throwDisposalFailures)) };
+    return {
+      release: createRecoverablePluginRelease(() => claim.release().then(throwDisposalFailures)),
+    };
   }
 
   release(): Promise<void> {
     if (!this.#release) {
       // Revocation can call back into release through synchronous abort listeners.
-      this.#release = this.#claim.release().then(throwDisposalFailures);
+      this.#release = this.#releaseClaim();
       markPluginRegistriesRetired(this.#registries);
       this.#registries.clear();
     }
-    return this.#release;
+    return this.#releaseClaim();
   }
 }

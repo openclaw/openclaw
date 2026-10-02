@@ -629,10 +629,8 @@ export function capturePluginGenerationArtifact(
       sourceForCaptured: (file: string) => originalSources.get(path.resolve(file)),
       isRequireReference: (importer: string, specifier: string) =>
         moduleCaptures.get(importer)?.isRequireReference(specifier) ?? false,
-      isRequirePreview: (importer: string, specifier: string) => {
-        const imports = moduleCaptures.get(importer)?.staticImports;
-        return imports !== undefined && !imports.has(specifier);
-      },
+      isRequirePreview: (importer: string, specifier: string) =>
+        moduleCaptures.get(importer)?.staticImports?.has(specifier) === false,
       boundaryRoot: directory,
       // The receipt attests the initial snapshot; first-demand inputs extend only its identity ledger.
       sourceDigest: initialReceipt.sourceDigest,
@@ -707,6 +705,7 @@ export function capturePluginGenerationArtifact(
           return target;
         }).value;
       },
+      isReleased: sourceCapture.isReleased,
       dispose: () => {
         sourceCapture.dispose();
         clearCaptures();

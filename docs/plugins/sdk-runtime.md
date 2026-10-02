@@ -163,10 +163,16 @@ instance may omit them; feature-detect them before relying on instance cleanup.
 The existing `api.lifecycle.registerRuntimeLifecycle(...)` contract remains
 available for plugin-owned host state.
 
-Inspection release reports settled disposal failures without marking the managed
+Inspection release reports settled plugin callback failures without marking the managed
 resources as still retained. Prepared-model shutdown records those failures and
-can finish after cleanup settles. Unfinished disposal and failed host cleanup
-prerequisites still prevent shutdown from reporting a completed resource release.
+can finish after cleanup settles. For host-owned captured-source resources, inspection
+release and prepared-model shutdown reconcile an explicit repeat-safe cleanup operation
+and check whether the exact resource claim was released. A close that throws after
+releasing its resource remains a diagnostic, not permanent custody. A later release or
+shutdown can retry an outstanding recoverable claim without replaying plugin callbacks
+or reopening the retired instance. Unfinished disposal, unverified module cleanup, and
+failed host prerequisites without a recovery contract still retain custody. This internal
+host capability does not change the one-shot SDK `onDispose` contract.
 
 Cleanup is best effort. Plugins must explicitly release their own timers,
 listeners, sockets, watchers, and child processes in `onDispose` or their

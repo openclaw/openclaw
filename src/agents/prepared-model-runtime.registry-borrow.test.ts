@@ -2,12 +2,14 @@
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
+import { createPluginCache, retainPluginCacheInstance } from "../plugins/plugin-cache.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { bindPluginRuntimeArtifactSelection } from "../plugins/plugin-runtime-artifact-binding.js";
 import { resolvePluginRuntimeArtifactSelection } from "../plugins/plugin-runtime-artifact-selection.js";
@@ -16,6 +18,7 @@ import {
   bindPluginRegistryGatewayOwner,
   isPluginRegistryRetired,
 } from "../plugins/registry-lifecycle.js";
+import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
@@ -30,6 +33,11 @@ import {
   prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
+import {
+  capturePreparedModelRuntimeLifetime,
+  closePreparedModelRuntimeSnapshots,
+  registerPreparedModelRuntimeClose,
+} from "./prepared-model-runtime.lifecycle.js";
 import { retainPreparedPluginRegistry } from "./prepared-model-runtime.plugin-lifetime.js";
 import { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.resources.js";
 import * as runtimePlugins from "./runtime-plugins.js";
@@ -105,6 +113,100 @@ async function acquireConfiguredRegistryBorrower(source: "owned" | "gateway" = "
 }
 
 describe("prepared registry construction borrows", () => {
+  it("recovers a failed process close without replaying model or plugin disposal", async () => {
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "prepared-cleanup-recovery" });
+    registry.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry });
+    const birthCache = createPluginCache();
+    retainPluginCacheInstance(instance, birthCache);
+    const database = new DatabaseSync(":memory:");
+    const failure = new Error("fixture native close unavailable");
+    const recoveryStarted = createDeferred();
+    const finishRecovery = createDeferred();
+    const modelClose = vi.fn(async () => {});
+    const unregisterModelClose = registerPreparedModelRuntimeClose(modelClose);
+    const pluginDispose = vi.fn();
+    let cleanupAvailable = false;
+    const nativeDispose = vi.fn(() => {
+      throw failure;
+    });
+    const recover = vi.fn(async () => {
+      if (!cleanupAvailable) {
+        throw failure;
+      }
+      recoveryStarted.resolve();
+      await finishRecovery.promise;
+      database.close();
+    });
+    instance.lifecycle.onDispose(pluginDispose);
+    instance.onModuleDispose(nativeDispose, { isReleased: () => !database.isOpen, recover });
+    const admitted = capturePreparedModelRuntimeLifetime();
+    const release = retainPreparedPluginRegistry(registry)!;
+    let closing: Promise<void> | undefined;
+    try {
+      const [released] = await Promise.allSettled([release()]);
+      expect(released.status).toBe("rejected");
+      if (released.status !== "rejected") {
+        throw new Error("Prepared registry discarded its retained cleanup failure");
+      }
+      expect(hasRetainedPluginRuntimeCloseError(released.reason)).toBe(true);
+      expect(database.isOpen).toBe(true);
+      expect(birthCache.instances.has(instance)).toBe(true);
+      expect(pluginDispose).toHaveBeenCalledOnce();
+      expect(nativeDispose).toHaveBeenCalledOnce();
+      expect(recover).not.toHaveBeenCalled();
+      expect(() => instance.run(() => "retired")).toThrow("reloaded or disabled");
+
+      const firstClose = closePreparedModelRuntimeSnapshots();
+      await expect(firstClose).rejects.toThrow("Prepared model runtime failed to close");
+      expect(database.isOpen).toBe(true);
+      expect(hasRetainedPluginRuntimeCloseError(released.reason)).toBe(true);
+      expect(modelClose).toHaveBeenCalledOnce();
+      expect(recover).toHaveBeenCalledOnce();
+      expect(() => capturePreparedModelRuntimeLifetime()).toThrow("process lifetime closed");
+      expect(() => admitted()).toThrow("process lifetime closed");
+
+      cleanupAvailable = true;
+      closing = closePreparedModelRuntimeSnapshots();
+      expect(closing).not.toBe(firstClose);
+      expect(closePreparedModelRuntimeSnapshots()).toBe(closing);
+      await recoveryStarted.promise;
+      expect(database.isOpen).toBe(true);
+      expect(birthCache.instances.has(instance)).toBe(true);
+      expect(() => capturePreparedModelRuntimeLifetime()).toThrow("process lifetime closed");
+      expect(() => retainPreparedPluginRegistry(registry)).toThrow("process lifetime closed");
+      finishRecovery.resolve();
+      await closing;
+      expect(database.isOpen).toBe(false);
+      expect(birthCache.instances.has(instance)).toBe(false);
+      expect(hasRetainedPluginRuntimeCloseError(released.reason)).toBe(false);
+      expect(mocks.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Prepared plugin cleanup completed with failures"),
+      );
+      expect(pluginDispose).toHaveBeenCalledOnce();
+      expect(nativeDispose).toHaveBeenCalledOnce();
+      expect(recover).toHaveBeenCalledTimes(2);
+      expect(modelClose).toHaveBeenCalledOnce();
+      await expect(firstClose).rejects.toThrow("Prepared model runtime failed to close");
+      expect(() => admitted()).toThrow("process lifetime closed");
+      expect(() => instance.run(() => "retired")).toThrow("reloaded or disabled");
+      const warnings = mocks.warn.mock.calls.length;
+      await closePreparedModelRuntimeSnapshots();
+      expect(mocks.warn).toHaveBeenCalledTimes(warnings);
+      expect(recover).toHaveBeenCalledTimes(2);
+      expect(modelClose).toHaveBeenCalledOnce();
+    } finally {
+      unregisterModelClose();
+      cleanupAvailable = true;
+      finishRecovery.resolve();
+      await closing?.catch(() => {});
+      if (database.isOpen) {
+        database.close();
+      }
+    }
+  });
+
   it("retires a prepared registry after its borrowing request scope has closed", async () => {
     const caller = new AsyncWorkScope();
     const registry = createEmptyPluginRegistry();

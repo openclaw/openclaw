@@ -22,6 +22,7 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   hasRetainedPluginRuntimeCloseError,
   PluginRuntimeCloseRetainedError,
+  recoverPluginRuntimeCloseError,
 } from "../plugins/runtime-close-error.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -61,7 +62,13 @@ function createLifetime(dispose: () => Promise<unknown>, retainWork?: () => () =
   const references = new Set<object>();
   let closing: Deferred | undefined;
   let disposing = false;
+  let failure: { error: unknown } | undefined;
   const lifetime = {
+    reconcile() {
+      if (failure && !hasRetainedPluginRuntimeCloseError(failure.error)) {
+        active.delete(lifetime);
+      }
+    },
     get referenced() {
       return references.size > 0;
     },
@@ -96,9 +103,8 @@ function createLifetime(dispose: () => Promise<unknown>, retainWork?: () => () =
           },
           (error: unknown) => {
             // Keep the rejected completion for observation, not as ordinary resource custody.
-            if (!hasRetainedPluginRuntimeCloseError(error)) {
-              active.delete(lifetime);
-            }
+            failure = { error };
+            lifetime.reconcile();
           },
         );
       }
@@ -148,11 +154,19 @@ export function retainPreparedPluginRegistry(
     }
     markPluginRegistryActive(registry);
     lifetime = createLifetime(async () => {
-      try {
-        return await disposePluginRegistryInstances(registry);
-      } catch (error) {
-        // Ordinary cleanup faults are result rows; rejection leaves a host prerequisite unfinished.
+      const result = await disposePluginRegistryInstances(registry).catch((error: unknown) => {
+        // Rejection leaves a host prerequisite unfinished without an explicit recovery handle.
         throw new PluginRuntimeCloseRetainedError(error);
+      });
+      if (result.failures.length) {
+        throw new AggregateError(
+          result.failures.map(({ error, retained }) =>
+            retained && !(error instanceof PluginRuntimeCloseRetainedError)
+              ? new PluginRuntimeCloseRetainedError(error)
+              : error,
+          ),
+          "Prepared plugin registry cleanup failed",
+        );
       }
     });
     bindPluginRegistryLifetime(registry, lifetime);
@@ -337,7 +351,8 @@ export async function discardPreparedPluginGeneration(
 /** Process shutdown owns every outstanding generation and any earlier cleanup failure. */
 async function closePreparedPluginGenerations(): Promise<void> {
   const resourcesClosed = Promise.allSettled([closeEphemeralPreparedModelRuntimeResources()]);
-  const pending = new Set([...active].map((lifetime) => lifetime.close()));
+  const lifetimes = [...active];
+  const pending = new Set(lifetimes.map((lifetime) => lifetime.close()));
   for (const completion of retirements) {
     pending.add(completion);
   }
@@ -350,6 +365,11 @@ async function closePreparedPluginGenerations(): Promise<void> {
   const failures = results.flatMap((result) =>
     result.status === "rejected" ? [result.reason] : [],
   );
+  // Reconcile only physical-owner capabilities, never replay generation or plugin disposal.
+  await recoverPluginRuntimeCloseError(new AggregateError(failures));
+  for (const lifetime of lifetimes) {
+    lifetime.reconcile();
+  }
   let retained = failures.some(hasRetainedPluginRuntimeCloseError);
   try {
     await waitForPluginCacheRetirement(true);

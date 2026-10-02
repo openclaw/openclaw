@@ -8,16 +8,19 @@ export function appendPluginInstanceCleanupFailures(
   result: PluginInstanceDisposalResult,
 ): void {
   for (const error of result.errors) {
-    if (
-      failures.some(
-        (failure) =>
-          failure.pluginId === pluginId &&
-          failure.error === error &&
-          (failure.hookId === "instance" || result.hostCleanupErrors?.includes(error)),
-      )
-    ) {
+    const retained = result.retainedErrors?.includes(error);
+    const existing = failures.find(
+      (failure) =>
+        failure.pluginId === pluginId &&
+        failure.error === error &&
+        (failure.hookId === "instance" || result.hostCleanupErrors?.includes(error)),
+    );
+    if (existing) {
+      if (retained) {
+        existing.retained = true;
+      }
       continue;
     }
-    failures.push({ pluginId, hookId: "instance", error });
+    failures.push({ pluginId, hookId: "instance", error, ...(retained ? { retained: true } : {}) });
   }
 }

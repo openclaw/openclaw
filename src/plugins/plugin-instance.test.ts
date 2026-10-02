@@ -769,6 +769,7 @@ describe("managed plugin instances", () => {
           retainedConsumerCount: 0,
         });
         expect(result.errors).toEqual([drainTimeout, cleanupFailure]);
+        expect(result.retainedErrors).toEqual([drainTimeout]);
         expect(cleanup).toHaveBeenCalledOnce();
         let settled = false;
         const settlement = drainTimeout.settled.catch((error: unknown) => {

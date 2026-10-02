@@ -102,9 +102,25 @@ it.each(["success", "plugin failure", "module failure", "host failure"] as const
       } else {
         await expect(disposal).resolves.toEqual({
           errors: outcome === "success" ? [] : [failure],
+          ...(outcome === "module failure" ? { retainedErrors: [failure] } : {}),
         });
       }
       expect(successorCache.instances.has(instance)).toBe(outcome !== "success");
+      if (outcome !== "host failure") {
+        const retired = await retirePluginCache(successorCache);
+        expect(retired.failures).toEqual(
+          outcome === "success"
+            ? []
+            : [
+                {
+                  pluginId: record.id,
+                  hookId: "instance",
+                  error: failure,
+                  ...(outcome === "module failure" ? { retained: true } : {}),
+                },
+              ],
+        );
+      }
     } finally {
       finish.resolve();
       await Promise.allSettled([disposal, retirePluginCache(successorCache)]);

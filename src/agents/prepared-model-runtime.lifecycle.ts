@@ -27,6 +27,8 @@ class ProcessModelRuntimeLifetimes {
   retirePlugins?: () => Promise<void>;
   epoch = 0;
   closing?: Promise<void>;
+  modelCloseResults?: Promise<PromiseSettledResult<void>[]>;
+  retryPluginClose = false;
 }
 
 const lifetimes = resolveGlobalSingleton(
@@ -52,7 +54,7 @@ export function registerPreparedModelRuntimeClose(close: ModelRuntimeClose): () 
   return () => lifetimes.closeCallbacks.delete(close);
 }
 
-/** Install the shared plugin resource owner only when a real generation acquires it. */
+/** Register the one-shot disposal owner whose later calls reconcile retained host claims only. */
 export function registerPreparedPluginRetirement(retire: () => Promise<void>): void {
   capturePreparedModelRuntimeLifetime();
   lifetimes.retirePlugins ??= retire;
@@ -60,28 +62,40 @@ export function registerPreparedPluginRetirement(retire: () => Promise<void>): v
 
 /** Fence admission before abort callbacks run; old publications cannot enter the next lifetime. */
 export function closePreparedModelRuntimeSnapshots(): Promise<void> {
-  if (lifetimes.closing) {
+  if (lifetimes.closing && !lifetimes.retryPluginClose) {
     return lifetimes.closing;
   }
   const closed = createDeferredCore();
   lifetimes.closing = closed.promise;
-  lifetimes.epoch += 1;
-  const error = new Error("prepared model runtime process lifetime closed");
-  void Promise.allSettled(
-    [...lifetimes.closeCallbacks].map(async (close) => await close(error)),
-  ).then(async (results) => {
+  lifetimes.retryPluginClose = false;
+  if (!lifetimes.modelCloseResults) {
+    lifetimes.epoch += 1;
+    const error = new Error("prepared model runtime process lifetime closed");
+    const callbacks = [...lifetimes.closeCallbacks];
+    // Admission is fenced: consume this lifetime before callbacks can reenter close.
+    lifetimes.closeCallbacks.clear();
+    lifetimes.modelCloseResults = Promise.allSettled(
+      callbacks.map(async (close) => await close(error)),
+    );
+  }
+  // Rejected model callbacks have no recovery contract. Preserve their outcomes without replay.
+  void lifetimes.modelCloseResults.then(async (results) => {
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
     try {
       await lifetimes.retirePlugins?.();
       lifetimes.retirePlugins = undefined;
     } catch (reason) {
-      results.push({ status: "rejected", reason });
+      // Only the plugin owner can reconcile explicit host claims on a later close.
+      // Keep the rejected closing promise as the admission fence between attempts.
+      lifetimes.retryPluginClose = true;
+      failures.push(reason);
     }
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
     if (failures.length) {
       closed.reject(new AggregateError(failures, "Prepared model runtime failed to close"));
     } else {
+      lifetimes.modelCloseResults = undefined;
       lifetimes.closing = undefined;
       closed.resolve();
     }

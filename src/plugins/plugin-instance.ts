@@ -3,7 +3,11 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { releasePluginCacheInstance, withPluginCache, type PluginCache } from "./plugin-cache.js";
-import { DisposalFailures, type DisposalCleanup } from "./plugin-instance-disposal.js";
+import {
+  DisposalFailures,
+  type DisposalCleanup,
+  type DisposalCleanupKind,
+} from "./plugin-instance-disposal.js";
 import {
   PluginInstanceDrainTimeoutError,
   PluginInstanceUnavailableError,
@@ -27,6 +31,7 @@ import type {
 } from "./plugin-instance.types.js";
 import { mapPluginReturnPromise, resolvePluginReturnPromise } from "./plugin-return-value.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
+import type { PluginCleanupRecovery } from "./runtime-close-error.js";
 import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
 import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
 
@@ -64,7 +69,7 @@ export class PluginInstance {
       kind: "work" | "custody";
     }
   >();
-  private readonly cleanups = new Map<() => void | Promise<void>, "plugin" | "module">();
+  private readonly cleanups = new Map<() => void | Promise<void>, DisposalCleanupKind>();
   private readonly waiters = new Set<() => void>();
   readonly wrap = this.createValueView(
     <T>(run: () => T) => this.run(run),
@@ -93,7 +98,7 @@ export class PluginInstance {
     });
   }
 
-  private addCleanup(cleanup: () => void | Promise<void>, kind: "plugin" | "module") {
+  private addCleanup(cleanup: () => void | Promise<void>, kind: DisposalCleanupKind) {
     if (
       this.controller.signal.aborted ||
       ((!this.accepting || this.owner?.revoked) && !this.activeCall())
@@ -105,8 +110,8 @@ export class PluginInstance {
   }
 
   /** Captured module resources retain physical custody after a forced logical retirement. */
-  onModuleDispose(cleanup: () => void | Promise<void>): void {
-    this.addCleanup(cleanup, "module");
+  onModuleDispose(cleanup: () => void | Promise<void>, recovery?: PluginCleanupRecovery): void {
+    this.addCleanup(cleanup, { recovery });
   }
 
   private hasToken(token: object): boolean {
@@ -705,10 +710,10 @@ export class PluginInstance {
     }
     const deadline = Date.now() + SHUTDOWN_TIMEOUT_MS;
     this.abortDisposal(cleanupWork);
-    const moduleCleanups: Array<() => void | Promise<void>> = [];
+    const moduleCleanups: DisposalCleanup["moduleCleanups"] = [];
     for (const [cleanup, kind] of Array.from(this.cleanups).toReversed()) {
-      if (kind === "module") {
-        moduleCleanups.push(cleanup);
+      if (kind !== "plugin") {
+        moduleCleanups.push({ cleanup, recovery: kind.recovery });
         continue;
       }
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -739,12 +744,12 @@ export class PluginInstance {
     const { failures, hostFailure, moduleCleanups } = await cleanupCompletion;
     // Logical expiry revokes results; it cannot delete code still used by the original calls.
     await this.timedOutCalls?.settled.promise;
-    for (const cleanup of moduleCleanups) {
+    for (const { cleanup, recovery } of moduleCleanups) {
       try {
         await this.invoke(cleanup, this.lease({ cleanup: true }));
       } catch (error) {
         failures.push(error);
-        terminalFailures.add(error);
+        terminalFailures.addResourceError(error, recovery);
       }
     }
     this.cleanups.clear();
@@ -769,9 +774,7 @@ export class PluginInstance {
     if (hostFailure) {
       throw hostFailure.error;
     }
-    if (failures.length === 0) {
-      releasePluginCacheInstance(this);
-    }
+    terminalFailures.settle(failures, () => releasePluginCacheInstance(this));
     return terminalFailures.result(failures);
   }
 }

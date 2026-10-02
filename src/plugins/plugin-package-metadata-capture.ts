@@ -673,6 +673,8 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
   const additions = new Set<string>();
   const captureFailures = new Map<string, unknown>();
   let disposed = false;
+  let released = false;
+  let payloadReleased = false;
   const acquire = <T>(capture: () => T) => {
     if (disposed) {
       throw new Error("Plugin module capture has been disposed");
@@ -698,8 +700,7 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     }
   };
   const captureAdmitted = <T>(run: () => T) => {
-    const capture = () => acquire(run);
-    return execute ? execute(capture) : capture();
+    return execute ? execute(() => acquire(run)) : acquire(run);
   };
   const beginDisposal = () => {
     disposed = true;
@@ -715,6 +716,7 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     captureFailures.clear();
   };
   return {
+    isReleased: () => released,
     inputs,
     pendingInputs,
     additions,
@@ -730,17 +732,21 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     },
     dispose() {
       beginDisposal();
-      if (!retainLoadedPluginSourceCapture(directory)) {
+      if (!payloadReleased && !retainLoadedPluginSourceCapture(directory)) {
         fs.rmSync(directory, { recursive: true, force: true });
       }
+      payloadReleased = true;
       instance?.release();
+      released = true;
     },
     async disposeAsync() {
       beginDisposal();
-      if (!retainLoadedPluginSourceCapture(directory)) {
+      if (!payloadReleased && !retainLoadedPluginSourceCapture(directory)) {
         await fsPromises.rm(directory, { recursive: true, force: true });
       }
+      payloadReleased = true;
       await instance?.releaseAsync();
+      released = true;
     },
   };
 }

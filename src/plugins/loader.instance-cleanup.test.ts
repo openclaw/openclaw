@@ -1,9 +1,11 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { collectErrorGraphCandidates } from "../infra/errors.js";
+import * as nodeSqlite from "../infra/node-sqlite.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   acquirePluginRegistryForInspection,
@@ -81,7 +83,7 @@ it.each(["settled", "rejected", "pending"] as const)(
     if (outcome === "rejected") {
       observedDispose?.mockRejectedValue(failure);
     } else if (outcome === "pending") {
-      observedDispose?.mockResolvedValue({ errors: [failure] });
+      observedDispose?.mockResolvedValue({ errors: [failure], retainedErrors: [failure] });
     }
     try {
       const release = inspection.release();
@@ -104,6 +106,74 @@ it.each(["settled", "rejected", "pending"] as const)(
       observedDispose?.mockRestore();
       await instance.dispose();
       finished.resolve();
+      await fixture.cleanup(inspection);
+      resetPluginLoaderTestStateForTest();
+    }
+  },
+);
+
+it.each(["closed", "transient", "persistent"] as const)(
+  "recovers verified module cleanup without replaying plugin callbacks (%s)",
+  async (outcome) => {
+    const fixture = createInspectionFixture();
+    const inspection = await acquirePluginRegistryForInspection({ config: fixture.config });
+    const instance = getPluginInstance(inspection.registry.plugins[0]!);
+    if (!instance) {
+      throw new Error("Missing inspection instance");
+    }
+    const database = new DatabaseSync(":memory:");
+    const failure = new Error("Native module database close failed");
+    const originalClose = database.close.bind(database);
+    const close = vi.spyOn(database, "close").mockImplementation(() => {
+      if (outcome === "closed") {
+        originalClose();
+      }
+      throw failure;
+    });
+    if (outcome === "transient") {
+      close
+        .mockImplementationOnce(() => {
+          throw failure;
+        })
+        .mockImplementation(originalClose);
+    }
+    const dispose = () => {
+      if (database.isOpen) {
+        database.close();
+      }
+    };
+    instance.onModuleDispose(dispose, {
+      isReleased: () => !database.isOpen,
+      recover: dispose,
+    });
+    try {
+      const error: unknown = await inspection.release().catch((reason: unknown) => reason);
+      expect(
+        collectErrorGraphCandidates(error, (candidate) => [
+          candidate.cause,
+          ...(Array.isArray(candidate.errors) ? candidate.errors : []),
+        ]),
+      ).toContain(failure);
+      expect(database.isOpen).toBe(outcome === "persistent");
+      expect(hasRetainedPluginRuntimeCloseError(error)).toBe(outcome === "persistent");
+      expect(fixture.connection().instanceDisposals).toBe(1);
+      expect(fixture.connection().disposals).toBe(1);
+      expect(instance.acceptingCalls).toBe(false);
+      if (outcome === "persistent") {
+        close.mockImplementation(originalClose);
+        await inspection.release().catch(() => undefined);
+        expect(database.isOpen).toBe(false);
+        expect(hasRetainedPluginRuntimeCloseError(error)).toBe(false);
+        expect(fixture.connection().instanceDisposals).toBe(1);
+        expect(fixture.connection().disposals).toBe(1);
+      } else {
+        expect(close).toHaveBeenCalledTimes(outcome === "closed" ? 1 : 2);
+      }
+    } finally {
+      close.mockRestore();
+      if (database.isOpen) {
+        database.close();
+      }
       await fixture.cleanup(inspection);
       resetPluginLoaderTestStateForTest();
     }
@@ -607,3 +677,62 @@ it("rejects deferred runtime loading after cache retirement completes", async ()
     resetPluginLoaderTestStateForTest();
   }
 });
+
+it.each(["closed", "transient", "persistent"] as const)(
+  "recovers the loader's real captured-source token through inspection release (%s)",
+  async (outcome) => {
+    const fixture = createInspectionFixture();
+    const stateDir = makePluginLoaderTempDir();
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const open = nodeSqlite.openNodeSqliteDatabase;
+    const tokens: DatabaseSync[] = [];
+    const closes: Array<() => void> = [];
+    const failure = new Error("Captured source token close failed");
+    let repaired = false;
+    vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+      const database = open(...args);
+      if (args[0].includes("owner.sqlite")) {
+        tokens.push(database);
+        const close = database.close.bind(database);
+        closes.push(close);
+        let attempts = 0;
+        vi.spyOn(database, "close").mockImplementation(() => {
+          attempts++;
+          if (outcome === "closed" || repaired || (outcome === "transient" && attempts > 1)) {
+            close();
+          }
+          if (!repaired && !(outcome === "transient" && attempts > 1)) {
+            throw failure;
+          }
+        });
+      }
+      return database;
+    });
+    const inspection = await acquirePluginRegistryForInspection({ config: fixture.config });
+    try {
+      const error: unknown = await inspection.release().catch((reason: unknown) => reason);
+      expect(tokens.length).toBeGreaterThan(0);
+      expect(tokens.every((token) => !token.isOpen)).toBe(outcome !== "persistent");
+      expect(hasRetainedPluginRuntimeCloseError(error)).toBe(outcome === "persistent");
+      if (outcome === "persistent") {
+        repaired = true;
+        await inspection.release().catch(() => undefined);
+        expect(tokens.every((token) => !token.isOpen)).toBe(true);
+        expect(hasRetainedPluginRuntimeCloseError(error)).toBe(false);
+      }
+      expect(fixture.connection().instanceDisposals).toBe(1);
+      expect(fixture.connection().disposals).toBe(1);
+    } finally {
+      repaired = true;
+      await fixture.cleanup(inspection);
+      for (const [index, token] of tokens.entries()) {
+        if (token.isOpen) {
+          closes[index]!();
+        }
+      }
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+      resetPluginLoaderTestStateForTest();
+    }
+  },
+);

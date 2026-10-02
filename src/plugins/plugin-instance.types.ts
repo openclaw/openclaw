@@ -1,3 +1,5 @@
+import type { PluginCleanupRecovery } from "./runtime-close-error.js";
+
 /** Disposal and admission shared by instance resources and registry handles. */
 export type PluginInstanceLifecycle = {
   readonly signal: AbortSignal;
@@ -18,6 +20,8 @@ export type PluginInstanceAdmission = {
 /** Known disposal faults are reported outcomes, never new-call admission failures. */
 export type PluginInstanceDisposalResult = {
   errors: readonly unknown[];
+  /** Failed physical-resource cleanup or unfinished disposal, not ordinary callback faults. */
+  retainedErrors?: readonly unknown[];
   /** Errors seen only in host cleanup, eligible for its named-hook reporting. */
   hostCleanupErrors?: readonly unknown[];
 };
@@ -62,7 +66,7 @@ export type PluginModuleLoaderRecovery = {
 export interface PluginModuleLoaderOwner extends PluginInstanceResource, PluginInstanceAdmission {
   controlPlaneInitialized: boolean;
   sourceDigest?: string;
-  onModuleDispose(cleanup: () => void | Promise<void>): void;
+  onModuleDispose(cleanup: () => void | Promise<void>, recovery?: PluginCleanupRecovery): void;
   bindModuleLoader(
     load: (source: string) => unknown,
     hasSource?: (source: string) => boolean,
