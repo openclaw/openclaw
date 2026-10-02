@@ -63,12 +63,15 @@ async function startGatewayServerWithRuntime(
       await import("../state/agent-database-startup.js");
     try {
       const server = await readOnlyWorkers.run(() =>
-        withAgentDatabaseStartupAdmission(async (admission) => {
-          stopDatabaseAdmission = () => admission.stop();
-          const mod = await loadServerStart();
-          opts.gatewayStateOwner?.assertDatabaseAccess(resolveOpenClawStateSqlitePath());
-          return mod.startGatewayServerCore(port, { ...opts, startupStartedAt });
-        }),
+        withAgentDatabaseStartupAdmission(
+          async (admission) => {
+            stopDatabaseAdmission = () => admission.stop();
+            const mod = await loadServerStart();
+            opts.gatewayStateOwner?.assertDatabaseAccess(resolveOpenClawStateSqlitePath());
+            return mod.startGatewayServerCore(port, { ...opts, startupStartedAt });
+          },
+          { deferInspections: !opts.updateCanary },
+        ),
       );
       return {
         ...server,

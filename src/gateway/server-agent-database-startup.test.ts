@@ -25,7 +25,10 @@ import { runExec } from "../process/exec.js";
 import * as spawnBroker from "../process/spawn-broker/context.js";
 import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import {
+  AgentDatabaseAdmissionError,
+  readAgentDatabaseAdmissionRefusal,
+} from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
@@ -344,11 +347,11 @@ it.for([
       }
       expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
       const readiness = await fetch(`http://127.0.0.1:${port}/readyz`);
-      expect(readiness.status).toBe(agentId === "main" && paused ? 503 : 200);
+      expect(readiness.status).toBe(200);
       if (agentId === "main" && paused) {
         await expect(readiness.json()).resolves.toMatchObject({
-          ready: false,
-          failing: ["agent-database:main"],
+          ready: true,
+          failing: [],
           agentDatabases: [readAgentDatabaseAdmissionRefusal(agentId, { env })],
         });
       }
@@ -357,6 +360,7 @@ it.for([
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
           code: "agent-database-inspection-pending",
         });
+        expect(() => openOpenClawAgentDatabase(scope)).toThrow(AgentDatabaseAdmissionError);
         await vi.waitFor(() => expect(fs.existsSync(enteredPath)).toBe(true));
       }
       if (outcome === "recover") {
@@ -541,7 +545,7 @@ it("recovers queued agents after both inspection slots expire without refusing a
     server = started.server;
     await server.startupSettled;
     expect((await fetch(`http://127.0.0.1:${started.port}/healthz`)).status).toBe(200);
-    expect((await fetch(`http://127.0.0.1:${started.port}/readyz`)).status).toBe(503);
+    expect((await fetch(`http://127.0.0.1:${started.port}/readyz`)).status).toBe(200);
     await vi.waitFor(() => {
       for (const marker of pause.enteredPaths.slice(0, 2)) {
         expect(fs.existsSync(marker)).toBe(true);

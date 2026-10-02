@@ -16,6 +16,8 @@ import type {
 // Snapshot preparation can be disk-heavy; overlap one additional agent
 // without fanning out across every registered database.
 export const AGENT_DATABASE_PREFLIGHT_CONCURRENCY = 2;
+// Slow disks keep their full inspection budget without holding the Gateway listener.
+const AGENT_DATABASE_STARTUP_WAIT_MS = 5_000;
 
 export async function preflightAgentDatabasesBounded<T>(
   targets: readonly T[],
@@ -30,6 +32,7 @@ export async function preflightAgentDatabasesBounded<T>(
   startup?: {
     signal: AbortSignal;
     path: (target: T) => string;
+    canDefer: (target: T) => boolean;
     track: (work: Promise<unknown>) => void;
     defer: (
       inspections: { target: T; result: Promise<OpenClawDatabaseSchemaPreflight> }[],
@@ -37,6 +40,7 @@ export async function preflightAgentDatabasesBounded<T>(
     ) => AgentDatabaseAdmissionRefusal[];
   },
 ): Promise<AgentDatabasePreflightStats> {
+  const startupDeadline = performance.now() + AGENT_DATABASE_STARTUP_WAIT_MS;
   const inspectedAgentPaths = new Set<string>();
   const inspectedAgentTargets = new Set<string>();
   const claimAgentTarget = (realPath: string, agentId: string | undefined) => {
@@ -82,7 +86,9 @@ export async function preflightAgentDatabasesBounded<T>(
     }
     if (active.size === concurrency && [...active].every((index) => deferred.has(index))) {
       for (let index = nextInspectionIndex; index < targets.length; index += 1) {
-        deferred.add(index);
+        if (startup.canDefer(targets[index]!)) {
+          deferred.add(index);
+        }
       }
     }
     if (targets.some((_, index) => inspections[index] === undefined && !deferred.has(index))) {
@@ -127,17 +133,18 @@ export async function preflightAgentDatabasesBounded<T>(
       };
       active.add(index);
       let timer: ReturnType<typeof setTimeout> | undefined;
-      if (startup && !deferred.has(index)) {
+      if (startup && startup.canDefer(target) && !deferred.has(index)) {
         const pathname = startup.path(target);
         const { timeoutMs, size } = readSqliteInspectionBudget("startup readiness", pathname);
+        const waitMs = Math.min(timeoutMs, Math.max(0, startupDeadline - performance.now()));
         timer = setTimeout(() => {
           if (failures.size > 0 || inspectionSignal?.aborted) {
             return;
           }
           deferred.add(index);
-          deferredReason ||= `The ${size} database at ${pathname} exceeded its ${timeoutMs / 1000} second startup wait; inspection continues.`;
+          deferredReason ||= `The ${size} database at ${pathname} did not finish within the ${AGENT_DATABASE_STARTUP_WAIT_MS / 1000} second foreground startup budget; inspection continues.`;
           settleForeground();
-        }, timeoutMs);
+        }, waitMs);
         timer.unref();
       }
       try {
