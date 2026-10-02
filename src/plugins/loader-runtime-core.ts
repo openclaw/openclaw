@@ -429,7 +429,10 @@ export function loadOpenClawPluginsCore(
         }) ?? []),
       );
       registry.blockedHooks.push(
-        ...options.previousRegistry.blockedHooks.filter((entry) => retained.has(entry.pluginId)),
+        ...(source?.blockedHooks.filter((entry) => {
+          const record = retained.get(entry.pluginId);
+          return record && source.plugins.includes(record);
+        }) ?? []),
       );
     }
     const selectedMiddlewareOwnerManifests = new Map<
