@@ -1,10 +1,12 @@
-import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import type { AgentExecutorController } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { z } from "zod";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
+import {
+  agentsApiExecutorBindingSchema,
+  type AgentsApiExecutorBinding,
+} from "./agentsapi-executor-binding.js";
 
 /** The plugin owns native environment identity; deployments own executor processes. */
 export async function ensureAgentsApiEnvironment(params: {
@@ -93,20 +95,3 @@ export async function retireAgentsApiExecutor(
   await controller.retire(executor, { signal, assertCurrent: assertRetireCurrent });
   assertRetireCurrent();
 }
-
-const workspaceSchema = z.object({
-  workspaceDirectory: z
-    .string()
-    .min(1)
-    .refine((value) => path.posix.isAbsolute(value) || path.win32.isAbsolute(value)),
-});
-
-export const agentsApiExecutorBindingSchema = workspaceSchema.extend({
-  sessionKey: z.string().min(1),
-  agentId: z.string().min(1),
-  nativeSessionId: z.string().min(1),
-  environmentId: z.string().min(1),
-  remoteUrl: z.string().min(1),
-});
-
-export type AgentsApiExecutorBinding = z.infer<typeof agentsApiExecutorBindingSchema>;

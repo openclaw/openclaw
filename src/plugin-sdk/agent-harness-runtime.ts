@@ -2,13 +2,6 @@
 // Keep heavyweight tool construction out of this module so harness imports can
 // register quickly inside gateway startup and Docker e2e runs.
 
-export type {
-  AgentExecutorBinding,
-  AgentExecutorContext,
-  AgentExecutorController,
-} from "../plugins/agent-executor-controller.types.js";
-export { resolveAgentExecutorController } from "../plugins/agent-executor-controller.js";
-
 import { shouldLoadRequesterScopedMcpHarnessRuntime } from "../agents/agent-bundle-mcp-runtime-shared.js";
 import {
   mergeAgentRunAttemptTerminal,
@@ -54,6 +47,13 @@ import { resolveExecModePolicy } from "../infra/exec-approvals-core.js";
 import { maxAsk, minSecurity } from "../infra/exec-approvals-policy.js";
 import type { ImageContent } from "../llm/types.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+
+export type {
+  AgentExecutorBinding,
+  AgentExecutorContext,
+  AgentExecutorController,
+} from "../plugins/agent-executor-controller.types.js";
+export { resolveAgentExecutorController } from "../plugins/agent-executor-controller.js";
 
 export { projectAgentActivityItem } from "../agents/agent-activity-presentation.js";
 export { projectAgentToolActivity } from "../infra/agent-activity-events.js";
