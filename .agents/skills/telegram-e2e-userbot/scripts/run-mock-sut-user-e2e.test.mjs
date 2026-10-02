@@ -170,16 +170,16 @@ test("forwardBurst rejects a non-DM scenario before acquiring credentials", asyn
   assert.doesNotMatch(result.stderr, /unexpected credential acquisition/);
 });
 
-test("gateway readiness budget rejects non-positive values before acquiring credentials", () => {
+test("gateway readiness budget rejects non-positive values before acquiring credentials", async () => {
   for (const value of ["0", "-1", "1.5", "soon"]) {
-    const result = spawnSync(
+    const result = await runCommand(
       process.execPath,
       [
         new URL("./run-mock-sut-user-e2e.mjs", import.meta.url).pathname,
         "--gateway-ready-timeout-ms",
         value,
       ],
-      { env: {}, encoding: "utf8" },
+      { env: {} },
     );
     assert.equal(result.status, 1);
     assert.match(result.stderr, /--gateway-ready-timeout-ms takes a positive integer/);
