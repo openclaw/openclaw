@@ -42,7 +42,12 @@ type PluginRegistryLifecycleStore = {
   gatewayOwners?: WeakMap<PluginRegistry, PluginRegistryGatewayOwner | null>;
   gatewayChannels?: WeakMap<
     PluginRegistry,
-    ReadonlyMap<string, Pick<PluginChannelRegistration, "pluginId" | "plugin">>
+    ReadonlyMap<
+      string,
+      Pick<PluginChannelRegistration, "pluginId" | "plugin"> & {
+        handoffIdentity?: { channelId: string; durableFinalCapabilities?: unknown };
+      }
+    >
   >;
   borrowedRecords?: WeakMap<PluginRegistry, WeakSet<PluginRecord>>;
 };
@@ -119,12 +124,47 @@ export function bindPluginRegistryGatewayOwner(
         : undefined;
     if (admittedFrom) {
       if (inherited) {
-        gatewayChannels.set(key, inherited);
+        gatewayChannels.set(
+          key,
+          new Map(
+            [...inherited].map(([channelId, registration]) => [
+              channelId,
+              registration.handoffIdentity
+                ? registration
+                : {
+                    ...registration,
+                    handoffIdentity: {
+                      channelId: registration.plugin.id,
+                      ...(registration.plugin.message?.durableFinal?.capabilities
+                        ? {
+                            durableFinalCapabilities:
+                              registration.plugin.message.durableFinal.capabilities,
+                          }
+                        : {}),
+                    },
+                  },
+            ]),
+          ),
+        );
       }
     } else {
       gatewayChannels.set(
         key,
-        new Map(registry.channels.map(({ pluginId, plugin }) => [plugin.id, { pluginId, plugin }])),
+        new Map(
+          registry.channels.map(({ pluginId, plugin }) => [
+            plugin.id,
+            {
+              pluginId,
+              plugin,
+              handoffIdentity: {
+                channelId: plugin.id,
+                ...(plugin.message?.durableFinal?.capabilities
+                  ? { durableFinalCapabilities: plugin.message.durableFinal.capabilities }
+                  : {}),
+              },
+            },
+          ]),
+        ),
       );
     }
   }
@@ -141,7 +181,11 @@ export function getPluginRegistryGatewayOwner(
 export function getPluginRegistryGatewayChannelRegistration(
   registry: PluginRegistry,
   channel: string,
-): Pick<PluginChannelRegistration, "pluginId" | "plugin"> | undefined {
+):
+  | (Pick<PluginChannelRegistration, "pluginId" | "plugin"> & {
+      handoffIdentity?: { channelId: string; durableFinalCapabilities?: unknown };
+    })
+  | undefined {
   return gatewayChannels.get(getPluginRegistryResourceOwner(registry))?.get(channel);
 }
 

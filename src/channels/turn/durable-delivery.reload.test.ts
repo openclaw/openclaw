@@ -28,7 +28,10 @@ import {
 
 const cfg: OpenClawConfig = { channels: { telegram: { enabled: true } } };
 
-async function replacementFixture(options?: { newChannel?: boolean }) {
+async function replacementFixture(options?: {
+  newChannel?: boolean;
+  replacementCapabilities?: boolean;
+}) {
   const retired = new PluginInstance("discord");
   const old = createTestRegistry([
     {
@@ -54,14 +57,36 @@ async function replacementFixture(options?: { newChannel?: boolean }) {
         ...createChannelTestPluginBase({ id: "telegram" }),
         message: {
           id: "telegram",
-          durableFinal: { capabilities: { text: true, messageSendingHooks: true } },
+          durableFinal: {
+            capabilities: options?.replacementCapabilities
+              ? { text: true, messageSendingHooks: false }
+              : { text: true, messageSendingHooks: true },
+          },
           send: { text: sendText, lifecycle: { beforeSendAttempt } },
         },
       },
     },
   ]);
   if (!options?.newChannel) {
-    old.channels.push(...current.channels);
+    old.channels.push(
+      ...current.channels.map((entry) => ({
+        ...entry,
+        plugin: {
+          ...entry.plugin,
+          message: entry.plugin.message
+            ? {
+                ...entry.plugin.message,
+                durableFinal: entry.plugin.message.durableFinal
+                  ? {
+                      ...entry.plugin.message.durableFinal,
+                      capabilities: { text: true, messageSendingHooks: true },
+                    }
+                  : undefined,
+              }
+            : undefined,
+        },
+      })),
+    );
   }
   const setConfig = (config: OpenClawConfig) =>
     setPluginRuntimeLoadContext(current, {
@@ -130,7 +155,7 @@ describe("final delivery after plugin replacement", () => {
   });
 
   it.each([false, true])(
-    "sends once through its own Gateway (structured=%s)",
+    "sends once through a replacement registry with a platform id (structured=%s)",
     async (structured) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
       const fixture = await replacementFixture();
@@ -154,20 +179,17 @@ describe("final delivery after plugin replacement", () => {
     "account-changed",
     "plugin-changed",
     "new-channel",
-    "replaced-channel",
     "no-sender-preparation",
     "superseded-before-send",
     "superseded-live-send",
+    "capabilities-changed",
   ] as const)("does not send or borrow the process root when %s", async (stateChange) => {
     vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
-    const fixture = await replacementFixture({ newChannel: stateChange === "new-channel" });
+    const fixture = await replacementFixture({
+      newChannel: stateChange === "new-channel",
+      replacementCapabilities: stateChange === "capabilities-changed",
+    });
     setActivePluginRegistry(createTestRegistry([...fixture.current.channels]));
-    if (stateChange === "replaced-channel") {
-      fixture.current.channels = fixture.current.channels.map((entry) => ({
-        ...entry,
-        plugin: { ...entry.plugin },
-      }));
-    }
     if (stateChange === "no-sender-preparation") {
       delete fixture.request.prepareRuntimeHandoff;
     }

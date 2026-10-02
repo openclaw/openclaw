@@ -51,7 +51,13 @@ export function withDurableDeliveryRuntime<T>(
   const retainedChannel =
     channel &&
     admittedChannel?.pluginId === channel.pluginId &&
-    admittedChannel.plugin === channel.plugin;
+    (admittedChannel.handoffIdentity?.channelId ?? admittedChannel.plugin.id) ===
+      channel.plugin.id &&
+    isDeepStrictEqual(
+      admittedChannel.handoffIdentity?.durableFinalCapabilities ??
+        admittedChannel.plugin.message?.durableFinal?.capabilities,
+      channel.plugin.message?.durableFinal?.capabilities,
+    );
   if (
     !cfg ||
     !isDeepStrictEqual(cfg.channels?.[input.channel], input.cfg.channels?.[input.channel]) ||
