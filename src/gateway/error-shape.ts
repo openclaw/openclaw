@@ -1,6 +1,10 @@
 import { errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
+import {
+  AgentDatabaseAdmissionError,
+  createAgentDatabaseAdmissionErrorShape,
+} from "../state/agent-database-admission.js";
 
 /** Builds a wire error from an unknown failure without diagnostic class names. */
 export function errorShapeFromError(
@@ -8,7 +12,10 @@ export function errorShapeFromError(
   error: unknown,
   opts?: Parameters<typeof errorShape>[2],
 ) {
-  const shape = errorShape(code, formatErrorMessageWithCode(error), opts);
+  const shape =
+    error instanceof AgentDatabaseAdmissionError
+      ? createAgentDatabaseAdmissionErrorShape(error.refusal)
+      : errorShape(code, formatErrorMessageWithCode(error), opts);
   copyErrorDiagnostic(error, shape);
   return shape;
 }

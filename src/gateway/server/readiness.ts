@@ -45,19 +45,29 @@ type GatewayStartupStateDeps = {
 
 const DEFAULT_READINESS_CACHE_TTL_MS = 1_000;
 
-/** Create a startup checker that excludes downstream channel health. */
-export function createStartupChecker(deps: GatewayStartupStateDeps): StartupChecker {
+/** Startup waits for admission settlement; readiness retains its own agent policy. */
+export function createStartupChecker(
+  deps: GatewayStartupStateDeps,
+  getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[],
+): StartupChecker {
   return (): StartupResult => {
     const uptimeMs = Date.now() - deps.startedAt;
     if (deps.getGatewayDraining?.()) {
       return { ok: false, status: "draining", uptimeMs };
     }
-    if (deps.getStartupPending?.()) {
+    const pendingReason = deps.getStartupPending?.()
+      ? (deps.getStartupPendingReason?.() ?? "startup-sidecars")
+      : getAgentDatabaseAdmissionRefusals?.().some(
+            (refusal) => refusal.code === "agent-database-inspection-pending",
+          )
+        ? "agent-database-inspection"
+        : undefined;
+    if (pendingReason !== undefined) {
       return {
         ok: false,
         status: "starting",
         uptimeMs,
-        pendingReason: deps.getStartupPendingReason?.() ?? "startup-sidecars",
+        pendingReason,
       };
     }
     return { ok: true, status: "started", uptimeMs };

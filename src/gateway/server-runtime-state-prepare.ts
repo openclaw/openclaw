@@ -449,7 +449,7 @@ export async function prepareGatewayKernelState(params: {
     getStartupPendingReason: () => startupState.pendingReason,
     getGatewayDraining: () => lifecycle.closePreludeStarted || isGatewayDraining(),
   };
-  const getStartup = createStartupChecker(startupCheckerDeps);
+  const getStartup = createStartupChecker(startupCheckerDeps, listAgentDatabaseAdmissionRefusals);
   const getReadiness = createReadinessChecker({
     channelManager,
     ...startupCheckerDeps,

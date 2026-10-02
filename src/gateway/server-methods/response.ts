@@ -1,13 +1,10 @@
-import {
-  ErrorCodes,
-  errorShape,
-} from "../../../packages/gateway-protocol/src/schema/error-codes.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
+import { errorShapeFromError } from "../error-shape.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import { formatForLog } from "../ws-log.js";
 import type { RespondFn } from "./types.js";
 
 export function respondUnavailable(respond: RespondFn, err: unknown): void {
-  respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+  respond(false, undefined, errorShapeFromError(ErrorCodes.UNAVAILABLE, err));
 }
 
 export async function respondUnavailableOnThrow(respond: RespondFn, fn: () => Promise<void>) {

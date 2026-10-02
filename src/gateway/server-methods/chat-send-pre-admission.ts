@@ -15,13 +15,13 @@ import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
+import { errorShapeFromError } from "../error-shape.js";
 import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "../session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
-import { formatForLog } from "../ws-log.js";
 import {
   buildAbortedChatSendPayload,
   readPreRegisteredRun,
@@ -111,7 +111,7 @@ export function respondChatSendAdmissionError(
     );
     return;
   }
-  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(error)));
+  respond(false, undefined, errorShapeFromError(ErrorCodes.INVALID_REQUEST, error));
 }
 
 export type ChatSendPreAdmissionParams = {
