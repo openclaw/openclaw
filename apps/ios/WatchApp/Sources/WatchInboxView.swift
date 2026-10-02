@@ -417,7 +417,7 @@ struct WatchInboxView: View {
     }
 
     private var approvalCount: Int {
-        max(self.store.sortedExecApprovals.count, self.store.appSnapshot?.pendingApprovalCount ?? 0)
+        max(self.store.execApprovals.count, self.store.appSnapshot?.pendingApprovalCount ?? 0)
     }
 
     private var connectionLine: String {
@@ -1415,7 +1415,7 @@ private struct WatchExecApprovalListView: View {
 
     var body: some View {
         WatchDetailScroll(title: "Approvals") {
-            if self.store.sortedExecApprovals.isEmpty {
+            if self.store.execApprovals.isEmpty {
                 WatchHeroCard(
                     label: .localized("Clear"),
                     title: .localized("No approvals waiting"),

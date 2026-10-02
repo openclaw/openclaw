@@ -959,12 +959,7 @@ class MainViewModel private constructor(
     ensureRuntime().setNotificationForwardingMode(mode)
   }
 
-  fun setNotificationForwardingPackagesCsv(csv: String) {
-    val packages =
-      csv
-        .split(',')
-        .map { it.trim() }
-        .filter { it.isNotEmpty() }
+  fun setNotificationForwardingPackages(packages: List<String>) {
     ensureRuntime().setNotificationForwardingPackages(packages)
   }
 

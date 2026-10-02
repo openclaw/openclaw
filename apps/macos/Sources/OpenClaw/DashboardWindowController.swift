@@ -74,6 +74,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     let nativeBrowser: DashboardNativeBrowserHost
     private let messageHandler: DashboardMessageHandler
     let deviceSettingsMessageHandler: DashboardDeviceSettingsMessageHandler
+    /// The canonical Dashboard mount URL supplied by the manager. WebKit route
+    /// loads and SPA history do not mutate it, so native fallbacks stay rooted.
     private(set) var currentURL: URL {
         get { self.documentHost.currentURL }
         set { self.documentHost.currentURL = newValue }
@@ -355,10 +357,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.show()
     }
 
-    func loadInBackground(url: URL, auth: DashboardWindowAuth, restoringRoute: URL? = nil) {
-        self.update(url: url, auth: auth, restoringRoute: restoringRoute)
-    }
-
     func invalidateBrowserSession(error: GatewayBrowserSessionError? = nil) {
         self.invalidateGatewayHealth()
         if let url = self.webView.url, ControlUIDocumentHost.isTrustedLinkSource(url, dashboardURL: self.currentURL) {
@@ -428,7 +426,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         // outgoing experience before a delayed lookup can show it again.
         (window as? DashboardWindow)?.isHiddenForExperience = self.hasRetainedWindow
         (window as? DashboardWindow)?.lifetimeRevision &+= 1
-        self.advanceWindowIntent()
+        (self.window as? DashboardWindow)?.userIntentGeneration &+= 1
         self.notificationSourceID = UUID().uuidString
         self.pendingGatewaySwitch = nil
         _ = self.takePendingNativeActions()
@@ -773,7 +771,7 @@ extension DashboardWindowController {
         self.documentHost.hasLiveContent = false
         self.nativeCommandsReady = false
         self.isShowingFailurePage = true
-        self.advanceNavigationGeneration()
+        self.navigationGeneration &+= 1
         // A pending picker owns its successor's actions, independent of the failing document.
         guard self.pendingGatewaySwitch == nil else { return }
         // Transient reconnects retain generic commands; route-specific navigation expires.
@@ -922,7 +920,7 @@ extension DashboardWindowController {
         defer {
             self.pendingNativeCommands = []
             self.pendingNativeNavigation = nil
-            self.advanceNavigationGeneration()
+            self.navigationGeneration &+= 1
         }
         return (self.pendingNativeCommands, self.pendingNativeNavigation)
     }
@@ -1076,12 +1074,6 @@ extension DashboardWindowController {
         self.flushPendingNativeNavigation()
     }
 
-    /// The canonical Dashboard mount URL supplied by the manager. WebKit route
-    /// loads and SPA history do not mutate it, so native fallbacks stay rooted.
-    var dashboardBaseURL: URL {
-        self.currentURL
-    }
-
     func windowDidEnterFullScreen(_: Notification) {
         self.updateToolbarVisibility(isFullScreen: true)
     }
@@ -1104,8 +1096,8 @@ extension DashboardWindowController {
         (self.window as? DashboardWindow)?.lifetimeRevision &+= 1
         (self.window as? DashboardWindow)?.isHiddenForExperience = false
         self.deviceSettingsMessageHandler.stopObserving()
-        self.advanceWindowIntent()
-        self.advanceNavigationGeneration()
+        (self.window as? DashboardWindow)?.userIntentGeneration &+= 1
+        self.navigationGeneration &+= 1
         self.documentHost.hasLiveContent = false
         self.nativeCommandsReady = false
         self.invalidateGatewayHealth()
@@ -1172,8 +1164,8 @@ extension DashboardWindowController {
 
     func dispatchNativeCommand(_ command: DashboardNativeCommand) {
         if command.supersedesPendingNavigation {
-            self.advanceWindowIntent()
-            self.advanceNavigationGeneration()
+            (self.window as? DashboardWindow)?.userIntentGeneration &+= 1
+            self.navigationGeneration &+= 1
         }
         guard self.canDispatchNativeCommands, self.isWindowOpen
         else {
@@ -1220,8 +1212,8 @@ extension DashboardWindowController {
     }
 
     func dispatchNativeNavigation(_ navigation: DashboardNativeNavigation) {
-        self.advanceWindowIntent()
-        self.advanceNavigationGeneration()
+        (self.window as? DashboardWindow)?.userIntentGeneration &+= 1
+        self.navigationGeneration &+= 1
         guard self.canDispatchNativeCommands else {
             // Navigation is state selection, so only the newest destination matters while loading.
             self.pendingNativeNavigation = navigation
@@ -1263,14 +1255,6 @@ extension DashboardWindowController {
 
     var windowLifetimeRevision: UInt64? {
         (self.window as? DashboardWindow)?.lifetimeRevision
-    }
-
-    private func advanceWindowIntent() {
-        (window as? DashboardWindow)?.userIntentGeneration &+= 1
-    }
-
-    private func advanceNavigationGeneration() {
-        self.navigationGeneration &+= 1
     }
 
     private func navigationFallbackIsCurrent(generation: UInt64, sourceURL: URL) -> Bool {
