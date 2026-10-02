@@ -18,6 +18,7 @@ import {
   replaceSessionEntry,
   replaceTranscriptEvents,
 } from "./session-accessor.js";
+import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import type { InternalSessionEntry } from "./types.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-recovery-");
@@ -79,7 +80,12 @@ async function createFixture() {
 describe("recoverSessionEntryFromRestartTombstone", () => {
   it("clones and publishes the atomic archived successor transition without host SQLite", async () => {
     const fixture = await createFixture();
-    const successorEntry = { sessionId: "successor-session", updatedAt: 20, spawnDepth: 0 };
+    const successorEntry = {
+      sessionId: "successor-session",
+      updatedAt: 20,
+      spawnDepth: 0,
+      label: "Recovered session",
+    };
     const params = {
       agentId: "main",
       expected: {
@@ -95,10 +101,12 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
     };
 
     const createdKeys: string[] = [];
+    const publications: Array<ReturnType<typeof readPreparedSessionEntryChange>> = [];
     const changedKeys: string[] = [];
     const stopIdentity = onSessionIdentityMutation((mutation) => {
       if (mutation.kind === "create") {
         createdKeys.push(...mutation.current.sessionKeys);
+        publications.push(readPreparedSessionEntryChange(mutation, fixture.successorKey));
       }
     });
     const stopChanges = sessionChanges.subscribe((change) => {
@@ -112,6 +120,12 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
       expect(created).toMatchObject({ status: "created", successorKey: fixture.successorKey });
       expect(sql.queries).toEqual([]);
       expect(createdKeys).toEqual([fixture.successorKey]);
+      expect(publications).toEqual([
+        expect.objectContaining({
+          entry: expect.objectContaining(successorEntry),
+          source: expect.objectContaining({ revision: expect.any(Number) }),
+        }),
+      ]);
       expect(changedKeys).toEqual(
         expect.arrayContaining([fixture.sourceKey, fixture.successorKey]),
       );

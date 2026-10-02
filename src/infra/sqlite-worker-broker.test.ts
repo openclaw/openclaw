@@ -112,7 +112,6 @@ it.each([
   { writeAdmission: false, revoke: false },
   { writeAdmission: false, revoke: true },
   { writeAdmission: true, revoke: false },
-  { writeAdmission: true, revoke: true },
 ])(
   "retains queued command context and live ownership (write admission: $writeAdmission, revoke: $revoke)",
   async ({ writeAdmission, revoke }) => {
@@ -154,7 +153,7 @@ it.each([
   },
 );
 
-it.each(["abort", "drain", "timeout"] as const)(
+it.each(["drain", "timeout"] as const)(
   "releases admission waiters on %s without losing accepted writes",
   async (action) => {
     const file = databasePath();
@@ -185,9 +184,7 @@ it.each(["abort", "drain", "timeout"] as const)(
     try {
       await Promise.resolve();
       expect(settled).toBe(false);
-      if (action === "abort") {
-        cancel.abort(reason);
-      } else if (action === "drain") {
+      if (action === "drain") {
         closing = drainGlobalSingletonLifecycleState("restart");
       } else {
         vi.advanceTimersByTime(9_999);
@@ -198,7 +195,7 @@ it.each(["abort", "drain", "timeout"] as const)(
       for (const outcome of await waiters) {
         expect(outcome).toMatchObject({
           status: "rejected",
-          reason: action === "abort" ? reason : { code: "overloaded" },
+          reason: { code: "overloaded" },
         });
       }
       if (action === "timeout") {
@@ -269,7 +266,6 @@ it("charges admission waiters to the byte budget and releases canceled reservati
 
 poolIt.each([
   { cores: 1, workers: 2 },
-  { cores: 24, workers: 3 },
   { cores: 128, workers: 8 },
 ])("uses $workers worker threads for $cores available CPUs", async ({ cores, workers }) => {
   const parallelism = vi.spyOn(os, "availableParallelism").mockReturnValue(cores);

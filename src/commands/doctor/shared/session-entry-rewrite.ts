@@ -2,10 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sql } from "kysely";
 import type { DoctorSessionScanScope } from "../../../config/sessions/session-accessor.sqlite-canonical-inventory.js";
-import {
-  publishSessionEntryCacheInvalidation,
-  trackSessionEntryCacheWrite,
-} from "../../../config/sessions/session-accessor.sqlite-entry-cache.js";
+import { publishSessionEntryCacheInvalidation } from "../../../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { invalidateSessionEntryMaintenanceAgeFact } from "../../../config/sessions/session-accessor.sqlite-maintenance-age.js";
 import {
   getSessionKysely,
@@ -201,42 +198,37 @@ export function rewriteDoctorSessionEntries(
             assertOpenClawAgentDatabaseIdentity(database, params.expectedIdentity);
           }
           invalidateSessionEntryMaintenanceAgeFact(database.db);
-          const writeGeneration = trackSessionEntryCacheWrite(database, () => {
-            executeSqliteQuerySync(
-              database.db,
-              db
-                .updateTable("session_nodes")
-                .set({ entry_json: entryJson })
-                .where("session_key", "=", sessionKey),
-            );
-            if (snapshots) {
-              writeSessionEntrySnapshots(database, sessionKey, snapshots);
-            }
-            executeSqliteQuerySync(
-              database.db,
-              db
-                .updateTable("session_nodes")
-                .set({ entry_valid: entryValid })
-                .where("session_key", "=", sessionKey),
-            );
-            if (nextEntry && params.updateDeliveryProjection) {
-              executeSqliteQuerySync(
-                database.db,
-                db
-                  .updateTable("session_windows")
-                  .set({
-                    account_id: deliveryContextFromSession(nextEntry)?.accountId ?? null,
-                    channel: sessionDeliveryChannel(nextEntry) ?? null,
-                  })
-                  .where("session_id", "=", row.current_session_id),
-              );
-            }
-          });
-          publishSessionEntryCacheInvalidation(
-            database,
-            nextEntry ? { sessionKey, entry: nextEntry, entryJson } : { sessionKey },
-            writeGeneration,
+          executeSqliteQuerySync(
+            database.db,
+            db
+              .updateTable("session_nodes")
+              .set({ entry_json: entryJson })
+              .where("session_key", "=", sessionKey),
           );
+          if (snapshots) {
+            writeSessionEntrySnapshots(database, sessionKey, snapshots);
+          }
+          executeSqliteQuerySync(
+            database.db,
+            db
+              .updateTable("session_nodes")
+              .set({ entry_valid: entryValid })
+              .where("session_key", "=", sessionKey),
+          );
+          if (nextEntry && params.updateDeliveryProjection) {
+            executeSqliteQuerySync(
+              database.db,
+              db
+                .updateTable("session_windows")
+                .set({
+                  account_id: deliveryContextFromSession(nextEntry)?.accountId ?? null,
+                  channel: sessionDeliveryChannel(nextEntry) ?? null,
+                })
+                .where("session_id", "=", row.current_session_id),
+            );
+          }
+          // Repair rows do not yet supply complete canonical runtime and side-table facts.
+          publishSessionEntryCacheInvalidation(database, { sessionKey });
           batchRewritten += 1;
         }
         params.assertCurrent?.();

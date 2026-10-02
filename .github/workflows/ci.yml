@@ -4662,6 +4662,21 @@ jobs:
           REQUESTED_NODE_VERSION: ${{ env.NODE_VERSION }}
         run: *ensure_node_run
 
+      - &apple_mermaid_cache_key
+        name: Identify Apple Mermaid inputs
+        if: hashFiles('scripts/prepare-apple-mermaid.mjs') != '' && env.HISTORICAL_TARGET != 'true' && needs.preflight.outputs.frozen_target != 'true'
+        id: apple-mermaid-inputs
+        run: echo "key=$(node scripts/prepare-apple-mermaid.mjs --cache-key)" >> "$GITHUB_OUTPUT"
+
+      - &apple_mermaid_cache_restore
+        name: Restore Apple Mermaid assets
+        if: steps.apple-mermaid-inputs.outputs.key != '' && needs.preflight.outputs.cache_mode != 'off'
+        id: apple-mermaid-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/shared/mermaid/assets
+          key: apple-mermaid-v1-${{ steps.apple-mermaid-inputs.outputs.key }}
+
       - name: Prepare Apple Mermaid assets
         run: |
           set -euo pipefail
@@ -4673,6 +4688,16 @@ jobs:
             echo "Current CI targets must provide scripts/prepare-apple-mermaid.mjs." >&2
             exit 1
           fi
+
+      - &apple_mermaid_cache_save
+        name: Save Apple Mermaid assets
+        if: steps.apple-mermaid-inputs.outputs.key != '' && steps.apple-mermaid-cache.outputs.cache-hit != 'true' && needs.preflight.outputs.cache_write_allowed == 'true' && github.ref == 'refs/heads/main' && contains(fromJSON('["push","schedule"]'), github.event_name)
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/shared/mermaid/assets
+          key: ${{ steps.apple-mermaid-cache.outputs.cache-primary-key }}
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         if: matrix.phase == env.MACOS_PRIMARY_PHASE
@@ -5042,6 +5067,35 @@ jobs:
 
       - *plain_node_setup_step
 
+      - *apple_mermaid_cache_key
+      - *apple_mermaid_cache_restore
+
+      - name: Identify iOS native cache inputs
+        id: ios-cache-inputs
+        if: env.HISTORICAL_TARGET != 'true' && needs.preflight.outputs.frozen_target != 'true' && hashFiles('apps/shared/OpenClawWatchRTC/build.sh') != ''
+        run: |
+          echo "xcode=$(xcodebuild -version | shasum -a 256 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "OPENCLAW_WATCH_RTC_CACHE_DIR=$RUNNER_TEMP/openclaw-watch-rtc-libraries" >> "$GITHUB_ENV"
+
+      - name: Restore iOS source packages
+        id: ios-packages-cache
+        if: steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: &ios_packages_cache_paths |
+            ~/Library/Developer/Xcode/DerivedData/OpenClaw-*/SourcePackages
+          key: ios-packages-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('apps/ios/**/Package.resolved', 'apps/ios/project.yml', 'apps/shared/**/Package.swift', 'apps/swabble/Package.swift') }}
+
+      - name: Restore Watch RTC build inputs
+        id: watch-rtc-cache
+        if: steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: &watch_rtc_cache_paths |
+            ~/.cargo/registry
+            ${{ runner.temp }}/openclaw-watch-rtc-libraries
+          key: watch-rtc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('apps/shared/OpenClawWatchRTC/Cargo.lock', 'apps/shared/OpenClawWatchRTC/Cargo.toml', 'apps/shared/OpenClawWatchRTC/rust-toolchain.toml', 'apps/shared/OpenClawWatchRTC/build.sh', 'apps/shared/OpenClawWatchRTC/src/**', 'apps/ios/project.yml') }}
+
       - &install_watch_rust_toolchain
         name: Install Watch Rust toolchain
         if: env.HISTORICAL_TARGET != 'true' || hashFiles('apps/shared/OpenClawWatchRTC/Cargo.toml') != ''
@@ -5240,6 +5294,26 @@ jobs:
             -destination "generic/platform=iOS" \
             CODE_SIGNING_ALLOWED=NO \
             build
+
+      - *apple_mermaid_cache_save
+
+      - name: Save iOS source packages
+        if: steps.ios-cache-inputs.outputs.xcode != '' && steps.ios-packages-cache.outputs.cache-hit != 'true' && needs.preflight.outputs.cache_write_allowed == 'true' && github.ref == 'refs/heads/main' && contains(fromJSON('["push","schedule"]'), github.event_name)
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *ios_packages_cache_paths
+          key: ${{ steps.ios-packages-cache.outputs.cache-primary-key }}
+
+      - name: Save Watch RTC build inputs
+        if: steps.ios-cache-inputs.outputs.xcode != '' && steps.watch-rtc-cache.outputs.cache-hit != 'true' && needs.preflight.outputs.cache_write_allowed == 'true' && github.ref == 'refs/heads/main' && contains(fromJSON('["push","schedule"]'), github.event_name)
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *watch_rtc_cache_paths
+          key: ${{ steps.watch-rtc-cache.outputs.cache-primary-key }}
 
       - name: Prove native managed document download and export
         id: ios_attachment_tests

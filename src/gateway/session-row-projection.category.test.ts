@@ -71,7 +71,12 @@ it.for(["search", "full"] as const)(
         await withReadySessionRows(
           projection,
           () => queries,
-          () => undefined,
+          (read) => {
+            // Establish access order after the concurrent worker batches have finished.
+            for (const query of queries) {
+              expect(read.describe(query)?.entry.category).toBe("Work");
+            }
+          },
         );
         const materialized = projection.materializedCount;
         expect(materialized).toBe(101);

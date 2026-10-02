@@ -485,8 +485,23 @@ describe("scoped vitest configs", () => {
           `--import=${new URL("./vitest/vitest.jsdom-preload.mts", import.meta.url).href}`,
         ],
       },
-      { name: "plugins-native-loader", pool: "forks", execArgv: [] },
+      {
+        name: "plugins-native-loader",
+        pool: "forks",
+        execArgv: process.versions.bun ? ["--no-install"] : [],
+      },
     ]);
+    for (const file of ["loader.lazy-alias.test.ts", "plugin-sdk-native-resolver.test.ts"]) {
+      expect(
+        projects
+          .filter(
+            (project) =>
+              project.include.some((pattern) => minimatch(file, pattern)) &&
+              !project.exclude.some((pattern) => minimatch(file, pattern)),
+          )
+          .map((project) => project.name),
+      ).toEqual(["plugins-native-loader"]);
+    }
   });
 
   it("normalizes ui include patterns relative to the scoped dir", () => {

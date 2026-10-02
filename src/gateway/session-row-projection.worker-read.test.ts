@@ -145,6 +145,12 @@ it.each([
             expect(projection.dirtyRowCount).toBe(rowCount);
             const published = publications;
             expect(published).toBe(rowCount);
+            // Each commit accepts its prepared entry before the worker refreshes database facts.
+            expect(accepting).toBe(rowCount);
+            expect(acceptance).toEqual([]);
+            expect(reads).toEqual([]);
+            expect(materializedKeys).toEqual([]);
+            accepting = 0;
 
             // Advance the clock only after real materialization; Worker replies remain real.
             // Avoid keyed reads until the drain settles so they cannot consume the suffix.

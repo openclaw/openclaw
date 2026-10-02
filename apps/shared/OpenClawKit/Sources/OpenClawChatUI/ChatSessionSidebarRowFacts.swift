@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import OpenClawKit
 import OpenClawProtocol
 
 /// Presentation only: roster membership and mutations keep their existing owners.
@@ -14,6 +15,7 @@ struct ChatSessionSidebarRowFacts {
         let glyph: Glyph
         let label: String
         var tone: Tone = .secondary
+        var count: UInt64?
     }
 
     /// Metadata patches carry forward the sample; they must not restart its clock.
@@ -52,6 +54,7 @@ struct ChatSessionSidebarRowFacts {
         attention: OpenClawChatAttentionSummary?,
         showPreview: Bool,
         isConnected: Bool = true,
+        webFacts: NativeConversationSessionFacts.Session? = nil,
         preview: @autoclosure () -> String?,
         now: Date)
     {
@@ -125,7 +128,25 @@ struct ChatSessionSidebarRowFacts {
         // the wire count and the web sum cap are Number.MAX_SAFE_INTEGER.
         let conflictRows = session.isArchived ? [session] : node.previewSessions
         let conflicts = conflictRows.reduce(0) { min(9_007_199_254_740_991, $0 + Self.workspaceConflicts($1)) }
-        self.badges = Self.badges(session, isChild: isChild, conflicts: conflicts)
+        var badges = Self.badges(session, isChild: isChild, conflicts: conflicts)
+        // session-row-badges.ts:166,177 uses outbox attention, not queue length;
+        // composer drafts are independent of the Gateway's sharing-draft ghost.
+        if let webFacts {
+            if webFacts.outboxAttentionCount > 0 {
+                badges.append(Badge(
+                    glyph: .symbol("exclamationmark.triangle"),
+                    label: webFacts.outboxAttentionCount == 1 ? String(localized: "1 message needs attention") :
+                        String(
+                            format: String(localized: "%lld messages need attention"),
+                            webFacts.outboxAttentionCount),
+                    tone: .warning,
+                    count: webFacts.outboxAttentionCount))
+            }
+            if webFacts.hasComposerDraft {
+                badges.append(Badge(glyph: .symbol("pencil"), label: String(localized: "Unsent draft")))
+            }
+        }
+        self.badges = badges
     }
 
     static func icon(_ value: String) -> Glyph {

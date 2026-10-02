@@ -18,7 +18,6 @@ import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
-import { clientHasAdminScope } from "../agent-turn/agent-handler-helpers.js";
 import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
@@ -28,6 +27,7 @@ import {
   revokeMcpLoopbackClientGrant,
 } from "../mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { resolveGatewayChatCronCreatorAuthorityAdmission } from "./cron-creator-authority-admission.js";
 import {
@@ -187,7 +187,7 @@ describe("original caller through Cron creator transports", () => {
             config,
             admitted,
             creator,
-            senderIsOwner: clientHasAdminScope(client),
+            senderIsOwner: hasGatewayAdminScope(client),
           });
           transportTools = tools;
           const invoke = (name: string) =>

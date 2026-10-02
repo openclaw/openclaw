@@ -254,6 +254,14 @@ describe("application shell pairing access", () => {
       });
       let storedOutboxes = {
         total: 1,
+        sessions: [
+          {
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            hasComposerDraft: true,
+            outboxAttentionCount: 1,
+          },
+        ],
         attentionCountForSession: () => 1,
         hasSessionDraft: () => true,
       };
@@ -295,6 +303,14 @@ describe("application shell pairing access", () => {
       if (withOutboxes) {
         storedOutboxes = {
           total: 2,
+          sessions: [
+            {
+              agentId: "main",
+              sessionKey: "agent:main:main",
+              hasComposerDraft: false,
+              outboxAttentionCount: 2,
+            },
+          ],
           attentionCountForSession: () => 2,
           hasSessionDraft: () => false,
         };
@@ -371,6 +387,7 @@ describe("application shell pairing access", () => {
     shell.outboxStoreRuntime = {
       read: () => ({
         total: 0,
+        sessions: [],
         attentionCountForSession: () => 0,
         hasSessionDraft: () => false,
       }),

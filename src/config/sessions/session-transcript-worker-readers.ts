@@ -329,6 +329,12 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-pending-input-receipts", ...input }),
       (value) => value.receipts,
     ),
+    readConversationDelivery: reader(
+      "conversation-delivery",
+      "a conversation delivery receipt",
+      (input) => ({ kind: "conversation-delivery", ...input }),
+      (value) => value.record,
+    ),
     readGoalOperationReceipt: reader(
       "goal-operation-receipt",
       "a Goal operation receipt",

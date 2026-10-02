@@ -1,8 +1,10 @@
+import { ok, type Result } from "@openclaw/normalization-core/result";
 // Session-store key canonicalization across default agents, main aliases, and legacy keys.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import {
   AgentSelectionRequiredError,
   listAgentIds,
@@ -23,7 +25,10 @@ import {
   type ParsedAgentSessionKey,
 } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
-import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import {
+  resolveRequestedSessionAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "./session-request-agent.js";
 
 /** Canonicalize an opaque session key into the agent-scoped store namespace. */
 export function canonicalizeSessionKeyForAgent(agentId: string, key: string): string {
@@ -133,6 +138,21 @@ export function resolveSessionStoreKey(params: {
   }
   const agentId = storeAgentId ?? resolveLogicalSessionStoreAgentId(params.cfg, raw);
   return canonicalizeSessionKeyForAgent(agentId, raw);
+}
+
+export function resolveRequestedSessionStoreTarget(
+  cfg: OpenClawConfig,
+  sessionKey: string,
+  explicitAgentId?: string,
+): Result<{ sessionKey: string; agentId: string }, ErrorShape> {
+  const requested = resolveRequestedSessionAgentId(cfg, sessionKey, explicitAgentId);
+  if (!requested.ok) {
+    return requested;
+  }
+  return ok({
+    sessionKey: resolveSessionStoreKey({ cfg, sessionKey, storeAgentId: requested.agentId }),
+    agentId: requested.agentId,
+  });
 }
 
 /** Resolve ownership before a prepared agent's main alias collapses to global. */

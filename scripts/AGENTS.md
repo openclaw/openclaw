@@ -59,7 +59,10 @@ without changing the receipt or substituting today's main or the check's base.
 `OPENCLAW_PR_TOOLING_ROOT` selects a full checkout of the same repository for
 materialized wrappers' third-party dependencies; otherwise `openclaw.pr.toolingRoot` in the
 canonical checkout's Git config applies, then the canonical checkout itself.
-The standalone CI watcher resolves missing packages from the same tooling root when its checkout has no `node_modules`, with the same explicit-root identity checks and exact package versions.
+The standalone CI watcher and Crabbox entrypoint resolve missing third-party
+packages from the same tooling root when their checkout has no `node_modules`,
+with the same explicit-root identity checks and exact package versions. They
+never link an installation or resolve workspace packages from another checkout.
 The wrapper still selects and verifies code against the existing trust anchor.
 Installed package versions must exactly match the anchor manifest. On mismatch,
 an explicitly selected, separate, clean `main` checkout is fetched, fast-forwarded,

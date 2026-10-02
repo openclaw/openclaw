@@ -33,6 +33,7 @@ import {
   createSessionEntryWithTranscript,
   prepareSessionEntryMutationDatabases,
 } from "./session-accessor.entry-mutation.js";
+import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
   assertSessionEntryCreationPublication,
   projectSessionSharingEntry,
@@ -88,6 +89,12 @@ it("creates with prepared label facts, header and atomic owner without host data
     const env = { ...process.env };
     const originalStateDir = env.OPENCLAW_STATE_DIR;
     const order: string[] = [];
+    const publications: Array<ReturnType<typeof readPreparedSessionEntryChange>> = [];
+    const stopFacts = sessionChanges.subscribeFacts((change) => {
+      if ("sessionKey" in change && change.sessionKey === key) {
+        publications.push(readPreparedSessionEntryChange(change, key));
+      }
+    });
     const stop = sessionChanges.subscribe((change) => {
       if ("sessionKey" in change && change.sessionKey === key) {
         order.push(order.includes("committed") ? "published" : "header");
@@ -169,6 +176,20 @@ it("creates with prepared label facts, header and atomic owner without host data
       });
       expect(writes).toEqual(["session.entries.replace"]);
       expect(assertCreation).toThrow("Session creation publication owner is no longer current");
+      expect(publications).toEqual([
+        expect.objectContaining({
+          entry: expect.objectContaining({
+            sessionId: "created",
+            category: "Created",
+            label: "available",
+            owner,
+          }),
+          source: expect.objectContaining({
+            identity: expect.any(String),
+            revision: expect.any(Number),
+          }),
+        }),
+      ]);
       const firstUse = await createSessionEntryWithTranscript(
         {
           agentId: "main",
@@ -182,6 +203,7 @@ it("creates with prepared label facts, header and atomic owner without host data
     } finally {
       prepared.release();
       sql.restore();
+      stopFacts();
       stop();
     }
     expect(order).toEqual(["committed", "published", "registered"]);

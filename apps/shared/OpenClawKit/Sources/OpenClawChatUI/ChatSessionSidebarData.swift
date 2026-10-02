@@ -31,7 +31,7 @@ public final class OpenClawChatSessionSidebarData {
     var queryState: ChatSidebarQueryState?
     @ObservationIgnored var queryTask: Task<Void, Never>?
 
-    enum Projection: Hashable { case conversation(String), members([String]), swarm, sidebar }
+    enum Projection: Hashable { case conversation(String), members([String]), swarm, sidebar, sidebarTree }
     private(set) var projectionRevision = 0
     @ObservationIgnored private var projections: [Projection: [OpenClawChatSessionEntry]] = [:]
     @ObservationIgnored var onProjectionComputed: ((Projection) -> Void)?
@@ -42,6 +42,7 @@ public final class OpenClawChatSessionSidebarData {
 
     func invalidateQueryProjection() {
         self.projections[.sidebar] = nil
+        self.projections[.sidebarTree] = nil
     }
 
     static func identity(_ row: OpenClawChatSessionEntry) -> String {

@@ -12,6 +12,7 @@ struct ChatSidebarQueryState {
     let transport: any OpenClawChatSidebarTransport
     var query: OpenClawChatSidebarQuery
     var page: OpenClawChatSessionsListResponse?
+    var owners: [OpenClawChatSessionEntry.CreatedActor]?
     var pageIDs: [String] = []
     var searchIDs: [String]?
     var metadataIDs: Set<String> = []
@@ -33,6 +34,10 @@ extension OpenClawChatSessionSidebarData {
 
     public var query: OpenClawChatSidebarQuery {
         self.queryState?.query ?? .init(agentID: nil)
+    }
+
+    var owners: [OpenClawChatSessionEntry.CreatedActor]? {
+        self.queryState?.owners
     }
 
     public var agentScope: OpenClawChatSidebarAgentScope {
@@ -81,6 +86,28 @@ extension OpenClawChatSessionSidebarData {
               let page = state.page, page.hasMore == true else { return nil }
         // ui/src/components/session-data-controller-events.ts:197 distinguishes missing from explicit null.
         return page.nextOffsetPresent ? page.nextOffset : state.pageIDs.count
+    }
+
+    var rowsIncludingLoadedDescendants: [OpenClawChatSessionEntry] {
+        guard self.query.search.isEmpty, self.query.ownerId != nil,
+              self.query.involvingMe != true else { return self.rows }
+        return self.cachedProjection(.sidebarTree) {
+            var rows = self.rows
+            var seen = Set(rows.map(Self.identity))
+            var index = 0
+            // Owner membership hides navigation rows, not facts from already-loaded, linked children.
+            while index < rows.count {
+                let parent = rows[index]
+                let agentID = OpenClawChatSessionKey.agentID(from: parent.key) ?? parent.agentId ?? self.query.agentID
+                for key in parent.childSessions ?? [] {
+                    if let child = self.row(key: key, agentID: agentID), seen.insert(Self.identity(child)).inserted {
+                        rows.append(child)
+                    }
+                }
+                index += 1
+            }
+            return rows
+        }
     }
 
     public var isSettled: Bool {
@@ -141,6 +168,7 @@ extension OpenClawChatSessionSidebarData {
             self.queryState?.metadataIDs = []
             self.queryState?.hits = []
             self.queryState?.page = nil
+            self.queryState?.owners = nil
             self.queryState?.pageIDs = []
         }
         self.invalidateQueryProjection()
@@ -213,6 +241,8 @@ extension OpenClawChatSessionSidebarData {
             }
             let search = await transcript
             guard generation == self.queryState?.generation, !Task.isCancelled, var page else { return }
+            // Search and browsing share the complete facet, independently of retained page membership.
+            self.queryState?.owners = page.owners
             if !query.search.isEmpty {
                 self.queryState?.metadataIDs = Set(incoming.map(Self.identity))
                 incoming += (search.0?.sessions ?? []).filter { seen.insert(Self.identity($0)).inserted }

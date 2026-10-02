@@ -95,10 +95,10 @@ export async function loadAgentReplacementOperations() {
             });
           }
         });
-        const publication = kernel.prepareSessionEntryReplacementPublication(result);
+        const publication = kernel.prepareSessionEntryReplacementPublication(result, current);
         deferSqliteWorkerCommitReceipt(current.db, publication);
         context.admit("commit", publication);
-        return result;
+        return { ...result, publication };
       }),
   } satisfies Handlers;
 }
@@ -244,6 +244,34 @@ export async function loadAgentArchivePruningOperations() {
   } satisfies Handlers;
 }
 
+export async function loadConversationDeliveryOperations() {
+  const kernel = await import("../config/sessions/conversation-delivery-store.kernel.js");
+  return {
+    "conversation.delivery.begin": (
+      input: Parameters<typeof kernel.beginConversationDeliveryInDatabase>[1],
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction("conversation-delivery.begin", "Conversation delivery", (database) => {
+        const result = kernel.beginConversationDeliveryInDatabase(database, input);
+        admit("commit");
+        return result;
+      }),
+    "conversation.delivery.transition": (
+      input: Parameters<typeof kernel.transitionConversationDeliveryInDatabase>[1],
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction(
+        `conversation-delivery.${input.status}`,
+        "Conversation delivery",
+        (database) => {
+          const result = kernel.transitionConversationDeliveryInDatabase(database, input);
+          admit("commit");
+          return result;
+        },
+      ),
+  } satisfies Handlers;
+}
+
 export type RegisteredAgentWorkerOperations = WorkerOperations<
   Awaited<ReturnType<typeof loadAgentTranscriptOperations>> &
     Awaited<ReturnType<typeof loadAgentReplacementOperations>> &
@@ -255,5 +283,6 @@ export type RegisteredAgentWorkerOperations = WorkerOperations<
     Awaited<ReturnType<typeof loadAgentProviderReviewOperations>> &
     Awaited<ReturnType<typeof loadAgentReactionOperations>> &
     Awaited<ReturnType<typeof loadAgentPendingInputOperations>> &
-    Awaited<ReturnType<typeof loadAgentArchivePruningOperations>>
+    Awaited<ReturnType<typeof loadAgentArchivePruningOperations>> &
+    Awaited<ReturnType<typeof loadConversationDeliveryOperations>>
 >;

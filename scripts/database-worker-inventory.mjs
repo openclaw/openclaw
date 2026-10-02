@@ -120,6 +120,7 @@ const reviewed = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/config/sessions/conversation-delivery-store.kernel.ts", // Agent execution registry writes and session transcript worker reads only.
   "extensions/memory-core/src/memory-entry-origin-reads.ts", // Memory search worker origin-read commands only.
   "extensions/memory-core/src/memory-entry-origins-delete.ts", // Memory origin worker delete command only.
   "extensions/memory-core/src/memory-forget-index-read.ts", // Memory search worker forget-index-plan command only.

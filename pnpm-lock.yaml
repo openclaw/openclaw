@@ -448,8 +448,8 @@ importers:
         specifier: 3.1.1
         version: 3.1.1(supports-color@10.2.2)
       '@openclaw/crabline':
-        specifier: 0.1.27
-        version: 0.1.27
+        specifier: 0.1.28
+        version: 0.1.28
       '@openclaw/session-url-contract':
         specifier: workspace:*
         version: link:packages/session-url-contract
@@ -1991,8 +1991,8 @@ importers:
         specifier: 1.30.0
         version: 1.30.0(supports-color@10.2.2)(zod@4.6.5)
       '@openclaw/crabline':
-        specifier: 0.1.27
-        version: 0.1.27
+        specifier: 0.1.28
+        version: 0.1.28
       '@openclaw/fs-safe':
         specifier: 0.22.0
         version: 0.22.0
@@ -4619,8 +4619,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/crabline@0.1.27':
-    resolution: {integrity: sha512-QVh2Jccn1NVWL5dhwBvZ2fBurL3npgkJ7NJLqBoZjn1JmTfWPdp7ckY3dqc4tnFzUpfR2izT4qKydJX+wFQbGw==}
+  '@openclaw/crabline@0.1.28':
+    resolution: {integrity: sha512-BaHheygfeA6FG8AR8X/IwzteveoZc9fBacXiRdIr0uQNRetCkIsBCelg47Nw1l+FDR2F7kD+8TLaQcblGFK4Cw==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -12307,7 +12307,7 @@ snapshots:
   '@openai/codex@0.159.1-win32-x64':
     optional: true
 
-  '@openclaw/crabline@0.1.27':
+  '@openclaw/crabline@0.1.28':
     dependencies:
       '@types/node': 22.20.3
       commander: 15.0.0

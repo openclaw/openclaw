@@ -60,6 +60,9 @@ Doctor refuses these retired inputs:
   and the retired `channels.webchat` section.
 - `session.threadBindings.ttlHours` and Discord/LINE/Matrix/Telegram `threadBindings.ttlHours`,
   including per-account settings.
+- Telegram `dm`, `direct.*.threadReplies`, native draft preview settings, and scalar
+  or flat streaming settings (`streamMode`, `chunkMode`, `blockStreaming`,
+  `blockStreamingCoalesce`, and `draftChunk`), including account overrides.
 
 Configs containing these keys must be repaired before current validation can
 succeed. Doctor preserves the config and stops with recovery guidance instead

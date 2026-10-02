@@ -10,7 +10,17 @@ export type SqliteAuthTransferRequest = { type: "next" | "end"; transferId: numb
 
 /** JSON IPC carries only one bounded byte frame; aggregate records retain the transfer contract. */
 export function encodeSqliteAuthTransferFrame(frame: SqliteWorkerTransferFrame) {
-  return frame.done ? frame : { ...frame, bytes: Buffer.from(frame.bytes).toString("base64") };
+  // Encoding is synchronous; only the string escapes, so the owned frame needs no copy.
+  return frame.done
+    ? frame
+    : {
+        ...frame,
+        bytes: Buffer.from(
+          frame.bytes.buffer,
+          frame.bytes.byteOffset,
+          frame.bytes.byteLength,
+        ).toString("base64"),
+      };
 }
 
 function decodeFrame(value: unknown): SqliteWorkerTransferFrame {

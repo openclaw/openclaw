@@ -127,7 +127,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
         }),
       },
     );
-    beginConversationDeliveryOperation(scope, {
+    await beginConversationDeliveryOperation(scope, {
       operationId,
       operationKind: "send",
       conversationRef,
