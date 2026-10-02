@@ -1,4 +1,5 @@
 // Codex tests cover attempt timeouts plugin behavior.
+import * as agentHarnessAttemptRuntime from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -12,6 +13,7 @@ const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
 
 describe("Codex app-server attempt timeouts", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -65,12 +67,15 @@ describe("Codex app-server attempt timeouts", () => {
 
   it("waits for startup timeout cleanup before rejecting", async () => {
     vi.useFakeTimers();
+    const recordStop = vi.spyOn(agentHarnessAttemptRuntime, "recordModelFallbackStop");
+    const controller = new AbortController();
     const events: string[] = [];
     const run = withCodexStartupTimeout({
       timeoutMs: 10,
-      signal: new AbortController().signal,
+      signal: controller.signal,
       onTimeout: async () => {
         events.push("cleanup-start");
+        controller.abort();
         await new Promise<void>((resolve) => {
           setTimeout(() => {
             events.push("cleanup-done");
@@ -89,6 +94,11 @@ describe("Codex app-server attempt timeouts", () => {
     expect(isCodexAppServerStartupError(error, "timed_out")).toBe(true);
     expect((error as Error).message).toBe("codex app-server startup timed out");
     expect(events).toEqual(["cleanup-start", "cleanup-done"]);
+    expect(recordStop).toHaveBeenCalledWith(error);
+    expect(recordStop.mock.calls.map(([failure]) => failure.message)).toEqual([
+      "codex app-server startup timed out",
+      "codex app-server startup aborted",
+    ]);
   });
 
   it("rejects startup timeout when aborted before completion", async () => {

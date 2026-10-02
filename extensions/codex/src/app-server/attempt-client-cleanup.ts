@@ -1,6 +1,7 @@
 import {
   AgentHarnessPreflightError,
   embeddedAgentLog,
+  formatErrorMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -9,6 +10,7 @@ import { unsubscribeCodexAppServerLiveThread } from "./client-runtime.js";
 import {
   CodexAppServerRpcError,
   isCodexAppServerBrokenPipeError,
+  isCodexAppServerConnectionClosedError,
   isCodexAppServerOverloadError,
   isCodexAppServerRequestTimeoutError,
   type CodexAppServerClient,
@@ -17,6 +19,7 @@ import {
   isCodexAppServerStartSelectionChangedError,
   retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
+import { isCodexWebSocketOpenFailure } from "./transport-websocket.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 export const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
@@ -39,6 +42,39 @@ export class CodexAppServerUnsafeSubscriptionError extends Error {
     super(message, options);
     this.name = "CodexAppServerUnsafeSubscriptionError";
   }
+}
+
+/** A known pre-turn thread must be discarded before startup can create another one. */
+export class CodexUncommittedThreadCleanupError extends CodexAppServerUnsafeSubscriptionError {
+  constructor(
+    readonly threadId: string,
+    readonly ephemeral: boolean,
+    cause: unknown,
+  ) {
+    super("Codex uncommitted thread cleanup failed", { cause });
+    this.name = "CodexUncommittedThreadCleanupError";
+  }
+}
+
+export function throwCodexStartupError(error: unknown, signal: AbortSignal): never {
+  if (
+    !signal.aborted &&
+    (isCodexAppServerConnectionClosedError(error) || isCodexWebSocketOpenFailure(error))
+  ) {
+    // Switching models cannot repair this connection and may duplicate native
+    // work still running after the harness exhausted its startup recovery.
+    throw new AgentHarnessPreflightError(formatErrorMessage(error), { cause: error });
+  }
+  throw error;
+}
+
+export function isCodexUnrecoverableSubscriptionError(error: unknown): boolean {
+  // Reconnecting cannot settle an unknown owner. Only a known pre-turn thread
+  // has the identity needed for cleanup reconciliation before another start.
+  return (
+    error instanceof CodexAppServerUnsafeSubscriptionError &&
+    !(error instanceof CodexUncommittedThreadCleanupError)
+  );
 }
 
 export function assertCodexThreadResumeSubscription(

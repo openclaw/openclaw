@@ -12,9 +12,12 @@ import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   CodexAppServerUnsafeSubscriptionError,
+  isCodexUnrecoverableSubscriptionError,
+  CodexUncommittedThreadCleanupError,
   closeCodexStartupClientBestEffort,
   shouldRetireCodexStartupClient,
   unsubscribeCodexThreadBestEffort,
+  throwCodexStartupError,
 } from "./attempt-client-cleanup.js";
 import { buildCodexPluginThreadConfigEligibilityLogData } from "./attempt-diagnostics.js";
 import { verifyStartupArtifact } from "./attempt-runtime-artifact.js";
@@ -40,6 +43,7 @@ import {
   buildCodexAppServerRuntimeFingerprint,
   buildCodexPluginAppCacheKey,
 } from "./plugin-app-cache-key.js";
+import { discardUnattestedCodexPluginThread } from "./plugin-thread-attestation.js";
 import {
   createCodexPluginThreadConfigStartupProvider,
   resolveCodexPluginThreadConfigStartupPolicy,
@@ -79,10 +83,6 @@ import {
 import { isCodexWebSocketOpenFailure } from "./transport-websocket.js";
 import { getCodexAppServerTurnRouter, type CodexThreadRouteReservation } from "./turn-router.js";
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
-
-const CODEX_APP_SERVER_STARTUP_MAX_ATTEMPTS = 3;
-
-type CodexSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
 
 export async function startCodexAttemptThread(params: {
   assertCurrent?: () => void;
@@ -130,7 +130,7 @@ export async function startCodexAttemptThread(params: {
   nativeToolSurfaceEnabled: boolean;
   nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
   sandboxExecServerEnabled: boolean;
-  sandbox: CodexSandboxContext;
+  sandbox: Awaited<ReturnType<typeof resolveSandboxContext>>;
   contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
   startupTimeoutMs: number;
   signal: AbortSignal;
@@ -200,6 +200,7 @@ export async function startCodexAttemptThread(params: {
           : params.appServer;
 
         let attemptedClient: CodexAppServerClient | undefined;
+        let pendingThreadCleanup: CodexUncommittedThreadCleanupError | undefined;
         const startupAttempt = async () => {
           let startupClientLease: (() => void) | undefined;
           let startupClient: CodexAppServerClient | undefined;
@@ -261,6 +262,19 @@ export async function startCodexAttemptThread(params: {
             startupClientForAbandonedRequestCleanup = activeStartupClient;
             if (startupAbandonController.signal.aborted) {
               throw new CodexAppServerStartupError("aborted");
+            }
+            if (pendingThreadCleanup) {
+              params.assertCurrent?.();
+              const cleaned = await discardUnattestedCodexPluginThread({
+                client: activeStartupClient,
+                threadId: pendingThreadCleanup.threadId,
+                ephemeral: pendingThreadCleanup.ephemeral,
+                signal: startupAbandonController.signal,
+              });
+              if (!cleaned) {
+                throw pendingThreadCleanup;
+              }
+              pendingThreadCleanup = undefined;
             }
             const runtimeArtifact = await verifyStartupArtifact({
               client: activeStartupClient,
@@ -556,10 +570,9 @@ export async function startCodexAttemptThread(params: {
                     if (!isCodexAppServerStartSelectionChangedError(error)) {
                       throw error;
                     }
-                    // The run loop cannot safely swap the physical client, router,
-                    // and lease halfway through an overflow retry. Retire this
-                    // generation so the next bounded attempt acquires the owner
-                    // selected by the now-current native config.
+                    // Overflow retry cannot swap the physical client, router, and lease.
+                    // Retire this generation so the next bounded attempt acquires the
+                    // owner selected by the current native config.
                     retireSharedCodexAppServerClientIfCurrent(activeStartupClient);
                     throw Object.assign(
                       new Error("codex app-server client is closed", { cause: error }),
@@ -622,7 +635,7 @@ export async function startCodexAttemptThread(params: {
         };
 
         let replacedSettledFailureClient = false;
-        for (let attempt = 1; attempt <= CODEX_APP_SERVER_STARTUP_MAX_ATTEMPTS; attempt += 1) {
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
           try {
             return await startupAttempt();
           } catch (error) {
@@ -630,12 +643,16 @@ export async function startCodexAttemptThread(params: {
             const clientRetired = error instanceof CodexThreadClientReplacementError;
             if (
               startupAbandonController.signal.aborted ||
+              isCodexUnrecoverableSubscriptionError(error) ||
               // Physical startup already owns the bounded unopened-socket retries.
               isCodexWebSocketOpenFailure(error) ||
               (clientRetired && replacedSettledFailureClient) ||
               (!clientRetired && !selectionChanged && !isCodexAppServerConnectionClosedError(error))
             ) {
               throw error;
+            }
+            if (error instanceof CodexUncommittedThreadCleanupError) {
+              pendingThreadCleanup = error;
             }
             replacedSettledFailureClient ||= clientRetired;
             const refreshedSharedClient = clientRetired
@@ -699,7 +716,7 @@ export async function startCodexAttemptThread(params: {
       await closeCodexStartupClientBestEffort(startupClientForAbandonedRequestCleanup);
       startupClientForAbandonedRequestCleanup = undefined;
     }
-    throw error;
+    return throwCodexStartupError(error, startupAbandonController.signal);
   } finally {
     params.signal.removeEventListener("abort", abandonStartupAcquire);
   }

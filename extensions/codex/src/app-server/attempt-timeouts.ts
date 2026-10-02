@@ -1,3 +1,4 @@
+import { recordModelFallbackStop } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import { addTimerTimeoutGraceMs, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
 const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
@@ -21,6 +22,7 @@ export class CodexAppServerStartupError extends Error {
   ) {
     super(message);
     this.name = "CodexAppServerStartupError";
+    recordModelFallbackStop(this);
   }
 }
 

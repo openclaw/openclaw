@@ -8,6 +8,8 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
 import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import {
   findCliTerminalStopError,
+  hasRecordedModelFallbackStop,
+  recordModelFallbackStop,
   resolveFailoverClassificationFromError,
 } from "../../failover-error.js";
 import { failoverReasonFromClassification } from "../../failover/classification-rules.js";
@@ -294,6 +296,11 @@ export async function recoverEmbeddedRunAttempt(input: {
     recordRecoveryDecision("accepted", "live_model_switch");
     throw new LiveSessionModelSwitchError(requestedSelection);
   }
+  if (promptError && !attempt.codexAppServerFailure && hasRecordedModelFallbackStop(promptError)) {
+    // The harness already exhausted recovery or cannot safely replay native
+    // work. Preserve its terminal error before generic continuation or routing.
+    throw toErrorObject(promptError, "Prompt failed");
+  }
   const assistantSignal =
     attemptAssistant?.stopReason === "error"
       ? buildAssistantFailoverSignal(attemptAssistant)
@@ -463,6 +470,34 @@ export async function recoverEmbeddedRunAttempt(input: {
       lastRetryFailoverReason: outputLimitFailure ? input.lastRetryFailoverReason : failureReason,
     });
   }
+  const hasCodexAppServerTimeoutOutcome = Boolean(
+    attempt.codexAppServerFailure &&
+    (attempt.promptTimeoutOutcome || isEmbeddedRunTimeoutFinal(attempt)),
+  );
+  if (promptError && promptErrorSource !== "compaction" && attempt.codexAppServerFailure) {
+    const recoveryRetry = resolveCodexAppServerRecoveryRetry({
+      attempt,
+      retryAvailable: input.codexAppServerRecoveryRetryAvailable,
+    });
+    if (currentAttemptReplaySafe && recoveryRetry.retry) {
+      runInput.laneController.throwIfAborted();
+      sessionPromptState.suppressNextUserMessagePersistence = true;
+      log.warn(
+        `codex app-server replay-safe failure; retrying once failureKind=${attempt.codexAppServerFailure?.kind} ` +
+          `runId=${params.runId} sessionId=${params.sessionId}`,
+      );
+      recordRecoveryDecision("accepted", "harness_retry");
+      return retry({ codexAppServerRecoveryRetries: input.codexAppServerRecoveryRetries + 1 });
+    }
+    if (!hasCodexAppServerTimeoutOutcome) {
+      recordRecoveryDecision("rejected", "harness_retry_unavailable");
+      // A disconnected app-server may still own the native turn. Exhausting
+      // same-model recovery never authorizes replay through another model.
+      const error = toErrorObject(promptError, "Prompt failed");
+      recordModelFallbackStop(error);
+      throw error;
+    }
+  }
   if (
     !currentAttemptReplaySafe &&
     !canContinueSettledMidTurnOverflow &&
@@ -505,30 +540,6 @@ export async function recoverEmbeddedRunAttempt(input: {
   if (!currentAttemptReplaySafe) {
     recordRecoveryDecision("rejected", "replay_unsafe");
     return { action: "proceed" };
-  }
-  const hasCodexAppServerTimeoutOutcome = Boolean(
-    attempt.codexAppServerFailure &&
-    (attempt.promptTimeoutOutcome || isEmbeddedRunTimeoutFinal(attempt)),
-  );
-  if (promptError && promptErrorSource !== "compaction" && attempt.codexAppServerFailure) {
-    const recoveryRetry = resolveCodexAppServerRecoveryRetry({
-      attempt,
-      retryAvailable: input.codexAppServerRecoveryRetryAvailable,
-    });
-    if (recoveryRetry.retry) {
-      runInput.laneController.throwIfAborted();
-      sessionPromptState.suppressNextUserMessagePersistence = true;
-      log.warn(
-        `codex app-server replay-safe failure; retrying once failureKind=${attempt.codexAppServerFailure?.kind} ` +
-          `runId=${params.runId} sessionId=${params.sessionId}`,
-      );
-      recordRecoveryDecision("accepted", "harness_retry");
-      return retry({ codexAppServerRecoveryRetries: input.codexAppServerRecoveryRetries + 1 });
-    }
-    if (!hasCodexAppServerTimeoutOutcome) {
-      recordRecoveryDecision("rejected", "harness_retry_unavailable");
-      throw toErrorObject(promptError, "Prompt failed");
-    }
   }
   if (
     promptError &&

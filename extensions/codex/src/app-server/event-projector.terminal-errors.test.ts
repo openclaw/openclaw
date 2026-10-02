@@ -1,3 +1,4 @@
+import * as agentHarnessAttemptRuntime from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   emitAgentEvent,
   normalizeUsage,
@@ -114,6 +115,58 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       }
     },
   );
+
+  it.each([
+    "httpConnectionFailed",
+    "responseStreamConnectionFailed",
+    "responseStreamDisconnected",
+    "responseTooManyFailedAttempts",
+  ])("preserves native %s as a transport fallback stop", async (variant) => {
+    const recordStop = vi.spyOn(agentHarnessAttemptRuntime, "recordModelFallbackStop");
+    for (const method of ["error", "turn/completed"] as const) {
+      const projector = await createProjector();
+      const message = "stream disconnected before completion";
+      await projector.handleNotification(
+        terminalError({ message, codexErrorInfo: { [variant]: { httpStatusCode: null } } }, method),
+      );
+      const { promptError } = readAttemptTerminal(snapshot(projector));
+      expect(promptError).toBeInstanceOf(Error);
+      expect(promptError).toMatchObject({ message });
+      expect(recordStop).toHaveBeenCalledWith(promptError);
+    }
+  });
+
+  it.each([429, 400, 503])("retains HTTP %s responses as provider failures", async (status) => {
+    const recordStop = vi.spyOn(agentHarnessAttemptRuntime, "recordModelFallbackStop");
+    const projector = await createProjector();
+    await projector.handleNotification(
+      terminalError({
+        message: status === 400 ? "The requested model is unavailable" : "Provider request failed",
+        codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: status } },
+      }),
+    );
+    expect(readAttemptTerminal(snapshot(projector)).promptError).toMatchObject({ status });
+    expect(recordStop).not.toHaveBeenCalled();
+  });
+
+  it("lets native stream reconnection complete without creating an outer retry", async () => {
+    const recordStop = vi.spyOn(agentHarnessAttemptRuntime, "recordModelFallbackStop");
+    const projector = await createProjector();
+    await projector.handleNotification(
+      appServerError({
+        message: "stream disconnected before completion",
+        codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } },
+        willRetry: true,
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "reconnected-answer", text: "Done." }]),
+    );
+    const result = snapshot(projector);
+    expect(result.assistantTexts).toEqual(["Done."]);
+    expect(readAttemptTerminal(result).promptError).toBeNull();
+    expect(recordStop).not.toHaveBeenCalled();
+  });
 
   it("keeps sparse successful bash output eligible for the no-visible-answer guard", async () => {
     const projector = await createProjector();

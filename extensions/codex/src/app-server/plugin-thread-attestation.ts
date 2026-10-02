@@ -6,7 +6,7 @@ import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
-import type { CodexAppServerClient } from "./client.js";
+import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import type { JsonObject, v2 } from "./protocol.js";
 import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
 import { attestCodexRestrictedToolSurfaceMcpServersDisabled } from "./thread-mcp-attestation.js";
@@ -103,7 +103,9 @@ export async function discardUnattestedCodexPluginThread(params: {
   client: CodexAppServerClient;
   threadId: string;
   ephemeral: boolean;
+  signal?: AbortSignal;
 }): Promise<boolean> {
+  params.signal?.throwIfAborted();
   if (params.ephemeral) {
     return await unsubscribeCodexThreadBestEffort(params.client, {
       threadId: params.threadId,
@@ -115,10 +117,21 @@ export async function discardUnattestedCodexPluginThread(params: {
     await params.client.request(
       "thread/delete",
       { threadId: params.threadId },
-      { timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS },
+      { timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS, signal: params.signal },
     );
     return true;
   } catch (error) {
+    params.signal?.throwIfAborted();
+    // A lost delete response may leave cleanup complete. Only Codex's exact
+    // missing-target reply for this provisional thread proves that outcome.
+    if (
+      error instanceof CodexAppServerRpcError &&
+      error.method === "thread/delete" &&
+      error.code === -32_600 &&
+      error.message === `thread not found: ${params.threadId}`
+    ) {
+      return true;
+    }
     embeddedAgentLog.debug("codex plugin app attestation thread deletion failed", {
       threadId: params.threadId,
       error,

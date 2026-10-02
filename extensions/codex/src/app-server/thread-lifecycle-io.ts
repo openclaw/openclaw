@@ -5,6 +5,7 @@ import {
   closeCodexStartupClientBestEffort,
   retireUnsafeCodexTurnClientBestEffort,
   CodexAppServerUnsafeSubscriptionError,
+  CodexUncommittedThreadCleanupError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerLocalHomeDir } from "./auth-start-options.js";
@@ -521,9 +522,11 @@ export async function startFreshCodexThread(
     });
     if (!cleanupConfirmed) {
       await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();
-      throw new CodexAppServerUnsafeSubscriptionError("Codex uncommitted thread cleanup failed", {
+      throw new CodexUncommittedThreadCleanupError(
+        response.thread.id,
+        startParams.ephemeral === true,
         cause,
-      });
+      );
     }
     throw cause;
   };

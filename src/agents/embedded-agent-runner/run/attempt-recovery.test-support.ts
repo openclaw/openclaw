@@ -29,6 +29,8 @@ export type TransportDropScenario = {
   activeCount?: number;
   asyncStarted?: boolean;
   codeModeSuspended?: boolean;
+  codexAppServerFailure?: Parameters<typeof makeEmbeddedRunnerAttempt>[0]["codexAppServerFailure"];
+  codexAppServerRecoveryRetryAvailable?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
   failedToolCallId?: string;
   missingToolResult?: boolean;
@@ -121,6 +123,9 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
       activeCount: scenario.activeCount ?? 0,
     },
     ...(scenario.terminal ? { terminal: scenario.terminal } : {}),
+    ...(scenario.codexAppServerFailure
+      ? { codexAppServerFailure: scenario.codexAppServerFailure }
+      : {}),
     ...(scenario.yieldDetected ? { yieldDetected: true } : {}),
     ...(scenario.providerRetryMaxDelayMs !== undefined
       ? { providerRetryMaxDelayMs: scenario.providerRetryMaxDelayMs }
@@ -228,7 +233,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
       usageAccumulator: createUsageAccumulator(),
       lastRunPromptUsage: undefined,
       runtimeAuthRetry: false,
-      codexAppServerRecoveryRetryAvailable: false,
+      codexAppServerRecoveryRetryAvailable: scenario.codexAppServerRecoveryRetryAvailable ?? false,
       codexAppServerRecoveryRetries: 0,
       lastRetryFailoverReason: null,
       traceAttempts: [],

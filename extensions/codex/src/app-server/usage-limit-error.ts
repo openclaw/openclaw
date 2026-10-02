@@ -1,3 +1,4 @@
+import { recordModelFallbackStop } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   embeddedAgentLog,
   formatErrorMessage,
@@ -64,10 +65,19 @@ export function resolveCodexPromptError(
       "responseTooManyFailedAttempts",
     ]) {
       const detail = info[variant];
-      if (isJsonObject(detail) && typeof detail.httpStatusCode === "number") {
+      if (!isJsonObject(detail)) {
+        continue;
+      }
+      if (typeof detail.httpStatusCode === "number") {
         status = detail.httpStatusCode;
         break;
       }
+      // Native Codex owns response-stream reconnection and its retry budget.
+      // Without an HTTP response this is transport exhaustion, not evidence
+      // that another model can safely replay the same work.
+      const error = new Error(source.message ?? "Codex response connection failed");
+      recordModelFallbackStop(error);
+      return error;
     }
   }
   return status === undefined

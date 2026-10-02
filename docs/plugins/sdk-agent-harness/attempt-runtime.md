@@ -196,6 +196,18 @@ isolates observer failures, and `createAgentHarnessAttemptLifecycle` gates
 lifecycle events and deduplicates execution phases. Native interruption,
 completion decisions, output flushing, and cleanup remain backend-owned.
 
+`recordModelFallbackStop(error)` from this same private attempt-runtime surface
+marks an `Error` as terminal for the outer model fallback chain. Official
+harnesses use it when native transport recovery has exhausted its budget or
+another model would repeat work whose outcome is uncertain. The marker survives
+`cause` and aggregate-error wrapping without mutating frozen errors.
+
+Keep native reconnect and same-model recovery with the harness that owns the
+connection. This marker does not authorize replay or restart an accepted turn.
+Preserve real provider responses, including rate limits and unavailable-model
+errors, for normal model fallback policy instead of marking them as transport
+failures.
+
 The private `openclaw/plugin-sdk/agent-harness-tool-runtime` provides correlated
 execution promises and argument/start snapshots through
 `createAgentHarnessToolExecutionRegistry` and
