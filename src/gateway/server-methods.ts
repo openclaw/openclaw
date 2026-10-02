@@ -17,8 +17,6 @@ import {
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import {
-  getGatewayRestartDrainSignal,
-  getGatewaySuspendAdmissionPhase,
   tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
@@ -63,6 +61,7 @@ import type {
 } from "./server-methods/types.js";
 import type { GatewayRequestEntry } from "./server-request-entry.js";
 import {
+  isGatewayRootlessRequestAllowed,
   runGatewayPendingWorkContinuation,
   runWithGatewayObservationScope,
   workAdmissionUnavailableError,
@@ -95,13 +94,6 @@ import {
 import { classifyGatewayStaleInstall } from "./stale-install.js";
 
 export { coreGatewayHandlers };
-
-const SUSPEND_CONTROL_METHODS = new Set([
-  "gateway.suspend.prepare",
-  "gateway.suspend.status",
-  "gateway.suspend.resume",
-  "gateway.suspend.handoff",
-]);
 
 /** Builds the per-request method registry from core, plugin, and explicit extra handlers. */
 export function createRequestGatewayMethodRegistry(
@@ -156,6 +148,10 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   sessionMutationAuthorization?: SessionMutationAuthorization;
   sessionAccessAuthority?: GatewaySessionAccessAuthority;
 }> {
+  const signal = params.methodRegistry.isObservation(params.method)
+    ? getAsyncWorkSignal()
+    : undefined;
+  signal?.throwIfAborted();
   if (params.context.ensureSessionRowProjection) {
     params.markSessionSubscribePhase?.("projectionReadiness");
     await params.context.ensureSessionRowProjection();
@@ -183,6 +179,7 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         })
       : null;
   while (true) {
+    signal?.throwIfAborted();
     const scopeAuthorization = authorizeMethod();
     if (scopeAuthorization.error) {
       return { error: scopeAuthorization.error };
@@ -266,23 +263,26 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     );
     const preparedSessionMutation =
       projection && !subscriptionAccessOnly
-        ? await projection.withPreparedExactRows(
-            (cfg) =>
-              resolveDirectSessionTargets(params.method, params.requestParams).flatMap((target) => {
+        ? await projection.withPreparedExactRows((cfg) => {
+            signal?.throwIfAborted();
+            return resolveDirectSessionTargets(params.method, params.requestParams).flatMap(
+              (target) => {
                 const agent = resolveRequestedSessionAgentId(
                   cfg,
                   target.sessionKey,
                   target.agentId,
                 );
                 return agent.ok ? [{ key: target.sessionKey, agentId: agent.agentId }] : [];
-              }),
-            authorizeSession,
-          )
+              },
+            );
+          }, authorizeSession)
         : withCanonicalSessionValidationDeferral(() => authorizeSession());
     params.markSessionSubscribePhase?.("accessFacts");
+    signal?.throwIfAborted();
     if (preparedSessionMutation.kind === "pending") {
       const { certifySessionCanonicalValidationPending } =
         await import("../config/sessions/session-canonical-validation-readiness.js");
+      signal?.throwIfAborted();
       await certifySessionCanonicalValidationPending(preparedSessionMutation.database);
       // No permission result survives readiness. Method scopes, profile binding,
       // startup state, target selection and current session facts all run again.
@@ -443,11 +443,7 @@ export async function runWithGatewayRequestEnvelope<T>(
       }),
     );
   }
-  const restartProgressRead =
-    method === "update.runs.get" &&
-    getGatewayRestartDrainSignal().aborted &&
-    getGatewaySuspendAdmissionPhase() === "accepting";
-  if (!rootWorkAdmission && !SUSPEND_CONTROL_METHODS.has(method) && !restartProgressRead) {
+  if (!rootWorkAdmission && !isGatewayRootlessRequestAllowed(method)) {
     return await options.reject(workAdmissionUnavailableError(method));
   }
   async function invokeWithRequestScope() {
@@ -466,33 +462,21 @@ export async function runWithGatewayRequestEnvelope<T>(
         getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
         getActivePluginRegistry() ??
         undefined;
-      const invoke = () =>
-        withPluginRuntimeGatewayRequestScope(
-          {
-            context: options.context,
-            // Detached turn admission needs the live instance resolver, not a captured request context.
-            resolveGatewayContext: options.context.resolveGatewayContext,
-            client,
-            signal: options.signal,
-            hasCurrentClientAuthority: options.hasCurrentClientAuthority,
-            isWebchatConnect: options.isWebchatConnect,
-            // Only an owner-bound in-process stream may retain admitted Full authority.
-            ...(client?.internal?.nodeInvokeStream ? getPluginRuntimeGatewayNodeAuthorities() : {}),
-            ...(pluginRegistry ? { pluginRegistry } : {}),
-          },
-          fn,
-        );
-      return await (options.methodRegistry.isObservation(method)
-        ? runWithGatewayObservationScope(invoke, [options.signal, client?.connectionSignal], () =>
-            options.reject(
-              getGatewayRestartDrainSignal().aborted
-                ? workAdmissionUnavailableError(method)
-                : errorShape(ErrorCodes.UNAVAILABLE, `${method} observation cancelled`, {
-                    retryable: true,
-                  }),
-            ),
-          )
-        : invoke());
+      return await withPluginRuntimeGatewayRequestScope(
+        {
+          context: options.context,
+          // Detached turn admission needs the live instance resolver, not a captured request context.
+          resolveGatewayContext: options.context.resolveGatewayContext,
+          client,
+          signal: options.signal,
+          hasCurrentClientAuthority: options.hasCurrentClientAuthority,
+          isWebchatConnect: options.isWebchatConnect,
+          // Only an owner-bound in-process stream may retain admitted Full authority.
+          ...(client?.internal?.nodeInvokeStream ? getPluginRuntimeGatewayNodeAuthorities() : {}),
+          ...(pluginRegistry ? { pluginRegistry } : {}),
+        },
+        fn,
+      );
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         return await options.reject(error.error);
@@ -526,209 +510,222 @@ export async function handleGatewayRequest(
   diagnostics?: GatewayRpcDiagnostics,
 ): Promise<void> {
   const { req, client, isWebchatConnect, context, signal, hasCurrentClientAuthority } = opts;
-  using subscribeDiagnostics =
-    req.method === "sessions.messages.subscribe"
-      ? startSlowRequestDiagnostics<SessionSubscribePhase>(
-          sessionLog,
-          "slow session messages subscribe",
-          req.method,
-          "setup",
-        )
-      : undefined;
-  const runtimeParticipant = resolveRuntimeSessionParticipantRequest(opts);
-  if (runtimeParticipant === null) {
-    return;
-  }
-  const profileBinding =
-    opts.expectedProfileBinding ??
-    (req.expectedProfileId === undefined
-      ? undefined
-      : await createExpectedProfileBinding(
-          req.expectedProfileId,
-          client,
-          readGatewayRequestMutationAuthority(opts).assertLifetimeCurrent,
-        ));
-  // WS publication already owns the shared guard, including policy-close responses.
-  const profileRespond =
-    profileBinding && !opts.expectedProfileBinding
-      ? profileBinding.guardResponse(opts.respond)
-      : opts.respond;
-  const respond: GatewayRequestOptions["respond"] = runtimeParticipant
-    ? (ok, ...response) => {
-        if (ok) {
-          runtimeParticipant.assertCurrent();
-        }
-        profileRespond(ok, ...response);
-      }
-    : profileRespond;
-  const sessionMutationCommitGuard =
-    profileBinding || runtimeParticipant
-      ? () => {
-          profileBinding?.assertCurrent();
-          runtimeParticipant?.assertCurrent();
-          opts.sessionMutationCommitGuard?.();
-        }
-      : opts.sessionMutationCommitGuard;
-  const entry = opts.requestEntry ?? context.requestEntryLifetime?.enter(opts);
-  const releaseForegroundWork = retainSessionListForegroundWork();
-  let sessionAccessAuthority: GatewaySessionAccessAuthority | undefined;
-  try {
-    entry?.assertOpen();
-    // Prefer the caller-attached registry when it owns the requested method so plugin dispatch
-    // metadata newer than global runtime state still authorizes and dispatches correctly. When the
-    // attached snapshot does not own the method, rebuild from the process-root registry so late
-    // methods remain reachable (#94127).
-    const methodRegistry =
-      opts.methodRegistry?.getHandler(req.method) !== undefined
-        ? opts.methodRegistry
-        : createRequestGatewayMethodRegistry(opts.extraHandlers);
-    const requestMutationAuthority = readGatewayRequestMutationAuthority(opts);
-    const requestFacts = { method: req.method, requestParams: req.params, client, context };
-    const authorization = await authorizeGatewayRequestPreDispatch({
-      ...requestFacts,
-      methodRegistry,
-      expectedProfileBinding: profileBinding,
-      hasCurrentClientAuthority,
-      markSessionSubscribePhase: subscribeDiagnostics?.mark,
-      assertInvocationCurrent: () => {
-        runtimeParticipant?.assertCurrent();
-        profileBinding?.assertCurrent();
-        // Profile hydration binds the operator guard later; retain the original request lifetime.
-        readGatewayRequestMutationAuthority(opts).assertOperatorCurrent?.();
-        requestMutationAuthority.assertCurrent();
-      },
-    });
-    sessionAccessAuthority = authorization.sessionAccessAuthority;
-    entry?.assertOpen();
-    if (authorization.error) {
-      respond(false, undefined, authorization.error);
+  // Keep the caller's current registry, including methods published after global registration.
+  const methodRegistry =
+    opts.methodRegistry?.getHandler(req.method) !== undefined
+      ? opts.methodRegistry
+      : createRequestGatewayMethodRegistry(opts.extraHandlers);
+  const observation = methodRegistry.isObservation(req.method);
+  let observationResponded = false;
+  let respondCancelled = opts.respond;
+  const dispatch = async (retainRoot?: () => void) => {
+    const observationSignal = observation ? getAsyncWorkSignal() : undefined;
+    using subscribeDiagnostics =
+      req.method === "sessions.messages.subscribe"
+        ? startSlowRequestDiagnostics<SessionSubscribePhase>(
+            sessionLog,
+            "slow session messages subscribe",
+            req.method,
+            "setup",
+          )
+        : undefined;
+    const runtimeParticipant = resolveRuntimeSessionParticipantRequest(opts);
+    if (runtimeParticipant === null) {
       return;
     }
-    const handler = methodRegistry.getHandler(req.method) as GatewayRequestHandler | undefined;
-    if (!handler) {
-      const error = errorShape(ErrorCodes.INVALID_REQUEST, `unknown method: ${req.method}`);
-      respond(false, undefined, error);
-      return;
-    }
-    // Every session mutation owner uses these pre-commit assertions. Compose the
-    // host lifetime here so individual handlers cannot lose it across an await.
-    const assertOperatorCurrent = captureGatewayRequestOperatorGuard(opts);
-    const sessionMutationAuthorization = withSessionMutationCommitGuard(
-      authorization.sessionMutationAuthorization,
-      () => {
-        runtimeParticipant?.assertCurrent();
-        assertOperatorCurrent();
-        requestMutationAuthority.assertCurrent();
-      },
-      profileBinding?.assertCurrent,
-      requestMutationAuthority.assertAdmittedInputCurrent
-        ? () => {
-            assertOperatorCurrent();
-            requestMutationAuthority.assertAdmittedInputCurrent?.();
+    const profileBinding =
+      opts.expectedProfileBinding ??
+      (req.expectedProfileId === undefined
+        ? undefined
+        : await createExpectedProfileBinding(
+            req.expectedProfileId,
+            client,
+            readGatewayRequestMutationAuthority(opts).assertLifetimeCurrent,
+          ));
+    // WS publication already owns the shared guard, including policy-close responses.
+    const profileRespond =
+      profileBinding && !opts.expectedProfileBinding
+        ? profileBinding.guardResponse(opts.respond)
+        : opts.respond;
+    const respondUnobserved: GatewayRequestOptions["respond"] = runtimeParticipant
+      ? (ok, ...response) => {
+          if (ok) {
+            runtimeParticipant.assertCurrent();
           }
-        : undefined,
-    );
-    const respondAuthorized: GatewayRequestOptions["respond"] =
-      authorization.sessionScope === "operator.sessions.read"
-        ? (...response) => {
-            try {
-              sessionMutationAuthorization?.assertCurrent();
-            } catch (error) {
-              if (!(error instanceof SessionMutationAuthorizationChangedError)) {
-                throw error;
-              }
-              respond(false, undefined, error.error);
-              return;
-            }
-            respond(...response);
-          }
-        : respond;
-    const observation = methodRegistry.isObservation(req.method);
-    let observationResponded = false;
-    const respondToHandler: GatewayRequestOptions["respond"] = observation
+          profileRespond(ok, ...response);
+        }
+      : profileRespond;
+    respondCancelled = respondUnobserved;
+    const respond: GatewayRequestOptions["respond"] = observation
       ? (...response) => {
-          getAsyncWorkSignal()?.throwIfAborted();
-          respondAuthorized(...response);
+          observationSignal?.throwIfAborted();
+          respondUnobserved(...response);
           observationResponded = true;
         }
-      : respondAuthorized;
-    const invokeHandler = async () => {
-      subscribeDiagnostics?.mark("handlerPreparation");
-      const preparedHandler = await prepareGatewayRequestHandler(handler, entry, opts);
-      // Lazy preparation may yield across a hot config change. Keep the router fence
-      // unless the canonical owner reconciles accepted input before new admission.
-      const uploadError = gatewayRouterUploadPolicyError(requestFacts, methodRegistry);
-      if (uploadError) {
-        respond(false, undefined, uploadError);
-        return;
-      }
-      const handlerOptions = bindGatewayRequestHandlerMutationAuthority(
-        opts,
-        {
-          req,
-          params: (req.params ?? {}) as Record<string, unknown>,
-          client,
-          isWebchatConnect,
-          respond: respondToHandler,
-          acceptsSerializedJson: opts.acceptsSerializedJson,
-          context,
-          signal,
-          ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
-          sessionMutationCommitGuard,
-          sessionMutationAuthorization,
-          markSessionSubscribePhase: subscribeDiagnostics?.mark,
-          ...(authorization.sessionAccessAuthority
-            ? { sessionAccessAuthority: authorization.sessionAccessAuthority }
-            : {}),
-        },
-        profileBinding,
-        authorization.sessionScope,
-      );
-      sessionMutationCommitGuard?.();
-      assertOperatorCurrent();
-      authorization.sessionAccessAuthority?.assertCurrent();
+      : respondUnobserved;
+    const sessionMutationCommitGuard =
+      profileBinding || runtimeParticipant
+        ? () => {
+            profileBinding?.assertCurrent();
+            runtimeParticipant?.assertCurrent();
+            opts.sessionMutationCommitGuard?.();
+          }
+        : opts.sessionMutationCommitGuard;
+    const entry = opts.requestEntry ?? context.requestEntryLifetime?.enter(opts);
+    const releaseForegroundWork = retainSessionListForegroundWork();
+    let sessionAccessAuthority: GatewaySessionAccessAuthority | undefined;
+    try {
       entry?.assertOpen();
-      if (signal?.aborted) {
+      const requestMutationAuthority = readGatewayRequestMutationAuthority(opts);
+      const requestFacts = { method: req.method, requestParams: req.params, client, context };
+      const authorization = await authorizeGatewayRequestPreDispatch({
+        ...requestFacts,
+        methodRegistry,
+        expectedProfileBinding: profileBinding,
+        hasCurrentClientAuthority,
+        markSessionSubscribePhase: subscribeDiagnostics?.mark,
+        assertInvocationCurrent: () => {
+          runtimeParticipant?.assertCurrent();
+          profileBinding?.assertCurrent();
+          // Profile hydration binds the operator guard later; retain the original request lifetime.
+          readGatewayRequestMutationAuthority(opts).assertOperatorCurrent?.();
+          requestMutationAuthority.assertCurrent();
+        },
+      });
+      sessionAccessAuthority = authorization.sessionAccessAuthority;
+      entry?.assertOpen();
+      if (authorization.error) {
+        respond(false, undefined, authorization.error);
         return;
       }
-      // No await between the final fence, ownership handoff, and actual invocation.
-      // Long polls and shutdown initiators must never remain preparation leases.
-      entry?.release();
-      profileBinding?.markInvoked();
-      return diagnostics
-        ? diagnostics.runHandler(() => preparedHandler(handlerOptions))
-        : preparedHandler(handlerOptions);
-    };
-    if (req.method === "question.get" || req.method === "question.resolve") {
-      // Draining admission consults the pending owner before handler entry.
-      requestMutationAuthority.assertCurrent();
-      profileBinding?.assertCurrent();
-    }
-    await runWithGatewayRequestEnvelope(req.method, client, invokeHandler, {
-      context,
-      isWebchatConnect,
-      signal,
-      hasCurrentClientAuthority,
-      methodRegistry,
-      requestParams: req.params,
-      admission: opts.admission,
-      reject: (error) => {
-        if (!observation || (!observationResponded && !client?.connectionSignal?.aborted)) {
-          respond(false, undefined, error);
+      const handler = methodRegistry.getHandler(req.method) as GatewayRequestHandler | undefined;
+      if (!handler) {
+        const error = errorShape(ErrorCodes.INVALID_REQUEST, `unknown method: ${req.method}`);
+        respond(false, undefined, error);
+        return;
+      }
+      // Every session mutation owner uses these pre-commit assertions. Compose the
+      // host lifetime here so individual handlers cannot lose it across an await.
+      const assertOperatorCurrent = captureGatewayRequestOperatorGuard(opts);
+      const sessionMutationAuthorization = withSessionMutationCommitGuard(
+        authorization.sessionMutationAuthorization,
+        () => {
+          runtimeParticipant?.assertCurrent();
+          assertOperatorCurrent();
+          requestMutationAuthority.assertCurrent();
+        },
+        profileBinding?.assertCurrent,
+        requestMutationAuthority.assertAdmittedInputCurrent
+          ? () => {
+              assertOperatorCurrent();
+              requestMutationAuthority.assertAdmittedInputCurrent?.();
+            }
+          : undefined,
+      );
+      const respondAuthorized: GatewayRequestOptions["respond"] =
+        authorization.sessionScope === "operator.sessions.read"
+          ? (...response) => {
+              try {
+                sessionMutationAuthorization?.assertCurrent();
+              } catch (error) {
+                if (!(error instanceof SessionMutationAuthorizationChangedError)) {
+                  throw error;
+                }
+                respond(false, undefined, error.error);
+                return;
+              }
+              respond(...response);
+            }
+          : respond;
+      const invokeHandler = async () => {
+        retainRoot?.();
+        subscribeDiagnostics?.mark("handlerPreparation");
+        const preparedHandler = await prepareGatewayRequestHandler(handler, entry, opts);
+        // Lazy preparation may yield across a hot config change. Keep the router fence
+        // unless the canonical owner reconciles accepted input before new admission.
+        const uploadError = gatewayRouterUploadPolicyError(requestFacts, methodRegistry);
+        if (uploadError) {
+          respond(false, undefined, uploadError);
+          return;
         }
-      },
-    });
-  } catch (error) {
-    if (!(error instanceof SessionMutationAuthorizationChangedError)) {
-      throw error;
+        const handlerOptions = bindGatewayRequestHandlerMutationAuthority(
+          opts,
+          {
+            req,
+            params: (req.params ?? {}) as Record<string, unknown>,
+            client,
+            isWebchatConnect,
+            respond: respondAuthorized,
+            acceptsSerializedJson: opts.acceptsSerializedJson,
+            context,
+            signal,
+            ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
+            sessionMutationCommitGuard,
+            sessionMutationAuthorization,
+            markSessionSubscribePhase: subscribeDiagnostics?.mark,
+            ...(authorization.sessionAccessAuthority
+              ? { sessionAccessAuthority: authorization.sessionAccessAuthority }
+              : {}),
+          },
+          profileBinding,
+          authorization.sessionScope,
+        );
+        sessionMutationCommitGuard?.();
+        assertOperatorCurrent();
+        authorization.sessionAccessAuthority?.assertCurrent();
+        entry?.assertOpen();
+        observationSignal?.throwIfAborted();
+        if (signal?.aborted) {
+          return;
+        }
+        // No await between the final fence, ownership handoff, and actual invocation.
+        // Long polls and shutdown initiators must never remain preparation leases.
+        entry?.release();
+        profileBinding?.markInvoked();
+        return diagnostics
+          ? diagnostics.runHandler(() => preparedHandler(handlerOptions))
+          : preparedHandler(handlerOptions);
+      };
+      if (req.method === "question.get" || req.method === "question.resolve") {
+        // Draining admission consults the pending owner before handler entry.
+        requestMutationAuthority.assertCurrent();
+        profileBinding?.assertCurrent();
+      }
+      await runWithGatewayRequestEnvelope(req.method, client, invokeHandler, {
+        context,
+        isWebchatConnect,
+        signal,
+        hasCurrentClientAuthority,
+        methodRegistry,
+        requestParams: req.params,
+        admission: opts.admission,
+        reject: (error) => respond(false, undefined, error),
+      });
+    } catch (error) {
+      if (!(error instanceof SessionMutationAuthorizationChangedError)) {
+        throw error;
+      }
+      respond(false, undefined, error.error);
+    } finally {
+      sessionAccessAuthority?.release();
+      releaseForegroundWork();
+      // Transport/import owners retain failures through their response and logging paths.
+      if (!opts.requestEntry) {
+        entry?.release();
+      }
     }
-    respond(false, undefined, error.error);
-  } finally {
-    sessionAccessAuthority?.release();
-    releaseForegroundWork();
-    // Transport/import owners retain failures through their response and logging paths.
-    if (!opts.requestEntry) {
-      entry?.release();
-    }
+  };
+  if (!observation) {
+    return await dispatch();
   }
+  await runWithGatewayObservationScope(
+    req.method,
+    dispatch,
+    [signal, client?.connectionSignal],
+    (error) => {
+      if (!observationResponded && !client?.connectionSignal?.aborted) {
+        respondCancelled(false, undefined, error);
+      }
+    },
+  );
 }

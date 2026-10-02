@@ -15,6 +15,8 @@ Session rows include `snapshotAt`, the Gateway's sampling time in milliseconds s
 
 Once session stores are admitted, authorization for direct session targets prepares only the requested rows. A dirty target must pass canonical validation before authorization; unrelated rows continue validating in the background. Method scopes, profile bindings, and startup availability are checked again after preparation. `sessions.list` authorizes the caller's scope first and leaves row validity and visibility filtering to the session reader.
 
+`sessions.describe` and `sessions.get` are connection-bound observations. Disconnecting cancels further row-preparation retries, including preparation during authorization, after in-flight preparation settles. Reconnect and issue a new read to obtain a current result. Accepted session mutations retain their existing completion lifetime.
+
 ## Session control
 
 - `sessions.catalog.list` lists external session catalogs. Pass `metadataOnly: true` when a client needs catalog IDs, labels, capabilities, and share-route metadata without enumerating hosts or sessions. This mode returns the normal catalog objects with `hosts: []`; it retains agent and catalog selection, skips row filtering/pagination, and emits no host progress events. Omit the flag for full listing, including the host availability needed for terminal selection. The Control UI uses metadata-only discovery for the new-session picker and hidden-source labels in Settings.

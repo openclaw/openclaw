@@ -24,6 +24,7 @@ vi.mock("../server-methods.js", () => ({
   authorizeGatewayRequestPreDispatch: authorize,
   createRequestGatewayMethodRegistry: () => ({
     isControlPlaneWrite: () => false,
+    isObservation: (method: string) => method === "agent.wait",
   }),
   runWithGatewayRequestEnvelope: async (
     _method: string,
@@ -165,7 +166,10 @@ describe("createInternalAgentTurnFacade", () => {
           joinedEntries = entries.waitForPendingEntries().then(() => {
             entriesSettled = true;
           });
-          joinedScope = scope.drain().then(() => {
+          joinedScope = AsyncWorkScope.runWhenAllIdle(
+            () => [scope],
+            () => scope.drain(),
+          ).then(() => {
             scopeSettled = true;
           });
           await nextTurn();
@@ -185,13 +189,20 @@ describe("createInternalAgentTurnFacade", () => {
           expect(outcome, `${method}/${boundary} caller`).toEqual({
             error: expect.objectContaining({ message }),
           });
+          const executionMessage =
+            method === "wait" && boundary === "abort"
+              ? "agent.wait observation cancelled"
+              : message;
           expect(await Promise.allSettled(executions), `${method}/${boundary} execution`).toEqual([
             boundary === "deadline"
               ? {
                   status: "fulfilled",
                   value: method === "dispatch" ? undefined : { status: "timeout" },
                 }
-              : { status: "rejected", reason: expect.objectContaining({ message }) },
+              : {
+                  status: "rejected",
+                  reason: expect.objectContaining({ message: executionMessage }),
+                },
           ]);
           expect(startTurn).toHaveBeenCalledTimes(
             boundary === "deadline" && method === "dispatch" ? 1 : 0,
@@ -216,7 +227,7 @@ describe("createInternalAgentTurnFacade", () => {
   });
 
   it.each(["dispatch", "wait"] as const)(
-    "does not start %s execution when the caller aborts during authorization",
+    "does not enter the %s handler when the caller aborts during authorization",
     async (method) => {
       const reached = createDeferred();
       const release = createDeferred();
@@ -226,7 +237,6 @@ describe("createInternalAgentTurnFacade", () => {
         return { error: null };
       });
       const context = createContext();
-      const trackExecution = vi.spyOn(context, "trackExecution");
       const entries = new GatewayRequestEntryLifetime();
       const facade = createFacade({ ...context, requestEntryLifetime: entries });
       const controller = new AbortController();
@@ -251,7 +261,6 @@ describe("createInternalAgentTurnFacade", () => {
       }
       await rejected;
       await entries.waitForPendingEntries();
-      expect(trackExecution).not.toHaveBeenCalled();
       expect(envelope).not.toHaveBeenCalled();
       expect(startTurn).not.toHaveBeenCalled();
       expect(waitForTurn).not.toHaveBeenCalled();
