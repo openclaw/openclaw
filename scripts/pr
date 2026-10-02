@@ -548,7 +548,7 @@ Usage:
     Exact evidence is required; branch-caused failures, security checks, and enforced reviews remain blocking.
     This requires --confirmed-operator-admin and immediate squash without auto-merge.
     Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
-  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA>] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>] [--admin-evidence <path> --confirmed-operator-admin]
+  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA> --auto-merge] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>] [--admin-evidence <path> --confirmed-operator-admin]
     Explicitly authorize one new attempt after inspecting the retained outcome and remote history.
     Defaults to the retained head; replacement requires an explicitly selected full lowercase 40-character SHA,
     freshly authored exact-head review/preparation and completed CI proof. Standing landing authority covers
@@ -557,6 +557,9 @@ Usage:
     Paired admin flags permit an explicitly selected head after confirmed auto cancellation, including the retained SHA.
     They also permit same-head recovery without --replacement-head for the complete known prior-CI REST base-modified HTTP 405 rejection.
     This reruns current admin admission and retains the original captures; other admin failures remain fenced.
+    --replacement-head <SHA> --auto-merge retires an unaccepted prior-CI REST admin intent fenced by a different
+    exact current head, then requests ordinary current-head auto-merge. It requires exact-head github_pending
+    preparation and all normal required-check and ClawSweeper gates; it never reuses prior admin evidence.
     --cancel-auto instead retires the exact accepted or uncertain non-queue auto request before head repair.
     Cancels a matching active request once, or records an already absent request without sending cancellation.
     Repeated cancellation reconciles only. Use its current outcome OID for later reviewed/prepared recovery.
@@ -686,7 +689,7 @@ main() {
             shift
             ;;
           --auto-merge)
-            [ "$cmd" = merge-run ] && [ "$auto_merge" = false ] || { usage; exit 2; }
+            [ "$auto_merge" = false ] || { usage; exit 2; }
             auto_merge=true
             shift
             ;;
@@ -721,6 +724,10 @@ main() {
         [ -n "$admin_evidence" ] && [ "$confirmed_admin" = true ] && [ "$auto_merge" = false ] &&
           [ -z "$legacy_directory$refusal_directory" ] && [ "$cancel_auto" = false ] &&
           [ "${OPENCLAW_PR_MERGE_METHOD:-squash}" = squash ] || { usage; exit 2; }
+      fi
+      if [ "$cmd" = merge-recover ] && [ "$auto_merge" = true ]; then
+        [ -n "$replacement_head" ] && [ -z "$body_path$legacy_directory$refusal_directory$admin_evidence" ] &&
+          [ "$confirmed_admin" = false ] && [ "$cancel_auto" = false ] || { usage; exit 2; }
       fi
       [ -z "$legacy_directory" ] || [ -n "$replacement_head" ] || { usage; exit 2; }
       [ -z "$refusal_directory" ] || [ -z "$legacy_directory" ] || { usage; exit 2; }

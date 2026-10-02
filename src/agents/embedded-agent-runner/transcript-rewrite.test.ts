@@ -5,7 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
@@ -25,11 +25,8 @@ import {
 } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import {
-  openOpenClawAgentDatabase,
-  deferOpenClawAgentPostCommitPublication,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { useTranscriptRewriteTempDirs } from "./transcript-rewrite.test-support.js";
 
 let rewriteTranscriptEntriesInSessionManager: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSessionManager;
@@ -225,64 +222,19 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
         let rewriteTarget = expectDefined(toolEntryId, "tool result entry");
         let currentEntryId = receipt.inputId;
         const beforeNested = getBranchMessages(manager);
-        let nestedRewrite: Promise<unknown> | undefined;
         runOpenClawAgentWriteTransaction(
           () => {
-            nestedRewrite = receipt.run(() =>
-              rewriteTranscriptEntriesInSessionManager({
-                sessionManager: manager,
-                replacements: [
-                  {
-                    entryId: rewriteTarget,
-                    message: createToolResultReplacement("read", "rolled back", 3),
-                  },
-                ],
-              }),
+            expect(() => receipt.run(() => manager.prepareTranscriptRewrite())).toThrow(
+              "Transcript rewrite must own its commit",
             );
           },
           { agentId: target.agentId, path: resolveSessionTranscriptDatabasePath(target) },
         );
-        await expect(nestedRewrite).rejects.toThrow("Transcript rewrite must own its commit");
         expect(getBranchMessages(manager)).toEqual(beforeNested);
         expect(await loadTranscriptEvents(target)).toEqual(originalRows);
         expect(
           await receipt.run(() => appendTranscriptMessage(target, { message: receipt.message })),
         ).toMatchObject({ appended: false, messageId: receipt.inputId });
-        const publicationDatabase = openOpenClawAgentDatabase({
-          agentId: target.agentId,
-          path: resolveSessionTranscriptDatabasePath(target),
-        });
-        const observerRewrites: Array<ReturnType<typeof rewriteTranscriptEntriesInSessionManager>> =
-          [];
-        publicationDatabase.db.function("queue_custody_observer", () => {
-          expect(
-            deferOpenClawAgentPostCommitPublication(publicationDatabase, () => {
-              const currentTool = manager
-                .getBranch()
-                .find((entry) => entry.type === "message" && entry.message.role === "toolResult");
-              expect(currentTool).toMatchObject({
-                message: { content: [{ type: "text", text: "short result" }] },
-              });
-              observerRewrites.push(
-                receipt.run(() =>
-                  rewriteTranscriptEntriesInSessionManager({
-                    sessionManager: manager,
-                    replacements: [
-                      {
-                        entryId: expectDefined(currentTool, "observer tool result").id,
-                        message: createToolResultReplacement("read", "observer rewrite", 3),
-                      },
-                    ],
-                  }),
-                ),
-              );
-            }),
-          ).toBe(true);
-          return 0;
-        });
-        publicationDatabase.db.exec(
-          "CREATE TEMP TRIGGER observe_rewrite_custody AFTER INSERT ON main.transcript_events WHEN json_extract(NEW.event_json, '$.message.content[0].text') = 'short result' BEGIN SELECT queue_custody_observer(); END;",
-        );
         for (const replacementText of ["short result", "shorter"]) {
           const rewritten = await receipt.run(() =>
             rewriteTranscriptEntriesInSessionManager({
@@ -296,9 +248,25 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
             }),
           );
           expect(rewritten.changed).toBe(true);
-          expect(observerRewrites).toHaveLength(replacementText === "short result" ? 1 : 0);
-          for (const observerRewrite of observerRewrites.splice(0)) {
-            expect((await observerRewrite).changed).toBe(true);
+          if (replacementText === "short result") {
+            const currentTool = manager
+              .getBranch()
+              .find((entry) => entry.type === "message" && entry.message.role === "toolResult");
+            expect(currentTool).toMatchObject({
+              message: { content: [{ type: "text", text: "short result" }] },
+            });
+            const observedRewrite = await receipt.run(() =>
+              rewriteTranscriptEntriesInSessionManager({
+                sessionManager: manager,
+                replacements: [
+                  {
+                    entryId: expectDefined(currentTool, "observer tool result").id,
+                    message: createToolResultReplacement("read", "observer rewrite", 3),
+                  },
+                ],
+              }),
+            );
+            expect(observedRewrite.changed).toBe(true);
           }
           expect(
             receipt.run(() => appendTranscriptMessageSync(target, { message: receipt.message })),
@@ -880,13 +848,9 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     },
   );
 
-  it.each([
-    { reset: false, finalLeaf: false },
-    { reset: true, finalLeaf: false },
-    { reset: true, finalLeaf: true },
-  ])(
-    "keeps the complete active branch when suffix replay is interrupted (reset=$reset, finalLeaf=$finalLeaf)",
-    async ({ reset, finalLeaf }) => {
+  it.each([false, true])(
+    "keeps the complete active branch when the worker refuses rewrite commit (reset=%s)",
+    async (reset) => {
       const dir = tempDirs.make("openclaw-transcript-rewrite-interrupted-");
       const storePath = path.join(dir, "sessions.json");
       const target = {
@@ -921,33 +885,37 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
       }
       const originalMessages = getBranchMessages(sessionManager);
       const originalRows = await loadTranscriptEvents(target);
-      const database = openOpenClawAgentDatabase({
-        agentId: target.agentId,
-        path: resolveSessionTranscriptDatabasePath(target),
-      });
-      const reject = finalLeaf
-        ? "json_extract(NEW.event_json, '$.type') = 'leaf'"
-        : "json_extract(NEW.event_json, '$.message.content[0].text') = 'replay interruption sentinel'";
-      database.db.exec(`CREATE TRIGGER reject_interrupted_rewrite BEFORE INSERT ON transcript_events
-      WHEN ${reject}
-      BEGIN SELECT RAISE(ABORT, 'suffix replay interrupted'); END;`);
-
-      await expect(
-        rewriteTranscriptEntriesInSessionManager({
-          sessionManager,
-          replacements: [
-            {
-              entryId: expectDefined(entryIds[1], "tool result entry id"),
-              message: createToolResultReplacement("exec", "rewritten before interruption", 2),
-            },
-          ],
-        }),
-      ).rejects.toThrow("suffix replay interrupted");
+      await waitForSessionTranscriptProjection(target);
+      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+      const admission = vi
+        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((admit, attachment) =>
+          createAdmission((request, grant) => {
+            if (request.stage === "commit") {
+              throw new Error("suffix replay interrupted");
+            }
+            admit(request, grant);
+          }, attachment),
+        );
+      try {
+        await expect(
+          rewriteTranscriptEntriesInSessionManager({
+            sessionManager,
+            replacements: [
+              {
+                entryId: expectDefined(entryIds[1], "tool result entry id"),
+                message: createToolResultReplacement("exec", "rewritten before interruption", 2),
+              },
+            ],
+          }),
+        ).rejects.toThrow("suffix replay interrupted");
+      } finally {
+        admission.mockRestore();
+      }
 
       expect(getBranchMessages(sessionManager)).toEqual(originalMessages);
       expect(getBranchMessages(SessionManager.open(target, dir))).toEqual(originalMessages);
       expect(await loadTranscriptEvents(target)).toEqual(originalRows);
-      database.db.exec("DROP TRIGGER reject_interrupted_rewrite");
       await rewriteTranscriptEntriesInSessionManager({
         sessionManager,
         replacements: [

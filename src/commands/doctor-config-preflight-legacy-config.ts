@@ -10,7 +10,10 @@ import {
 } from "../config/io.js";
 import { resolveCanonicalConfigPath, resolveIsConfigReadOnly } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
+import { resolveCronJobsStorePathFromConfig } from "../cron/store/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { listRetiredCronStateFiles } from "../infra/state-migrations.retired-cron-files.js";
+import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveHomeDir } from "../utils.js";
 import type { ConfigPreflightSnapshotRead } from "./config-preflight-snapshot.js";
@@ -84,6 +87,14 @@ export async function prepareDoctorConfigRecovery(params: {
   if (retired) {
     throw new Error(`${retired.message} ${retired.nextAction}`);
   }
+  assertNoRetiredStateFiles(
+    "Cron state",
+    await listRetiredCronStateFiles(
+      resolveCronJobsStorePathFromConfig(
+        snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
+      ),
+    ),
+  );
   let activeConfigRepair: ReturnType<typeof planAutomaticConfigRepair> = null;
   const recoveryEnabled =
     params.enabled && !resolveFutureConfigActionBlock({ action: "recover config", snapshot });

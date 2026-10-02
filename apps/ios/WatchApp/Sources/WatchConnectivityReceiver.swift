@@ -766,7 +766,7 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
             }
             return true
         }
-        acknowledgment?.rejectUnsupportedPayload()
+        acknowledgment?.reject(reason: "unsupported_payload")
         return false
     }
 }

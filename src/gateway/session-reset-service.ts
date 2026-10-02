@@ -14,11 +14,7 @@ import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manag
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveAmbientOwnerAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   clearBootstrapSnapshot,
   clearBootstrapSnapshotOnSessionBoundary,
@@ -67,11 +63,7 @@ import { getSessionBindingService } from "../infra/outbound/session-binding-serv
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import {
-  isIncognitoSessionKey,
-  isSubagentSessionKey,
-  normalizeAgentId,
-} from "../routing/session-key.js";
+import { isIncognitoSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../sessions/agent-harness-session-key.js";
 import {
   isModelSelectionLocked,
@@ -113,7 +105,7 @@ import {
 } from "./session-reset-acp.js";
 import { deleteIncognitoSessionForReset } from "./session-reset-incognito.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
-import { resolveSessionResetTarget } from "./session-reset-target.js";
+import { resolveSessionResetTarget, resolveLifecycleAgentId } from "./session-reset-target.js";
 import { readGatewayBeforeResetPluginHookMessages } from "./session-reset-transcript.js";
 import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import type { SessionWorkerPlacementContext } from "./session-worker-placement-context.js";
@@ -121,10 +113,6 @@ import {
   resolveSessionWorkerPlacementMutationError,
   retireSessionWorkerPlacementBeforeMutation,
 } from "./worker-environments/session-placement-lifecycle.js";
-
-function resolveLifecycleAgentId(cfg: OpenClawConfig, agentId?: string): string {
-  return normalizeAgentId(agentId ?? resolveAmbientOwnerAgentId(cfg));
-}
 
 async function resetSessionAgentHarnesses(params: {
   cfg: OpenClawConfig;
@@ -1028,6 +1016,7 @@ export async function performGatewaySessionReset(params: {
                   ) {
                     validateCleanupRevocation = await prepareSubagentSessionCleanupRevocation(
                       target.canonicalKey,
+                      agentId,
                       assertCompletionAuthorized,
                     );
                   }
@@ -1135,6 +1124,7 @@ export async function performGatewaySessionReset(params: {
           // Revoke only the selected session, after no-op generation checks and before reset commits.
           validateCleanupRevocation = await prepareSubagentSessionCleanupRevocation(
             target.canonicalKey,
+            agentId,
             assertCompletionAuthorized,
           );
           resetBoundaryAppended = currentEntry !== undefined;

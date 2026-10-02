@@ -36,7 +36,7 @@ import {
   restoreSubagentRunsFromDisk,
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
-import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
+import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
 import { isRetiredSubagentSessionOwner } from "./subagent-registry-restart-recovery-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
@@ -575,10 +575,7 @@ export function createSubagentRegistryRestorer(config: {
           isSameSubagentRunOwner(current, entry) &&
           isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
           !shouldSuppressSubagentRecoverySessionEffects(current) &&
-          isSameSubagentRunOwner(
-            getLatestSubagentRunByChildSessionKeyFromRuns(runs, entry.childSessionKey),
-            entry,
-          )
+          isSameSubagentRunOwner(getLatestSubagentRunForChild(runs, entry), entry)
         );
       };
       const suppressRetiredSessionEffects = () =>

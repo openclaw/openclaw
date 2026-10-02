@@ -98,6 +98,7 @@ function toolDigest(
   session = { sessionId: "embedded-session", sessionKey: "agent:main:main" },
 ) {
   return beginPromptCacheObservation({
+    messages: [],
     ...session,
     provider: "openai",
     modelId: "gpt-test",

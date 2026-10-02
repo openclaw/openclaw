@@ -226,6 +226,7 @@ config or state. Gateway startup logs include the decision and its reason.
 
 ## Known limitations
 
+- **Supervised command output:** Large piped responses, including CUA screenshots, preserve backpressure under Bun. Completed output reaches EOF while process cleanup retains authority, including on builds that retain duplicate standard-output descriptors.
 - **Text boundaries:** OpenClaw works around a [JSC segment lookup bug](https://github.com/oven-sh/WebKit/pull/753) that can include the preceding cluster when a lookup starts on an emoji's high surrogate. Message chunking and terminal cells preserve the intended grapheme boundaries on Bun without runtime configuration changes.
 - **Desktop WebSockets:** OpenClaw uses the installed `ws` transport for desktop observers and paired-node desktop/portal streams. Bun 1.4.2's built-in `ws` server adapter lacks pause/resume and the Duplex stream bridge; the installed transport preserves backpressure, payload limits, and cleanup when a desktop disconnects.
 - **Lifecycle scripts:** Bun blocks dependency lifecycle scripts unless explicitly trusted with `bun pm trust`.

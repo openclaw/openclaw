@@ -67,8 +67,8 @@ stage matrix, exact workflow job names, profile differences, the `npm-beta-v1`
 and `npm-stable-v1` coverage policies, artifacts, and focused rerun handles.
 
 The `normal_ci` child dispatches `ci.yml` with the exact target and release scope,
-without `release_gate`. In FRV only, `windows-node-ci` failures are advisory.
-Other failures stay blocking.
+without `release_gate`. Every selected failure remains blocking, including
+Windows Node failures.
 Complete campaigns (`rerun_group=all`) retain QA Smoke's
 full scenario profile and Control UI performance independently of changed paths.
 Docker seed runs all six lanes in every ordinary manual/release scope:

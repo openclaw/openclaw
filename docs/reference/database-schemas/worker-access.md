@@ -117,6 +117,29 @@ callers together and deletes the host incognito routes. The existing 24-hour,
 nonrenewing session deadline and restart loss remain unchanged. P1 and P2 have no update
 behavior, schema change, migration, or operator action because it is inactive.
 
+### Incognito reports and closed-turn outbox (P4a, inactive)
+
+Report preparation, custom/assistant report appends, aborted partials, and latest
+custom-report reads can use the actor's retained connection. Custom selection
+returns its transcript version; append rechecks that version and binds the
+existing report domain for preparation and commit. A concurrent message append
+refuses the stale selection without writing. Message appends and closed-turn
+range reads share the actor's FIFO and current-session checks.
+
+The closed-turn outbox binds its existing domain backend to that same connection.
+Publish and recovery retain their existing idempotency and range-validation
+rules. Actor adapters constrain every operation, including drain acknowledgment,
+to its current session and reject foreign transcript anchors and advancement
+keys. Transaction and pre-commit grants use the existing committed-facts owner;
+host grant callbacks cannot query the actor. Worker loss ends affected sessions
+with `INCOGNITO_SESSION_ENDED`, including accepted outbox work.
+
+These adapters remain inactive in production until P7. They do not change durable
+outbox behavior, schema, retention, the SessionManager API, or update behavior.
+Reset, deletion, reclamation, parent-fork callbacks, and native companion
+settlement remain P4b work. The 18 outbox/range inventory sites are prepared for
+cutover; none is retired from main-thread exposure in this stage.
+
 ### Existing worker flows
 
 Shared-state transaction diagnostics inherit the executing worker command name
@@ -133,7 +156,11 @@ transcript content.
 
 Move an existing domain operation across its worker boundary instead of creating
 a second store, generic SQL service, or cache manager. Read-only operations use the
-existing read-only worker scope and the relevant domain reader. Shared-state
+existing read-only worker scope and the relevant domain reader. Typed domain
+handlers register with the scoped transport; it owns bounded result transfer,
+cancellation, and child cleanup. Catalog preparation captures these worker-read
+facts before registry publication, while catalog writes retain the agent executor.
+Shared-state
 fixed reads and session transcript/history reads retain
 their established adapters and cleanup owners. A Promise around synchronous SQL,
 or `withOpenClawAgentDatabaseReadOnly` alone, does not move execution off thread.
@@ -983,6 +1010,17 @@ succeeds. Incognito sessions retain facts from their existing in-memory writer
 lifetime. The requester evaluates these facts with the current role and profile
 aliases before and after policy callbacks.
 
+Session owner assignments and suggestion add, claim, release, and finalization use
+the existing collaboration writer. Queued requests recheck their original target,
+current caller, and committed sharing policy at transaction and commit admission.
+Suggestion dispatch carries that authority into chat input acceptance. A rejected
+request releases its exact claim; accepted input retains settlement custody after
+a later profile change, while subsequent effects still require the original host.
+Edit and dismiss resolutions retain caller authority through finalization. These
+guards reuse committed in-memory facts for process-held incognito sessions without
+adding native SQL reads. Stored formats, schemas, retention, and update behavior
+are unchanged.
+
 For writes, shared-state domain operations registered by
 `src/state/openclaw-state-worker-runtime.ts` reuse the broker and publish results
 through their original store/projection owner.
@@ -1092,8 +1130,10 @@ before using the result. Caller-owned in-memory recovery keeps its existing
 buffer. Compaction persistence, stored bytes, retention, and update behavior are
 unchanged.
 
-Streaming assistant and tool-result completion events use the session manager's
-existing SQLite writer domain. The host retains extension hooks, redaction, and
+SessionManager's awaited persistence family uses its existing SQLite writer
+domain for file-backed transcripts, including user and custom messages,
+`beforeFreshMessageCommit`, metadata, compaction, and branch/leaf mutations.
+The host retains extension hooks, redaction, and
 tool-result custody; the worker validates the prepared parent, appends the exact
 storage bytes, and returns the committed version and any required view reload.
 The manager adopts that receipt before publishing pending-tool changes. Each
@@ -1104,18 +1144,21 @@ prompt payloads. No cross-transaction root cache is introduced.
 Runtime custom messages, prompt cache markers, bootstrap completion and prompt-error
 markers, and nested tool activity use the same awaited writer. The manager captures
 custom payloads before queueing, rechecks its current parent at admission, and adopts
-the committed version before publishing the result. Non-user asynchronous message
-appends use this worker; user-input custody and transaction-local callbacks retain
-their native transaction contract.
+the committed version before publishing the result. User-input custody and
+transaction-local callbacks keep their existing admission and commit contracts.
 
 Runtime report navigation and writes use the same broker's agent database owner.
 Custom report selectors consume prepared facts on the host, and the worker
 compares the transcript version before appending. Only a definite version conflict
 repeats selection; uncertain writes are never replayed. Startup orphan repair
 retains its native transaction so session settlement and the report remain atomic.
-Process-held incognito databases, user-input custody, compaction, provider replay,
-and the shipped synchronous SessionManager SDK remain separate migration work.
-Schemas, stored bytes, retention, and update behavior are unchanged.
+Bundled session callers await this owner before dependent publication. The
+shipped synchronous SessionManager methods remain named third-party
+compatibility adapters, deprecated for removal at the next Plugin SDK major;
+each warns once per method per process. Incognito retains its process-local
+database owner until its separate worker cutover. Schemas, stored bytes,
+retention, and update behavior are unchanged. See the
+[SDK migration](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence).
 
 Channel identity administration, profile display and avatar edits, role assignments, email linking, and
 HTTP/WebSocket sign-in acquisition use that writer and the existing read worker.

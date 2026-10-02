@@ -22,50 +22,12 @@ import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version
 
 export { MAX_RELEASE_ARTIFACT_BYTES, serializeReleaseArtifact };
 
-// CI's dependency-free shell gate is pinned to this class by its workflow tests.
-export const WINDOWS_NODE_CI_ADVISORY = Object.freeze({
-  id: "windows-node-ci",
-  child: "normalCi",
-  jobNamePattern: /^checks-windows-node-.+$/u,
-  aggregateJob: "checks-windows",
-});
-
-function isWindowsNodeAdvisoryJob(child, job) {
-  return (
-    child.key === WINDOWS_NODE_CI_ADVISORY.child &&
-    typeof job.name === "string" &&
-    WINDOWS_NODE_CI_ADVISORY.jobNamePattern.test(job.name) &&
-    job.status === "completed" &&
-    ["failure", "timed_out"].includes(job.conclusion)
-  );
+export function releaseAdvisoryJobs() {
+  return [];
 }
 
-function isAdvisoryJob(child, job) {
-  return isWindowsNodeAdvisoryJob(child, job);
-}
-
-export function releaseAdvisoryJobs(children) {
-  return children.flatMap((child) =>
-    child.jobs.flatMap((job) => {
-      const windows = isWindowsNodeAdvisoryJob(child, job);
-      return windows
-        ? [
-            {
-              class: WINDOWS_NODE_CI_ADVISORY.id,
-              child: child.key,
-              job: job.name,
-              conclusion: job.conclusion,
-              runId: child.runId,
-              url: job.html_url ?? job.url ?? "",
-            },
-          ]
-        : [];
-    }),
-  );
-}
-
-function validateReleaseAdvisoryJobs(value, children) {
-  const expected = releaseAdvisoryJobs(children);
+function validateReleaseAdvisoryJobs(value) {
+  const expected = [];
   const recorded = value === undefined ? [] : value;
   if (!Array.isArray(recorded) || jsonSha256(recorded) !== jsonSha256(expected)) {
     throw new Error("Release advisory jobs differ from the release policy evidence");
@@ -85,21 +47,16 @@ export function validateReleaseManifestAdvisoryJobs(manifest) {
   ) {
     throw new Error("Release advisory child evidence is invalid");
   }
-  const children = Object.entries(manifest.childEvidence ?? {}).map(([key, child]) => {
-    if (!child || !Array.isArray(child.jobs)) {
+  const normalCi = manifest.childEvidence?.normalCi;
+  if (normalCi !== undefined) {
+    if (!normalCi || !Array.isArray(normalCi.jobs)) {
       throw new Error("Release advisory child evidence is invalid");
     }
-    if (
-      key === WINDOWS_NODE_CI_ADVISORY.child &&
-      (typeof child.runId !== "string" ||
-        !/^[1-9][0-9]*$/u.test(child.runId) ||
-        child.runId !== manifest.childRuns?.normalCi)
-    ) {
-      throw new Error("Release advisory child run differs from the manifest");
+    if (normalCi.jobs.some(isFailedJob)) {
+      throw new Error("Release manifest contains failed selected job evidence");
     }
-    return Object.assign({}, child, { key });
-  });
-  return validateReleaseAdvisoryJobs(manifest.advisoryJobs, children);
+  }
+  return validateReleaseAdvisoryJobs(manifest.advisoryJobs);
 }
 
 export function buildReleaseValidationManifest({ plan, drain, context }) {
@@ -1610,16 +1567,7 @@ function isFailedJob(job) {
 
 export function terminalPolicyPass(child) {
   const failures = child.jobs.filter(isFailedJob);
-  const advisoryOnly = failures.length > 0 && failures.every((job) => isAdvisoryJob(child, job));
-  const gates = child.jobs.filter((job) => job.name === "openclaw/ci-gate");
-  return (
-    child.status === "completed" &&
-    (child.conclusion === "success" || (child.conclusion === "failure" && advisoryOnly)) &&
-    (failures.length === 0 || advisoryOnly) &&
-    // Selected-vs-skipped coverage comes from the successful gate or its exact log.
-    (!advisoryOnly ||
-      (gates.length === 1 && gates[0].status === "completed" && gates[0].conclusion === "success"))
-  );
+  return child.status === "completed" && child.conclusion === "success" && failures.length === 0;
 }
 
 // These consumers bind their producer's artifact to the current run attempt, so a
@@ -1637,7 +1585,7 @@ const ATTEMPT_BOUND_RELEASE_PRODUCERS = Object.freeze([
 /** Choose the single GitHub rerun request that can repair a terminal child's blocking jobs. */
 export function planReleaseChildRerun({ childKey, jobs }) {
   const failed = jobs
-    .filter((job) => isFailedJob(job) && !isAdvisoryJob({ key: childKey }, job))
+    .filter(isFailedJob)
     .map((job) => job.name)
     .toSorted();
   if (failed.length === 0) {
@@ -1709,20 +1657,18 @@ export function classifyReleaseSnapshot({
     (child.errors ?? []).filter((error) => error.kind !== "dispatch_missing"),
   );
   const childJobBlockers = selected.flatMap((child) =>
-    child.jobs
-      .filter((job) => isFailedJob(job) && !isAdvisoryJob(child, job))
-      .map((job) => ({
-        child: child.key,
-        conclusion: job.conclusion,
-        job: job.name,
-        kind: "job_failure",
-        message: `${child.key} job failed policy`,
-        primaryAt: stringValue(
-          job.completed_at ?? job.completedAt ?? job.started_at ?? job.startedAt,
-        ),
-        runId: child.runId,
-        url: job.html_url ?? job.url ?? child.url,
-      })),
+    child.jobs.filter(isFailedJob).map((job) => ({
+      child: child.key,
+      conclusion: job.conclusion,
+      job: job.name,
+      kind: "job_failure",
+      message: `${child.key} job failed policy`,
+      primaryAt: stringValue(
+        job.completed_at ?? job.completedAt ?? job.started_at ?? job.startedAt,
+      ),
+      runId: child.runId,
+      url: job.html_url ?? job.url ?? child.url,
+    })),
   );
   const childJobBlockerKeys = new Set(
     childJobBlockers.map((blocker) => `${blocker.child}:${blocker.runId}`),

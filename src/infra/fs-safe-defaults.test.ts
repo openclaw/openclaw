@@ -6,6 +6,7 @@ import { nativeProcessTestEntrypoints } from "./native-process-runtime.test-supp
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
 const coreUrl = resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.fsSafeCore);
+const envUrl = resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.fsSafeEnv);
 const memoryUrl = resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.memoryFsUtils);
 
 type NativeMode = "auto" | "off" | "require";
@@ -35,6 +36,8 @@ function inspectNativeDefaults(params: {
       const options = JSON.parse(process.argv[1]);
       const config = await import("@openclaw/fs-safe/config");
       if (options.beforeImport) config.configureFsSafeNative({ mode: options.beforeImport });
+      const { normalizeFsSafeNativeEnv } = await import(options.envUrl);
+      normalizeFsSafeNativeEnv();
       await import(options.coreUrl);
       await import(options.memoryUrl);
       const before = config.getFsSafeNativeConfig().mode;
@@ -45,6 +48,7 @@ function inspectNativeDefaults(params: {
       JSON.stringify({
         ...params,
         coreUrl: coreUrl.href,
+        envUrl: envUrl.href,
         memoryUrl: memoryUrl.href,
       }),
     ],
@@ -103,12 +107,19 @@ describe("fs-safe defaults", () => {
     ).toEqual({ before: "off", after: "require" });
   });
 
-  it("retains legacy mode migration without overriding it", () => {
-    expect(inspectNativeDefaults({ env: { OPENCLAW_FS_SAFE_PYTHON_MODE: "require" } })).toEqual({
-      before: "require",
-      after: "require",
-    });
-  });
+  it.each(["FS_SAFE_PYTHON_MODE", "OPENCLAW_FS_SAFE_PYTHON_MODE"])(
+    "maps deprecated %s at OpenClaw startup without overriding native configuration",
+    (key) => {
+      expect(inspectNativeDefaults({ env: { [key]: "require" }, afterImport: "off" })).toEqual({
+        before: "require",
+        after: "off",
+      });
+      expect(inspectNativeDefaults({ env: { [key]: "require" }, beforeImport: "off" })).toEqual({
+        before: "off",
+        after: "off",
+      });
+    },
+  );
 
   it.skipIf(process.platform !== "win32")(
     "honors case-insensitive Windows environment names",

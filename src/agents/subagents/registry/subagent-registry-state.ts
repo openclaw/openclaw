@@ -9,6 +9,7 @@ import {
   prepareOpenClawStateReadSource,
 } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
+import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import {
   projectSubagentRunForMaintenance,
   projectSubagentRunForSessionList,
@@ -501,6 +502,7 @@ export function getSubagentRunsSnapshotForController(
 export function getSubagentRunsSnapshotForChildSession(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   childSessionKey: string,
+  childAgentId?: string,
 ): Map<string, SubagentRunRecord> {
   const key = childSessionKey.trim();
   if (!key) {
@@ -509,6 +511,6 @@ export function getSubagentRunsSnapshotForChildSession(
   return getSubagentRunsSnapshot(inMemoryRuns, persistedSubagentRunsReadCache, {
     selectCached: (lookup) => lookup.selectChildren(new Set([key])),
     load: () => loadSubagentRunsForChildSessionFromSqlite(key),
-    matches: (entry) => entry.childSessionKey === key,
+    matches: (entry) => matchesSubagentChildSessionOwner(entry, key, childAgentId),
   });
 }

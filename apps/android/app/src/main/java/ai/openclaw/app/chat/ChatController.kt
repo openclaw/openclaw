@@ -1382,23 +1382,29 @@ class ChatController internal constructor(
   suspend fun renameSessionGroup(
     from: String,
     to: String,
+    expectedGatewayId: String?,
   ) {
     val fromName = from.trim().takeIf { it.isNotEmpty() } ?: return
     val toName = to.trim().takeIf { it.isNotEmpty() } ?: return
-    patchSessionGroupMembers(group = fromName, category = toName)
+    patchSessionGroupMembers(group = fromName, category = toName, expectedGatewayId = expectedGatewayId)
   }
 
   /** Deletes a session group: member sessions are kept and move back to Ungrouped. */
-  suspend fun dissolveSessionGroup(group: String) {
+  suspend fun dissolveSessionGroup(
+    group: String,
+    expectedGatewayId: String?,
+  ) {
     val groupName = group.trim().takeIf { it.isNotEmpty() } ?: return
-    patchSessionGroupMembers(group = groupName, category = null)
+    patchSessionGroupMembers(group = groupName, category = null, expectedGatewayId = expectedGatewayId)
   }
 
   private suspend fun patchSessionGroupMembers(
     group: String,
     category: String?,
+    expectedGatewayId: String?,
   ) {
     val gatewayScope = currentCacheScope()
+    if (gatewayScope?.gatewayId != expectedGatewayId) return
     val ownerAgentId = resolveAgentIdForSessionKey(_sessionKey.value) ?: return
     val lease = captureRequestLease(gatewayScope)
 
