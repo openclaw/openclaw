@@ -1,11 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildLlamaServerPreset, type LlamaServerPresetOptions } from "./llama-server-preset.js";
 import { prepareManagedLlamaServer } from "./managed-server.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 const EMBEDDING = "[embeddinggemma-300m-qat-q8_0]";
 
 function refreshDefaultEmbedding(
@@ -83,14 +86,11 @@ describe("managed embedding slot default through server preparation", () => {
     );
   });
 
-  it("bounds an isolated candidate preset, which does not run with the service settings", async () => {
-    const root = tempDirs.make("llama-server-candidate-slots-");
-    const activePreset = path.join(root, "models.ini");
-    await fs.writeFile(activePreset, "version = 1\n");
+  async function prepareCandidatePreset(root: string, activePreset: string): Promise<string> {
     const runtime = await prepareManagedLlamaServer({
       localService: {
         command: path.join(root, "custom-server"),
-        args: ["--models-preset", activePreset],
+        args: ["--models-preset", activePreset, "--parallel", "4"],
         env: { LLAMA_ARG_N_PARALLEL: "4" },
       },
       isolated: true,
@@ -101,9 +101,35 @@ describe("managed embedding slot default through server preparation", () => {
     });
     const candidatePreset = String(runtime.args[runtime.args.indexOf("--models-preset") + 1]);
     expect(candidatePreset).not.toBe(activePreset);
-    expect(await fs.readFile(candidatePreset, "utf8")).toContain(
+    return await fs.readFile(candidatePreset, "utf8");
+  }
+
+  it("bounds an isolated candidate, which is accepted without the service args and env", async () => {
+    const root = tempDirs.make("llama-server-candidate-slots-");
+    const activePreset = path.join(root, "models.ini");
+    await fs.writeFile(activePreset, "version = 1\n");
+    expect(await prepareCandidatePreset(root, activePreset)).toContain(
       "embedding = true\nparallel = 1\n",
     );
     expect(await fs.readFile(activePreset, "utf8")).toBe("version = 1\n");
+  });
+
+  it("keeps a slot count inherited from the OpenClaw process environment", async () => {
+    vi.stubEnv("LLAMA_ARG_N_PARALLEL", "4");
+    const root = tempDirs.make("llama-server-process-env-slots-");
+    const presetPath = path.join(root, "custom.ini");
+    await fs.writeFile(presetPath, `version = 1\n\n${EMBEDDING}\nmodel = /models/old.gguf\n`);
+    await prepareManagedLlamaServer({
+      localService: {
+        command: path.join(root, "custom-server"),
+        args: ["--models-preset", presetPath],
+      },
+      chatModel: { mode: "remove" },
+      embeddingModelIsDefault: true,
+      embeddingModelPath: "/models/embedding.gguf",
+      port: 19_436,
+    });
+    expect(await fs.readFile(presetPath, "utf8")).not.toContain("parallel");
+    expect(await prepareCandidatePreset(root, presetPath)).not.toContain("parallel");
   });
 });

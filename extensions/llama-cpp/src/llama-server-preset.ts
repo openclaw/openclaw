@@ -20,8 +20,11 @@ export type LlamaServerPresetOptions = {
   embeddingModelIsDefault?: boolean;
   embeddingModelPath?: string;
   defaultEmbeddingModelPath?: string;
-  // Settings the router service already passes to every model through its args or env.
-  serviceSettings?: { args?: readonly string[]; env?: Readonly<Record<string, string>> };
+  // Settings the router already passes to every model: its args and its effective environment.
+  serviceSettings?: {
+    args?: readonly string[];
+    env?: Readonly<Record<string, string | undefined>>;
+  };
 };
 
 const LLAMA_CPP_EMBEDDING_UBATCH_SIZE = 2048; // Fit one input in one physical batch.
@@ -101,7 +104,9 @@ function readSettingKeys(section: string | undefined): Set<string> {
 // key becomes a child CLI option, which llama.cpp applies over the inherited env value.
 function readServiceSettingKeys(service: LlamaServerPresetOptions["serviceSettings"]): Set<string> {
   const keys = [
-    ...Object.keys(service?.env ?? {}),
+    ...Object.entries(service?.env ?? {})
+      .filter(([, value]) => value !== undefined)
+      .map(([key]) => key),
     ...(service?.args ?? [])
       .filter((arg) => arg.startsWith("-"))
       .map((arg) => arg.replace(/^-+/u, "").split("=")[0] ?? ""),
