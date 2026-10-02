@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { createWhatsAppMonitorOwnerScope } from "./inbound/monitor-owner.js";
 import {
   loadConfigMock,
   resetPairingSecurityMocks,
@@ -344,11 +345,14 @@ export async function startInboxMonitor(
     authDir: getAuthDir(),
     ...extraOptions,
   };
+  const monitorOwnerScope =
+    merged.monitorOwnerScope ?? createWhatsAppMonitorOwnerScope({ accountId: merged.accountId });
   const tracker: InboundWorkTracker = { pending: 0 };
   inboundWorkTrackers.add(tracker);
   const callerOnPendingWorkChanged = merged.onPendingWorkChanged;
   const listener = await monitorWebInbox({
     ...merged,
+    monitorOwnerScope,
     onPendingWorkChanged: (pendingWorkCount: number, at?: number) => {
       publishInboundPendingWork(tracker, pendingWorkCount);
       callerOnPendingWorkChanged?.(pendingWorkCount, at);
@@ -363,11 +367,15 @@ export async function startInboxMonitor(
       }
       closed = true;
       activeInboxListeners.delete(trackedListener);
-      await listener.close();
+      try {
+        await listener.close();
+      } finally {
+        monitorOwnerScope.dispose();
+      }
     },
   };
   activeInboxListeners.add(trackedListener);
-  return { listener: trackedListener, sock: getSock() };
+  return { listener: trackedListener, monitorOwnerScope, sock: getSock() };
 }
 
 export function buildNotifyMessageUpsert(params: {

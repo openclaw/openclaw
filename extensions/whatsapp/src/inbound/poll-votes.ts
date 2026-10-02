@@ -12,6 +12,7 @@ import {
   readWhatsAppBaileysCacheEntry,
 } from "./baileys-cache.js";
 import { findMessageSection } from "./extract.js";
+import type { WhatsAppMonitorOwnerScope } from "./monitor-owner.js";
 
 export type WhatsAppDecodedPollVote = {
   /** Id of the poll creation message this vote applies to. */
@@ -250,7 +251,10 @@ export function decodeWhatsAppPollVote(params: {
 // Poll state is intentionally process-local and bounded. Persisting the
 // creation message would retain its decryption secret after a restart.
 const OWN_POLL_CREATION_TTL_MS = 10 * 60 * 1000;
-const recentOwnPollCreationKeys: Map<string, { expiresAt: number; value: true }> = new Map();
+const recentOwnPollCreationKeys: Map<
+  string,
+  { expiresAt: number; value: WhatsAppMonitorOwnerScope }
+> = new Map();
 
 /**
  * Record that a poll creation message at `remoteJid:messageId` was sent by
@@ -263,29 +267,40 @@ export function rememberWhatsAppOwnPollCreation(
   accountId: string,
   remoteJid: string | null | undefined,
   messageId: string | null | undefined,
+  ownerScope: WhatsAppMonitorOwnerScope,
 ): void {
-  if (!remoteJid || !messageId) {
+  if (!remoteJid || !messageId || ownerScope.accountId !== accountId || !ownerScope.isCurrent()) {
     return;
   }
   rememberWhatsAppBaileysCacheEntry(
     recentOwnPollCreationKeys,
     `${accountId}:${remoteJid}:${messageId}`,
-    true,
+    ownerScope,
     OWN_POLL_CREATION_TTL_MS,
   );
 }
 
-function isOwnPollCreation(accountId: string, remoteJid: string, messageId: string): boolean {
+function isOwnPollCreation(
+  accountId: string,
+  remoteJid: string,
+  messageId: string,
+  ownerScope: WhatsAppMonitorOwnerScope,
+): boolean {
   return (
+    ownerScope.accountId === accountId &&
+    ownerScope.isCurrent() &&
     readWhatsAppBaileysCacheEntry(
       recentOwnPollCreationKeys,
       `${accountId}:${remoteJid}:${messageId}`,
-    ) === true
+    ) === ownerScope
   );
 }
 
 const POLL_VOTE_DEDUP_TTL_MS = 10 * 60 * 1000;
-const recentlyDispatchedPollVoteKeys: Map<string, { expiresAt: number; value: true }> = new Map();
+const recentlyDispatchedPollVoteKeys: Map<
+  string,
+  { expiresAt: number; value: WhatsAppMonitorOwnerScope }
+> = new Map();
 const POLL_VOTE_DECODE_FAILURE_LOG_TTL_MS = 10 * 60 * 1000;
 const recentPollVoteDecodeFailureKeys: Map<string, { expiresAt: number; value: true }> = new Map();
 const pollVoteLogger = getChildLogger({ module: "web-poll-votes" });
@@ -330,6 +345,7 @@ const WHATSAPP_POLL_VOTE_RECEIVED_HOOK_LIMITS = {
 function emitWhatsAppPollVoteReceivedHook(params: {
   accountId: string;
   vote: WhatsAppDecodedPollVote;
+  ownerScope: WhatsAppMonitorOwnerScope;
   dedupeKey?: string;
   getRuntimeConfig: () => OpenClawConfig;
   /** The vote-update message's own id — distinct per vote/retraction, unlike pollMessageId (shared by every vote on the same poll). */
@@ -343,12 +359,16 @@ function emitWhatsAppPollVoteReceivedHook(params: {
     () => {
       // Queue-admission dedupe is provisional until dispatch; blocked votes must remain replayable.
       const clearDedupe = () => {
-        if (params.dedupeKey) {
+        if (
+          params.dedupeKey &&
+          recentlyDispatchedPollVoteKeys.get(params.dedupeKey)?.value === params.ownerScope
+        ) {
           recentlyDispatchedPollVoteKeys.delete(params.dedupeKey);
         }
       };
       try {
         if (
+          !params.ownerScope.isCurrent() ||
           !shouldEmitWhatsAppPollVoteHooks({
             cfg: params.getRuntimeConfig(),
             accountId: params.accountId,
@@ -360,6 +380,12 @@ function emitWhatsAppPollVoteReceivedHook(params: {
       } catch (error) {
         clearDedupe();
         throw error;
+      }
+      // Scope may have been replaced while loading config; revalidate at the
+      // disclosure boundary immediately before invoking plugin code.
+      if (!params.ownerScope.isCurrent()) {
+        clearDedupe();
+        return Promise.resolve();
       }
       return hookRunner.runPollVoteReceived(
         {
@@ -403,14 +429,23 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
   getCachedMessage: (remoteJid: string, messageId: string) => proto.IMessage | undefined;
   selfJid?: string | null;
   selfLid?: string | null;
+  monitorOwnerScope?: WhatsAppMonitorOwnerScope;
 }): void {
   const { accountId, cfg, loadConfig } = params;
+  const ownerScope = params.monitorOwnerScope;
+  if (!ownerScope || ownerScope.accountId !== accountId || !ownerScope.isCurrent()) {
+    return;
+  }
   if (!shouldEmitWhatsAppPollVoteHooks({ cfg, accountId })) {
     return;
   }
   const creationKey = extractWhatsAppPollUpdateMessage(params.message)?.pollCreationMessageKey;
   const remoteJid = params.key.remoteJid ?? creationKey?.remoteJid;
-  if (!creationKey?.id || !remoteJid || !isOwnPollCreation(accountId, remoteJid, creationKey.id)) {
+  if (
+    !creationKey?.id ||
+    !remoteJid ||
+    !isOwnPollCreation(accountId, remoteJid, creationKey.id, ownerScope)
+  ) {
     // Not a poll this account created — stays within the documented
     // "polls OpenClaw created" boundary rather than exposing third-party
     // participants' vote selections to opted-in plugins. Account-scoped so
@@ -419,7 +454,10 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
   }
   const voteUpdateId = params.key.id;
   const dedupeKey = voteUpdateId ? `${accountId}:${remoteJid}:${voteUpdateId}` : undefined;
-  if (dedupeKey && readWhatsAppBaileysCacheEntry(recentlyDispatchedPollVoteKeys, dedupeKey)) {
+  if (
+    dedupeKey &&
+    readWhatsAppBaileysCacheEntry(recentlyDispatchedPollVoteKeys, dedupeKey) === ownerScope
+  ) {
     return;
   }
   const decoded = decodeWhatsAppPollVote({
@@ -453,6 +491,7 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
   const admitted = emitWhatsAppPollVoteReceivedHook({
     accountId,
     vote: decoded,
+    ownerScope,
     dedupeKey,
     getRuntimeConfig: loadConfig,
     // Falls back to the poll id in the (practically unseen) case a vote
@@ -471,7 +510,7 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
   rememberWhatsAppBaileysCacheEntry(
     recentlyDispatchedPollVoteKeys,
     `${accountId}:${remoteJid}:${voteUpdateId}`,
-    true,
+    ownerScope,
     POLL_VOTE_DEDUP_TTL_MS,
   );
 }

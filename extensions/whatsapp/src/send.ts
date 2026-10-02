@@ -431,7 +431,14 @@ export async function sendPollWhatsApp(
       // observing our own message echo back on the inbound messages.upsert
       // stream — a vote arriving before (or without) that echo would
       // otherwise be silently rejected by the poll_vote_received hook gate.
-      rememberWhatsAppOwnPollCreation(resolvedAccountId, sentJid, messageId);
+      if (active.monitorOwnerScope) {
+        rememberWhatsAppOwnPollCreation(
+          resolvedAccountId,
+          sentJid,
+          messageId,
+          active.monitorOwnerScope,
+        );
+      }
     }
     return { messageId, toJid: sentJid };
   } catch (err) {

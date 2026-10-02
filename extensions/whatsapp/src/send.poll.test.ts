@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createWhatsAppMonitorOwnerScope } from "./inbound/monitor-owner.js";
 import { createAcceptedWhatsAppSendResult } from "./inbound/send-result.test-helper.js";
 import type { ActiveWebListener } from "./inbound/types.js";
 
@@ -58,6 +59,7 @@ describe("web outbound polls", () => {
   const sendReaction = vi.fn(async () =>
     createAcceptedWhatsAppSendResult("reaction", "reaction123"),
   );
+  let monitorOwnerScope: ReturnType<typeof createWhatsAppMonitorOwnerScope>;
 
   beforeAll(async () => {
     ({ sendPollWhatsApp } = await import("./send.js"));
@@ -69,8 +71,10 @@ describe("web outbound polls", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    monitorOwnerScope = createWhatsAppMonitorOwnerScope({ accountId: "default" });
     hoisted.controllerListeners.clear();
     hoisted.controllerListeners.set("default", {
+      monitorOwnerScope,
       sendComposingTo,
       sendMessage,
       sendPoll,
@@ -79,6 +83,7 @@ describe("web outbound polls", () => {
   });
 
   afterEach(() => {
+    monitorOwnerScope.dispose();
     resetLogger();
     setLoggerOverride(null);
     hoisted.controllerListeners.clear();
@@ -112,6 +117,7 @@ describe("web outbound polls", () => {
           "default",
           "1555@s.whatsapp.net",
           "poll123",
+          monitorOwnerScope,
         );
       }
     },

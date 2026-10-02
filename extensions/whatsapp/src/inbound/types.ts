@@ -8,6 +8,7 @@ import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import type { WhatsAppIdentity, WhatsAppReplyContext, WhatsAppSelfIdentity } from "../identity.js";
 import type { WhatsAppQuotedMessageKey } from "../quoted-message.js";
 import type { WhatsAppInboundAdmission } from "./admission.js";
+import type { WhatsAppMonitorOwnerScope } from "./monitor-owner.js";
 import type { WhatsAppSendResult } from "./send-result.js";
 
 export type WebListenerCloseReason = {
@@ -25,6 +26,7 @@ export type ActiveWebSendOptions = {
 };
 
 export type ActiveWebListener = {
+  monitorOwnerScope?: WhatsAppMonitorOwnerScope;
   assertSendReady?: (to: string) => Promise<void>;
   sendMessage: (
     to: string,

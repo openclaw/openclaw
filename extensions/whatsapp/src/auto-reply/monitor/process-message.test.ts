@@ -7,6 +7,7 @@ import {
 // Whatsapp tests cover process message plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { enqueueWhatsAppHookQueueBarrierForTests } from "../../hook-queue.test-helper.js";
+import { createWhatsAppMonitorOwnerScope } from "../../inbound/monitor-owner.js";
 import { createAcceptedWhatsAppSendResult } from "../../inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
 
@@ -270,6 +271,7 @@ function callProcessMessage(
     dispatchReplyFromConfig?: Parameters<typeof processMessage>[0]["dispatchReplyFromConfig"];
     groupHistories?: Map<string, unknown[]>;
     loadConfig?: () => OpenClawConfig;
+    monitorOwnerScope?: ReturnType<typeof createWhatsAppMonitorOwnerScope>;
     msg?: unknown;
     suppressGroupHistoryClear?: boolean;
   } = {},
@@ -278,6 +280,7 @@ function callProcessMessage(
   const processParams = {
     cfg,
     loadConfig: overrides.loadConfig ?? (() => cfg),
+    ...(overrides.monitorOwnerScope ? { monitorOwnerScope: overrides.monitorOwnerScope } : {}),
     msg: (overrides.msg ?? makeBaseMsg()) as never,
     route: baseRoute as never,
     groupHistoryKey: "whatsapp:default:group:123@g.us",
@@ -678,6 +681,42 @@ describe("processMessage group system prompt wiring", () => {
     } finally {
       releaseQueue();
       await enqueueWhatsAppHookQueueBarrierForTests();
+    }
+  });
+
+  it("drops queued message_received hooks after their monitor owner closes", async () => {
+    const internalReceived = vi.fn();
+    registerInternalHook("message:received", internalReceived);
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { pluginHooks: { messageReceived: true } } },
+    };
+    const abortController = new AbortController();
+    const monitorOwnerScope = createWhatsAppMonitorOwnerScope({
+      accountId: "default",
+      abortSignal: abortController.signal,
+    });
+    const releaseQueue = occupyWhatsAppHookQueue();
+
+    try {
+      await callProcessMessage({ cfg, monitorOwnerScope });
+      expect(runMessageReceivedMock).not.toHaveBeenCalled();
+      expect(internalReceived).not.toHaveBeenCalled();
+
+      abortController.abort();
+      const dispatchBarrier = enqueueWhatsAppHookQueueBarrierForTests();
+      releaseQueue();
+      await dispatchBarrier;
+
+      expect({
+        plugin: runMessageReceivedMock.mock.calls.length,
+        internal: internalReceived.mock.calls.length,
+      }).toEqual({ plugin: 0, internal: 0 });
+      expect(monitorOwnerScope.isCurrent()).toBe(false);
+    } finally {
+      releaseQueue();
+      await enqueueWhatsAppHookQueueBarrierForTests();
+      monitorOwnerScope.dispose();
     }
   });
 

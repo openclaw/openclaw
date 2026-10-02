@@ -5,6 +5,7 @@ import {
   createWhatsAppDurableInboundMessageId,
   createWhatsAppDurableInboundQueue,
 } from "./inbound/durable-receive.js";
+import { createWhatsAppMonitorOwnerScope } from "./inbound/monitor-owner.js";
 import {
   maybeEmitWhatsAppPollVoteReceivedHook,
   rememberWhatsAppOwnPollCreation,
@@ -91,10 +92,13 @@ describe("web monitor inbox poll vote hook", () => {
       ? { remoteJid: CHAT_JID, id: pollMessageId, fromMe: true }
       : { remoteJid: CHAT_JID, id: pollMessageId, fromMe: false, participant: OTHER_CREATOR_JID };
 
-    const { sock } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage, {
-      recentMessageKeys: params.baileysCache.recentMessageKeys,
-      baileysGroupMetaCache: params.baileysCache.baileysGroupMetaCache,
-    });
+    const { sock, monitorOwnerScope } = await startInboxMonitor(
+      vi.fn(async () => {}) as InboxOnMessage,
+      {
+        recentMessageKeys: params.baileysCache.recentMessageKeys,
+        baileysGroupMetaCache: params.baileysCache.baileysGroupMetaCache,
+      },
+    );
 
     sock.ev.emit("messages.upsert", {
       type: "notify",
@@ -111,7 +115,12 @@ describe("web monitor inbox poll vote hook", () => {
       // echo alone must NOT be sufficient to establish ownership (a fromMe
       // poll-creation message can also come from another linked device).
       // Simulate what sendPollWhatsApp would have done at accepted-send time.
-      rememberWhatsAppOwnPollCreation(DEFAULT_ACCOUNT_ID, CHAT_JID, pollMessageId);
+      rememberWhatsAppOwnPollCreation(
+        DEFAULT_ACCOUNT_ID,
+        CHAT_JID,
+        pollMessageId,
+        monitorOwnerScope,
+      );
     }
 
     const vote = encryptPollVoteForTests({
@@ -365,7 +374,7 @@ describe("web monitor inbox poll vote hook", () => {
     const creationKey = { remoteJid: CHAT_JID, id: pollMessageId, fromMe: true };
 
     const normalMessageId = "NORMAL-AFTER-THROWING-POLL-HOOK";
-    const { sock } = await startInboxMonitor(
+    const { sock, monitorOwnerScope } = await startInboxMonitor(
       vi.fn(async () => {}),
       {
         recentMessageKeys: baileysCache.recentMessageKeys,
@@ -376,7 +385,7 @@ describe("web monitor inbox poll vote hook", () => {
 
     // Simulate ownership recorded from an accepted send (the only producer
     // since round 3), so the hook actually reaches the point that throws.
-    rememberWhatsAppOwnPollCreation(DEFAULT_ACCOUNT_ID, CHAT_JID, pollMessageId);
+    rememberWhatsAppOwnPollCreation(DEFAULT_ACCOUNT_ID, CHAT_JID, pollMessageId, monitorOwnerScope);
 
     const vote = encryptPollVoteForTests({
       selectedOptionNames: ["Sushi"],
@@ -594,7 +603,9 @@ describe("web monitor inbox poll vote hook", () => {
         },
       } as never;
       // Only account A observed (and recorded) this poll as its own.
-      rememberWhatsAppOwnPollCreation(ACCOUNT_A, CHAT_JID, pollMessageId);
+      const accountAScope = createWhatsAppMonitorOwnerScope({ accountId: ACCOUNT_A });
+      const accountBScope = createWhatsAppMonitorOwnerScope({ accountId: ACCOUNT_B });
+      rememberWhatsAppOwnPollCreation(ACCOUNT_A, CHAT_JID, pollMessageId, accountAScope);
 
       // Account B, opted in, observes a vote on the same chat/poll id — must
       // not fire, since B never recorded this poll as its own.
@@ -606,13 +617,23 @@ describe("web monitor inbox poll vote hook", () => {
         getCachedMessage: () => pollCreationMessage,
         selfJid: SELF_JID,
       };
-      maybeEmitWhatsAppPollVoteReceivedHook({ ...crossAccountVoteParams, accountId: ACCOUNT_B });
+      maybeEmitWhatsAppPollVoteReceivedHook({
+        ...crossAccountVoteParams,
+        accountId: ACCOUNT_B,
+        monitorOwnerScope: accountBScope,
+      });
       await enqueueWhatsAppHookQueueBarrierForTests();
       expect(runPollVoteReceivedMock).not.toHaveBeenCalled();
 
       // The same vote, dispatched as account A (the actual owner), does fire.
-      maybeEmitWhatsAppPollVoteReceivedHook({ ...crossAccountVoteParams, accountId: ACCOUNT_A });
+      maybeEmitWhatsAppPollVoteReceivedHook({
+        ...crossAccountVoteParams,
+        accountId: ACCOUNT_A,
+        monitorOwnerScope: accountAScope,
+      });
       await waitForMessageCalls(runPollVoteReceivedMock, 1);
+      accountAScope.dispose();
+      accountBScope.dispose();
     });
   });
 });

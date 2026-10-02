@@ -20,6 +20,7 @@ import {
   createWhatsAppMessageDeliveryCoordinator,
   type WhatsAppAppendReplyWindow,
 } from "./message-delivery.js";
+import type { WhatsAppMonitorOwnerScope } from "./monitor-owner.js";
 import { createWebSendApi } from "./send-api.js";
 import { createWhatsAppAttachedSocketSession } from "./socket-session.js";
 import type { AdmittedWebInboundCallbackMessage } from "./types.js";
@@ -37,6 +38,7 @@ type MonitorWebInboxOptions = {
   verbose: boolean;
   accountId: string;
   authDir: string;
+  monitorOwnerScope?: WhatsAppMonitorOwnerScope;
   onMessage: (msg: AdmittedWebInboundCallbackMessage) => Promise<void>;
   mediaMaxMb?: number;
   /** Keep the global presence unavailable so self-chat sessions do not mute phone pushes. */
@@ -110,6 +112,7 @@ export async function attachWebInboxToSocket(
     loadConfig: options.loadConfig,
     verbose: options.verbose,
     accountId: options.accountId,
+    ...(options.monitorOwnerScope ? { monitorOwnerScope: options.monitorOwnerScope } : {}),
     sock: options.sock,
     socketSession,
     groupMetadata,
@@ -149,6 +152,7 @@ export async function attachWebInboxToSocket(
     onClose: socketSession.onClose,
     signalClose: socketSession.signalClose,
     assertSendReady: socketSession.assertSendReady,
+    ...(options.monitorOwnerScope ? { monitorOwnerScope: options.monitorOwnerScope } : {}),
     sendComposingTo: sendApi.sendComposingTo,
     sendMessage: sendApi.sendMessage,
     sendPoll: sendApi.sendPoll,

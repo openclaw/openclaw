@@ -26,6 +26,7 @@ import {
 } from "../../inbound-policy.js";
 import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import { resolveWhatsAppIngressLifecycle } from "../../inbound/ingress-lifecycle.js";
+import type { WhatsAppMonitorOwnerScope } from "../../inbound/monitor-owner.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
@@ -126,11 +127,12 @@ function shouldEmitWhatsAppMessageReceivedHooks(params: {
 function emitWhatsAppMessageReceivedHooksIfEnabled(params: {
   cfg: ReturnType<LoadConfigFn>;
   loadConfig: LoadConfigFn;
+  monitorOwnerScope?: WhatsAppMonitorOwnerScope;
   ctx: Awaited<ReturnType<typeof prepareWhatsAppInboundContext>>["ctxPayload"];
   accountId?: string;
   sessionKey: string;
 }): void {
-  const { cfg, loadConfig, ctx, accountId, sessionKey } = params;
+  const { cfg, loadConfig, monitorOwnerScope, ctx, accountId, sessionKey } = params;
   if (!shouldEmitWhatsAppMessageReceivedHooks({ cfg, accountId })) {
     return;
   }
@@ -138,10 +140,8 @@ function emitWhatsAppMessageReceivedHooksIfEnabled(params: {
   // Bounded hook factories run later; use the monitor's current snapshot at dispatch.
   const getRuntimeConfig = loadConfig;
   const isStillEnabled = () =>
-    shouldEmitWhatsAppMessageReceivedHooks({
-      cfg: getRuntimeConfig(),
-      accountId,
-    });
+    monitorOwnerScope?.isCurrent() !== false &&
+    shouldEmitWhatsAppMessageReceivedHooks({ cfg: getRuntimeConfig(), accountId });
   const enqueueIfEnabled = (task: () => Promise<unknown>, label: string) =>
     fireAndForgetBoundedHook(
       () => (isStillEnabled() ? task() : Promise.resolve()),
@@ -177,6 +177,7 @@ function emitWhatsAppMessageReceivedHooksIfEnabled(params: {
 export async function processMessage(params: {
   cfg: ReturnType<LoadConfigFn>;
   loadConfig: LoadConfigFn;
+  monitorOwnerScope?: WhatsAppMonitorOwnerScope;
   msg: AdmittedWebInboundMessage;
   route: ReturnType<typeof resolveAgentRoute>;
   groupHistoryKey: string;
@@ -457,6 +458,7 @@ export async function processMessage(params: {
   emitWhatsAppMessageReceivedHooksIfEnabled({
     cfg: params.cfg,
     loadConfig: params.loadConfig,
+    monitorOwnerScope: params.monitorOwnerScope,
     ctx: ctxPayload,
     accountId: params.route.accountId,
     sessionKey: params.route.sessionKey,

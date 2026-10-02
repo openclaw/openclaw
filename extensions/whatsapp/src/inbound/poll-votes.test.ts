@@ -4,6 +4,10 @@ import { fireAndForgetBoundedHook } from "openclaw/plugin-sdk/hook-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { enqueueWhatsAppHookQueueBarrierForTests } from "../hook-queue.test-helper.js";
 import {
+  createWhatsAppMonitorOwnerScope,
+  type WhatsAppMonitorOwnerScope,
+} from "./monitor-owner.js";
+import {
   decodeWhatsAppPollVote,
   maybeEmitWhatsAppPollVoteReceivedHook,
   rememberWhatsAppOwnPollCreation,
@@ -378,7 +382,11 @@ describe("decodeWhatsAppPollVote", () => {
 });
 
 describe("maybeEmitWhatsAppPollVoteReceivedHook", () => {
+  let ownerScope: WhatsAppMonitorOwnerScope;
+
   beforeEach(() => {
+    ownerScope?.dispose();
+    ownerScope = createWhatsAppMonitorOwnerScope({ accountId: "default" });
     hasHooksMock.mockClear();
     pollVoteWarningMock.mockClear();
     runPollVoteReceivedMock.mockClear();
@@ -410,9 +418,10 @@ describe("maybeEmitWhatsAppPollVoteReceivedHook", () => {
       key: voteKeyFor("VOTE-CACHE-EXPIRED"),
       getCachedMessage: () => undefined,
       selfJid: POLL_CREATOR_JID,
+      monitorOwnerScope: ownerScope,
     };
 
-    rememberWhatsAppOwnPollCreation("default", CHAT_JID, pollMessageId);
+    rememberWhatsAppOwnPollCreation("default", CHAT_JID, pollMessageId, ownerScope);
     maybeEmitWhatsAppPollVoteReceivedHook(params);
     maybeEmitWhatsAppPollVoteReceivedHook(params);
 
@@ -446,6 +455,7 @@ describe("maybeEmitWhatsAppPollVoteReceivedHook", () => {
       key: voteKeyFor("VOTE-THIRD-PARTY"),
       getCachedMessage: () => undefined,
       selfJid: POLL_CREATOR_JID,
+      monitorOwnerScope: ownerScope,
     };
     maybeEmitWhatsAppPollVoteReceivedHook(thirdPartyVoteParams);
 
@@ -487,7 +497,7 @@ describe("maybeEmitWhatsAppPollVoteReceivedHook", () => {
         voterJid: VOTER_JID,
       });
 
-      rememberWhatsAppOwnPollCreation("default", CHAT_JID, pollMessageId);
+      rememberWhatsAppOwnPollCreation("default", CHAT_JID, pollMessageId, ownerScope);
       const voteParams = {
         cfg: initialConfig,
         loadConfig,
@@ -496,6 +506,7 @@ describe("maybeEmitWhatsAppPollVoteReceivedHook", () => {
         key: voteKeyFor("VOTE-OPT-OUT-QUEUED"),
         getCachedMessage: () => pollCreationMessage,
         selfJid: POLL_CREATOR_JID,
+        monitorOwnerScope: ownerScope,
       };
       maybeEmitWhatsAppPollVoteReceivedHook(voteParams);
 
@@ -514,6 +525,115 @@ describe("maybeEmitWhatsAppPollVoteReceivedHook", () => {
       await enqueueWhatsAppHookQueueBarrierForTests();
 
       expect(runPollVoteReceivedMock).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseQueue();
+      await enqueueWhatsAppHookQueueBarrierForTests();
+    }
+  });
+
+  it("does not disclose an old poll after a WhatsApp account slot is reassigned", async () => {
+    const pollMessageId = "POLL-ACCOUNT-REASSIGNED";
+    const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
+      section: "pollCreationMessage",
+      options: ["A", "B"],
+    });
+    const receivedCreationKey = {
+      remoteJid: CHAT_JID,
+      id: pollMessageId,
+      fromMe: false,
+      participant: POLL_CREATOR_JID,
+    };
+    const vote = encryptPollVoteForTests({
+      selectedOptionNames: ["A"],
+      pollEncKey,
+      pollCreatorJid: POLL_CREATOR_JID,
+      pollMsgId: pollMessageId,
+      voterJid: VOTER_JID,
+    });
+    const config: OpenClawConfig = {
+      channels: { whatsapp: { pluginHooks: { pollVoteReceived: true } } },
+    };
+
+    // The old session sent this poll under `default`; a replacement WhatsApp
+    // identity reuses that account id and can still see the old group poll.
+    const oldSession = new AbortController();
+    const oldScope = createWhatsAppMonitorOwnerScope({
+      accountId: "default",
+      abortSignal: oldSession.signal,
+    });
+    rememberWhatsAppOwnPollCreation("default", CHAT_JID, pollMessageId, oldScope);
+    oldSession.abort();
+    const replacementScope = createWhatsAppMonitorOwnerScope({ accountId: "default" });
+    maybeEmitWhatsAppPollVoteReceivedHook({
+      cfg: config,
+      loadConfig: () => config,
+      accountId: "default",
+      message: buildPollUpdateMessageForTests({ creationKey: receivedCreationKey, vote }),
+      key: voteKeyFor("VOTE-ACCOUNT-REASSIGNED"),
+      getCachedMessage: () => pollCreationMessage,
+      selfJid: "15550003333@s.whatsapp.net",
+      monitorOwnerScope: replacementScope,
+    });
+    await enqueueWhatsAppHookQueueBarrierForTests();
+
+    expect(runPollVoteReceivedMock).not.toHaveBeenCalled();
+    replacementScope.dispose();
+  });
+
+  it("drops a queued vote when its WhatsApp account lifetime is revoked", async () => {
+    const config: OpenClawConfig = {
+      channels: { whatsapp: { pluginHooks: { pollVoteReceived: true } } },
+    };
+    let releaseQueue!: () => void;
+    const queueBlocker = new Promise<void>((resolve) => {
+      releaseQueue = resolve;
+    });
+    for (let index = 0; index < 8; index += 1) {
+      fireAndForgetBoundedHook(
+        () => queueBlocker,
+        "test: hold WhatsApp hook queue",
+        () => {},
+        { maxConcurrency: 8, maxQueue: 128, timeoutMs: 60_000 },
+      );
+    }
+
+    try {
+      const pollMessageId = "POLL-LIFETIME-REVOKED";
+      const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
+        section: "pollCreationMessage",
+        options: ["A", "B"],
+      });
+      const creationKey = creationKeyFor(pollMessageId);
+      const vote = encryptPollVoteForTests({
+        selectedOptionNames: ["A"],
+        pollEncKey,
+        pollCreatorJid: POLL_CREATOR_JID,
+        pollMsgId: pollMessageId,
+        voterJid: VOTER_JID,
+      });
+      const accountAbortController = new AbortController();
+      const lifecycleScope = createWhatsAppMonitorOwnerScope({
+        accountId: "default",
+        abortSignal: accountAbortController.signal,
+      });
+      rememberWhatsAppOwnPollCreation("default", CHAT_JID, pollMessageId, lifecycleScope);
+      maybeEmitWhatsAppPollVoteReceivedHook({
+        cfg: config,
+        loadConfig: () => config,
+        accountId: "default",
+        message: buildPollUpdateMessageForTests({ creationKey, vote }),
+        key: voteKeyFor("VOTE-LIFETIME-REVOKED"),
+        getCachedMessage: () => pollCreationMessage,
+        selfJid: POLL_CREATOR_JID,
+        monitorOwnerScope: lifecycleScope,
+      });
+
+      accountAbortController.abort();
+      const dispatchBarrier = enqueueWhatsAppHookQueueBarrierForTests();
+      releaseQueue();
+      await dispatchBarrier;
+
+      expect(runPollVoteReceivedMock).not.toHaveBeenCalled();
     } finally {
       releaseQueue();
       await enqueueWhatsAppHookQueueBarrierForTests();

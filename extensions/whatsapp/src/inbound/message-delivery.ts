@@ -35,6 +35,7 @@ import {
   createWhatsAppInboundMessageNormalizer,
   type WhatsAppNormalizedInboundMessage,
 } from "./message-normalization.js";
+import type { WhatsAppMonitorOwnerScope } from "./monitor-owner.js";
 import { addWhatsAppOutboundMentionsToContent } from "./outbound-mentions.js";
 import {
   extractWhatsAppPollUpdateMessage,
@@ -84,6 +85,7 @@ type WhatsAppMessageDeliveryOptions = {
   loadConfig: () => OpenClawConfig;
   verbose: boolean;
   accountId: string;
+  monitorOwnerScope?: WhatsAppMonitorOwnerScope;
   sock: WASocket;
   socketSession: WhatsAppAttachedSocketSession;
   groupMetadata: WhatsAppGroupMetadataCacheOwner;
@@ -505,6 +507,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
               cfg: getRuntimeConfig(),
               loadConfig: getRuntimeConfig,
               accountId: options.accountId,
+              monitorOwnerScope: options.monitorOwnerScope,
               message: msg.message,
               key: msg.key,
               getCachedMessage: getCachedBaileysMessage,
