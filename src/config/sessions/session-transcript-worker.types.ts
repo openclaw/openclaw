@@ -482,7 +482,7 @@ type SessionArchivePresenceWorkerInput = TranscriptArchivePresenceRead & {
   kind: "session-archive-presence";
 };
 
-export type SessionArchivePruningWorkerInput = SessionArchivePruningRead & {
+type SessionArchivePruningWorkerInput = SessionArchivePruningRead & {
   kind: "session-archive-pruning";
 };
 
@@ -680,7 +680,7 @@ export type SessionHistoryWorkerDatabase = {
   >;
   readArchivePruning: SessionHistoryReader<
     SessionArchivePruningWorkerInput,
-    PublishedSessionTranscriptArchive | null
+    PublishedSessionTranscriptArchive[]
   >;
   readColdMetadata: SessionHistoryReader<SessionColdMetadataWorkerInput>;
   readColdStorageInventory: SessionHistoryReader<SessionColdStorageInventoryWorkerInput>;
