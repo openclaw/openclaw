@@ -1,4 +1,4 @@
-import { coerceSecretRef } from "../../config/types.secrets.js";
+import { coerceSecretRef, hasLegacySecretRefExtraFields } from "../../config/types.secrets.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import type { AuthProfileCredential } from "./types.js";
 
@@ -6,6 +6,17 @@ import type { AuthProfileCredential } from "./types.js";
 export function normalizeAuthProfileSecretRefs(
   credential: AuthProfileCredential,
 ): AuthProfileCredential {
+  const value =
+    credential.type === "api_key"
+      ? credential.keyRef
+      : credential.type === "token"
+        ? credential.tokenRef
+        : undefined;
+  if (hasLegacySecretRefExtraFields(value)) {
+    throw new Error(
+      "Auth profile SecretRef contains unsupported fields. Preserve that metadata separately and explicitly call coerceSecretRef before saving a source/provider/id reference.",
+    );
+  }
   if (credential.type === "api_key") {
     const keyRef = coerceSecretRef(credential.keyRef);
     return keyRef && keyRef !== credential.keyRef ? { ...credential, keyRef } : credential;

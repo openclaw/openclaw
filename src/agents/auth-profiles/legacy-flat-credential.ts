@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
-import { coerceSecretRef } from "../../config/types.secrets.js";
+import { coerceSecretRef, hasLegacySecretRefExtraFields } from "../../config/types.secrets.js";
 import { coercePersistedAuthProfileStore, parseAuthProfileCredential } from "./persisted.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
@@ -125,15 +125,23 @@ export function parseLegacyCredentialEntry(
     : null;
 }
 
-export function normalizeLegacyAuthProfileFields(raw: unknown): void {
+export function normalizeLegacyAuthProfileFields(raw: unknown): number {
   if (!isRecord(raw) || !isRecord(raw.profiles)) {
-    return;
+    return 0;
   }
+  let refsWithDiscardedFields = 0;
   for (const [id, profile] of Object.entries(raw.profiles)) {
     if (isRecord(profile) && parseLegacyCredentialEntry(profile)) {
-      raw.profiles[id] = normalizeLegacyCredentialFields(profile);
+      const normalized = normalizeLegacyCredentialFields(profile);
+      for (const field of ["keyRef", "tokenRef", "key", "token", "apiKey", "api_key"]) {
+        if (hasLegacySecretRefExtraFields(profile[field]) && normalized[field] !== profile[field]) {
+          refsWithDiscardedFields += 1;
+        }
+      }
+      raw.profiles[id] = normalized;
     }
   }
+  return refsWithDiscardedFields;
 }
 
 export function coerceLegacyAuthProfileStore(raw: unknown): AuthProfileStore | null {

@@ -1623,6 +1623,10 @@ export function createAuthProfileStoreRuntime(
     options?: SaveAuthProfileStoreOptions,
     database?: AuthProfileDatabase,
   ): void {
+    // Reject lossy SDK inputs before opening the write owner; normalize its detached copy later.
+    for (const credential of Object.values(store.profiles)) {
+      normalizeAuthProfileSecretRefs(credential);
+    }
     const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
     if (database) {
       // Retain a prepared transaction owner, or use a shared connection's canonical identity.

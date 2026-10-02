@@ -26,6 +26,13 @@ backs up config and auth databases before rewriting them; updates run the same
 repair. The Plugin SDK's input coercion remains compatible, and SDK auth writes
 persist canonical refs.
 
+Auth SecretRefs contain exactly those three fields. If an older providerless
+auth ref includes other fields, Doctor reports their removal and preserves the
+original row in its verified database backup or source archive. New SDK auth
+writes reject these extended inputs before changing stored or published state.
+Keep that metadata separately and explicitly call `coerceSecretRef` to choose
+the canonical reference before saving.
+
 Other aliases and all `file`/`exec` refs require a registered `secrets.providers` entry with the same `source`. Changing a source's default does not rewrite explicit refs: a ref that still names `default` after an override must match a registered same-source provider, or resolution fails.
 
 <Tabs>

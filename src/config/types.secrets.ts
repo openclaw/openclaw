@@ -52,6 +52,13 @@ export function isLegacySecretRefWithoutProvider(
   );
 }
 
+export function hasLegacySecretRefExtraFields(value: unknown): boolean {
+  return (
+    isLegacySecretRefWithoutProvider(value) &&
+    Object.keys(value).some((key) => key !== "source" && key !== "provider" && key !== "id")
+  );
+}
+
 /** Parse `$NAME` and `${NAME}` env-secret shorthand strings into env SecretRefs. */
 export function parseEnvTemplateSecretRef(
   value: unknown,

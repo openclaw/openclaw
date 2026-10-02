@@ -1,9 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
-import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  getRuntimeAuthProfileStoreSnapshotCore,
+  setRuntimeAuthProfileStoreSnapshot,
+} from "../agents/auth-profiles/runtime-snapshots.js";
+import {
+  resolveAuthProfileDatabasePath,
+  readPersistedAuthProfileStoreRaw,
+  readPersistedAuthProfileStateRaw,
+} from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
@@ -23,6 +32,7 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
+  clearRuntimeAuthProfileStoreSnapshots();
   closeOpenClawAgentDatabasesForTest();
 });
 
@@ -43,7 +53,7 @@ describe("provider auth write compatibility", () => {
     >().toEqualTypeOf<[AuthProfileStore]>();
   });
 
-  it("passes only the auth store to the public updater callback", async () => {
+  it("preserves SDK callback inputs and refuses lossy SecretRef writes", async () => {
     const root = tempDirs.make("openclaw-provider-auth-callback-");
     const agentDir = path.join(root, "agents", "work", "agent");
     fs.mkdirSync(agentDir, { recursive: true });
@@ -97,6 +107,40 @@ describe("provider auth write compatibility", () => {
         provider: "sample",
         tokenRef: { source: "env", provider: "default", id: "SYNTHETIC_AUTH_TOKEN" },
       });
+    }
+    const admitted = loadPersistedAuthProfileStore(agentDir);
+    assert(admitted);
+    setRuntimeAuthProfileStoreSnapshot(admitted, agentDir);
+    const persistedBefore = structuredClone(readPersistedAuthProfileStoreRaw(agentDir));
+    const stateBefore = structuredClone(readPersistedAuthProfileStateRaw(agentDir));
+    const snapshotBefore = structuredClone(getRuntimeAuthProfileStoreSnapshotCore(agentDir));
+    assert(snapshotBefore);
+    for (const refField of ["keyRef", "tokenRef"] as const) {
+      const input = structuredClone(admitted);
+      Object.assign(input.profiles, {
+        "sample:unsupported": {
+          type: refField === "keyRef" ? "api_key" : "token",
+          provider: "sample",
+          [refField]: { source: "env", id: "SYNTHETIC_EXTENDED_REF", opaque: { keep: true } },
+        },
+      });
+      const originalInput = structuredClone(input);
+      expect(() => saveAuthProfileStore(input, agentDir)).toThrow(
+        "explicitly call coerceSecretRef",
+      );
+      await expect(
+        updateAuthProfileStoreWithLock({
+          agentDir,
+          updater(store) {
+            Object.assign(store.profiles, input.profiles);
+            return true;
+          },
+        }),
+      ).resolves.toBeNull();
+      expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual(persistedBefore);
+      expect(readPersistedAuthProfileStateRaw(agentDir)).toEqual(stateBefore);
+      expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toEqual(snapshotBefore);
+      expect(input).toEqual(originalInput);
     }
   });
 

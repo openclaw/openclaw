@@ -260,13 +260,17 @@ describe("Doctor stored auth alias migration", () => {
               "example:providerless-key": {
                 type: "api_key",
                 provider: "example",
-                keyRef: { source: "env", id: "SYNTHETIC_AUTH_KEY" },
+                keyRef: { source: "env", id: "SYNTHETIC_AUTH_KEY", opaque: "keep-in-backup" },
                 extension: "preserved",
               },
               "example:providerless-token": {
                 type: "token",
                 provider: "example",
-                tokenRef: { source: "env", id: "SYNTHETIC_AUTH_KEY" },
+                tokenRef: {
+                  source: "env",
+                  id: "SYNTHETIC_AUTH_KEY",
+                  opaque: { note: "keep-in-backup" },
+                },
               },
               "example:api-ref": { type: "api_key", provider: "example", key: null, apiKey: ref },
               "example:empty": {
@@ -312,7 +316,16 @@ describe("Doctor stored auth alias migration", () => {
               doctorFixCommand: "openclaw doctor --fix",
               env: fixture.env,
             });
-          await run();
+          const repaired = await run();
+          expect(
+            repaired.changeNotes.filter((message) =>
+              message.startsWith("Canonicalized 2 auth SecretRef(s) in "),
+            ),
+          ).toEqual([
+            expect.stringContaining(
+              "to source/provider/id; unsupported fields are preserved in the verified migration backup.",
+            ),
+          ]);
           const expected = {
             version: 1,
             profiles: {
