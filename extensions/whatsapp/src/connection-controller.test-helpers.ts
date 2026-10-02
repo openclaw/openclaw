@@ -39,16 +39,19 @@ vi.mock("./auth-store.js", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/channel-runtime-context", () => ({
+vi.mock("openclaw/plugin-sdk/channel-runtime-context", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime-context")>()),
   getChannelRuntimeContext: vi.fn(),
   registerChannelRuntimeContext: runtimeContextMocks.register,
 }));
 
-vi.mock("./runtime.js", () => ({
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
   getWhatsAppChannelRuntime: () => runtimeContextMocks.channelRuntime,
 }));
 
-vi.mock("./connection-owner.js", () => ({
+vi.mock("./connection-owner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./connection-owner.js")>()),
   acquireWhatsAppGatewayConnectionOwner: connectionOwnerMocks.acquire,
 }));
 
@@ -74,6 +77,7 @@ export type ControllerTestModules = Awaited<ReturnType<typeof loadConnectionCont
 
 export function resetConnectionControllerTestMocks(modules: ControllerTestModules): void {
   vi.clearAllMocks();
+  modules.createWaSocketMock.mockReset();
   runtimeContextMocks.register.mockReturnValue({ dispose: vi.fn() });
   connectionOwnerMocks.acquire.mockResolvedValue({ release: connectionOwnerMocks.release });
   connectionOwnerMocks.release.mockResolvedValue(undefined);
@@ -130,7 +134,6 @@ export function createLoginResultHarness(
     runtime,
     run: (opts: {
       waitForConnection: ReturnType<typeof vi.fn>;
-      createSocket: ReturnType<typeof vi.fn>;
       verbose?: boolean;
       socketTiming?: {
         connectTimeoutMs: number;
@@ -139,19 +142,19 @@ export function createLoginResultHarness(
       };
       onQr?: (qr: string) => void;
       onSocketReplaced?: (sock: unknown) => void;
-    }) =>
-      waitForWhatsAppLoginResult({
+    }) => {
+      return waitForWhatsAppLoginResult({
         sock: initialSock as never,
         authDir: loginAuthDir,
         isLegacyAuthDir: false,
         verbose: opts.verbose ?? false,
         runtime,
         waitForConnection: opts.waitForConnection as never,
-        createSocket: opts.createSocket as never,
         ...(opts.socketTiming ? { socketTiming: opts.socketTiming } : {}),
         ...(opts.onQr ? { onQr: opts.onQr } : {}),
         ...(opts.onSocketReplaced ? { onSocketReplaced: opts.onSocketReplaced } : {}),
-      }),
+      });
+    },
   };
 }
 

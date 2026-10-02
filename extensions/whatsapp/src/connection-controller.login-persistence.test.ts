@@ -26,7 +26,9 @@ describe("WhatsApp login credential persistence", () => {
       .fn()
       .mockRejectedValueOnce(restartError)
       .mockResolvedValueOnce(undefined);
-    const createSocket = vi.fn(async () => harness.replacementSock);
+    const createSocket = modules.createWaSocketMock.mockResolvedValueOnce(
+      harness.replacementSock as never,
+    );
     const beforeCredentialPersistence = vi.fn(async () => {});
     const onCredentialPersistenceError = vi.fn();
     const onCredentialPersistenceTask = vi.fn();
@@ -39,7 +41,6 @@ describe("WhatsApp login credential persistence", () => {
       verbose: false,
       runtime: harness.runtime,
       waitForConnection: waitForConnection as never,
-      createSocket: createSocket as never,
       beforeCredentialPersistence,
       onCredentialPersistenceError,
       onCredentialPersistenceTask,

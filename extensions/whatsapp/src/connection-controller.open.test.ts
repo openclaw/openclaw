@@ -50,8 +50,13 @@ describe("WhatsAppConnectionController open behavior", () => {
     expect(controller.getActiveListener()).toBeNull();
   });
 
-  it("falls back to raw websocket close when Baileys end is unavailable", () => {
-    const sock = { ws: { close: vi.fn() } };
+  it.each([
+    undefined,
+    () => {
+      throw new Error("end failed");
+    },
+  ])("falls back to raw websocket close when Baileys end is unavailable or throws (%#)", (end) => {
+    const sock = { end, ws: { close: vi.fn() } };
 
     modules.controller.closeWaSocket(sock);
 

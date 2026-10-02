@@ -1,4 +1,5 @@
 import type { Agent } from "node:https";
+import { Browsers } from "baileys";
 import type {
   GroupMetadata,
   SignalDataTypeMap,
@@ -62,7 +63,7 @@ const WHATSAPP_WEBSOCKET_PROXY_TARGET = "https://mmg.whatsapp.net/";
 const CREDS_FLUSH_TIMEOUT_MESSAGE =
   "Queued WhatsApp creds save did not finish before auth bootstrap; skipping repair and continuing with primary creds.";
 const WHATSAPP_BROWSER: WABrowserDescription = ["openclaw", "cli", VERSION];
-export const WHATSAPP_PHONE_CODE_BROWSER: WABrowserDescription = ["openclaw", "Chrome", VERSION];
+export const WHATSAPP_PHONE_CODE_BROWSER = Browsers.macOS("Chrome");
 const OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV = "OPENCLAW_WHATSAPP_WEB_SOCKET_URL";
 
 async function rejectUnsafeWebCredsPath(authDir: string): Promise<void> {
@@ -183,11 +184,19 @@ async function createWaSocketInternal(
   };
   const socketRef: { current?: ReturnType<typeof makeWASocket> } = {};
   let pendingSocketAbort: { error: unknown } | undefined;
+  // Login observes persistence failures; ordinary sockets keep warning-only saves.
+  const observesCredentialPersistence = Boolean(
+    opts.beforeCredentialPersistence ||
+    opts.onCredentialPersistenceError ||
+    opts.onCredentialPersistenceTask,
+  );
   const reportCredentialPersistenceError = (error: unknown) => {
-    if (socketRef.current) {
-      abortSocketAfterCredentialPersistenceFailure(socketRef.current, error);
-    } else {
-      pendingSocketAbort = { error };
+    if (observesCredentialPersistence) {
+      if (socketRef.current) {
+        abortSocketAfterCredentialPersistenceFailure(socketRef.current, error);
+      } else {
+        pendingSocketAbort = { error };
+      }
     }
     opts.onCredentialPersistenceError?.(error);
   };
@@ -210,16 +219,14 @@ async function createWaSocketInternal(
   const cachedSignalKeys = makeCacheableSignalKeyStore(persistedSignalKeys, logger);
   // Interactive login observes Baileys' deferred writes even when no setup
   // authority guard is needed; otherwise a socket can open before persistence fails.
-  const observesCredentialPersistence = Boolean(
-    opts.beforeCredentialPersistence ||
-    opts.onCredentialPersistenceError ||
-    opts.onCredentialPersistenceTask,
-  );
   const signalKeys: SignalKeyStore = observesCredentialPersistence
     ? {
         ...cachedSignalKeys,
         get<T extends keyof SignalDataTypeMap>(type: T, ids: string[]) {
-          return observeCredentialPersistence(Promise.resolve(cachedSignalKeys.get(type, ids)), true);
+          return observeCredentialPersistence(
+            Promise.resolve(cachedSignalKeys.get(type, ids)),
+            true,
+          );
         },
         set(data) {
           return observeCredentialPersistence(Promise.resolve(cachedSignalKeys.set(data)), true);

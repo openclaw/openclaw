@@ -25,8 +25,10 @@ async function runLoggedOutRecovery(opts: {
   } else if (opts.secondWait === "logged-out") {
     waitForConnection.mockRejectedValueOnce(error);
   }
-  const createSocket = vi.fn(async () => harness.replacementSock);
-  const result = await harness.run({ waitForConnection, createSocket });
+  const createSocket = modules.createWaSocketMock.mockResolvedValueOnce(
+    harness.replacementSock as never,
+  );
+  const result = await harness.run({ waitForConnection });
   return { createSocket, error, harness, result, waitForConnection };
 }
 
@@ -45,17 +47,16 @@ describe("WhatsApp logged-out login recovery", () => {
     const waitForConnection = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(undefined);
     const onQr = vi.fn();
     const onSocketReplaced = vi.fn();
-    const createSocket = vi.fn(
+    const createSocket = modules.createWaSocketMock.mockImplementationOnce(
       async (_printQr: boolean, _verbose: boolean, opts?: { onQr?: (qr: string) => void }) => {
         opts?.onQr?.("qr-after-logout");
-        return harness.replacementSock;
+        return harness.replacementSock as never;
       },
     );
 
     const result = await harness.run({
       verbose: true,
       waitForConnection,
-      createSocket,
       onQr,
       onSocketReplaced,
     });

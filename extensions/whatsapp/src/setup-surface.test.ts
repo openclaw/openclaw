@@ -325,7 +325,9 @@ describe("whatsapp setup wizard", () => {
     [["separate", "allowlist", "list"], "Invalid WhatsApp allowFrom list"],
     [["personal"], "Invalid WhatsApp owner number"],
   ] as const)("rejects undefined input for %j", async (selectValues, error) => {
-    hoisted.readWebAuthState.mockResolvedValue(selectValues[0] === "personal" ? "linked" : "not-linked");
+    hoisted.readWebAuthState.mockResolvedValue(
+      selectValues[0] === "personal" ? "linked" : "not-linked",
+    );
     const harness = createSeparatePhoneHarness([...selectValues]);
     harness.text.mockResolvedValueOnce(undefined as never);
     await expect(runFinalizeWithHarness({ harness })).rejects.toThrow(error);

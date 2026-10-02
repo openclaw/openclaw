@@ -26,27 +26,34 @@ describe("web session persistence observers", () => {
     await cleanupSessionTest(session.waitForCredsSaveQueue);
   });
 
-  it("reports credential save failures without a persistence authority hook", async () => {
-    const authDir = createTempAuthDir("openclaw-wa-observed-creds");
-    const persistenceError = new Error("simulated credential save failure");
-    const onCredentialPersistenceError = vi.fn();
-    const openMock = mockFsOpenForCredsWrites();
-    const renameSpy = vi.spyOn(fs, "rename").mockRejectedValue(persistenceError);
+  it.each(["ordinary", "guarded", "error-observed", "task-observed"] as const)(
+    "handles credential save failures on a %s socket",
+    async (mode) => {
+      const authDir = createTempAuthDir("openclaw-wa-observed-creds");
+      const persistenceError = new Error("simulated credential save failure");
+      const onCredentialPersistenceError = vi.fn();
+      const openMock = mockFsOpenForCredsWrites();
+      const renameSpy = vi.spyOn(fs, "rename").mockRejectedValue(persistenceError);
 
-    try {
-      await session.createWaSocket(false, false, {
-        authDir,
-        onCredentialPersistenceError,
-      });
-      await emitCredsUpdate(session.waitForCredsSaveQueue, authDir);
+      try {
+        await session.createWaSocket(false, false, {
+          authDir,
+          ...(mode === "guarded" ? { beforeCredentialPersistence: async () => {} } : {}),
+          ...(mode === "error-observed" ? { onCredentialPersistenceError } : {}),
+          ...(mode === "task-observed" ? { onCredentialPersistenceTask: vi.fn() } : {}),
+        });
+        await emitCredsUpdate(session.waitForCredsSaveQueue, authDir);
 
-      expect(onCredentialPersistenceError).toHaveBeenCalledWith(persistenceError);
-      expect(getLastSocket().ws.close).toHaveBeenCalledTimes(1);
-    } finally {
-      openMock.restore();
-      renameSpy.mockRestore();
-    }
-  });
+        if (mode === "error-observed") {
+          expect(onCredentialPersistenceError).toHaveBeenCalledWith(persistenceError);
+        }
+        expect(getLastSocket().ws.close).toHaveBeenCalledTimes(mode === "ordinary" ? 0 : 1);
+      } finally {
+        openMock.restore();
+        renameSpy.mockRestore();
+      }
+    },
+  );
 
   it("observes signal persistence without a persistence authority hook", async () => {
     const authDir = createTempAuthDir("openclaw-wa-observed-keys");

@@ -238,7 +238,6 @@ describe("login-qr", () => {
   });
 
   it("clears partial phone-code auth before creating a QR socket", async () => {
-    const accountId = "partial-phone-code-qr";
     prepareWebAuthForLoginMock.mockResolvedValueOnce("cleared");
 
     const result = await startWebLoginWithQr({ timeoutMs: 5000, accountId });
@@ -414,7 +413,9 @@ describe("login-qr", () => {
     if (cleanup instanceof Error) {
       prepareWebAuthForLoginMock.mockResolvedValueOnce("not-needed").mockRejectedValueOnce(cleanup);
     } else {
-      prepareWebAuthForLoginMock.mockResolvedValueOnce("not-needed").mockResolvedValueOnce("not-cleared");
+      prepareWebAuthForLoginMock
+        .mockResolvedValueOnce("not-needed")
+        .mockResolvedValueOnce("not-cleared");
     }
     const start = issued ? await scanQr(accountId) : await startQr(accountId);
     await expectLoginFailure(
@@ -446,7 +447,7 @@ describe("login-qr", () => {
       message: "WhatsApp is already linked (+15551234567). Say “relink” if you want a fresh QR.",
     });
     expect(createWaSocketMock).toHaveBeenCalledOnce();
-    expect(prepareWebAuthForLoginMock).toHaveBeenCalledOnce();
+    expect(prepareWebAuthForLoginMock).toHaveBeenCalledTimes(2);
   });
 
   it("caps oversized wait timeouts to a timer-safe delay", async () => {
