@@ -23,18 +23,45 @@ export function sessionActorGroupId(owner: SessionCreatedActor | undefined): str
     : JSON.stringify(identity, Object.keys(identity).toSorted());
 }
 
+function isWindowsCheckoutPath(path: string): boolean {
+  // Forward-slash double roots are also legal POSIX paths, not evidence of UNC.
+  return /^[a-z]:[\\/]/i.test(path) || path.startsWith("\\");
+}
+
 // Canonicalize a checkout path for grouping: strip trailing separators so
 // `/repo` and `/repo/` key one section, then mirror Claude Code desktop by
 // folding any cwd at or under `.claude/worktrees/<name>` into the origin repo
 // (the lazy prefix picks the outermost repo root). Returns null for separator-only
 // paths or worktrees with no origin repo.
 export function foldWorktreeCheckoutPath(path: string): string | null {
-  const trimmed = path.replace(/[\\/]+$/, "");
+  // Live sidebar section IDs are persisted verbatim; keep their existing folding.
+  return foldCheckoutPath(path, false);
+}
+
+function foldCheckoutPath(path: string, windows: boolean): string | null {
+  // Catalog drive roots retain their separator for absolute-path detection.
+  const trimmed =
+    windows && /^[a-z]:[\\/]+$/i.test(path) ? path.slice(0, 3) : path.replace(/[\\/]+$/, "");
   if (!trimmed) {
     return null;
   }
-  const match = trimmed.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
-  return match ? match[1] || null : trimmed;
+  const worktreePattern = /^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/;
+  const match = trimmed.match(windows ? new RegExp(worktreePattern.source, "i") : worktreePattern);
+  if (!match) {
+    return trimmed;
+  }
+  const root = match[1];
+  return windows && root && /^[a-z]:$/i.test(root) ? trimmed.slice(0, 3) : root || null;
+}
+
+// Shared by grouping and stored collapse-id migration, including aliases whose
+// sessions are no longer in the roster. POSIX double-slash paths stay case-sensitive.
+export function windowsProjectSectionKey(path: string): string | null {
+  if (!isWindowsCheckoutPath(path)) {
+    return null;
+  }
+  const projectPath = foldCheckoutPath(path, true);
+  return projectPath ? `project:${projectPath.replace(/\//g, "\\").toLowerCase()}` : null;
 }
 
 type CatalogProjectGroup = {
@@ -81,22 +108,27 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
     // Paths without a project identity fall to the ungrouped flat tail;
     // do not invent a project name when canonicalization returns no origin.
     const trimmedPath = session.cwd?.trim();
-    const projectPath = trimmedPath ? foldWorktreeCheckoutPath(trimmedPath) : null;
+    const projectPath = trimmedPath
+      ? foldCheckoutPath(trimmedPath, isWindowsCheckoutPath(trimmedPath))
+      : null;
     if (!projectPath) {
       ungrouped.push(session);
       continue;
     }
-    let group = projectGroupsByPath.get(projectPath);
+    // State identity must survive roster reordering; only display text comes
+    // from the first member. The renderer migrates earlier spelling-based ids.
+    const key = windowsProjectSectionKey(projectPath) ?? `project:${projectPath}`;
+    let group = projectGroupsByPath.get(key);
     if (!group) {
       group = {
         kind: "project",
-        key: `project:${projectPath}`,
+        key,
         legacySectionKey: projectPath,
         label: pathDisplayName(projectPath),
         title: projectPath,
         sessions: [],
       };
-      projectGroupsByPath.set(projectPath, group);
+      projectGroupsByPath.set(key, group);
     }
     group.sessions.push(session);
   }

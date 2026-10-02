@@ -22,6 +22,7 @@ import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import {
   groupCatalogSessionsByPerson,
   groupCatalogSessionsByProject,
+  windowsProjectSectionKey,
   type CatalogProjectGrouping,
 } from "../lib/sessions/catalog-project-grouping.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
@@ -55,7 +56,7 @@ type SessionCatalogGroupsParams = {
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
   renderLiveRow: (row: GatewaySessionRow, display: CatalogBackingSessionDisplay) => unknown;
-  onToggleSection: (sectionId: string) => void;
+  onToggleSection: (sectionId: string, equivalentSectionIds?: readonly string[]) => void;
   draggingSectionId: string | null;
   sectionDropTarget: { sectionId: string; position: "before" | "after" } | null;
   onSectionDragOver: (event: DragEvent, sectionId: string) => void;
@@ -441,16 +442,40 @@ function renderCatalogHostGroup(
                 projectGroups.groups,
                 (group) => group.key,
                 (group) => {
-                  const sectionId = `catalog-${group.kind}:${catalog.id}:${host.hostId}:${group.key}`;
-                  const legacySectionId = group.legacySectionKey
-                    ? `catalog-project:${catalog.id}:${host.hostId}:${group.legacySectionKey}`
-                    : null;
-                  const collapsedSectionId = params.collapsedSections.has(sectionId)
-                    ? sectionId
-                    : legacySectionId && params.collapsedSections.has(legacySectionId)
-                      ? legacySectionId
+                  // Old absolute-root IDs lost their separator and cannot be distinguished
+                  // from drive-relative roots. New relative preferences need their own namespace,
+                  // even while their sessions are absent from the roster.
+                  const driveRelativeRoot =
+                    group.kind === "project" && /^project:[a-z]:$/i.test(group.key);
+                  const sectionKind = driveRelativeRoot ? "project-drive-relative" : group.kind;
+                  const sectionId = `catalog-${sectionKind}:${catalog.id}:${host.hostId}:${group.key}`;
+                  const legacySectionId =
+                    !driveRelativeRoot && group.legacySectionKey
+                      ? `catalog-project:${catalog.id}:${host.hostId}:${group.legacySectionKey}`
                       : null;
-                  const collapsed = collapsedSectionId !== null;
+                  const equivalentSectionIds: string[] = [];
+                  if (legacySectionId) {
+                    equivalentSectionIds.push(legacySectionId);
+                  }
+                  if (group.kind === "project") {
+                    const prefix = `catalog-project:${catalog.id}:${host.hostId}:`;
+                    for (const storedId of params.collapsedSections) {
+                      if (!storedId.startsWith(prefix)) {
+                        continue;
+                      }
+                      const suffix = storedId.slice(prefix.length);
+                      const path = suffix.startsWith("project:") ? suffix.slice(8) : suffix;
+                      // Earlier collapse IDs stripped a drive root's separator.
+                      // Restore it only for persisted IDs, not drive-relative cwds.
+                      const legacyPath = /^[a-z]:$/i.test(path) ? `${path}\\` : path;
+                      if (windowsProjectSectionKey(legacyPath) === group.key) {
+                        equivalentSectionIds.push(storedId);
+                      }
+                    }
+                  }
+                  const collapsed = [sectionId, ...equivalentSectionIds].some((id) =>
+                    params.collapsedSections.has(id),
+                  );
                   return html`
                     <div class="sidebar-session-catalog-project" role="listitem">
                       <button
@@ -459,7 +484,7 @@ function renderCatalogHostGroup(
                         data-session-catalog-project=${group.key}
                         aria-expanded=${String(!collapsed)}
                         title=${group.title}
-                        @click=${() => params.onToggleSection(collapsedSectionId ?? sectionId)}
+                        @click=${() => params.onToggleSection(sectionId, equivalentSectionIds)}
                       >
                         <span class="sidebar-session-catalog-project__icon" aria-hidden="true"
                           >${collapsed ? icons.chevronRight : icons.chevronDown}</span
