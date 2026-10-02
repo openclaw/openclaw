@@ -95,6 +95,14 @@ The same `docs` server, written straight into config:
 
 An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). The exact server name `__proto__` is reserved; choose a different name. Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
 
+## Interactive apps and plugin extensions
+
+MCP servers can also supply sandboxed interactive views. Enable the opt-in
+[MCP Apps host](/cli/mcp/apps) to use those views and supported
+[plugin extensions](/cli/mcp/apps#plugin-extensions), including app entrypoints,
+settings, composer resources, and workspace file viewers. Connecting a server
+does not enable its UI code automatically or bypass session tool permissions.
+
 ## Approvals
 
 Codex MCP tool approvals follow the session permission posture: the default full-permission posture does not prompt, while stricter modes check tools without safety annotations (`workspace` can use automatic review; `guarded` and `read-only` can prompt the operator).

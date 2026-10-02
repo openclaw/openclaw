@@ -7,7 +7,7 @@ import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-w
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as writerQueue from "../shared/store-writer-queue.js";
-import type { AgentDatabaseExecutionScope } from "../state/openclaw-agent-execution-native.js";
+import type { AgentDatabaseExecutionScope } from "../state/openclaw-agent-execution-contract.js";
 import * as executionOwner from "../state/openclaw-agent-execution.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission.js";
 

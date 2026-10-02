@@ -37,9 +37,16 @@ export function createUpdateConfigFailure(
   const retired = findRetiredConfigUpgradeRequirement(
     snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
   );
+  const includeOwnedLegacyRoster =
+    snapshot.agentRosterIncludeOwned === true &&
+    snapshot.legacyIssues.some(
+      (issue) => issue.path === "agents.list" || issue.path === "agents.entries",
+    );
   const nextAction =
     retired?.nextAction ??
-    "Run `openclaw doctor --fix` to repair retired or unrecognized configuration fields, then correct any remaining errors before retrying.";
+    (includeOwnedLegacyRoster
+      ? "Doctor cannot safely rewrite this include-owned legacy roster. Back up the root config, included files, and persisted state, then temporarily consolidate the original legacy config into one openclaw.json. Preserve roster order, legacy markers, environment and secret references, and configured path meanings. Run `openclaw doctor --fix` or retry the update; after repair and `openclaw config validate` succeed, split the canonical config back into includes and validate again. See https://docs.openclaw.ai/gateway/doctor/config-migrations#agent-roster-migration."
+      : "Run `openclaw doctor --fix` to repair retired or unrecognized configuration fields, then correct any remaining errors before retrying.");
   return new UpdatePreMutationError(
     "invalid-config",
     [

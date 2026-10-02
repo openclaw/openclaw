@@ -187,15 +187,8 @@ export const isBunFetchSocketError = (message?: string) =>
   message ? BUN_FETCH_SOCKET_ERROR_RE.test(message) : false;
 
 /** Formats Bun socket-close errors for user-facing reply output. */
-export const formatBunFetchSocketError = (message: string) => {
-  const trimmed = message.trim();
-  return [
-    "⚠️ LLM connection failed. This could be due to server issues, network problems, or context length exceeded (e.g., with local LLMs like LM Studio). Original error:",
-    "```",
-    trimmed || "Unknown error",
-    "```",
-  ].join("\n");
-};
+export const formatBunFetchSocketError = () =>
+  "⚠️ Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
 
 /** Remaps the original inline request without reusing a queued model's clamped level. */
 export function resolveRunThinkingLevelForFallbackCandidate(

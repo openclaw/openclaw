@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { root as fsRoot } from "../infra/fs-safe.js";
-import { resolveSkillFileHost } from "../skills/loading/skill-file-host.js";
+import { resolveSkillFileHost } from "../skills/skill-file-host.js";
+import type { SkillSnapshot } from "../skills/types.js";
 import {
   resolveSkillReadPath,
   resolveWorkspaceSkillSourcePath,
-} from "../skills/loading/workspace-skill-read-path.js";
-import type { SkillSnapshot } from "../skills/types.js";
+} from "../skills/workspace-skill-read-path.js";
 import {
   bindAgentToolActionDescriptor,
   type AgentToolActionDescriptor,

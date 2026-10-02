@@ -16,6 +16,16 @@ export function getUpdateSchedule(): UpdateScheduleState | null {
   return updateScheduleCache;
 }
 
+export function withoutUpdateCampaign(schedule: UpdateScheduleState): UpdateScheduleState {
+  const { campaign: _campaign, ...rest } = schedule;
+  return rest;
+}
+
+export function withoutUpdateTarget(schedule: UpdateScheduleState): UpdateScheduleState {
+  const { target: _target, campaign: _campaign, ...rest } = schedule;
+  return rest;
+}
+
 function sameUpdateAvailable(a: UpdateAvailable | null, b: UpdateAvailable | null): boolean {
   if (a === b) {
     return true;

@@ -90,11 +90,7 @@ export function createCronSessionVisibility(
   };
 }
 
-export function cronJobVisibilityTarget(
-  job: CronJob | undefined,
-  defaultAgentId?: string,
-  legacyDefaultAgentId?: string,
-) {
+export function cronJobVisibilityTarget(job: CronJob | undefined, defaultAgentId?: string) {
   if (!job) {
     return undefined;
   }
@@ -106,20 +102,18 @@ export function cronJobVisibilityTarget(
     return undefined;
   }
   const agentId =
-    resolveCronJobOwnerAgentId(job) ??
-    tryResolveCronJobEffectiveAgentId(job, defaultAgentId, legacyDefaultAgentId);
-  return legacyDefaultAgentId && !agentId ? undefined : { sessionKey, agentId };
+    resolveCronJobOwnerAgentId(job) ?? tryResolveCronJobEffectiveAgentId(job, defaultAgentId);
+  return agentId ? { sessionKey, agentId } : undefined;
 }
 
 export function cronJobIsVisible(
   job: CronJob,
   visibility: CronSessionVisibility | undefined,
   defaultAgentId: string | undefined,
-  legacyDefaultAgentId?: string,
 ): boolean {
   if (!visibility) {
     return true;
   }
-  const target = cronJobVisibilityTarget(job, defaultAgentId, legacyDefaultAgentId);
+  const target = cronJobVisibilityTarget(job, defaultAgentId);
   return Boolean(target && visibility(target.sessionKey, target.agentId));
 }

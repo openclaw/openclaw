@@ -5,8 +5,10 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { transferFollowupCohort } from "../completion/session-followup-cohort.js";
+import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import {
   publishSubagentRunChanges,
@@ -153,6 +155,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   private readonly retirementScopes = new Set<SubagentRetirementScope>();
   private readonly registrationScopes = new Set<{
     childSessionKey: string;
+    childAgentId?: string;
     current: boolean;
     superseded: boolean;
     expectedEntry?: SubagentRunRecord;
@@ -316,7 +319,6 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         !record ||
         !isSameSubagentRunOwner(this.get(entry.runId), entry) ||
         record.generation !== entry.generation ||
-        record.execution.suppressSessionEffects === true ||
         (!record.requesterTurnRunId &&
           !record.requesterSettleWake &&
           record.pauseReason !== "sessions_yield" &&
@@ -373,8 +375,18 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   }
 
   /** A committed successor remains superseding even if it retires before preparation finishes. */
-  captureRegistrationOwnership(childSessionKey: string, expectedEntry?: SubagentRunRecord) {
-    const scope = { childSessionKey, current: true, superseded: false, expectedEntry };
+  captureRegistrationOwnership(
+    childSessionKey: string,
+    expectedEntry?: SubagentRunRecord,
+    childAgentId?: string,
+  ) {
+    const scope = {
+      childSessionKey,
+      childAgentId,
+      current: true,
+      superseded: false,
+      expectedEntry,
+    };
     this.registrationScopes.add(scope);
     return {
       get superseded() {
@@ -406,7 +418,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     }
     for (const scope of this.registrationScopes) {
       if (
-        scope.childSessionKey === entry.childSessionKey &&
+        matchesSubagentChildSessionOwner(entry, scope.childSessionKey, scope.childAgentId) &&
         !isSameSubagentRunOwner(scope.expectedEntry, entry)
       ) {
         scope.current = false;
@@ -583,10 +595,15 @@ export function getCurrentSubagentRunOwner(
 }
 
 /** Iterate live generations for one child session without scanning the registry. */
-export function getSubagentRunsForChildSession(
+export function* getSubagentRunsForChildSession(
   childSessionKey: string,
+  childAgentId?: string,
 ): Iterable<SubagentRunRecord> {
-  return runsByChildSessionKey.get(childSessionKey)?.values() ?? [];
+  for (const entry of runsByChildSessionKey.get(childSessionKey)?.values() ?? []) {
+    if (matchesSubagentChildSessionOwner(entry, childSessionKey, childAgentId)) {
+      yield entry;
+    }
+  }
 }
 
 /** Current requester-owned generations, without restoring or scanning retained rows. */
@@ -610,10 +627,22 @@ export function getSubagentRunsForCollectorGroup(
 }
 
 /** Resolve a collector tombstone that reserves its child session from ordinary turns. */
-export function findSwarmCollectorSession(childSessionKey?: string): SubagentRunRecord | undefined {
+export function findSwarmCollectorSession(
+  childSessionKey?: string,
+  childAgentId?: string,
+): SubagentRunRecord | undefined {
   const key = childSessionKey?.trim();
   if (!key) {
     return undefined;
+  }
+  if (childAgentId !== undefined && !parseAgentSessionKey(key)) {
+    let collector: SubagentRunRecord | undefined;
+    for (const entry of getSubagentRunsForChildSession(key, childAgentId)) {
+      if (entry.collect === true) {
+        collector = entry;
+      }
+    }
+    return collector;
   }
   const runId = collectorRunIdByChildSessionKey.get(key);
   return runId ? subagentRuns.get(runId) : undefined;
@@ -622,6 +651,7 @@ export function findSwarmCollectorSession(childSessionKey?: string): SubagentRun
 /** Resolve the host-registered collector that authorizes a Gateway request. */
 export function findAuthorizedSwarmCollectorRequest(params: {
   childSessionKey?: string;
+  childAgentId?: string;
   idempotencyKey?: string;
   outputSchema?: Record<string, unknown>;
 }): SubagentRunRecord | undefined {
@@ -629,7 +659,7 @@ export function findAuthorizedSwarmCollectorRequest(params: {
   if (!idempotencyKey) {
     return undefined;
   }
-  const entry = findSwarmCollectorSession(params.childSessionKey);
+  const entry = findSwarmCollectorSession(params.childSessionKey, params.childAgentId);
   if (!entry) {
     return undefined;
   }

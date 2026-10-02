@@ -61,6 +61,13 @@ and [config and infrastructure migration](/plugins/sdk-migration/how-to-migrate)
 for replacements and behavioral differences. System-event snapshot inspection
 and consumption now use `openclaw/plugin-sdk/system-event-runtime`.
 
+The compatibility subpaths `command-auth`, `discord`, and `telegram-account`
+were retired early by explicit SDK-owner approval on October 2, 2026. That
+decision closes their compatibility window; it does not certify that every
+external plugin has migrated. Their public exports are removed. Upgrade affected
+plugins before loading them on a host containing this removal. See the
+[command and channel facade replacements](/plugins/sdk-migration/import-paths#removed-command-and-channel-facades).
+
 Bundled-plugin migration does not prove that every external caller can use a
 path-only replacement. Migrate the functions with verified typed-public mappings;
 adapt the caller where a removed named type or required behavior lacks a

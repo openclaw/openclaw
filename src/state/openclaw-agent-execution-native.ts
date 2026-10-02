@@ -49,6 +49,7 @@ import type {
   AgentDatabaseFileExecutionIdentity,
   AgentDatabaseExecutionFileIdentity,
   AgentDatabaseExecutionOpen,
+  AgentDatabaseExecutionScope,
   AgentDatabaseGenerationClaim,
   AgentDatabaseRequestExecutionSource,
   AgentDatabaseOperations,
@@ -109,9 +110,9 @@ async function settleAgentRegistration<T>(
   return result.value;
 }
 
-export type AgentDatabaseExecutionScope = Pick<Store, "execute">;
 export type AgentDatabaseNativeGeneration = {
   failure(): "open-refused" | "native" | undefined;
+  isPrepared(): boolean;
   captureClaim(): AgentDatabaseGenerationClaim;
   run<T>(
     source: AgentDatabaseRequestExecutionSource,
@@ -122,6 +123,30 @@ export type AgentDatabaseNativeGeneration = {
   ): Promise<T | undefined>;
   close(): Promise<void>;
 };
+
+/** Bind a native claim to the same borrower and logical generation that captured it. */
+export function captureBorrowedAgentDatabaseGenerationClaim(
+  assertBorrowed: () => void,
+  readGeneration: () => AgentDatabaseNativeGeneration | undefined,
+): AgentDatabaseGenerationClaim {
+  assertBorrowed();
+  const captured = readGeneration();
+  if (!captured) {
+    throw new Error("Agent database execution has no admitted generation");
+  }
+  const claim = captured.captureClaim();
+  return {
+    identity: claim.identity,
+    incarnation: claim.incarnation,
+    assertCurrent() {
+      assertBorrowed();
+      if (readGeneration() !== captured) {
+        throw new Error("Agent database execution generation was replaced");
+      }
+      claim.assertCurrent();
+    },
+  };
+}
 
 /** A logical execution owner can replace this generation only after its native close settles. */
 export function createAgentDatabaseNativeGeneration(
@@ -159,6 +184,7 @@ export function createAgentDatabaseNativeGeneration(
   let readCloseReceipt: (() => SqliteWorkerCloseReceipt | undefined) | undefined;
   let lease: OpenClawAgentDatabaseWorkerLeaseReceipt | undefined;
   let quickCheckPending = false;
+  let preparationPublished = false;
   let receiveValidation:
     | ReturnType<typeof captureOpenClawAgentDatabaseValidationTransfer>
     | undefined;
@@ -457,6 +483,10 @@ export function createAgentDatabaseNativeGeneration(
       openedStore = store;
       try {
         assertCurrent();
+        // An eager opener has already settled registration and its topology publication.
+        if (nativeIdentity) {
+          preparationPublished = true;
+        }
         return store;
       } catch (error) {
         try {
@@ -540,6 +570,7 @@ export function createAgentDatabaseNativeGeneration(
         assertCurrent();
         source.assertCurrent();
       });
+      preparationPublished = true;
     }
     if (quickCheckPending) {
       quickCheckPending = false;
@@ -588,6 +619,10 @@ export function createAgentDatabaseNativeGeneration(
     failure: () =>
       openingFailure ??
       (openedStore && !isSqliteWorkerStoreAvailable(openedStore) ? "native" : undefined),
+    isPrepared() {
+      assertCurrent();
+      return preparationPublished;
+    },
     captureClaim() {
       assertCurrent();
       const captured = nativeIdentity;

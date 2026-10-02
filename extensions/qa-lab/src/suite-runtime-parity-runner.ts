@@ -224,45 +224,22 @@ export async function runQaRuntimeParitySuite(
                 }
                 throw error;
               }
-              if (cellResult.evidence?.schemaVersion === 3) {
-                childEvidence = cellResult.evidence;
-              }
+              childEvidence = cellResult.evidence;
               const childSelectedId = importChild();
               if (cellResult.startedScenarioIds.includes(scenario.id)) {
                 startedScenarioIndexes.add(index);
               }
-              let scenarioResult =
-                cellResult.scenarios[0] ??
-                ({
-                  name: scenario.title,
-                  status: "fail",
-                  details: "runtime parity cell returned no scenario result",
-                  steps: [
-                    {
-                      name: "runtime parity cell",
-                      status: "fail",
-                      details: "runtime parity cell returned no scenario result",
-                    },
-                  ],
-                } satisfies QaSuiteScenarioResult);
-              if (childEvidence) {
-                if (!childSelectedId || scenarioResult.evidenceOccurrenceId !== childSelectedId) {
-                  throw new Error("runtime parity result does not match its child observation");
-                }
-                cells.invocation.complete(dispatchId, {
-                  status: scenarioResult.status === "skip" ? "skipped" : scenarioResult.status,
-                  entries: [],
-                });
-              } else {
-                // Only this just-returned child can supply legacy rows. Keep their
-                // complete contents; runtime labels do not establish target proof.
-                const legacy = cellResult.evidence
-                  ? rebaseQaSuiteEvidence(cellResult.evidence, cellOutputDir, comparisonDir)
-                  : undefined;
-                scenarioResult = await cells.record(cellIndex, dispatchId, scenarioResult, {
-                  importedEntries: legacy?.entries,
-                });
+              const scenarioResult = cellResult.scenarios[0];
+              if (!scenarioResult) {
+                throw new Error("runtime parity cell returned no scenario result");
               }
+              if (!childSelectedId || scenarioResult.evidenceOccurrenceId !== childSelectedId) {
+                throw new Error("runtime parity result does not match its child observation");
+              }
+              cells.invocation.complete(dispatchId, {
+                status: scenarioResult.status === "skip" ? "skipped" : scenarioResult.status,
+                entries: [],
+              });
               const fallbackCell = {
                 runtime,
                 transcriptBytes: "",
@@ -339,13 +316,10 @@ export async function runQaRuntimeParitySuite(
       const finishedAt = new Date();
       return await completeQaSuiteRun(
         {
-          repoRoot: params.repoRoot,
           outputDir: params.outputDir,
           startedAt: params.startedAt,
           finishedAt,
           scenarios,
-          scenarioDefinitions: params.selectedScenarios,
-          evidenceMode: params.evidenceMode,
           recordedEvidence: recording.snapshot(),
           transport,
           providerMode: params.providerMode,

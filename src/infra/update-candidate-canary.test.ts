@@ -718,8 +718,12 @@ describe("update candidate canary", () => {
           child.stderr.write("openclaw-update-canary-progress: cli.main.gateway-run-bootstrap\n");
         } else {
           child.stderr.write(
-            formatCliFailureLines({ title: "The CLI command failed.", error, env: {} }).join("\n") +
-              "\n",
+            formatCliFailureLines({
+              title: "The CLI command failed.",
+              error,
+              argv: args,
+              env: options.env,
+            }).join("\n") + "\n",
           );
         }
         if (["lint", "startup", "config"].includes(scenario)) {

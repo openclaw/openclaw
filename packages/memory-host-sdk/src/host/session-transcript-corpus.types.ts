@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import type { OpenClawConfig } from "./openclaw-runtime-config.js";
 import type { MemorySessionKind } from "./types.js";
 
 type SessionTranscriptCorpusArtifactKind =

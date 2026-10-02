@@ -266,11 +266,7 @@ describe("Doctor workspace persistence", () => {
             });
             const before = await readConfigFileSnapshot();
             expect(before.valid).toBe(false);
-            if (legacyId === "main") {
-              expect(resolveAgentWorkspaceDir(before.sourceConfig, "main")).toBe(workspace);
-            } else {
-              expect(before.sourceConfig.agents?.list?.[0]?.id).toBe(legacyId);
-            }
+            expect(before.sourceConfig.agents?.list?.[0]?.id).toBe(legacyId);
 
             const ctx = await prepareDoctorContext(configPath);
             await runInitialConfigWriteHealth(ctx);

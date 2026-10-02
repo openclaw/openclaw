@@ -24,6 +24,7 @@ import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type {
   AgentDatabaseExecutionFileIdentity,
+  AgentDatabaseExecutionScope,
   AgentDatabaseRequestExecutionSource,
   OpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution-contract.js";
@@ -32,10 +33,10 @@ import {
   type IncognitoAgentExecutionOwner,
 } from "./openclaw-agent-execution-incognito.js";
 import {
+  captureBorrowedAgentDatabaseGenerationClaim,
   createAgentDatabaseNativeGeneration,
   supportsAgentDatabaseExecutionScope,
   supportsOpenClawAgentDatabaseExecution,
-  type AgentDatabaseExecutionScope,
   type AgentDatabaseNativeGeneration,
 } from "./openclaw-agent-execution-native.js";
 import {
@@ -495,6 +496,8 @@ function createAgentDatabaseExecution(
         }
         assertReferenceCurrent();
       };
+      const captureGenerationClaim = () =>
+        captureBorrowedAgentDatabaseGenerationClaim(assertBorrowed, () => generation);
       return {
         agentId,
         path: borrowedPath,
@@ -503,24 +506,18 @@ function createAgentDatabaseExecution(
           return fileIdentity;
         },
         assertCurrent: assertBorrowed,
-        captureGenerationClaim() {
+        captureGenerationClaim,
+        capturePreparedGenerationClaim() {
           assertBorrowed();
-          const captured = generation;
-          if (!captured) {
-            throw new Error("Agent database execution has no admitted generation");
+          if (
+            agentDatabaseLifecycle.pending.has(pathname) ||
+            nativeClosing ||
+            cleanupFailure ||
+            !generation?.isPrepared()
+          ) {
+            return undefined;
           }
-          const claim = captured.captureClaim();
-          return {
-            identity: claim.identity,
-            incarnation: claim.incarnation,
-            assertCurrent() {
-              assertBorrowed();
-              if (generation !== captured) {
-                throw new Error("Agent database execution generation was replaced");
-              }
-              claim.assertCurrent();
-            },
-          };
+          return captureGenerationClaim();
         },
         async prepare(source, signal) {
           assertBorrowed();

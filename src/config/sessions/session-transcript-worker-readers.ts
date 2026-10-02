@@ -53,6 +53,12 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readConversations: reader(
+      "conversation-rows",
+      "conversations",
+      (input) => ({ kind: "conversation-rows", ...input }),
+      (value) => value.rows,
+    ),
     prewarm: reader(
       "prewarm",
       "prewarm acknowledgement",

@@ -53,5 +53,5 @@ export function isArchiveAccessDeniedError(err: unknown): boolean {
 }
 
 export function formatMissingOperatorReadScopeMessage(feature: string): string {
-  return `This connection is missing operator.read, so ${feature} cannot be loaded yet.`;
+  return `You don't have permission to view ${feature}. Ask the person who manages OpenClaw for access.`;
 }

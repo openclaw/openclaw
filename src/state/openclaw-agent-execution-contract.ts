@@ -38,6 +38,35 @@ export type AgentDatabaseGenerationClaim = {
   assertCurrent(): void;
 };
 
+export type AgentDatabaseExecutionScope = Pick<
+  SqliteWorkerStore<AgentDatabaseOperations>,
+  "execute"
+>;
+
+export type OpenClawAgentDatabaseExecution = {
+  readonly agentId: string;
+  readonly path: string;
+  /** The accepted native receipt; reading this never adopts the current pathname. */
+  readonly fileIdentity: AgentDatabaseExecutionFileIdentity | undefined;
+  assertCurrent(): void;
+  captureGenerationClaim(): AgentDatabaseGenerationClaim;
+  /** Reuse only a native generation whose preparation and registration publication settled. */
+  capturePreparedGenerationClaim(): AgentDatabaseGenerationClaim | undefined;
+  /** Initialize first-use storage through the same admitted native owner. */
+  prepare(source: AgentDatabaseRequestExecutionSource, signal?: AbortSignal): Promise<void>;
+  /** Admit a write against existing storage; a missing store remains missing. */
+  runExisting<T>(
+    source: AgentDatabaseRequestExecutionSource,
+    operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
+    options?: { retireNativeOnFailure: true },
+  ): Promise<T | undefined>;
+  /**
+   * Join this reference's work; native cleanup failures remain with its resource owner.
+   * The owner may retain one bounded idle generation.
+   */
+  release(): Promise<void>;
+};
+
 export type AgentDatabaseFileExecutionOpen = {
   kind?: "file";
   leaseId: string;
@@ -105,26 +134,4 @@ export type AgentDatabaseRequestExecutionSource = {
     authorize(request: SqliteWorkerAdmissionRequest): void;
     assertCurrent(): void;
   }): SqliteWorkerAdmissionFactory;
-};
-
-export type OpenClawAgentDatabaseExecution = {
-  readonly agentId: string;
-  readonly path: string;
-  /** The accepted native receipt; reading this never adopts the current pathname. */
-  readonly fileIdentity: AgentDatabaseExecutionFileIdentity | undefined;
-  assertCurrent(): void;
-  captureGenerationClaim(): AgentDatabaseGenerationClaim;
-  /** Initialize first-use storage through the same admitted native owner. */
-  prepare(source: AgentDatabaseRequestExecutionSource, signal?: AbortSignal): Promise<void>;
-  /** Admit a write against existing storage; a missing store remains missing. */
-  runExisting<T>(
-    source: AgentDatabaseRequestExecutionSource,
-    operation: (scope: Pick<SqliteWorkerStore<AgentDatabaseOperations>, "execute">) => Promise<T>,
-    options?: { retireNativeOnFailure: true },
-  ): Promise<T | undefined>;
-  /**
-   * Join this reference's work; native cleanup failures remain with its resource owner.
-   * The owner may retain one bounded idle generation.
-   */
-  release(): Promise<void>;
 };

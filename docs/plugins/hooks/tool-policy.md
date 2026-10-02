@@ -188,7 +188,6 @@ the change:
   agents: {
     entries: {
       "maintenance-agent": {
-        default: true,
         workspace: "~/.openclaw/workspace-maintenance",
       },
     },

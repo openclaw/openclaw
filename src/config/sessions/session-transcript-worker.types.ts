@@ -23,6 +23,10 @@ import type {
 } from "./activity-summary-source.types.js";
 import type { ConversationDeliveryRecord } from "./conversation-delivery-store.types.js";
 import type {
+  ConversationRowsWorkerInput,
+  ConversationRecord,
+} from "./conversation-registry.types.js";
+import type {
   ArchivedSessionEvictionBatch,
   ArchivedSessionEvictionQuery,
 } from "./disk-budget.types.js";
@@ -35,6 +39,7 @@ import type {
   SessionBranchSummaryReadResult,
 } from "./session-accessor.sqlite-branches.js";
 import type {
+  SessionEntryStatusSelection,
   SessionTranscriptContextVersion,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
@@ -369,6 +374,7 @@ export type SessionExactEntriesWorkerSelection =
 
 type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelection & {
   env: NodeJS.ProcessEnv;
+  statusSelection?: SessionEntryStatusSelection;
   lifecycleSessionKey?: string;
   includeMembers?: boolean;
   includeParticipantRecords?: boolean;
@@ -383,6 +389,7 @@ export type SessionExactEntriesWorkerResult = {
   entries: SessionEntrySummary[];
   lifecycleTimestamps: SessionLifecycleTimestamps;
   pendingArchives?: boolean;
+  statusFound?: boolean;
   databaseIdentity?: {
     identity: string;
     incarnation: string;
@@ -499,6 +506,7 @@ export type SessionHistoryWorkerInput =
   | SessionProgressCardWorkerInput
   | SessionPendingInputReceiptsWorkerInput
   | SessionGoalOperationReceiptWorkerInput
+  | ConversationRowsWorkerInput
   | ConversationDeliveryWorkerInput
   | SessionEntryListWorkerInput
   | SessionEntryReadWorkerInput
@@ -529,6 +537,7 @@ export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues & {
+  "conversation-rows": { kind: "conversation-rows"; rows: ConversationRecord[] };
   "conversation-delivery": { kind: "conversation-delivery"; record?: ConversationDeliveryRecord };
   prewarm: { kind: "prewarm" };
   "session-pending-archives": { kind: "session-pending-archives"; pending: boolean };
@@ -646,6 +655,7 @@ type CancellableSessionHistoryReader<
 > = (input: Omit<Input, "kind" | "database">, signal?: AbortSignal) => Promise<Value>;
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
+  readConversations: SessionHistoryReader<ConversationRowsWorkerInput, ConversationRecord[]>;
   prewarm: (input: { env: NodeJS.ProcessEnv }) => Promise<void>;
   readPendingArchives: CancellableSessionHistoryReader<SessionPendingArchivesWorkerInput, boolean>;
   findTranscriptEvent: (

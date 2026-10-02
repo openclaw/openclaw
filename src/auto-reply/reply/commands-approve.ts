@@ -17,9 +17,12 @@ import {
   type ApprovalCommandAuthorization,
 } from "../../infra/channel-approval-auth.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveChannelAccountId } from "./channel-context.js";
 import { commandReply, requireGatewayClientScope } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
+
+const log = createSubsystemLogger("auto-reply/commands-approve");
 
 const COMMAND_REGEX = /^\/?approve(?:\s|$)/i;
 const FOREIGN_COMMAND_MENTION_REGEX = /^\/approve@([^\s]+)(?:\s|$)/i;
@@ -289,8 +292,14 @@ export async function handleApproveCommandFromContext(
         if (systemAgentRefusedForOwner) {
           return ownerOnlyResult;
         }
+        return commandReply(
+          "That approval is no longer available. Check the request in the Control UI.",
+        );
       }
-      return commandReply(`❌ Failed to submit approval: ${formatErrorMessage(error)}`);
+      log.warn(`Approval submission failed: ${formatErrorMessage(error)}`);
+      return commandReply(
+        "⚠️ Couldn't confirm that approval. Check the request in the Control UI before trying again.",
+      );
     }
   }
 

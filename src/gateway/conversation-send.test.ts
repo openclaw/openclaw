@@ -54,6 +54,9 @@ function sentResult() {
 
 function createDeps(agentId = "main") {
   const store = createConversationDeliveryTestStore(agentId);
+  vi.spyOn(conversationRegistry, "readConversation").mockImplementation(async (scope, ref) =>
+    conversationRegistry.resolveConversation(scope, ref),
+  );
   return {
     ...store,
     beginOperation: vi.spyOn(deliveryStore, "beginConversationDeliveryOperation"),

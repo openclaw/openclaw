@@ -352,6 +352,9 @@ export async function runCampaignUpdate(params: {
         isCurrent,
       });
     }
+    if (!isCurrent()) {
+      return "failed";
+    }
     const skipped = classifyUpdateOutcome(outcome.result) === "noop";
     params.log.info(skipped ? "auto-update attempt skipped" : "auto-update attempt failed", {
       ...attempt,

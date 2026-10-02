@@ -117,7 +117,6 @@ const suite = createControlUiE2eSuite({
           defaults: { workspace },
           entries: {
             main: {
-              default: true,
               workspace,
               identity: { name: "Synthetic loading assistant", avatar: "avatar.png" },
             },

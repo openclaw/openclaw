@@ -750,8 +750,13 @@ describe("setup activation credentials and configuration", () => {
       ...setup.config,
       agents: {
         ...setup.config.agents,
+        ownership: "explicit",
+        defaults: {
+          ...setup.config.agents?.defaults,
+          systemAgent: { agentId: "main" },
+        },
         entries: {
-          main: { default: true, model: `${modelRef}@openai:removed` },
+          main: { model: `${modelRef}@openai:removed` },
           other: { model: `${modelRef}@openai:other` },
         },
       },

@@ -1,4 +1,5 @@
 // OpenRouter transport tests cover real provider-http request policy enforcement.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";

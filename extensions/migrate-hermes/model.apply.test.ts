@@ -1,5 +1,6 @@
 // Migrate Hermes tests cover model.apply plugin behavior.
 import path from "node:path";
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import {
   resolvePreferredOpenClawTmpDir,

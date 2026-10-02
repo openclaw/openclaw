@@ -112,8 +112,6 @@ import {
   resetCodexTestBindingStore,
   type CodexAppServerBindingIdentity,
   readCodexAppServerBinding,
-  registerCodexTestSessionIdentity,
-  testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import * as sharedClientModule from "./shared-client.js";
@@ -129,9 +127,9 @@ import {
   buildThreadStartParams,
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
-  startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
 import {
+  startOrResumeAttemptThread as startOrResumeThread,
   createAppServerOptions as createBaseAppServerOptions,
   createCodexLifecycleHarness,
   createLeasedCodexLifecycleHarness,
@@ -146,17 +144,6 @@ const testing = {
   resolveCodexDynamicToolDirectNames,
   shouldEnableCodexAppServerNativeToolSurface,
 };
-
-function startOrResumeThread(
-  params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
-) {
-  registerCodexTestSessionIdentity(
-    params.params.sessionFile,
-    params.params.sessionId,
-    params.params.sessionKey,
-  );
-  return startOrResumeThreadImpl({ ...params, bindingStore: testCodexAppServerBindingStore });
-}
 
 function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();

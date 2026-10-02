@@ -5,12 +5,12 @@ import {
   toAgentEntriesRecord,
   tryResolveSoleAgentId,
 } from "../agents/agent-scope-config.js";
-import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 
 export function gatewayTransportError(
   kind: "closed" | "timeout",
@@ -28,10 +28,7 @@ function resolveFixtureStoreAgentId(cfg: OpenClawConfig, deletedAgentId: string)
   const storeConfig = cfg.session?.store;
   if (typeof storeConfig === "string" && !storeConfig.includes("{agentId}")) {
     return (
-      tryGetLegacyDefaultAgentId(cfg) ??
-      listAgentEntries(cfg).find((entry) => entry.default === true)?.id ??
-      tryResolveSoleAgentId(cfg) ??
-      deletedAgentId
+      cfg.agents?.defaults?.sessionStore?.agentId ?? tryResolveSoleAgentId(cfg) ?? deletedAgentId
     );
   }
   return deletedAgentId;
@@ -47,7 +44,10 @@ export function createAgentsDeleteFixture(setConfig: (cfg: OpenClawConfig) => vo
     const deletedAgentId = params.deletedAgentId ?? "ops";
     const authored = structuredClone(params.cfg);
     const roster = listAgentEntries(authored);
-    if (!roster.some((entry) => entry.default === true)) {
+    if (
+      authored.agents?.ownership !== "explicit" &&
+      !roster.some((entry) => entry.default === true)
+    ) {
       const existingDefault = roster.find((entry) => entry.id !== deletedAgentId);
       if (existingDefault) {
         existingDefault.default = true;
@@ -56,10 +56,10 @@ export function createAgentsDeleteFixture(setConfig: (cfg: OpenClawConfig) => vo
       }
     }
     const { list: _legacyList, ...agents } = authored.agents ?? {};
-    const cfg: OpenClawConfig = {
+    const { config: cfg } = createCanonicalAgentConfigFixture({
       ...authored,
       agents: { ...agents, entries: toAgentEntriesRecord(roster) },
-    };
+    });
     const storeAgentId = resolveFixtureStoreAgentId(cfg, deletedAgentId);
     for (const [sessionKey, entry] of Object.entries(params.sessions)) {
       const entryAgentId = parseAgentSessionKey(sessionKey)?.agentId ?? storeAgentId;

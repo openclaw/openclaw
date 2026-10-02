@@ -13,13 +13,13 @@ import { ensureSkillSnapshot } from "../../../../src/auto-reply/reply/session-up
 import type { SessionEntry } from "../../../../src/config/sessions/types.js";
 import { createTestPluginApi } from "../../../../src/plugin-sdk/plugin-test-api.js";
 import type { OpenClawPluginApi, OpenClawPluginService } from "../../../../src/plugins/types.js";
-import { resolveSkillFileHost } from "../../../../src/skills/loading/skill-file-host.js";
 import { prepareWorkspaceSkills } from "../../../../src/skills/loading/workspace-skill-loader.js";
 import { closeSkillsWatchers } from "../../../../src/skills/runtime/refresh.js";
 import {
   prepareSkillResourceDelivery,
   materializeSkillResources,
 } from "../../../../src/skills/runtime/resources.js";
+import { resolveSkillFileHost } from "../../../../src/skills/skill-file-host.js";
 import { writeSkill } from "../../../../src/skills/test-support/e2e-test-helpers.js";
 import {
   closeOpenClawStateDatabaseAsync,

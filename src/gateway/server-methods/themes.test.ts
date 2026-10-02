@@ -20,7 +20,10 @@ import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as userPreferences from "../../state/user-preferences.js";
-import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
+import {
+  getUserPreferences,
+  setUserPreferences,
+} from "../../state/user-preferences.test-support.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
@@ -208,8 +211,10 @@ describe("theme RPC", () => {
 
   it("imports and applies in one durable profile mutation, preserving other preferences and notifying only that profile", async () => {
     expect(
-      setUserPreferences(requesterProfileId, { "ui.accent": "#aabbcc", "ui.fontFamily": "serif" })
-        .ok,
+      setUserPreferences(requesterProfileId, {
+        "ui.accent": "#aabbcc",
+        "ui.fontFamily": "serif",
+      }).ok,
     ).toBe(true);
     const requester = client(requesterProfileId);
     const other = { ...client(otherProfileId), connId: "other-browser" };
@@ -547,7 +552,10 @@ describe("theme RPC", () => {
     for (let round = 0; round < 4; round += 1) {
       Object.assign(expected, { "ui.theme": "claw", "ui.themeMode": "system" });
       expect(
-        setUserPreferences(requesterProfileId, { "ui.theme": "claw", "ui.themeMode": "system" }).ok,
+        setUserPreferences(requesterProfileId, {
+          "ui.theme": "claw",
+          "ui.themeMode": "system",
+        }).ok,
       ).toBe(true);
       const ids = Array.from({ length: 4 }, (_, index) => `independent-${round}-${index}`);
       const definitions = ids.map((name) => createThemeDefinitionFixture({ name }));

@@ -5,7 +5,6 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isCronJobActive } from "../active-jobs.js";
-import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { coerceFiniteScheduleNumber } from "../schedule-number.js";
 import { computeNextRunAtMs, computePreviousRunAtMs } from "../schedule.js";
 import { resolveCronStaggerMs } from "../stagger.js";
@@ -718,8 +717,6 @@ export function summarizeCronJobSchedule(state: CronServiceState) {
     }
     if (
       (rawEnabled ?? true) &&
-      (!state.deps.legacyDefaultAgentId ||
-        tryResolveCronJobEffectiveAgentId(job, undefined, state.deps.legacyDefaultAgentId)) &&
       hasCanonicalCronDeliveryMode(job.delivery) &&
       isTimeScheduledJob(job) &&
       hasNextRun

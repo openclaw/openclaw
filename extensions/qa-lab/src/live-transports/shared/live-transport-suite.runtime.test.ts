@@ -8,7 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const runQaSuiteCommand = vi.hoisted(() => vi.fn());
 const loadMatrixQaE2eeRuntime = vi.hoisted(() => vi.fn());
 const resolveLiveTransportQaScenarioIds = vi.hoisted(() => vi.fn());
-const runFlowWorkers = vi.hoisted(() => vi.fn());
+const runFlowWorkers = vi.hoisted(() =>
+  vi.fn<typeof import("../../suite-run-standard.js").runQaFlowSuiteStandard>(),
+);
 
 vi.mock("../../cli.runtime.js", () => ({ runQaSuiteCommand }));
 vi.mock("../matrix/substrate/e2ee-client.js", () => ({ loadMatrixQaE2eeRuntime }));
@@ -22,7 +24,7 @@ vi.mock("./scenario-selection.js", async (importOriginal) => ({
 import type { QaSeedScenarioWithSource } from "../../scenario-catalog.js";
 import { runQaSuite } from "../../suite-launch.runtime.js";
 import { selectQaFlowSuiteScenarios } from "../../suite-planning.js";
-import type { QaSuiteResolvedRunContext } from "../../suite-types.js";
+import { recordQaSuiteTestResults } from "../../suite-test-helpers.js";
 import type { QaSuiteRunParams } from "../../suite.js";
 import { discordQaCliRegistration } from "../discord/cli.js";
 import { matrixQaCliRegistration } from "../matrix/cli.js";
@@ -143,23 +145,20 @@ describe("live transport suite runtime", () => {
       initializationStarted.resolve();
       return initialization.promise;
     });
-    runFlowWorkers.mockImplementation((_params, context: QaSuiteResolvedRunContext) => {
+    runFlowWorkers.mockImplementation(async (params, context) => {
       workersStarted.resolve();
       const scenarioIds = context.selectedScenarios.map((scenario) => scenario.id);
       return {
-        evidence: {
-          kind: "openclaw.qa.evidence-summary",
-          schemaVersion: 2,
-          generatedAt: new Date().toISOString(),
-          evidenceMode: "full",
-          entries: [],
-        },
+        ...recordQaSuiteTestResults(
+          params,
+          context.selectedScenarios,
+          scenarioIds.map((name) => ({ name, status: "pass", steps: [] })),
+        ),
         outputDir: context.outputDir,
         evidencePath: path.join(context.outputDir, "qa-evidence.json"),
         reportPath: path.join(context.outputDir, "qa-suite-report.md"),
         summaryPath: path.join(context.outputDir, "qa-suite-summary.json"),
         report: "# QA Suite Report\n",
-        scenarios: scenarioIds.map((name) => ({ name, status: "pass", steps: [] })),
         startedScenarioIds: scenarioIds,
         watchUrl: "http://127.0.0.1:43124",
       };
@@ -523,7 +522,7 @@ describe("live transport suite runtime", () => {
     const file = await writeAgentE2eRecipe(directory, "discord-e2e-doctor");
     let selected: QaSeedScenarioWithSource[] = [];
     const boundary = new Error("reached selected workers without acquiring credentials");
-    runFlowWorkers.mockImplementation((_params, context: QaSuiteResolvedRunContext) => {
+    runFlowWorkers.mockImplementation((_params, context) => {
       selected = context.selectedScenarios;
       throw boundary;
     });

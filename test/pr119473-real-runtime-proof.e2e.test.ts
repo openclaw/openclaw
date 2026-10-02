@@ -125,7 +125,7 @@ describe("PR #119473 real gateway proof", () => {
                 [provider.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
               },
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
           gateway: { auth: { mode: "token", token: "pr119473-proof-token" } },

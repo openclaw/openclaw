@@ -5144,7 +5144,24 @@ class ChatComposerLayoutTest {
             ),
           )
         }
-        composeRule.waitUntil { !directory.exists() && !model.chatComposerState.hasPendingImport(owner) }
+        // Camera import and its directory cleanup run outside Compose's idling registry.
+        val cameraImport =
+          object : IdlingResource {
+            override val isIdleNow: Boolean
+              get() = !directory.exists() && !model.chatComposerState.hasPendingImport(owner)
+
+            override fun getDiagnosticMessageIfBusy(): String =
+              "Camera $mode/$outcome directoryExists=${directory.exists()} " +
+                "pendingImport=${model.chatComposerState.hasPendingImport(owner)}"
+          }
+        composeRule.registerIdlingResource(cameraImport)
+        try {
+          composeRule.waitForIdle()
+        } finally {
+          composeRule.unregisterIdlingResource(cameraImport)
+        }
+        assertFalse("Camera import removes its temporary capture directory", directory.exists())
+        assertFalse("Camera import releases its pending-import gate", model.chatComposerState.hasPendingImport(owner))
         editor.assertTextEquals(caption)
         assertFalse("Camera completion releases its media lease", model.chatComposerState.hasPendingGatewaySwitchWork(owner))
         if (outcome != "captured") {

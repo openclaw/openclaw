@@ -156,6 +156,7 @@ export async function prepareGitHubPublicationOptionsRead(
           sessionKey: loaded.canonicalKey,
           agentId: loaded.agentId,
           lifecycleRevision: loaded.entry.lifecycleRevision ?? null,
+          archivedAt: loaded.entry.archivedAt ?? null,
         }
       : null;
   };
@@ -163,20 +164,30 @@ export async function prepareGitHubPublicationOptionsRead(
   if (!session) {
     throw new Error("GitHub publication session was not found.");
   }
+  // sessionId/lifecycleRevision pin the incarnation; archivedAt is re-read below because
+  // archiving flips it without touching either identity field.
+  const readCurrent = () => {
+    const current = readSession(session.sessionKey, session.agentId);
+    if (
+      !current ||
+      current.sessionId !== session.sessionId ||
+      current.lifecycleRevision !== session.lifecycleRevision
+    ) {
+      throw new Error("GitHub publication session access changed; select the session again.");
+    }
+    return current;
+  };
   return {
     personal,
     session,
     sessionScoped: authority.sessionScope === "operator.sessions.read",
-    currentSession: () => {
-      const current = readSession(session.sessionKey, session.agentId);
-      if (
-        !current ||
-        current.sessionId !== session.sessionId ||
-        current.lifecycleRevision !== session.lifecycleRevision
-      ) {
+    currentSession: readCurrent,
+    // Callbacks may refresh live facts, but must not replace the response's archive snapshot.
+    assertSessionUnchanged: (snapshot: ReturnType<typeof readCurrent>): void => {
+      const current = readCurrent();
+      if (current.archivedAt !== snapshot.archivedAt) {
         throw new Error("GitHub publication session access changed; select the session again.");
       }
-      return session;
     },
   };
 }

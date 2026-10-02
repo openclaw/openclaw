@@ -62,8 +62,13 @@ function formatQuestionTerminalStatusLine(
     if (question.isSecret || question.options.length === 0) {
       return [];
     }
-    const optionLabels = new Set(question.options.map((option) => option.label));
-    return (answers[question.questionId] ?? []).filter((answer) => optionLabels.has(answer));
+    const optionLabels = new Map(
+      question.options.map((option) => [option.value ?? option.label, option.label]),
+    );
+    return (answers[question.questionId] ?? []).flatMap((answer) => {
+      const label = optionLabels.get(answer);
+      return label ? [label] : [];
+    });
   });
   return labels.length > 0 ? `Answered: ${labels.join(", ")}` : "Answered";
 }

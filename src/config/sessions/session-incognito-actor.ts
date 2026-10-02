@@ -17,8 +17,12 @@ import type {
   IncognitoSessionCreate,
   IncognitoSessionFacts,
   IncognitoSessionRead,
-  IncognitoSessionSnapshot,
+  IncognitoSessionOperations,
 } from "./session-incognito-contract.js";
+import {
+  isIncognitoSideDataWrite,
+  type IncognitoSideDataOperations,
+} from "./session-incognito-side-data-contract.js";
 
 type Scope = Pick<SqliteWorkerStore<AgentDatabaseIncognitoOperations>, "execute">;
 export type IncognitoSessionRunner = <T>(
@@ -105,37 +109,33 @@ export function createIncognitoSessionFacts(
       topologyRevision += 1;
     },
     bind(run: IncognitoSessionRunner, assertBorrowed: () => void) {
-      const perform = (
+      const perform = <Key extends keyof IncognitoSessionOperations, Result>(
         authority: IncognitoSessionAuthority,
-        selection: IncognitoSessionRead | IncognitoSessionCreate,
-        creating: boolean,
+        command: { type: Key; input: IncognitoSessionOperations[Key]["input"] },
+        changing: boolean,
+        receive: (value: IncognitoSessionOperations[Key]["output"]) => Result,
         signal?: AbortSignal,
       ) => {
         // Capture caller-owned input before queue waits.
-        const input = structuredClone(selection);
+        const captured = structuredClone(command);
+        const targets = new Set<string>();
         let native:
           | {
               retained: RetainedWorkerTransactionAdmission;
               admission: SqliteWorkerOperationAdmission;
             }
           | undefined;
-        let postimage: IncognitoSessionFacts | undefined;
+        let postimage: IncognitoSessionFacts[] | undefined;
         let commitGranted = false;
         return run(
           authority,
           async (scope) => {
             assertActorCurrent();
-            if (creating) {
-              pending.add(input.sessionKey);
-            }
             let outcome:
-              | { ok: true; value: IncognitoSessionSnapshot }
+              | { ok: true; value: IncognitoSessionOperations[Key]["output"] }
               | { ok: false; error: unknown };
             try {
-              const value =
-                "entry" in input
-                  ? await scope.execute({ type: "session.entry.create", input })
-                  : await scope.execute({ type: "session.entry.read", input });
+              const value = await scope.execute(captured);
               outcome = { ok: true, value };
             } catch (error) {
               outcome = { ok: false, error };
@@ -146,18 +146,22 @@ export function createIncognitoSessionFacts(
                 const receipt = native.admission.committed?.facts;
                 if (receipt !== undefined) {
                   if (!postimage || !isDeepStrictEqual(receipt, postimage)) {
-                    unavailable.add(input.sessionKey);
+                    for (const key of targets) {
+                      unavailable.add(key);
+                    }
                     throw new SqliteWorkerError(
                       "Incognito commit receipt differs from its grant",
                       "outcome-unknown",
                     );
                   }
                   // Revocation cannot undo COMMIT. Publish while FIFO custody is still held.
-                  install(postimage);
-                } else if (creating && (commitGranted || outcome.ok)) {
-                  unavailable.add(input.sessionKey);
+                  postimage.forEach(install);
+                } else if (changing && (commitGranted || outcome.ok)) {
+                  for (const key of targets) {
+                    unavailable.add(key);
+                  }
                   throw new SqliteWorkerError(
-                    "Incognito creation has no confirmed commit receipt",
+                    "Incognito mutation has no confirmed commit receipt",
                     "outcome-unknown",
                   );
                 }
@@ -165,7 +169,9 @@ export function createIncognitoSessionFacts(
                   settlement.kind !== "not-entered" &&
                   native.admission.settlement?.kind !== "completed"
                 ) {
-                  unavailable.add(input.sessionKey);
+                  for (const key of targets) {
+                    unavailable.add(key);
+                  }
                   throw new SqliteWorkerError(
                     "Incognito session native settlement is unknown",
                     "outcome-unknown",
@@ -175,15 +181,19 @@ export function createIncognitoSessionFacts(
               if (!outcome.ok) {
                 throw outcome.error;
               }
-              if (!creating) {
-                install(outcome.value.facts);
+              if (!changing) {
+                outcome.value.facts.forEach(install);
               }
-              pending.delete(input.sessionKey);
+              for (const key of targets) {
+                pending.delete(key);
+              }
               authority.assertCurrent();
               assertActorCurrent();
-              return { entry: outcome.value.entry, claim: claim(input.sessionKey, assertBorrowed) };
+              return receive(outcome.value);
             } finally {
-              pending.delete(input.sessionKey);
+              for (const key of targets) {
+                pending.delete(key);
+              }
             }
           },
           signal,
@@ -202,7 +212,7 @@ export function createIncognitoSessionFacts(
                 }
                 if (request.stage !== "prepare") {
                   if (
-                    !creating ||
+                    !changing ||
                     !(
                       (phase === "prepare" && request.stage === "transaction") ||
                       (phase === "transaction" && request.stage === "commit")
@@ -210,24 +220,43 @@ export function createIncognitoSessionFacts(
                   ) {
                     throw new Error("Incognito session authority requested out of order");
                   }
-                  const received = request.facts.session;
+                  const received = request.facts.sessions;
                   if (
-                    !isRecord(received) ||
-                    !isDeepStrictEqual(received.identity, identity) ||
-                    received.sessionKey !== input.sessionKey ||
-                    !Number.isSafeInteger(received.revision)
+                    !Array.isArray(received) ||
+                    received.some(
+                      (facts: unknown) =>
+                        !isRecord(facts) ||
+                        !isDeepStrictEqual(facts.identity, identity) ||
+                        typeof facts.sessionKey !== "string" ||
+                        !Number.isSafeInteger(facts.revision),
+                    )
                   ) {
                     throw new Error("Incognito session grant differs from its captured target");
                   }
-                  // SAFETY: the private, typed worker sends this bounded publication envelope.
-                  const facts = received as IncognitoSessionFacts;
-                  const authorization: unknown = authority.authorize?.(
-                    request.stage,
-                    structuredClone(facts),
-                  );
-                  if (isPromiseLike(authorization)) {
-                    void Promise.resolve(authorization).catch(() => undefined);
-                    throw new Error("Incognito session grants must remain synchronous");
+                  // SAFETY: the private, typed worker sends these bounded publication envelopes.
+                  const facts = received as IncognitoSessionFacts[];
+                  const keys = facts.map((entry) => entry.sessionKey);
+                  if (
+                    new Set(keys).size !== keys.length ||
+                    ("sessionKey" in captured.input &&
+                      (keys.length !== 1 || keys[0] !== captured.input.sessionKey)) ||
+                    (request.stage === "commit" && !isDeepStrictEqual(keys, [...targets]))
+                  ) {
+                    throw new Error("Incognito session grant changed its target set");
+                  }
+                  for (const entry of facts) {
+                    targets.add(entry.sessionKey);
+                    pending.add(entry.sessionKey);
+                  }
+                  for (const entry of facts) {
+                    const authorization: unknown = authority.authorize?.(
+                      request.stage,
+                      structuredClone(entry),
+                    );
+                    if (isPromiseLike(authorization)) {
+                      void Promise.resolve(authorization).catch(() => undefined);
+                      throw new Error("Incognito session grants must remain synchronous");
+                    }
                   }
                   if (request.stage === "commit") {
                     postimage = facts;
@@ -253,12 +282,42 @@ export function createIncognitoSessionFacts(
           authority: IncognitoSessionAuthority,
           input: IncognitoSessionRead,
           signal?: AbortSignal,
-        ) => perform(authority, input, false, signal),
+        ) => {
+          const sessionKey = input.sessionKey;
+          return perform(
+            authority,
+            { type: "session.entry.read", input },
+            false,
+            (value) => ({ entry: value.entry, claim: claim(sessionKey, assertBorrowed) }),
+            signal,
+          );
+        },
         create: (
           authority: IncognitoSessionAuthority,
           input: IncognitoSessionCreate,
           signal?: AbortSignal,
-        ) => perform(authority, input, true, signal),
+        ) => {
+          const sessionKey = input.sessionKey;
+          return perform(
+            authority,
+            { type: "session.entry.create", input },
+            true,
+            (value) => ({ entry: value.entry, claim: claim(sessionKey, assertBorrowed) }),
+            signal,
+          );
+        },
+        sideData: <Key extends keyof IncognitoSideDataOperations>(
+          authority: IncognitoSessionAuthority,
+          command: { type: Key; input: IncognitoSideDataOperations[Key]["input"] },
+          signal?: AbortSignal,
+        ): Promise<IncognitoSideDataOperations[Key]["output"]> =>
+          perform(
+            authority,
+            command,
+            isIncognitoSideDataWrite(command.type),
+            (result) => result.value,
+            signal,
+          ),
         captureCurrent(sessionKey: string) {
           assertBorrowed();
           return claim(sessionKey, assertBorrowed);
