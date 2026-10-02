@@ -10,8 +10,8 @@ import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { PROXY_ENV_KEYS } from "../infra/net/proxy-env.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { startGatewayServer } from "./server.js";
-import { getGatewayE2ePortBlock } from "./test-helpers.e2e.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
+import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
 
 const NETWORK_GATEWAY_ENV_KEYS = [
   "HOME",
@@ -98,11 +98,14 @@ describe("gateway network runtime", () => {
       );
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
 
-      server = await startGatewayServer(await getGatewayE2ePortBlock(), {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-      });
+      const claim = await acquireGatewayE2ePortBlock();
+      server = await startClaimedGateway(claim, () =>
+        startGatewayServer(claim.port, {
+          bind: "loopback",
+          auth: { mode: "token", token },
+          controlUiEnabled: false,
+        }),
+      );
 
       expect(isEnvHttpProxyDispatcher(getGlobalDispatcher())).toBe(true);
     } finally {
@@ -154,9 +157,12 @@ describe("gateway network runtime", () => {
         await fs.writeFile(configPath, raw, { mode: 0o600 });
         setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
 
-        server = await startGatewayServer(await getGatewayE2ePortBlock(), {
-          controlUiEnabled: false,
-        });
+        const claim = await acquireGatewayE2ePortBlock();
+        server = await startClaimedGateway(claim, () =>
+          startGatewayServer(claim.port, {
+            controlUiEnabled: false,
+          }),
+        );
 
         await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(raw);
       } finally {

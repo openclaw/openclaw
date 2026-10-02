@@ -33,9 +33,9 @@ import {
   connectDeviceAuthReq,
   disconnectGatewayClient,
   connectGatewayClient,
-  getGatewayE2ePortBlock,
   startGatewayWithClient,
 } from "./test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
 import { installOpenAiResponsesMock } from "./test-helpers.openai-mock.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
@@ -43,14 +43,16 @@ let createConfigIO: typeof import("../config/config.js").createConfigIO;
 const GATEWAY_E2E_TIMEOUT_MS = 90_000;
 
 async function startLoopbackTokenGateway(token: string) {
-  const port = await getGatewayE2ePortBlock();
-  const server = await startGatewayServer(port, {
-    bind: "loopback",
-    auth: { mode: "token", token },
-    controlUiEnabled: false,
-    sidecarStartup: "defer",
-  });
-  return { port, server };
+  const claim = await acquireGatewayE2ePortBlock();
+  const server = await startClaimedGateway(claim, () =>
+    startGatewayServer(claim.port, {
+      bind: "loopback",
+      auth: { mode: "token", token },
+      controlUiEnabled: false,
+      sidecarStartup: "defer",
+    }),
+  );
+  return { port: claim.port, server };
 }
 
 async function writeWorkspacePlugin(params: {
@@ -131,17 +133,19 @@ describe("gateway e2e", () => {
         logging: { level: "info" },
       };
       await createConfigIO({ configPath }).writeConfigFile(initialConfig);
-      const port = await getGatewayE2ePortBlock();
-      server = await startGatewayServer(port, {
-        bind: "loopback",
-        controlUiEnabled: false,
-        sidecarStartup: "defer",
-      });
+      const claim = await acquireGatewayE2ePortBlock();
+      server = await startClaimedGateway(claim, () =>
+        startGatewayServer(claim.port, {
+          bind: "loopback",
+          controlUiEnabled: false,
+          sidecarStartup: "defer",
+        }),
+      );
 
       await expect(
         callGateway({
           config: initialConfig,
-          localPortOverride: port,
+          localPortOverride: claim.port,
           method: "health",
           timeoutMs: 5_000,
         }),
@@ -246,18 +250,20 @@ describe("gateway e2e", () => {
           authSource === "explicit-override"
             ? { mode: "off" as const, preserveFunnel: true }
             : undefined;
-        const port = await getGatewayE2ePortBlock();
-        server = await startGatewayServer(port, {
-          bind: "loopback",
-          ...(callerAuthOverride ? { auth: callerAuthOverride } : {}),
-          ...(callerTailscaleOverride ? { tailscale: callerTailscaleOverride } : {}),
-          controlUiEnabled: false,
-        });
+        const claim = await acquireGatewayE2ePortBlock();
+        server = await startClaimedGateway(claim, () =>
+          startGatewayServer(claim.port, {
+            bind: "loopback",
+            ...(callerAuthOverride ? { auth: callerAuthOverride } : {}),
+            ...(callerTailscaleOverride ? { tailscale: callerTailscaleOverride } : {}),
+            controlUiEnabled: false,
+          }),
+        );
         const expectedToken =
           authSource === "generated" ? getRuntimeConfig().gateway?.auth?.token : overrideToken;
         expect(typeof expectedToken).toBe("string");
         client = await connectGatewayClient({
-          url: `ws://127.0.0.1:${port}`,
+          url: `ws://127.0.0.1:${claim.port}`,
           token: expectedToken as string,
           clientDisplayName: "vitest-direct-reload",
         });
@@ -327,7 +333,7 @@ describe("gateway e2e", () => {
         }
 
         const reconnected = await connectGatewayClient({
-          url: `ws://127.0.0.1:${port}`,
+          url: `ws://127.0.0.1:${claim.port}`,
           token: expectedToken as string,
           clientDisplayName: "vitest-direct-reload-reconnect",
         });
@@ -369,19 +375,21 @@ describe("gateway e2e", () => {
       await createConfigIO({ configPath }).writeConfigFile(initialConfig, {
         allowedAgentRosterRemovals: ["main"],
       });
-      const port = await getGatewayE2ePortBlock();
+      const claim = await acquireGatewayE2ePortBlock();
       const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
-      server = await startGatewayServer(port, {
-        bind: "loopback",
-        controlUiEnabled: false,
-        hotReloadRecovery,
-      });
+      server = await startClaimedGateway(claim, () =>
+        startGatewayServer(claim.port, {
+          bind: "loopback",
+          controlUiEnabled: false,
+          hotReloadRecovery,
+        }),
+      );
       await expect
         .poll(
           async () => {
             const health = await callGateway({
               config: initialConfig,
-              localPortOverride: port,
+              localPortOverride: claim.port,
               method: "health",
               timeoutMs: 5_000,
             });
@@ -398,7 +406,7 @@ describe("gateway e2e", () => {
       };
 
       const postAgentHook = async (agentId: string) => {
-        const response = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
+        const response = await fetch(`http://127.0.0.1:${claim.port}/hooks/agent`, {
           method: "POST",
           headers: {
             authorization: `Bearer ${hookToken}`,
@@ -479,21 +487,23 @@ describe("gateway e2e", () => {
           logging: { level: "info" },
         });
         setTestEnvValue("OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN", oldToken);
-        const port = await getGatewayE2ePortBlock();
-        server = await startGatewayServer(port, {
-          bind: "loopback",
-          auth: {
-            mode: "token",
-            token: {
-              source: "env",
-              provider: "default",
-              id: "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
+        const claim = await acquireGatewayE2ePortBlock();
+        server = await startClaimedGateway(claim, () =>
+          startGatewayServer(claim.port, {
+            bind: "loopback",
+            auth: {
+              mode: "token",
+              token: {
+                source: "env",
+                provider: "default",
+                id: "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
+              },
             },
-          },
-          controlUiEnabled: false,
-        });
+            controlUiEnabled: false,
+          }),
+        );
         oldClient = await connectGatewayClient({
-          url: `ws://127.0.0.1:${port}`,
+          url: `ws://127.0.0.1:${claim.port}`,
           token: oldToken,
           clientDisplayName: "vitest-startup-auth-ref-old",
         });
@@ -506,7 +516,7 @@ describe("gateway e2e", () => {
           expect(reload.ok).toBe(true);
         }
         const newClient = await connectGatewayClient({
-          url: `ws://127.0.0.1:${port}`,
+          url: `ws://127.0.0.1:${claim.port}`,
           token: newToken,
           clientDisplayName: "vitest-startup-auth-ref-new",
         });
@@ -547,11 +557,13 @@ describe("gateway e2e", () => {
       logging: { level: "info" },
     };
     await configIO.writeConfigFile(initialConfig);
-    const port = await getGatewayE2ePortBlock();
-    const server = await startGatewayServer(port, {
-      bind: "lan",
-      controlUiEnabled: false,
-    });
+    const claim = await acquireGatewayE2ePortBlock();
+    const server = await startClaimedGateway(claim, () =>
+      startGatewayServer(claim.port, {
+        bind: "lan",
+        controlUiEnabled: false,
+      }),
+    );
 
     try {
       const seededOrigins = getRuntimeConfig().gateway?.controlUi?.allowedOrigins;
@@ -785,24 +797,26 @@ module.exports = {
       clearConfigCache();
 
       const wizardToken = nextGatewayId("wiz-token");
-      const port = await getGatewayE2ePortBlock();
-      const server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token: wizardToken },
-        controlUiEnabled: false,
-        wizardRunner: async (_opts, _runtime, prompter) => {
-          await prompter.intro("Wizard E2E");
-          await prompter.note("write token");
-          const token = await prompter.text({ message: "token" });
-          await createConfigIO({ configPath }).writeConfigFile({
-            gateway: { auth: { mode: "token", token } },
-          });
-          await prompter.outro("ok");
-        },
-      });
+      const claim = await acquireGatewayE2ePortBlock();
+      const server = await startClaimedGateway(claim, () =>
+        startGatewayServer(claim.port, {
+          bind: "loopback",
+          auth: { mode: "token", token: wizardToken },
+          controlUiEnabled: false,
+          wizardRunner: async (_opts, _runtime, prompter) => {
+            await prompter.intro("Wizard E2E");
+            await prompter.note("write token");
+            const token = await prompter.text({ message: "token" });
+            await createConfigIO({ configPath }).writeConfigFile({
+              gateway: { auth: { mode: "token", token } },
+            });
+            await prompter.outro("ok");
+          },
+        }),
+      );
 
       const client = await connectGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
+        url: `ws://127.0.0.1:${claim.port}`,
         token: wizardToken,
         clientDisplayName: "vitest-wizard",
       });
@@ -866,20 +880,22 @@ module.exports = {
         await server.close({ reason: "wizard e2e complete" });
       }
 
-      const port2 = await getGatewayE2ePortBlock();
-      const server2 = await startGatewayServer(port2, {
-        bind: "loopback",
-        controlUiEnabled: false,
-      });
+      const claim2 = await acquireGatewayE2ePortBlock();
+      const server2 = await startClaimedGateway(claim2, () =>
+        startGatewayServer(claim2.port, {
+          bind: "loopback",
+          controlUiEnabled: false,
+        }),
+      );
       try {
         const resNoToken = await connectDeviceAuthReq({
-          url: `ws://127.0.0.1:${port2}`,
+          url: `ws://127.0.0.1:${claim2.port}`,
         });
         expect(resNoToken.ok).toBe(false);
         expect(resNoToken.error?.message ?? "").toContain("unauthorized");
 
         const resToken = await connectDeviceAuthReq({
-          url: `ws://127.0.0.1:${port2}`,
+          url: `ws://127.0.0.1:${claim2.port}`,
           token: wizardToken,
         });
         expect(resToken.ok).toBe(true);

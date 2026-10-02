@@ -29,8 +29,11 @@ import { resolveSessionStorePathCore } from "../../../../src/config/sessions/pat
 import { replaceSessionEntrySync } from "../../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { startGatewayServer } from "../../../../src/gateway/server.js";
-import { getGatewayE2ePortBlock } from "../../../../src/gateway/test-helpers.e2e.js";
 import { snapshotGatewayStartupEnv } from "../../../../src/gateway/test-helpers.env.js";
+import {
+  acquireGatewayE2ePortBlock,
+  startClaimedGateway,
+} from "../../../../src/gateway/test-helpers.listener.js";
 import { resetPluginRuntimeStateForTest } from "../../../../src/plugins/runtime.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
 import { createDeferred } from "../../../helpers/promise.js";
@@ -142,13 +145,15 @@ describe("native child cancellation authority", () => {
       async () => {
         clearConfigCache();
         clearRuntimeConfigSnapshot();
-        const port = await getGatewayE2ePortBlock();
-        const server = await startGatewayServer(port, {
-          auth: { mode: "token", token: TOKEN },
-          bind: "loopback",
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
-        });
+        const claim = await acquireGatewayE2ePortBlock();
+        const server = await startClaimedGateway(claim, () =>
+          startGatewayServer(claim.port, {
+            auth: { mode: "token", token: TOKEN },
+            bind: "loopback",
+            controlUiEnabled: false,
+            sidecarStartup: "defer",
+          }),
+        );
         await server.startupSettled;
         const acpxServices: OpenClawPluginService[] = [];
         const acpxRuntime = createPluginRuntimeMock({

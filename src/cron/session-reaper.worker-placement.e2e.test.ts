@@ -15,7 +15,10 @@ import {
 } from "../gateway/gateway.test-support.js";
 import { startGatewayServer } from "../gateway/server.js";
 import type { SessionsListResult } from "../gateway/session-utils.types.js";
-import { getGatewayE2ePortBlock } from "../gateway/test-helpers.e2e.js";
+import {
+  acquireGatewayE2ePortBlock,
+  startClaimedGateway,
+} from "../gateway/test-helpers.listener.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -114,13 +117,13 @@ describe("scheduled cron session retirement through the Gateway", () => {
         },
       };`,
     );
-    const port = await getGatewayE2ePortBlock();
     const token = "synthetic-cron-retirement-token";
     const configPath = await createGatewayConfigPath(setup.tempHome);
+    const claim = await acquireGatewayE2ePortBlock();
     const config: OpenClawConfig = {
       gateway: {
         mode: "local",
-        port,
+        port: claim.port,
         bind: "loopback",
         auth: { mode: "token", token },
         controlUi: { enabled: false },
@@ -141,13 +144,15 @@ describe("scheduled cron session retirement through the Gateway", () => {
       },
       cron: { enabled: true },
     };
-    await fs.writeFile(configPath, JSON.stringify(config));
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
-    setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
     stateDatabasePath = path.join(setup.tempHome, ".openclaw", "state", "openclaw.sqlite");
-    sessionStorePath = resolveDefaultSessionStorePath("main");
-    server = await startGatewayServer(port, { controlUiEnabled: false });
+    server = await startClaimedGateway(claim, async () => {
+      await fs.writeFile(configPath, JSON.stringify(config));
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(claim.port));
+      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
+      sessionStorePath = resolveDefaultSessionStorePath("main");
+      return await startGatewayServer(claim.port, { controlUiEnabled: false });
+    });
   }, 120_000);
 
   afterEach(async () => {

@@ -178,6 +178,12 @@ Vitest namespaces, found through their explicit resource owners. Parallel invoca
 therefore share port ownership while a fixture hands its reserved socket to a child;
 removing one invocation's files cannot remove another fixture's port claim.
 
+A fixture that binds a Gateway, in-process or spawned, on a shared pool port holds
+that port's claim from selection until the Gateway closes. A Gateway retries a busy
+port while starting, so an unclaimed fixture can take another fixture's port during
+its handoff. `getDeterministicFreePortBlock` is a probe, not a lease; in-process
+Gateway E2E fixtures use `acquireGatewayE2ePortBlock` with `startClaimedGateway`.
+
 Live-aware setup still loads the original profile and stages live state when
 requested. A bounded invocation artifact carries the original home to that setup;
 it does not grant live access, and hermetic setup never consults it. Known
