@@ -245,6 +245,43 @@ describe("splitMediaFromOutput", () => {
     });
   });
 
+  it("separates quoted references that a comma divides", () => {
+    // A comma already reads as list punctuation on an unquoted line: `cleanCandidate` trims it from a
+    // reference's tail, so `MEDIA:/tmp/first.png, /tmp/second.png` gives two attachments. Quoting each
+    // reference moves that comma outside the quote pair, where the list scan gave it no meaning, so the
+    // pair fell back to the whole-payload reading and attached one
+    // `/tmp/first image.png", "/tmp/second image.png` — the two attachments that the space-separated list
+    // of the same references produces.
+    expectParsedMediaOutputCase("MEDIA:/tmp/first.png, /tmp/second.png", {
+      mediaUrls: ["/tmp/first.png", "/tmp/second.png"],
+    });
+    for (const [input, mediaUrls] of [
+      [
+        'MEDIA:"/tmp/first image.png", "/tmp/second image.png"',
+        ["/tmp/first image.png", "/tmp/second image.png"],
+      ],
+      ['MEDIA:"/tmp/a.png","/tmp/b.png"', ["/tmp/a.png", "/tmp/b.png"]],
+      ['MEDIA:"/tmp/first.png", "second.png"', ["/tmp/first.png", "second.png"]],
+      ["MEDIA:'/tmp/a.png', '/tmp/b.png'", ["/tmp/a.png", "/tmp/b.png"]],
+      ['MEDIA:"/tmp/a.png", "b.png", "c.png"', ["/tmp/a.png", "b.png", "c.png"]],
+    ] as const) {
+      expectParsedMediaOutputCase(input, { mediaUrls: [...mediaUrls] });
+    }
+    // A member that is not a reference of its own stays visible text rather than joining its neighbour,
+    // which is what the space-separated list already does.
+    expectParsedMediaOutputCase('MEDIA:"/tmp/first.png", "second"', {
+      mediaUrls: ["/tmp/first.png"],
+      text: '"second"',
+    });
+    // A comma inside one quoted reference stays part of its value, not a separator.
+    expectAcceptedMediaPathCase("/tmp/Hello, World.png", 'MEDIA:"/tmp/Hello, World.png"');
+    // Prose behind the comma is a token no quote pair bounds, so no list forms and `main`'s reading of the
+    // payload stands.
+    expectParsedMediaOutputCase('MEDIA:"/tmp/first.png", the picture above', {
+      mediaUrls: ["/tmp/first.png"],
+    });
+  });
+
   it.each([
     'MEDIA:"first.png," "second.png,"',
     "MEDIA:'first.png,' 'second.png,'",
