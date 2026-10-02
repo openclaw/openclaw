@@ -2,7 +2,7 @@
   "base": "codex-dynamic-tools.telegram-direct.json",
   "replace": {
     "openclaw_direct": {
-      "description": "",
+      "description": "Call these tools directly, outside exec and tools.*. Their results enter model context automatically; image results must remain structured images.",
       "name": "openclaw_direct",
       "tools": [
         {

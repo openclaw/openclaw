@@ -52,12 +52,13 @@ const SESSION_DESCRIPTIONS = [
     tool: "sessions_history",
     describe: describeSessionsHistoryTool,
     original:
-      "Read sanitized visible-session history. Before reply/debug/resume. Use messageId (optionally sessionId) for anchored history; offset is ignored when messageId is set. Without messageId, use offset for plain pagination. limit bounds either mode. Include tool messages with includeTools. pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled/interrupted inputs never replay automatically. Lower limit for richer pending previews.",
+      "Read sanitized visible-session history. Read when needed context is missing from the current conversation. For a specific past fact, use a known messageId or a focused search; pass sessionId when available. offset is ignored when messageId is set. Use offset and returned nextOffset for broader or incomplete-search review; do not reread unchanged pages already available. limit bounds either mode. Include tool messages with includeTools. pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled/interrupted inputs never replay automatically. Lower limit for richer pending previews.",
   },
   {
     tool: "sessions_search",
     describe: describeSessionsSearchTool,
-    original: "Search visible past sessions for matching user and assistant text.",
+    original:
+      "Search visible past sessions for matching user and assistant text. Prefer a focused query for a past fact over paging through entire histories. Set contextMessages (1–10) when the matching passage is needed: context contains the top result's sanitized history window in the same call. Omit for excerpts only. Check indexing, archivedTranscriptsExcluded, truncated and context truncation. An empty search is not proof of absence; try other terms or read broader history.",
   },
 ] as const;
 

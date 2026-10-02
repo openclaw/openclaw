@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -101,6 +102,96 @@ describe("embedded session history anchors", () => {
     },
   );
 
+  it("returns the same anchored evidence with one search call as separate search and history", async () => {
+    const tools = toolsFor();
+    const separate = await tools.history.execute("separate", { ...selector, limit: 3 });
+    const combined = await tools.search.execute("combined", {
+      query: "quasar",
+      contextMessages: 3,
+    });
+    const {
+      messages,
+      truncated,
+      droppedMessages,
+      contentTruncated,
+      contentRedacted,
+      bytes,
+      totalMessages,
+    } = separate.details as Record<string, unknown>;
+
+    expect(combined.details).toMatchObject({
+      results: [expect.objectContaining(selector)],
+      context: {
+        messages,
+        truncated,
+        droppedMessages,
+        contentTruncated,
+        contentRedacted,
+        bytes,
+      },
+    });
+    const context = (
+      combined.details as { context: { messages: unknown[]; totalMessages?: number } }
+    ).context;
+    expect(context.totalMessages).toBe(totalMessages);
+    expect(context.messages.map(readChatHistoryMessageId)).toContain("old");
+    expect(Value.Check(tools.search.outputSchema!, combined.details)).toBe(true);
+  });
+
+  it("redacts and bounds inline context through the canonical history reader", async () => {
+    await appendTranscriptMessage(scope, {
+      eventId: "private-match",
+      message: {
+        role: "user",
+        content: `nebula OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789 ${"z".repeat(5000)}`,
+        timestamp: 1_700_000_000_010,
+      },
+    });
+    const result = await toolsFor().search.execute("redacted-context", {
+      query: "nebula",
+      contextMessages: 1,
+    });
+
+    expect(result.details).toMatchObject({
+      context: { contentRedacted: true, contentTruncated: true },
+    });
+    expect(JSON.stringify(result.details)).not.toContain("sk-or-v1-abcdef0123456789");
+  });
+
+  it("includes a nearby correction that does not repeat the search term", async () => {
+    await appendTranscriptMessage(scope, {
+      eventId: "plan",
+      message: {
+        role: "user",
+        content: "Orion meeting is on Tuesday",
+        timestamp: 1_700_000_000_010,
+      },
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "correction",
+      message: {
+        role: "user",
+        content: "Correction: moved to Thursday",
+        timestamp: 1_700_000_000_011,
+      },
+    });
+    const result = await toolsFor().search.execute("corrected-fact", {
+      query: "Orion",
+      contextMessages: 3,
+    });
+
+    expect(result.details).toMatchObject({
+      results: [expect.objectContaining({ messageId: "plan" })],
+    });
+    const context = (result.details as { context: { messages: unknown[] } }).context;
+    expect(context.messages.map(readChatHistoryMessageId)).toEqual([
+      "newest",
+      "plan",
+      "correction",
+    ]);
+    expect(JSON.stringify(context.messages)).toContain("Correction: moved to Thursday");
+  });
+
   it("returns no history for a missing anchor", async () => {
     expect(await history({ ...selector, messageId: "missing", limit: 1 })).toMatchObject({
       messages: [],
@@ -143,6 +234,13 @@ describe("embedded session history anchors", () => {
       "reset",
     ]);
     expect(recalled.messages.map(readChatHistoryMessageId)).not.toContain("fresh");
+    const combined = await toolsFor().search.execute("find-with-context", {
+      query: "quasar",
+      contextMessages: 10,
+    });
+    const combinedContext = (combined.details as { context: { messages: unknown[] } }).context;
+    expect(combinedContext.messages.map(readChatHistoryMessageId)).toContain("old");
+    expect(combinedContext.messages.map(readChatHistoryMessageId)).not.toContain("fresh");
   });
 
   it.each(["missing", "wrong-key", "wrong-agent"])(
@@ -224,8 +322,13 @@ describe("embedded session history anchors", () => {
         status: "forbidden",
       });
       expect(
-        (await tools.search.execute("hidden", { query: "quasar", sessionKey: target.sessionKey }))
-          .details,
+        (
+          await tools.search.execute("hidden", {
+            query: "quasar",
+            sessionKey: target.sessionKey,
+            contextMessages: 3,
+          })
+        ).details,
       ).toMatchObject({ status: "forbidden" });
     },
   );

@@ -23,6 +23,25 @@ For SQLite transcript history, a missing or off-path message returns empty histo
 the newest tail; a `sessionId` that does not belong to the selected session key is rejected.
 These rules also apply in local embedded mode, without a running Gateway.
 
+When you need the matching passage as well as search results, set `contextMessages`
+to a value from 1 through 10. The response includes `context`, a sanitized history
+window around the first result, using that result's exact `sessionKey`, `messageId`
+and `sessionId`. This combines search and anchored recall in one tool call. Omitting
+the parameter keeps the excerpt-only path and performs no history read. No match
+also performs no history read. A result without both message anchors reports
+`contextUnavailable: "missing_message_anchor"` rather than reading the newest tail.
+
+The context uses the same access checks, reset boundaries, redaction and 80 KB
+history budget as a separate history read; the search results keep their existing
+32 KB budget. Context truncation, total message count when available, and access
+errors remain visible inside `context`. The window is not the entire conversation;
+current pending inputs remain available through a separate history read.
+For a specific fact, start with a focused query and read the relevant context.
+Use history pagination when a broader review is needed or search coverage is
+incomplete; avoid rereading unchanged pages already present in the conversation.
+An empty search can reflect different wording: try other terms or review the
+relevant history before concluding that a fact was never discussed.
+
 ## Visibility and output
 
 Search uses the same configured session visibility rules as `sessions_history`. The default

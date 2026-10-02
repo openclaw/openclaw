@@ -18,7 +18,7 @@ const config: OpenClawConfig = {
 
 describe("host-bound session read scope", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  it.each(["history", "search"] as const)(
+  it.each(["history", "search", "search-context"] as const)(
     "reads only the observed session through %s",
     async (kind) => {
       const callGateway = vi.fn(async (request: { method: string; params?: unknown }) => {
@@ -37,6 +37,8 @@ describe("host-bound session read scope", () => {
               sessionKey,
               role: "assistant",
               snippet: "observed evidence",
+              messageId: "observed-message",
+              sessionId: "observed-incarnation",
               timestamp: 1,
               score: 1,
             })),
@@ -57,13 +59,33 @@ describe("host-bound session read scope", () => {
       };
       const tool =
         kind === "history" ? createSessionsHistoryTool(options) : createSessionsSearchTool(options);
-      const args = kind === "history" ? {} : { query: "evidence" };
+      const args =
+        kind === "history"
+          ? {}
+          : {
+              query: "evidence",
+              ...(kind === "search-context" ? { contextMessages: 3 } : {}),
+            };
       const result = await tool.execute("observed", { ...args, sessionKey: observed });
       expect(result.details).toMatchObject(
         kind === "history"
           ? { sessionKey: observed, messages: [{ role: "assistant" }] }
           : { results: [{ sessionKey: observed, snippet: "observed evidence" }] },
       );
+      if (kind === "search-context") {
+        expect(result.details).toMatchObject({ context: { messages: [{ role: "assistant" }] } });
+        expect(callGateway).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method: "chat.history",
+            params: expect.objectContaining({
+              sessionKey: observed,
+              sessionId: "observed-incarnation",
+              messageId: "observed-message",
+              limit: 3,
+            }),
+          }),
+        );
+      }
       for (const sessionKey of [internal, sibling]) {
         callGateway.mockClear();
         expect((await tool.execute("denied", { ...args, sessionKey })).details).toMatchObject({

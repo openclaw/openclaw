@@ -1,4 +1,5 @@
 /** Full-text search over visible session transcripts. */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
@@ -40,6 +41,7 @@ import {
   resolveSessionToolContext,
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
+import { createSessionsHistoryTool } from "./sessions-history-tool.js";
 
 const SESSIONS_SEARCH_DEFAULT_LIMIT = 10;
 const SESSIONS_SEARCH_MAX_LIMIT = 25;
@@ -55,6 +57,11 @@ const SessionsSearchToolSchema = Type.Object({
   query: Type.String({ maxLength: SESSIONS_SEARCH_MAX_QUERY_CHARS }),
   sessionKey: Type.Optional(Type.String()),
   limit: optionalPositiveIntegerSchema({ maximum: SESSIONS_SEARCH_MAX_LIMIT }),
+  contextMessages: optionalPositiveIntegerSchema({
+    maximum: 10,
+    description:
+      "Include a bounded history window around the top matching message (1–10 messages). Omit for excerpts only.",
+  }),
 });
 
 const SessionsSearchHitSchema = Type.Object(
@@ -74,6 +81,30 @@ const SessionsSearchOutputSchema = Type.Union([
   Type.Object(
     {
       results: Type.Array(SessionsSearchHitSchema),
+      context: Type.Optional(
+        Type.Union([
+          Type.Object(
+            {
+              messages: Type.Array(Type.Unknown()),
+              truncated: Type.Boolean(),
+              droppedMessages: Type.Boolean(),
+              contentTruncated: Type.Boolean(),
+              contentRedacted: Type.Boolean(),
+              bytes: Type.Number(),
+              totalMessages: Type.Optional(Type.Number()),
+            },
+            { additionalProperties: false },
+          ),
+          Type.Object(
+            {
+              status: Type.String({ enum: ["error", "forbidden"] }),
+              error: Type.String(),
+            },
+            { additionalProperties: false },
+          ),
+        ]),
+      ),
+      contextUnavailable: Type.Optional(Type.Literal("missing_message_anchor")),
       sessionLinkRule: Type.Optional(
         Type.String({
           description: "How to build Control UI URLs for sessionKey values in this result.",
@@ -355,7 +386,7 @@ export function createSessionsSearchTool(opts?: {
     description: describeSessionsSearchTool({ sessionLinkBase: opts?.sessionLinkBase }),
     parameters: SessionsSearchToolSchema,
     outputSchema: SessionsSearchOutputSchema,
-    execute: async (_toolCallId, args) => {
+    execute: async (toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
       const query = readToolStringParam(params, "query")?.trim() ?? "";
       if (!query) {
@@ -370,6 +401,7 @@ export function createSessionsSearchTool(opts?: {
         readPositiveIntegerParam(params, "limit", {
           max: SESSIONS_SEARCH_MAX_LIMIT,
         }) ?? SESSIONS_SEARCH_DEFAULT_LIMIT;
+      const contextMessages = readPositiveIntegerParam(params, "contextMessages", { max: 10 });
       // The host-bound scope is already the complete search universe. Reuse the
       // targeted authorization path instead of listing every session to filter it back down.
       const requestedSessionKey =
@@ -608,8 +640,55 @@ export function createSessionsSearchTool(opts?: {
       visibleHits.sort(compareSearchHits);
       const limited = visibleHits.slice(0, limit);
       const capped = capSearchHits(limited);
+      const topHit = capped.items[0];
+      const canReadContext = Boolean(topHit?.messageId && topHit.sessionId);
+      // Compose the canonical history reader so visibility, incarnation checks,
+      // redaction and reset-relative anchors stay identical to a separate read.
+      const historyResult =
+        contextMessages && topHit && canReadContext
+          ? await createSessionsHistoryTool({
+              agentSessionKey: effectiveRequesterKey,
+              sessionReadScopeKey: opts?.sessionReadScopeKey,
+              requesterAgentIdOverride: requesterAgentId,
+              sandboxed: opts?.sandboxed,
+              config: cfg,
+              callGateway: gatewayCall,
+              sessionLinkBase: opts?.sessionLinkBase,
+            }).execute(
+              toolCallId,
+              {
+                sessionKey: topHit.sessionKey,
+                sessionId: topHit.sessionId,
+                messageId: topHit.messageId,
+                limit: contextMessages,
+              },
+              signal,
+            )
+          : undefined;
+      const history = asOptionalRecord(historyResult?.details);
+      // Pending inputs belong to the current session, not the matched passage.
+      // Keep only the canonical reader's transcript and completeness evidence.
+      const context = history
+        ? history.status
+          ? { status: history.status, error: history.error }
+          : {
+              messages: history.messages,
+              truncated: history.truncated,
+              droppedMessages: history.droppedMessages,
+              contentTruncated: history.contentTruncated,
+              contentRedacted: history.contentRedacted,
+              bytes: history.bytes,
+              ...(typeof history.totalMessages === "number"
+                ? { totalMessages: history.totalMessages }
+                : {}),
+            }
+        : undefined;
       return jsonResult({
         results: capped.items,
+        ...(context ? { context } : {}),
+        ...(contextMessages && topHit && !canReadContext
+          ? { contextUnavailable: "missing_message_anchor" }
+          : {}),
         ...(opts?.sessionLinkBase
           ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
           : {}),

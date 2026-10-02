@@ -107,6 +107,40 @@ function createTool(params: {
 describe("sessions_search tool", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+  it.each([0, -1, 1.5, 11, "invalid"])(
+    "rejects invalid context size %s before reading",
+    async (contextMessages) => {
+      const requests: CallGatewayRequest[] = [];
+      await expect(
+        createTool({ requests }).execute("invalid-context", {
+          query: "text",
+          contextMessages,
+        }),
+      ).rejects.toThrow("contextMessages must be a positive integer");
+      expect(requests).toHaveLength(0);
+    },
+  );
+
+  it.each([
+    { results: [hit()], contextMessages: undefined },
+    { results: [], contextMessages: 3 },
+    { results: [hit({ messageId: undefined })], contextMessages: 3 },
+    { results: [hit({ sessionId: undefined })], contextMessages: 3 },
+  ])(
+    "avoids history reads without a requested usable match: %j",
+    async ({ results, contextMessages }) => {
+      const requests: CallGatewayRequest[] = [];
+      const tool = createTool({ results, requests });
+      const result = await tool.execute("excerpt-only", { query: "text", contextMessages });
+      expect(result.details).not.toHaveProperty("context");
+      expect(requests.some((request) => request.method === "chat.history")).toBe(false);
+      expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+      if (contextMessages && results.length) {
+        expect(result.details).toHaveProperty("contextUnavailable", "missing_message_anchor");
+      }
+    },
+  );
+
   it("rejects a literal global target owned by another fixed-store agent when agent-to-agent is disabled", async () => {
     const requests: CallGatewayRequest[] = [];
     const tool = createTool({
@@ -153,7 +187,7 @@ describe("sessions_search tool", () => {
     expect(error.details).toMatchObject({ status: "error", error: expect.any(String) });
     expect(Value.Check(tool.outputSchema!, error.details)).toBe(true);
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ results: Array<{ role: "assistant" | "user"; score: number; sessionKey: string; snippet: string; timestamp: number; messageId?: string; sessionId?: string }>; archivedTranscriptsExcluded?: number; indexing?: true; sessionLinkRule?: string; truncated?: true; warning?: string } | { error: string; status: "error" | "forbidden" }',
+      '{ results: Array<{ role: "assistant" | "user"; score: number; sessionKey: string; snippet: string; timestamp: number; messageId?: string; sessionId?: string }>; archivedTranscriptsExcluded?: number; context?: { bytes: number; contentRedacted: boolean; contentTruncated: boolean; droppedMessages: boolean; messages: Array<unknown>; truncated: boolean; totalMessages?: number } | { error: string; status: "error" | "forbidden" }; contextUnavailable?: "missing_message_anchor"; indexing?: true; sessionLinkRule?: string; truncated?: true; warning?: string } | { error: string; status: "error" | "forbidden" }',
     );
   });
 
@@ -527,6 +561,62 @@ describe("sessions_search tool", () => {
         tool.execute("scoped-grant-race", { query: "text", sessionKey: targetSessionKey }),
       ).rejects.toThrow(`Session "${targetSessionKey}" changed after access was granted.`);
       expect(requests.some((request) => request.method === "sessions.search")).toBe(false);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("rechecks access before reading context when a search grant is revoked", async () => {
+    const requesterSessionKey = "agent:main:viewer";
+    const targetSessionKey = "agent:main:shared";
+    const expectedSessionId = "shared-incarnation";
+    const storePath = path.join(tempDirs.make("openclaw-search-context-"), "sessions.sqlite");
+    await applySessionStoreProjection({
+      storePath,
+      skipMaintenance: true,
+      update: (store) => {
+        store[targetSessionKey] = { sessionId: expectedSessionId, updatedAt: 1 };
+        return { persist: true, result: undefined };
+      },
+    });
+    let granted = true;
+    const requests: CallGatewayRequest[] = [];
+    const unregister = createSessionVisibilityChecker.registerScopedAccessProvider((request) =>
+      granted &&
+      request.requesterSessionKey === requesterSessionKey &&
+      request.targetSessionKey === targetSessionKey
+        ? { expectedSessionId }
+        : undefined,
+    );
+    try {
+      const tool = createSessionsSearchTool({
+        agentSessionKey: requesterSessionKey,
+        config: {
+          session: { store: storePath },
+          tools: { sessions: { visibility: "self" } },
+        },
+        callGateway: async <T = Record<string, unknown>>(
+          request: CallGatewayRequest,
+        ): Promise<T> => {
+          requests.push(request);
+          if (request.method === "sessions.search") {
+            granted = false;
+            return {
+              results: [hit({ sessionKey: targetSessionKey, sessionId: expectedSessionId })],
+            } as T;
+          }
+          throw new Error("Unexpected Gateway method: " + request.method);
+        },
+      });
+      const result = await tool.execute("revoked-context", {
+        query: "text",
+        sessionKey: targetSessionKey,
+        contextMessages: 3,
+      });
+
+      expect(result.details).toMatchObject({ context: { status: "forbidden" } });
+      expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+      expect(requests.some((request) => request.method === "chat.history")).toBe(false);
     } finally {
       unregister();
     }
