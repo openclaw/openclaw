@@ -185,11 +185,13 @@ The receipt can also include cleanup warnings. Modules and native libraries may
 remain loaded after their registrations are removed.
 
 Bundled plugins can reload while preserving their enabled or disabled policy.
-Compiled bundled plugins reuse their process-loaded code when their registrations
-reload. If the plugin's files changed while its original module remains loaded,
+Bundled plugins, including TypeScript source entries, reuse their process-loaded
+code when their registrations reload. If the plugin's files changed while its
+original module remains loaded,
 the result reports `restartRequired: true` with a warning, and CLI and tool
 output explain that a Gateway restart is needed to load edited code. Reload does
-not rebuild compiled bundled code; source installations also need a build.
+not rebuild bundled code. Rebuild before restarting when the installation loads
+compiled output.
 External captured sources return `restartRequired: false` after replacement.
 Reloading unchanged bundled files also returns `restartRequired: false`; channel
 and service registrations can be replaced without restarting the Gateway.
