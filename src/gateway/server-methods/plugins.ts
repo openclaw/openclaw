@@ -38,6 +38,7 @@ import { getPluginRegistryVersion } from "../../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
 import { listPluginServiceHealthFailures } from "../../plugins/service-health.js";
 import { validatePluginSkillPath } from "../../skills/loading/plugin-skill-bundle.js";
+import { catalogHandlers } from "./catalog.js";
 import { pluginCredentialHandlers } from "./plugins.credentials.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
@@ -52,6 +53,7 @@ function pluginReadError(error: unknown) {
 }
 
 export const pluginsHandlers: GatewayRequestHandlers = {
+  ...catalogHandlers,
   ...pluginCredentialHandlers,
   "plugins.skills.read": async ({ params, respond, context }) => {
     if (

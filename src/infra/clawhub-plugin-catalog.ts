@@ -225,7 +225,7 @@ function parseCatalogPackage(
     packageName: readRequiredClawHubStringField(value, "name", context),
     displayName: readRequiredClawHubStringField(value, "displayName", context),
     family,
-    isOfficial: readRequiredBoolean(value, "isOfficial", context),
+    isOfficial: readOptionalBoolean(value, "isOfficial", context) === true,
     categories: readClawHubStringArrayField(value, "categories", context) ?? [],
     ...(summary ? { summary } : {}),
     ...(ownerHandle ? { ownerHandle } : {}),
@@ -439,6 +439,7 @@ export async function fetchClawHubPluginCatalog(
     query?: string;
     searchSource?: "openclaw-control-ui";
     intent?: "all" | "trending" | "official" | "featured";
+    officialOnly?: boolean;
     category?: string;
     cursor?: string;
     limit?: number;
@@ -466,7 +467,7 @@ export async function fetchClawHubPluginCatalog(
         q: query,
         searchSource,
         category: params.category,
-        isOfficial: params.intent === "official" ? "true" : undefined,
+        isOfficial: params.officialOnly || params.intent === "official" ? "true" : undefined,
         limit: params.limit ? String(params.limit) : undefined,
       },
     });
@@ -479,7 +480,7 @@ export async function fetchClawHubPluginCatalog(
       category: params.category,
       cursor: params.cursor,
       featured: params.intent === "featured" ? "true" : undefined,
-      isOfficial: params.intent === "official" ? "true" : undefined,
+      isOfficial: params.officialOnly || params.intent === "official" ? "true" : undefined,
       curated: (params.intent ?? "all") === "all" && params.category ? "true" : undefined,
       sort:
         params.intent === "featured"

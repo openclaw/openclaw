@@ -696,4 +696,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["mcp.app.subscribeResource", "mcp-app", "operator.read", "2026.9"],
   ["mcp.app.unsubscribeResource", "mcp-app", "operator.read", "2026.9"],
   ["mcp.app.openFile", "mcp-app", "operator.read", "2026.9"],
+  ["catalog.browse", "plugins", "operator.read", "2026.9"],
+  ["catalog.searchKeywords", "plugins", "operator.read", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
