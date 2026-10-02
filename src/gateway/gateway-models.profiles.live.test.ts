@@ -10,12 +10,7 @@ import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { calculateUsageCost, normalizeResolvedPricing } from "@openclaw/llm-core";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  clampThinkingLevel,
-  type Api,
-  type Model,
-  type ModelThinkingLevel,
-} from "openclaw/plugin-sdk/llm";
+import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderCatNoncePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { installTestEnv } from "../../test/test-env.js";
@@ -138,7 +133,8 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { GatewayClient } from "./client.js";
 import {
   isolateLiveGatewayConfig,
-  type ProviderThinkingModelCompat,
+  resolveGatewayLiveModelThinkingLevel,
+  resolveGatewayLiveThinkingLevel,
 } from "./gateway-models.profiles.live.test-helpers.js";
 import { restoreLiveEnv, snapshotLiveEnv } from "./live-env-test-helpers.js";
 import {
@@ -160,17 +156,6 @@ const GATEWAY_LIVE_SMOKE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_SM
 const GATEWAY_LIVE_OPENAI_API_DEFAULT = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT,
 );
-const GATEWAY_LIVE_THINKING_LEVELS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-  "ultra",
-] as const;
-type GatewayLiveThinkingLevel = (typeof GATEWAY_LIVE_THINKING_LEVELS)[number];
 const THINKING_LEVEL = resolveGatewayLiveThinkingLevel({
   raw: process.env.OPENCLAW_LIVE_GATEWAY_THINKING,
   smoke: GATEWAY_LIVE_SMOKE,
@@ -2058,6 +2043,46 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
         requestedLevel: "high",
       }),
     ).toBe("off");
+  });
+
+  it.each([
+    { selector: "absent", compat: { supportsReasoningEffort: false } },
+    { selector: "empty", compat: { supportedReasoningEfforts: [] } },
+  ])("preserves mandatory OpenRouter thinking with an $selector effort selector", ({ compat }) => {
+    const model: Model<"openai-completions"> = {
+      ...createGatewayLiveTestModel("openrouter", "minimax/minimax-m2.7"),
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      thinkingLevelMap: { off: null },
+      compat,
+    };
+    expect(resolveGatewayLiveModelThinkingLevel({ model, requestedLevel: "off" })).toBe("low");
+
+    const cfg = OpenClawSchema.parse(
+      buildLiveGatewayConfig({
+        cfg: {},
+        candidates: [model],
+        liveAgentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
+        liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
+      }),
+    );
+    const configured = expectDefined(
+      cfg.models?.providers?.openrouter?.models?.[0],
+      "configured OpenRouter model",
+    );
+    const profile = resolveEffectiveThinkingProfile({
+      provider: "openrouter",
+      context: {
+        provider: "openrouter",
+        modelId: configured.id,
+        api: configured.api,
+        reasoning: configured.reasoning,
+        thinkingLevelMap: configured.thinkingLevelMap,
+        compat: configured.compat,
+      },
+    });
+    expect(profile?.levels.map(({ id }) => id)).toEqual(["low"]);
   });
 
   it.each([
@@ -5443,6 +5468,7 @@ function toLiveModelConfig(model: Model): NonNullable<ModelProviderConfig["model
     baseUrl: model.baseUrl,
     input: model.input ?? ["text"],
     reasoning: model.reasoning,
+    ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
     cost: {
       ...model.cost,
       ...(model.cost.tieredPricing
@@ -5604,94 +5630,6 @@ function resolveExplicitLiveModelCandidates(params: {
   return candidates;
 }
 
-function resolveGatewayLiveModelThinkingLevel(params: {
-  model: Model;
-  requestedLevel: string;
-}): string {
-  const { model, requestedLevel } = params;
-  const normalized = requestedLevel.trim().toLowerCase();
-  if (!isGatewayLiveThinkingLevel(normalized)) {
-    return requestedLevel;
-  }
-  const profile = resolveEffectiveThinkingProfile({
-    provider: model.provider,
-    context: {
-      provider: model.provider,
-      modelId: model.id,
-      api: model.api,
-      agentRuntime: "openclaw",
-      reasoning: model.reasoning,
-      compat: getProviderThinkingModelCompat(model),
-    },
-  });
-  if (profile) {
-    const levelIds = profile.levels.map((level) => level.id);
-    if (levelIds.some((level) => level === normalized)) {
-      if (normalized === "ultra") {
-        return normalized;
-      }
-      const clamped = clampThinkingLevel(model, normalized as ModelThinkingLevel);
-      if (normalized === "max" && clamped !== normalized) {
-        throw new Error(
-          `${model.provider}/${model.id} advertises max but model metadata clamps it to ${clamped}`,
-        );
-      }
-      return clamped;
-    }
-    if (normalized === "max" || normalized === "ultra") {
-      throw new Error(`${model.provider}/${model.id} does not advertise ${normalized}`);
-    }
-    if (profile.defaultLevel) {
-      return clampThinkingLevel(model, profile.defaultLevel as ModelThinkingLevel);
-    }
-    if (levelIds.length === 1) {
-      const [onlyLevel] = levelIds;
-      return onlyLevel
-        ? clampThinkingLevel(model, onlyLevel as ModelThinkingLevel)
-        : requestedLevel;
-    }
-  }
-  if (normalized === "ultra") {
-    throw new Error(`${model.provider}/${model.id} does not advertise ultra`);
-  }
-  const clamped = clampThinkingLevel(model, normalized as ModelThinkingLevel);
-  if (normalized === "max" && clamped !== normalized) {
-    throw new Error(`${model.provider}/${model.id} clamps max to ${clamped}`);
-  }
-  return clamped;
-}
-
-function getProviderThinkingModelCompat(model: Model): ProviderThinkingModelCompat | undefined {
-  const compat = model.compat;
-  if (!compat || typeof compat !== "object") {
-    return undefined;
-  }
-  const record = compat as Record<string, unknown>;
-  const thinkingFormat =
-    typeof record.thinkingFormat === "string" ? record.thinkingFormat : undefined;
-  const supportedReasoningEfforts =
-    Array.isArray(record.supportedReasoningEfforts) &&
-    record.supportedReasoningEfforts.every((value) => typeof value === "string")
-      ? record.supportedReasoningEfforts
-      : record.supportedReasoningEfforts === null
-        ? null
-        : undefined;
-  return thinkingFormat || supportedReasoningEfforts !== undefined
-    ? {
-        ...(thinkingFormat ? { thinkingFormat } : {}),
-        ...(supportedReasoningEfforts !== undefined ? { supportedReasoningEfforts } : {}),
-      }
-    : undefined;
-}
-
-function resolveGatewayLiveThinkingLevel(params: { raw?: string; smoke: boolean }): string {
-  const raw = params.raw?.trim().toLowerCase();
-  if (!raw) {
-    return params.smoke ? "low" : "high";
-  }
-  return isGatewayLiveThinkingLevel(raw) ? raw : params.smoke ? "low" : "high";
-}
-
 async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> {
   const configured = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
   if (!GATEWAY_LIVE_OPENAI_API_DEFAULT) {
@@ -5729,10 +5667,6 @@ async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> 
   }
   expect(selected.modelRef).toBe("openai/gpt-6-astra");
   return selected.modelRef;
-}
-
-function isGatewayLiveThinkingLevel(value: string): value is GatewayLiveThinkingLevel {
-  return GATEWAY_LIVE_THINKING_LEVELS.some((level) => level === value);
 }
 
 function buildLiveGatewayConfig(params: {
