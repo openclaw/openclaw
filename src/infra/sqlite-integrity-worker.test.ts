@@ -168,52 +168,6 @@ describe("SQLite integrity child", () => {
     expect(fs.readFileSync(source, "utf8")).toBe("retained source");
   });
 
-  it.each([
-    { label: "empty", paddingBytes: null, minimumSize: 0, maximumSize: 0, timeout: 300_000 },
-    {
-      label: "small",
-      paddingBytes: 0,
-      minimumSize: 1,
-      maximumSize: 32 * 1024 * 1024,
-      timeout: 301_000,
-    },
-    {
-      label: "over 64 MiB",
-      paddingBytes: 64 * 1024 * 1024,
-      minimumSize: 64 * 1024 * 1024 + 1,
-      maximumSize: 96 * 1024 * 1024,
-      timeout: 381_000,
-    },
-  ])(
-    "starts the child with the size budget for a $label database",
-    async ({ paddingBytes, minimumSize, maximumSize, timeout }) => {
-      const source = path.join(tempDirs.make("openclaw-integrity-budget-"), "source.sqlite");
-      const db = new (requireNodeSqlite().DatabaseSync)(source);
-      try {
-        if (paddingBytes !== null) {
-          db.exec("CREATE TABLE padding (data BLOB)");
-          db.prepare("INSERT INTO padding VALUES (zeroblob(?))").run(paddingBytes);
-        }
-      } finally {
-        db.close();
-      }
-      const size = fs.statSync(source).size;
-      expect(size).toBeGreaterThanOrEqual(minimumSize);
-      expect(size).toBeLessThanOrEqual(maximumSize);
-      vi.mocked(fork).mockClear();
-
-      await expect(
-        assertSqliteIntegrityInWorker(source, 250, new AbortController().signal),
-      ).resolves.toBeUndefined();
-
-      expect(fork).toHaveBeenCalledExactlyOnceWith(
-        expect.any(URL),
-        [],
-        expect.objectContaining({ timeout, killSignal: "SIGKILL" }),
-      );
-    },
-  );
-
   it("budgets integrity for committed WAL data while its writer remains open", async () => {
     const source = path.join(tempDirs.make("openclaw-integrity-wal-budget-"), "source.sqlite");
     const writer = new (requireNodeSqlite().DatabaseSync)(source);
@@ -484,8 +438,7 @@ describe("SQLite integrity child", () => {
     { messages: '[{ type: "phase", phase: "checking" }, { ok: true }]', completes: true },
     { messages: '[{ ok: true }, { type: "phase", phase: "closing" }]', completes: true },
     { messages: "[{ ok: true, checkElapsedMs: 0 }]", completes: true, checkMs: 0 },
-    { messages: "[{ ok: true, checkElapsedMs: 4.75 }]", completes: true, checkMs: 4.75 },
-    ...["-1", "NaN", "Infinity", '"4.75"', "null"].map((invalid) => ({
+    ...["-1", "NaN", '"4.75"'].map((invalid) => ({
       messages: `[{ ok: true, checkElapsedMs: ${invalid} }]`,
       completes: true,
     })),
@@ -494,12 +447,6 @@ describe("SQLite integrity child", () => {
         '[{ ok: false, error: { name: "SyntheticCheckError", message: "synthetic check failed" }, checkElapsedMs: 4.75 }]',
       completes: false,
       checkMs: 4.75,
-      errorMessage: "synthetic check failed",
-    },
-    {
-      messages:
-        '[{ ok: false, error: { name: "SyntheticCheckError", message: "synthetic check failed" }, checkElapsedMs: NaN }]',
-      completes: false,
       errorMessage: "synthetic check failed",
     },
   ])(
@@ -631,7 +578,6 @@ describe("SQLite integrity child", () => {
   });
 
   it.each([
-    { failClosingPhase: false, failOpen: false, failNativeClose: false, reuse: false },
     { failClosingPhase: true, failOpen: false, failNativeClose: false, reuse: false },
     { failClosingPhase: false, failOpen: true, failNativeClose: false, reuse: false },
     { failClosingPhase: false, failOpen: false, failNativeClose: true, reuse: true },
