@@ -9,6 +9,7 @@ import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.t
 import { decodeXml } from "../src/shared/xml.ts";
 import {
   collectToolDisplaySources,
+  decodeAndroidResourceValue,
   findClosingDelimiter,
   lineNumber,
   selectDeterministicTranslation,
@@ -92,6 +93,7 @@ const TOOL_DISPLAY_SOURCE =
 const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
   android: [
     path.join(ROOT, "apps", "android", "app", "src", "main"),
+    path.join(ROOT, "apps", "android", "gateway-client", "src", "main"),
     path.join(ROOT, "apps", "android", "app", "src", "play"),
     path.join(ROOT, "apps", "android", "app", "src", "thirdParty"),
     path.join(ROOT, "apps", "android", "wear", "src", "main", "res", "values"),
@@ -544,6 +546,9 @@ function decodeMultilineLiteral(raw: string): string {
 }
 
 function decodeLiteral(raw: string, kind: string): string {
+  if (kind.startsWith("resource-")) {
+    return decodeAndroidResourceValue(raw);
+  }
   if (kind.endsWith("-multiline")) {
     return decodeMultilineLiteral(raw);
   }

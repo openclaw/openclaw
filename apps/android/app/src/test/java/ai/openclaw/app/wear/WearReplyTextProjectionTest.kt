@@ -5,6 +5,8 @@ import ai.openclaw.wear.shared.WearProtocolCodec
 import ai.openclaw.wear.shared.WearReplyText
 import ai.openclaw.wear.shared.WearReplyTextStatus
 import ai.openclaw.wear.shared.WearRpcMethod
+import ai.openclaw.wear.shared.projectWearFullReply
+import ai.openclaw.wear.shared.wearReplyText
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement

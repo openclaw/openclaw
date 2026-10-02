@@ -5,16 +5,10 @@ import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.parseInvokeErrorFromThrowable
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-
-fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
-
-internal fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
 
 internal fun escapeSqlLikeLiteral(value: String): String = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
@@ -66,9 +60,6 @@ fun parseJsonBooleanFlag(
     else -> null
   }
 }
-
-/** Converts JSON null to Kotlin null while preserving primitive text content. */
-fun JsonElement?.asStringOrNull(): String? = (this as? JsonPrimitive)?.contentOrNull
 
 /** Parses #RRGGBB or RRGGBB into opaque ARGB. */
 fun parseHexColorArgb(raw: String?): Long? {

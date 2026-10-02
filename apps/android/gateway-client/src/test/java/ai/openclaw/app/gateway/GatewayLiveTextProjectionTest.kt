@@ -1,6 +1,5 @@
 package ai.openclaw.app.gateway
 
-import ai.openclaw.app.wear.WearChatStreamProjector
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -50,9 +49,6 @@ class GatewayLiveTextProjectionTest {
     val coalesced = "x".repeat(3_000) + "latest tail"
     val afterCoalescing = checkNotNull(projection.project("chat", chat("\"deltaText\":${JsonPrimitive(coalesced)}")))
     assertEquals("Hello  world\n$coalesced", text(afterCoalescing))
-    val watch = checkNotNull(WearChatStreamProjector().project(afterCoalescing))
-    assertEquals(coalesced.takeLast(2_000), watch.getValue("streamText").jsonPrimitive.content)
-    assertEquals(JsonPrimitive(true), watch["streamTextComplete"])
   }
 
   @Test

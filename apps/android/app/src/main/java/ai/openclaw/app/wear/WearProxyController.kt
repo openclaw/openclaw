@@ -15,6 +15,10 @@ import ai.openclaw.wear.shared.WearReplyTextPage
 import ai.openclaw.wear.shared.WearReplyTextStatus
 import ai.openclaw.wear.shared.WearRpcError
 import ai.openclaw.wear.shared.WearRpcMethod
+import ai.openclaw.wear.shared.wearReplyEntryId
+import ai.openclaw.wear.shared.wearReplyIsSynthetic
+import ai.openclaw.wear.shared.wearReplyIsTruncated
+import ai.openclaw.wear.shared.wearReplyText
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement

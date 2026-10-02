@@ -25,6 +25,7 @@ const WEAR_RESOURCE_ROOT = path.join(ANDROID_WEAR_MAIN_ROOT, "res");
 const WEAR_SOURCE_ROOT = path.join(ANDROID_WEAR_MAIN_ROOT, "java");
 const ANDROID_SOURCE_ROOTS = [
   SOURCE_ROOT,
+  path.join(ROOT, "apps", "android", "gateway-client", "src", "main", "java"),
   ANDROID_PLAY_SOURCE_ROOT,
   ANDROID_THIRD_PARTY_SOURCE_ROOT,
   WEAR_SOURCE_ROOT,

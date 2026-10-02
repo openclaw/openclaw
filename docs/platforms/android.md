@@ -99,7 +99,21 @@ any failure. Offline messages still use the durable queue.
 
 ## Wear OS companion
 
-The Wear OS companion uses the paired Android phone's authenticated Gateway connection; the watch never receives or stores Gateway credentials. It can select agents and sessions, read bounded transcripts, send text or dictated replies, abort an active run, start realtime Talk inside the selected session, and connect or disconnect the paired phone's Gateway. It also offers local reply notifications, dark or light appearance, and optional automatic speech for replies. Agent and Gateway controls are capability-negotiated for staggered phone/watch updates. Realtime Talk streams microphone and playback audio over a temporary Wear OS Data Layer channel and stops when the selected phone, Gateway connection, or audio channel is lost.
+The Wear OS companion defaults to **Phone Proxy**, using the paired Android phone's authenticated Gateway connection. In this mode, Gateway credentials stay on the phone. It can select agents and sessions, read bounded transcripts, send text or dictated replies, abort an active run, start realtime Talk inside the selected session, and connect or disconnect the paired phone's Gateway. It also offers local reply notifications, dark or light appearance, and optional automatic speech for replies. Agent and Gateway controls are capability-negotiated for staggered phone/watch updates. Realtime Talk streams microphone and playback audio over a temporary Wear OS Data Layer channel and stops when the selected phone, Gateway connection, or audio channel is lost.
+
+### Direct Gateway
+
+To connect without a phone, open **Connection > Setup code** on the watch. Generate a limited code for a Gateway endpoint the watch can reach:
+
+```bash
+openclaw qr --limited --setup-code-only
+```
+
+Enter the code, then connect. If the watch asks to trust a certificate, verify its fingerprint before accepting it. The watch stores its own encrypted device credentials and certificate trust; it does not copy credentials from the phone. Full-access setup codes, shared tokens, and passwords are not accepted. See [QR setup](/cli/qr) for endpoint overrides and pairing approval.
+
+Direct mode supports session selection, bounded text history, messages, stopping the active run, and reviewing pending approvals. It requests read, write, and approval scopes, not administrative or pairing access. Phone Proxy features such as realtime Talk remain in Phone Proxy mode.
+
+Direct transport closes when the app leaves the foreground and reconnects on return unless you selected **Disconnect**. Use **Connection** to change Gateways, select **Phone Proxy**, or forget saved credentials. A failed direct connection never silently switches to the phone. If message delivery or an approval outcome is unconfirmed, refresh before retrying.
 
 ## Install outside Google Play
 

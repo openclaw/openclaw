@@ -10,7 +10,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const inputManifest = path.join(root, "scripts/native-protocol-inputs.json");
 export const nativeProtocolOutputDirectories = {
   swift: "apps/shared/OpenClawKit/.build/protocol",
-  kotlin: "apps/android/app/build/generated/openclaw-protocol",
+  kotlin: "apps/android/gateway-client/build/generated/openclaw-protocol",
 };
 const outputFiles = {
   swift: ["GatewayModels.swift"],

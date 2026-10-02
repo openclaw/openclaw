@@ -25,7 +25,7 @@ data class GatewaySourcePreviewConfig(
   val generation: Long,
 )
 
-internal fun resolveGatewaySourcePreviewConfig(
+fun resolveGatewaySourcePreviewConfig(
   config: JsonObject?,
   controlUiUrl: String,
   generation: Long,

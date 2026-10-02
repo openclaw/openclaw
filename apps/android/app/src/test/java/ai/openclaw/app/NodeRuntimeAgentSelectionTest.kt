@@ -11,6 +11,7 @@ import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayHelloSummary
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.syntheticGatewayRequestLease
 import android.content.Context
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
@@ -1519,7 +1520,7 @@ class NodeRuntimeAgentSelectionTest {
     ReflectionHelpers.setField(chat, "requestGatewayForGateway", requestGatewayForGateway)
     val captureLease: (ChatCacheScope?) -> GatewaySession.RequestLease? = { gatewayScope ->
       val generation = requestLeaseGeneration()
-      GatewaySession.RequestLease(
+      syntheticGatewayRequestLease(
         endpointStableId = gatewayScope?.gatewayId.orEmpty(),
         isCurrentImpl = { generation == requestLeaseGeneration() },
       ) { method, paramsJson, _, withEnqueue ->

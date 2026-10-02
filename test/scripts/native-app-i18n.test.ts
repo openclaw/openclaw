@@ -523,17 +523,23 @@ describe("native app i18n inventory", () => {
     );
   });
 
-  it("ignores generated Android resource entries", () => {
+  it("decodes Android resource values and ignores generated entries", () => {
     const entries = extractNativeI18nCandidates(
       "android",
       "apps/android/app/src/main/res/values/strings.xml",
       `<resources>
         <string name="manual_status">Gateway ready</string>
+        <string name="approval_status">This session\\'s approvals</string>
+        <string name="quoted_status">"Review &amp; approve"</string>
         <string name="native_0123456789abcdef">Generated feedback</string>
       </resources>`,
     );
 
-    expect(entries.map((entry) => entry.source)).toEqual(["Gateway ready"]);
+    expect(entries.map((entry) => entry.source)).toEqual([
+      "Gateway ready",
+      "This session's approvals",
+      "Review & approve",
+    ]);
   });
 
   it("extracts only localizable usage descriptions from Apple plists", () => {
@@ -569,11 +575,16 @@ describe("native app i18n inventory", () => {
           <item>@string/native_mode</item>
           <item>off</item>
           <item>Visible choice</item>
+          <item>"Session\\'s &amp; shared"</item>
         </string-array>
       </resources>`,
     );
 
-    expect(entries.map((entry) => entry.source)).toEqual(["off", "Visible choice"]);
+    expect(entries.map((entry) => entry.source)).toEqual([
+      "off",
+      "Visible choice",
+      "Session's & shared",
+    ]);
   });
 
   it("shares discovered UI helpers across files only within the same platform", () => {
@@ -756,6 +767,7 @@ describe("native app i18n inventory", () => {
           entry.sites.every(
             (site) =>
               site.path.startsWith("apps/android/app/src/main/") ||
+              site.path.startsWith("apps/android/gateway-client/src/main/") ||
               site.path.startsWith("apps/android/app/src/play/") ||
               site.path.startsWith("apps/android/app/src/thirdParty/") ||
               site.path === "apps/android/wear/src/main/res/values/strings.xml" ||

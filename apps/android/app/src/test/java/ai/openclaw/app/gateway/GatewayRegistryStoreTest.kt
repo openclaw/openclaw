@@ -35,11 +35,10 @@ class GatewayRegistryStoreTest {
     val entriesBefore = store.entries.value
     endpoints.forEach { assertTrue(store.rename(it.stableId, "  Home lab  ")) }
     assertEquals(
-      entriesBefore,
-      store.entries.value
-        .map { it.copy(localName = null) }
-        .sortedForStorage(),
+      entriesBefore.associateBy { it.stableId },
+      store.entries.value.associate { it.stableId to it.copy(localName = null) },
     )
+    assertEquals(listOf(discovered.stableId, manual.stableId), store.entries.value.map { it.stableId })
     assertEquals(manual, manualGatewayEndpoint(requireNotNull(store.activeEntry())))
 
     store.setActive(discovered.stableId)

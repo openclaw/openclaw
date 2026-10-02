@@ -9,6 +9,7 @@ import ai.openclaw.wear.shared.WearRpcError
 import ai.openclaw.wear.shared.WearRpcMethod
 import android.app.Activity
 import android.app.RemoteInput
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -31,10 +32,14 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -2712,8 +2717,13 @@ class WearChatEventFlowTest {
       }
     private val clientField = WearApplication::class.java.getDeclaredField("proxyClient\$delegate").apply { isAccessible = true }
     private val repositoryField = WearApplication::class.java.getDeclaredField("gatewayRepository\$delegate").apply { isAccessible = true }
+    private val runtimeField = WearApplication::class.java.getDeclaredField("directRuntime\$delegate").apply { isAccessible = true }
+    private val factoryField = ViewModelProvider.AndroidViewModelFactory::class.java.getDeclaredField("_instance").apply { isAccessible = true }
     private val previousClient = clientField.get(app)
     private val previousRepository = repositoryField.get(app)
+    private val previousRuntime = runtimeField.get(app)
+    private val previousFactory = factoryField.get(null)
+    private val runtimeJob = SupervisorJob()
     private var sequence = 0L
     var runId = "stream-run"
     var historyRequests = 0
@@ -2807,10 +2817,17 @@ class WearChatEventFlowTest {
       Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
       owner.viewModelStore.clear()
       idle()
+      // Robolectric has no AndroidKeyStore; keep the real route owner with test-backed storage.
+      val store = WearGatewayStore(app.getSharedPreferences("event-flow-direct", Context.MODE_PRIVATE))
+      runtimeField.set(app, lazyOf(WearDirectRuntime(app, CoroutineScope(runtimeJob + Dispatchers.Main.immediate), store)))
+      // Observe the ViewModel created in the Phone Proxy composition, not a second Activity-owned one.
+      factoryField.set(
+        null,
+        object : ViewModelProvider.AndroidViewModelFactory(app) {
+          override fun <T : ViewModel> create(modelClass: Class<T>): T = super.create(modelClass).also { if (it is WearViewModel) vm = it }
+        },
+      )
       val controller = Robolectric.buildActivity(MainActivity::class.java, Intent().putExtra(extraWearLaunchTarget, target.rawValue))
-      // Bind this test application before Activity's cached default factory can
-      // reuse an Application from an earlier Robolectric test.
-      vm = ViewModelProvider(controller.get(), ViewModelProvider.AndroidViewModelFactory(app))[WearViewModel::class.java]
       replyObserver = controller
       controller.setup().visible()
       val root = controller.get().window.decorView
@@ -3111,9 +3128,12 @@ class WearChatEventFlowTest {
     fun close() {
       replyObserver?.pause()?.stop()?.destroy()
       owner.viewModelStore.clear()
+      runtimeJob.cancel()
       idle()
       clientField.set(app, previousClient)
       repositoryField.set(app, previousRepository)
+      runtimeField.set(app, previousRuntime)
+      factoryField.set(null, previousFactory)
       originalScale?.let { Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, it) }
     }
   }

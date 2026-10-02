@@ -1,6 +1,5 @@
 package ai.openclaw.app.gateway
 
-import ai.openclaw.app.SecurePrefs
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -58,9 +57,9 @@ interface DeviceAuthTokenStore {
   )
 }
 
-/** SecurePrefs-backed implementation of Android gateway device-token storage. */
+/** Gateway device-token storage backed by the app's secure credential store. */
 class DeviceAuthStore(
-  private val prefs: SecurePrefs,
+  private val prefs: GatewayCredentialStore,
 ) : DeviceAuthTokenStore {
   private val json = Json { ignoreUnknownKeys = true }
 
@@ -131,29 +130,38 @@ class DeviceAuthStore(
     prefs.remove(metadataKey(gatewayId, deviceId, role))
   }
 
-  private fun tokenKey(
-    gatewayId: String,
-    deviceId: String,
-    role: String,
-  ): String = "gateway.deviceToken.${keySuffix(gatewayId, deviceId, role)}"
+  companion object {
+    /** Pure edits for a registry/credential transaction after the session writers drain. */
+    fun removalEdits(
+      gatewayId: String,
+      deviceId: String,
+      roles: List<String>,
+    ): Map<String, String?> = roles.flatMap { role -> listOf(tokenKey(gatewayId, deviceId, role), metadataKey(gatewayId, deviceId, role)) }.associateWith { null }
 
-  private fun metadataKey(
-    gatewayId: String,
-    deviceId: String,
-    role: String,
-  ): String = "gateway.deviceTokenMeta.${keySuffix(gatewayId, deviceId, role)}"
+    private fun tokenKey(
+      gatewayId: String,
+      deviceId: String,
+      role: String,
+    ): String = "gateway.deviceToken.${keySuffix(gatewayId, deviceId, role)}"
 
-  private fun keySuffix(
-    gatewayId: String,
-    deviceId: String,
-    role: String,
-  ): String {
-    val gateway = gatewayId.trim().also { require(it.isNotEmpty()) }
-    return "$gateway.${deviceId.trim().lowercase()}.${normalizeRole(role)}"
+    private fun metadataKey(
+      gatewayId: String,
+      deviceId: String,
+      role: String,
+    ): String = "gateway.deviceTokenMeta.${keySuffix(gatewayId, deviceId, role)}"
+
+    private fun keySuffix(
+      gatewayId: String,
+      deviceId: String,
+      role: String,
+    ): String {
+      val gateway = gatewayId.trim().also { require(it.isNotEmpty()) }
+      return "$gateway.${deviceId.trim().lowercase()}.${normalizeRole(role)}"
+    }
+
+    /** Normalizes role names so node/operator token slots are stable across callers. */
+    private fun normalizeRole(role: String): String = role.trim().lowercase()
   }
-
-  /** Normalizes role names so node/operator token slots are stable across callers. */
-  private fun normalizeRole(role: String): String = role.trim().lowercase()
 
   /** Stores scopes in deterministic order for display and restart comparisons. */
   private fun normalizeScopes(scopes: List<String>): List<String> =

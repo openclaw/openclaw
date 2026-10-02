@@ -2839,12 +2839,12 @@ jobs:
             # Use the manifest's inventory for both Node receipts and this fallback.
             startup_files_text="$(node -p 'JSON.parse(process.env.OPENCLAW_CI_STARTUP_CORPUS_TEST_FILES_JSON).join(" ")')"
             read -r -a startup_files <<< "$startup_files_text"
-            startup_workers="$(node -p 'Math.min(4, require("node:os").availableParallelism())')"
+            startup_workers="$(node -e 'process.stdout.write(String(Math.min(4, require("node:os").availableParallelism())))')"
             run_startup_corpus --maxWorkers="$startup_workers" "${startup_files[@]}"
             exit 0
           elif [[ -f test/vitest/vitest.startup-corpus-paths.mjs ]]; then
             # Runner labels can advertise more CPUs than this process can use.
-            startup_workers="$(node -p 'Math.min(4, require("node:os").availableParallelism())')"
+            startup_workers="$(node -e 'process.stdout.write(String(Math.min(4, require("node:os").availableParallelism())))')"
             run_startup_corpus --maxWorkers="$startup_workers" src/config/config-startup-corpus.test.ts \
               src/config/state-startup-corpus*.test.ts
             exit 0
@@ -2853,7 +2853,7 @@ jobs:
             exit 1
           fi
           # Frozen targets before the file split retain their complete legacy matrix.
-          cores="$(node -p 'require("node:os").availableParallelism()')"
+          cores="$(node -e 'process.stdout.write(String(require("node:os").availableParallelism()))')"
           # Worker compilation also uses CPU: reserve four cores per invocation.
           # The 4-vCPU ratchets label can deliver only two usable CPUs.
           concurrency=$((cores / 4))
@@ -5828,6 +5828,17 @@ jobs:
         run: |
           set -euo pipefail
           android_build_metadata=()
+          gateway_client_test=()
+          gateway_client_build=()
+          gateway_client_lint=()
+          gateway_client_ktlint=()
+          # Frozen Android targets retain their module set.
+          if [ -f gateway-client/build.gradle.kts ]; then
+            gateway_client_test=(:gateway-client:testDebugUnitTest)
+            gateway_client_build=(:gateway-client:assembleDebug :gateway-client:lintDebug)
+            gateway_client_lint=(:gateway-client:lintDebug)
+            gateway_client_ktlint=(:gateway-client:ktlintCheck)
+          fi
           if [ "$RUN_LINT" = "true" ] || [ -n "$APP_LINT" ]; then
             # Repeated native invocations in one row must not invalidate BuildConfig by time alone.
             android_build_timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -5837,7 +5848,7 @@ jobs:
             test-play)
               ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
                 :app:testPlayDebugUnitTest \
-                :wear-shared:testDebugUnitTest
+                :wear-shared:testDebugUnitTest "${gateway_client_test[@]}"
               ;;
             test-play-compat)
               # Frozen targets predate the Wear shared project. Keep their app-owned
@@ -5869,7 +5880,7 @@ jobs:
                 ./gradlew --no-daemon --build-cache \
                   :benchmark:assembleDebug \
                   :wear-shared:assembleDebug \
-                  :wear-shared:lintDebug
+                  :wear-shared:lintDebug "${gateway_client_build[@]}"
               else
                 ./gradlew --no-daemon --build-cache \
                   :app:assemblePlayDebug \
@@ -5878,7 +5889,7 @@ jobs:
                   :app:lintThirdPartyDebug \
                   :benchmark:assembleDebug \
                   :wear-shared:assembleDebug \
-                  :wear-shared:lintDebug
+                  :wear-shared:lintDebug "${gateway_client_build[@]}"
               fi
               ;;
             build-wear)
@@ -5897,7 +5908,7 @@ jobs:
                 :app:ktlintCheck \
                 :benchmark:ktlintCheck \
                 :wear:ktlintCheck \
-                :wear-shared:ktlintCheck
+                :wear-shared:ktlintCheck "${gateway_client_ktlint[@]}"
               if [ "$BUILD_BENCHMARK" = "true" ]; then
                 ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache :benchmark:assembleDebug
               fi
@@ -5914,7 +5925,7 @@ jobs:
               ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache :app:lintThirdPartyDebug
               ;;
             play)
-              ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache :app:lintPlayDebug :wear-shared:lintDebug
+              ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache :app:lintPlayDebug :wear-shared:lintDebug "${gateway_client_lint[@]}"
               ;;
             "") ;;
             *)
@@ -5930,6 +5941,7 @@ jobs:
           name: android-test-reports-${{ matrix.task }}-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_attempt }}
           path: |
             apps/android/app/build/test-results/test*UnitTest/TEST-*.xml
+            apps/android/gateway-client/build/test-results/test*UnitTest/TEST-*.xml
             apps/android/wear/build/test-results/test*UnitTest/TEST-*.xml
             apps/android/wear-shared/build/test-results/test*UnitTest/TEST-*.xml
             apps/android/**/hs_err_pid*.log

@@ -3,7 +3,6 @@ package ai.openclaw.app
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatTranscriptCache
-import ai.openclaw.app.gateway.DeviceAuthPayload
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GATEWAY_CONNECT_TIMEOUT_MS
@@ -556,7 +555,7 @@ class GatewayBootstrapAuthTest {
             .getValue("deviceToken")
             .jsonPrimitive.content,
         )
-        val payload = DeviceAuthPayload.buildV3(identity.deviceId, "openclaw-android", "ui", "operator", scopes, 1700000000123, token, "browser-challenge", "android", "Android")
+        val payload = "v3|${identity.deviceId}|openclaw-android|ui|operator|${scopes.joinToString(",")}|1700000000123|$token|browser-challenge|android|android"
         assertTrue(
           identityStore.verifySelfSignature(
             payload,
@@ -614,7 +613,8 @@ class GatewayBootstrapAuthTest {
           assertEquals(setOf(field), result.getValue("auth").jsonObject.keys)
           val scopes = result.getValue("scopes").jsonArray.map { it.jsonPrimitive.content }
           assertEquals(listOf("operator.read"), scopes)
-          val payload = DeviceAuthPayload.buildV3(identity.deviceId, "openclaw-android", "ui", "operator", scopes, 1700000000123, if (field == "token") expectedCredential else null, "browser-challenge", "android", "Android")
+          val signatureToken = if (field == "token") expectedCredential else ""
+          val payload = "v3|${identity.deviceId}|openclaw-android|ui|operator|${scopes.joinToString(",")}|1700000000123|$signatureToken|browser-challenge|android|android"
           assertTrue(
             identityStore.verifySelfSignature(
               payload,

@@ -18,7 +18,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - SMS is available only in third-party builds on supported telephony devices. Setup distinguishes partial read/send access. Android Settings can recover user denial, but installer or device-policy restrictions may leave SMS unavailable; OpenClaw cannot override them. Returning from Settings rereads the actual grants without restarting Gateway setup.
 - View the phone's memory and disk meters on the Control UI Devices page. Connected Android nodes report host resource stats immediately and every 60 seconds; disk meters require an available storage sample and a Gateway that supports host stats.
 - Manage installed skills and Gateway-verified ClawHub releases, review Skill Workshop proposals, and inspect or edit automations with the required Gateway access.
-- Use the Wear OS companion for sessions, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch.
+- Use the Wear OS companion in Phone Proxy mode for sessions, replies, aborts, and realtime Talk through the paired phone. Direct Gateway mode adds watch-owned conversations and approvals.
 
 ## Open in Android Studio
 
@@ -195,9 +195,13 @@ Other dialogs, sheets, and popup menus are not fold-adapted yet.
 
 ## Wear OS companion
 
-The `wear` app is a paired-phone companion with the same application ID and signing identity as the phone app. The watch discovers the phone through Wear OS Data Layer, then uses the phone's existing authenticated operator session. It never receives or stores Gateway tokens, passwords, TLS pins, or device-signing identity.
+The `wear` app remains a paired-phone companion package with the phone app's application ID and signing identity. It defaults to **Phone Proxy**. In that mode, the watch discovers the phone through Wear OS Data Layer and uses the phone's authenticated operator session. Phone Proxy does not copy Gateway credentials, TLS pins, or device-signing identity to the watch.
 
-The watch supports agent and session selection, bounded text-only transcript history, streaming reply state, text and voice replies, abort, realtime Talk within the selected session, paired-phone Gateway controls, local reply notifications, theme and automatic-speech settings, and a launch Tile. Realtime Talk streams watch microphone and playback audio over a temporary Wear OS Data Layer channel; it still uses the phone's authenticated Gateway session and closes when the selected phone or Gateway connection changes. A missing Data Layer event sequence or changed phone-process epoch triggers a fresh history request instead of applying uncertain deltas. Agent and Gateway controls are capability-negotiated so an older paired phone remains usable during staggered updates.
+In Phone Proxy, the watch supports agent and session selection, bounded text-only transcript history, streaming reply state, text and voice replies, abort, realtime Talk within the selected session, paired-phone Gateway controls, local reply notifications, theme and automatic-speech settings, and a launch Tile. Realtime Talk streams watch microphone and playback audio over a temporary Wear OS Data Layer channel; it still uses the phone's authenticated Gateway session and closes when the selected phone or Gateway connection changes. A missing Data Layer event sequence or changed phone-process epoch triggers a fresh history request instead of applying uncertain deltas. Agent and Gateway controls are capability-negotiated so an older paired phone remains usable during staggered updates.
+
+Open **Connection** on the watch to add a Direct Gateway with a limited setup code from `openclaw qr --limited`. The watch keeps its own credentials, certificate trust, and device identity in encrypted local storage. It does not accept a phone token or password. Direct mode supports conversation history, text replies, aborts, and supported approvals while the app is in the foreground. Backgrounding pauses the direct connection. Reopening reconnects the selected Gateway unless you explicitly disconnected it.
+
+Realtime Talk and phone-provided controls remain Phone Proxy features. Direct Gateway does not change the companion-package installation requirement. See the [Wear OS behavior contract](wear/BEHAVIOR.md) for mode and lifecycle details.
 
 ```bash
 cd apps/android
@@ -226,7 +230,7 @@ pnpm install
 cd apps/android
 ./gradlew :app:assemblePlayDebug
 ./gradlew :app:installPlayDebug
-./gradlew :app:testPlayDebugUnitTest
+./gradlew :app:testPlayDebugUnitTest :gateway-client:testDebugUnitTest
 cd ../..
 pnpm android:release:archive
 ```
@@ -393,9 +397,9 @@ Direct Gradle tasks:
 
 ```bash
 cd apps/android
-./gradlew :app:ktlintCheck :benchmark:ktlintCheck :wear:ktlintCheck :wear-shared:ktlintCheck
-./gradlew :app:ktlintFormat :benchmark:ktlintFormat :wear:ktlintFormat :wear-shared:ktlintFormat
-./gradlew :app:lintPlayDebug :app:lintThirdPartyDebug :wear:lintDebug :wear-shared:lintDebug
+./gradlew :app:ktlintCheck :benchmark:ktlintCheck :gateway-client:ktlintCheck :wear:ktlintCheck :wear-shared:ktlintCheck
+./gradlew :app:ktlintFormat :benchmark:ktlintFormat :gateway-client:ktlintFormat :wear:ktlintFormat :wear-shared:ktlintFormat
+./gradlew :app:lintPlayDebug :app:lintThirdPartyDebug :gateway-client:lintDebug :wear:lintDebug :wear-shared:lintDebug
 ```
 
 Set `ANDROID_HOME` to your installed Android SDK, or set `sdk.dir` in the local `apps/android/local.properties` file. For Homebrew's command-line tools, the SDK may be at `/opt/homebrew/share/android-commandlinetools`.

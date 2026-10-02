@@ -4033,6 +4033,7 @@ describe("ci workflow guards", () => {
       row: Record<string, unknown>,
       context: Parameters<typeof evaluateWorkflowExpression>[1],
       failTask = "",
+      gatewayClient = false,
     ) {
       const step: WorkflowStep = expectDefined(
         readCiWorkflow().jobs.android.steps.find(
@@ -4041,6 +4042,10 @@ describe("ci workflow guards", () => {
         "Android task runner",
       );
       const root = tempDirs.make("openclaw-android-tier-");
+      if (gatewayClient) {
+        mkdirSync(path.join(root, "gateway-client"));
+        writeFileSync(path.join(root, "gateway-client/build.gradle.kts"), "");
+      }
       const callsPath = path.join(root, "gradle-calls.jsonl");
       const clockPath = path.join(root, "clock-reads.jsonl");
       const gradleJavaHome = path.join(root, "gradle jdk");
@@ -4128,6 +4133,38 @@ describe("ci workflow guards", () => {
         tasks: calls.flat().filter((arg) => arg.startsWith(":")),
       };
     }
+
+    it.each([
+      { task: "test-play", app_lint: "", expected: [":gateway-client:testDebugUnitTest"] },
+      {
+        task: "ktlint",
+        app_lint: "play",
+        expected: [":gateway-client:ktlintCheck", ":gateway-client:lintDebug"],
+      },
+      {
+        task: "build-play",
+        app_lint: "",
+        expected: [":gateway-client:assembleDebug", ":gateway-client:lintDebug"],
+      },
+    ])("runs shared Gateway tasks only when the target owns the module: $task", (row) => {
+      for (const backend of ["blacksmith", "github"] as const) {
+        const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+          eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          runnerBackend: backend,
+        };
+        for (const present of [false, true]) {
+          const result = runAndroidTask(row, context, "", present);
+          expect(result.status, result.stdout + result.stderr).toBe(0);
+          expect(result.tasks.filter((task) => task.startsWith(":gateway-client:"))).toEqual(
+            present ? row.expected : [],
+          );
+        }
+        const failed = runAndroidTask(row, context, row.expected[0], true);
+        expect(failed.status, failed.stdout + failed.stderr).toBe(23);
+      }
+    });
 
     it.each([
       {
@@ -7744,7 +7781,7 @@ describe("ci workflow guards", () => {
     writeExecutable(path.join(bin, "node"), [
       "#!/bin/sh",
       'test -f dist/.buildstamp || { echo "runtime not prepared" >&2; exit 1; }',
-      'if [ "$1" = "-p" ]; then exec "$STARTUP_CORPUS_NODE" "$@"; fi',
+      'if [ "$1" = "-p" ] || [ "$1" = "-e" ]; then exec "$STARTUP_CORPUS_NODE" "$@"; fi',
       'label="${OPENCLAW_TEST_STARTUP_CORPUS_SHARD:-config}"',
       'case "$label" in */*) label="${label%/*}-${label#*/}" ;; esac',
       'printf "%s\\n" "$@" > "$STARTUP_CORPUS_ARGS.$label"',
@@ -7760,6 +7797,7 @@ describe("ci workflow guards", () => {
         PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
         STARTUP_CORPUS_ARGS: argsPath,
         STARTUP_CORPUS_NODE: testNodeExecPath,
+        FORCE_COLOR: "3",
         OPENCLAW_CI_STARTUP_CORPUS_TEST_FILES_JSON: String(
           evaluateWorkflowExpression(inventoryExpression, context),
         ),

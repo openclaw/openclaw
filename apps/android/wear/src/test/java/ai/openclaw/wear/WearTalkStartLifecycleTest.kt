@@ -2,12 +2,14 @@ package ai.openclaw.wear
 
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 import android.Manifest
-import android.content.Intent
 import android.media.AudioRecord
 import android.os.Looper
 import android.provider.Settings
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -148,17 +150,138 @@ class WearTalkStartLifecycleTest {
       }
     }
 
-  private fun withActivity(test: (ActivityController<MainActivity>, WearViewModel) -> Unit) {
+  @Test
+  fun disposingResumedConversationStopsAudioBeforeHeldStopAndReentryDoesNotRestart() =
+    withActivity { controller, vm ->
+      val client = vm.talkTestField("realtimeTalkClient") as WearRealtimeTalkClient
+      val fixture =
+        WearTalkTestFixture(controller.get(), client) { id ->
+          WearRealtimeTalkSnapshot(attemptId = id, active = true)
+        }
+      try {
+        vm.startRealtimeTalk()
+        idle()
+        assertEquals(1, CountingTalkStartAudioRecord.starts)
+        assertTrue(client.isCapturing.value)
+
+        controller.get().setContent {}
+        idle()
+
+        assertEquals(Lifecycle.State.RESUMED, controller.get().lifecycle.currentState)
+        assertTrue(vm.viewModelScope.coroutineContext[Job]?.isActive == true)
+        assertFalse("Leaving the conversation must stop capture without clearing its retained ViewModel", client.isCapturing.value)
+        assertEquals(1, fixture.input.closes.get())
+        assertEquals(1, fixture.output.closes.get())
+        assertEquals(1, fixture.channelCloses.get())
+        assertTrue(fixture.rpcEntered.isCompleted)
+        assertFalse(fixture.rpcReply.isCompleted)
+        fixture.rpcReply.complete(Unit)
+        idle()
+        val settings = WearSettingsStore(controller.get())
+        val speaker = WearReplySpeaker(controller.get())
+        controller.get().setContent { OpenClawWearApp(vm, settings, speaker) }
+        idle()
+        assertEquals("Reentry is not a new recording intent", 1, CountingTalkStartAudioRecord.starts)
+        assertFalse(client.isCapturing.value)
+      } finally {
+        fixture.rpcReply.complete(Unit)
+        idle()
+        client.shutdown()
+      }
+    }
+
+  @Test
+  fun disposingPendingStartRejectsLateCaptureWithoutClearingRetainedViewModel() =
+    withActivity { controller, vm ->
+      var reply: Continuation<WearRealtimeTalkSnapshot>? = null
+      var attemptId: String? = null
+      val client = vm.talkTestField("realtimeTalkClient") as WearRealtimeTalkClient
+      val fixture =
+        WearTalkTestFixture(controller.get(), client) { id ->
+          attemptId = id
+          suspendCoroutine { reply = it }
+        }
+      fixture.rpcReply.complete(Unit)
+      try {
+        vm.startRealtimeTalk()
+        idle()
+        assertNotNull(reply)
+        assertTrue(vm.state.value.talkBusy)
+        controller.get().setContent {}
+        idle()
+        assertEquals(Lifecycle.State.RESUMED, controller.get().lifecycle.currentState)
+        assertTrue(vm.viewModelScope.coroutineContext[Job]?.isActive == true)
+
+        checkNotNull(reply).resume(WearRealtimeTalkSnapshot(attemptId = attemptId, active = true))
+        reply = null
+        idle()
+
+        assertEquals("A disposed presentation cannot admit its late capture result", 0, CountingTalkStartAudioRecord.starts)
+        assertFalse(client.isCapturing.value)
+        assertFalse(vm.state.value.talkBusy)
+        assertEquals(1, fixture.input.closes.get())
+        assertEquals(1, fixture.channelCloses.get())
+      } finally {
+        reply?.resume(WearRealtimeTalkSnapshot(attemptId = attemptId))
+        idle()
+        client.shutdown()
+      }
+    }
+
+  @Test
+  fun stoppingThenDisposingDoesNotDuplicateTalkCleanup() =
+    withActivity { controller, vm ->
+      val client = vm.talkTestField("realtimeTalkClient") as WearRealtimeTalkClient
+      val fixture =
+        WearTalkTestFixture(controller.get(), client) { id ->
+          WearRealtimeTalkSnapshot(attemptId = id, active = true)
+        }
+      try {
+        vm.startRealtimeTalk()
+        idle()
+        controller.pause().stop()
+        idle()
+        assertTrue(fixture.rpcEntered.isCompleted)
+        assertFalse(fixture.rpcReply.isCompleted)
+        controller.get().setContent {}
+        controller
+          .restart()
+          .start()
+          .resume()
+          .visible()
+        idle()
+
+        assertFalse(client.isCapturing.value)
+        assertEquals(1, fixture.input.closes.get())
+        assertEquals(1, fixture.output.closes.get())
+        assertEquals(1, fixture.channelCloses.get())
+        assertEquals(1, fixture.events.count { it.endsWith("rpc-enter") })
+        assertEquals(1, CountingTalkStartAudioRecord.starts)
+        fixture.rpcReply.complete(Unit)
+        idle()
+        assertEquals(1, fixture.events.count { it.endsWith("rpc-enter") })
+        assertEquals(1, fixture.input.closes.get())
+        assertEquals(1, fixture.output.closes.get())
+        assertEquals(1, fixture.channelCloses.get())
+        assertFalse(client.isCapturing.value)
+      } finally {
+        fixture.rpcReply.complete(Unit)
+        idle()
+        client.shutdown()
+      }
+    }
+
+  private fun withActivity(test: (ActivityController<ComponentActivity>, WearViewModel) -> Unit) {
     val app = RuntimeEnvironment.getApplication() as WearApplication
     val scale = Settings.Global.getFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
     Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
     shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
     CountingTalkStartAudioRecord.starts = 0
-    val controller = Robolectric.buildActivity(MainActivity::class.java, Intent())
+    val controller = Robolectric.buildActivity(ComponentActivity::class.java)
     try {
       controller.setup().visible()
       idle()
-      val vm = ViewModelProvider(controller.get())[WearViewModel::class.java]
+      val vm = ViewModelProvider(controller.get(), ViewModelProvider.AndroidViewModelFactory(app))[WearViewModel::class.java]
       (vm.talkTestField("loadJob") as? Job)?.cancel()
       @Suppress("UNCHECKED_CAST")
       val state = vm.talkTestField("mutableState") as kotlinx.coroutines.flow.MutableStateFlow<WearUiState>
@@ -167,6 +290,11 @@ class WearTalkStartLifecycleTest {
       (client.talkTestField("scope") as CoroutineScope).cancel()
       // Audio workers do not race lifecycle assertions; real startCapture still owns AudioRecord.
       client.setTalkTestField("scope", CoroutineScope(SupervisorJob() + StandardTestDispatcher()))
+      val settings = WearSettingsStore(app)
+      val speaker = WearReplySpeaker(app)
+      controller.get().setContent {
+        OpenClawWearApp(vm, settings, speaker)
+      }
       idle()
       assertEquals(Lifecycle.State.RESUMED, controller.get().lifecycle.currentState)
       test(controller, vm)

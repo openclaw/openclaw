@@ -27,7 +27,7 @@ export function assertStartupCorpusCommand(
   ]);
   writeExecutable(path.join(bin, "node"), [
     "#!/bin/sh",
-    `if [ "$1" = "-p" ]; then echo ${scenario.cpus}; exit 0; fi`,
+    `if [ "$1" = "-e" ]; then echo ${scenario.cpus}; exit 0; fi`,
     'test -f dist/.buildstamp || { echo "runtime not prepared" >&2; exit 1; }',
     'label="${OPENCLAW_TEST_STARTUP_CORPUS_SHARD:-config}"',
     'case "$label" in */*) label="${label%/*}-${label#*/}" ;; esac',

@@ -8,23 +8,32 @@ import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.ThreadContextElement
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
@@ -232,55 +241,6 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
-  fun canvasRoutePinsOnlyTheConnectedTlsEndpoint() {
-    val fingerprint = "ab".repeat(32)
-
-    data class RouteCase(
-      val host: String,
-      val surfaceOrigin: String,
-      val matches: Boolean,
-      val port: Int = 7443,
-      val tls: Boolean = true,
-      val pin: String? = fingerprint,
-    )
-    val cases =
-      listOf(
-        RouteCase("gateway.example", "https://gateway.example:7443", true),
-        RouteCase("GATEWAY.example.", "https://gateway.EXAMPLE:7443", true),
-        RouteCase(" gateway.example. ", "https://gateway.example.:7443", true),
-        RouteCase("gateway.example", "https://gateway.example", true, port = 443),
-        RouteCase("192.0.2.10", "https://192.0.2.10:7443", true),
-        RouteCase("[2001:db8::10]", "https://[2001:db8::10]:7443", true),
-        RouteCase("gateway.example", "https://canvas.example:7443", false),
-        RouteCase("gateway.example", "https://gateway.example:9443", false),
-        RouteCase("gateway.example", "http://gateway.example:7443", false),
-        RouteCase("localhost", "https://127.0.0.1:7443", false),
-        RouteCase("bücher.example", "https://xn--bcher-kva.example:7443", false),
-        RouteCase("192.0.2.10", "https://192.0.2.11:7443", false),
-        RouteCase("2001:db8::10", "https://[2001:db8::11]:7443", false),
-        RouteCase("::ffff:192.0.2.10", "https://192.0.2.11:7443", false),
-        RouteCase("gateway.example", "https://gateway.example:7443", false, tls = false),
-        RouteCase("gateway.example", "https://gateway.example:7443", false, pin = null),
-        RouteCase("::ffff:192.0.2.10", "https://192.0.2.10:7443", true),
-        RouteCase("192.0.2.10", "https://[::ffff:192.0.2.10]:7443", true),
-        RouteCase("2001:db8::10", "https://[2001:db8::10]:7443", true),
-        RouteCase("2001:0db8:0:0:0:0:0:10", "https://[2001:db8::10]:7443", true),
-      )
-    for (case in cases) {
-      assertEquals(
-        "Gateway ${case.host}:${case.port}, surface ${case.surfaceOrigin}",
-        fingerprint.takeIf { case.matches },
-        gatewayTlsFingerprintForCanvasSurface(
-          fingerprint = case.pin,
-          surfaceUrl = "${case.surfaceOrigin}/__openclaw__/cap/token",
-          endpoint = GatewayEndpoint.manual(host = case.host, port = case.port),
-          isTlsConnection = case.tls,
-        ),
-      )
-    }
-  }
-
-  @Test
   fun refreshCanvasHostUrl_usesNodeRefreshMethod() =
     runBlocking {
       for (contextPath in listOf("", "/tenant%20gateway/gw", "/tenant%2Fgateway", "//tenant/gw", "/__openclaw__")) {
@@ -384,10 +344,10 @@ class GatewaySessionInvokeTest {
         contextPath = contextPath,
       )
       awaitConnectedOrThrow(connected, lastDisconnect, server)
-      val oldUrl = requireNotNull(harness.session.currentCanvasHostUrl())
+      val oldUrl = requireNotNull(harness.session.currentCanvasHostRoute()?.url)
       val beforeRefresh = loadDocument(oldUrl)
-      val refreshed = harness.session.refreshCanvasHostUrlIfCurrent(oldUrl)
-      val lagging = harness.session.refreshCanvasHostUrlIfCurrent(oldUrl)
+      val refreshed = harness.session.refreshCanvasHostRouteIfCurrent(oldUrl)?.url
+      val lagging = harness.session.refreshCanvasHostRouteIfCurrent(oldUrl)?.url
       val afterRefresh = loadDocument(requireNotNull(refreshed))
       val expiredDocument = loadDocument(oldUrl)
       val responses = listOf(beforeRefresh, afterRefresh)
@@ -397,7 +357,7 @@ class GatewaySessionInvokeTest {
       assertEquals(404, expiredDocument.first)
       assertTrue(oldUrl.endsWith("/old-token"))
       assertTrue(refreshed.endsWith("/new-token"))
-      assertEquals(refreshed, harness.session.currentCanvasHostUrl())
+      assertEquals(refreshed, harness.session.currentCanvasHostRoute()?.url)
       assertEquals(refreshed, lagging)
       assertEquals(1, refreshRequests.get())
     } finally {
@@ -428,7 +388,7 @@ class GatewaySessionInvokeTest {
       try {
         connectNodeSession(harness.session, server.port, role = "operator", scopes = listOf("operator.read"), contextPath = contextPath)
         awaitConnectedOrThrow(connected, lastDisconnect, server)
-        assertEquals(advertised.get(), harness.session.currentCanvasHostUrl())
+        assertEquals(advertised.get(), harness.session.currentCanvasHostRoute()?.url)
         val origin = "http://127.0.0.1:${server.port}"
         val explicitRoutes =
           listOf(
@@ -445,10 +405,45 @@ class GatewaySessionInvokeTest {
           )
         for (route in explicitRoutes) {
           advertised.set(route)
-          assertEquals(route, harness.session.refreshCanvasHostUrlIfCurrent(harness.session.currentCanvasHostUrl()))
+          assertEquals(route, harness.session.refreshCanvasHostRouteIfCurrent(harness.session.currentCanvasHostRoute()?.url)?.url)
         }
       } finally {
         shutdownHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun canvasRoutes_ignoreUnavailableMetadata() =
+    runBlocking {
+      for (raw in listOf(null, "", "  ", "http://[")) {
+        val connected = CompletableDeferred<Unit>()
+        val lastDisconnect = AtomicReference("")
+        val advertised = AtomicReference(raw)
+        val server =
+          startGatewayServer(testJson()) { webSocket, id, method, _ ->
+            if (method == "connect" || method == "plugin.surface.refresh") {
+              val surfaces = JsonObject(mapOf("canvas" to (advertised.get()?.let(::JsonPrimitive) ?: JsonNull)))
+              webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{"pluginSurfaceUrls":$surfaces}}""")
+            }
+          }
+        val harness = createNodeHarness(connected, lastDisconnect) { GatewaySession.InvokeResult.ok(null) }
+        try {
+          connectNodeSession(harness.session, server.port, role = "operator", scopes = listOf("operator.read"))
+          awaitConnectedOrThrow(connected, lastDisconnect, server)
+          assertNull("Unavailable hello metadata must not publish a route: $raw", harness.session.currentCanvasHostRoute())
+
+          val valid = "http://127.0.0.1:${server.port}/__openclaw__/cap/current"
+          advertised.set(valid)
+          assertEquals(valid, harness.session.refreshCanvasHostRouteIfCurrent(null)?.url)
+          advertised.set(raw)
+          assertEquals(
+            "Unavailable refresh metadata must not replace the current route: $raw",
+            valid,
+            harness.session.refreshCanvasHostRouteIfCurrent(valid)?.url,
+          )
+        } finally {
+          shutdownHarness(harness, server)
+        }
       }
     }
 
@@ -1851,6 +1846,265 @@ class GatewaySessionInvokeTest {
         shutdownHarness(harness, server)
       }
     }
+
+  @Test
+  fun nodeEventApis_explicitCancellationStopsCallerContinuation() =
+    runBlocking {
+      assertNodeEventCancellationOutcomes(NodeEventCancellation.EXPLICIT, NodeEventApi.entries)
+    }
+
+  @Test
+  fun nodeEventApis_preserveEnclosingCallerDeadline() =
+    runBlocking {
+      assertNodeEventCancellationOutcomes(NodeEventCancellation.CALLER_DEADLINE, NodeEventApi.entries)
+    }
+
+  @Test
+  fun nodeEventApis_preserveRpcOwnedTimeoutOutcomes() =
+    runBlocking {
+      assertNodeEventCancellationOutcomes(NodeEventCancellation.RPC_TIMEOUT, NodeEventApi.entries)
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun connectRpcTimeoutPreservesStructuredNetworkFailure() =
+    runBlocking {
+      val scheduler = TestCoroutineScheduler()
+      val connected = CompletableDeferred<Unit>()
+      val connectRequestSeen = CompletableDeferred<Unit>()
+      val failure = CompletableDeferred<GatewaySession.ErrorShape>()
+      val server =
+        startGatewayServer(testJson()) { _, _, method, _ ->
+          if (method == "connect") connectRequestSeen.complete(Unit)
+        }
+      val harness =
+        createNodeHarness(
+          connected = connected,
+          lastDisconnect = AtomicReference(""),
+          extraContext = StandardTestDispatcher(scheduler),
+          onConnectFailure = { error, _ -> failure.complete(error) },
+        ) { GatewaySession.InvokeResult.ok("{}") }
+      try {
+        withTimeout(TEST_TIMEOUT_MS) {
+          connectNodeSession(harness.session, server.port)
+          while (!connectRequestSeen.isCompleted) {
+            scheduler.runCurrent()
+            yield()
+          }
+          scheduler.runCurrent()
+          assertEquals(0L, scheduler.currentTime)
+          assertFalse("Connect must not fail before its RPC deadline", failure.isCompleted)
+          assertFalse("A withheld connect response must not publish a connected callback", connected.isCompleted)
+
+          // The outer connect watchdog stays on real IO time; only the observed RPC deadline advances.
+          scheduler.advanceTimeBy(12_000)
+          scheduler.runCurrent()
+          while (!failure.isCompleted) {
+            scheduler.runCurrent()
+            yield()
+          }
+          val error = failure.await()
+          assertEquals("NETWORK_UNREACHABLE", error.code)
+          assertEquals("timeout", error.details?.reason)
+          assertFalse("A timed-out connect RPC must not publish a connected callback", connected.isCompleted)
+          println("connect-rpc-timeout: virtualMs=${scheduler.currentTime} code=${error.code} reason=${error.details?.reason} connected=0")
+        }
+      } finally {
+        harness.session.disconnect()
+        harness.sessionJob.cancel()
+        scheduler.runCurrent()
+        withTimeout(TEST_TIMEOUT_MS) { harness.sessionJob.join() }
+        server.shutdown()
+      }
+    }
+
+  private enum class NodeEventApi {
+    BOOLEAN,
+    ENDPOINT_BOOLEAN,
+    ENDPOINT_DETAILED,
+    LEASE,
+  }
+
+  private enum class NodeEventCancellation {
+    EXPLICIT,
+    CALLER_DEADLINE,
+    RPC_TIMEOUT,
+  }
+
+  private data class NodeEventCancellationObservation(
+    val continued: Boolean,
+    val result: Any?,
+    val innerFailure: Throwable?,
+    val terminalFailure: Throwable?,
+    val callerActiveAtOutcome: Boolean,
+    val callerCancelled: Boolean,
+  )
+
+  private suspend fun assertNodeEventCancellationOutcomes(
+    cancellation: NodeEventCancellation,
+    apis: List<NodeEventApi>,
+  ) {
+    val failures = mutableListOf<String>()
+    for (api in apis) {
+      val observation = observeNodeEventCancellation(api, cancellation)
+      val result =
+        when (val value = observation.result) {
+          is GatewaySession.RpcResult -> "RpcResult(ok=${value.ok},code=${value.error?.code})"
+          is Boolean -> value.toString()
+          else -> value?.javaClass?.simpleName ?: "none"
+        }
+      val description =
+        "$cancellation/$api continued=${observation.continued} result=$result " +
+          "inner=${observation.innerFailure?.javaClass?.simpleName} " +
+          "terminal=${observation.terminalFailure?.javaClass?.simpleName} " +
+          "active=${observation.callerActiveAtOutcome} cancelled=${observation.callerCancelled}"
+      println("node-event-cancellation: $description")
+      val valid =
+        when (cancellation) {
+          NodeEventCancellation.EXPLICIT -> {
+            !observation.continued &&
+              observation.innerFailure is CancellationException &&
+              observation.innerFailure !is TimeoutCancellationException &&
+              observation.callerCancelled
+          }
+
+          NodeEventCancellation.CALLER_DEADLINE -> {
+            !observation.continued &&
+              observation.innerFailure is TimeoutCancellationException &&
+              observation.callerCancelled
+          }
+
+          NodeEventCancellation.RPC_TIMEOUT -> {
+            val outcomeMatches =
+              when (api) {
+                NodeEventApi.BOOLEAN, NodeEventApi.ENDPOINT_BOOLEAN -> {
+                  observation.continued && observation.result == false && observation.innerFailure == null
+                }
+
+                NodeEventApi.ENDPOINT_DETAILED -> {
+                  val rpcResult = observation.result as? GatewaySession.RpcResult
+                  observation.continued &&
+                    rpcResult?.ok == false &&
+                    rpcResult.error?.code == "UNAVAILABLE" &&
+                    observation.innerFailure == null
+                }
+
+                NodeEventApi.LEASE -> {
+                  !observation.continued && observation.innerFailure is GatewayRequestOutcomeUnknown
+                }
+              }
+            observation.callerActiveAtOutcome && outcomeMatches
+          }
+        }
+      if (!valid) failures += description
+    }
+    assertTrue(failures.joinToString("\n"), failures.isEmpty())
+  }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  private suspend fun observeNodeEventCancellation(
+    api: NodeEventApi,
+    cancellation: NodeEventCancellation,
+  ): NodeEventCancellationObservation {
+    val connected = CompletableDeferred<Unit>()
+    val nodeEventSeen = CompletableDeferred<Unit>()
+    val lastDisconnect = AtomicReference("")
+    val scheduler = TestCoroutineScheduler()
+    val callerOwner = SupervisorJob()
+    val callerScope = CoroutineScope(callerOwner + StandardTestDispatcher(scheduler))
+    var continued = false
+    var result: Any? = null
+    var innerFailure: Throwable? = null
+    var callerActiveAtOutcome = false
+    val server =
+      startGatewayServer(testJson()) { webSocket, id, method, _ ->
+        when (method) {
+          "connect" -> webSocket.send(connectResponseFrame(id))
+          "node.event" -> nodeEventSeen.complete(Unit)
+        }
+      }
+    val harness =
+      createNodeHarness(connected, lastDisconnect) { GatewaySession.InvokeResult.ok("{}") }
+    var caller: Deferred<Unit>? = null
+
+    try {
+      connectNodeSession(harness.session, server.port)
+      awaitConnectedOrThrow(connected, lastDisconnect, server)
+      val gatewayId = gatewayIdForPort(server.port)
+      val lease = if (api == NodeEventApi.LEASE) requireNotNull(harness.session.captureRequestLease(gatewayId)) else null
+      val request: suspend () -> Unit = {
+        try {
+          result =
+            when (api) {
+              NodeEventApi.BOOLEAN -> {
+                harness.session.sendNodeEvent("node.presence.alive", "{}")
+              }
+
+              NodeEventApi.ENDPOINT_BOOLEAN -> {
+                harness.session.sendNodeEventForEndpoint(gatewayId, "node.presence.alive", "{}")
+              }
+
+              NodeEventApi.ENDPOINT_DETAILED -> {
+                harness.session.sendNodeEventDetailedForEndpoint(
+                  gatewayId,
+                  "node.presence.alive",
+                  "{}",
+                  timeoutMs = TEST_TIMEOUT_MS,
+                )
+              }
+
+              NodeEventApi.LEASE -> {
+                requireNotNull(lease).request(
+                  "node.event",
+                  """{"event":"node.presence.alive","payloadJSON":"{}"}""",
+                  timeoutMs = TEST_TIMEOUT_MS,
+                )
+              }
+            }
+          continued = true
+          callerActiveAtOutcome = currentCoroutineContext().isActive
+        } catch (error: Throwable) {
+          // Record inside the caller deadline: a translated exception must not masquerade as cancellation.
+          innerFailure = error
+          callerActiveAtOutcome = currentCoroutineContext().isActive
+          throw error
+        }
+      }
+      val activeCaller =
+        callerScope.async {
+          if (cancellation == NodeEventCancellation.CALLER_DEADLINE) {
+            withTimeout(TEST_TIMEOUT_MS / 2) { request() }
+          } else {
+            request()
+          }
+        }
+      caller = activeCaller
+      scheduler.runCurrent()
+      withTimeout(TEST_TIMEOUT_MS) { nodeEventSeen.await() }
+      when (cancellation) {
+        NodeEventCancellation.EXPLICIT -> activeCaller.cancel()
+        NodeEventCancellation.CALLER_DEADLINE -> scheduler.advanceTimeBy(TEST_TIMEOUT_MS / 2)
+        NodeEventCancellation.RPC_TIMEOUT -> scheduler.advanceTimeBy(TEST_TIMEOUT_MS)
+      }
+      scheduler.runCurrent()
+      withTimeout(TEST_TIMEOUT_MS) { activeCaller.join() }
+
+      return NodeEventCancellationObservation(
+        continued = continued,
+        result = result,
+        innerFailure = innerFailure,
+        terminalFailure = runCatching { activeCaller.await() }.exceptionOrNull(),
+        callerActiveAtOutcome = callerActiveAtOutcome,
+        callerCancelled = activeCaller.isCancelled,
+      )
+    } finally {
+      caller?.cancel()
+      scheduler.runCurrent()
+      withTimeout(TEST_TIMEOUT_MS) { caller?.join() }
+      callerOwner.cancelAndJoin()
+      shutdownHarness(harness, server)
+    }
+  }
 
   @Test
   fun sendNodeEventDetailedForEndpoint_sendsPresenceAlivePayloadAndReturnsStructuredResponse() =

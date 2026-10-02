@@ -71,7 +71,7 @@ internal fun ReplyPreview(
 @Composable
 internal fun ReplyReader(
   reply: WearOpenReply,
-  readReply: suspend (WearReplyTarget, Int, String?) -> WearReplyTextPage,
+  readReply: suspend (Int, String?) -> WearReplyTextPage,
   onDismiss: () -> Unit,
 ) {
   BackHandler(onBack = onDismiss)
@@ -89,8 +89,7 @@ internal fun ReplyReader(
         when {
           reply.localText != null -> WearReplyText.page(reply.localText, "loaded", offset, revision)
           !reply.supported -> WearReplyTextPage(WearReplyTextStatus.Unsupported)
-          reply.target == null -> WearReplyTextPage(WearReplyTextStatus.Unavailable)
-          else -> readReply(reply.target, offset, revision)
+          else -> readReply(offset, revision)
         }
       } catch (err: CancellationException) {
         throw err

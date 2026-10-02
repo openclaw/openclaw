@@ -9,6 +9,8 @@ import android.provider.Settings
 import android.speech.RecognizerIntent
 import android.view.View
 import android.view.ViewGroup
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
@@ -38,15 +40,20 @@ class WearMicrophonePermissionTest {
     val app = RuntimeEnvironment.getApplication() as WearApplication
     val originalScale = Settings.Global.getFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
     Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
-    val controller = Robolectric.buildActivity(MainActivity::class.java, Intent().putExtra(extraWearLaunchTarget, "voice"))
+    val controller = Robolectric.buildActivity(ComponentActivity::class.java)
     try {
       controller.setup().visible()
       val activity = controller.get()
-      val vm = ViewModelProvider(activity)[WearViewModel::class.java]
+      val vm = ViewModelProvider(activity, ViewModelProvider.AndroidViewModelFactory(app))[WearViewModel::class.java]
       (vm.talkTestField("loadJob") as? Job)?.cancel()
       @Suppress("UNCHECKED_CAST")
       val state = vm.talkTestField("mutableState") as MutableStateFlow<WearUiState>
       state.value = WearUiState(loading = false, connected = true, phoneNodeId = "phone-a", selectedSession = WearSession("agent:main:proof", "Proof", null, false, "phone-a"))
+      val settingsStore = WearSettingsStore(app)
+      val speaker = WearReplySpeaker(app)
+      activity.setContent {
+        OpenClawWearApp(vm, settingsStore, speaker, initialPage = WearHomePage.Voice)
+      }
       activity.window.decorView.measure(View.MeasureSpec.makeMeasureSpec(384, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(384, View.MeasureSpec.EXACTLY))
       activity.window.decorView.layout(0, 0, 384, 384)
       idle()
@@ -132,7 +139,7 @@ class WearMicrophonePermissionTest {
   }
 
   private fun completePermission(
-    activity: MainActivity,
+    activity: Activity,
     requestCode: Int,
     granted: Boolean,
   ) {

@@ -1,5 +1,4 @@
 import com.android.build.api.variant.impl.VariantOutputImpl
-import groovy.json.JsonSlurper
 import org.gradle.api.tasks.Exec
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.process.ExecOperations
@@ -83,11 +82,6 @@ abstract class ExtractCloudflareSodium : DefaultTask() {
       }
     }
   }
-}
-
-abstract class GenerateGatewayProtocol : Exec() {
-  @get:OutputDirectory
-  abstract val outputDirectory: DirectoryProperty
 }
 
 val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
@@ -190,51 +184,6 @@ plugins {
   alias(libs.plugins.ksp)
 }
 
-val generateGatewayProtocol =
-  tasks.register<GenerateGatewayProtocol>("generateGatewayProtocol") {
-    val repositoryRoot = rootProject.projectDir.resolve("../..").canonicalFile
-    val manifest = repositoryRoot.resolve("scripts/native-protocol-inputs.json")
-    val protocolInputs = JsonSlurper().parse(manifest) as Map<*, *>
-    val directories = protocolInputs["directories"] as List<*>
-    val files = protocolInputs["files"] as List<*>
-    inputs
-      .files(
-        directories.map { directory ->
-          fileTree(repositoryRoot.resolve(directory as String)) {
-            include("**/*.ts", "**/*.mts", "**/*.mjs", "**/*.json")
-            exclude("**/node_modules/**", "**/*.test.*", "**/*.spec.*", "**/.*", "**/.*/**")
-          }
-        },
-        files.map { file -> repositoryRoot.resolve(file as String) },
-      ).withPathSensitivity(PathSensitivity.RELATIVE)
-    outputDirectory.set(layout.buildDirectory.dir("generated/openclaw-protocol"))
-    val nodeName = if (System.getProperty("os.name").startsWith("Windows")) "node.exe" else "node"
-    val nodeCandidates =
-      providers
-        .environmentVariable("PATH")
-        .orNull
-        .orEmpty()
-        .split(File.pathSeparator)
-        .map { directory -> File(directory, nodeName) } +
-        listOf(File("/opt/homebrew/bin/node"), File("/usr/local/bin/node"))
-    val node =
-      nodeCandidates.firstOrNull { it.isFile && it.canExecute() }
-        ?: error("Node.js is required to build the Gateway protocol models.")
-    workingDir(repositoryRoot)
-    commandLine(
-      node.absolutePath,
-      repositoryRoot.resolve("scripts/prepare-native-protocol.mjs").path,
-      "--language",
-      "kotlin",
-      "--out",
-      outputDirectory.get().asFile.absolutePath,
-    )
-  }
-
-androidComponents.onVariants { variant ->
-  variant.sources.kotlin?.addGeneratedSourceDirectory(generateGatewayProtocol, GenerateGatewayProtocol::outputDirectory)
-}
-
 // NuGet is used only as an upstream native artifact container, never as a managed/runtime dependency.
 val cloudflareSodiumArchive =
   configurations.create("cloudflareSodiumArchive") {
@@ -318,6 +267,7 @@ val generateNativeI18n =
       fileTree(repositoryRoot.resolve("apps/.i18n/native")) { include("*.json") },
       listOf(
         "apps/android/app/src/main/java",
+        "apps/android/gateway-client/src/main/java",
         "apps/android/app/src/play/java",
         "apps/android/app/src/thirdParty/java",
         "apps/android/wear/src/main/java",
@@ -547,6 +497,7 @@ dependencies {
   implementation(composeBom)
   androidTestImplementation(composeBom)
 
+  implementation(project(":gateway-client"))
   implementation(project(":wear-shared"))
   implementation(libs.play.services.wearable)
 
@@ -583,7 +534,6 @@ dependencies {
   implementation(libs.media3.exoplayer)
   implementation(libs.media3.session)
   implementation(libs.media3.ui)
-  implementation(libs.bcprov)
   implementation("${libs.jna.get()}@aar")
   implementation(libs.coil.compose)
   implementation(libs.coil.svg)
@@ -608,6 +558,7 @@ dependencies {
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.mockwebserver)
   testImplementation(libs.robolectric)
+  testImplementation(libs.bcprov)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testRuntimeOnly(libs.junit.platform.launcher)
   testRuntimeOnly(libs.junit.vintage.engine)

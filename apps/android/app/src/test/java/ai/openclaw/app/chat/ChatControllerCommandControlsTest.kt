@@ -3,6 +3,7 @@ package ai.openclaw.app.chat
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.syntheticGatewayRequestLease
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -279,7 +280,7 @@ class ChatControllerCommandControlsTest {
         val controller =
           createChatController(
             captureRequestLease = {
-              GatewaySession.RequestLease(endpointStableId = "") { method, paramsJson, _, withEnqueue ->
+              syntheticGatewayRequestLease(endpointStableId = "") { method, paramsJson, _, withEnqueue ->
                 request(method, paramsJson, withEnqueue)
               }
             },
@@ -488,7 +489,7 @@ class ChatControllerCommandControlsTest {
           cacheScope = { ChatCacheScope("gateway-a", 1) },
           captureRequestLease = { capturedScope ->
             assertEquals(ChatCacheScope("gateway-a", 1), capturedScope)
-            GatewaySession.RequestLease(endpointStableId = "gateway-a") { method, paramsJson, timeoutMs, withEnqueue ->
+            syntheticGatewayRequestLease(endpointStableId = "gateway-a") { method, paramsJson, timeoutMs, withEnqueue ->
               withEnqueue {}
               assertEquals("sessions.patch", method)
               archiveParams = paramsJson
@@ -1192,7 +1193,7 @@ class ChatControllerCommandControlsTest {
             currentDefaultAgentId = { defaultAgentId },
             currentDefaultAgentRevision = { defaultAgentRevision },
             captureRequestLease = { capturedScope ->
-              GatewaySession.RequestLease(
+              syntheticGatewayRequestLease(
                 endpointStableId = capturedScope?.gatewayId.orEmpty(),
                 isCurrentImpl = { leaseCurrent },
               ) { method, paramsJson, _, withEnqueue ->
@@ -1347,7 +1348,7 @@ class ChatControllerCommandControlsTest {
         createChatController(
           cacheScope = { gatewayScope },
           captureRequestLease = {
-            GatewaySession.RequestLease(
+            syntheticGatewayRequestLease(
               endpointStableId = gatewayScope.gatewayId,
               commitIfCurrentImpl = { block ->
                 if (refreshBeforeAdmission) {

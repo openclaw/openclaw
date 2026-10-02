@@ -1,41 +1,52 @@
-package ai.openclaw.app.wear
+package ai.openclaw.wear.shared
 
-import ai.openclaw.wear.shared.WearReplyText
-import ai.openclaw.wear.shared.WearReplyTextPage
-import ai.openclaw.wear.shared.WearReplyTextStatus
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
-internal fun wearReplyText(source: JsonObject): String =
-  when (val content = source["content"]) {
-    is JsonPrimitive -> {
-      content.contentOrNull.orEmpty()
-    }
+fun wearReplyText(
+  source: JsonObject,
+  maxChars: Int = WearReplyText.MAX_TEXT_LENGTH + 1,
+): String {
+  val parts =
+    when (val content = source["content"]) {
+      is JsonPrimitive -> {
+        sequenceOf(content.contentOrNull.orEmpty())
+      }
 
-    is JsonArray -> {
-      content
-        .mapNotNull { part ->
+      is JsonArray -> {
+        content.asSequence().mapNotNull { part ->
           when (part) {
             is JsonPrimitive -> part.contentOrNull
             is JsonObject -> if (part["type"] == null || part["type"] == JsonPrimitive("text")) (part["text"] as? JsonPrimitive)?.contentOrNull else null
             else -> null
           }
-        }.joinToString("\n")
-    }
+        }
+      }
 
-    else -> {
-      ""
+      else -> {
+        emptySequence()
+      }
+    }
+  // Keep one extra character at callers' limits to detect loss without joining an unbounded reply.
+  return buildString {
+    var first = true
+    for (text in parts) {
+      if (!first && length < maxChars) append('\n')
+      append(text, 0, minOf(text.length, maxChars - length))
+      if (length == maxChars) break
+      first = false
     }
   }
+}
 
-internal fun wearReplyEntryId(source: JsonObject): String? = ((source["__openclaw"] as? JsonObject)?.get("id") as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank)
+fun wearReplyEntryId(source: JsonObject): String? = ((source["__openclaw"] as? JsonObject)?.get("id") as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank)
 
-internal fun wearReplyIsSynthetic(source: JsonObject): Boolean = source["openclawMessageToolMirror"] is JsonObject || source["openclawStreamFallback"] is JsonObject
+fun wearReplyIsSynthetic(source: JsonObject): Boolean = source["openclawMessageToolMirror"] is JsonObject || source["openclawStreamFallback"] is JsonObject
 
-internal fun wearReplyIsTruncated(
+fun wearReplyIsTruncated(
   source: JsonObject,
   maxChars: Int,
 ): Boolean {
@@ -53,13 +64,13 @@ internal fun wearReplyIsTruncated(
         }
       }
     } else {
-      listOf(wearReplyText(source))
+      listOf((content as? JsonPrimitive)?.contentOrNull.orEmpty())
     }
   // Shipped Gateways predate the structural display-cap marker.
   return marker == null && texts.any { it.length == maxChars + suffix.length && it.endsWith(suffix) }
 }
 
-internal fun projectWearFullReply(
+fun projectWearFullReply(
   result: JsonElement,
   entryId: String,
   owner: String,

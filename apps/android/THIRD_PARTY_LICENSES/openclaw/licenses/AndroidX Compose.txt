@@ -1,6 +1,7 @@
 AndroidX Compose
 Artifacts:
 - androidx.compose.material3:material3:1.4.0
+- androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0
 
 Copyright 2020 The Android Open Source Project
 

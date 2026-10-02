@@ -38,7 +38,7 @@ class WearProxyListenerService : WearableListenerService() {
           path = messageEvent.path,
           data = messageEvent.data,
         ) ?: return@runBlocking
-      if (event.event == WearEventType.Chat && !app.isActivityVisible()) {
+      if (event.event == WearEventType.Chat && !app.isActivityVisible() && app.directRuntime.isPhoneProxySelected()) {
         WearReplyNotifier(applicationContext).show(event)
       }
     }

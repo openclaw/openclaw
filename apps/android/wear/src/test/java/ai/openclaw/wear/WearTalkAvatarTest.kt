@@ -41,6 +41,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowChoreographer
 import org.robolectric.shadows.ShadowSystemClock
 import org.robolectric.shadows.ShadowValueAnimator
 import java.io.ByteArrayInputStream
@@ -356,49 +357,51 @@ class WearTalkAvatarTest {
     val frameClock = FakeWearAvatarFrameClock()
     val observedStates = mutableListOf<WearAvatarAnimationState>()
 
-    controller.get().setContent {
-      WearTalkAvatar(
-        state = RealtimeVoiceButtonState.SPEAKING,
-        mouthLevel = 1f,
-        syntheticSpeech = false,
-        accent = Color.Cyan,
-        danger = Color.Red,
-        animatorScaleSource = scaleSource,
-        motionDurationScale = motionDurationScale,
-        frameClock = frameClock,
-        onAnimationStateChanged = observedStates::add,
-      )
+    try {
+      controller.get().setContent {
+        WearTalkAvatar(
+          state = RealtimeVoiceButtonState.SPEAKING,
+          mouthLevel = 1f,
+          syntheticSpeech = false,
+          accent = Color.Cyan,
+          danger = Color.Red,
+          animatorScaleSource = scaleSource,
+          motionDurationScale = motionDurationScale,
+          frameClock = frameClock,
+          onAnimationStateChanged = observedStates::add,
+        )
+      }
+      advanceComposeFrames()
+
+      assertEquals(1, scaleSource.subscriptionCount)
+      assertEquals(1f, observedStates.last().durationScale, 0f)
+      frameClock.sendFrame(1_000_000_000L)
+      advanceComposeFrames()
+      frameClock.sendFrame(1_016_666_667L)
+      advanceComposeFrames()
+      assertTrue(observedStates.last().animationSeconds > 0f)
+
+      scaleSource.emit(0f)
+      advanceComposeFrames()
+      assertEquals(0f, observedStates.last().durationScale, 0f)
+      assertEquals(0f, observedStates.last().animationSeconds, 0f)
+      assertEquals(0f, observedStates.last().mouthLevel, 0f)
+      val frameRequestsAtZero = frameClock.awaitCount
+      idleMainLooper(Duration.ofMillis(100))
+      assertEquals(frameRequestsAtZero, frameClock.awaitCount)
+
+      scaleSource.emit(1f)
+      advanceComposeFrames()
+      assertEquals(1f, observedStates.last().durationScale, 0f)
+      assertTrue(frameClock.awaitCount > frameRequestsAtZero)
+
+      motionDurationScale.scaleFactor = 2f
+      advanceComposeFrames()
+      assertEquals(2f, observedStates.last().durationScale, 0f)
+    } finally {
+      controller.pause().stop().destroy()
+      idleMainLooper()
     }
-    idleMainLooper()
-
-    assertEquals(1, scaleSource.subscriptionCount)
-    assertEquals(1f, observedStates.last().durationScale, 0f)
-    frameClock.sendFrame(1_000_000_000L)
-    idleMainLooper()
-    frameClock.sendFrame(1_016_666_667L)
-    idleMainLooper()
-    assertTrue(observedStates.last().animationSeconds > 0f)
-
-    scaleSource.emit(0f)
-    idleMainLooper()
-    assertEquals(0f, observedStates.last().durationScale, 0f)
-    assertEquals(0f, observedStates.last().animationSeconds, 0f)
-    assertEquals(0f, observedStates.last().mouthLevel, 0f)
-    val frameRequestsAtZero = frameClock.awaitCount
-    idleMainLooper(Duration.ofMillis(100))
-    assertEquals(frameRequestsAtZero, frameClock.awaitCount)
-
-    scaleSource.emit(1f)
-    idleMainLooper()
-    assertEquals(1f, observedStates.last().durationScale, 0f)
-    assertTrue(frameClock.awaitCount > frameRequestsAtZero)
-
-    motionDurationScale.scaleFactor = 2f
-    idleMainLooper()
-    assertEquals(2f, observedStates.last().durationScale, 0f)
-
-    controller.pause().stop().destroy()
-    idleMainLooper()
     assertEquals(1, scaleSource.disposeCount)
     assertEquals(0, scaleSource.activeSubscriptionCount)
   }
@@ -610,6 +613,11 @@ class WearTalkAvatarTest {
 
   private fun idleMainLooper(duration: Duration = Duration.ZERO) {
     shadowOf(Looper.getMainLooper()).idleFor(duration)
+  }
+
+  private fun advanceComposeFrames() {
+    // State changes and effect-driven resets need real Compose frames before SideEffect observes them.
+    repeat(2) { idleMainLooper(ShadowChoreographer.getFrameDelay()) }
   }
 
   private fun setRobolectricAnimatorDurationScale(scale: Float) {

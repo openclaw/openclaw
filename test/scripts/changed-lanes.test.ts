@@ -1493,6 +1493,7 @@ describe("scripts/changed-lanes", () => {
 
   it.each([
     ["apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt", true],
+    ["apps/android/gateway-client/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt", true],
     ["apps/web/index.ts", false],
   ] as const)("selects only the owning app lint for %s", (file, android) => {
     const result = detectChangedLanes([file]);
@@ -1616,13 +1617,16 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
-  it("excludes generated mobile build inputs from protocol coverage", () => {
-    const plan = createChangedCheckPlan(
-      detectChangedLanes(["apps/shared/OpenClawKit/Sources/.build/Generated.swift"]),
-    );
-    expect(plan.commands.map(({ args }) => args[0])).not.toContain(
-      "scripts/check-protocol-event-coverage.mjs",
-    );
+  it.each([
+    ["apps/shared/OpenClawKit/Sources/.build/Generated.swift", false],
+    ["apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt", true],
+    ["apps/android/gateway-client/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt", true],
+    ["apps/android/gateway-client/build/generated/openclaw-protocol/GatewayProtocol.kt", false],
+  ])("selects protocol coverage for source inputs only: %s", (file, expected) => {
+    const plan = createChangedCheckPlan(detectChangedLanes([file]));
+    expect(
+      plan.commands.some(({ args }) => args[0] === "scripts/check-protocol-event-coverage.mjs"),
+    ).toBe(expected);
   });
 
   it("allows explicitly opting out of the dead-export scan", () => {

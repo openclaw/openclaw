@@ -1,6 +1,7 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.syntheticGatewayRequestLease
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
@@ -346,7 +347,7 @@ class ChatControllerReactionsTest {
       val controller =
         controller(gateway) { cacheScope ->
           val connection = physicalConnection
-          GatewaySession.RequestLease(
+          syntheticGatewayRequestLease(
             endpointStableId = requireNotNull(cacheScope).gatewayId,
             isCurrentImpl = { connection == physicalConnection },
           ) { method, params, _, enqueue ->
