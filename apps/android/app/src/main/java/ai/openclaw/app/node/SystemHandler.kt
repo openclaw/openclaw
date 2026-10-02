@@ -1,7 +1,6 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.gateway.GatewaySession
-import ai.openclaw.app.hasPermission
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.mainActivityPendingIntent
 import android.Manifest
@@ -9,9 +8,11 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 
 private const val NOTIFICATION_CHANNEL_BASE_ID = "openclaw.system.notify"
 private const val NOTIFICATION_CONTENT_REQUEST_CODE = 3
@@ -33,9 +34,10 @@ private class AndroidSystemNotificationPoster(
 ) : SystemNotificationPoster {
   /** Posts through a priority-specific channel so Android's immutable channel importance is respected. */
   override fun post(request: SystemNotifyRequest) {
+    // Android lint must see the platform check before notify().
     if (
       Build.VERSION.SDK_INT >= 33 &&
-      !appContext.hasPermission(Manifest.permission.POST_NOTIFICATIONS)
+      ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
     ) {
       throw SecurityException("notifications permission missing")
     }

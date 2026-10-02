@@ -1,13 +1,14 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.hasPermission
 import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.os.CancellationSignal
 import android.os.Looper
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -42,10 +43,13 @@ class LocationCaptureManager(
     providers: List<String>,
     maxAgeMs: Long?,
   ): Location? {
+    // Keep platform checks visible to Android lint's permission analysis.
     val fineOk =
-      context.hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+      ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
     val coarseOk =
-      context.hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
+      ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
     if (!fineOk && !coarseOk) {
       throw IllegalStateException("LOCATION_PERMISSION_REQUIRED: grant Location permission")
     }
@@ -68,9 +72,11 @@ class LocationCaptureManager(
     maxAgeMs: Long?,
   ): Location {
     val fineOk =
-      context.hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+      ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
     val coarseOk =
-      context.hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
+      ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
     if (!fineOk && !coarseOk) {
       throw IllegalStateException("LOCATION_PERMISSION_REQUIRED: grant Location permission")
     }
