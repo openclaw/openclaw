@@ -103,6 +103,7 @@ export async function executeWorkerTurn(
     sessionId: placement.sessionId,
     sessionKey: placement.sessionKey,
     agentId: placement.agentId,
+    executionAuthority: readRunOperatorAuthority(turn),
     assertCurrent: () => params.placements.validateTurnClaim(params.turnClaim),
   });
 

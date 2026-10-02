@@ -132,7 +132,8 @@ type WorkerRepositoryWorkspaceSource = {
   ref?: string;
   branch: string;
   baseCommit?: string;
-  gitToken?: string;
+  /** Gateway-owned, credential-free source for private repository recovery. */
+  localSourcePath?: string;
   runSetupScript?: boolean;
   checkpoint?: Pick<
     WorkerRepositoryCheckpointPayload,

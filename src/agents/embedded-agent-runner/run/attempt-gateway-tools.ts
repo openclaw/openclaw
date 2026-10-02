@@ -1,5 +1,6 @@
 import { prepareGitHubPublicationAvailability } from "../../../gateway/github-publication-availability.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { readRunOperatorAuthority } from "../../admitted-run-context.js";
 import { agentHarnessExposesOpenClawTools } from "../../harness/tool-surface.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -60,6 +61,7 @@ export async function withPreparedEmbeddedGatewayTools<T>(
         sessionId: attempt.sessionId,
         sessionKey: attempt.sessionKey,
         agentId: attempt.agentId,
+        operatorAuthority: readRunOperatorAuthority(attempt),
         assertCurrent: isCurrent,
       });
       if (!isCurrent()) {

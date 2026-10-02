@@ -122,7 +122,7 @@ export function readChatPublicationAccess(
       canMutate &&
       readSessionMethodAccess(snapshot, {
         method: "sessions.github.publish",
-        requiredScope: "operator.sessions.write",
+        requiredScope: "operator.write",
         session,
       }).allowed,
     canPublishPersonal: canMutate && hasOperatorWriteAccess(snapshot.hello?.auth ?? null),

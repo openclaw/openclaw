@@ -101,12 +101,23 @@ it("rejects repository sources on SSH before invoking any remote command", async
 });
 
 it.each([
-  { publication: "available", filters: false, closeOwner: false },
-  { publication: "blocked by filters", filters: true, closeOwner: false },
-  { publication: "blocked when the owner closes", filters: true, closeOwner: true },
+  { publication: "available", filters: false, closeOwner: false, privateSource: false },
+  {
+    publication: "available from a private snapshot",
+    filters: false,
+    closeOwner: false,
+    privateSource: true,
+  },
+  { publication: "blocked by filters", filters: true, closeOwner: false, privateSource: false },
+  {
+    publication: "blocked when the owner closes",
+    filters: true,
+    closeOwner: true,
+    privateSource: false,
+  },
 ])(
   "preserves repository checkpoints with publication $publication",
-  async ({ filters, closeOwner }) => {
+  async ({ filters, closeOwner, privateSource }) => {
     const root = await fs.realpath(tempDirs.make("node-repository-roundtrip-"));
     const origin = path.join(root, "origin");
     const home = path.join(root, "node-home");
@@ -217,12 +228,17 @@ it.each([
     };
     const source = {
       kind: "repository" as const,
-      url: pathToFileURL(origin).href,
+      url: privateSource
+        ? "https://github.com/example/private-repository.git"
+        : pathToFileURL(origin).href,
+      ...(privateSource ? { localSourcePath: origin, baseCommit } : {}),
       ref: "HEAD",
       branch: "openclaw/session",
-      gitToken: "synthetic-repository-token",
       runSetupScript: true,
     };
+    if (privateSource) {
+      await git("config", "--local", "http.extraHeader", "Authorization: synthetic-gateway-only");
+    }
     try {
       const actions = createActions();
       const first = await actions.syncWorkspace({
@@ -235,6 +251,13 @@ it.each([
         throw new Error("Repository source was not prepared");
       }
       expect(first.baseCommit).toBe(baseCommit);
+      expect(await gitAt(first.remoteWorkspaceDir, "remote", "get-url", "origin")).toBe(source.url);
+      expect(await gitAt(first.remoteWorkspaceDir, "symbolic-ref", "--short", "HEAD")).toBe(
+        source.branch,
+      );
+      const config = await gitAt(first.remoteWorkspaceDir, "config", "--local", "--list");
+      expect(config).not.toContain("synthetic-gateway-only");
+      expect(config).not.toContain("extraheader");
       expect(first.manifestRef).not.toBe(first.baseManifestRef);
       expect(await fs.readFile(path.join(first.remoteWorkspaceDir, "setup.txt"), "utf8")).toBe(
         "prepared\n",

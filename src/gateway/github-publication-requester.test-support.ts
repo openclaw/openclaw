@@ -1,4 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import {
+  createPluginRegistryFixture,
+  registerVirtualTestPlugin,
+} from "openclaw/plugin-sdk/plugin-test-contracts";
 import { expect, vi, type Mock } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
@@ -23,6 +28,7 @@ import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
+import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
 import { readGitHubPublicationRequest } from "./github-publication-store.js";
 import {
   createGitHubPublicationRequesterFixture,
@@ -38,7 +44,9 @@ import {
 } from "./github-repository-publication-store.js";
 import { createRepositoryPublicationFixture } from "./github-repository-publication.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
-import { SESSION_READ_SCOPE, SESSION_WRITE_SCOPE } from "./operator-scopes.js";
+import { SESSION_READ_SCOPE, SESSION_WRITE_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
+import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
+import { prepareGatewayConnectOperatorAccess } from "./server/ws-connection/connect-operator-access.js";
 import {
   REQUEST,
   seedActivePlacement,
@@ -52,6 +60,7 @@ type Backend = "local" | "repository";
 type Coordinator = ReturnType<typeof createTestGitHubPublicationCoordinator>;
 type Requester = NonNullable<Parameters<Coordinator["requestForSession"]>[0]["requester"]>;
 export const guestScopes = [SESSION_READ_SCOPE, SESSION_WRITE_SCOPE];
+export const publisherScopes = [WRITE_SCOPE];
 
 async function createRequesterPolicySources(
   session: { sessionId: string; sessionKey: string },
@@ -62,6 +71,11 @@ async function createRequesterPolicySources(
   const maintainerProfile = (
     await ensureCanonicalUserProfileForEmail("publication-maintainer@example.test")
   ).id;
+  const publisherProfile = (
+    await ensureCanonicalUserProfileForEmail("publication-publisher@example.test")
+  ).id;
+  await setCanonicalUserProfileRole(publisherProfile, "publisher");
+  invalidateOperatorRolePolicy(publisherProfile);
   await setCanonicalUserProfileRole(maintainerProfile, "maintainer");
   invalidateOperatorRolePolicy(maintainerProfile);
   const config: OpenClawConfig = {
@@ -72,6 +86,7 @@ async function createRequesterPolicySources(
         default: "guest",
         definitions: {
           guest: { sessions: { others: "view" }, agents: ["main"], scopes: guestScopes },
+          publisher: { sessions: { others: "write" }, agents: ["main"], scopes: publisherScopes },
           maintainer: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
           revoked: { sessions: { others: "none" }, agents: [], scopes: [] },
         },
@@ -85,11 +100,27 @@ async function createRequesterPolicySources(
     createdActor: { type: "human", source: "profile", id: guestProfile },
     sandbox: "required",
   });
-  const guestSource = await createGitHubPublicationRequesterFixture({
+  const guestClient = createOperatorWsClient({ connId: guestProfile, scopes: guestScopes });
+  guestClient.authenticatedUserProfile = {
     profileId: guestProfile,
-    scopes: guestScopes,
-    sessionKey: session.sessionKey,
-    agentId: "main",
+    displayName: null,
+    avatarRevision: "fixture",
+    hasAvatar: false,
+    updatedAt: 1,
+  };
+  prepareGatewayConnectOperatorAccess(guestClient);
+  const guestSource = {
+    client: guestClient,
+    context: {
+      getRuntimeConfig: currentGitHubPublicationConfig,
+      getCommittedRuntimeConfig: currentGitHubPublicationConfig,
+    },
+    session: { sessionKey: session.sessionKey, agentId: "main" },
+  };
+  const publisherSource = await createGitHubPublicationRequesterFixture({
+    profileId: publisherProfile,
+    scopes: publisherScopes,
+    ...guestSource.session,
   });
   const maintainerSource = await createGitHubPublicationRequesterFixture({
     profileId: maintainerProfile,
@@ -97,7 +128,7 @@ async function createRequesterPolicySources(
     sessionKey: session.sessionKey,
     agentId: "main",
   });
-  const guest = guestSource.requester;
+  const publisher = publisherSource.requester;
   const maintainer = maintainerSource.requester;
   const database = openOpenClawStateDatabase();
   const publishedTitles: string[] = [];
@@ -116,17 +147,19 @@ async function createRequesterPolicySources(
     config,
     session,
     database,
-    guest,
     guestSource,
     guestProfile,
+    publisher,
+    publisherSource,
+    publisherProfile,
     maintainer,
     maintainerSource,
     maintainerProfile,
     publishedTitles,
     externalWrites,
     async revoke() {
-      await setCanonicalUserProfileRole(guestProfile, "revoked");
-      invalidateOperatorRolePolicy(guestProfile);
+      await setCanonicalUserProfileRole(publisherProfile, "revoked");
+      invalidateOperatorRolePolicy(publisherProfile);
     },
   };
 }
@@ -215,6 +248,25 @@ export async function createRequesterPublicationFixture(
         ).run(requestId);
       });
     },
+    replaceRequesterSnapshot(requestId: string, snapshot: Requester["snapshot"]) {
+      const json = JSON.stringify(snapshot);
+      runOpenClawStateWriteTransaction(({ db }) => {
+        if (backend === "repository") {
+          const row = readRepositoryGitHubPublication(requestId)!;
+          db.prepare(
+            "UPDATE github_repository_publication_requests SET requester_authority_json = ?, request_digest = ? WHERE request_id = ?",
+          ).run(
+            json,
+            repositoryGitHubPublicationDigest({ ...row, requester_authority_json: json }),
+            requestId,
+          );
+          return;
+        }
+        db.prepare(
+          "UPDATE github_publication_session_lifecycles SET requester_authority_json = ? WHERE publication_kind = 'shared' AND request_id = ?",
+        ).run(json, requestId);
+      });
+    },
   };
 }
 
@@ -241,7 +293,157 @@ type StoredVisitorGrant = {
   expiresAt: number | null;
 };
 
-export function requireVisitorPublicationPolicy(f: { config: OpenClawConfig }): OpenClawConfig {
+export function requirePublisherAccessPolicy(f: { config: OpenClawConfig }): OpenClawConfig {
+  const roles = f.config.gateway!.roles!;
+  const config: OpenClawConfig = {
+    ...f.config,
+    gateway: {
+      ...f.config.gateway,
+      roles: {
+        ...roles,
+        definitions: {
+          ...roles.definitions,
+          publisher: { ...roles.definitions.publisher!, accessPolicyPlugin: "publication-access" },
+        },
+      },
+    },
+  };
+  setRuntimeConfigSnapshot(config);
+  return config;
+}
+
+/** Exercise retained generic policy grants without widening the restricted Visitor role. */
+export async function preparePublisherAccessPolicyFixture(f: { config: OpenClawConfig }) {
+  const {
+    captureActivePluginRegistrySnapshot,
+    restoreActivePluginRegistrySnapshot,
+    setActivePluginRegistry,
+    stageActivePluginRegistry,
+    rollbackStagedPluginRegistry,
+  } = await import("../plugins/runtime.js");
+  const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
+  const priorRegistry = captureActivePluginRegistrySnapshot();
+  requirePublisherAccessPolicy(f);
+  const email = "publication-publisher@example.test";
+  const store = createPluginStateKeyedStore<StoredVisitorGrant>("publication-access", {
+    namespace: "publication-grants",
+    maxEntries: 1,
+    overflowPolicy: "reject-new",
+  });
+  let grant: StoredVisitorGrant | undefined;
+  let controller = new AbortController();
+  const authority = () => {
+    const captured = grant!;
+    const signal = controller.signal;
+    return {
+      grantId: captured.grantId,
+      signal,
+      assertCurrent() {
+        signal.throwIfAborted();
+        if (
+          !grant ||
+          grant.grantId !== captured.grantId ||
+          (grant.expiresAt !== null && Date.now() >= grant.expiresAt)
+        ) {
+          throw new Error("Publication access grant ended");
+        }
+      },
+    };
+  };
+  const register = () => {
+    const fixture = createPluginRegistryFixture();
+    registerVirtualTestPlugin({
+      registry: fixture.registry,
+      config: fixture.config,
+      id: "publication-access",
+      name: "Publication access",
+      register(api) {
+        api.registerGatewayAccessPolicy({
+          authorize({ profile, requiredByRole }) {
+            if (!requiredByRole) {
+              return undefined;
+            }
+            if (
+              !grant ||
+              !profile.emails.includes(email) ||
+              (grant.expiresAt !== null && Date.now() >= grant.expiresAt)
+            ) {
+              throw new Error("Publication access grant required");
+            }
+            return authority();
+          },
+          resume({ profile, grantId }) {
+            if (
+              !grant ||
+              grant.grantId !== grantId ||
+              !profile.emails.includes(email) ||
+              (grant.expiresAt !== null && Date.now() >= grant.expiresAt)
+            ) {
+              return undefined;
+            }
+            return authority();
+          },
+        });
+      },
+    });
+    setActivePluginRegistry(fixture.registry.registry);
+  };
+  return {
+    store,
+    async start() {
+      grant = await store.lookup(email);
+      register();
+    },
+    async execute(operation: "grant" | "revoke", input: { email: string; days?: number }) {
+      expect(input.email).toBe(email);
+      if (operation === "revoke") {
+        controller.abort();
+        grant = undefined;
+        await store.delete(email);
+        return;
+      }
+      const previous = await store.lookup(email);
+      const continuous =
+        previous && (previous.expiresAt === null || previous.expiresAt > Date.now());
+      if (!continuous) {
+        controller.abort();
+        controller = new AbortController();
+      }
+      grant = {
+        grantId: continuous ? previous.grantId : randomUUID(),
+        email,
+        createdAt: continuous ? previous.createdAt : Date.now(),
+        expiresAt: Date.now() + (input.days ?? 1) * 86400000,
+      };
+      await store.register(email, grant);
+    },
+    suspendRegistry() {
+      const snapshot = captureActivePluginRegistrySnapshot();
+      stageActivePluginRegistry(
+        createEmptyPluginRegistry(),
+        null,
+        snapshot.runtimeSubagentMode,
+        snapshot.workspaceDir ?? undefined,
+      );
+      return () => rollbackStagedPluginRegistry(snapshot);
+    },
+    async reopen() {
+      restoreActivePluginRegistrySnapshot(priorRegistry);
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+      grant = undefined;
+    },
+    async close() {
+      restoreActivePluginRegistrySnapshot(priorRegistry);
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+    },
+  };
+}
+
+function requireVisitorPublicationPolicy(f: { config: OpenClawConfig }): OpenClawConfig {
   const roles = f.config.gateway!.roles!;
   const config: OpenClawConfig = {
     ...f.config,

@@ -40,7 +40,6 @@ import {
   matchesGitHubPublicationIdentityRow,
   projectGitHubPublicationResult,
 } from "./github-publication-store.js";
-import { assertGitHubPublicationWorkflowChangesAllowed } from "./github-publication-workflows.js";
 import {
   executeRepositoryGitHubPublication,
   prepareRepositoryGitHubPublicationTarget,
@@ -169,9 +168,6 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
         snapshot: captured.snapshot,
         snapshotRoot: captured.snapshotRoot,
         storePath: loaded.storePath,
-        assertWorkflowChangesAllowed: bound
-          ? assertExecution
-          : () => assertGitHubPublicationWorkflowChangesAllowed(getRequester()),
         assertWorkspace: () => {
           assertReceiptOwner(row, preparedOwner);
         },

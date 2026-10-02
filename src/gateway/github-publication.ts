@@ -49,7 +49,6 @@ import {
   projectGitHubPublicationResult as publicationResult,
   readGitHubPublicationRequest,
 } from "./github-publication-store.js";
-import { assertGitHubPublicationWorkflowChangesAllowed } from "./github-publication-workflows.js";
 import { createRepositoryGitHubPublicationCoordinator } from "./github-repository-publication.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import type {
@@ -338,8 +337,6 @@ export function createGitHubPublicationCoordinator(params: {
             return await executeGitHubPublication({
               initial: claimed,
               validateCustody,
-              assertWorkflowChangesAllowed: () =>
-                assertGitHubPublicationWorkflowChangesAllowed(getRequester()),
               prepareAuthority: async () => {
                 if (!validateCustody()) {
                   throw new GitHubPublicationAuthorityLostError(

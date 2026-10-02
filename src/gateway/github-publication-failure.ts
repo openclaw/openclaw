@@ -100,16 +100,6 @@ export class GitHubPublicationCreditChangedError extends GitHubPublicationKnownF
   }
 }
 
-export class GitHubPublicationWorkflowChangesError extends GitHubPublicationKnownFailure {
-  constructor() {
-    super("Publishing GitHub workflow changes requires full operator write permission.", {
-      code: "github_rejected",
-      nextAction:
-        "Your saved changes are intact. Ask a maintainer with full write access to publish the GitHub workflow changes, or restore the workflow definitions and request publication again.",
-    });
-  }
-}
-
 export function resolveGitHubPublicationFailure(error: unknown): PublicationFailure {
   if (error instanceof GitHubPublicationKnownFailure) {
     return error.failure;

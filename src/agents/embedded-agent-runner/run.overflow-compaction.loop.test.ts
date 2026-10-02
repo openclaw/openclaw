@@ -440,6 +440,7 @@ describe("embedded run retry dispatch", () => {
       agentId: "main",
       sessionId: "rotated-session",
       sessionKey: "agent:main:session-1",
+      operatorAuthority: undefined,
       assertCurrent: expect.any(Function),
     });
   });

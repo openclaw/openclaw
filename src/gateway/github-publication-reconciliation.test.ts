@@ -25,7 +25,7 @@ type Backend = Parameters<typeof fixture>[0];
 
 async function prepareExistingPullRequest(backend: Backend) {
   const f = await fixture(backend);
-  const first = await f.coordinator.requestForSession(f.request("first-publication", f.guest));
+  const first = await f.coordinator.requestForSession(f.request("first-publication", f.publisher));
   if (first.status !== "published") {
     throw new Error("The original fixture publication did not complete.");
   }
@@ -106,7 +106,7 @@ describe("shared GitHub publication reconciliation", () => {
         return response;
       });
 
-      const result = await f.coordinator.requestForSession(f.request("paged-update", f.guest));
+      const result = await f.coordinator.requestForSession(f.request("paged-update", f.publisher));
 
       expect(
         hostScans.mock.calls
@@ -161,7 +161,7 @@ describe("shared GitHub publication reconciliation", () => {
       });
 
       const idempotencyKey = "interrupted-existing-pr-update";
-      const pending = f.coordinator.requestForSession(f.request(idempotencyKey, f.guest));
+      const pending = f.coordinator.requestForSession(f.request(idempotencyKey, f.publisher));
       let requestId: string;
       if (backend === "local") {
         await expect(pending).rejects.toBeInstanceOf(GitHubPublicationRecoveryPendingError);
@@ -187,7 +187,7 @@ describe("shared GitHub publication reconciliation", () => {
       // The accepted update survives a later close; its existing PR retains the original body.
       pullRequest.state = "closed";
       await f.revoke();
-      expect(f.guest.assertCurrent).toThrow();
+      expect(f.publisher.assertCurrent).toThrow();
       readbackAvailable = true;
       const restarted = f.restart();
       const read = stateReads.executeExistingOpenClawStateRead;

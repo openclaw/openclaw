@@ -2,10 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type {
-  SessionGitHubPublicationResult,
-  SessionGitHubStatusResult,
-} from "../../../packages/gateway-protocol/src/schema/session-github-publication.ts";
+import type { SessionGitHubStatusResult } from "../../../packages/gateway-protocol/src/schema/session-github-publication.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import type { GitHubPublicationOptions } from "../lib/sessions/github-publication-controller.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -53,7 +50,7 @@ async function installGuestGateway(
     workspace: "/synthetic/visitor-publication",
     communityInvite: false,
     operatorScopes: ["operator.sessions.write"],
-    // Guests do not receive the broad PR watcher; publication must work without its branch event.
+    // Guests retain shared receipts without the broad PR watcher or mutation actions.
     featureMethods: publicationMethods.filter(
       (method) => method !== SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
     ),
@@ -111,16 +108,10 @@ async function expectNoPersonalActions(page: Page) {
 }
 
 suite.define(() => {
-  it("publishes an owned guest session through the shared account and recovers its receipt", async () => {
+  it("denies guest publication while retaining shared receipts across reconnect and reload", async () => {
     await suite.withPage(contextOptions(true), async ({ page }) => {
       const gateway = await installGuestGateway(page);
       const requestId = "8c698e8a-bdc7-4927-a0f2-73a842c2d7b7";
-      const requested = {
-        requestId,
-        status: "requested",
-        publisher,
-        message: "The shared publisher is preparing the pull request.",
-      } satisfies SessionGitHubPublicationResult;
       const receipt = {
         result: {
           requestId,
@@ -139,34 +130,20 @@ suite.define(() => {
       expect(discovered.params).toEqual({ sessionKey, agentId: "main" });
       const publish = page.getByRole("button", { name: "Publish PR", exact: true });
       try {
-        await expect.poll(() => publish.count()).toBe(1);
-        await expect.poll(() => publish.isEnabled()).toBe(true);
+        await expect.poll(() => publish.count()).toBe(0);
       } finally {
-        // This same capture records the missing action when run on the pre-fix source.
-        await screenshot(page, "01-guest-ready.png");
+        await screenshot(page, "01-guest-restricted.png");
       }
       await expectNoPersonalActions(page);
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
-      await gateway.deferNext("sessions.github.publish");
-      await publish.click();
-      const publication = await gateway.waitForRequest("sessions.github.publish");
-      expect(publication.params).toEqual({
-        sessionKey,
-        agentId: "main",
-        idempotencyKey: expect.any(String),
-        selection: { source: "shared", expected: publisher },
-      });
-      await gateway.resolveDeferred("sessions.github.publish", requested);
-      await page.getByText(requested.message, { exact: true }).waitFor();
-      await screenshot(page, "02-guest-requested.png");
       await gateway.setMethodResponse("sessions.github.status", receipt);
       await gateway.setMethodResponse("sessions.github.options", {
         ...options,
         latestShared: receipt,
       });
-      await page.getByRole("button", { name: "Refresh publication", exact: true }).click();
-      const status = await gateway.waitForRequest("sessions.github.status");
-      expect(status.params).toEqual({ sessionKey, agentId: "main", requestId });
+      const initialOptions = (await gateway.getRequests("sessions.github.options")).length;
+      await reconnectMockGateway(page, gateway);
+      await gateway.waitForRequest("sessions.github.options", { after: initialOptions });
       const openPr = page.getByRole("link", { name: "Open PR", exact: true });
       await expect.poll(() => openPr.getAttribute("href")).toBe(receipt.result.url);
       await screenshot(page, "03-guest-published.png");
@@ -176,7 +153,7 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.github.options", { after: previousOptions });
       await expect.poll(() => openPr.getAttribute("href")).toBe(receipt.result.url);
       await expectNoPersonalActions(page);
-      expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
       expect(await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD)).toHaveLength(0);
       await page.reload();
@@ -189,7 +166,7 @@ suite.define(() => {
   });
 
   it.each([false, true])(
-    "waits for an available publication target (managed workspace: %s)",
+    "retains denial when a publication target becomes available (managed workspace: %s)",
     async (hasWorkspace) => {
       await suite.withPage(contextOptions(), async ({ page }) => {
         const gateway = await installGuestGateway(page, hasWorkspace, null);
@@ -208,7 +185,7 @@ suite.define(() => {
           await gateway.waitForRequest("sessions.github.options", { after: previousOptions });
           await expect
             .poll(() => page.getByRole("button", { name: "Publish PR", exact: true }).count())
-            .toBe(1);
+            .toBe(0);
           expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
         }
       });

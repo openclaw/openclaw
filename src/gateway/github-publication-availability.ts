@@ -1,14 +1,17 @@
 import type { GitHubPublicationPublisher } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import {
   matchesPreparedGitHubPublicationIdentity,
   prepareGitHubPublicationIdentity,
   prepareGitHubPublicationOptionsIdentity,
+  prepareGitHubReadIdentity,
   type PreparedGitHubPublicationIdentity,
 } from "../agents/github-tool-identity.js";
 import { readRegistryWorktree } from "../agents/worktrees/registry-read.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
@@ -55,6 +58,20 @@ export function assertExpectedSharedGitHubPublisher(
 
 export function currentGitHubPublicationConfig() {
   return publicationConfigSnapshot().config;
+}
+
+/** Source reads select the live Gateway identity, independent of captured workspace config. */
+export async function prepareCurrentGitHubReadIdentity(agentId: string, assertActive: () => void) {
+  const snapshot = publicationConfigSnapshot();
+  return await prepareGitHubReadIdentity({
+    config: snapshot.config,
+    sourceConfig: snapshot.sourceConfig,
+    getCurrentConfig: currentGitHubPublicationConfig,
+    agentId,
+    assertActive,
+    refresh: () => requestCurrentGitHubOAuthRefresh(agentId),
+    allowAnonymous: true,
+  });
 }
 
 export async function prepareCurrentGitHubPublicationIdentity(
@@ -252,9 +269,21 @@ export async function prepareGitHubPublicationAvailability(params: {
   sessionId: string;
   sessionKey: string;
   agentId: string;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   assertCurrent?: () => boolean;
 }): Promise<boolean> {
   try {
+    params.operatorAuthority?.assertCurrent();
+    if (
+      params.operatorAuthority &&
+      !roleScopesAllow({
+        role: "operator",
+        requestedScopes: ["operator.write"],
+        allowedScopes: params.operatorAuthority.scopes,
+      })
+    ) {
+      return false;
+    }
     if (params.assertCurrent?.() === false) {
       return false;
     }
@@ -264,6 +293,7 @@ export async function prepareGitHubPublicationAvailability(params: {
       return false;
     }
     const identity = await prepareCurrentGitHubPublicationIdentity(params.agentId);
+    params.operatorAuthority?.assertCurrent();
     if (params.assertCurrent?.() === false) {
       return false;
     }

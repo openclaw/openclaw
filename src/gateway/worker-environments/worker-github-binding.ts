@@ -1,6 +1,8 @@
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { resolveConfiguredGitHubToolIdentity } from "../../agents/github-tool-identity.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import {
   parseWorkerGitHubLaunchBinding,
   type WorkerGitHubLaunchBinding,
@@ -20,14 +22,32 @@ export async function prepareWorkerGitHubBinding(params: {
   sessionId: string;
   sessionKey: string;
   agentId: string;
+  executionAuthority: AdmittedRunOperatorAuthority | undefined;
   assertCurrent?: () => boolean;
 }): Promise<WorkerGitHubLaunchBinding | undefined> {
   try {
+    params.executionAuthority?.assertCurrent();
+    if (
+      params.executionAuthority?.rolePolicy?.sandboxRequired ||
+      (params.executionAuthority &&
+        !roleScopesAllow({
+          role: "operator",
+          requestedScopes: ["operator.write"],
+          allowedScopes: params.executionAuthority.scopes,
+        }))
+    ) {
+      return undefined;
+    }
     if (params.assertCurrent?.() === false) {
       return undefined;
     }
     const currentWorkspace = await prepareGitHubPublicationWorkspaceOwner(params);
     const workspace = currentWorkspace();
+    // A later maintainer turn cannot lend a bearer credential to a workspace
+    // whose original restricted execution can retain files or background processes.
+    if (workspace.loaded.entry.sandbox === "required") {
+      return undefined;
+    }
     if (params.assertCurrent?.() === false) {
       return undefined;
     }
@@ -56,11 +76,13 @@ export async function prepareWorkerGitHubBinding(params: {
       return undefined;
     }
     if (
+      currentWorkspace().loaded.entry.sandbox === "required" ||
       !sameGitHubPublicationWorkspace(workspace, currentWorkspace()) ||
       !matchesCurrentGitHubPublicationIdentity({ agentId: params.agentId, identity })
     ) {
       return undefined;
     }
+    params.executionAuthority?.assertCurrent();
     const token = identity.env.GH_TOKEN;
     if (!token) {
       return undefined;

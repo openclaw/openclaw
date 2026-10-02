@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   installManagedGitHubProfile,
   resolveManagedGitHubProfileDir,
 } from "../../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { prepareGitHubPublicationAvailability } from "../github-publication-availability.js";
 import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
 
 const mocks = vi.hoisted(() => ({
@@ -46,7 +48,12 @@ vi.mock("../../process/exec.js", () => ({ runCommandBuffered: mocks.nativeToken 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const profileId = "ghp_11111111111111111111111111111111";
 const token = "synthetic-worker-github-binding-token";
-const session = { sessionId: "worker-session", sessionKey: "agent:main:worker", agentId: "main" };
+const session = {
+  sessionId: "worker-session",
+  sessionKey: "agent:main:worker",
+  agentId: "main",
+  executionAuthority: undefined,
+};
 const worktree = {
   id: "worker-worktree",
   path: "/repo/worktree",
@@ -112,6 +119,97 @@ describe("worker GitHub launch binding", () => {
     });
     expect(mocks.verify).toHaveBeenCalledWith(token);
     expect(mocks.nativeToken).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { scopes: ["operator.sessions.write"], sandbox: undefined, allowed: false },
+    { scopes: ["operator.write"], sandbox: "required", allowed: false },
+    { scopes: ["operator.write"], sandbox: undefined, allowed: true },
+  ])("gates credential export by admitted scope and original workspace: %j", async (input) => {
+    await installProfile();
+    const loaded = mocks.session();
+    mocks.session.mockReturnValue({
+      ...loaded,
+      entry: { ...loaded.entry, sandbox: input.sandbox },
+    });
+    const binding = await prepareWorkerGitHubBinding({
+      ...session,
+      executionAuthority: createAdmittedRunOperatorAuthority({
+        profileId: "worker-operator",
+        scopes: input.scopes,
+        assertCurrent: () => {},
+      }),
+    });
+    expect(binding?.token).toBe(input.allowed ? token : undefined);
+    if (!input.allowed) {
+      expect(mocks.verify).not.toHaveBeenCalled();
+      expect(mocks.nativeToken).not.toHaveBeenCalled();
+    }
+  });
+
+  it("does not export a credential after admitted authority closes during identity preparation", async () => {
+    await installProfile();
+    let current = true;
+    const executionAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "worker-operator",
+      scopes: ["operator.write"],
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("Worker authority revoked");
+        }
+      },
+    });
+    mocks.verify.mockImplementation(async () => {
+      current = false;
+      return verified;
+    });
+    await expect(
+      prepareWorkerGitHubBinding({ ...session, executionAuthority }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not export a credential for a sandbox-required role on an unstamped workspace", async () => {
+    await installProfile();
+    const executionAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "sandboxed-operator",
+      scopes: ["operator.write"],
+      rolePolicy: { sessionAccessCap: "write", sandboxRequired: true, agents: "*" },
+      assertCurrent: () => {},
+    });
+    await expect(
+      prepareWorkerGitHubBinding({ ...session, executionAuthority }),
+    ).resolves.toBeUndefined();
+    expect(mocks.worktree).not.toHaveBeenCalled();
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(mocks.verify).not.toHaveBeenCalled();
+    expect(mocks.nativeToken).not.toHaveBeenCalled();
+  });
+
+  it("hides the publication tool for narrow authority while retaining fresh maintainer availability", async () => {
+    await installProfile();
+    const operatorAuthority = (scopes: string[]) =>
+      createAdmittedRunOperatorAuthority({
+        profileId: "tool-requester",
+        scopes,
+        assertCurrent: () => {},
+      });
+    await expect(
+      prepareGitHubPublicationAvailability({
+        ...session,
+        operatorAuthority: operatorAuthority(["operator.sessions.write"]),
+      }),
+    ).resolves.toBe(false);
+    expect(mocks.verify).not.toHaveBeenCalled();
+    expect(mocks.worktree).not.toHaveBeenCalled();
+    const loaded = mocks.session();
+    mocks.session.mockReturnValue({ ...loaded, entry: { ...loaded.entry, sandbox: "required" } });
+    await expect(
+      prepareGitHubPublicationAvailability({
+        ...session,
+        operatorAuthority: operatorAuthority(["operator.write"]),
+      }),
+    ).resolves.toBe(true);
+    expect(mocks.verify).toHaveBeenCalledWith(token);
   });
 
   it("uses the agent override author without inheriting system author fields", async () => {

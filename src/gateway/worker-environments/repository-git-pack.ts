@@ -8,15 +8,16 @@ import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 
 const FETCH_TIMEOUT_MS = 10 * 60_000;
 
-/** The caller retains scratch-directory custody until this operation settles. */
-export async function prepareRepositoryWorkerGitPack(params: {
+type RepositoryBaseRequest = {
   url: string;
   baseCommit: string;
   token: string;
   temporaryRoot: string;
   signal: AbortSignal;
   assertCurrent: () => void;
-}): Promise<string> {
+};
+
+async function prepareRepositoryWorkerBase(params: RepositoryBaseRequest) {
   if (parseProjectGitUrl(params.url)?.url !== params.url) {
     throw new Error("Repository preparation requires a canonical GitHub URL");
   }
@@ -32,7 +33,7 @@ export async function prepareRepositoryWorkerGitPack(params: {
   };
   const repository = path.join(params.temporaryRoot, "repository.git");
   // Inherited Git configuration, tracing, credential helpers and .netrc must not
-  // redirect this account-bound fetch or persist its credential. No checkout is made.
+  // redirect this account-bound fetch or persist its credential.
   const baseEnv = gitEnvironment({
     ...workerSshCommandOptions({ timeoutMs: FETCH_TIMEOUT_MS }).baseEnv,
     HOME: repository,
@@ -107,6 +108,14 @@ export async function prepareRepositoryWorkerGitPack(params: {
     throw new Error("The pinned repository object is not a commit");
   }
   assertCurrent();
+  return { repository, command, baseEnv };
+}
+
+/** The caller retains scratch-directory custody until this operation settles. */
+export async function prepareRepositoryWorkerGitPack(
+  params: RepositoryBaseRequest,
+): Promise<string> {
+  const { repository, baseEnv } = await prepareRepositoryWorkerBase(params);
   const pack = await prepareWorkerWorkspaceGitPack({
     root: repository,
     baseCommit: params.baseCommit,
@@ -114,6 +123,23 @@ export async function prepareRepositoryWorkerGitPack(params: {
     signal: params.signal,
     baseEnv,
   });
-  assertCurrent();
+  params.assertCurrent();
   return pack;
+}
+
+/** A transient source for the existing node snapshot transfer, never an execution workspace. */
+export async function prepareRepositoryWorkerReadWorkspace(
+  params: RepositoryBaseRequest,
+): Promise<string> {
+  const { repository, command } = await prepareRepositoryWorkerBase(params);
+  const workspace = path.join(params.temporaryRoot, "workspace");
+  await fs.mkdir(workspace, { mode: 0o700 });
+  await fs.writeFile(path.join(workspace, ".git"), "gitdir: " + repository + "\n");
+  await command(["config", "--local", "core.bare", "false"]);
+  await command(["config", "--local", "core.worktree", workspace]);
+  // The fetched repository has no templates, helpers or inherited configuration.
+  // Checkout never executes repository setup or exports its read credential.
+  await command(["checkout", "--detach", "--force", params.baseCommit]);
+  params.assertCurrent();
+  return workspace;
 }

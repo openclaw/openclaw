@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
@@ -41,6 +41,41 @@ import {
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 import { reconcileWorkspaceAfterTurn } from "./workspace-result-finalize.js";
+
+// Replace only remote source admission for this local-origin lifecycle fixture.
+vi.mock("./repository-project-admission.js", () => ({
+  prepareRepositoryWorkerProjectSource: async (params: {
+    repository: { agentId: string; url: string; baseCommit?: string };
+    assertCurrent: () => void;
+  }) => {
+    params.assertCurrent();
+    const { requireWorkspaceResultGit } = await import("./workspace-result-git.js");
+    const baseCommit =
+      params.repository.baseCommit ??
+      (await requireWorkspaceResultGit(fileURLToPath(params.repository.url), [
+        "rev-parse",
+        "HEAD",
+      ]));
+    params.assertCurrent();
+    return {
+      project: {
+        key: "a".repeat(64),
+        baseCommit,
+        source: {
+          kind: "repository",
+          url: params.repository.url,
+          repositoryId: "R_local_fixture",
+          owner: {
+            agent: { agentId: params.repository.agentId, provenance: null },
+            identity: { source: "anonymous" },
+          },
+        },
+      },
+      assertCurrent: params.assertCurrent,
+      revalidate: async () => params.assertCurrent(),
+    };
+  },
+}));
 
 export function useRepositoryWorkspaceResultFixture() {
   const seedDirs = useAutoCleanupTempDirTracker(afterAll);

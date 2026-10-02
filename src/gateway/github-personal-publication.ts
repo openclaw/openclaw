@@ -359,7 +359,6 @@ export function createPersonalGitHubPublicationCoordinator(
           workspace.assertCustody();
           return execution.ownsExecution();
         },
-        assertWorkflowChangesAllowed: assertCurrent,
         identity: {
           prepare: async () =>
             await preparePersonalGitHubPublicationSelection(bound, workspace.assertCurrent),

@@ -13,11 +13,6 @@ import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { placements, SESSION_ID, sessionTarget } from "./worker-turn-launcher.test-support.js";
 import { useRepositoryWorkspaceResultFixture } from "./workspace-result-repository.test-support.js";
 
-// This fixture clones a local Git origin; no GitHub identity is involved.
-vi.mock("./worker-github-binding.js", () => ({
-  prepareWorkerGitHubBinding: async () => undefined,
-}));
-
 describe("repository workspace editor admission", () => {
   const { fixture, readArtifact } = useRepositoryWorkspaceResultFixture();
 

@@ -43,7 +43,6 @@ import {
   githubPublicationPushArgs,
   githubPublicationRemoteHeadArgs,
   githubPublicationUpdateRefArgs,
-  hasGitHubPublicationWorkflowChanges,
   hasGitHubPublicationMessageFooter,
   readGitHubPublicationCoauthorTrailers,
   requirePublicationCommand as requireCommand,
@@ -58,7 +57,6 @@ import {
   recoverGitHubPublicationWorkspace,
 } from "./github-publication-recovery.js";
 import { prepareGitHubPublicationTarget } from "./github-publication-target.js";
-import { prepareGitHubPublicationWorkflowGuard } from "./github-publication-workflows.js";
 import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 
@@ -176,7 +174,6 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
   validateAuthority: () => boolean;
   prepareAuthority?: () => Promise<void>;
   validateCustody: () => boolean;
-  assertWorkflowChangesAllowed: () => void;
   projectResult: (row: Row) => SessionGitHubPublicationResult;
   bindWorkspaceSnapshot: (input: {
     row: Row;
@@ -420,23 +417,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       }
     }
     const existingPullRequest = await step(findPullRequest);
-    const assertWorkflowAuthority = await prepareGitHubPublicationWorkflowGuard(
-      params.assertWorkflowChangesAllowed,
-      () =>
-        hasGitHubPublicationWorkflowChanges({
-          cwd: worktree.path,
-          comparisonCommit: expectedRemoteHead || lineage.stdout.toString("utf8").trim(),
-          ancestryCommit: expectedRemoteHead || sourceHeadCommit,
-          targetCommit: remoteBaseSha,
-          workspaceTree,
-          run,
-        }),
-    );
-    const assertPublicationAction = () => {
-      assertWorkflowAuthority();
-      assertAuthority();
-    };
-    assertPublicationAction();
+    assertAuthority();
     row = params.updatePublishingFacts({
       row,
       repository,
@@ -458,7 +439,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     });
     const attribution = preparedAttribution.attribution;
     const assertAction = () => {
-      assertPublicationAction();
+      assertAuthority();
       if (!preparedAttribution.isCurrent()) {
         throw new GitHubPublicationCreditChangedError();
       }

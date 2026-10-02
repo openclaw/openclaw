@@ -693,9 +693,9 @@ describe("chat pane pushed pull request state", () => {
 });
 
 it.each(["worktree", "repository"] as const)(
-  "derives guest shared publication for an owned %s workspace",
+  "keeps an owned guest %s workspace read-only for publication",
   async (workspace) => {
-    const { pane, state, context, request, shared, settled } = createPublicationPane(undefined, [
+    const { state, request, settled } = createPublicationPane(undefined, [
       "operator.sessions.write",
     ]);
     const row = state.sessionsResult!.sessions[0]!;
@@ -709,27 +709,10 @@ it.each(["worktree", "repository"] as const)(
       };
     }
     const guest = await settled();
-    expect(guest.onPublish).toBeTypeOf("function");
+    expect(guest.onPublish).toBeUndefined();
     expect(guest.onSelect).toBeUndefined();
     expect(guest.onConfirm).toBeUndefined();
-    guest.onPublish?.();
-    await settled();
-    expect(request).toHaveBeenLastCalledWith("sessions.github.publish", {
-      sessionKey: state.sessionKey,
-      agentId: "main",
-      idempotencyKey: expect.any(String),
-      selection: { source: "shared", expected: shared },
-    });
-    const previous = pane.chatProps!.githubPublication!;
-    context.gateway.snapshot.hello = gatewayHelloForMethods(
-      ["sessions.github.publish", "sessions.github.options"],
-      ["operator.sessions.read"],
-    );
-    previous.onPublish?.();
-    expect(
-      request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
-    ).toHaveLength(1);
-    expect((await settled()).onPublish).toBeUndefined();
+    expect(request.mock.calls.some(([method]) => method === "sessions.github.publish")).toBe(false);
   },
 );
 
