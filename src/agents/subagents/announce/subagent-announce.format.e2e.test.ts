@@ -946,7 +946,7 @@ describe("subagent announce formatting", () => {
       "Reviews, failed checks, and other in-scope fixable blockers require continued work",
     );
     expect(msg).toContain(
-      `Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`,
+      "Otherwise send a truthful user-facing update unless this exact result is already visible to the user in this same turn.",
     );
     expect(msg).toContain("step-0");
     expect(msg).toContain("step-139");
@@ -2512,7 +2512,7 @@ describe("subagent announce formatting", () => {
     expectInputProvenance(call?.params, "agent:main:subagent:orchestrator:subagent:worker");
     const message = typeof call?.params?.message === "string" ? call.params.message : "";
     expect(message).toContain(
-      "Convert this completion into a concise internal orchestration update for your parent agent",
+      "Convert the reviewed outcome into a concise internal orchestration update for your parent agent",
     );
     expect(message).toContain(modelRouteChange);
     expect(message).toContain(
