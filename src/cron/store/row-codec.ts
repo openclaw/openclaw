@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import {
   executeSqliteQuerySync,
@@ -12,7 +13,6 @@ import {
 import { normalizeSqliteNumber as normalizeNumber } from "../../infra/sqlite-number.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { hashCronJobDefinition } from "../definition-hash.js";
-import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
@@ -117,7 +117,8 @@ function bindCronJobRow(storeKey: string, job: CronStoredJob, sortOrder: number)
 function normalizeCronJobForSqlite(job: CronStoreFile["jobs"][number]): CronStoredJob | null {
   const raw: Record<string, unknown> = { ...structuredClone(job) };
   const hadDeleteAfterRun = Object.hasOwn(raw, "deleteAfterRun");
-  normalizeCronJobIdentityFields(raw);
+  raw.id = normalizeOptionalString(raw.id);
+  delete raw.jobId;
   const normalized = normalizeCronJobInput(raw, { applyDefaults: true });
   if (!normalized || getInvalidPersistedCronJobReason(normalized)) {
     return null;
