@@ -2,6 +2,7 @@ import { Type, type Static } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
+import { resolveSessionChannelScope } from "../../plugin-sdk/session-visibility.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -30,6 +31,7 @@ import {
 } from "./scoped-session-access.js";
 import {
   createSessionVisibilityRowChecker,
+  resolveSessionToolChannelScope,
   formatSessionToolAccessDenial,
   resolveDisplaySessionKey,
   resolveSessionReference,
@@ -211,6 +213,7 @@ async function listVisibleSearchSessions(params: {
           }
           const visibilityRow = {
             key: row.key,
+            channelScope: resolveSessionChannelScope(row),
             ...(typeof row.agentId === "string"
               ? { agentId: row.agentId }
               : agentId
@@ -402,7 +405,14 @@ export function createSessionsSearchTool(opts?: {
         };
       }
 
+      const requesterChannelScope = await resolveSessionToolChannelScope({
+        visibility,
+        sessionKey: effectiveRequesterKey,
+        agentId: requesterAgentId,
+        callGateway: gatewayCall,
+      });
       const rowGuard = createSessionVisibilityRowChecker({
+        requesterChannelScope,
         action: "history",
         defaultAgentId: requesterAgentId,
         requesterAgentId,

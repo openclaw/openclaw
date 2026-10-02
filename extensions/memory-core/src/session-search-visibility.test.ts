@@ -36,6 +36,42 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     combinedSessionStore = crossAgentStore;
   });
 
+  it("keeps transcript recall channel-scoped and rejects ambiguous aliases and archives", async () => {
+    const requester = "agent:main:slack:channel:c111:thread:1.001";
+    const sibling = "agent:main:slack:channel:c111:thread:1.002";
+    const other = "agent:main:slack:channel:c222:thread:1.003";
+    const stored = (id: string, to: string) =>
+      sessionEntry(id, 1, `/tmp/sessions/${id}.jsonl`, {
+        chatType: "channel",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "slack", accountId: "default", to },
+          origin: { provider: "slack", accountId: "default", chatType: "channel", to },
+        }),
+      });
+    combinedSessionStore = {
+      [requester]: stored("current", "channel:c111"),
+      [sibling]: stored("past", "channel:c111"),
+      [other]: stored("secret", "channel:c222"),
+    };
+    const visible = searchHit("sessions/past.jsonl", "sessions", "same channel");
+    const privateHit = searchHit("sessions/secret.jsonl", "sessions", "other customer");
+    const archived = searchHit(
+      "sessions/past.jsonl.reset.2026-01-01T00-00-00.000Z",
+      "sessions",
+      "old scope unknown",
+    );
+    const request = {
+      cfg: asOpenClawConfig({ tools: { sessions: { visibility: "channel" } } }),
+      agentId: "main",
+      requesterSessionKey: requester,
+      sandboxed: false,
+      hits: [visible, privateHit, archived],
+    };
+    expect(await filterMemorySearchHitsBySessionVisibility(request)).toEqual([visible]);
+    combinedSessionStore[other] = stored("past", "channel:c222");
+    expect(await filterMemorySearchHitsBySessionVisibility(request)).toEqual([]);
+  });
+
   it("drops sessions-sourced hits when requester key is missing (fail closed)", async () => {
     const hits: MemorySearchResult[] = [searchHit("sessions/u1.jsonl", "sessions", "x")];
     const filtered = await filterMemorySearchHitsBySessionVisibility({

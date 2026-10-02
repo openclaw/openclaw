@@ -9,7 +9,10 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
-import { sessionDeliveryOrigin } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
   loadCombinedSessionStoreForGateway,
@@ -20,6 +23,7 @@ import {
   createSessionVisibilityGuard,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxSessionToolsVisibility,
+  resolveSessionChannelScope,
 } from "openclaw/plugin-sdk/session-visibility";
 import {
   normalizeOptionalLowercaseString as normalizeAgentIdForCompare,
@@ -189,6 +193,22 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       })
     : undefined;
   const scopedAgentId = params.agentId?.trim() || requesterAgentId;
+  const { store: combinedSessionStore, storePath } = loadCombinedSessionStoreForGateway(
+    params.cfg,
+    scopedAgentId ? { agentId: scopedAgentId } : {},
+  );
+  const channelScopeForSession = (key: string) => {
+    const entry = combinedSessionStore[key];
+    return entry
+      ? resolveSessionChannelScope({
+          key,
+          chatType: entry.chatType,
+          space: entry.space,
+          origin: sessionDeliveryOrigin(entry),
+          deliveryContext: deliveryContextFromSession(entry),
+        })
+      : undefined;
+  };
   const guard = params.requesterSessionKey
     ? await createSessionVisibilityGuard({
         action: "history",
@@ -205,13 +225,15 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
             : undefined,
         visibility,
         a2aPolicy,
+        ...(visibility === "channel"
+          ? {
+              requesterChannelScope: channelScopeForSession(params.requesterSessionKey),
+              channelScopeForSession,
+            }
+          : {}),
       })
     : null;
 
-  const { store: combinedSessionStore, storePath } = loadCombinedSessionStoreForGateway(
-    params.cfg,
-    scopedAgentId ? { agentId: scopedAgentId } : {},
-  );
   const archiveNames = [
     ...new Set(
       params.hits.flatMap((hit) => {
@@ -233,7 +255,11 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
 
   const conversationRecall = params.conversationRecall;
   const trustedAgentScope = Boolean(
-    params.trustedAgentScope && scopedAgentId && !params.requesterSessionKey && !conversationRecall,
+    visibility !== "channel" &&
+    params.trustedAgentScope &&
+    scopedAgentId &&
+    !params.requesterSessionKey &&
+    !conversationRecall,
   );
   const anchorSessionKey = conversationRecall?.anchorSessionKey.trim();
   const recallAgentId = anchorSessionKey
@@ -259,6 +285,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   };
   const recallAuthorized = Boolean(
     conversationRecall &&
+    visibility !== "channel" &&
     !params.sandboxed &&
     conversationRecall.scope === "same-agent-private" &&
     (conversationRecall.corpus === "sessions" || conversationRecall.corpus === "configured") &&
@@ -340,7 +367,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   const areSessionKeysAllowed = (keys: string[], allowAnchorTranscript = false): boolean => {
     // Product recall fails closed when aliases disagree about privacy. Ordinary
     // session-tool visibility keeps its existing any-visible-alias behavior.
-    return conversationRecall
+    return conversationRecall || visibility === "channel"
       ? expandRecallAliasKeys(keys).every((key) => isSessionKeyAllowed(key, allowAnchorTranscript))
       : keys.some((key) => isSessionKeyAllowed(key));
   };
@@ -358,6 +385,11 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     }
     const identity = extractTranscriptIdentityFromSessionsMemoryHit(hit.path);
     if (!identity) {
+      continue;
+    }
+    // A reused live key cannot prove an archived transcript's former channel.
+    // Keep archives out until their own immutable route facts are available.
+    if (visibility === "channel" && identity.archived) {
       continue;
     }
     const archiveReason = readSessionArchiveReasonFromHitPath(hit.path);

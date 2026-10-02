@@ -1,7 +1,11 @@
 /** Core-private spawned-session ownership lookup; not a published plugin SDK subpath. */
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import {
   GatewayCredentialsRequiredError,
@@ -13,14 +17,93 @@ import { GatewayClientRequestError } from "../gateway/client.js";
 import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
+import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import {
   isAcpSessionKey,
   isIncognitoSessionKey,
   isSubagentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
+import { parseSessionDeliveryRoute } from "../sessions/session-key-utils.js";
 
 type GatewayCaller = typeof defaultCallGateway;
+
+/** Trusted stored transport scope; never derive this from model-supplied addresses. */
+export type SessionChannelScope = {
+  provider: string;
+  accountId: string;
+  to: string;
+  kind: "channel" | "group";
+  space?: string;
+};
+
+/** Read channel identity from a host-projected row, not the opaque peer in its key. */
+export function resolveSessionChannelScope(value: unknown): SessionChannelScope | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const row = value;
+  const route = parseSessionDeliveryRoute(typeof row.key === "string" ? row.key : undefined);
+  if (!route || (route.peerKind !== "channel" && route.peerKind !== "group")) {
+    return undefined;
+  }
+  const origin = isRecord(row.origin) ? row.origin : undefined;
+  const delivery = isRecord(row.deliveryContext) ? row.deliveryContext : undefined;
+  const provider = normalizeLowercaseStringOrEmpty(delivery?.channel);
+  const accountId = normalizeOptionalAccountId(
+    typeof delivery?.accountId === "string" ? delivery.accountId : undefined,
+  );
+  const to = normalizeOptionalString(delivery?.to);
+  const kind = row.chatType ?? origin?.chatType;
+  if (
+    !provider ||
+    provider !== route.channel ||
+    !accountId ||
+    !to ||
+    (kind !== "channel" && kind !== "group") ||
+    kind !== route.peerKind ||
+    (origin?.chatType !== undefined && origin.chatType !== kind) ||
+    (origin?.provider !== undefined &&
+      normalizeLowercaseStringOrEmpty(origin.provider) !== provider) ||
+    (origin?.accountId !== undefined &&
+      normalizeOptionalAccountId(
+        typeof origin.accountId === "string" ? origin.accountId : undefined,
+      ) !== accountId)
+  ) {
+    return undefined;
+  }
+  const space = normalizeOptionalString(row.space);
+  return { provider, accountId, to, kind, ...(space ? { space } : {}) };
+}
+
+function channelScopeMatchesSessionKey(
+  scope: SessionChannelScope | undefined,
+  key: string,
+): boolean {
+  const route = parseSessionDeliveryRoute(key);
+  return Boolean(
+    scope &&
+    route &&
+    (route.peerKind === "channel" || route.peerKind === "group") &&
+    route.channel === scope.provider &&
+    route.peerKind === scope.kind,
+  );
+}
+
+function sameChannelScope(left?: SessionChannelScope, right?: SessionChannelScope): boolean {
+  return Boolean(
+    left?.provider &&
+    left.accountId &&
+    left.to &&
+    (left.kind === "channel" || left.kind === "group") &&
+    right &&
+    left.provider === right.provider &&
+    left.accountId === right.accountId &&
+    left.to === right.to &&
+    left.kind === right.kind &&
+    left.space === right.space,
+  );
+}
 
 export type LookupFailureKind = "transient" | "credentials" | "unknown";
 
@@ -28,13 +111,14 @@ export type SessionVisibilityDecisionAction = "history" | "send" | "list" | "sta
 export type SessionVisibilityDecisionPresentationAction =
   | SessionVisibilityDecisionAction
   | "search";
-export type SessionVisibilityDecisionMode = "self" | "tree" | "agent" | "all";
+export type SessionVisibilityDecisionMode = "self" | "tree" | "channel" | "agent" | "all";
 export type SessionVisibilityDecisionPolicy = {
   enabled: boolean;
   isAllowed: (requesterAgentId: string, targetAgentId: string) => boolean;
 };
 export type SessionVisibilityDecisionRow = {
   key: string;
+  channelScope?: SessionChannelScope;
   agentId?: string;
   ownerSessionKey?: string;
   spawnedBy?: string;
@@ -43,6 +127,7 @@ export type SessionVisibilityDecisionRow = {
 export type SessionVisibilityDenialReason =
   | "agent_to_agent_disabled"
   | "agent_to_agent_not_allowed"
+  | "channel_visibility_restricted"
   | "cross_agent_visibility_restricted"
   | "incognito_session"
   | "session_ownership_lookup_failed_credentials"
@@ -68,6 +153,7 @@ type SessionVisibilityDecisionParams = {
   defaultAgentId?: string;
   requesterAgentId?: string;
   requesterSessionKey: string;
+  requesterChannelScope?: SessionChannelScope;
   mainSessionKey?: string;
   explicitTargetAgentOwnership?: boolean;
   visibility: SessionVisibilityDecisionMode;
@@ -144,6 +230,26 @@ export function createSessionVisibilityDecisionChecker(params: SessionVisibility
             ["session.owner"],
           );
         }
+      }
+      // Channel scope is a ceiling: lineage, main-session aliases and A2A
+      // permissions must not widen a request into another customer's channel.
+      if (params.visibility === "channel" && !isRequesterSession) {
+        if (
+          targetAgentId !== requesterAgentId ||
+          !channelScopeMatchesSessionKey(
+            params.requesterChannelScope,
+            params.requesterSessionKey,
+          ) ||
+          !channelScopeMatchesSessionKey(row.channelScope, targetSessionKey) ||
+          !sameChannelScope(params.requesterChannelScope, row.channelScope)
+        ) {
+          return denied(
+            "channel_visibility_restricted",
+            ["tools.sessions.visibility"],
+            ["requesterAgentId", "targetAgentId", "requesterChannelScope", "targetChannelScope"],
+          );
+        }
+        return { allowed: true };
       }
       const isRequesterOwned =
         rowOwnedByRequester(row, params.requesterSessionKey) ||
@@ -251,6 +357,8 @@ export function renderSessionVisibilityDenial(
       return `Agent-to-agent ${params.action} is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.`;
     case "agent_to_agent_not_allowed":
       return `Agent-to-agent ${params.action === "send" ? "messaging" : params.action === "list" ? "listing" : params.action} denied by tools.agentToAgent.allow.`;
+    case "channel_visibility_restricted":
+      return `${actionPrefix(params.action)} visibility is restricted to the current session and verified same-agent channel (tools.sessions.visibility=channel).`;
     case "self_visibility_restricted":
       return `${actionPrefix(params.action)} visibility is restricted to the current session (tools.sessions.visibility=self).`;
     case "tree_visibility_restricted":

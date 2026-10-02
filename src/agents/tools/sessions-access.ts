@@ -17,6 +17,8 @@ import {
 import {
   createSessionVisibilityChecker,
   resolveSandboxSessionToolsVisibility,
+  resolveSessionChannelScope,
+  type SessionChannelScope,
   type AgentToAgentPolicy,
   type SessionAccessAction,
   type SessionToolsVisibility,
@@ -70,7 +72,43 @@ function readDescribedSessionVisibilityRow(value: unknown): DescribedSessionVisi
     spawnedBy: normalizeOptionalString(value.spawnedBy),
     parentSessionKey: normalizeOptionalString(value.parentSessionKey),
     sessionId: normalizeOptionalString(value.sessionId),
+    channelScope: resolveSessionChannelScope(value),
   };
+}
+
+/** Read only metadata from the exact, owner-qualified session; missing facts deny. */
+async function readSessionToolChannelRow(params: {
+  sessionKey: string;
+  agentId: string;
+  callGateway?: AgentToolGatewayRequestCaller;
+}): Promise<DescribedSessionVisibilityRow | undefined> {
+  try {
+    const described = await (params.callGateway ?? callAgentToolGatewayRequest)<{
+      session?: unknown;
+    }>({
+      method: "sessions.describe",
+      params: { key: params.sessionKey, agentId: params.agentId },
+    });
+    const row = readDescribedSessionVisibilityRow(described?.session);
+    if (row?.key === params.sessionKey && (!row.agentId || row.agentId === params.agentId)) {
+      return row;
+    }
+  } catch {
+    // Neither lookup failure nor an older Gateway may widen this boundary.
+  }
+  return undefined;
+}
+
+/** Prepare the requester's channel facts once before filtering an inventory. */
+export async function resolveSessionToolChannelScope(params: {
+  visibility: SessionToolsVisibility;
+  sessionKey: string;
+  agentId: string;
+  callGateway?: AgentToolGatewayRequestCaller;
+}): Promise<SessionChannelScope | undefined> {
+  return params.visibility === "channel"
+    ? (await readSessionToolChannelRow(params))?.channelScope
+    : undefined;
 }
 
 /** Render operator guidance only when a tool presents a private access decision. */
@@ -233,6 +271,43 @@ export async function resolveSessionToolAccess(params: {
     if (!capped.allowed) {
       return deny(capped);
     }
+  }
+  if (params.visibility === "channel") {
+    // Channel visibility is a ceiling, including host-scoped grants. Do not let
+    // lineage or the main-session exception substitute for route ownership.
+    const isCurrent = authorizationTargetSessionKey === params.requesterSessionKey;
+    const [requester, target] =
+      !isCurrent && params.requesterAgentId === params.targetAgentId
+        ? await Promise.all([
+            readSessionToolChannelRow({
+              sessionKey: params.requesterSessionKey,
+              agentId: params.requesterAgentId,
+              callGateway: params.callGateway,
+            }),
+            readSessionToolChannelRow({
+              sessionKey: params.targetSessionKey,
+              agentId: params.targetAgentId,
+              callGateway: params.callGateway,
+            }),
+          ])
+        : [];
+    const decision = createSessionVisibilityDecisionChecker({
+      action: params.action,
+      defaultAgentId: params.targetAgentId,
+      requesterAgentId: params.requesterAgentId,
+      requesterSessionKey: params.requesterSessionKey,
+      visibility: params.visibility,
+      a2aPolicy: params.a2aPolicy,
+      requesterChannelScope: requester?.channelScope,
+    }).check({
+      key: authorizationTargetSessionKey,
+      agentId: params.targetAgentId,
+      channelScope: target?.channelScope,
+    });
+    if (!decision.allowed) {
+      return deny(decision);
+    }
+    return target?.sessionId ? { allowed: true, expectedSessionId: target.sessionId } : decision;
   }
   const scoped = await createSessionVisibilityChecker.resolveScopedAccessAsync({
     action: params.action,
