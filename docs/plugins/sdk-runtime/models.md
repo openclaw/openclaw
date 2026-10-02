@@ -122,6 +122,12 @@ Backend adapters retain protocol validation and special-mode handling.
     const result = await api.runtime.llm.complete({
       messages: [{ role: "user", content: "Return one JSON value." }],
       systemPrompt: "You are a JSON-only function.",
+      outputSchema: {
+        type: "object",
+        properties: { answer: { type: "string" } },
+        required: ["answer"],
+        additionalProperties: false,
+      },
       model: "openai/gpt-6-astra",
       execution: {
         mode: "isolated-agent-runtime",
@@ -143,6 +149,14 @@ Backend adapters retain protocol validation and special-mode handling.
     from acting during inference. Callers requiring zero tools must select a
     runtime that enforces that boundary. See the
     [isolated-completion contract](/plugins/sdk-agent-harness/registration#isolated-completion).
+
+    `outputSchema` is an advisory native final-output constraint. The host
+    forwards a detached JSON-safe snapshot only when it fits within 1 KiB;
+    otherwise generation continues without the native constraint. Harnesses
+    such as Codex pass the snapshot to transports that support structured
+    output. Codex retries with a prompt-level constraint when its transport
+    explicitly rejects the schema dialect; other owners may ignore it. Callers
+    must still parse and validate the returned value.
 
     Completion failures expose a stable `code` on the thrown error. Isolated
     callers can distinguish authorization, invalid isolated input, unsupported
