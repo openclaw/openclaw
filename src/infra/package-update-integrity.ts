@@ -6,6 +6,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
+import * as fileHashing from "./package-update-integrity-hasher.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
 
 const MAX_TREE_BYTES = 1024 * 1024 * 1024;
@@ -284,7 +285,6 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       const buffer = readBuffer ?? Buffer.allocUnsafe(64 * 1024);
       const size = Number(stat.size);
       let position = 0;
-      const readStartedAtNs = BigInt(Date.now()) * 1_000_000n;
       // The final stat detects growth; an extra EOF read costs one OS call per file.
       while (position < size) {
         const { bytesRead } = await read(() =>
@@ -299,15 +299,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       if (!unchanged(stat, await read(() => handle.stat({ bigint: true })))) {
         throw new Error("Package rollback file changed while reading");
       }
-      // Userspace cannot set ctime, but coarse filesystem clocks can hide same-tick
-      // writes, so reuse only bytes read well after the last change. Like the final
-      // sweep, this observes rather than excludes writers: a store to an already
-      // dirty shared mapping need not update timestamps.
-      return {
-        digest: hash.digest("hex"),
-        bytes: position,
-        reusable: stat.ctimeNs + SETTLED_CTIME_MARGIN_NS <= readStartedAtNs,
-      };
+      return { digest: hash.digest("hex"), bytes: position };
     } finally {
       await close(handle);
     }
@@ -332,20 +324,36 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       retained: string[];
       reusable: boolean;
     };
-    type FileOutcome = { entry: HashedEntry } | { error: unknown };
-    const pendingFiles: Array<Promise<FileOutcome>> = [];
-    let pendingHashes = 0;
-    const buffers: Buffer[] = [];
+    type Outcome = { entry: HashedEntry } | { error: unknown };
+    const pending: Array<{ file: boolean; outcome: Promise<Outcome> }> = [];
+    const hasher = fileHashing.createPackageFileHasher(
+      async (file, stat) => (await hashFile(file, stat, Number(stat.size))).digest,
+    );
+    const window = 64;
+    let pendingFiles = 0;
     let fileFailed = false;
     const appendEntry = ({ relative, fields, retained, reusable }: HashedEntry) => {
       const retainedEntry = JSON.stringify([relative, retained]);
       digest.update(retainedEntry);
       entriesObserved.set(relative, { fields, retained: retainedEntry, reusable });
     };
-    const drainFiles = async () => {
-      const outcomes = await Promise.all(pendingFiles);
-      pendingFiles.length = 0;
-      pendingHashes = 0;
+    const drainFiles = async (limit = pending.length) => {
+      let count = limit;
+      if (!count) {
+        return;
+      }
+      let outcomes = await read(() => {
+        hasher.flush();
+        return Promise.all(pending.slice(0, count).map((item) => item.outcome));
+      });
+      if (count < pending.length && outcomes.some((outcome) => "error" in outcome)) {
+        count = pending.length;
+        outcomes = await read(() => {
+          hasher.flush();
+          return Promise.all(pending.map((item) => item.outcome));
+        });
+      }
+      pendingFiles -= pending.splice(0, count).filter((item) => item.file).length;
       // Journal digests and refusal precedence follow DFS order, not IO completion order.
       for (const outcome of outcomes) {
         if ("error" in outcome) {
@@ -390,7 +398,6 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         retained.push(info.size, info.mtimeNs);
       }
       if (stat.isSymbolicLink()) {
-        await drainFiles();
         const target = await read(() => fs.readlink(file));
         const resolved = path.relative(
           originalRoot,
@@ -432,35 +439,37 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         ) {
           fields.set("sha256", previousDigest);
           retained.push("file", previousDigest);
-          const entry = { relative, fields, retained, reusable: true };
           // Keep reused entries behind earlier hashes without consuming a hash slot.
-          if (pendingFiles.length) {
-            pendingFiles.push(Promise.resolve({ entry }));
-          } else {
-            appendEntry(entry);
-          }
+          pending.push({
+            file: false,
+            outcome: Promise.resolve({ entry: { relative, fields, retained, reusable: true } }),
+          });
           return;
         }
-        const buffer = (buffers[pendingHashes++] ??= Buffer.allocUnsafe(64 * 1024));
-        pendingFiles.push(
-          hashFile(file, stat, remainingBytes, buffer).then(
-            (contents) => {
-              fields.set("sha256", contents.digest);
-              retained.push("file", contents.digest);
-              return { entry: { relative, fields, retained, reusable: contents.reusable } };
+        pendingFiles++;
+        // Admission precedes either the worker or fallback read, so coarse ctime
+        // clocks cannot make this guard looser than checking at read start.
+        const admittedAtNs = BigInt(Date.now()) * 1_000_000n;
+        const reusable = stat.ctimeNs + SETTLED_CTIME_MARGIN_NS <= admittedAtNs;
+        pending.push({
+          file: true,
+          outcome: trackIo(() => hasher.hash(file, stat)).then(
+            (fileDigest) => {
+              fields.set("sha256", fileDigest);
+              retained.push("file", fileDigest);
+              return { entry: { relative, fields, retained, reusable } };
             },
             (error: unknown) => {
               fileFailed = true;
               return { error };
             },
           ),
-        );
-        if (pendingHashes === 4) {
-          await drainFiles();
+        });
+        if (pendingFiles === window) {
+          await drainFiles(pending.findIndex((item) => item.file) + 1);
         }
         return;
       } else if (stat.isDirectory()) {
-        await drainFiles();
         const children = await entries(file, remainingEntries);
         // Reserve pending siblings before descending so wide ancestor lists
         // cannot each retain another full tree budget.
@@ -468,34 +477,44 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         for (const child of children) {
           await visit(path.join(file, child), relative ? `${relative}/${child}` : child);
         }
-        await drainFiles();
       } else {
         throw new Error("Package rollback contains a non-file entry");
       }
-      appendEntry({ relative, fields, retained, reusable: false });
+      pending.push({
+        file: false,
+        outcome: Promise.resolve({ entry: { relative, fields, retained, reusable: false } }),
+      });
     }
 
     try {
-      await visit(root, "");
-    } catch (error) {
-      // A later resource limit must not hide an earlier admitted integrity refusal.
-      await drainFiles();
-      throw error;
-    }
-    // JSON parsing buffers the manifest, unlike the streamed tree hash. Bound
-    // that allocation separately, including growth after hashing.
-    const version = await read(() => readPackageVersion(root, { maxBytes: MAX_MANIFEST_BYTES }));
-    if (!version) {
-      throw new Error("Package rollback version is unavailable");
-    }
-    for (const entry of observed) {
-      if (!unchanged(entry.stat, await read(() => fs.lstat(entry.file, { bigint: true })))) {
-        throw new Error("Package rollback tree changed during verification");
+      try {
+        await visit(root, "");
+        await drainFiles();
+      } catch (error) {
+        // A deadline abandons OS work; all other refusals join admitted hashes
+        // so a later walk error cannot hide an earlier DFS hash failure.
+        if (!(error instanceof PackageIntegrityTimeoutError)) {
+          await drainFiles();
+        }
+        throw error;
       }
+      // JSON parsing buffers the manifest, unlike the streamed tree hash. Bound
+      // that allocation separately, including growth after hashing.
+      const version = await read(() => readPackageVersion(root, { maxBytes: MAX_MANIFEST_BYTES }));
+      if (!version) {
+        throw new Error("Package rollback version is unavailable");
+      }
+      for (const entry of observed) {
+        if (!unchanged(entry.stat, await read(() => fs.lstat(entry.file, { bigint: true })))) {
+          throw new Error("Package rollback tree changed during verification");
+        }
+      }
+      const fingerprint = { digest: digest.digest("hex"), identity: rootIdentity, version };
+      observations.set(fingerprint, entriesObserved);
+      return fingerprint;
+    } finally {
+      hasher.close();
     }
-    const fingerprint = { digest: digest.digest("hex"), identity: rootIdentity, version };
-    observations.set(fingerprint, entriesObserved);
-    return fingerprint;
   }
 
   async function rootEntry(
