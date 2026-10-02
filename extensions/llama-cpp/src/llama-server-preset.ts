@@ -24,6 +24,8 @@ export type LlamaServerPresetOptions = {
   serviceSettings?: {
     args?: readonly string[];
     env?: Readonly<Record<string, string | undefined>>;
+    // Windows environment names are case-insensitive. Defaults to process.platform.
+    platform?: NodeJS.Platform;
   };
 };
 
@@ -103,10 +105,12 @@ function readSettingKeys(section: string | undefined): Set<string> {
 // Router children inherit the service env, so those keys count as configured too. A preset
 // key becomes a child CLI option, which llama.cpp applies over the inherited env value.
 function readServiceSettingKeys(service: LlamaServerPresetOptions["serviceSettings"]): Set<string> {
+  const caseInsensitiveEnv = (service?.platform ?? process.platform) === "win32";
   const keys = [
     ...Object.entries(service?.env ?? {})
       .filter(([, value]) => value !== undefined)
-      .map(([key]) => key),
+      // The env aliases are uppercase, so this matches `llama_arg_n_parallel` the way Windows does.
+      .map(([key]) => (caseInsensitiveEnv ? key.toUpperCase() : key)),
     ...(service?.args ?? [])
       .filter((arg) => arg.startsWith("-"))
       .map((arg) => arg.replace(/^-+/u, "").split("=")[0] ?? ""),

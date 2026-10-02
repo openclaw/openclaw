@@ -60,8 +60,24 @@ describe("managed embedding slot default", () => {
     { label: "--parallel arg", serviceSettings: { args: ["--port", "1", "--parallel", "2"] } },
     { label: "-np arg", serviceSettings: { args: ["-np", "3"] } },
     { label: "--parallel= arg", serviceSettings: { args: ["--parallel=2"] } },
+    {
+      label: "lowercase Windows env",
+      serviceSettings: { env: { llama_arg_n_parallel: "4" }, platform: "win32" as const },
+    },
+    {
+      label: "mixed-case Windows env",
+      serviceSettings: { env: { Llama_Arg_N_Parallel: "4" }, platform: "win32" as const },
+    },
   ])("keeps a slot count the router service sets through its $label", ({ serviceSettings }) => {
     expect(refreshDefaultEmbedding(undefined, { serviceSettings })).not.toContain("parallel");
+  });
+
+  it("bounds slots when a POSIX env name differs only in case", () => {
+    expect(
+      refreshDefaultEmbedding(undefined, {
+        serviceSettings: { env: { llama_arg_n_parallel: "4" }, platform: "linux" },
+      }),
+    ).toContain("embedding = true\nparallel = 1\n");
   });
 });
 
