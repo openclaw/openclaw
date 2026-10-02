@@ -71,6 +71,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
   cfg: OpenClawConfig;
   runId: string;
   childSessionKey: string;
+  childAgentId?: string;
   task: string;
   requester?: PluginSubagentRequesterContext;
   pluginId?: string;
@@ -90,12 +91,14 @@ export async function registerPluginSubagentRunFromGateway(params: {
   // a requester and therefore owns a separate delivery.
   if (
     !params.requester &&
-    adoptPausedSubagentRunForFollowUp({
+    (await adoptPausedSubagentRunForFollowUp({
       childSessionKey,
+      childAgentId: params.childAgentId,
       runId: params.runId,
       task: params.task,
       gatewayContextResolver: params.gatewayContextResolver,
-    })
+      assertCurrent: params.assertCurrent,
+    }))
   ) {
     return;
   }
@@ -103,6 +106,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
     {
       runId: params.runId,
       childSessionKey,
+      childAgentId: params.childAgentId,
       sessionEntry,
       controllerSessionKey: ownerSessionKey,
       requesterSessionKey,

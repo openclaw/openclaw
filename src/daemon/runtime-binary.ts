@@ -118,7 +118,7 @@ export function resolveRuntimeScriptPosition(args: string[]): {
       const nodeOption = !bun && process.allowedNodeEnvironmentFlags.has(option);
       const knownBoolean =
         RUNTIME_BOOLEAN_OPTIONS.has(option) ||
-        (bun && option === "--hot") ||
+        (bun && (option === "--hot" || option === "--no-install")) ||
         (nodeOption && process.allowedNodeEnvironmentFlags.has(negated));
       if (!inlineCommand && !knownBoolean && !/^--[^=]+=/.test(arg)) {
         unresolved ??= { kind: "unclassified", reason: `unsupported runtime option ${arg}` };

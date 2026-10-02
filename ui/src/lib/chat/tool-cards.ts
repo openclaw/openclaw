@@ -166,11 +166,8 @@ export function resolveToolCardOutcome(
   return "unknown";
 }
 
-export function extractToolPreview(
-  outputText: string | undefined,
-  toolName: string | undefined,
-): CanvasToolPreview | undefined {
-  const preview = extractCanvasFromText(outputText, toolName);
+export function extractToolPreview(outputText: string | undefined): CanvasToolPreview | undefined {
+  const preview = extractCanvasFromText(outputText);
   return preview?.surface === "assistant_message"
     ? { ...preview, surface: "assistant_message" }
     : undefined;
@@ -186,7 +183,7 @@ function extractToolPresentation(
   const canvas =
     preview?.surface === "assistant_message"
       ? { ...preview, surface: "assistant_message" }
-      : extractToolPreview(text, name);
+      : extractToolPreview(text);
   if (canvas) {
     return { preview: { ...canvas, surface: "assistant_message" } };
   }

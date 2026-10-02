@@ -53,7 +53,7 @@ it.each([false, true])(
           gateway: { mode: "local" },
           agents: {
             defaults: { workspace: state.workspaceDir },
-            entries: { main: { default: true, workspace: state.workspaceDir } },
+            entries: { main: { workspace: state.workspaceDir } },
           },
           plugins: { entries: {} },
         };

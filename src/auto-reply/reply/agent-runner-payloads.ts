@@ -182,7 +182,7 @@ export async function buildReplyPayloads(params: {
       let text = payload.text;
 
       if (payload.isError && text && isBunFetchSocketError(text)) {
-        text = formatBunFetchSocketError(text);
+        text = formatBunFetchSocketError();
       }
 
       if (text?.includes("HEARTBEAT_OK")) {

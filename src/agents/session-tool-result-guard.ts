@@ -18,6 +18,8 @@ import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import {
   getRawSessionAppendMessage,
   setRawSessionAppendMessage,
+  getRawSessionAppendMessageAsync,
+  setRawSessionAppendMessageAsync,
 } from "./session-raw-append-message.js";
 import {
   capToolResultForPersistence,
@@ -27,9 +29,16 @@ import {
 import { resolveAppendedMessageSeq } from "./session-tool-result-guard.transcript-seq.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
 import type { SessionManager } from "./sessions/index.js";
-import { withSessionCompactionPersistence } from "./sessions/session-compaction-persistence.js";
-import type { CompactionAppendPersistence } from "./sessions/session-compaction-persistence.js";
+import {
+  withSessionCompactionPersistence,
+  withSessionCompactionPersistenceAsync,
+} from "./sessions/session-compaction-persistence.js";
+import type {
+  CompactionAppendPersistence,
+  CompactionAppendPersistenceAsync,
+} from "./sessions/session-compaction-persistence.js";
 import { withSessionManagerWrite } from "./sessions/session-manager-write-admission.js";
+import { warnSessionPersistenceDeprecation } from "./sessions/session-persistence-deprecation.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultId,
@@ -160,10 +169,12 @@ export function installSessionToolResultGuard(
     onUserMessageBlocked?: (message: UserAgentMessage) => void;
     onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
     withCompactionPersistence?: CompactionAppendPersistence;
+    withCompactionPersistenceAsync?: CompactionAppendPersistenceAsync;
   },
 ): {
   hasPendingToolResults: () => boolean;
   flushPendingToolResults: () => void;
+  flushPendingToolResultsAsync: () => Promise<void>;
   clearPendingToolResults: () => void;
   clearNextUserMessagePersistenceSuppression: () => void;
   setNextUserMessagePersistenceSuppression: (suppress: boolean) => void;
@@ -176,6 +187,7 @@ export function installSessionToolResultGuard(
   const originalAppendWithTranscriptAnchorAsync =
     sessionManager.appendMessageWithTranscriptAnchorAsync.bind(sessionManager);
   setRawSessionAppendMessage(sessionManager, originalAppend);
+  setRawSessionAppendMessageAsync(sessionManager, getRawSessionAppendMessageAsync(sessionManager));
   const pending = new Map<string, string | undefined>();
   // Response that most recently added pending tool calls; see clearsPendingToolCalls.
   let pendingResponseIds: readonly string[] = [];
@@ -363,6 +375,7 @@ export function installSessionToolResultGuard(
     };
   }
   const originalAppendCompaction = sessionManager.appendCompaction.bind(sessionManager);
+  const originalAppendCompactionAsync = sessionManager.appendCompactionAsync.bind(sessionManager);
   const guardedAppendCompaction = ((
     ...args: Parameters<SessionManager["appendCompaction"]>
   ): string => {
@@ -372,6 +385,14 @@ export function installSessionToolResultGuard(
       originalAppendCompaction(...args),
     );
   }) as SessionManager["appendCompaction"];
+  const guardedAppendCompactionAsync: SessionManager["appendCompactionAsync"] = (...args) => {
+    args[5] = { runId: transcriptRunId, ...args[5] };
+    return withSessionCompactionPersistenceAsync(
+      sessionManager,
+      opts?.withCompactionPersistenceAsync,
+      () => originalAppendCompactionAsync(...args),
+    );
+  };
 
   /**
    * Run the before_message_write hook. Returns the (possibly modified) message,
@@ -434,6 +455,8 @@ export function installSessionToolResultGuard(
     pending.clear();
   }
   const flushPendingToolResults = () => runSync(flushPendingToolResultsOperation());
+  const flushPendingToolResultsAsync = () =>
+    withSessionManagerWrite(sessionManager, () => runAsync(flushPendingToolResultsOperation()));
 
   function* guardedAppend(
     message: AgentMessage,
@@ -601,10 +624,13 @@ export function installSessionToolResultGuard(
     return result;
   }
 
-  sessionManager.appendMessage = ((message, options) =>
-    withCodeModeSourceAppend(message, options, (sourceAppend) =>
+  // Retained third-party synchronous adapter; bundled runtime uses the awaited guard below.
+  sessionManager.appendMessage = ((message, options) => {
+    warnSessionPersistenceDeprecation("SessionManager.appendMessage", "appendMessageAsync");
+    return withCodeModeSourceAppend(message, options, (sourceAppend) =>
       runSync(guardedAppend(message, options, sourceAppend)),
-    )) as SessionManager["appendMessage"];
+    );
+  }) as SessionManager["appendMessage"];
   sessionManager.appendMessageAsync = (message, options) =>
     withSessionManagerWrite(sessionManager, () =>
       withCodeModeSourceAppend(message, options, (sourceAppend) =>
@@ -612,10 +638,12 @@ export function installSessionToolResultGuard(
       ),
     );
   sessionManager.appendCompaction = guardedAppendCompaction;
+  sessionManager.appendCompactionAsync = guardedAppendCompactionAsync;
 
   return {
     hasPendingToolResults: () => pending.size > 0,
     flushPendingToolResults,
+    flushPendingToolResultsAsync,
     clearPendingToolResults: () => pending.clear(),
     clearNextUserMessagePersistenceSuppression: () => {
       suppressNextUserMessagePersistence = false;

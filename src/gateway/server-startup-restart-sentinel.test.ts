@@ -1,28 +1,59 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeRestartSentinel } from "../infra/restart-sentinel.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
-import { scheduleRestartSentinelWakeAfterReady } from "./server-startup-restart-sentinel.js";
+import {
+  refreshLatestUpdateRestartSentinelIfPresent,
+  scheduleRestartSentinelWakeAfterReady,
+} from "./server-startup-restart-sentinel.js";
 
-const { scheduleRestartSentinelWake } = vi.hoisted(() => ({
+const { refreshLatestUpdateRestartSentinel, scheduleRestartSentinelWake } = vi.hoisted(() => ({
+  refreshLatestUpdateRestartSentinel:
+    vi.fn<typeof import("./server-restart-sentinel.js").refreshLatestUpdateRestartSentinel>(),
   scheduleRestartSentinelWake:
     vi.fn<typeof import("./server-restart-sentinel.js").scheduleRestartSentinelWake>(),
 }));
 
-vi.mock("./server-restart-sentinel.js", () => ({ scheduleRestartSentinelWake }));
+vi.mock("./server-restart-sentinel.js", () => ({
+  refreshLatestUpdateRestartSentinel,
+  scheduleRestartSentinelWake,
+}));
+
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  });
+});
 
 beforeEach(() => {
   resetGatewayWorkAdmission();
+  refreshLatestUpdateRestartSentinel.mockReset();
   scheduleRestartSentinelWake.mockReset();
 });
 afterEach(resetGatewayWorkAdmission);
+
+it("refreshes only an existing restart sentinel", async () => {
+  const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("restart-sentinel-startup-") };
+  await expect(refreshLatestUpdateRestartSentinelIfPresent(env)).resolves.toBeNull();
+  expect(refreshLatestUpdateRestartSentinel).not.toHaveBeenCalled();
+
+  const sentinel = { kind: "update", status: "ok", ts: 1 } as const;
+  await writeRestartSentinel(sentinel, env);
+  refreshLatestUpdateRestartSentinel.mockResolvedValue(sentinel);
+  await expect(refreshLatestUpdateRestartSentinelIfPresent(env)).resolves.toBe(sentinel);
+  expect(refreshLatestUpdateRestartSentinel).toHaveBeenCalledExactlyOnceWith(env);
+});
 
 it("keeps delayed restart sentinel recovery admitted until wake work completes", async () => {
   const clock = createGatewaySchedulerClock();

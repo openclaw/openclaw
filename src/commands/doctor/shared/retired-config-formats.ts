@@ -55,6 +55,12 @@ export function findRetiredConfigUpgradeRequirement(
     ]);
     checkKeys(scope.sandbox, `${configPath}.sandbox`, ["perSession"]);
     checkKeys(scope.silentReply, `${configPath}.silentReply`, ["direct"]);
+    checkKeys(scope.model, `${configPath}.model`, ["timeoutMs"]);
+    checkKeys(
+      isRecord(scope.subagents) ? scope.subagents.model : undefined,
+      `${configPath}.subagents.model`,
+      ["timeoutMs"],
+    );
     checkMemoryStore(scope, `${configPath}.`);
   });
   if (isRecord(config.surfaces)) {

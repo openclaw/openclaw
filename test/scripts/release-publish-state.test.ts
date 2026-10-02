@@ -13,6 +13,27 @@ import { createNestedGitEnv, writeJsonFile } from "../helpers/temp-repo.js";
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const version = "2026.9.5";
 const sourceSha = "a".repeat(40);
+const githubOptions = {
+  repository: "openclaw/openclaw",
+  releaseTag: `v${version}`,
+  sourceSha,
+  npmDistTag: "latest",
+};
+const pluginOptions = {
+  version,
+  npmDistTag: "latest",
+  publishOpenclawNpm: false,
+  plugins: [
+    {
+      extensionId: "example",
+      packageDir: "extensions/example",
+      packageName: "@openclaw/example",
+      version,
+      channel: "stable",
+      publishTag: "latest",
+    },
+  ],
+} satisfies Parameters<typeof observeReleaseNpmState>[0];
 afterEach(() => vi.unstubAllGlobals());
 
 describe("release publication state", () => {
@@ -30,21 +51,7 @@ describe("release publication state", () => {
         }),
       ),
     );
-    const result = await observeReleaseNpmState({
-      version,
-      npmDistTag: "latest",
-      publishOpenclawNpm: false,
-      plugins: [
-        {
-          extensionId: "example",
-          packageDir: "extensions/example",
-          packageName: "@openclaw/example",
-          version,
-          channel: "stable",
-          publishTag: "latest",
-        },
-      ],
-    });
+    const result = await observeReleaseNpmState(pluginOptions);
     expect(result.gates).toContainEqual(
       expect.objectContaining({
         id: "npm.package.@openclaw/example",
@@ -77,21 +84,7 @@ describe("release publication state", () => {
           }),
         ),
       );
-      const result = await observeReleaseNpmState({
-        version,
-        npmDistTag: "latest",
-        publishOpenclawNpm: false,
-        plugins: [
-          {
-            extensionId: "example",
-            packageDir: "extensions/example",
-            packageName: "@openclaw/example",
-            version,
-            channel: "stable",
-            publishTag: "latest",
-          },
-        ],
-      });
+      const result = await observeReleaseNpmState(pluginOptions);
       expect(result.gates).toContainEqual(
         expect.objectContaining({
           id: "npm.package.@openclaw/example",
@@ -261,10 +254,7 @@ function observeRuns(params: {
   onProgress?: (message: string) => void;
 }) {
   return observeReleaseGitHubState({
-    repository: "openclaw/openclaw",
-    releaseTag: `v${version}`,
-    sourceSha,
-    npmDistTag: "latest",
+    ...githubOptions,
     onProgress: params.onProgress,
     runGh: (args) => {
       const endpoint = args[1];
@@ -325,10 +315,7 @@ describe("release concurrency observations", () => {
       return "[]";
     });
     const result = observeReleaseGitHubState({
-      repository: "openclaw/openclaw",
-      releaseTag: `v${version}`,
-      sourceSha,
-      npmDistTag: "latest",
+      ...githubOptions,
       budgetMs: 100,
       now: () => now,
       runGh,
@@ -357,10 +344,7 @@ describe("release concurrency observations", () => {
 
   it("retains a gh stderr failure and exact unread command without hiding known blockers", () => {
     const result = observeReleaseGitHubState({
-      repository: "openclaw/openclaw",
-      releaseTag: `v${version}`,
-      sourceSha,
-      npmDistTag: "latest",
+      ...githubOptions,
       runGh(args) {
         if (args[1]?.includes("/plugin-npm-release.yml/") && args[1].includes("status=queued")) {
           return JSON.stringify({
@@ -413,10 +397,7 @@ describe("release concurrency observations", () => {
         : JSON.stringify({ total_count: 0, workflow_runs: [] }),
     );
     const result = observeReleaseGitHubState({
-      repository: "openclaw/openclaw",
-      releaseTag: `v${version}`,
-      sourceSha,
-      npmDistTag: "latest",
+      ...githubOptions,
       runGh,
     });
     expect(result.release).toMatchObject(release);
@@ -425,10 +406,7 @@ describe("release concurrency observations", () => {
 
   it("replays a failed filtered release-inventory read with its exact --jq filter", () => {
     const result = observeReleaseGitHubState({
-      repository: "openclaw/openclaw",
-      releaseTag: `v${version}`,
-      sourceSha,
-      npmDistTag: "latest",
+      ...githubOptions,
       runGh(args) {
         if (args[1]?.includes("/releases/tags/")) {
           throw new Error("HTTP 404: Not Found");

@@ -14,6 +14,7 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "../../agents/auth-profiles/store-runtime.js";
+import * as catalogCredentials from "../../agents/plugin-model-catalog-credentials.js";
 import * as catalogs from "../../agents/plugin-model-catalog.js";
 import { registerModelsCli } from "../../cli/models-cli.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -558,13 +559,13 @@ describe("models auth logout", () => {
       mocks.removeAuthProfilesAcrossOwnerStores.mockImplementation((params) =>
         removeAuthProfilesAcrossOwnerStores({ ...params, agentDir }),
       );
-      const scrub = catalogs.removePersistedPluginModelCatalogCredentials;
+      const scrub = catalogCredentials.removePersistedPluginModelCatalogCredentials;
       let calls = 0;
       const cleanup = vi
-        .spyOn(catalogs, "removePersistedPluginModelCatalogCredentials")
+        .spyOn(catalogCredentials, "removePersistedPluginModelCatalogCredentials")
         .mockImplementation(async (params) => {
           calls += 1;
-          if (calls === 2) {
+          if (calls === 1) {
             expect(
               loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId],
             ).toBeUndefined();

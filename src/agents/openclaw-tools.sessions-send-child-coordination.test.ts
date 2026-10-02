@@ -106,12 +106,12 @@ import {
 } from "./openclaw-tools.sessions-send-requester-retirement.test-support.js";
 import { observeSessionSendContinuations } from "./openclaw-tools.sessions-timeout.test-support.js";
 import { announceTesting } from "./subagents/announce/subagent-announce-overrides.test-support.js";
+import { mutateSubagentRuns } from "./subagents/registry/subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagents/registry/subagent-registry-publication.js";
 import { observeRootWork } from "./subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByRunId,
-  getLatestLiveSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
   settleRequesterAfterSessionSpawns,
 } from "./subagents/registry/subagent-registry.test-helpers.js";
@@ -249,7 +249,7 @@ describe("sessions_send child coordination", () => {
         spawnedBy: requesterSessionKey,
         spawnDepth: 1,
       });
-      resetSubagentRegistryForTests();
+      await resetSubagentRegistryForTests();
       const seed = (runId: string, generation: number) =>
         addSubagentRunForTests({
           runId,
@@ -263,26 +263,50 @@ describe("sessions_send child coordination", () => {
           completion: { required: true },
           delivery: { status: "pending" },
         });
-      seed("steer-A", 1);
-      const previous = getLatestLiveSubagentRunByChildSessionKey(childSessionKey)!;
+      await seed("steer-A", 1);
+      const previous = () => getSubagentRunByRunId("steer-A")!;
       const queueB = vi.fn(async () => {});
       const handleB = createEmbeddedRunHandle({ runId: "steer-B", queueMessage: queueB });
-      const replace = () => {
-        previous.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
-        seed("steer-B", 2);
+      const completePrevious = async (delivered = false) => {
+        await mutateSubagentRuns(["steer-A"], (rows) => {
+          const current = rows.get("steer-A");
+          if (!current) {
+            throw new Error("Expected the admitted steering target");
+          }
+          return {
+            value: undefined,
+            postimages: new Map([
+              [
+                current.runId,
+                {
+                  ...current,
+                  execution: {
+                    status: "terminal" as const,
+                    endedAt: Date.now(),
+                    outcome: { status: "ok" as const },
+                  },
+                  ...(delivered
+                    ? {
+                        delivery: { status: "delivered" as const },
+                        cleanupCompletedAt: Date.now(),
+                      }
+                    : {}),
+                },
+              ],
+            ]),
+          };
+        });
+      };
+      const replace = async () => {
+        await completePrevious();
+        await seed("steer-B", 2);
         setActiveEmbeddedRun(sessionId, handleB, childSessionKey);
       };
       const queueA = vi.fn(async () => {
         if (timing === "after completion") {
-          previous.execution = {
-            status: "terminal",
-            endedAt: Date.now(),
-            outcome: { status: "ok" },
-          };
-          previous.delivery = { status: "delivered" };
-          previous.cleanupCompletedAt = Date.now();
+          await completePrevious(true);
         } else {
-          replace();
+          await replace();
         }
       });
       const handleA = createEmbeddedRunHandle({ runId: "steer-A", queueMessage: queueA });
@@ -290,9 +314,9 @@ describe("sessions_send child coordination", () => {
       const deliver = sendDelivery.trySessionsSendActiveRunDelivery;
       const admission = vi
         .spyOn(sendDelivery, "trySessionsSendActiveRunDelivery")
-        .mockImplementationOnce((...args) => {
+        .mockImplementationOnce(async (...args) => {
           if (timing === "before admission") {
-            replace();
+            await replace();
           }
           return deliver(...args);
         });
@@ -315,10 +339,10 @@ describe("sessions_send child coordination", () => {
             error: expect.stringContaining("completion could not be claimed"),
           });
           expect(queueA).toHaveBeenCalledOnce();
-          expect(previous.requesterTurnRunId).toBeUndefined();
+          expect(previous().requesterTurnRunId).toBeUndefined();
           expect(queueB).not.toHaveBeenCalled();
           expect(getSubagentRunByRunId("steer-B")?.requesterTurnRunId).toBeUndefined();
-          expect(previous.delivery?.status).toBe(
+          expect(previous().delivery?.status).toBe(
             timing === "after completion" ? "delivered" : "pending",
           );
           return;
@@ -331,7 +355,7 @@ describe("sessions_send child coordination", () => {
         expect(queueB).toHaveBeenCalledOnce();
         expect(queueA).not.toHaveBeenCalled();
         expect(getSubagentRunByRunId("steer-B")?.requesterTurnRunId).toBe(requesterTurnRunId);
-        expect(previous.requesterTurnRunId).toBeUndefined();
+        expect(previous().requesterTurnRunId).toBeUndefined();
         const yielded = await createSessionsYieldTool({
           sessionId: "steer-requester",
           onYield: () => {},
@@ -346,7 +370,7 @@ describe("sessions_send child coordination", () => {
         admission.mockRestore();
         clearActiveEmbeddedRun(sessionId, handleB, childSessionKey);
         clearActiveEmbeddedRun(sessionId, handleA, childSessionKey);
-        resetSubagentRegistryForTests();
+        await resetSubagentRegistryForTests();
       }
     },
   );
@@ -370,8 +394,8 @@ describe("sessions_send child coordination", () => {
         spawnedBy: requesterSessionKey,
         spawnDepth: 1,
       });
-      resetSubagentRegistryForTests();
-      addSubagentRunForTests({
+      await resetSubagentRegistryForTests();
+      await addSubagentRunForTests({
         runId: "original-child-run",
         childSessionKey,
         requesterSessionKey,
@@ -510,7 +534,7 @@ describe("sessions_send child coordination", () => {
         finishChild();
         stopObserving();
         await settleSessionWork();
-        resetSubagentRegistryForTests();
+        await resetSubagentRegistryForTests();
         announceTesting.setDepsForTest();
       }
     },

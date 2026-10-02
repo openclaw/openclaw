@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import nodeFs, { Dir } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import path from "node:path";
@@ -12,11 +11,18 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeGitWorktreeOperation } from "../agents/worktrees/git-worktree-operations.runtime.js";
 import * as worktreeGit from "../agents/worktrees/git.js";
 import { ensureStagedInputDirectory, stagedInputDirectory } from "../media/staged-inputs.js";
+import { emitChildProcessSpawnSample } from "../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
+import {
+  onDiagnosticEvent,
+  setDiagnosticsEnabledForProcess,
+  type DiagnosticEventPayload,
+} from "./diagnostic-events.js";
 import * as gitExec from "./git-exec.js";
+import { installUnknownDirentFixture } from "./git-worker-dir.test-support.js";
 import { runGitWorkerOperation, type GitWorkerOperationOptions } from "./git-worker.js";
 
 const execFileAsync = promisify(execFile);
@@ -251,71 +257,32 @@ describe("Git operation host lifecycle", () => {
     },
   );
 
-  it.skipIf(!supportsRawPathBytes)(
-    "resolves unknown dirent types in ignored raw-byte directories during cleanup inspection",
+  it.skipIf(process.platform === "win32")(
+    "resolves unknown dirent types through runtime fixtures during cleanup inspection",
     async () => {
       const root = tempDirs.make("openclaw-unknown-dirent-");
       const repo = await repository(root);
       await fs.writeFile(path.join(repo, ".gitignore"), "dependencies/\n");
       const rawDirectory = Buffer.concat([
         Buffer.from(`${repo}/dependencies/`),
-        Buffer.from([0xff]),
+        supportsRawPathBytes ? Buffer.from([0xff]) : Buffer.from("界"),
       ]);
-      const name = Buffer.concat([Buffer.from("ordinary-"), Buffer.from([0xfe])]);
+      const name = Buffer.concat([
+        Buffer.from("ordinary-"),
+        supportsRawPathBytes ? Buffer.from([0xfe]) : Buffer.from("文"),
+      ]);
       const child = Buffer.concat([rawDirectory, Buffer.from("/"), name]);
       await fs.mkdir(rawDirectory, { recursive: true });
       await fs.writeFile(child, "generated, not snapshot-owned\n");
-      // Invoke the registered worktree dispatcher in-process so the low-level
-      // fs.Dir fixture reaches the same inventory owner used by worker threads.
-      const lstat = vi.spyOn(nodeFs, "lstatSync");
-      const realOpen = fs.opendir;
-      let reads = 0;
-      const close = vi.fn((request: { oncomplete: (error: Error | null) => void }) => {
-        request.oncomplete(null);
-      });
-      vi.spyOn(fs, "opendir").mockImplementation(async (directoryPath, options) => {
-        if (!Buffer.isBuffer(directoryPath) || !directoryPath.equals(rawDirectory)) {
-          return await realOpen(directoryPath, options);
-        }
-        // Only the low-level handle is fake: real fs.Dir performs getDirent's
-        // UV_DIRENT_UNKNOWN (0) fallback, lstat, iteration, and handle closure.
-        const handle = {
-          read(
-            encoding: string,
-            _bufferSize: number,
-            request: {
-              oncomplete: (
-                error: Error | null,
-                entries: (Buffer | string | number)[] | null,
-              ) => void;
-            },
-          ) {
-            if (encoding !== "buffer" && !Buffer.isEncoding(encoding)) {
-              throw new Error(`Unexpected directory encoding: ${encoding}`);
-            }
-            request.oncomplete(
-              null,
-              reads++ === 0 ? [encoding === "buffer" ? name : name.toString(encoding), 0] : null,
-            );
-          },
-          close,
-        };
-        // Dir's public declaration omits its runtime constructor arguments.
-        const directory: unknown = Reflect.construct(Dir, [handle, directoryPath, options]);
-        if (!(directory instanceof Dir)) {
-          throw new Error("Expected a real Node directory");
-        }
-        return directory;
-      });
+      // Observe the directory API at the inventory owner used by workers.
+      const directoryFixture = installUnknownDirentFixture(rawDirectory, name);
       expect(
         await executeGitWorktreeOperation({
           type: "worktree.cleanup-inspection",
           input: { kind: "nested-repository", checkoutPath: repo },
         }),
       ).toEqual({ retainedReason: undefined });
-      expect(reads).toBe(2);
-      expect(lstat).toHaveBeenCalledWith(child);
-      expect(close).toHaveBeenCalledOnce();
+      directoryFixture.expectConsumed(child);
     },
   );
 
@@ -351,6 +318,18 @@ describe("Git operation host lifecycle", () => {
     const peerRoot = path.join(root, "peer");
     await fs.mkdir(peerRoot);
     const peer = await repository(peerRoot);
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    setDiagnosticsEnabledForProcess(false);
+    emitChildProcessSpawnSample();
+    setDiagnosticsEnabledForProcess(true);
+    const spawns: Extract<DiagnosticEventPayload, { type: "diagnostic.child_process.spawn" }>[] =
+      [];
+    const stop = onDiagnosticEvent((event) => {
+      if (event.type === "diagnostic.child_process.spawn") {
+        spawns.push(event);
+      }
+    });
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const realRun = worktreeGit.runGitBytes;
@@ -397,7 +376,18 @@ describe("Git operation host lifecycle", () => {
     } finally {
       release.resolve();
       await Promise.all(pending);
+      now = 60_000;
+      emitChildProcessSpawnSample();
+      stop();
+      setDiagnosticsEnabledForProcess(false);
+      emitChildProcessSpawnSample();
     }
+    expect(
+      spawns
+        .map(({ operation }) => operation ?? "unknown")
+        .toSorted((left, right) => left.localeCompare(right)),
+    ).toEqual(["checkout.diff", "repository.branches"]);
+    expect(spawns.every(({ family, count }) => family === "git" && count > 0)).toBe(true);
   });
 
   it.each(["cleanup-inspection", "snapshot"] as const)(

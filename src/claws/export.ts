@@ -268,7 +268,6 @@ async function readAuthorBootstrap(path: string): Promise<Buffer> {
     const read = await sourceRoot.read(basename(resolvedPath), {
       hardlinks: "reject",
       maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-      nonBlockingRead: true,
       symlinks: "reject",
     });
     const text = new TextDecoder("utf-8", { fatal: true }).decode(read.buffer);

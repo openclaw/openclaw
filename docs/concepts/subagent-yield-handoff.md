@@ -74,6 +74,26 @@ with its scheduler-owned continuation.
 
 ## Invariants
 
+The registry persistence owner serializes mutations per run, admitting multi-run
+batches in sorted order. A synchronous plan reads the current immutable published
+rows after admission and returns replacement rows or deletions. Asynchronous
+preparation happens first; the plan rechecks execution, cancellation, requester,
+and cohort ownership before committing.
+Callbacks retain their observed ownership and wake progress across waits. They
+advance those observations only from their own acknowledged publications.
+
+The SQLite worker compares row-version digests before writing. A foreign change
+refreshes the affected rows through the read worker and reruns the plan, up to
+three attempts. Only acknowledged commits publish resident rows and notify readers.
+An unknown write outcome fences those rows until canonical restoration. Terminal
+rows and their eligible session-state events commit together; equivalent duplicate
+terminal callbacks preserve in-flight cleanup authority. This changes no schema or
+update format.
+
+Process-local callback ownership survives metadata publication. Recovery under a
+replacement Gateway acquires a fresh runtime incarnation through the same row
+owner, so callbacks from the closed Gateway cannot settle the recovered wake.
+
 - **One completion owner.** Yield transfers ownership before closing the old
   execution. An existing visible-final receipt for the exact turn and child
   batch prevents rearming an already fulfilled obligation. Successful batch

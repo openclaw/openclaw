@@ -201,7 +201,9 @@ describe("current attachments in an active remote placement", () => {
                 : prompt.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n"),
             );
             request.onDispatchReady?.();
-            const transcriptLeafId = openSessionManager().appendMessage({
+            const transcriptLeafId = await (
+              await openSessionManager()
+            ).appendMessageAsync({
               role: "assistant",
               content: [{ type: "text", text: "Read both" }],
               api: "openai-responses",

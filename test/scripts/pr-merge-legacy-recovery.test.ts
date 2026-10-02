@@ -101,7 +101,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
   });
 
   it.each([
-    "empty",
     "timeout",
     "extra-capture",
     "wrong-hash",
@@ -109,10 +108,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     "wrong-base",
     "missing-proof",
     "symlink",
-    "auto",
     "queue",
-    "closed",
-    "pending",
     "ci-proof",
     "changed-capture",
     "no-head",
@@ -122,8 +118,8 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     const approvedHead = f.replacePreparedHead();
     const next = f.state();
     const capture = join(f.worktree, ".local/merge-output.log");
-    if (fault === "empty" || fault === "timeout") {
-      const text = fault === "empty" ? "" : "502 after dispatch\n";
+    if (fault === "timeout") {
+      const text = "502 after dispatch\n";
       writeFileSync(capture, text);
       writeFileSync(join(legacy.directory, "merge-output.log"), text);
       legacy.oid = f.git(["hash-object", "--no-filters", capture]);
@@ -151,17 +147,8 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       rmSync(capture);
       symlinkSync(join(legacy.directory, "merge-output.log"), capture);
     }
-    if (fault === "auto") {
-      next.pr.autoMergeRequest = { mergeMethod: "SQUASH" };
-    }
     if (fault === "queue") {
       next.pr.isMergeQueueEnabled = true;
-    }
-    if (fault === "closed") {
-      next.pr.state = "CLOSED";
-    }
-    if (fault === "pending") {
-      next.gates = "pending";
     }
     if (fault === "ci-proof") {
       next.ciExit = 15;

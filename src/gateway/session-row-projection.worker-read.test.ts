@@ -1,6 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { StatementSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   observeHostDataSql,
   observeSqliteReadSql,
@@ -11,7 +11,7 @@ import {
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
+import { persistRegistryFixture } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import {
   assignSessionOwner,
@@ -60,7 +60,12 @@ import { resolveSessionStoreKey } from "./session-store-key.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import * as rowInputs from "./session-utils-row.js";
 
-afterEach(() => vi.restoreAllMocks());
+// Hold GatewayScheduler timeouts so WAL maintenance stays outside the request SQL budget.
+beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 it.each([
   { workMs: 0, rowCount: 2 },
@@ -683,7 +688,7 @@ it.each([
           };
           subagentRuns.set(runId, collector);
           subagentRuns.commitOwnership(collector);
-          persistSubagentRunsToDiskOrThrow(subagentRuns, [runId]);
+          persistRegistryFixture(subagentRuns, [runId]);
         } else if (changesOwner) {
           const emit = sessionChanges.emit.bind(sessionChanges);
           let publicationObserved = false;
@@ -769,7 +774,7 @@ it.each([
         clearAgentRunContext(runId);
         if (collector && subagentRuns.get(runId) === collector) {
           subagentRuns.delete(runId);
-          persistSubagentRunsToDiskOrThrow(subagentRuns, [runId]);
+          persistRegistryFixture(subagentRuns, [runId]);
         }
       }
     } finally {

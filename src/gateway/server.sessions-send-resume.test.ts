@@ -8,8 +8,8 @@ import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.
 import { buildAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "../agents/subagents/registry/subagent-registry-run-pause.js";
-import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
 import {
   markSubagentRunTerminated,
   registerSubagentRun,
@@ -67,7 +67,7 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   // Stop registry timers before the Gateway releases their database lifecycle.
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   await server.close();
 });
 
@@ -81,6 +81,15 @@ async function mockSubagentAnnounce() {
 }
 
 // Each case owns distinct durable identities while sharing the isolated Gateway.
+async function pauseRun(runId: string) {
+  await mutateSubagentRuns([runId], (rows) => {
+    const entry = structuredClone(expectDefined(rows.get(runId), "child to pause"));
+    expect(markSubagentRunPausedAfterYield({ entry })).toBe(true);
+    return { value: undefined, postimages: new Map([[runId, entry]]) };
+  });
+  return expectDefined(subagentRuns.get(runId), "paused child");
+}
+
 async function arrangeAuthorityProof(name: string) {
   const root = tempDirs.make(`openclaw-resume-${name}-`);
   const parent = "agent:main:main";
@@ -111,9 +120,7 @@ async function arrangeAuthorityProof(name: string) {
     expectsCompletionMessage: true,
     queued: true,
   });
-  const previous = expectDefined(subagentRuns.get(previousRunId), "paused child");
-  expect(markSubagentRunPausedAfterYield({ entry: previous })).toBe(true);
-  persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
+  const previous = await pauseRun(previousRunId);
   const scope = { agentId: "main", sessionKey: child, sessionId, storePath };
   // The provider can publish success only after real input custody is consumed.
   // Admission, task replacement, and recorder live-owner checks remain production code.
@@ -159,8 +166,13 @@ async function arrangeAuthorityProof(name: string) {
     );
   };
   const expectUnadopted = () => {
-    expect(subagentRuns.get(previousRunId)).toBe(previous);
-    expect(previous.pauseReason).toBe("sessions_yield");
+    expect(subagentRuns.get(previousRunId)).toMatchObject({
+      runId: previousRunId,
+      childSessionKey: child,
+      createdAt: previous.createdAt,
+      generation: previous.generation,
+      pauseReason: "sessions_yield",
+    });
     expect(subagentRuns.has(runId)).toBe(false);
   };
   return {
@@ -189,9 +201,18 @@ it.each([
   try {
     const proof = await arrangeAuthorityProof(scenario);
     if (scenario === "completion-disabled") {
-      const previous = expectDefined(subagentRuns.get(proof.previousRunId), "paused child");
-      previous.expectsCompletionMessage = false;
-      persistSubagentRunsToDiskOrThrow(subagentRuns, [proof.previousRunId]);
+      await mutateSubagentRuns([proof.previousRunId], (rows) => ({
+        value: undefined,
+        postimages: new Map([
+          [
+            proof.previousRunId,
+            {
+              ...expectDefined(rows.get(proof.previousRunId), "paused child"),
+              expectsCompletionMessage: false,
+            },
+          ],
+        ]),
+      }));
     }
     const result = await proof.send(
       scenario === "unrelated-controller" ? proof.unrelated : proof.parent,
@@ -200,7 +221,7 @@ it.each([
     );
     expect(result.details).toMatchObject({ status: "error", error });
     proof.expectUnadopted();
-    expect(listSessionPendingInputs(proof.scope)).toEqual({ items: [], total: 0 });
+    expect(await listSessionPendingInputs(proof.scope)).toEqual({ items: [], total: 0 });
     expect(listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual([]);
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(announce).not.toHaveBeenCalled();
@@ -234,7 +255,7 @@ it("rejects parent authority revoked while durable input preparation awaits", as
     sending = proof.send(proof.parent, parentAuthority.signal);
     await prepared.promise;
     expect(preparation).toHaveBeenCalledTimes(1);
-    expect(listSessionPendingInputs(proof.scope)).toMatchObject({
+    expect(await listSessionPendingInputs(proof.scope)).toMatchObject({
       total: 1,
       items: [{ runId: proof.runId, state: "queued" }],
     });
@@ -247,7 +268,7 @@ it("rejects parent authority revoked while durable input preparation awaits", as
       error: expect.stringContaining("agent tool caller authority is no longer active"),
     });
     proof.expectUnadopted();
-    expect(listSessionPendingInputs(proof.scope)).toMatchObject({
+    expect(await listSessionPendingInputs(proof.scope)).toMatchObject({
       total: 1,
       items: [{ runId: proof.runId, state: "cancelled" }],
     });
@@ -309,7 +330,7 @@ it("fences a cancelled successor after adoption before queued input consumption"
     await adopted.promise;
     expect(subagentRuns.has(proof.previousRunId)).toBe(false);
     expect(subagentRuns.get(proof.runId)).toMatchObject({ taskRunId: proof.previousRunId });
-    expect(listSessionPendingInputs(proof.scope)).toMatchObject({
+    expect(await listSessionPendingInputs(proof.scope)).toMatchObject({
       total: 1,
       items: [{ runId: proof.runId, state: "queued" }],
     });
@@ -335,7 +356,7 @@ it("fences a cancelled successor after adoption before queued input consumption"
       expect.anything(),
     );
     // Custody remains unconsumed even though execution cleanup records interruption.
-    expect(listSessionPendingInputs(proof.scope)).toMatchObject({
+    expect(await listSessionPendingInputs(proof.scope)).toMatchObject({
       total: 1,
       items: [{ runId: proof.runId, state: "interrupted" }],
     });
@@ -390,9 +411,7 @@ it.each(["explicit", "automatic"] as const)(
         expectsCompletionMessage: true,
         queued: true,
       });
-      const previous = subagentRuns.get(previousRunId)!;
-      markSubagentRunPausedAfterYield({ entry: previous });
-      persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
+      await pauseRun(previousRunId);
       agentCommandMock.mockImplementation(async (opts) => {
         const command = opts as AgentCommandGatewayIngressOpts;
         const runId = expectDefined(command.runId, "resume execution run id");

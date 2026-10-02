@@ -80,7 +80,7 @@ function followupRequest(): FollowupRequest {
 describe("Gateway native subagent admission", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    mocks.adoptPausedSubagentRunForFollowUp.mockReturnValue(false);
+    mocks.adoptPausedSubagentRunForFollowUp.mockResolvedValue(false);
   });
 
   it("registers plugin work with its execution owner before accepting it", async () => {
@@ -140,7 +140,7 @@ describe("Gateway native subagent admission", () => {
       createdAt: 1,
     };
     client.internal = bindInProcessSubagentResume({}, resume);
-    const adoptParentResume = vi.fn(() => "previous-run");
+    const adoptParentResume = vi.fn(async () => "previous-run");
     mocks.prepareParentSubagentResume.mockResolvedValue(adoptParentResume);
     await expect(prepareGatewaySubagentRun(parameters({ client }))).resolves.toEqual({
       pluginSubagent: false,

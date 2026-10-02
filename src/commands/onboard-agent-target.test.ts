@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -125,11 +124,14 @@ describe("onboarding agent target", () => {
     });
   });
 
-  it("uses the retained compatibility owner after the marker is removed", () => {
-    const config = retainLegacyDefaultAgentId(
-      { agents: { entries: { main: {}, ops: { workspace: "/srv/ops" } } } },
-      "ops",
-    );
+  it("uses the persisted system-agent owner after the marker is removed", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { main: {}, ops: { workspace: "/srv/ops" } },
+      },
+    };
 
     expect(resolveOnboardingAgentTarget(config)).toMatchObject({
       agentId: "ops",

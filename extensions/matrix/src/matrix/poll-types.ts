@@ -363,10 +363,7 @@ export function buildPollStartContent(poll: PollInput): PollStartContent {
   }));
 
   const isMultiple = normalized.maxSelections > 1;
-  const fallbackText = buildPollFallbackText(
-    normalized.question,
-    answers.map((answer) => getTextContent(answer)),
-  );
+  const fallbackText = buildPollFallbackText(normalized.question, normalized.options);
 
   return {
     [M_POLL_START]: {

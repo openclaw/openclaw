@@ -76,6 +76,10 @@ const routes = [
   },
 ];
 
+const mutationScopes = routes.filter(({ name }) =>
+  ["text edit", "pin", "reaction addition"].includes(name),
+);
+
 async function withFeishuMutation(
   run: (fixture: {
     cfg: OpenClawConfig;
@@ -267,7 +271,7 @@ describe("Feishu mutations through the message tool and Lark HTTP transport", ()
     });
   });
 
-  it.each(routes)(
+  it.each(mutationScopes)(
     "stops $name after retirement during renewed token preparation",
     async (route) => {
       await withFeishuMutation(async ({ execute, requests, respond, retire, gate }) => {
@@ -456,7 +460,7 @@ describe("Feishu mutations through the message tool and Lark HTTP transport", ()
     });
   });
 
-  it.each(routes.filter(({ name }) => ["text edit", "pin", "reaction addition"].includes(name)))(
+  it.each(mutationScopes)(
     "keeps provider errors with incidental IDs as failures for $name",
     async (route) => {
       await withFeishuMutation(async ({ execute, respond }) => {

@@ -10,7 +10,7 @@ const cfg = {} as OpenClawConfig;
 
 function bindingKeys(
   job: Parameters<typeof resolveCronJobBoundSessionKeys>[0],
-  defaultAgentId?: string,
+  defaultAgentId = "main",
 ) {
   return resolveCronJobBoundSessionKeys(job, { cfg, defaultAgentId });
 }
@@ -80,6 +80,15 @@ describe("resolveCronJobBoundSessionKeys", () => {
     ).toEqual(new Set(["agent:main:main", "agent:main:discord:channel:123"]));
   });
 
+  test("scoped session ownership takes precedence over the configured default", () => {
+    expect(
+      bindingKeys(
+        { id: "job1", sessionTarget: "isolated", sessionKey: "agent:ops:main" },
+        "research",
+      ),
+    ).toEqual(new Set(["agent:ops:cron:job1", "agent:ops:main"]));
+  });
+
   test("malformed session targets bind nothing instead of throwing", () => {
     expect(bindingKeys({ id: "job1", sessionTarget: "session: " })).toEqual(new Set());
   });
@@ -125,7 +134,7 @@ describe("disableCronJobsBoundToSession", () => {
     expect(update.mock.calls[0]?.slice(0, 2)).toEqual(["bound", { enabled: false }]);
   });
 
-  test("returns empty when nothing is bound", async () => {
+  test("leaves ownerless jobs unchanged when no canonical default is configured", async () => {
     const update = fakeUpdateWithPrecondition(() => [job({ id: "elsewhere" })]);
     const disabled = await disableCronJobsBoundToSession({
       cron: {
@@ -134,7 +143,7 @@ describe("disableCronJobsBoundToSession", () => {
         getDefaultAgentId: () => undefined,
       },
       cfg,
-      sessionKey: "agent:main:slack:group:x",
+      sessionKey: "agent:main:cron:elsewhere",
     });
     expect(disabled).toEqual([]);
     expect(update).not.toHaveBeenCalled();

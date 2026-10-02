@@ -20,6 +20,7 @@ import { observeRootWork } from "./subagent-registry.browser-cleanup.test-suppor
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 import { makeQueuedRun } from "./subagent-registry.run-fixtures.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSameSubagentRun } from "./subagent-run-generation.js";
 
 type RestoredSettlementTestOptions = {
   getRegistry: () => SubagentRegistryHarness;
@@ -111,7 +112,7 @@ export function registerRestoredRollbackPublicationTest({
 }: {
   mocks: Pick<
     ReturnType<typeof createSubagentRegistryMockState>,
-    "entries" | "persistSubagentRunsToDiskOrThrow" | "callGateway" | "emitSessionLifecycleEvent"
+    "entries" | "persistRegistryRows" | "callGateway" | "emitSessionLifecycleEvent"
   >;
   hydrateAndActivateRegistry: () => Promise<void>;
   mockSingleCollectorConcurrency: () => void;
@@ -169,23 +170,24 @@ export function registerRestoredRollbackPublicationTest({
 
     await hydrateAndActivateRegistry();
     await launchEntered.promise;
-    mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
+    mocks.persistRegistryRows.mockImplementationOnce(() => {
       throw new Error("sqlite unavailable after Gateway acceptance");
     });
     const memory = await import("./subagent-registry-memory.js");
     const entry = expectDefined(memory.subagentRuns.get("run-restored-stop-one"), "restored run");
-    const publication = memory.subagentRuns.captureRetirement(
-      entry,
-      (current) => current === entry,
+    const publication = memory.subagentRuns.captureRetirement(entry, (current) =>
+      isSameSubagentRun(current, entry),
     );
-    const overlap = memory.subagentRuns.captureRetirement(entry, (current) => current === entry);
+    const overlap = memory.subagentRuns.captureRetirement(entry, (current) =>
+      isSameSubagentRun(current, entry),
+    );
     const cleanupWaiting = createDeferred();
     const waitForPublication = memory.waitForSubagentRetirementPublication;
     const publicationWait = vi
       .spyOn(memory, "waitForSubagentRetirementPublication")
       .mockImplementation((current) => {
         const pending = waitForPublication(current);
-        if (current === entry && pending) {
+        if (isSameSubagentRun(current, entry) && pending) {
           cleanupWaiting.resolve();
         }
         return pending;
@@ -256,7 +258,7 @@ export function registerRestoredRequesterWakeSettlementTests({
   getRegistry: () => SubagentRegistryHarness;
   mocks: Pick<
     ReturnType<typeof createSubagentRegistryMockState>,
-    "restoreSubagentRunsFromDisk" | "persistSubagentRunsToDiskOrThrow" | "runSubagentAnnounceFlow"
+    "restoreSubagentRunsFromDisk" | "persistRegistryRows" | "runSubagentAnnounceFlow"
   >;
   wakeRequester: Mock<typeof maybeWakeRequesterAfterAllChildrenSettled>;
   bindWakeMutation: (entries: readonly SubagentRunRecord[]) => void;
@@ -280,6 +282,7 @@ export function registerRestoredRequesterWakeSettlementTests({
       createSubagentRunRecord({
         runId,
         childSessionKey: `agent:main:subagent:${runId}`,
+        requesterAgentId: "main",
         task: "restore requester settle wake",
         cleanup: "delete",
         expectsCompletionMessage: true,
@@ -321,18 +324,27 @@ export function registerRestoredRequesterWakeSettlementTests({
       }) as never);
     }
     const retirementWrites: string[][] = [];
-    mocks.persistSubagentRunsToDiskOrThrow.mockImplementation((runs, ids) => {
-      if (ids?.some((id) => runIds.includes(id)) && runIds.every((id) => !runs.has(id))) {
+    mocks.persistRegistryRows.mockImplementation((runs, ids) => {
+      if (runIds.every((id) => ids.includes(id) && !runs.has(id))) {
         retirementWrites.push(ids.toSorted());
       }
     });
     const wakeGateway = createDeferred<unknown>();
+    const wakeOutcome = wakeGateway.promise.then(
+      (gateway) => ({ gateway }),
+      (error: unknown) => ({ error }),
+    );
     wakeRequester.mockImplementation(async (params) => {
-      const gateway = getSharedGatewayContextResolver(restored)?.()?.recoveryRuntime;
-      bindWakeMutation(restored);
-      await params.completeBatch(restored);
-      wakeGateway.resolve(gateway);
-      return false;
+      try {
+        const gateway = getSharedGatewayContextResolver(restored)?.()?.recoveryRuntime;
+        bindWakeMutation(restored);
+        await params.completeBatch(restored);
+        wakeGateway.resolve(gateway);
+        return false;
+      } catch (error) {
+        wakeGateway.reject(error);
+        throw error;
+      }
     });
     let gatewayOpen = true;
     const instanceContext = { recoveryRuntime } as never;
@@ -366,7 +378,11 @@ export function registerRestoredRequesterWakeSettlementTests({
           await activateRegistry();
         }
       }
-      expect(await wakeGateway.promise).toBe(
+      const outcome = await wakeOutcome;
+      if ("error" in outcome) {
+        throw outcome.error;
+      }
+      expect(outcome.gateway).toBe(
         restoreTiming === "without activation" ? undefined : recoveryRuntime,
       );
     } finally {
@@ -400,7 +416,7 @@ export function registerRestoredRotationFailureTest({
   getRegistry: () => SubagentRegistryHarness;
   mocks: Pick<
     ReturnType<typeof createSubagentRegistryMockState>,
-    "entries" | "persistSubagentRunsToDiskOrThrow" | "callGateway" | "lifecycleGeneration"
+    "entries" | "persistRegistryRows" | "callGateway" | "lifecycleGeneration"
   >;
   hydrateAndActivateRegistry: () => Promise<void>;
   mockSingleCollectorConcurrency: () => void;
@@ -442,7 +458,7 @@ export function registerRestoredRotationFailureTest({
       if (request.method === "agent") {
         agentCalls += 1;
         if (agentCalls === 1) {
-          mocks.persistSubagentRunsToDiskOrThrow.mockImplementation(() => {
+          mocks.persistRegistryRows.mockImplementation(() => {
             persistenceCalls += 1;
             if (persistenceCalls === 1) {
               throw new Error("sqlite unavailable after Gateway acceptance");

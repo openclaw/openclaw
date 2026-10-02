@@ -28,8 +28,31 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
     ((input.command.type === "deliveryQueue.outbound" &&
       (input.command.id === undefined || typeof input.command.id === "string") &&
       (input.command.mode === "pending" || input.command.mode === "unfinished")) ||
+      (input.command.type === "sessionState.versions" &&
+        Array.isArray(input.command.input) &&
+        input.command.input.every(
+          (ref) =>
+            isRecord(ref) && typeof ref.sessionKey === "string" && typeof ref.agentId === "string",
+        )) ||
+      (input.command.type === "sessionState.events" &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.sessionKey === "string" &&
+        typeof input.command.input.agentId === "string" &&
+        typeof input.command.input.afterSequence === "number" &&
+        typeof input.command.input.limit === "number") ||
+      (input.command.type === "diagnostic.latest" &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.scope === "string" &&
+        Number.isSafeInteger(input.command.input.limit) &&
+        (input.command.input.beforeSequence === undefined ||
+          Number.isSafeInteger(input.command.input.beforeSequence))) ||
       input.command.type === "acpSessions.list" ||
       input.command.type === "backup.runs" ||
+      ((input.command.type === "restartSentinel.current" ||
+        input.command.type === "restartSentinel.snapshot" ||
+        input.command.type === "restartSentinel.installReceipt") &&
+        "input" in input.command &&
+        input.command.input === undefined) ||
       (input.command.type === "acpSessions.metadata" &&
         Array.isArray(input.command.entries) &&
         input.command.entries.length <= 64 &&
@@ -157,7 +180,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       input.command.type === "agentDatabaseRegistry.read" ||
       (input.command.type === "agentDatabaseDeletion.snapshot" &&
         (input.command.purpose === "runtime" || input.command.purpose === "maintenance")) ||
-      (input.command.type === "agentDeletionJournal.status" &&
+      ((input.command.type === "agentDeletionJournal.status" ||
+        input.command.type === "agentDeletionJournal.authority") &&
         typeof input.command.agentId === "string") ||
       input.command.type === "sessionGroups.snapshot" ||
       (input.command.type === "sessionGroups.members" && isRecord(input.command.cfg)) ||

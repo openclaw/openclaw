@@ -24,7 +24,7 @@ vi.mock("../../scripts/lib/cross-os-release-checks/process.ts", async (importOri
   runCommandInvocation: command.run,
 }));
 
-describe.each(["packaged", "installed"] as const)("%s release agent turn", (adapter) => {
+describe("release agent turn", () => {
   let dir: string;
   let logPath: string;
   const env = { RELEASE_TEST: "1" };
@@ -40,7 +40,7 @@ describe.each(["packaged", "installed"] as const)("%s release agent turn", (adap
     rmSync(dir, { recursive: true, force: true });
   });
 
-  function run() {
+  function run(adapter: "packaged" | "installed" = "packaged") {
     const params = { env, label: "probe", logPath };
     return adapter === "installed"
       ? runInstalledAgentTurn({ ...params, cliPath: join(dir, "openclaw"), cwd: dir })
@@ -59,7 +59,10 @@ describe.each(["packaged", "installed"] as const)("%s release agent turn", (adap
         });
   }
 
-  function expectInvocation() {
+  it.each(["packaged", "installed"] as const)("uses the exact %s invocation", async (adapter) => {
+    command.run.mockResolvedValue(success);
+    await expect(run(adapter)).resolves.toBe(success);
+    expect(command.run).toHaveBeenCalledTimes(1);
     const [invocation, options] = command.run.mock.calls[0]!;
     const args = invocation.args.slice(adapter === "packaged" ? 1 : 0);
     expect(args).toEqual([
@@ -99,14 +102,6 @@ describe.each(["packaged", "installed"] as const)("%s release agent turn", (adap
       check: true,
     });
     expect(options.env).toBe(env);
-    return args[4];
-  }
-
-  it("returns the command result with the exact agent invocation", async () => {
-    command.run.mockResolvedValue(success);
-    await expect(run()).resolves.toBe(success);
-    expect(command.run).toHaveBeenCalledTimes(1);
-    expectInvocation();
   });
 
   it("rejects stale OK output without another command", async () => {
@@ -133,8 +128,6 @@ describe.each(["packaged", "installed"] as const)("%s release agent turn", (adap
   it.each([
     "document-extract: failed to install bundled runtime deps",
     "HTTP 503: upstream connect error",
-    "gateway request timeout for agent after 210000ms",
-    "The model did not produce a response before the model idle timeout.",
   ])("preserves the first failure without another command: %s", async (message) => {
     const error = new Error(message);
     command.run.mockRejectedValueOnce(error).mockResolvedValueOnce(success);

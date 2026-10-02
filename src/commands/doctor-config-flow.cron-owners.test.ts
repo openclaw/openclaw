@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot, transformConfigFile } from "../config/config.js";
+import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../cron/agent-id.js";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { CronService } from "../cron/service.js";
@@ -18,6 +19,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -89,11 +91,7 @@ async function repair(state: OpenClawTestState) {
   });
 }
 
-function createCron(
-  storePath: string,
-  defaultAgentId = "research",
-  legacyDefaultAgentId: string | null = "ops",
-) {
+function createCron(storePath: string, defaultAgentId?: string) {
   const clock = createGatewaySchedulerClock(Date.now());
   const scheduler = createTestGatewayScheduler(clock.clock);
   const execute = vi.fn(async () => ({ status: "ok" as const }));
@@ -103,7 +101,7 @@ function createCron(
     cronEnabled: true,
     nowMs: clock.clock.now,
     defaultAgentId,
-    legacyDefaultAgentId: legacyDefaultAgentId ?? undefined,
+    resolveDefaultAgentId: () => defaultAgentId,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     enqueueSystemEvent: () => false,
     requestHeartbeat() {},
@@ -134,10 +132,13 @@ it.each(["retains", "removes"])(
         const beforeRows = rows(storePath);
         const beforeConfig = await fs.readFile(state.configPath, "utf8");
         const write = transformConfigFile({
-          transform: (current) => ({
-            nextConfig:
-              agentChange === "removes" ? pruneAgentConfig(current, "ops").config : current,
-          }),
+          transform: (current) => {
+            const canonical = createCanonicalAgentConfigFixture(current).config;
+            return {
+              nextConfig:
+                agentChange === "removes" ? pruneAgentConfig(canonical, "ops").config : canonical,
+            };
+          },
           writeOptions: {
             persistCanonicalAgentRoster: true,
             ...(agentChange === "removes" ? { allowedAgentRosterRemovals: ["ops"] } : {}),
@@ -179,7 +180,7 @@ it.each(["update", "remove"])(
             operation === "update"
               ? cron.update("historical", { name: "changed" })
               : cron.remove("historical");
-          await expect(operationResult).rejects.toThrow("openclaw doctor --fix");
+          await expect(operationResult).rejects.toThrow(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
           expect(rows(storePath)).toEqual(beforeRows);
           expect(await backups()).toEqual([]);
         } finally {
@@ -212,7 +213,10 @@ it("preserves historical and explicit jobs when agent deletion needs Doctor", as
           cron.removeAgentJobsTransactional("research", () =>
             transformConfigFile({
               transform: (current) => ({
-                nextConfig: pruneAgentConfig(current, "research").config,
+                nextConfig: pruneAgentConfig(
+                  createCanonicalAgentConfigFixture(current).config,
+                  "research",
+                ).config,
               }),
               writeOptions: { allowedAgentRosterRemovals: ["research"] },
               afterWrite: { mode: "none", reason: "test agent deletion" },
@@ -251,7 +255,7 @@ it("preserves malformed cron bytes and the historical marker when Doctor cannot 
   );
 });
 
-it("leaves SQLite and legacy JSON owners unchanged on ordinary cron startup", async () => {
+it("leaves SQLite owners unchanged on ordinary cron startup", async () => {
   await withOpenClawTestState({ label: "cron-owner-startup" }, async (state) => {
     await state.writeConfig(sourceConfig());
     const storePath = state.statePath("cron", "jobs.json");
@@ -261,8 +265,6 @@ it("leaves SQLite and legacy JSON owners unchanged on ordinary cron startup", as
         "UPDATE cron_jobs SET state_json = json_set(state_json, '$.nextRunAtMs', 123), job_json = json_set(job_json, '$.notify', json('true')) WHERE store_key = ? AND job_id = 'sql-owner'",
       )
       .run(cronStoreKey(storePath));
-    const legacy = `${JSON.stringify({ version: 1, jobs: [makeCronJob({ id: "legacy-json", enabled: false })] })}\n`;
-    await state.writeText("cron/jobs.json", legacy);
     const beforeDefinitions = rows(storePath).map(({ job_id, job_json, agent_id }) => ({
       job_id,
       job_json,
@@ -283,7 +285,6 @@ it("leaves SQLite and legacy JSON owners unchanged on ordinary cron startup", as
           ).state_json,
         ).nextRunAtMs,
       ).toBeUndefined();
-      expect(await fs.readFile(storePath, "utf8")).toBe(legacy);
       expect(execute).not.toHaveBeenCalled();
       expect(await backups()).toEqual([]);
     } finally {
@@ -293,7 +294,7 @@ it("leaves SQLite and legacy JSON owners unchanged on ordinary cron startup", as
   });
 });
 
-it("keeps a due legacy one-shot pending until Doctor repairs its owner, then runs it once", async () => {
+it("preserves a due legacy one-shot through Doctor ownership repair, then runs it once", async () => {
   await withOpenClawTestState(
     { label: "cron-owner-one-shot", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
     async (state) => {
@@ -313,23 +314,9 @@ it("keeps a due legacy one-shot pending until Doctor repairs its owner, then run
           }),
         ],
       });
-      const original = createCron(storePath);
-      try {
-        await original.cron.start();
-        expect(original.execute).not.toHaveBeenCalled();
-        expect(original.cron.getJob("pending-one-shot")).toMatchObject({
-          enabled: true,
-          state: { nextRunAtMs: dueAt },
-        });
-        expect(original.cron.getJob("pending-one-shot")?.state.lastRunStatus).toBeUndefined();
-        expect(await original.cron.status()).toMatchObject({ nextWakeAtMs: null });
-        await expect(original.cron.run("pending-one-shot", "force")).rejects.toThrow(
-          "openclaw doctor --fix",
-        );
-      } finally {
-        original.cron.stop();
-        await original.scheduler.stop();
-      }
+      const original = rows(storePath);
+      expect((await readConfigFileSnapshot()).valid).toBe(false);
+      expect(rows(storePath)).toEqual(original);
       const readReceipts = () =>
         openOpenClawStateDatabase()
           .db.prepare(
@@ -339,7 +326,7 @@ it("keeps a due legacy one-shot pending until Doctor repairs its owner, then run
       expect(readReceipts()).toEqual([]);
       await repair(state);
       expect(await backups()).toHaveLength(1);
-      const repaired = createCron(storePath, "research", null);
+      const repaired = createCron(storePath, "research");
       try {
         await repaired.cron.start();
         expect(repaired.execute).not.toHaveBeenCalled();
@@ -492,35 +479,6 @@ it.each([
   },
 );
 
-it.each(["ops", "research"])(
-  "pins newly created jobs to the selected %s owner while legacy repair is pending",
-  async (agentId) => {
-    await withOpenClawTestState({ label: "cron-owner-new-job" }, async (state) => {
-      const storePath = state.statePath("cron", "jobs.json");
-      const { cron, scheduler, execute } = createCron(storePath, agentId);
-      try {
-        const created = await cron.add({
-          name: "New job",
-          enabled: false,
-          schedule: { kind: "every", everyMs: 60_000 },
-          sessionTarget: "isolated",
-          wakeMode: "now",
-          payload: { kind: "agentTurn", message: "newly authored job" },
-        });
-        expect(created.agentId, "New cron jobs must preserve their freshly selected owner").toBe(
-          agentId,
-        );
-        expect(rows(storePath).find((row) => row.job_id === created.id)?.agent_id).toBe(agentId);
-        await cron.run(created.id, "force");
-        expect(execute).toHaveBeenCalledOnce();
-      } finally {
-        cron.stop();
-        await scheduler.stop();
-      }
-    });
-  },
-);
-
 it.each([
   "health write",
   "preflight custom store",
@@ -625,25 +583,6 @@ it.each([
           "SELECT grant_definition_generation FROM cron_jobs WHERE store_key = ? AND job_id = 'historical'",
         )
         .get(cronStoreKey(storePath));
-      if (customStore) {
-        await state.writeJson("custom-cron/jobs.json", {
-          version: 1,
-          jobs: [
-            makeCronJob({ id: "json-import", enabled: false }),
-            ...(machineStore
-              ? [
-                  makeCronJob({ id: "json-explicit", agentId: "research", enabled: false }),
-                  makeCronJob({
-                    id: "json-session",
-                    sessionKey: "agent:research:main",
-                    enabled: false,
-                  }),
-                ]
-              : []),
-          ],
-        });
-      }
-      const legacySource = customStore ? await fs.readFile(storePath, "utf8") : undefined;
       const ctx = await repair(state);
       expect(ctx.configWriteRefusal).toBeUndefined();
       const saved = await readConfigFileSnapshot();
@@ -700,33 +639,12 @@ it.each([
       expect(
         JSON.parse(repaired.find((row) => row.job_id === "sql-owner")?.job_json ?? "null"),
       ).toMatchObject({ agentId: "research" });
-      if (customStore) {
-        expect(repaired.find((row) => row.job_id === "json-import")?.agent_id).toBe("ops");
-      }
       if (machineStore) {
         expect(saved.sourceConfig.agents).not.toHaveProperty("list");
         expect(readOtherRows()).toEqual(otherRowsBefore);
-        const importedExplicit = expectDefined(
-          repaired.find((row) => row.job_id === "json-explicit"),
-          "explicit legacy import",
-        );
-        expect(importedExplicit.agent_id).toBe("research");
-        expect(JSON.parse(importedExplicit.job_json)).toMatchObject({ agentId: "research" });
-        const importedSession = expectDefined(
-          repaired.find((row) => row.job_id === "json-session"),
-          "session-qualified legacy import",
-        );
-        expect(JSON.parse(importedSession.job_json)).toMatchObject({
-          sessionKey: "agent:research:main",
-        });
-        expect(JSON.parse(importedSession.job_json)).not.toHaveProperty("agentId");
-      }
-      if (customStore) {
-        await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(fs.readFile(`${storePath}.migrated`, "utf8")).resolves.toBe(legacySource);
       }
       const savedBackups = await backups();
-      expect(savedBackups).toHaveLength(customStore ? 2 : 1);
+      expect(savedBackups).toHaveLength(1);
       const backedUpRows = savedBackups.map((backupPath) => {
         const backup = new DatabaseSync(backupPath, { readOnly: true });
         try {
@@ -737,39 +655,13 @@ it.each([
           backup.close();
         }
       });
-      expect(
-        backedUpRows.filter(
-          (snapshotRows) => !snapshotRows.some((row) => row.job_id === "json-import"),
-        ),
-      ).toEqual([original]);
-      if (customStore) {
-        const beforeOwnership = expectDefined(
-          backedUpRows.find((snapshotRows) =>
-            snapshotRows.some((row) => row.job_id === "json-import"),
-          ),
-          "backup after legacy import and before ownership repair",
-        );
-        expect(beforeOwnership.map((row) => row.job_id).toSorted()).toEqual(
-          repaired.map((row) => row.job_id).toSorted(),
-        );
-        for (const id of ["historical", "json-import"]) {
-          const ownerless = expectDefined(
-            beforeOwnership.find((row) => row.job_id === id),
-            `unrepaired ${id} backup`,
-          );
-          expect(ownerless.agent_id).toBeNull();
-          expect(JSON.parse(ownerless.job_json)).not.toHaveProperty("agentId");
-        }
-      }
+      expect(backedUpRows).toEqual([original]);
       const repairedDefinitions = rows(storePath);
       await repair(state);
       expect(rows(storePath)).toEqual(repairedDefinitions);
       expect(await backups()).toEqual(savedBackups);
       if (machineStore) {
         expect(readOtherRows()).toEqual(otherRowsBefore);
-      }
-      if (customStore) {
-        await expect(fs.readFile(`${storePath}.migrated`, "utf8")).resolves.toBe(legacySource);
       }
     },
   );

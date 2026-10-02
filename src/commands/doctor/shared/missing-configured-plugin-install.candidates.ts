@@ -10,15 +10,10 @@ import {
 } from "../../../infra/update-channels.js";
 import { isBundledPluginInsideDevSourceRoot } from "../../../plugins/dev-source-root.js";
 import {
-  resolveDefaultPluginExtensionsDir,
-  resolvePluginInstallDir,
-} from "../../../plugins/install-paths.js";
-import {
   loadInstalledPluginIndexInstallRecords,
   removePluginInstallRecordFromRecords,
 } from "../../../plugins/installed-plugin-index-records.js";
 import { createInstalledPluginOwnershipResolver } from "../../../plugins/installed-plugin-package-ownership.js";
-import { readLegacyNpmPluginDeclaration } from "../../../plugins/legacy-npm-declaration.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
 import type { PluginPackageInstall } from "../../../plugins/manifest.js";
@@ -409,72 +404,6 @@ export function collectDownloadableInstallCandidates(params: {
       candidates.set(entry.pluginId, { ...existing, versionBoundToOpenClaw: true });
     } else if (!existing) {
       candidates.set(entry.pluginId, entry);
-    }
-  }
-
-  for (const candidate of collectLegacyNpmDeclarationInstallCandidates({
-    cfg: params.cfg,
-    env: params.env,
-    configuredPluginIds,
-    missingPluginIds: params.missingPluginIds,
-    blockedPluginIds: params.blockedPluginIds,
-  })) {
-    if (!candidates.has(candidate.pluginId)) {
-      candidates.set(candidate.pluginId, candidate);
-    }
-  }
-
-  return [...candidates.values()].toSorted((left, right) =>
-    left.pluginId.localeCompare(right.pluginId),
-  );
-}
-
-function collectLegacyNpmDeclarationInstallCandidates(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  configuredPluginIds: ReadonlySet<string>;
-  missingPluginIds: ReadonlySet<string>;
-  blockedPluginIds?: ReadonlySet<string>;
-}): DownloadableInstallCandidate[] {
-  const candidates = new Map<string, DownloadableInstallCandidate>();
-  const addCandidate = (pluginDir: string) => {
-    const declaration = readLegacyNpmPluginDeclaration(pluginDir);
-    if (
-      !declaration ||
-      params.blockedPluginIds?.has(declaration.pluginId) ||
-      (!params.configuredPluginIds.has(declaration.pluginId) &&
-        !params.missingPluginIds.has(declaration.pluginId))
-    ) {
-      return;
-    }
-    candidates.set(declaration.pluginId, {
-      pluginId: declaration.pluginId,
-      label: declaration.pluginId,
-      npmSpec: declaration.npmSpec,
-      defaultChoice: "npm",
-    });
-  };
-  const env = params.env ?? process.env;
-  const loadPaths = params.cfg.plugins?.load?.paths;
-  if (Array.isArray(loadPaths)) {
-    for (const rawPath of loadPaths) {
-      if (typeof rawPath !== "string" || !rawPath.trim()) {
-        continue;
-      }
-      addCandidate(resolveUserPath(rawPath, env));
-    }
-  }
-
-  const extensionsDir = resolveDefaultPluginExtensionsDir(env);
-  const configuredOrMissingPluginIds = new Set([
-    ...params.configuredPluginIds,
-    ...params.missingPluginIds,
-  ]);
-  for (const pluginId of configuredOrMissingPluginIds) {
-    try {
-      addCandidate(resolvePluginInstallDir(pluginId, extensionsDir));
-    } catch {
-      continue;
     }
   }
 

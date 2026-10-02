@@ -2,10 +2,7 @@ import "./attempt-spawn-workspace.tools-mock.test-support.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { vi, type Mock } from "vitest";
 import type {
   AssembleResult,
@@ -31,6 +28,7 @@ import type { Agent, AgentMessage, StreamFn } from "../../runtime/index.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
 import type { AgentSession, CreateAgentSessionOptions } from "../../sessions/index.js";
+import { convertToLlm } from "../../sessions/messages.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
@@ -38,6 +36,7 @@ import {
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
 import { getSkillMocks, resetSkillMocks } from "./attempt-skills-mock.test-support.js";
 import {
+  readMockSessionCacheTtlTimestamp,
   resetSessionManagerMocks,
   type SessionManagerMocks,
 } from "./attempt-spawn-workspace.session-manager-mock.test-support.js";
@@ -187,22 +186,21 @@ const hoisted = vi.hoisted((): AttemptBaseMocks => {
     getEntries: vi.fn(() => []),
     getBranch: vi.fn(() => []),
     getBoundaryCount: vi.fn(() => 0),
-    branch: vi.fn(),
-    resetLeaf: vi.fn(),
+    branchAsync: vi.fn(async () => undefined),
+    resetLeafAsync: vi.fn(async () => undefined),
     buildSessionContext: vi.fn<() => { messages: AgentMessage[] }>(() => ({ messages: [] })),
     appendThinkingLevelChange: vi.fn(),
     appendModelChange: vi.fn(),
-    appendCustomEntry: vi.fn(),
-    appendCustomEntryAsync: vi.fn(),
-    appendMessage: vi.fn(),
-    appendSessionInfo: vi.fn(),
-    appendLabelChange: vi.fn(),
+    appendCustomEntryAsync: vi.fn(async (..._args: unknown[]) => undefined),
+    appendMessageAsync: vi.fn(async (..._args: unknown[]) => undefined),
+    appendSessionInfoAsync: vi.fn(async (..._args: unknown[]) => undefined),
+    appendLabelChangeAsync: vi.fn(async (..._args: unknown[]) => undefined),
     flushPendingPersistence: vi.fn(),
-    flushPendingToolResults: vi.fn(),
+    flushPendingToolResultsAsync: vi.fn(async () => undefined),
     clearPendingToolResults: vi.fn(),
-    reloadPersistedTranscript: vi.fn(),
+    reloadPersistedTranscriptAsync: vi.fn(async () => undefined),
     clearNextUserMessagePersistenceSuppression: vi.fn(),
-    removeTrailingEntries: vi.fn(() => 0),
+    removeTrailingEntriesAsync: vi.fn(async () => 0),
   };
   return {
     spawnSubagentDirectMock,
@@ -694,48 +692,12 @@ vi.mock("../../transcript-policy.js", () => ({
 
 vi.mock("../cache-ttl.js", () => ({
   appendCacheTtlTimestamp: (
-    sessionManager: { appendCustomEntry?: (customType: string, data: unknown) => void },
+    sessionManager: { appendCustomEntryAsync?: (customType: string, data: unknown) => void },
     data: unknown,
-  ) => sessionManager.appendCustomEntry?.("openclaw.cache-ttl", data),
+  ) => sessionManager.appendCustomEntryAsync?.("openclaw.cache-ttl", data),
   isCacheTtlEligibleProvider: (provider?: string) => provider === "anthropic",
-  readLastCacheTtlTimestamp: (
-    sessionManager: {
-      appendCustomEntryAsync?: { mock?: { calls?: unknown[][] } };
-    },
-    context?: { provider?: string; modelId?: string },
-  ) => {
-    const calls = sessionManager.appendCustomEntryAsync?.mock?.calls ?? [];
-    for (let index = calls.length - 1; index >= 0; index -= 1) {
-      const [customType, data] = calls[index] ?? [];
-      if (customType !== "openclaw.cache-ttl") {
-        continue;
-      }
-      const entry = data as
-        | {
-            timestamp?: unknown;
-            provider?: string;
-            modelId?: string;
-          }
-        | undefined;
-      if (
-        context?.provider &&
-        normalizeOptionalLowercaseString(entry?.provider) !==
-          normalizeOptionalLowercaseString(context.provider)
-      ) {
-        continue;
-      }
-      if (
-        context?.modelId &&
-        normalizeOptionalLowercaseString(entry?.modelId) !==
-          normalizeOptionalLowercaseString(context.modelId)
-      ) {
-        continue;
-      }
-      const timestamp = entry?.timestamp;
-      return typeof timestamp === "number" ? timestamp : null;
-    }
-    return null;
-  },
+  readLastCacheTtlTimestamp: (...args: Parameters<typeof readMockSessionCacheTtlTimestamp>) =>
+    readMockSessionCacheTtlTimestamp(...args),
 }));
 
 vi.mock("../compaction-runtime-context.js", () => ({
@@ -850,7 +812,7 @@ type MutableSession = {
   isStreaming: boolean;
   subscribe: AgentSession["subscribe"];
   agent: {
-    convertToLlm?: (messages: AgentMessage[]) => AgentMessage[] | Promise<AgentMessage[]>;
+    convertToLlm: Agent["convertToLlm"];
     prompt?: (...args: unknown[]) => Promise<unknown>;
     streamFn?: (...args: Parameters<StreamFn>) => Promise<unknown>;
     transport?: string;
@@ -898,12 +860,7 @@ type SessionPromptOverride = (
   options?: { images?: unknown[]; preflightResult?: (submitted: boolean) => void },
 ) => Promise<void>;
 
-type TestAgentStream = {
-  result: () => Promise<unknown>;
-  [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
-};
-
-function createCompletedAssistantStream(): TestAgentStream {
+function createCompletedAssistantStream() {
   return {
     async result() {
       return { role: "assistant", content: "done" };
@@ -1049,6 +1006,7 @@ export function createDefaultEmbeddedSession(params?: {
     isStreaming: false,
     subscribe: () => () => {},
     agent: {
+      convertToLlm,
       prompt: async (prompt, options) => {
         pendingPrompt = {
           prompt: String(prompt),

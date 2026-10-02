@@ -65,7 +65,7 @@ async function createRequesterPolicySources(
   await setCanonicalUserProfileRole(maintainerProfile, "maintainer");
   invalidateOperatorRolePolicy(maintainerProfile);
   const config: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true, workspace }] },
+    agents: { entries: { main: { workspace } } },
     session: { maintenance: { mode: "warn" } },
     gateway: {
       roles: {

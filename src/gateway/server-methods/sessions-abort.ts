@@ -35,7 +35,7 @@ import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/age
 import { waitForChatAbortTerminalPersistence } from "../chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
-import { resolveSessionKeyForRun } from "../server-session-key.js";
+import { resolveSessionForRun } from "../server-session-key.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
@@ -231,10 +231,10 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       scopedRequestedKey ??
       scopedActiveRunSessionKey ??
       (requestedRunId
-        ? resolveSessionKeyForRun(requestedRunId, {
+        ? resolveSessionForRun(requestedRunId, {
             agentId: requestedRunAgentId,
             projection: getSessionRowProjection(context),
-          })
+          })?.sessionKey
         : undefined) ??
       workerRunTarget?.sessionKey ??
       embeddedRunSessionKey;

@@ -1,6 +1,17 @@
 import Foundation
 import OpenClawProtocol
 
+extension OpenClawChatSidebarStatus {
+    func includes(_ session: OpenClawChatSessionEntry, now: Date) -> Bool {
+        switch self {
+        case .active: !session.isArchived && !session.isSnoozed(at: now)
+        case .snoozed: !session.isArchived && session.isSnoozed(at: now)
+        case .archived: session.isArchived
+        case .all: true
+        }
+    }
+}
+
 struct ChatSidebarTranscriptResult: Decodable {
     let results: [SessionsSearchHit]
     let sessions: [OpenClawChatSessionEntry]?
@@ -61,11 +72,20 @@ extension OpenClawChatSessionSidebarData {
     }
 
     public var rows: [OpenClawChatSessionEntry] {
+        self.rows(at: .now)
+    }
+
+    public func rows(at now: Date) -> [OpenClawChatSessionEntry] {
+        self.queryRows.filter { self.query.status.includes($0, now: now) }
+    }
+
+    /// Cache query membership and ranking; time-dependent visibility uses the caller's clock.
+    var queryRows: [OpenClawChatSessionEntry] {
         guard let state = self.queryState else { return [] }
         return self.cachedProjection(.sidebar) {
             let candidates: [OpenClawChatSessionEntry] = if let ids = state.searchIDs {
                 self.project(ids)
-            } else if state.page == nil, state.query.agentID != nil, state.query.status == .active,
+            } else if state.page == nil, state.query.agentID != nil, state.query.wire.status == .active,
                       state.query.involvingMe != true
             {
                 self.conversationRows(agentID: state.query.agentID)
@@ -73,9 +93,8 @@ extension OpenClawChatSessionSidebarData {
                 self.project(state.pageIDs)
             }
             let rows = candidates.filter {
-                (state.query.status == .all || $0.isArchived == (state.query.status == .archived)) &&
-                    (state.query.involvingMe == true || state.query.ownerId == nil || $0.owner?.actor.id == state.query
-                        .ownerId)
+                state.query.involvingMe == true || state.query.ownerId == nil || $0.owner?.actor.id == state.query
+                    .ownerId
             }
             return state.query.search.isEmpty ? rows : Self.ranked(rows, state: state)
         }
@@ -90,9 +109,9 @@ extension OpenClawChatSessionSidebarData {
 
     var rowsIncludingLoadedDescendants: [OpenClawChatSessionEntry] {
         guard self.query.search.isEmpty, self.query.ownerId != nil,
-              self.query.involvingMe != true else { return self.rows }
+              self.query.involvingMe != true else { return self.queryRows }
         return self.cachedProjection(.sidebarTree) {
-            var rows = self.rows
+            var rows = self.queryRows
             var seen = Set(rows.map(Self.identity))
             var index = 0
             // Owner membership hides navigation rows, not facts from already-loaded, linked children.

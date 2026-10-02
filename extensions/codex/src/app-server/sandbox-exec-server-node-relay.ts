@@ -38,6 +38,15 @@ const CODEX_NODE_HTTP_CREDENTIAL_FIELD_NAME_PATTERN =
   /^(?:(?:[a-z\d]+_)*(?:token|secret|password|passwd|pwd|passphrase|passcode|credentials?|authorization|api_?key|private_key|secret_key|secret_access_key|jwt|assertion|verifier|signature|hmac|bearer|ticket|(?:oauth|consumer|auth|access)_key|otp|totp|pin)|(?:device|authorization|auth|verification|mfa)_code|session(?:_id)?|jsessionid|saml(?:_?response|_?assertion)?|auth|jwt|code|sig|signature|hmac|key|pass)$/u;
 const nodeExecServerTextDecoder = new TextDecoder("utf-8", { fatal: true });
 
+class CodexNodeExecServerDisconnectedError extends Error {
+  readonly code = "codex_node_disconnected";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "CodexNodeExecServerDisconnectedError";
+  }
+}
+
 /** Produces the bounded, redacted terminal failure shared by pending and claimed node leases. */
 export function createCodexNodeExecServerDisconnectError(reason: string, cause?: unknown): Error {
   const detail =
@@ -47,7 +56,7 @@ export function createCodexNodeExecServerDisconnectError(reason: string, cause?:
           redactSensitiveText(formatErrorMessage(cause), { mode: "tools" }),
           CODEX_NODE_EXEC_SERVER_MAX_FAILURE_DETAIL_CHARS,
         )}`;
-  return new Error(
+  return new CodexNodeExecServerDisconnectedError(
     `Codex execution node disconnected; start a fresh attempt. (${reason}${detail})`,
   );
 }

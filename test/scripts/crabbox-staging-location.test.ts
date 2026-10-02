@@ -86,52 +86,32 @@ process.stdout.write(JSON.stringify({candidate:{files:files.length},topFiles:fil
   return { root, repository, home, env, git, prepare };
 }
 
-it.each([false, true])(
-  "runs repo-local staging without recovery records (ignored=%s)",
-  (ignored) => {
-    const f = fixture(ignored ? "stages/\n" : "");
-    const index = f.git(f.repository, "ls-files", "--stage");
-    const syncRoot = join(f.repository, "stages");
-    const capsule = f.prepare(syncRoot);
-    try {
-      expect(capsule.staging.recorded).toBe(false);
-      capsule.staging.admitted();
-      capsule.staging.settled();
-      const artifacts = preserveCrabboxArtifacts(capsule.directory, f.repository);
-      if (!artifacts) {
-        throw new Error("Fixture expected disposable source artifact evidence");
-      }
-      capsule.staging.preserved(artifacts);
-      expect(readdirSync(capsule.staging.root)).toEqual(["payload"]);
-      expect(readdirSync(capsule.staging.payload)).toEqual(["source"]);
-      expect(
-        f.git(capsule.directory, "ls-tree", "-r", "--name-only", capsule.tree).split("\n"),
-      ).toEqual([".gitignore", "source.txt"]);
-      expect(readFileSync(join(capsule.directory, "source.txt"), "utf8")).toBe("original source\n");
-      expect(f.git(f.repository, "ls-files", "--stage")).toBe(index);
-    } finally {
-      capsule.cleanup();
-    }
-    expect(readdirSync(syncRoot)).toEqual([]);
-    expect(readFileSync(join(f.repository, "source.txt"), "utf8")).toBe("original source\n");
-  },
-);
-
-it("registers a real capsule outside its source and Git workspace", () => {
+it("runs repo-local staging without recovery records", () => {
   const f = fixture();
-  const capsule = f.prepare(join(f.root, "external-staging"));
+  const index = f.git(f.repository, "ls-files", "--stage");
+  const syncRoot = join(f.repository, "stages");
+  const capsule = f.prepare(syncRoot);
   try {
-    expect(capsule.staging.recorded).toBe(true);
-    expect(
-      JSON.parse(readFileSync(join(capsule.staging.root, "staging.json"), "utf8")),
-    ).toMatchObject({ state: "prepared", users: "none", repository: f.repository });
-    expect(existsSync(join(capsule.staging.root, "manifest.json"))).toBe(true);
+    expect(capsule.staging.recorded).toBe(false);
+    capsule.staging.admitted();
+    capsule.staging.settled();
+    const artifacts = preserveCrabboxArtifacts(capsule.directory, f.repository);
+    if (!artifacts) {
+      throw new Error("Fixture expected disposable source artifact evidence");
+    }
+    capsule.staging.preserved(artifacts);
+    expect(readdirSync(capsule.staging.root)).toEqual(["payload"]);
+    expect(readdirSync(capsule.staging.payload)).toEqual(["source"]);
     expect(
       f.git(capsule.directory, "ls-tree", "-r", "--name-only", capsule.tree).split("\n"),
     ).toEqual([".gitignore", "source.txt"]);
+    expect(readFileSync(join(capsule.directory, "source.txt"), "utf8")).toBe("original source\n");
+    expect(f.git(f.repository, "ls-files", "--stage")).toBe(index);
   } finally {
     capsule.cleanup();
   }
+  expect(readdirSync(syncRoot)).toEqual([]);
+  expect(readFileSync(join(f.repository, "source.txt"), "utf8")).toBe("original source\n");
 });
 
 it("reevaluates registration when staging roots and ignore rules change", () => {

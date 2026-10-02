@@ -127,7 +127,7 @@ describe("conversation listings after removing accounts", () => {
       ),
     );
     registerConversationAddresses(scope, identities);
-    const before = listConversations(scope);
+    const before = await listConversations(scope);
     expect(before).toHaveLength(identities.length);
 
     const result = await runGatewayConversationList({ config, agentId: "main", limit: 10 }, deps);
@@ -138,7 +138,7 @@ describe("conversation listings after removing accounts", () => {
         accountId: conversation.accountId,
       })),
     ).toEqual(LIVE_CHANNELS.map(({ channel }) => ({ channel, accountId: LIVE_ACCOUNT_ID })));
-    expect(listConversations(scope)).toEqual(before);
+    expect(await listConversations(scope)).toEqual(before);
   });
 
   it("searches the active Discord account and preserves inactive history", async () => {
@@ -159,7 +159,7 @@ describe("conversation listings after removing accounts", () => {
       ),
     );
     registerConversationAddresses(scope, identities);
-    const before = listConversations(scope);
+    const before = await listConversations(scope);
 
     const result = await runGatewayConversationList(
       { config, agentId: "main", channel: "discord", query: "123456789012345678", limit: 10 },
@@ -173,7 +173,7 @@ describe("conversation listings after removing accounts", () => {
         target: "channel:123456789012345678",
       }),
     ]);
-    expect(listConversations(scope)).toEqual(before);
+    expect(await listConversations(scope)).toEqual(before);
     expect(before).toHaveLength(3);
   });
 });

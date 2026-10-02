@@ -154,11 +154,12 @@ describe("public yielded settle replay with real Gateway admission", () => {
         isSourceCurrent: () => true,
         requesterSessionKey,
         settledEntry,
-        transitionBatch: (batch, state) => {
+        transitionBatch: (batch, state, onPublished) => {
           for (const entry of batch) {
             entry.requesterSettleWake = state;
             persistChild(entry);
           }
+          onPublished(batch);
         },
         completeBatch,
       }),
@@ -450,11 +451,12 @@ describe("public yielded settle replay with real Gateway admission", () => {
         isSourceCurrent: () => true,
         requesterSessionKey,
         settledEntry,
-        transitionBatch: (members, state) => {
+        transitionBatch: (members, state, onPublished) => {
           for (const entry of members) {
             entry.requesterSettleWake = state;
             persistChild(entry);
           }
+          onPublished(members);
         },
         // Model the crash window after Gateway input completion commits but
         // before lifecycle durably acknowledges the dispatching wake.

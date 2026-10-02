@@ -9,7 +9,7 @@ import {
   testing as embeddedRunsTesting,
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import {
-  consumeRequesterFinalAttachment,
+  finalizeRequesterFinalAttachment,
   promoteRequesterFinalAttachment,
 } from "../../agents/subagents/requester-final-attachment.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
@@ -159,16 +159,17 @@ describe("Talk requester-final consult ownership", () => {
     core.resolve({ payloads: [] });
     await expect(run).resolves.toEqual({ text: "done" });
     expect(runner.runPrompt.claimAppend()).toBe(true);
-    expect(
-      consumeRequesterFinalAttachment({
-        requesterAgentId: "researcher",
-        requesterSessionKey: "agent:researcher:talk",
-        requesterSessionId: "session-talk",
-        batchRunIds: ["run-child"],
-        rearmGeneration: 1,
-        text: "late final",
-      }),
-    ).toBe("appended");
+    finalizeRequesterFinalAttachment({
+      requesterAgentId: "researcher",
+      requesterSessionKey: "agent:researcher:talk",
+      requesterSessionId: "session-talk",
+      batchRunIds: ["run-child"],
+      rearmGeneration: 1,
+      requesterYieldBatch: true,
+      pause: false,
+      delivered: true,
+      finalAssistantVisibleText: "late final",
+    });
     expect(append).toHaveBeenCalledExactlyOnceWith("late final");
   });
 
@@ -196,16 +197,17 @@ describe("Talk requester-final consult ownership", () => {
 
     runCurrent = false;
     expect(runner.runPrompt.claimAppend()).toBe(false);
-    expect(
-      consumeRequesterFinalAttachment({
-        requesterAgentId: "researcher",
-        requesterSessionKey: "agent:researcher:talk",
-        requesterSessionId: "session-talk",
-        batchRunIds: ["run-child"],
-        rearmGeneration: 2,
-        text: "stale final",
-      }),
-    ).toBe("missing");
+    finalizeRequesterFinalAttachment({
+      requesterAgentId: "researcher",
+      requesterSessionKey: "agent:researcher:talk",
+      requesterSessionId: "session-talk",
+      batchRunIds: ["run-child"],
+      rearmGeneration: 2,
+      requesterYieldBatch: true,
+      pause: false,
+      delivered: true,
+      finalAssistantVisibleText: "stale final",
+    });
     expect(append).not.toHaveBeenCalled();
   });
 });

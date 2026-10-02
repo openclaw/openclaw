@@ -221,6 +221,10 @@ Other supported filesystems keep the hard-link fast path and copy fallback.
 
 SQLite read-only workers use that retained generation through post-install
 verification, even after the package manager removes the previous package path.
+The updater joins those workers before returning. It records completed runtime
+projections for cleanup by the next eligible update or `openclaw doctor --fix`,
+so recursive deletion does not delay command exit after the final result.
+Cleanup keeps projections while another OpenClaw process may still use them.
 Already-installed older updaters, including 2026.9.6, still run their original
 worker-launch code; installing a corrected candidate cannot repair that first hop.
 

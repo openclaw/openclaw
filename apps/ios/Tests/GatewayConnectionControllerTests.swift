@@ -289,7 +289,7 @@ private func waitUntil(
         ]) {
             let appModel = NodeAppModel()
             let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
-            let options = await controller.makeConnectOptions(stableID: nil, deviceAuthGatewayID: nil)
+            let options = await controller.makeConnectOptions(deviceAuthGatewayID: nil)
             let caps = Set(options.caps)
 
             #expect(!caps.contains(OpenClawCapability.canvas.rawValue))
@@ -493,17 +493,17 @@ private func waitUntil(
     }
 
     @Test func `stored device token scope gap uses gateway scope compatibility`() {
-        #expect(!GatewayChannelActor._test_requestedScopesExceedStoredToken(
+        #expect(!GatewayChannelActor.requestedScopesExceedStoredToken(
             role: "operator",
             requestedScopes: ["operator.read", "operator.write", "operator.talk.secrets"],
             storedToken: "stored-device-token",
             storedScopes: ["operator.admin"]))
-        #expect(!GatewayChannelActor._test_requestedScopesExceedStoredToken(
+        #expect(!GatewayChannelActor.requestedScopesExceedStoredToken(
             role: "operator",
             requestedScopes: ["operator.read"],
             storedToken: "stored-device-token",
             storedScopes: []))
-        #expect(GatewayChannelActor._test_requestedScopesExceedStoredToken(
+        #expect(GatewayChannelActor.requestedScopesExceedStoredToken(
             role: "operator",
             requestedScopes: ["operator.admin"],
             storedToken: "stored-device-token",

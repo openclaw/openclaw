@@ -9,6 +9,7 @@ import { createDeferredCore, type Deferred } from "../../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import { getFollowupCohortOwner, bindFollowupCohortOwner } from "./session-followup-cohort.js";
 import type {
   FollowupCohort as Cohort,
@@ -181,7 +182,9 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
     if (
       !cohort ||
       cohort.entries.length !== entries.length ||
-      !entries.every((entry) => cohort.entries.includes(entry))
+      !entries.every((entry) =>
+        cohort.entries.some((current) => isSameSubagentRunOwner(current, entry)),
+      )
     ) {
       throw new Error("Followup completion cohort was replaced.");
     }
@@ -191,14 +194,17 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
       if (
         (this.cohort !== cohort &&
           !(this.execution.runId === runId && this.execution.admittedCohort === cohort)) ||
-        entries.some(
-          (entry) =>
+        entries.some((observed) => {
+          const entry = cohort.entries.find((current) => isSameSubagentRunOwner(current, observed));
+          return (
+            !entry ||
             getFollowupCohortOwner(entry) !== this ||
             entry.requesterSettleWake?.rearmGeneration !== cohort.generation ||
             entry.killIntent ||
             entry.killReconciliation ||
-            entry.suppressCompletionDelivery,
-        )
+            entry.suppressCompletionDelivery
+          );
+        })
       ) {
         throw new Error("Followup successor no longer owns its completion cohort.");
       }
@@ -285,32 +291,26 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
       this.taking = false;
     }
   }
-  replaceCohortEntry(previous: SubagentRunRecord, next: SubagentRunRecord): () => void {
+  replaceCohortEntry(previous: SubagentRunRecord, next: SubagentRunRecord): void {
     const cohorts = [this.cohort, this.execution.admittedCohort].filter(
-      (cohort): cohort is Cohort => Boolean(cohort?.entries.includes(previous)),
+      (cohort): cohort is Cohort =>
+        Boolean(cohort?.entries.some((entry) => isSameSubagentRunOwner(entry, previous))),
     );
     if (
-      (previous.taskRunId ?? previous.runId) !== (next.taskRunId ?? next.runId) ||
-      previous.childSessionKey !== next.childSessionKey ||
-      previous.requesterSessionKey !== next.requesterSessionKey ||
-      previous.requesterAgentId !== next.requesterAgentId ||
-      !next.requesterSettleWake
+      !isSameSubagentRunOwner(previous, next) &&
+      ((previous.taskRunId ?? previous.runId) !== (next.taskRunId ?? next.runId) ||
+        previous.childSessionKey !== next.childSessionKey ||
+        previous.requesterSessionKey !== next.requesterSessionKey ||
+        previous.requesterAgentId !== next.requesterAgentId ||
+        !next.requesterSettleWake)
     ) {
-      return () => {};
+      return;
     }
-    const changes = cohorts.map((cohort) => {
-      const before = cohort.entries;
-      const after = before.map((entry) => (entry === previous ? next : entry));
-      cohort.entries = after;
-      return { cohort, before, after };
-    });
-    return () => {
-      for (const { cohort, before, after } of changes) {
-        if (cohort.entries === after) {
-          cohort.entries = before;
-        }
-      }
-    };
+    for (const cohort of cohorts) {
+      cohort.entries = cohort.entries.map((entry) =>
+        isSameSubagentRunOwner(entry, previous) ? next : entry,
+      );
+    }
   }
   close(error?: unknown) {
     if (this.signal.aborted) {

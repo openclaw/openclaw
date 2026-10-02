@@ -12,6 +12,7 @@ import type { RegisterSubagentRunOptions } from "../registry/subagent-registry.t
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import {
   createConfigOverride,
+  createSubagentRegistrationScopeForTest,
   inheritedSpawnCases,
   installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
@@ -103,15 +104,15 @@ describe("spawnSubagentDirect seam flow", () => {
     ({ closeSwarmScheduler } = await import("../swarm/swarm-scheduler.js"));
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     swarmSchedulerTesting.reset();
-    resetSubagentRegistryForTests();
+    await resetSubagentRegistryForTests();
     for (const mock of Object.values(hoisted)) {
       mock.mockReset();
     }
     hoisted.prepareModelChoiceMock.mockImplementation(supportedSpawnModelChoice);
-    hoisted.startQueuedSubagentRunMock.mockReturnValue(true);
-    hoisted.settleFailedQueuedSubagentLaunchMock.mockReturnValue(true);
+    hoisted.startQueuedSubagentRunMock.mockResolvedValue(true);
+    hoisted.settleFailedQueuedSubagentLaunchMock.mockResolvedValue(true);
     hoisted.hasInProcessGatewayContextMock.mockReturnValue(false);
     hoisted.resolveContextEngineMock.mockResolvedValue({});
     hoisted.countActiveRunsForSessionMock.mockReturnValue(0);
@@ -449,7 +450,7 @@ describe("spawnSubagentDirect seam flow", () => {
     configOverride = createConfigOverride({
       tools: { swarm: { enabled: true, maxConcurrent: 1 } },
     });
-    hoisted.startQueuedSubagentRunMock.mockReturnValueOnce(false).mockReturnValue(true);
+    hoisted.startQueuedSubagentRunMock.mockResolvedValueOnce(false).mockResolvedValue(true);
     let stopAllowed = false;
     let agentCalls = 0;
     let abortCalls = 0;
@@ -503,7 +504,7 @@ describe("spawnSubagentDirect seam flow", () => {
     configOverride = createConfigOverride({
       tools: { swarm: { enabled: true, maxConcurrent: 1 } },
     });
-    hoisted.startQueuedSubagentRunMock.mockReturnValueOnce(false).mockReturnValue(true);
+    hoisted.startQueuedSubagentRunMock.mockResolvedValueOnce(false).mockResolvedValue(true);
     const publication = createDeferred();
     const waitEntered = createDeferred();
     const retryEntered = createDeferred();
@@ -517,23 +518,21 @@ describe("spawnSubagentDirect seam flow", () => {
         if (!options?.retainOwnership) {
           throw new Error("Expected retained collector registration");
         }
-        options.retainOwnership({
-          canLaunch: () => true,
-          canAcceptLaunch: () => true,
-          canCleanupSession: () => !publicationPending,
-          canRetireReservation: () => true,
-          waitForClaim: () => undefined,
-          waitForRetirementPublication: () => {
-            if (!publicationPending) {
-              return undefined;
-            }
-            waitEntered.resolve();
-            return publication.promise;
-          },
-          settleFailedLaunch: async (error) => {
-            hoisted.settleFailedQueuedSubagentLaunchMock(record.runId, error);
-          },
-        });
+        options.retainOwnership(
+          createSubagentRegistrationScopeForTest({
+            canCleanupSession: () => !publicationPending,
+            waitForRetirementPublication: () => {
+              if (!publicationPending) {
+                return undefined;
+              }
+              waitEntered.resolve();
+              return publication.promise;
+            },
+            settleFailedLaunch: async (error) => {
+              await hoisted.settleFailedQueuedSubagentLaunchMock(record.runId, error);
+            },
+          }),
+        );
       },
     );
     hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {

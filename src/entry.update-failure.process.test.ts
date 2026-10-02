@@ -68,6 +68,7 @@ await runMainOrRootHelp(['node', 'openclaw', 'update', ${json ? "'--json'" : "'-
           OPENCLAW_STATE_DIR: path.join(root, "state"),
           OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
           OPENCLAW_DEBUG: "0",
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
           OPENCLAW_GATEWAY_STARTUP_TRACE: trace ? "1" : "0",
           NODE_OPTIONS: "",
           VITEST: "",

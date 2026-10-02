@@ -652,10 +652,16 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
             throw OpenClawChatTransportSendError.notDispatched
         }
         try await self.requireCurrentOutboxGateway()
-        return try await MacChatMessageSpeechClient.synthesize(
-            text: text,
-            serverLease: serverLease,
-            connection: self.connection)
+        let encoded = try JSONEncoder().encode(TtsSpeakParams(text: text))
+        guard let params = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] else {
+            throw MacChatMessageSpeechError.invalidRequest
+        }
+        let responseData = try await self.connection.request(
+            method: "tts.speak",
+            params: params.mapValues(AnyCodable.init),
+            timeoutMs: 60000,
+            ifCurrentServerLease: serverLease)
+        return try OpenClawChatGatewayPayloadCodec.decodeSpeechClip(responseData)
     }
 
     func loadSourceContext() async -> OpenClawChatSourceContext? {
@@ -685,10 +691,6 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
             kind: kind,
             playback: playback,
             ifCurrentServerLease: serverLease)
-    }
-
-    var supportsSlashCommandCatalog: Bool {
-        true
     }
 
     func createSession(
@@ -842,27 +844,6 @@ private enum MacChatMessageSpeechError: LocalizedError {
         case .unsupportedTransport:
             "Gateway TTS is unavailable for this chat transport"
         }
-    }
-}
-
-private enum MacChatMessageSpeechClient {
-    private static let requestTimeoutMs: Double = 60000
-
-    static func synthesize(
-        text: String,
-        serverLease: GatewayConnection.ServerLease,
-        connection: GatewayConnection) async throws -> OpenClawChatSpeechClip
-    {
-        let encoded = try JSONEncoder().encode(TtsSpeakParams(text: text))
-        guard let params = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] else {
-            throw MacChatMessageSpeechError.invalidRequest
-        }
-        let responseData = try await connection.request(
-            method: "tts.speak",
-            params: params.mapValues(AnyCodable.init),
-            timeoutMs: self.requestTimeoutMs,
-            ifCurrentServerLease: serverLease)
-        return try OpenClawChatGatewayPayloadCodec.decodeSpeechClip(responseData)
     }
 }
 

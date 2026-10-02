@@ -1,14 +1,28 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../config/io.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as sqliteReads from "../infra/sqlite-readonly-worker.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createCurrentOpenClawAgentDatabaseFixtures } from "../state/openclaw-agent-db.test-support.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { resolveAuthProfileDatabaseOwnerId } from "./auth-profiles/sqlite.js";
+import { resetModelsJsonReadyCacheForTest } from "./models-config-state.test-support.js";
+import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
+import * as modelsPlan from "./models-config.plan.js";
+import * as catalogAuth from "./plugin-model-catalog-auth.js";
 import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import {
@@ -19,6 +33,7 @@ import {
   createPreparedModelRuntimeSnapshot,
   prepareFullCatalogFacts,
 } from "./prepared-model-runtime.full-catalog.js";
+import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
 
@@ -92,7 +107,144 @@ function fixture(mode: "merge" | "replace" = "merge") {
   return { facts, generation, configured, staticConfig, modelsJsonContents };
 }
 
+function persistedFixture() {
+  const prepared = fixture();
+  const { facts, configured } = prepared;
+  const agentDir = facts.input.agentDir;
+  const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(agentDir, "state") };
+  facts.env = env;
+  facts.input = { ...facts.input, env, readOnly: true };
+  facts.configuredGeneratedCatalogPluginIds = [pluginId];
+  const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
+  createCurrentOpenClawAgentDatabaseFixtures(path.join(agentDir, "template.sqlite"), [
+    { path: databasePath, agentId: resolveAuthProfileDatabaseOwnerId(agentDir) },
+  ]);
+  const catalogs = [
+    {
+      pluginId,
+      contents: JSON.stringify({
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: { [providerId]: { ...configured, models: [model("persisted-only")] } },
+      }),
+    },
+  ];
+  const database = new DatabaseSync(databasePath);
+  try {
+    database
+      .prepare("INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)")
+      .run("plugin-model-catalog-v1", pluginId, catalogs[0]!.contents, 1);
+  } finally {
+    database.close();
+  }
+  return { ...prepared, catalogs };
+}
+
 describe("prepared catalog source composition", () => {
+  it("prepares persisted catalog sources, fingerprints, and queued plans without caller-thread SQLite", async () => {
+    const { facts, generation, catalogs, modelsJsonContents } = persistedFixture();
+    const planner = vi
+      .spyOn(modelsPlan, "planOpenClawModelsJson")
+      .mockResolvedValue({ action: "skip" });
+    const authCapture = vi
+      .spyOn(catalogAuth, "capturePluginModelCatalogAuth")
+      .mockResolvedValue([]);
+    const workerRead = vi.spyOn(sqliteReads, "runSqliteReadOnlyOperation");
+    const sql = observeMainThreadSql({ includeClose: true });
+    const scope = sqliteReads.createSqliteReadOnlyWorkerScope();
+    resetModelsJsonReadyCacheForTest();
+    try {
+      sql.calibrate();
+      await scope.run(async () => {
+        const batch = await prepareConfiguredRuntimeFactsBatch({
+          agentFacts: [facts],
+          pluginGeneration: generation,
+        });
+        expect(
+          batch.catalogs.get(facts.input)?.templateModelRegistry.find(providerId, "persisted-only"),
+        ).toMatchObject({ id: "persisted-only", provider: providerId });
+        const source = await prepareAgentCatalogSource(facts, generation, "static");
+        expect(source).toMatchObject({ modelsJsonContents, pluginCatalogs: catalogs });
+        const options = {
+          env: facts.env,
+          pluginMetadataSnapshot: generation.pluginMetadataSnapshot,
+        };
+        await expect(
+          ensureOpenClawModelsJson(facts.input.config, facts.input.agentDir, options),
+        ).resolves.toEqual({ agentDir: facts.input.agentDir, wrote: false });
+        expect(planner).toHaveBeenLastCalledWith(
+          expect.objectContaining({ pluginCatalogs: catalogs }),
+        );
+        await expect(
+          planOpenClawModelsJsonSource(facts.input.config, facts.input.agentDir, options),
+        ).resolves.toMatchObject({ modelsJsonContents, pluginCatalogs: catalogs });
+        expect(planner).toHaveBeenLastCalledWith(
+          expect.objectContaining({ pluginCatalogs: catalogs }),
+        );
+      });
+      await scope.close();
+      expect(workerRead).toHaveBeenCalled();
+      sql.expectIdle();
+    } finally {
+      try {
+        await scope.close();
+      } finally {
+        sql.restore();
+        workerRead.mockRestore();
+        planner.mockRestore();
+        authCapture.mockRestore();
+        resetModelsJsonReadyCacheForTest();
+      }
+    }
+  });
+
+  it.for(["retired", "rejected"] as const)(
+    "does not construct a configured registry after a delayed catalog read is %s",
+    async (outcome, { signal }) => {
+      const { facts, generation, catalogs } = persistedFixture();
+      const started = createDeferred();
+      const reply = createDeferred<typeof catalogs>();
+      const failure = new Error(`catalog preparation ${outcome}`);
+      const workerRead = vi
+        .spyOn(sqliteReads, "runSqliteReadOnlyOperation")
+        .mockImplementationOnce(async () => {
+          started.resolve();
+          return await reply.promise;
+        });
+      let current = true;
+      const registries: PreparedConfiguredModelRegistries = new Map();
+      const pending = prepareConfiguredRuntimeFactsBatch({
+        agentFacts: [facts],
+        pluginGeneration: generation,
+        registries,
+        assertCurrent() {
+          if (!current) {
+            throw failure;
+          }
+        },
+      });
+      const rejected = expect(pending).rejects.toBe(failure);
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(started.promise, pending, "Catalog read was skipped"),
+          signal,
+        );
+        expect(registries.get(generation.pluginMetadataSnapshot)?.size).toBe(0);
+        if (outcome === "retired") {
+          current = false;
+          reply.resolve(catalogs);
+        } else {
+          reply.reject(failure);
+        }
+        await rejected;
+        expect(registries.get(generation.pluginMetadataSnapshot)?.size).toBe(0);
+      } finally {
+        reply.resolve(catalogs);
+        await Promise.allSettled([pending, rejected]);
+        workerRead.mockRestore();
+      }
+    },
+  );
+
   it("retains inherited catalogs and current request settings without custom model rows", async () => {
     vi.stubEnv("OPENAI_API_KEY", undefined);
     const { facts, staticConfig } = fixture();

@@ -8,6 +8,7 @@ import {
   publishSubagentRunChanges,
   subscribeSubagentRunChanges,
 } from "./subagent-registry-publication.js";
+import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 
 it.each(["memory", "persistence"] as const)(
   "publishes %s projections before session observers and wakes persistence observers last",
@@ -75,14 +76,24 @@ describe("pending lifecycle registration ownership", () => {
       const runs = new Map([[original.runId, original]]);
       const completeInBackground = vi.fn();
       const scheduler = createPendingLifecycleScheduler({ runs, completeInBackground });
-      scheduler[schedule]({ runId: original.runId, endedAt: 123, error: "old failure" });
+      scheduler[schedule]({
+        runId: original.runId,
+        expectedEntry: original,
+        endedAt: 123,
+        error: "old failure",
+      });
       const successor = createSubagentRunRecord({ runId: original.runId, generation: 2 });
       runs.set(original.runId, successor);
 
       vi.advanceTimersByTime(AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
 
       expect(completeInBackground).not.toHaveBeenCalled();
-      scheduler[schedule]({ runId: successor.runId, endedAt: 456, error: "new failure" });
+      scheduler[schedule]({
+        runId: successor.runId,
+        expectedEntry: successor,
+        endedAt: 456,
+        error: "new failure",
+      });
       vi.advanceTimersByTime(AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
       expect(completeInBackground).toHaveBeenCalledOnce();
       expect(completeInBackground).toHaveBeenCalledWith(
@@ -92,16 +103,22 @@ describe("pending lifecycle registration ownership", () => {
     },
   );
 
-  it("rejects a registration whose generation changes on the same row", () => {
+  it("rejects a registration whose generation changes while retaining runtime custody", () => {
     vi.useFakeTimers();
     const entry = createSubagentRunRecord({ runId: "rotated", generation: 1 });
     const completeInBackground = vi.fn();
+    const runs = new Map([[entry.runId, entry]]);
     const scheduler = createPendingLifecycleScheduler({
-      runs: new Map([[entry.runId, entry]]),
+      runs,
       completeInBackground,
     });
-    scheduler.scheduleError({ runId: entry.runId, endedAt: 123, error: "old failure" });
-    entry.generation = 2;
+    scheduler.scheduleError({
+      runId: entry.runId,
+      expectedEntry: entry,
+      endedAt: 123,
+      error: "old failure",
+    });
+    runs.set(entry.runId, copySubagentRunRuntimeOwner(entry, { ...entry, generation: 2 }));
 
     vi.advanceTimersByTime(AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
 

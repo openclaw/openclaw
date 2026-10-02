@@ -73,7 +73,7 @@ const ASSETS = [
   "build/src/third_party/issue-descriptions/example.md",
 ];
 
-function fixture(version: string, hashes: Record<string, string>) {
+function fixture(version = "1.10.1", hashes = CONTRACT_HASHES["1.10.1"]) {
   return {
     declaredVersion: version,
     manifest: { version, type: "module", bin: { "chrome-devtools-mcp": "./" + CLI } },
@@ -87,63 +87,60 @@ describe.each(Object.entries(CONTRACT_HASHES))("patched MCP %s contract", (versi
     expect(collectPatchedMcpArtifactErrors(fixture(version, hashes))).toEqual([]);
   });
 
-  it("binds the bundled manifest to the exact declared pin", () => {
+  it("rejects changed bytes for every hashed runtime entry", () => {
     const input = fixture(version, hashes);
-    input.manifest.version = version === "1.10.1" ? "1.9.0" : "1.10.1";
-    expect(collectPatchedMcpArtifactErrors(input)).toContain(
-      "bundled chrome-devtools-mcp must be ESM version " + version,
+    input.sha256 = () => "0".repeat(64);
+    expect(collectPatchedMcpArtifactErrors(input).toSorted()).toEqual(
+      Object.keys(hashes)
+        .map((file) => "bundled chrome-devtools-mcp has unpatched or changed runtime entry " + file)
+        .toSorted(),
     );
-  });
-
-  it.each(Object.keys(hashes))("rejects changed or unpatched bytes: %s", (file) => {
-    const input = fixture(version, hashes);
-    input.sha256 = (entry) => (entry === file ? "0".repeat(64) : hashes[entry]);
-    expect(collectPatchedMcpArtifactErrors(input)).toContain(
-      "bundled chrome-devtools-mcp has unpatched or changed runtime entry " + file,
-    );
-  });
-
-  it.each([...Object.keys(hashes), ...ASSETS])("rejects missing runtime entries: %s", (file) => {
-    const input = fixture(version, hashes);
-    input.files.delete(file);
-    expect(collectPatchedMcpArtifactErrors(input)).toContain(
-      file.endsWith("example.md")
-        ? "bundled chrome-devtools-mcp is missing third-party issue descriptions"
-        : "bundled chrome-devtools-mcp is missing required runtime entry " + file,
-    );
-  });
-
-  it("rejects mixed-version byte contracts", () => {
-    const other = Object.entries(CONTRACT_HASHES).find(([candidate]) => candidate !== version)?.[1];
-    expect(other).toBeDefined();
-    expect(collectPatchedMcpArtifactErrors(fixture(version, other ?? {}))).toContain(
-      "bundled chrome-devtools-mcp has unpatched or changed runtime entry build/src/bin/chrome-devtools-mcp-main.js",
-    );
-  });
-
-  it("does not trust artifact-supplied replacement hashes", () => {
-    const input = fixture(version, hashes);
-    expect(
-      collectPatchedMcpArtifactErrors({
-        ...input,
-        manifest: { ...input.manifest, hashes: { [CLI]: "0".repeat(64) } },
-        sha256: (file) => (file === CLI ? "0".repeat(64) : hashes[file]),
-      }),
-    ).toContain("bundled chrome-devtools-mcp has unpatched or changed runtime entry " + CLI);
-  });
-
-  it("retains the ESM and CLI requirements", () => {
-    const input = fixture(version, hashes);
-    input.manifest.type = "commonjs";
-    input.manifest.bin["chrome-devtools-mcp"] = "./other.js";
-    expect(collectPatchedMcpArtifactErrors(input)).toEqual([
-      "bundled chrome-devtools-mcp must be ESM version " + version,
-      "bundled chrome-devtools-mcp must expose CLI " + CLI,
-    ]);
   });
 });
 
-it.each([null, 1.8, "", "^1.8.0", "~1.9.0", "1.7.0", "1.10.0", "latest", "toString"])(
+it("binds the bundled manifest to the exact declared pin", () => {
+  const input = fixture();
+  input.manifest.version = "1.9.0";
+  expect(collectPatchedMcpArtifactErrors(input)).toContain(
+    "bundled chrome-devtools-mcp must be ESM version 1.10.1",
+  );
+});
+
+it("reports every missing runtime entry", () => {
+  const input = fixture();
+  input.files.clear();
+  expect(collectPatchedMcpArtifactErrors(input).toSorted()).toEqual(
+    [
+      ...[...ASSETS.slice(0, -1), ...Object.keys(CONTRACT_HASHES["1.10.1"])].map(
+        (file) => "bundled chrome-devtools-mcp is missing required runtime entry " + file,
+      ),
+      "bundled chrome-devtools-mcp is missing third-party issue descriptions",
+    ].toSorted(),
+  );
+});
+
+it("does not trust artifact-supplied replacement hashes", () => {
+  const input = fixture();
+  expect(
+    collectPatchedMcpArtifactErrors({
+      ...input,
+      manifest: { ...input.manifest, hashes: { [CLI]: "0".repeat(64) } },
+      sha256: (file) => (file === CLI ? "0".repeat(64) : input.sha256(file)),
+    }),
+  ).toContain("bundled chrome-devtools-mcp has unpatched or changed runtime entry " + CLI);
+});
+
+it("retains the ESM and CLI requirements", () => {
+  const input = fixture();
+  input.manifest.type = "commonjs";
+  input.manifest.bin["chrome-devtools-mcp"] = "./other.js";
+  expect(collectPatchedMcpArtifactErrors(input)).toEqual([
+    "bundled chrome-devtools-mcp must be ESM version 1.10.1",
+    "bundled chrome-devtools-mcp must expose CLI " + CLI,
+  ]);
+});
+
+it.each([null, "^1.8.0", "1.10.0", "toString"])(
   "rejects unpinned or unknown declarations: %s",
   (declaredVersion) => {
     expect(

@@ -79,8 +79,7 @@ class GatewayDevicePairingTest {
     val pending = listOf(pending("request-1", "device-1"))
     val paired = listOf(paired("device-1"))
 
-    assertEquals(
-      GatewayDevicePairingMutationOutcome.Approved,
+    assertTrue(
       verifyGatewayDevicePairingMutation(
         mutation = GatewayDevicePairingMutation(GatewayDevicePairingAction.Approve, "request-1"),
         expectedDeviceId = "device-1",
@@ -89,8 +88,7 @@ class GatewayDevicePairingTest {
         paired = paired,
       ),
     )
-    assertEquals(
-      GatewayDevicePairingMutationOutcome.NotVerified,
+    assertFalse(
       verifyGatewayDevicePairingMutation(
         mutation = GatewayDevicePairingMutation(GatewayDevicePairingAction.Approve, "request-1"),
         expectedDeviceId = "device-1",
@@ -99,8 +97,7 @@ class GatewayDevicePairingTest {
         paired = paired,
       ),
     )
-    assertEquals(
-      GatewayDevicePairingMutationOutcome.Rejected,
+    assertTrue(
       verifyGatewayDevicePairingMutation(
         mutation = GatewayDevicePairingMutation(GatewayDevicePairingAction.Reject, "request-1"),
         expectedDeviceId = "",
@@ -109,8 +106,7 @@ class GatewayDevicePairingTest {
         paired = emptyList(),
       ),
     )
-    assertEquals(
-      GatewayDevicePairingMutationOutcome.Removed,
+    assertTrue(
       verifyGatewayDevicePairingMutation(
         mutation = GatewayDevicePairingMutation(GatewayDevicePairingAction.Remove, "device-1"),
         expectedDeviceId = "device-1",
@@ -119,8 +115,7 @@ class GatewayDevicePairingTest {
         paired = emptyList(),
       ),
     )
-    assertEquals(
-      GatewayDevicePairingMutationOutcome.NotVerified,
+    assertFalse(
       verifyGatewayDevicePairingMutation(
         mutation = GatewayDevicePairingMutation(GatewayDevicePairingAction.Reject, "request-1"),
         expectedDeviceId = "",

@@ -73,11 +73,10 @@ if (process.argv[3] === "session") {
       expect(runSqliteReadOnlyWorkerSync(base, undefined, "content-version")).toBe("a".repeat(64));
       for (const workerPath of retainedPaths) {
         expect(workerPath.startsWith(root + path.sep)).toBe(false);
-        expect(await fs.readFile(workerPath, "utf8")).toBe(worker);
       }
     });
     for (const workerPath of retainedPaths) {
-      await expect(fs.stat(workerPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(workerPath, "utf8")).toBe(worker);
     }
   });
 });

@@ -498,7 +498,16 @@ suite.define(() => {
         await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
         await page.locator(".chat-working-indicator").waitFor({ state: "hidden" });
         if (terminal === "error") {
-          await page.locator(".chat-error strong", { hasText: errorMessage }).waitFor();
+          const failure = page.locator(".chat-error").filter({ hasText: errorMessage });
+          await failure
+            .locator("summary strong")
+            .getByText("Couldn't finish this reply. Check the conversation before trying again.")
+            .waitFor();
+          await failure.locator("summary").click();
+          await failure.getByLabel("Error details", { exact: true }).waitFor();
+          expect(
+            await failure.getByLabel("Error details", { exact: true }).textContent(),
+          ).toContain(errorMessage);
         }
         await emitDelta(text, text.slice(partial.length));
         await expect.poll(() => page.locator(".chat-bubble.streaming").count()).toBe(0);
