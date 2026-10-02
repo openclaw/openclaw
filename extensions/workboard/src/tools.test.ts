@@ -777,9 +777,14 @@ describe("workboard tools", () => {
         reason: "re-routing to people board",
       }),
     );
-    expect(unclaimed.card).toMatchObject({ status: "blocked" });
-    expect(unclaimed.card.metadata?.automation?.boardId).toBe("people");
-    expect(unclaimed.card.metadata?.comments?.at(-1)?.body).toBe("re-routing to people board");
+    expect(unclaimed.card).toMatchObject({
+      status: "blocked",
+      metadata: {
+        automation: { boardId: "people" },
+      },
+    });
+    const updatedUnclaimed = await store.get(card.id);
+    expect(updatedUnclaimed?.metadata?.comments?.at(-1)?.body).toBe("re-routing to people board");
 
     await store.claim(card.id, { ownerId: "agent-a", token: "test-auth-token" });
     await expect(
@@ -796,7 +801,11 @@ describe("workboard tools", () => {
         token: "test-auth-token",
       }),
     );
-    expect(claimed.card).toMatchObject({ status: "blocked" });
-    expect(claimed.card.metadata?.automation?.boardId).toBe("security");
+    expect(claimed.card).toMatchObject({
+      status: "blocked",
+      metadata: {
+        automation: { boardId: "security" },
+      },
+    });
   });
 });
