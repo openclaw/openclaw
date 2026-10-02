@@ -2,7 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
-import { pwAi } from "./pw-ai.js";
+import * as pwAi from "./pw-ai.js";
 
 const {
   closePlaywrightBrowserConnection,

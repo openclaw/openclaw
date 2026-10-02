@@ -1,5 +1,5 @@
-/** Playwright-backed browser helpers loaded as one optional runtime object. */
-import {
+/** Playwright-backed browser helpers loaded as one optional runtime module. */
+export {
   closePageByTargetIdViaPlaywright,
   closePlaywrightBrowserConnection,
   createObservedDialogAbortSignalForPage,
@@ -17,13 +17,13 @@ import {
   respondToObservedDialogOnPage,
   retirePlaywrightBrowserConnectionExact,
 } from "./pw-session.js";
-import {
+export {
   getConsoleMessagesViaPlaywright,
   getNetworkRequestsViaPlaywright,
   getPageErrorsViaPlaywright,
   getPageTextViaPlaywright,
 } from "./pw-tools-core.activity.js";
-import {
+export {
   armDialogViaPlaywright,
   armFileUploadViaPlaywright,
   downloadCurrentDocumentViaPlaywright,
@@ -31,22 +31,22 @@ import {
   uploadViaPlaywright,
   waitForDownloadViaPlaywright,
 } from "./pw-tools-core.downloads.js";
-import {
+export {
   executeActViaPlaywright,
   highlightViaPlaywright,
   screenshotWithLabelsViaPlaywright,
   setInputFilesViaPlaywright,
   takeScreenshotViaPlaywright,
 } from "./pw-tools-core.interactions.js";
-import { responseBodyViaPlaywright } from "./pw-tools-core.responses.js";
-import {
+export { responseBodyViaPlaywright } from "./pw-tools-core.responses.js";
+export {
   navigateViaPlaywright,
   pdfViaPlaywright,
   snapshotAriaViaPlaywright,
   snapshotRoleViaPlaywright,
   storeSnapshotRefsViaPlaywright,
 } from "./pw-tools-core.snapshot.js";
-import {
+export {
   emulateMediaViaPlaywright,
   setDeviceViaPlaywright,
   setExtraHTTPHeadersViaPlaywright,
@@ -56,7 +56,7 @@ import {
   setOfflineViaPlaywright,
   setTimezoneViaPlaywright,
 } from "./pw-tools-core.state.js";
-import {
+export {
   cookiesClearViaPlaywright,
   cookiesGetViaPlaywright,
   cookiesSetManyViaPlaywright,
@@ -65,61 +65,4 @@ import {
   storageGetViaPlaywright,
   storageSetViaPlaywright,
 } from "./pw-tools-core.storage.js";
-import { traceStartViaPlaywright, traceStopViaPlaywright } from "./pw-tools-core.trace.js";
-
-export const pwAi = {
-  downloadCurrentDocumentViaPlaywright,
-  closePageByTargetIdViaPlaywright,
-  closePlaywrightBrowserConnection,
-  retirePlaywrightBrowserConnectionExact,
-  createPageViaPlaywright,
-  ensurePageState,
-  forceDisconnectPlaywrightForTarget,
-  focusPageByTargetIdViaPlaywright,
-  createObservedDialogAbortSignalForPage,
-  getObservedBrowserStateForPage,
-  getObservedBrowserStateViaPlaywright,
-  getDocumentIdentitiesViaPlaywright,
-  getPageForTargetId,
-  hasCachedPlaywrightBrowserConnection,
-  isBrowserObservedDialogBlockedError,
-  listPagesViaPlaywright,
-  respondToObservedDialogOnPage,
-  armDialogViaPlaywright,
-  armFileUploadViaPlaywright,
-  cookiesClearViaPlaywright,
-  cookiesGetViaPlaywright,
-  cookiesSetManyViaPlaywright,
-  cookiesSetViaPlaywright,
-  downloadViaPlaywright,
-  emulateMediaViaPlaywright,
-  executeActViaPlaywright,
-  getConsoleMessagesViaPlaywright,
-  getNetworkRequestsViaPlaywright,
-  getPageErrorsViaPlaywright,
-  getPageTextViaPlaywright,
-  highlightViaPlaywright,
-  navigateViaPlaywright,
-  pdfViaPlaywright,
-  responseBodyViaPlaywright,
-  setDeviceViaPlaywright,
-  setExtraHTTPHeadersViaPlaywright,
-  setGeolocationViaPlaywright,
-  setHttpCredentialsViaPlaywright,
-  setInputFilesViaPlaywright,
-  setLocaleViaPlaywright,
-  setOfflineViaPlaywright,
-  setTimezoneViaPlaywright,
-  snapshotAriaViaPlaywright,
-  snapshotRoleViaPlaywright,
-  storeSnapshotRefsViaPlaywright,
-  screenshotWithLabelsViaPlaywright,
-  storageClearViaPlaywright,
-  storageGetViaPlaywright,
-  storageSetViaPlaywright,
-  takeScreenshotViaPlaywright,
-  traceStartViaPlaywright,
-  traceStopViaPlaywright,
-  uploadViaPlaywright,
-  waitForDownloadViaPlaywright,
-};
+export { traceStartViaPlaywright, traceStopViaPlaywright } from "./pw-tools-core.trace.js";

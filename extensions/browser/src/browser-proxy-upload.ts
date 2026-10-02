@@ -1,6 +1,4 @@
 /**
- * Browser proxy upload transport.
- *
  * Existing Browser upload paths are Gateway-owned. Proxied requests carry
  * bounded bytes to the node, which stages private copies under its upload root.
  */
@@ -481,7 +479,6 @@ function validateUploadEnvelope(upload: BrowserProxyUploadV1): BrowserProxyUploa
   return upload.files;
 }
 
-/** Stage a validated upload envelope under the node's managed Browser upload root. */
 export async function stageBrowserProxyUploadRequest(params: {
   method: string;
   path: string;
