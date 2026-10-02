@@ -20,12 +20,8 @@ exec setpriv --reuid="$service_user" --regid="$service_user" --init-groups \
   --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs bash -c '
 set -euo pipefail
 if [ -r /sys/module/apparmor/parameters/enabled ] && [ "$(cat /sys/module/apparmor/parameters/enabled)" = Y ]; then
-  profile="$(cat /proc/self/attr/current)"
-  # The no-new-privileges handoff can retain unconfined in an enforced profile stack.
-  case "$profile" in
-    "docker-default (enforce)" | "docker-default//&unconfined (enforce)") ;;
-    *) exit 1 ;;
-  esac
+  IFS= read -r profile < /proc/self/attr/current
+  [ "$profile" = "docker-default (enforce)" ]
   printf "Survivor payload AppArmor: %s\n" "$profile"
 fi
 exec "$@"
