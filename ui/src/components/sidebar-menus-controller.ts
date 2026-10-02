@@ -34,7 +34,13 @@ type AgentMenuInteractionState = "closed" | "hover-pending" | "open-hover" | "op
 
 type MenuPosition = { x: number; y: number };
 type CatalogMenuPosition = MenuPosition & { catalogId: string };
-type PositionedMenu = "customize" | "more" | "sessionSort" | "catalogView" | "identity";
+type PositionedMenu =
+  | "customize"
+  | "more"
+  | "sessionSort"
+  | "peopleFilter"
+  | "catalogView"
+  | "identity";
 
 function menuPosition(x: number, y: number, width: number, height: number): MenuPosition {
   return {
@@ -55,6 +61,7 @@ export class SidebarMenusController implements ReactiveController {
   sessionMenuWork: SessionMenuWork | null = null;
   sessionGroupMenu: SidebarSessionGroupMenuState | null = null;
   sessionSortMenuPosition: MenuPosition | null = null;
+  peopleFilterMenuPosition: MenuPosition | null = null;
   catalogViewMenuPosition: CatalogMenuPosition | null = null;
   filterMenuView: SidebarFilterMenuView = "root";
   agentMenuPosition: { x: number; top: number } | null = null;
@@ -67,6 +74,7 @@ export class SidebarMenusController implements ReactiveController {
   private sessionMenuWorkVersion = 0;
   sessionGroupMenuTrigger: HTMLElement | null = null;
   sessionSortMenuTrigger: HTMLElement | null = null;
+  peopleFilterMenuTrigger: HTMLElement | null = null;
   catalogViewMenuTrigger: HTMLElement | null = null;
   agentMenuTrigger: HTMLElement | null = null;
   agentMenuInteractionState: AgentMenuInteractionState = "closed";
@@ -153,6 +161,7 @@ export class SidebarMenusController implements ReactiveController {
       this.catalogMenu.isOpen ||
       this.sessionGroupMenu ||
       this.sessionSortMenuPosition ||
+      this.peopleFilterMenuPosition ||
       this.catalogViewMenuPosition ||
       this.agentMenuPosition ||
       this.identityMenuPosition,
@@ -161,6 +170,7 @@ export class SidebarMenusController implements ReactiveController {
     this.closeMoreMenu();
     this.closeSessionMenu();
     this.catalogMenu.close();
+    this.closePeopleFilterMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
     this.closeCatalogViewMenu();
@@ -315,6 +325,26 @@ export class SidebarMenusController implements ReactiveController {
     }
   }
 
+  togglePeopleFilterMenu(trigger: HTMLElement) {
+    if (this.peopleFilterMenuPosition) {
+      this.closePeopleFilterMenu();
+      return;
+    }
+    this.loadMenuRenderer();
+    const rect = trigger.getBoundingClientRect();
+    this.dismissTransientMenus();
+    this.host.people.dismiss();
+    this.peopleFilterMenuTrigger = trigger;
+    this.updateState(
+      "peopleFilterMenuPosition",
+      menuPosition(rect.right, rect.bottom + 4, 320, 160),
+    );
+  }
+
+  closePeopleFilterMenu(options: { restoreFocus?: boolean } = {}) {
+    this.closePositionedMenu("peopleFilter", options);
+  }
+
   toggleSessionSortMenu(trigger: HTMLElement) {
     if (this.sessionSortMenuPosition) {
       this.closeSessionSortMenu();
@@ -408,6 +438,7 @@ export class SidebarMenusController implements ReactiveController {
     this.closeSessionSortMenu();
     this.closeCatalogViewMenu();
     this.closeIdentityMenu();
+    this.closePeopleFilterMenu();
     this.agentMenuTrigger = trigger;
     this.agentMenuFocusBeforeHover =
       interactionState === "open-hover" && document.activeElement instanceof HTMLElement
@@ -551,6 +582,7 @@ export class SidebarMenusController implements ReactiveController {
       ${this.catalogMenu.render()}
       ${renderer?.renderSidebarSessionGroupMenuForController(this) ?? nothing}
       ${renderer?.renderSidebarSessionSortMenuForController(this) ?? nothing}
+      ${renderer?.renderSidebarPeopleFilterMenuForController(this) ?? nothing}
       ${renderer?.renderSidebarCatalogViewMenuForController(this) ?? nothing}
     `;
   }

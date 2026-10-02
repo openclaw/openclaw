@@ -15,6 +15,7 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -77,7 +78,12 @@ async function withCatalog(
       );
     }
     const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-    const projection = await createSessionRowProjection({ cfg, getConfig: () => cfg, context });
+    const projection = await createSessionRowProjection({
+      cfg,
+      getConfig: () => cfg,
+      context,
+      modelCatalog: [],
+    });
     bindSessionRowProjection(context, () => projection);
     const previous = captureActivePluginRegistrySnapshot();
     const provider: SessionCatalogProvider = {
@@ -140,6 +146,37 @@ it("reads clean local catalog entries from the resident owner without SQLite", a
   });
 });
 
+it.each(["planning", "delivery"])(
+  "serves catalog %s without draining unrelated display invalidations",
+  async (phase) => {
+    await withCatalog(
+      async ({ list, setList, projection }) => {
+        const warm = await list();
+        const before = projection.materializedCount;
+        const invalidate = () => {
+          sessionChanges.emit({ all: true, scope: "catalog" });
+          expect(projection.needsMaterialization).toBe(true);
+        };
+        setList(async ({ sessionEntries }) => {
+          expect(sessionEntries?.entriesForCatalog?.()).toHaveLength(41);
+          if (phase === "delivery") {
+            invalidate();
+          }
+          return hosts([session()]);
+        });
+        if (phase === "planning") {
+          invalidate();
+        }
+        const response = await list();
+        expect(response.mock.calls[0]?.[1]).toEqual(warm.mock.calls[0]?.[1]);
+        expect(projection.materializedCount).toBe(before);
+        expect(projection.dirtyRowCount).toBeGreaterThan(0);
+      },
+      { otherEntryCount: 40 },
+    );
+  },
+);
+
 it("reuses unchanged agent selections across catalog polls and refreshes published rows", async () => {
   await withCatalog(
     async ({ list, setList, projection }) => {
@@ -152,25 +189,29 @@ it("reuses unchanged agent selections across catalog polls and refreshes publish
       };
       replaceSessionEntrySync({ agentId: "main", sessionKey: key }, { ...original, label: "Main" });
       replaceSessionEntrySync({ agentId: "work", sessionKey: workKey }, workEntry);
-      setList(async ({ sessionEntries }) => [
-        {
-          hostId: "gateway:fixture",
-          label: "Fixture",
-          kind: "gateway",
-          connected: true,
-          sessions: (sessionEntries?.entriesForCatalog?.() ?? []).map(
-            ({ agentId, sessionKey, entry }) => ({
-              threadId: `${agentId}:${entry.sessionId}`,
-              sessionKey,
-              title: entry.label,
-              status: "stored",
-              archived: false,
-              canContinue: true,
-              canArchive: false,
-            }),
-          ),
-        },
-      ]);
+      const planningRevisions: Array<object | undefined> = [];
+      setList(async ({ sessionEntries }) => {
+        planningRevisions.push(sessionEntries?.revision);
+        return [
+          {
+            hostId: "gateway:fixture",
+            label: "Fixture",
+            kind: "gateway",
+            connected: true,
+            sessions: (sessionEntries?.entriesForCatalog?.() ?? []).map(
+              ({ agentId, sessionKey, entry }) => ({
+                threadId: `${agentId}:${entry.sessionId}`,
+                sessionKey,
+                title: entry.label,
+                status: "stored",
+                archived: false,
+                canContinue: true,
+                canArchive: false,
+              }),
+            ),
+          },
+        ];
+      });
       const mainSession = {
         threadId: `main:${original.sessionId}`,
         sessionKey: key,
@@ -189,8 +230,8 @@ it("reuses unchanged agent selections across catalog polls and refreshes publish
       });
       const selectEntries = projection.selectEntries.bind(projection);
       let broadRowsRead = 0;
-      vi.spyOn(projection, "selectEntries").mockImplementation((query) => {
-        const rows = selectEntries(query);
+      vi.spyOn(projection, "selectEntries").mockImplementation((query, metadataPrepared) => {
+        const rows = selectEntries(query, metadataPrepared);
         if (!query?.key && !query?.sessionIdOrKey) {
           broadRowsRead += rows.length;
         }
@@ -199,6 +240,14 @@ it("reuses unchanged agent selections across catalog polls and refreshes publish
       const second = await list();
       expect(second.mock.calls[0]?.[1]).toEqual(first.mock.calls[0]?.[1]);
       expect(broadRowsRead).toBe(0);
+      expect(planningRevisions[0]).toBeDefined();
+      expect(planningRevisions[1]).toBe(planningRevisions[0]);
+
+      sessionChanges.emit({ all: true, scope: "catalog" });
+      const catalogRefresh = await list();
+      expect(catalogRefresh.mock.calls[0]?.[1]).toEqual(first.mock.calls[0]?.[1]);
+      expect(broadRowsRead).toBe(0);
+      expect(planningRevisions[2]).toBe(planningRevisions[0]);
 
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: key },
@@ -211,11 +260,13 @@ it("reuses unchanged agent selections across catalog polls and refreshes publish
         ],
       });
       expect(broadRowsRead).toBeGreaterThan(0);
+      expect(planningRevisions[3]).not.toBe(planningRevisions[2]);
       broadRowsRead = 0;
 
       const repeated = await list();
       expect(repeated.mock.calls[0]?.[1]).toEqual(updated.mock.calls[0]?.[1]);
       expect(broadRowsRead).toBe(0);
+      expect(planningRevisions[4]).toBe(planningRevisions[3]);
     },
     { agents: { ownership: "explicit", entries: { main: {}, work: {} } } },
   );
@@ -228,8 +279,8 @@ it("bounds catalog result delivery to returned adoption keys", async () => {
       let deliveryRowsRead = 0;
       setList(async ({ sessionEntries }) => {
         expect(sessionEntries?.entriesForCatalog?.()).toHaveLength(257);
-        vi.spyOn(projection, "selectEntries").mockImplementation((query) => {
-          const rows = selectEntries(query);
+        vi.spyOn(projection, "selectEntries").mockImplementation((query, metadataPrepared) => {
+          const rows = selectEntries(query, metadataPrepared);
           deliveryRowsRead += rows.length;
           return rows;
         });

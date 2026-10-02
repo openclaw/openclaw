@@ -210,7 +210,15 @@ const runtimePartitions = new Map<
         globSync(controlUiTestGlobs, { cwd, exclude: controlUiE2eTestGlobs })
           .map((file) => file.replaceAll("\\", "/"))
           .toSorted(),
-      nodeRequired: new Set(),
+      // collectGarbageForTest needs V8's precise collection: JavaScriptCore's
+      // conservative stack scanning can retain unreachable WeakRef targets.
+      nodeRequired: new Set([
+        "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
+        "ui/src/pages/chat/chat-pane-retention.test.ts",
+        "ui/src/pages/chat/chat-thread-retention.test.ts",
+        "ui/src/pages/chat/session-snapshot-store.test.ts",
+        "ui/src/pages/usage/usage-page-retention.test.ts",
+      ]),
       includeAfterShard: true,
     },
   ],

@@ -125,9 +125,9 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
   const diagnostics = startSessionCatalogRequestDiagnostics();
   let finishInitialProjection: (() => void) | undefined;
   try {
-    while (projection.needsMaterialization) {
+    while (projection.needsSelectionPreparation()) {
       finishInitialProjection ??= diagnostics?.startWait("projection_initial");
-      await projection.ensureMaterialized();
+      await projection.prepareSelection();
     }
   } finally {
     finishInitialProjection?.();
@@ -233,7 +233,7 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
         subscriber,
         isProgressCurrent,
         client?.connectionSignal ?? signal,
-        () => (projection.needsMaterialization ? projection.ensureMaterialized() : undefined),
+        () => (projection.needsSelectionPreparation() ? projection.prepareSelection() : undefined),
       );
     }
   };
@@ -265,9 +265,9 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     }
     let finishFinalProjection: (() => void) | undefined;
     try {
-      while (projection.needsMaterialization) {
+      while (projection.needsSelectionPreparation()) {
         finishFinalProjection ??= diagnostics?.startWait("projection_final");
-        await projection.ensureMaterialized();
+        await projection.prepareSelection();
       }
     } finally {
       finishFinalProjection?.();
@@ -414,9 +414,9 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     const result = await operation;
     let finishFinalProjection: (() => void) | undefined;
     try {
-      while (projection.needsMaterialization) {
+      while (projection.needsSelectionPreparation()) {
         finishFinalProjection ??= diagnostics?.startWait("projection_final");
-        await projection.ensureMaterialized();
+        await projection.prepareSelection();
       }
     } finally {
       finishFinalProjection?.();

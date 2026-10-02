@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasExactKeys } from "../../chrome-extension/modules/strict-json.js";
 import {
   assertOwnedPath,
   chromeProductRoots,
@@ -49,13 +50,8 @@ async function inspectRequest(root: ChromeProductRoot): Promise<ChromeStoreInsta
     }
     const value: unknown = JSON.parse(await fs.readFile(target, "utf8"));
     if (
-      !value ||
-      typeof value !== "object" ||
-      Array.isArray(value) ||
-      Object.keys(value).length !== 2 ||
-      !("external_update_url" in value) ||
+      !hasExactKeys(value, ["external_update_url", "openclawOwnership"]) ||
       value.external_update_url !== OWNED_REQUEST.external_update_url ||
-      !("openclawOwnership" in value) ||
       value.openclawOwnership !== OWNED_REQUEST.openclawOwnership
     ) {
       return {

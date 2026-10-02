@@ -137,6 +137,9 @@ export function visitorProfileFixture(
     async readSessionFacts() {
       throw new Error("Unexpected session facts request");
     },
+    async openPluginPanel() {
+      throw new Error("Unexpected plugin panel request");
+    },
     withUserProfileIdentity,
   };
   const request = vi.spyOn(gateway, "request").mockImplementation(response);

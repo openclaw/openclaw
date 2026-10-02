@@ -48,7 +48,7 @@ let presentation: PresentationBinding | undefined;
 
 function renderLinks(links = [href(1)], session = "first", active = true, connected = true) {
   render(
-    html`<div ${linkReaderPrefetch(session, active, connected, presentation)}>
+    html`<div ${linkReaderPrefetch(session, active ? (presentation ?? true) : false, connected)}>
       ${links.map((url) => html`<a class="markdown-github-link" href=${url}>Item</a>`)}
     </div>`,
     container,

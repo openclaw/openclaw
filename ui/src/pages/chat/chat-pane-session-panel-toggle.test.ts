@@ -9,7 +9,10 @@ import {
   stubScreenshotMedia,
   createBrowserPanelTestMetrics,
 } from "../../components/browser/browser-panel-controller-test-support.ts";
-import { LINK_READER_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
+import {
+  LINK_READER_PANEL_TOGGLE_EVENT,
+  PLUGIN_PANEL_TOGGLE_EVENT,
+} from "../../components/panel-toggle-contract.ts";
 import {
   rememberSessionPanelToggle,
   type SessionPanelToggleSlot,
@@ -60,6 +63,7 @@ function fixture() {
     renderRoot: root,
     state,
     linkReaders: [reader],
+    pluginPanels: ["review/document"] as const,
     updateComplete: Promise.resolve(),
   };
   const pending = new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>();
@@ -92,6 +96,44 @@ function fixture() {
 }
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("plugin panel intent delivery", () => {
+  it("opens an early panel intent only for its registered session owner", () => {
+    const f = fixture();
+    const event = new CustomEvent(PLUGIN_PANEL_TOGGLE_EVENT, {
+      detail: { pluginId: "review", panelId: "document", sessionKey: "session-b", open: true },
+    });
+    rememberSessionPanelToggle("plugin:review/document", event);
+    f.controller.flush();
+    expect(f.updateSidebarLayout).not.toHaveBeenCalled();
+    f.state.sessionKey = "session-b";
+    f.controller.flush();
+    expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(true);
+    expect(f.pending.size).toBe(0);
+    expect(f.deliverPanelEvent).not.toHaveBeenCalled();
+  });
+
+  it("routes direct opens and closes and ignores unregistered panels", () => {
+    const f = fixture();
+    const stop = f.controller.subscribe();
+    try {
+      const send = (panelId: string, open: boolean) =>
+        window.dispatchEvent(
+          new CustomEvent(PLUGIN_PANEL_TOGGLE_EVENT, {
+            detail: { pluginId: "review", panelId, sessionKey: f.state.sessionKey, open },
+          }),
+        );
+      send("missing", true);
+      expect(f.updateSidebarLayout).not.toHaveBeenCalled();
+      send("document", true);
+      expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(true);
+      send("document", false);
+      expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(false);
+    } finally {
+      stop();
+    }
+  });
+});
 
 describe("session link-reader intent delivery", () => {
   it("delivers every buffered reader intent in order after the lazy commit", async () => {
@@ -230,6 +272,7 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
         renderRoot: this,
         state: this.state,
         linkReaders: [],
+        pluginPanels: [],
         updateComplete: this.updateComplete,
       }),
       pending: this.pending,
