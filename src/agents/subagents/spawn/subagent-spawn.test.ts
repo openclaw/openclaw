@@ -12,6 +12,7 @@ import type { RegisterSubagentRunOptions } from "../registry/subagent-registry.t
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import {
   createConfigOverride,
+  createSubagentRegistrationScopeForTest,
   inheritedSpawnCases,
   installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
@@ -517,23 +518,21 @@ describe("spawnSubagentDirect seam flow", () => {
         if (!options?.retainOwnership) {
           throw new Error("Expected retained collector registration");
         }
-        options.retainOwnership({
-          canLaunch: () => true,
-          canAcceptLaunch: () => true,
-          canCleanupSession: () => !publicationPending,
-          canRetireReservation: () => true,
-          waitForClaim: () => undefined,
-          waitForRetirementPublication: () => {
-            if (!publicationPending) {
-              return undefined;
-            }
-            waitEntered.resolve();
-            return publication.promise;
-          },
-          settleFailedLaunch: async (error) => {
-            await hoisted.settleFailedQueuedSubagentLaunchMock(record.runId, error);
-          },
-        });
+        options.retainOwnership(
+          createSubagentRegistrationScopeForTest({
+            canCleanupSession: () => !publicationPending,
+            waitForRetirementPublication: () => {
+              if (!publicationPending) {
+                return undefined;
+              }
+              waitEntered.resolve();
+              return publication.promise;
+            },
+            settleFailedLaunch: async (error) => {
+              await hoisted.settleFailedQueuedSubagentLaunchMock(record.runId, error);
+            },
+          }),
+        );
       },
     );
     hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {

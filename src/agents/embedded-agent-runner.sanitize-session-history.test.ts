@@ -17,7 +17,7 @@ import { validateReplayTurns } from "./embedded-agent-runner/replay-history.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 import { textToolResult, textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { extractToolCallsFromAssistant } from "./tool-call-id.js";
-import type { TranscriptPolicy } from "./transcript-policy.js";
+import type { TranscriptPolicy } from "./transcript-policy.types.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 vi.mock("./embedded-agent-helpers.js", async () => ({

@@ -75,11 +75,9 @@ export async function runSpawnPipeline<TState>(
       registration = params.buildRegistration(state, runId);
       await registerSubagentRun(registration, {
         assertCurrent: params.assertActive,
-        retainOwnership: registration.queued
-          ? (scope) => {
-              registrationScope = scope;
-            }
-          : undefined,
+        retainOwnership: (scope) => {
+          registrationScope = scope;
+        },
       });
       // Release launch admission only after any authority preparation and registry acknowledgement.
       params.admissionReservation?.release();

@@ -2,7 +2,7 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import type { ModelCatalogEntry } from "../../api/types.ts";
+import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { switchChatModel } from "./chat-session.ts";
@@ -19,6 +19,35 @@ const model: ModelCatalogEntry = {
     { agentRuntime: { id: "codex", source: "model" }, available: true, contextWindow: 200_000 },
   ],
 };
+
+function renderControls(
+  result: SessionsListResult,
+  models: ModelCatalogEntry[],
+  options: Pick<
+    Parameters<typeof renderChatModelControls>[0],
+    "onModelSelect" | "onModelSetup" | "modelSelectionLocked"
+  > = {},
+  container = document.createElement("div"),
+) {
+  render(
+    renderChatModelControls({
+      activeRunId: null,
+      connected: true,
+      gatewayAvailable: true,
+      loading: false,
+      modelCatalog: models,
+      modelSwitching: false,
+      sending: false,
+      sessionKey: "main",
+      selectedSession: result.sessions[0],
+      sessionsResult: result,
+      stream: null,
+      ...options,
+    }),
+    container,
+  );
+  return container;
+}
 
 function renderRuntimeModel(
   entry: ModelCatalogEntry,
@@ -38,24 +67,20 @@ function renderRuntimeModel(
     result.sessions[0]!.activeModel = entry.id;
     result.sessions[0]!.activeModelProvider = entry.provider;
   }
-  const container = document.createElement("div");
-  render(
-    renderChatModelControls({
-      activeRunId: null,
-      connected: true,
-      gatewayAvailable: true,
-      loading: false,
-      modelCatalog: [entry],
-      modelSwitching: false,
-      sending: false,
-      sessionKey: "main",
-      selectedSession: result.sessions[0],
-      sessionsResult: result,
-      stream: null,
-    }),
-    container,
-  );
-  return container;
+  return renderControls(result, [entry]);
+}
+
+function selectionHost(result: SessionsListResult, models: ModelCatalogEntry[]) {
+  return makeChatHost({
+    sessionKey: "main",
+    sessionsResult: result,
+    chatModelCatalog: models,
+    chatModelSwitchPromises: {},
+    requestHandlers: {
+      "sessions.patch": { ok: true, key: "main", path: "", entry: { sessionId: "main" } },
+      "sessions.list": result,
+    },
+  });
 }
 
 describe("chat model runtime choices", () => {
@@ -93,37 +118,19 @@ describe("chat model runtime choices", () => {
         ? { id: "acpx", source: "session-key" }
         : defaultModel.agentRuntime;
       result.sessions[0]!.runtimeSelectionLocked = runtimeLocked || undefined;
-      const host = makeChatHost({
-        sessionKey: "main",
-        sessionsResult: result,
-        chatModelCatalog: models,
-        chatModelSwitchPromises: {},
-        requestHandlers: {
-          "sessions.patch": { ok: true, key: "main", path: "", entry: { sessionId: "main" } },
-          "sessions.list": result,
-        },
-      });
+      const host = selectionHost(result, models);
       const container = document.createElement("div");
       let selection: Promise<boolean> | undefined;
       const draw = () =>
-        render(
-          renderChatModelControls({
-            activeRunId: null,
-            connected: true,
-            gatewayAvailable: true,
-            loading: false,
-            modelCatalog: models,
-            modelSwitching: false,
-            sending: false,
-            sessionKey: "main",
-            selectedSession: result.sessions[0],
-            sessionsResult: result,
-            stream: null,
+        renderControls(
+          result,
+          models,
+          {
             onModelSelect: (value, key, runtime) => {
               selection = switchChatModel(host, value, key, runtime);
               return selection;
             },
-          }),
+          },
           container,
         );
       try {
@@ -298,37 +305,19 @@ describe("chat model runtime choices", () => {
         modelOverrideSource,
       });
       result.sessions[0]!.agentRuntime = { id: initialRuntime, source: "provider" };
-      const host = makeChatHost({
-        sessionKey: "main",
-        sessionsResult: result,
-        chatModelCatalog: [model],
-        chatModelSwitchPromises: {},
-        requestHandlers: {
-          "sessions.patch": { ok: true, key: "main", path: "", entry: { sessionId: "main" } },
-          "sessions.list": result,
-        },
-      });
+      const host = selectionHost(result, [model]);
       const container = document.createElement("div");
       let selection: Promise<boolean> | undefined;
       const draw = () =>
-        render(
-          renderChatModelControls({
-            activeRunId: null,
-            connected: true,
-            gatewayAvailable: true,
-            loading: false,
-            modelCatalog: [model],
-            modelSwitching: false,
-            sending: false,
-            sessionKey: "main",
-            selectedSession: result.sessions[0],
-            sessionsResult: result,
-            stream: null,
+        renderControls(
+          result,
+          [model],
+          {
             onModelSelect: (value, key, runtime) => {
               selection = switchChatModel(host, value, key, runtime);
               return selection;
             },
-          }),
+          },
           container,
         );
       try {
@@ -387,36 +376,25 @@ describe("chat model runtime choices", () => {
       const onSetup = vi.fn();
       const result = createSessionsListResult({ model: model.id, defaultsModel: model.id });
       result.sessions[0]!.agentRuntime = model.agentRuntime;
-      const container = document.createElement("div");
-      render(
-        renderChatModelControls({
-          activeRunId: null,
-          connected: true,
-          gatewayAvailable: true,
-          loading: false,
-          modelCatalog: [
-            {
-              ...model,
-              runtimeChoices: [
-                {
-                  ...model.runtimeChoices![0]!,
-                  available: false,
-                  ...(guard === "locked" ? {} : { unavailableReason: guard }),
-                },
-              ],
-            },
-          ],
+      const container = renderControls(
+        result,
+        [
+          {
+            ...model,
+            runtimeChoices: [
+              {
+                ...model.runtimeChoices![0]!,
+                available: false,
+                ...(guard === "locked" ? {} : { unavailableReason: guard }),
+              },
+            ],
+          },
+        ],
+        {
           modelSelectionLocked: guard === "locked",
-          modelSwitching: false,
-          sending: false,
-          sessionKey: "main",
-          selectedSession: result.sessions[0],
-          sessionsResult: result,
-          stream: null,
           onModelSelect: onSelect,
           onModelSetup: onSetup,
-        }),
-        container,
+        },
       );
       const row = container.querySelector<HTMLButtonElement>('[data-chat-model-runtime="codex"]');
       if (guard === "locked") {

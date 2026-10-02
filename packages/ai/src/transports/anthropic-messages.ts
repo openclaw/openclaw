@@ -8,6 +8,7 @@ import type {
   ToolResultBlockParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
 import type { Context, Model, Tool } from "@openclaw/llm-core";
+import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAiTransportHost } from "../host.js";
 import {
@@ -48,6 +49,7 @@ import {
   extractToolResultBlockText,
   extractToolResultText,
 } from "../providers/tool-result-text.js";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../replay-turn-classification.js";
 import {
   buildAnthropicReplayPlan,
   type AnthropicCompactionBlock,
@@ -77,9 +79,10 @@ type AnthropicReplayBlock =
     };
 
 type AnthropicWireMessage = {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string | AnthropicReplayBlock[];
   reasoning_content?: string;
+  clear_at?: "next_user_message";
 };
 
 const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
@@ -165,7 +168,19 @@ async function convertAnthropicMessages(
   },
 ): Promise<AnthropicWireMessage[]> {
   const params: AnthropicWireMessage[] = [];
+  const appendMessage = (message: AnthropicWireMessage) => {
+    // Interrupted turns can leave a system update last; retain it before the next user turn.
+    if (message.role === "user" && params.at(-1)?.role === "system") {
+      params.push({
+        role: "assistant",
+        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+      });
+    }
+    params.push(message);
+  };
   const modelRetainsRuntimeContext = bindsClaudeThinkingPrefix(model);
+  const inHistorySystemUpdates =
+    !isOAuthToken && isDirectAnthropicModel(model) && supportsClaudeInHistorySystemMessages(model);
   const imageBudget = createAnthropicInlineImageBudget();
   const allowReasoningContentReplay = options.allowReasoningContentReplay === true;
   const replayThinkingEnabled = options.replayThinkingEnabled !== false;
@@ -179,6 +194,7 @@ async function convertAnthropicMessages(
       continue;
     }
     if (msg.role === "user") {
+      const operatorMessage = inHistorySystemUpdates ? msg.operatorMessage : undefined;
       let content: AnthropicWireMessage["content"];
       if (typeof msg.content === "string") {
         if (msg.content.trim().length === 0) {
@@ -218,13 +234,21 @@ async function convertAnthropicMessages(
           continue;
         }
       }
+      appendMessage({
+        role: operatorMessage ? "system" : "user",
+        content: operatorMessage
+          ? typeof content === "string"
+            ? [{ type: "text", text: content }]
+            : content.filter((block) => block.type === "text")
+          : content,
+        ...(operatorMessage?.turnScoped ? { clear_at: "next_user_message" as const } : {}),
+      });
       if (
         msg.runtimeContextCarrier &&
         !(msg.runtimeContextCarrierRetained ?? modelRetainsRuntimeContext)
       ) {
-        options.cacheBreakpointOptOutMessageIndexes?.add(params.length);
+        options.cacheBreakpointOptOutMessageIndexes?.add(params.length - 1);
       }
-      params.push({ role: "user", content });
       continue;
     }
     if (msg.role === "assistant") {
@@ -335,7 +359,7 @@ async function convertAnthropicMessages(
         j += 1;
       }
       i = j - 1;
-      params.push({
+      appendMessage({
         role: "user",
         content: toolResults,
       });
@@ -539,7 +563,7 @@ export async function buildAnthropicRequest(
   const params: MessageCreateParamsStreaming = {
     model:
       managed && isDirectAnthropicModel(model) ? model.id.replace(/^anthropic\//i, "") : model.id,
-    // SAFETY: the beta endpoint accepts compaction blocks omitted by the stable SDK union.
+    // SAFETY: the API accepts in-history system messages and compaction blocks absent from the SDK union.
     messages: messages as MessageParam[],
     max_tokens: maxTokens ?? model.maxTokens,
     stream: true,

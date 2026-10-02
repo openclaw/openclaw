@@ -52,9 +52,10 @@ RPC method families for gateway status and identity, models and usage, channels 
 ## Plugin management
 
 - `plugins.list` (`operator.read`) returns the installed plugin inventory plus locally curated official picks, diagnostics, and whether the current install mode allows mutations. It includes the current runtime `generation` and each plugin's runtime state separately from configured enablement.
-- `plugins.inspect` (`operator.read`) inspects one plugin with `{ pluginId }`, including declared capabilities, grants, trust details, and a `reviewToken` for capability consent.
+- `plugins.inspect` (`operator.read`) accepts `{ pluginId }` for installed, staged, or official candidates; `{ source: "clawhub", packageName, version? }` for arbitrary ClawHub plugins; or `{ catalogId, version? }` using a discovery identity. Installed and staged inspections include a `reviewToken` for capability consent. Remote inspections expose the selected catalog detail, applicable grants, and release trust. Their `declaredSurfaceStatus` is `partial` or `unavailable`: registry summaries omit some capability groups and package siblings, so they cannot issue a consent token. Empty unsupported groups do not mean the package declares no such capabilities.
 - `plugins.search` (`operator.read`) searches installable ClawHub code-plugin and bundle-plugin families. Pass non-empty `query` and optional `limit` from 1 to 100.
 - `plugins.catalog.browse` (`operator.read`) returns ClawHub discovery results with Gateway-local installed and bundled state. The Control UI adds `searchSource: "openclaw-control-ui"` only after manual input of at least two characters settles for 250 ms. Initial browsing, refreshes, filter changes, and generic API searches omit it. The Gateway honors `CLAWHUB_DISABLE_TELEMETRY` and does not replay attributed HTTP searches after transient failures. ClawHub records the normalized query, source, and remote result counts; those counts exclude local-only matches added by the Gateway. Installed inventory and operator, device, and session identities are not included in the observation.
+- `plugins.catalog.get` (`operator.read`) accepts `{ id, version? }` using the unchanged discovery ID from `plugins.catalog.browse`. Detail includes publisher metadata, README, topics, package tags, selected-release notes, capabilities, configuration, verification, and security when supplied by ClawHub. `detail.selectedRelease` names the actual release independently of `plugin.catalog.latestVersion`; null means no release was selected. `detail.metadata` explicitly reports available or missing README, manifest, and security data. An installed counterpart can supply local detail during registry outages; `remoteError` explains the failure, and remote selected-release facts remain unknown. Local-only identities do not support remote version selection.
 - `plugins.install` (`operator.admin`) accepts these source-specific request fields:
 
   | `source`      | Fields                                                                     |
@@ -76,6 +77,33 @@ RPC method families for gateway status and identity, models and usage, channels 
 - `plugins.reload` (`operator.admin`) reloads one or more discovered plugins with `{ plugins: [{ pluginId, installHash?, sourceDigests? }], acknowledgeCapabilities? }`, preserving configured enablement. Send 1–64 targets; a one-plugin request uses the same array envelope. The response contains `pluginIds`, a boolean `restartRequired`, and a required `runtime` receipt. When compiled bundled code retains its loaded module after its files change, `restartRequired` is `true` and the result explains why.
 - `plugins.refresh` (`operator.admin`) refreshes plugin metadata and applies the resulting registry with `{}`.
 - `plugins.uninstall` (`operator.admin`) removes one externally installed plugin with `{ pluginId, keepFiles? }`: config references, the install record, and managed files. Bundled plugins cannot be uninstalled, only disabled. The response lists the removal actions.
+
+### Catalog detail and client confirmation
+
+`detail.downloadability` has one of these shapes:
+
+| Status                                         | Meaning                                                                |
+| ---------------------------------------------- | ---------------------------------------------------------------------- |
+| `{ "status": "downloadable" }`                 | The source has confirmed selected-release artifact availability.       |
+| `{ "status": "unavailable", "reason": "..." }` | A missing release or source download policy prevents download.         |
+| `{ "status": "unknown", "reason": "..." }`     | The source cannot establish availability, or the registry read failed. |
+
+ClawHub currently exposes a selected plugin release's download-policy block, but
+its read-only detail and artifact resolver do not check stored artifact bytes.
+A permitted security verdict, download URL, listing, or local install action
+therefore produces `unknown`, never `downloadable`. A side-effect-free per-release
+availability fact requires a ClawHub contract extension. Gateway inspection does
+not download packages to probe them; registry download routes record telemetry.
+
+A native client can fetch `plugins.catalog.get`, inspect the same `catalogId`,
+display the returned facts, and collect confirmation itself. After approval,
+call `plugins.install` with `source: "clawhub"`, the exact returned `packageName`,
+and `selectedRelease.version` when present. Preserve scope and publisher spelling;
+do not rebuild the package name from a runtime plugin ID. If installation requires
+capability consent or install-policy acknowledgment, display that owner-issued
+review and retry the same intent with its acknowledgment. Catalog inspection does
+not grant consent or bypass install policy, integrity, trust, or authorization.
+Cancel sends no installation RPC. The Gateway does not manage confirmation dialogs.
 
 Runtime-only refresh works with read-only, Nix-managed, and root `$include` configurations without rewriting them.
 Plugin lifecycle and Claw package removal requests return retryable `UNAVAILABLE` with `retryAfterMs` when another plugin or config operation is already applying. This busy response occurs before the requested mutation starts; retry after the current operation completes. Failures after a mutation starts retain their application details and are not automatically retryable.

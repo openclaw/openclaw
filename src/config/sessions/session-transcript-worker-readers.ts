@@ -381,6 +381,12 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-progress-card", ...input }),
       (value) => value.card,
     ),
+    readPendingInputHistory: reader(
+      "session-pending-input-history",
+      "pending input history",
+      (input) => ({ kind: "session-pending-input-history", ...input }),
+      (value) => value.snapshot,
+    ),
     readPendingInputReceipts: reader(
       "session-pending-input-receipts",
       "pending input receipts",

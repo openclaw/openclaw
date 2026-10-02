@@ -205,6 +205,20 @@ type SessionReclamationPlanBase = {
   materializedPlans: MaterializedSessionStateDeletePlan[];
 };
 
+export type SessionMaintenanceMetadataCommand =
+  | { kind: "maintenance-statistics" }
+  | { kind: "maintenance-plan"; input: SessionEntryMaintenanceInput };
+
+export type SessionMaintenanceMetadataResult =
+  | { kind: "maintenance-statistics"; value: true }
+  | { kind: "maintenance-preservation-required" }
+  | { kind: "maintenance-plan-stale" }
+  | {
+      kind: "maintenance-plan";
+      value: SessionEntryMaintenancePlan;
+      ageFact?: SessionEntryMaintenanceAgeFact;
+    };
+
 export type SqliteSessionReclamationPlan =
   | (SessionReclamationPlanBase & {
       kind: "lifecycle-projection-plan";
@@ -231,11 +245,7 @@ export type SqliteSessionReclamationPlan =
       nowMs: number;
     })
   | (SessionReclamationPlanBase & { kind: "maintenance-pages"; maxPages?: number })
-  | (SessionReclamationPlanBase & { kind: "maintenance-statistics" })
-  | (SessionReclamationPlanBase & {
-      kind: "maintenance-plan";
-      input: SessionEntryMaintenanceInput;
-    })
+  | (SessionReclamationPlanBase & SessionMaintenanceMetadataCommand & { materializedPlans: [] })
   | (SessionReclamationPlanBase & {
       agentId: string;
       entries: SessionEntryRemovalPlan[];
@@ -265,6 +275,11 @@ export type SqliteSessionReclamationPlan =
       sessionId: string;
     });
 
+export type SqliteArchiveReclamationPlan = Exclude<
+  SqliteSessionReclamationPlan,
+  SessionMaintenanceMetadataCommand
+>;
+
 export type SqliteSessionReclamationResult =
   | { kind: "lifecycle-projection-plan"; value: ProjectedLifecycleMutation }
   | { kind: "lifecycle-projection-commit"; value: ProjectedLifecycleCommitResult }
@@ -273,14 +288,7 @@ export type SqliteSessionReclamationResult =
   | { kind: "archive-publish-prepare"; value: TranscriptArchivePublishPlan[] }
   | { kind: "archive-publish-record"; value: true }
   | { kind: "maintenance-pages"; value: SqliteWalReclamationResult }
-  | { kind: "maintenance-statistics"; value: true }
-  | { kind: "maintenance-preservation-required" }
-  | { kind: "maintenance-plan-stale" }
-  | {
-      kind: "maintenance-plan";
-      value: SessionEntryMaintenancePlan;
-      ageFact?: SessionEntryMaintenanceAgeFact;
-    }
+  | SessionMaintenanceMetadataResult
   | {
       kind: "maintenance-finalize";
       value: {

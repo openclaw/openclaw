@@ -372,15 +372,19 @@ export function buildProviderReplayFamilyHooks(
       };
     }
     case "anthropic-by-model":
+    case "native-anthropic-by-model": {
+      const buildPolicy =
+        options.family === "native-anthropic-by-model"
+          ? buildNativeAnthropicReplayPolicyForModel
+          : buildAnthropicReplayPolicyForModel;
       return {
-        buildReplayPolicy: ({ modelId, model }: ProviderReplayPolicyContext) =>
-          buildAnthropicReplayPolicyForModel(modelId, model),
+        buildReplayPolicy: ({
+          modelId,
+          model,
+          inHistorySystemUpdates,
+        }: ProviderReplayPolicyContext) => buildPolicy(modelId, model, inHistorySystemUpdates),
       };
-    case "native-anthropic-by-model":
-      return {
-        buildReplayPolicy: ({ modelId, model }: ProviderReplayPolicyContext) =>
-          buildNativeAnthropicReplayPolicyForModel(modelId, model),
-      };
+    }
     case "google-gemini":
       return {
         buildReplayPolicy: () => buildGoogleGeminiReplayPolicy(),

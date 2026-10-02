@@ -112,6 +112,16 @@ describe("provider replay helpers", () => {
     });
   });
 
+  it("retains operator context for an admitted in-history system route", () => {
+    expect(
+      buildNativeAnthropicReplayPolicyForModel("claude-opus-5", undefined, true),
+    ).toMatchObject({
+      inHistorySystemUpdates: true,
+      appendOnlyRuntimeContext: true,
+      preserveNativeAnthropicToolUseIds: true,
+    });
+  });
+
   it.each([
     ["claude-fable-5-1", true],
     ["claude-mythos-5-1", false],

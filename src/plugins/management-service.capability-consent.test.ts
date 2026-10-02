@@ -553,7 +553,7 @@ describe("managed plugin capability consent", () => {
           config,
           env,
           pluginId: inspection.plugin.id,
-          acknowledge: { reviewToken: inspection.reviewToken },
+          acknowledge: { reviewToken },
         }),
       ).resolves.toBeUndefined();
     }

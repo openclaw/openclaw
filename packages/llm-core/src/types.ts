@@ -378,6 +378,8 @@ export interface UserMessage {
   runtimeContextCarrier?: boolean;
   /** Explicit replay-policy retention decision; absent preserves model-derived behavior. */
   runtimeContextCarrierRetained?: boolean;
+  /** Operator-authored text projected to system authority on capable routes. */
+  operatorMessage?: { turnScoped: boolean };
 }
 
 /** Assistant turn, including provider identity and final stop state. */

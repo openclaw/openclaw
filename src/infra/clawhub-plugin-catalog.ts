@@ -1,4 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type {
+  ClawHubDownloadability,
+  ClawHubSelectedRelease,
+} from "../../packages/gateway-protocol/src/schema/clawhub-listing.js";
+import type { PluginInstallTrust } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { validatePluginCategories } from "../../packages/plugin-package-contract/src/index.js";
 import {
   fetchClawHubJson,
@@ -9,18 +14,19 @@ import {
   readRequiredClawHubNumberField,
   readRequiredClawHubStringField,
   resolveClawHubImageUrl,
+  resolveClawHubBaseUrl,
   type ClawHubRequestParams,
 } from "./clawhub-client.js";
-import {
-  parseClawHubPackageSecurityResponse,
-  type ClawHubPackageSecurityResponse,
-} from "./clawhub-packages.js";
 import {
   parseClawHubPluginCapabilities,
   parseClawHubPluginCompatibility,
   type ClawHubPluginCompatibility,
   type ClawHubPluginCapabilities,
 } from "./clawhub-plugin-manifest.js";
+import {
+  readClawHubPluginReleaseFacts,
+  type ClawHubPluginSecurity,
+} from "./clawhub-plugin-release.js";
 
 export type ClawHubPluginCatalogEntry = {
   packageName: string;
@@ -56,6 +62,16 @@ export type ClawHubPluginDetail = ClawHubPluginCatalogEntry &
     mcpServers: string[];
     skills: Array<{ name: string; description?: string }>;
     versions: ClawHubPluginVersion[];
+    registry: string;
+    tags: Record<string, string>;
+    selectedRelease: ClawHubSelectedRelease | null;
+    downloadability: ClawHubDownloadability;
+    metadata: {
+      manifest: "available" | "missing";
+      readme: "available" | "missing";
+      security: "available" | "missing";
+    };
+    trust?: PluginInstallTrust;
     verification?: ClawHubPluginVerification;
     security?: ClawHubPluginSecurity;
   };
@@ -81,15 +97,6 @@ type ClawHubPluginVerification = {
   sourceCommit?: string;
   sourcePath?: string;
   scanStatus?: string;
-};
-
-type ClawHubPluginSecurity = {
-  status: string;
-  auditUrl?: string;
-  verdict?: string;
-  summary?: string;
-  guidance?: string;
-  checkedAt?: number;
 };
 
 export type ClawHubPluginCategory = {
@@ -409,27 +416,6 @@ function parseVerification(
   };
 }
 
-function projectSecurity(value: ClawHubPackageSecurityResponse): ClawHubPluginSecurity {
-  const trust = value.trust;
-  const moderationStatus =
-    trust.moderationState && trust.moderationState !== "approved"
-      ? trust.moderationState
-      : undefined;
-  const status = trust.blockedFromDownload
-    ? "blocked"
-    : trust.pending
-      ? "pending"
-      : trust.stale
-        ? "stale"
-        : (moderationStatus ?? trust.scanStatus ?? "unknown");
-  return {
-    status,
-    ...(value.verdict ? { verdict: value.verdict } : {}),
-    auditUrl: value.securityAuditUrl,
-    summary: value.overview,
-  };
-}
-
 function parseVersions(value: unknown): ClawHubPluginVersion[] {
   if (!isRecord(value) || !Array.isArray(value.items)) {
     throw new Error("Malformed ClawHub plugin versions response: expected items to be an array.");
@@ -610,6 +596,16 @@ export async function fetchClawHubPluginDetail(
     throw new Error("Malformed ClawHub plugin detail response: expected package to be an object.");
   }
   const catalog = parseCatalogPackage(value.package, "plugin detail", params.baseUrl);
+  if (catalog.packageName !== params.packageName.trim().toLowerCase()) {
+    throw new Error("ClawHub returned a different plugin package identity.");
+  }
+  const tagsRecord = readOptionalRecord(value.package, "tags", "plugin detail");
+  const tags = Object.fromEntries(
+    Object.keys(tagsRecord ?? {}).map((tag) => [
+      tag,
+      readRequiredClawHubStringField(tagsRecord ?? {}, tag, "plugin tags"),
+    ]),
+  );
   const topics = readClawHubStringArrayField(value.package, "topics", "plugin detail") ?? [];
   const createdAt = readOptionalNonNegativeNumber(value.package, "createdAt", "plugin detail");
   const updatedAt = readOptionalNonNegativeNumber(value.package, "updatedAt", "plugin detail");
@@ -629,27 +625,19 @@ export async function fetchClawHubPluginDetail(
     : undefined;
 
   const versionRecord = readOptionalRecord(value, "version", "plugin detail response");
-  const readme = readClawHubStringField(value, "readme", "plugin detail response");
-  if (readme && Buffer.byteLength(readme, "utf8") > 512 * 1024) {
-    throw new Error("ClawHub plugin README exceeded 524288 bytes.");
-  }
-  let security: ClawHubPluginSecurity | undefined;
-  if (value.security != null) {
-    try {
-      security = projectSecurity(parseClawHubPackageSecurityResponse(value.security));
-    } catch {
-      // Security metadata is optional; malformed audit data must not hide the package.
-    }
-  }
-  const manifest = parseManifest(
-    versionRecord
-      ? readOptionalRecord(versionRecord, "pluginManifestSummary", "plugin version")
-      : readOptionalRecord(value.package, "pluginManifestSummary", "plugin detail"),
-  );
+  const { selectedRelease, readme, security, trust, downloadability } =
+    await readClawHubPluginReleaseFacts({
+      value,
+      versionRecord,
+      packageName: catalog.packageName,
+      version: params.version,
+    });
+  const manifestRecord = versionRecord
+    ? readOptionalRecord(versionRecord, "pluginManifestSummary", "plugin version")
+    : undefined;
+  const manifest = parseManifest(manifestRecord);
   const verification = parseVerification(
-    versionRecord
-      ? readOptionalRecord(versionRecord, "verification", "plugin version")
-      : readOptionalRecord(value.package, "verification", "plugin detail"),
+    versionRecord ? readOptionalRecord(versionRecord, "verification", "plugin version") : undefined,
   );
   const owner = {
     ...(ownerHandle ? { handle: ownerHandle } : {}),
@@ -659,6 +647,16 @@ export async function fetchClawHubPluginDetail(
   };
   return {
     ...catalog,
+    registry: resolveClawHubBaseUrl(params.baseUrl),
+    tags,
+    selectedRelease,
+    downloadability,
+    metadata: {
+      manifest: manifestRecord ? "available" : "missing",
+      readme: readme != null ? "available" : "missing",
+      security: security ? "available" : "missing",
+    },
+    ...(trust ? { trust } : {}),
     ...(ownerHandle && !catalog.ownerHandle ? { ownerHandle } : {}),
     ...(Object.keys(owner).length > 0 ? { owner } : {}),
     topics,

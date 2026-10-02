@@ -124,6 +124,7 @@ it.each([
 
     const successorCompleted = createDeferred();
     const originalCompleted = createDeferred();
+    const originalTimingCompleted = createDeferred();
     const originalSettled = createDeferred();
     const stopObserving = subscribeSubagentRunChanges("persistence", () => {
       const original = subagentRuns.get(b0.runId);
@@ -159,7 +160,15 @@ it.each([
           firstChildCleanup.resolve();
           await releaseFirstChildCleanup.promise;
         }
+        const completingOriginal =
+          entry.runId === b0.runId &&
+          entry.generation === b0.generation &&
+          entry.execution.status === "terminal" &&
+          entry.execution.outcome?.status === "ok";
         await persistTiming(entry, options);
+        if (completingOriginal) {
+          originalTimingCompleted.resolve();
+        }
       },
     );
     if (!completeDuringDrain && !provisional) {
@@ -316,6 +325,8 @@ it.each([
           terminalReply: { disposition: "visible", text: "original completed during cancellation" },
         });
         await originalCompleted.promise;
+        // Completion timing clears the abort marker after its registry outcome is durable.
+        await originalTimingCompleted.promise;
         expect(subagentRuns.get(b0.runId)?.killReconciliation).toBeUndefined();
         childAdmission.release();
         if (replace) {

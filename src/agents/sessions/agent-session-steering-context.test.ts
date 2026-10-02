@@ -3,6 +3,7 @@ import {
   type Context,
   type Model,
 } from "openclaw/plugin-sdk/llm";
+import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import {
   readRuntimePromptImageOrder,
@@ -12,8 +13,10 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
+import { installAttemptPermissionPrompt } from "../embedded-agent-runner/run/attempt-permission-prompt.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
 import { createUserTranscriptContextRegistry } from "../embedded-agent-runner/run/attempt-user-transcript-context-registry.js";
+import { buildSystemUpdateMessage } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -27,9 +30,191 @@ import {
   streamMocks,
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
+import { agentSessionQueuePromptContext } from "./agent-session-prompting.js";
 import { createSyntheticSourceInfo } from "./source-info.js";
 
 registerAgentSessionLoopTestLifecycle();
+
+describe("AgentSession operator context ordering", () => {
+  it("orders operator context and renews runtime facts after a later extension message", async () => {
+    const requests: Context[] = [];
+    streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+      requests.push(context);
+      return createAssistantResultStream(createAssistant(model, [{ type: "text", text: "Done" }]));
+    });
+    const extensionMessage = {
+      customType: "extension.context",
+      content: "Hook context",
+      display: false,
+    };
+    const loader = createResourceLoader(
+      new Map([["before_agent_start", [async () => ({ message: extensionMessage })]]]),
+    );
+    const { session, sessionManager } = await createTestSession({ resourceLoader: loader });
+    installAttemptPermissionPrompt({
+      activeSession: session,
+      attempt: {},
+      runAbortSignal: new AbortController().signal,
+      setActiveSessionSystemPrompt: (systemPrompt) => {
+        session.setBaseSystemPrompt(systemPrompt);
+        return systemPrompt;
+      },
+      prepareSystemPromptUpdate: (systemPrompt) => ({ systemPrompt }),
+    });
+    let queuedExtension = false;
+    session.agent.subscribe(async (event) => {
+      if (event.type === "turn_end" && !queuedExtension) {
+        queuedExtension = true;
+        await session.sendCustomMessage(
+          { ...extensionMessage, content: "Later extension context" },
+          { deliverAs: "steer" },
+        );
+      }
+    });
+    const convertToLlm = session.agent.convertToLlm.bind(session.agent);
+    session.agent.convertToLlm = (messages) =>
+      convertToLlm(normalizeMessagesForLlmBoundary(messages, { inHistorySystemUpdates: true }));
+    session[agentSessionQueuePromptContext](
+      buildSystemUpdateMessage("Rules changed", "prompt-update", false),
+    );
+    await session.sendCustomMessage(
+      { ...extensionMessage, content: "Queued context" },
+      { deliverAs: "nextTurn" },
+    );
+    session[agentSessionQueuePromptContext](
+      buildSystemUpdateMessage("Current facts", "runtime-context", true),
+    );
+
+    await session.prompt("Question");
+
+    expect(requests[0]?.messages).toMatchObject([
+      { role: "user", content: "Question" },
+      { role: "user", content: [{ type: "text", text: "Queued context" }] },
+      { role: "user", content: [{ type: "text", text: "Hook context" }] },
+      { role: "user", content: "Rules changed", operatorMessage: { turnScoped: false } },
+      { role: "user", content: "Current facts", operatorMessage: { turnScoped: true } },
+    ]);
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.messages.slice(0, requests[0]!.messages.length)).toEqual(
+      requests[0]?.messages,
+    );
+    expect(requests[1]?.messages.slice(-2)).toMatchObject([
+      { role: "user", content: [{ type: "text", text: "Later extension context" }] },
+      { role: "user", content: "Current facts", operatorMessage: { turnScoped: true } },
+    ]);
+    expect(sessionManager.buildSessionContext().messages.slice(1, 5)).toMatchObject([
+      { customType: "extension.context", content: "Queued context" },
+      { customType: "extension.context", content: "Hook context" },
+      { customType: "openclaw.system-update", content: "Rules changed" },
+      { customType: "openclaw.system-update", content: "Current facts" },
+    ]);
+  });
+
+  it.each([false, true])(
+    "renews runtime facts after tool results without crossing a new user: %s",
+    async (newUser) => {
+      const requests: Context[] = [];
+      streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+        requests.push(context);
+        return createAssistantResultStream(
+          createAssistant(
+            model,
+            requests.length === 1
+              ? [{ type: "toolCall", id: "refresh", name: "refresh", arguments: {} }]
+              : [{ type: "text", text: "Done" }],
+            requests.length === 1 ? "toolUse" : "stop",
+          ),
+        );
+      });
+      const { session } = await createTestSession({
+        customTools: [
+          {
+            name: "refresh",
+            label: "Refresh",
+            description: "Refresh current permissions",
+            parameters: Type.Object({}),
+            execute: async () => {
+              if (newUser) {
+                session.agent.steer({
+                  role: "user",
+                  content: "Start a different task.",
+                  timestamp: 2,
+                });
+              }
+              for (const content of ["First extension context", "Second extension context"]) {
+                await session.sendCustomMessage(
+                  { customType: "extension.context", content, display: false },
+                  { deliverAs: "steer" },
+                );
+              }
+              return { content: [{ type: "text", text: "Refreshed" }], details: {} };
+            },
+          },
+        ],
+      });
+      const convertToLlm = session.agent.convertToLlm.bind(session.agent);
+      session.agent.convertToLlm = (messages) =>
+        convertToLlm(normalizeMessagesForLlmBoundary(messages, { inHistorySystemUpdates: true }));
+      session.agent.steeringMode = "all";
+      session.agent.prepareNextTurn = () => {
+        if (session.messages.at(-1)?.role !== "toolResult") {
+          return undefined;
+        }
+        const cancel = session[agentSessionQueuePromptContext](
+          buildSystemUpdateMessage("Withdrawn update", "prompt-update", false),
+        );
+        session[agentSessionQueuePromptContext](
+          buildSystemUpdateMessage("Permissions changed", "prompt-update", false),
+        );
+        cancel();
+        return undefined;
+      };
+      installAttemptPermissionPrompt({
+        activeSession: session,
+        attempt: {},
+        runAbortSignal: new AbortController().signal,
+        setActiveSessionSystemPrompt: (systemPrompt) => {
+          session.setBaseSystemPrompt(systemPrompt);
+          return systemPrompt;
+        },
+        prepareSystemPromptUpdate: (systemPrompt) => ({ systemPrompt }),
+      });
+      session[agentSessionQueuePromptContext](
+        buildSystemUpdateMessage("Initial facts", "runtime-context", true),
+      );
+
+      await session.prompt("Refresh");
+
+      expect(requests).toHaveLength(2);
+      expect(requests[1]?.messages.slice(0, 2)).toEqual(requests[0]?.messages);
+      expect(requests[1]?.messages.slice(2)).toMatchObject([
+        { role: "assistant", content: [{ type: "toolCall", id: "refresh" }] },
+        {
+          role: "toolResult",
+          toolCallId: "refresh",
+          content: [{ type: "text", text: "Refreshed" }],
+        },
+        ...(newUser ? [{ role: "user", content: "Start a different task." }] : []),
+        { role: "user", content: [{ type: "text", text: "First extension context" }] },
+        { role: "user", content: [{ type: "text", text: "Second extension context" }] },
+        { role: "user", content: "Permissions changed", operatorMessage: { turnScoped: false } },
+        ...(newUser
+          ? []
+          : [{ role: "user", content: "Initial facts", operatorMessage: { turnScoped: true } }]),
+      ]);
+      expect(session.messages.at(-1)).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "Done" }],
+      });
+      expect(JSON.stringify(session.messages)).not.toContain("Withdrawn update");
+      expect(
+        session.messages.filter(
+          (message) => message.role === "custom" && message.content === "Initial facts",
+        ),
+      ).toHaveLength(newUser ? 1 : 2);
+    },
+  );
+});
 
 describe("AgentSession quoted steering context", () => {
   it.each(
