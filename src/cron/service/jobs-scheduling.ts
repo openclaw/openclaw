@@ -79,6 +79,27 @@ export function hasScheduledNextRunAtMs(value: unknown): value is number {
   return isFiniteTimestamp(value) && value > 0;
 }
 
+/** Rejects outcome-generated schedule timestamps before they can persist or arm a timer. */
+export function resolveNextRunAtMsOrDisable(params: {
+  state: CronJobPolicyContext;
+  job: CronJob;
+  candidate: unknown;
+  deferredNotifications: DeferredCronNotifications;
+}): number | undefined {
+  const nextRunAtMs = asDateTimestampMs(params.candidate);
+  if (nextRunAtMs !== undefined && nextRunAtMs > 0) {
+    return nextRunAtMs;
+  }
+  autoDisableCronJob({
+    job: params.job,
+    reason: "schedule-errors",
+    atMs: params.state.deps.nowMs(),
+    consecutiveErrors: 1,
+    deferredNotifications: params.deferredNotifications,
+  });
+  return undefined;
+}
+
 /** Resolves the newest persisted cron run status while older state is still readable. */
 export function resolveJobLastRunStatus(job: Pick<CronJob, "state">) {
   return job.state.lastRunStatus ?? job.state.lastStatus;

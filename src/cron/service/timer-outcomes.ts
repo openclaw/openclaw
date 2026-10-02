@@ -20,6 +20,7 @@ import {
   errorBackoffMs,
   isJobEnabled,
   recordScheduleComputeError,
+  resolveNextRunAtMsOrDisable,
 } from "./jobs-scheduling.js";
 import { resolveManualOneShotOccurrenceAtMs } from "./one-shot-schedule.js";
 import { recordQuietCronEvaluation } from "./run-history.js";
@@ -37,7 +38,6 @@ import {
   resolveCronNextRunWithLowerBound,
   resolveDeliveryState,
   resolveDisabledHeartbeatOneShotRetryDecision,
-  resolveNextRunAtMsOrDisable,
   resolveTransientCronRetryDecision,
   shouldRetryDisabledHeartbeatOneShot,
 } from "./timer-trigger.js";
