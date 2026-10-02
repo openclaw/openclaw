@@ -32,7 +32,6 @@ import type {
 } from "./disk-budget.types.js";
 import type { SessionGoalOperationLookupResult } from "./goals-operations.types.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
-import type { SessionTranscriptMessageEvent } from "./session-accessor.sqlite-active-events.js";
 import type {
   SessionPendingArchivesWorkerInput,
   SessionArchivePruningWorkerInput,
@@ -58,6 +57,7 @@ import type {
   SessionModelContextLimits,
 } from "./session-accessor.sqlite-model-context.js";
 import type { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
+import type { SessionTranscriptMessageEvent } from "./session-accessor.sqlite-projection-read.js";
 import type {
   SessionEntryReplacementSelection,
   SessionEntryReplacementState,

@@ -1225,7 +1225,8 @@ console.log("relocated Bash parser works without native grammar package");
       expect.arrayContaining([expect.objectContaining({ name: "openclaw:worker-deploy" })]),
     );
     expect(workerConfig?.outputOptions).toMatchObject({
-      codeSplitting: false,
+      codeSplitting: true,
+      chunkFileNames: "worker/worker-chunk-[hash].mjs",
       assetFileNames: "worker/[name][extname]",
     });
     for (const config of [receiverConfig, launcherConfig]) {

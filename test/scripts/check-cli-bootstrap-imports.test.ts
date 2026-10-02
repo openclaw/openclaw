@@ -513,6 +513,30 @@ describe("check-cli-bootstrap-imports", () => {
     ).toEqual(["Worker deploy artifact directory dist/worker is unreadable."]);
   });
 
+  it("validates every split worker chunk and rejects missing or external dependencies", () => {
+    const root = makeTempRoot();
+    for (const artifact of workerDeployArtifactNames) {
+      writeFixture(root, `dist/worker/${artifact}`, "export {};\n");
+    }
+    writeFixture(root, "dist/worker/worker.mjs", 'import "./worker-chunk-start.mjs";');
+    writeFixture(
+      root,
+      "dist/worker/worker-chunk-start.mjs",
+      'export const load = () => import("./worker-chunk-lazy.mjs");',
+    );
+    writeFixture(root, "dist/worker/worker-chunk-lazy.mjs", 'import "node:fs";');
+    expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([]);
+
+    writeFixture(root, "dist/worker/worker-chunk-lazy.mjs", 'import "unbundled";');
+    expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([
+      'Worker deploy artifact dist/worker/worker-chunk-lazy.mjs retains runtime import "unbundled" instead of bundling it.',
+    ]);
+    rmSync(join(root, "dist/worker/worker-chunk-lazy.mjs"));
+    expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([
+      'Worker deploy artifact dist/worker/worker-chunk-start.mjs retains runtime import "./worker-chunk-lazy.mjs" instead of bundling it.',
+    ]);
+  });
+
   it("rejects worker package imports and dependency manifests", () => {
     const root = makeTempRoot();
     for (const artifact of workerDeployArtifactNames) {
@@ -557,7 +581,6 @@ describe("check-cli-bootstrap-imports", () => {
     expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([
       'Worker deploy artifact dist/worker/github-exec-launcher.mjs retains runtime import "yaml" instead of bundling it.',
       'Worker deploy artifact dist/worker/service-child-group-anchor.mjs retains runtime import "signal-exit" instead of bundling it.',
-      'Worker deploy artifact dist/worker/service-child-relay.mjs retains runtime import "./service-child-group-anchor.mjs" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "../../package.json" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "./lazy.mjs" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "@openclaw/fs-safe/temp" instead of bundling it.',

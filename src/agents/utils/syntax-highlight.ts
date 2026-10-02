@@ -6,7 +6,6 @@
  */
 import { createRequire } from "node:module";
 import { decodeHtmlEntities } from "../../shared/html-entities.js";
-import { getWorkerDeployHighlightJs } from "../../worker/worker-deploy-runtime-registry.js";
 
 type HighlightJs = {
   getLanguage(name: string): unknown;
@@ -18,7 +17,6 @@ type HighlightJs = {
 };
 
 let highlightJsRuntime: HighlightJs | undefined;
-declare const WORKER_DEPLOY_BUILD: boolean;
 
 function isHighlightJs(value: unknown): value is HighlightJs {
   return (
@@ -33,29 +31,18 @@ function isHighlightJs(value: unknown): value is HighlightJs {
   );
 }
 
-function setHighlightJsRuntime(runtime: unknown): HighlightJs {
-  if (!isHighlightJs(runtime)) {
-    throw new TypeError("highlight.js did not expose the expected Node API");
-  }
-  highlightJsRuntime = runtime;
-  return runtime;
-}
-
 function loadHighlightJsRuntime(): HighlightJs {
   if (highlightJsRuntime) {
     return highlightJsRuntime;
   }
-  const injected = getWorkerDeployHighlightJs();
-  if (injected !== undefined) {
-    return setHighlightJsRuntime(injected);
-  }
-  if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
-    throw new Error("worker highlight.js runtime was not registered before use");
-  }
   // highlight.js ships `/// <reference lib="dom" />` in its d.ts, which would
   // silently re-inject DOM globals into the DOM-free core program. Load it
   // untyped and validate the narrow API we use instead of importing its types.
-  return setHighlightJsRuntime(createRequire(import.meta.url)("highlight.js"));
+  const runtime: unknown = createRequire(import.meta.url)("highlight.js");
+  if (!isHighlightJs(runtime)) {
+    throw new TypeError("highlight.js did not expose the expected Node API");
+  }
+  return (highlightJsRuntime = runtime);
 }
 
 type HighlightFormatter = (text: string) => string;

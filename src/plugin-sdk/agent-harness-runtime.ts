@@ -532,10 +532,10 @@ export {
   resolveWritableSandboxBindHostRoots,
 } from "../agents/sandbox/fs-paths.js";
 export {
-  buildBootstrapContextForFiles,
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
 } from "../agents/bootstrap-files.js";
+export { buildBootstrapContextForFiles } from "../agents/embedded-agent-helpers/bootstrap.js";
 export { prepareAgentWorkspaceContext } from "../agents/harness/workspace-context.js";
 export { buildAgentWorkspaceInstructionSnapshot } from "../agents/harness/workspace-instructions.js";
 export type { EmbeddedContextFile } from "../agents/embedded-agent-helpers/context-file.js";
