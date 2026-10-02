@@ -16,13 +16,13 @@ import { transformCliResultText } from "../cli-output-results.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { parseCliOutput } from "../cli-output.js";
 import type { FailoverError } from "../failover-error.js";
-import { resolveReplyExpectation } from "../reply-completion.js";
 import type { CliExecuteDeps } from "./execute-deps.js";
 import type { CliEventHandlers } from "./execute-events.js";
 import { createCliAbortError, executeNodeClaudeRun } from "./execute-node-claude.js";
 import { appendCliOutputTail } from "./execute-output-buffer.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
+import { attachCliReplyBackend } from "./execution-target.js";
 import {
   createCliExitFailoverError,
   createCliFailoverError,
@@ -114,6 +114,14 @@ export async function executeCliProcess(params: {
         onNativeTools: context.preparedBackend.mcpClientGrantCapture?.captureNativeTools,
         onAssistantMessage: params.diagnostics?.observeAssistantMessage,
         onUsage: params.diagnostics?.observeUsage,
+        onAttributedSubagentProgress: (parentToolUseId) => {
+          if (!params.events.isActiveForegroundAgentTool(parentToolUseId)) {
+            return;
+          }
+          // Raw stdout stays transport-only while a tool is active. Only a
+          // semantic record for this Agent call may move the recovery clock.
+          backendActivity?.observeAttributedAgentProgress(parentToolUseId);
+        },
       })
     : null;
   let stdoutTail = "";
@@ -225,6 +233,8 @@ export async function executeCliProcess(params: {
         consumeStdout,
         onOutstandingWorkChange: backendActivity?.setOutstandingWork,
         activeToolCount: params.events.activeParsedToolCount,
+        compactionActive: params.events.hasActiveCompaction,
+        onCompactionActiveChange: params.events.onCompactionActiveChange,
         getActiveLoopbackAskUserDeadline: params.toolTracking.getActiveLoopbackAskUserDeadline,
         onActiveLoopbackAskUserDeadlineChange:
           params.toolTracking.onActiveLoopbackAskUserDeadlineChange,
@@ -316,28 +326,15 @@ export async function executeCliProcess(params: {
           onStderr: consumeStderr,
         });
         managedRunPid = managedRun.pid;
-        const replyBackendHandle = runParams.replyOperation
-          ? {
-              kind: "cli" as const,
-              runId: runParams.runId,
-              toolAuthorityFingerprint: runParams.toolAuthorityFingerprint,
-              terminalReplyExpectation: resolveReplyExpectation(runParams),
-              cancel: () => {
-                processCancelled = true;
-                managedRun.cancel("manual-cancel");
-              },
-            }
-          : undefined;
-        if (replyBackendHandle) {
-          runParams.replyOperation?.attachBackend(replyBackendHandle);
-        }
+        const detachReplyBackend = attachCliReplyBackend(runParams, () => {
+          processCancelled = true;
+          managedRun.cancel("manual-cancel");
+        });
         try {
           result = await managedRun.wait();
           processCancelled ||= result.reason !== "exit";
         } finally {
-          if (replyBackendHandle) {
-            runParams.replyOperation?.detachBackend(replyBackendHandle);
-          }
+          detachReplyBackend?.();
         }
       } finally {
         runParams.abortSignal?.removeEventListener("abort", abortManagedRun);
@@ -455,6 +452,7 @@ export async function executeCliProcess(params: {
               observedActivity,
               activeToolCount: params.events.activeParsedToolCount(),
               backgroundTaskCount: 0,
+              compactionActive: params.events.hasActiveCompaction(),
             },
             hasOutputText: Boolean(stdoutDiagnostic || stderrDiagnostic),
             useResume: params.useResume,

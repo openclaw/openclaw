@@ -1,15 +1,17 @@
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   createTelegramNonIdempotentRequestWithDiag,
-  createTelegramRequestWithDiag,
-  normalizeMessageId,
   resolveAndPersistChatId,
   withTelegramApiContext,
   type TelegramApiContext,
 } from "./send-context.js";
 import type { TelegramApiCallOpts, TelegramMessageActionOpts } from "./send-message-types.js";
+import { prepareTelegramOutbound } from "./send-outbound.js";
 import { parseTelegramTarget } from "./targets.js";
+import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
+import { recordTopicCreation } from "./topic-name-cache.js";
 
 type TelegramCreateForumTopicParams = NonNullable<
   Parameters<TelegramApiContext["api"]["createForumTopic"]>[2]
@@ -48,53 +50,33 @@ export async function editForumTopicTelegram(
     throw new Error("Telegram forum topic update requires a name or iconCustomEmojiId");
   }
 
-  return withTelegramApiContext(
-    opts,
-    async (
+  return withTelegramApiContext(opts, async (context) => {
+    const { api } = context;
+    const {
+      chatId,
+      messageId: messageThreadId,
+      request,
+    } = await prepareTelegramOutbound({
+      to: chatIdInput,
       context,
-    ): Promise<{
-      ok: true;
-      chatId: string;
-      messageThreadId: number;
-      name?: string;
-      iconCustomEmojiId?: string;
-    }> => {
-      const { cfg, account, api } = context;
-      const rawTarget = String(chatIdInput);
-      const target = parseTelegramTarget(rawTarget);
-      const chatId = await resolveAndPersistChatId({
-        cfg,
-        api,
-        lookupTarget: target.chatId,
-        persistTarget: rawTarget,
-        verbose: opts.verbose,
-        gatewayClientScopes: opts.gatewayClientScopes,
-      });
-      const messageThreadId = normalizeMessageId(messageThreadIdInput);
-      const requestWithDiag = createTelegramRequestWithDiag({
-        cfg,
-        account,
-        retry: opts.retry,
-        verbose: opts.verbose,
-      });
-      const payload = {
-        ...(trimmedName ? { name: trimmedName } : {}),
-        ...(trimmedIconCustomEmojiId ? { icon_custom_emoji_id: trimmedIconCustomEmojiId } : {}),
-      };
-      await requestWithDiag(
-        () => api.editForumTopic(chatId, messageThreadId, payload),
-        "editForumTopic",
-      );
-      logVerbose(`[telegram] Edited forum topic ${messageThreadId} in chat ${chatId}`);
-      return {
-        ok: true,
-        chatId,
-        messageThreadId,
-        ...(trimmedName ? { name: trimmedName } : {}),
-        ...(trimmedIconCustomEmojiId ? { iconCustomEmojiId: trimmedIconCustomEmojiId } : {}),
-      };
-    },
-  );
+      opts,
+      messageIdInput: messageThreadIdInput,
+      request: { kind: "standard" },
+    });
+    const payload = {
+      ...(trimmedName ? { name: trimmedName } : {}),
+      ...(trimmedIconCustomEmojiId ? { icon_custom_emoji_id: trimmedIconCustomEmojiId } : {}),
+    };
+    await request(() => api.editForumTopic(chatId, messageThreadId, payload), "editForumTopic");
+    logVerbose(`[telegram] Edited forum topic ${messageThreadId} in chat ${chatId}`);
+    return {
+      ok: true as const,
+      chatId,
+      messageThreadId,
+      ...(trimmedName ? { name: trimmedName } : {}),
+      ...(trimmedIconCustomEmojiId ? { iconCustomEmojiId: trimmedIconCustomEmojiId } : {}),
+    };
+  });
 }
 
 export async function renameForumTopicTelegram(
@@ -115,10 +97,6 @@ export async function renameForumTopicTelegram(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Forum topic creation
-// ---------------------------------------------------------------------------
-
 type TelegramCreateForumTopicOpts = TelegramApiCallOpts &
   Pick<TelegramMessageActionOpts, "assertPlatformSendAuthorized"> & {
     /** Icon color for the topic (must be one of 0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F). */
@@ -133,14 +111,7 @@ type TelegramCreateForumTopicResult = {
   chatId: string;
 };
 
-/**
- * Create a forum topic in a Telegram supergroup.
- * Requires the bot to have `can_manage_topics` permission.
- *
- * @param chatId - Supergroup chat ID
- * @param name - Topic name (1-128 characters)
- * @param opts - Optional configuration
- */
+/** Requires the bot's can_manage_topics permission. */
 export async function createForumTopicTelegram(
   chatId: string,
   name: string,
@@ -158,7 +129,7 @@ export async function createForumTopicTelegram(
   return withTelegramApiContext(
     { ...opts, assertPlatformSendAuthorized },
     async (context): Promise<TelegramCreateForumTopicResult> => {
-      const { cfg, account, api } = context;
+      const { cfg, account, api, ownerAgentId } = context;
       // Accept topic-qualified targets (e.g. telegram:group:<id>:topic:<thread>)
       // but createForumTopic must always target the base supergroup chat id.
       const target = parseTelegramTarget(chatId);
@@ -173,7 +144,6 @@ export async function createForumTopicTelegram(
 
       const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
         cfg,
-        account,
         retry: opts.retry,
         verbose: opts.verbose,
       });
@@ -193,6 +163,20 @@ export async function createForumTopicTelegram(
       }, "createForumTopic");
 
       const topicId = result.message_thread_id;
+
+      await recordTopicCreation(
+        normalizedChatId,
+        topicId,
+        {
+          name: result.name ?? trimmedName,
+          creatorUserId: resolveTelegramBotUserIdFromToken(opts.token || account.token),
+          iconColor: result.icon_color ?? opts.iconColor,
+          iconCustomEmojiId: result.icon_custom_emoji_id ?? opts.iconCustomEmojiId,
+        },
+        resolveStorePath(cfg.session?.store, { agentId: ownerAgentId }),
+      ).catch((err: unknown) => {
+        logVerbose(`telegram: topic metadata persistence failed after creation: ${String(err)}`);
+      });
 
       recordChannelActivity({
         channel: "telegram",

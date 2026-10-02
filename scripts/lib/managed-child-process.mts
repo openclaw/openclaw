@@ -8,6 +8,7 @@ import type {
   StdioOptions,
 } from "node:child_process";
 import { constants as osConstants, tmpdir } from "node:os";
+import path from "node:path";
 import { Writable, type Readable } from "node:stream";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../windows-cmd-helpers.mjs";
 import type { ManagedWindowsJob } from "./managed-windows-job.mts";
@@ -52,6 +53,7 @@ type TaskkillRunner = (
     }
   | undefined;
 type ManagedChildTerminationOptions = {
+  deadlineAt?: number;
   onChildSignalError?: (error: unknown) => void;
   onProcessGroupSignalError?: (error: unknown) => void;
   platform?: NodeJS.Platform;
@@ -74,7 +76,9 @@ type ManagedCommandOptions = {
   comSpec?: string;
 };
 
-type RunManagedCommandOptions = ManagedCommandOptions & {
+export type RunManagedCommandOptions = ManagedCommandOptions & {
+  memoryLimitBytes?: number;
+  onMemoryScope?: (unit: string) => void;
   timeoutMs?: number;
   timeoutKillGraceMs?: number;
   signalKillGraceMs?: number;
@@ -165,7 +169,8 @@ export function hasUnjoinedWork(value: unknown): boolean {
     if ("processTreeState" in current && current.processTreeState !== "terminated") {
       return true;
     }
-    if (current instanceof AggregateError) {
+    // Rolldown preserves plugin failures in a plain Error.errors array.
+    if ("errors" in current && Array.isArray(current.errors)) {
       for (const error of current.errors) {
         pending.push(error);
       }
@@ -190,6 +195,7 @@ export function terminateManagedChild(
   child: ManagedProcessGroupChild & { kill(signal: NodeJS.Signals): unknown },
   signal: NodeJS.Signals = "SIGTERM",
   {
+    deadlineAt,
     onChildSignalError,
     onProcessGroupSignalError,
     platform = process.platform,
@@ -223,6 +229,9 @@ export function terminateManagedChild(
       return { processTreeState: "signaled" };
     }
   } catch (error) {
+    if (isExitedDarwinGroup(child, platform, error, deadlineAt)) {
+      return { processTreeState: "terminated" };
+    }
     processGroupIsMissing = isMissingProcessError(error);
     if (!processGroupIsMissing) {
       onProcessGroupSignalError?.(error);
@@ -368,7 +377,7 @@ export function inspectManagedProcessGroup(
   try {
     process.kill(-pid, 0);
     if (platform === "linux" && (child.exitCode != null || child.signalCode != null)) {
-      if (isLinuxZombieProcessGroup(pid, deadlineAt)) {
+      if (isZombieProcessGroup(pid, platform, deadlineAt)) {
         return "dead";
       }
       // The group may be reaped while ps runs. Recheck kernel existence without
@@ -380,13 +389,47 @@ export function inspectManagedProcessGroup(
     if (isMissingProcessError(error)) {
       return "dead";
     }
+    if (isExitedDarwinGroup(child, platform, error, deadlineAt)) {
+      return "dead";
+    }
     return errorPolicy === "alive-on-eperm" && hasProcessErrorCode(error, "EPERM")
       ? "live"
       : "indeterminate";
   }
 }
 
-function isLinuxZombieProcessGroup(pid: number, deadlineAt?: number): boolean {
+function isExitedDarwinGroup(
+  child: ManagedProcessGroupChild,
+  platform: NodeJS.Platform,
+  error: unknown,
+  deadlineAt?: number,
+): boolean {
+  if (
+    platform !== "darwin" ||
+    !hasProcessErrorCode(error, "EPERM") ||
+    !child.pid ||
+    (child.exitCode == null && child.signalCode == null)
+  ) {
+    return false;
+  }
+  // XNU killpg skips zombies and returns EPERM when none are signalable.
+  // Require a zombie-only census or kernel-confirmed disappearance during ps.
+  if (isZombieProcessGroup(child.pid, platform, deadlineAt)) {
+    return true;
+  }
+  try {
+    process.kill(-child.pid, 0);
+  } catch (probeError) {
+    return isMissingProcessError(probeError);
+  }
+  return false;
+}
+
+function isZombieProcessGroup(
+  pid: number,
+  platform: NodeJS.Platform,
+  deadlineAt?: number,
+): boolean {
   const timeout =
     deadlineAt === undefined
       ? PROCESS_GROUP_DRAIN_TIMEOUT_MS
@@ -400,13 +443,16 @@ function isLinuxZombieProcessGroup(pid: number, deadlineAt?: number): boolean {
   // which cannot write or respond to signals while awaiting their parent's reap.
   // Enumerate threads (-L): a process row reports only the group leader's state,
   // and a pthread_exit leader reads Z while sibling threads still run and write.
-  const result = spawnSync("ps", ["-s", String(pid), "-L", "-o", "pgid=,state="], {
+  const selection = platform === "darwin" ? ["-g", String(pid)] : ["-s", String(pid), "-L"];
+  const result = spawnSync("ps", [...selection, "-o", "pgid=,state="], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout,
     killSignal: "SIGKILL",
   });
-  const zombie = new RegExp(`^\\s*${pid}\\s+Z\\s*$`, "u");
+  // BSD ps appends flags (for example ZN for a niced zombie); Linux state is one letter.
+  const state = platform === "darwin" ? "Z[+<>AELNSsVWX]*" : "Z";
+  const zombie = new RegExp(`^\\s*${pid}\\s+${state}\\s*$`, "u");
   // Missing, failed or unrecognized snapshots never certify completion.
   return (
     !result.error &&
@@ -449,22 +495,108 @@ export async function waitForManagedProcessGroupExit(
 }
 
 /** Run a child command while forwarding termination signals to its process group. */
-export async function runManagedCommand({
-  stdio = "inherit",
-  platform = process.platform,
-  timeoutMs,
-  timeoutKillGraceMs,
-  signalKillGraceMs,
-  timeoutForceKillOnLeaderExit = false,
-  requireProcessTreeExit = false,
-  runTaskkill = spawnSync,
-  onReady,
-  signal,
-  abortKillGraceMs,
-  cleanupDrainTimeoutMs,
-  onSignal,
-  ...commandOptions
-}: RunManagedCommandOptions) {
+export async function runManagedCommand(options: RunManagedCommandOptions): Promise<number> {
+  const { memoryLimitBytes } = options;
+  if (memoryLimitBytes !== undefined) {
+    if (!Number.isSafeInteger(memoryLimitBytes) || memoryLimitBytes <= 0) {
+      throw new Error("Managed command memory limit must be a positive integer");
+    }
+    const platform = options.platform ?? process.platform;
+    if (platform === "linux") {
+      if (
+        Array.isArray(options.stdio) &&
+        (options.stdio.length > 3 || options.stdio.includes("ipc"))
+      ) {
+        throw new Error(
+          "Linux memory-limited commands do not support IPC or extra stdio descriptors",
+        );
+      }
+      // Preserve spawn's input snapshot while the Linux containment module loads.
+      const command = {
+        ...options,
+        args: options.args?.slice(),
+        cwd: path.resolve(options.cwd ?? process.cwd()),
+        env: { ...(options.env ?? process.env) },
+        stdio: Array.isArray(options.stdio) ? [...options.stdio] : options.stdio,
+      };
+      const { runLinuxMemoryCommand } = await import("./managed-memory.mts");
+      // The cgroup owner can prove extinction after a process-group cleanup failure.
+      // Its resource claim therefore outlives the inner runner's weaker observation.
+      const env = command.env;
+      const releaseClaim = findVitestResourceOwner(
+        env.TMPDIR || env.TMP || env.TEMP || tmpdir(),
+      )?.claim();
+      let joined = true;
+      let leafActive = false;
+      let receivedSignal: NodeJS.Signals | undefined;
+      // The leaf owns delivery and grace. Keep the outer owner alive after it
+      // exits, while the cgroup still joins detached members and releases claims.
+      const rememberSignal = (received: NodeJS.Signals) => {
+        receivedSignal ??= received;
+        if (!leafActive) {
+          command.onSignal?.(received);
+        }
+      };
+      installSignalHandlers();
+      managedChildren.add(rememberSignal);
+      try {
+        const status = await runLinuxMemoryCommand(command, async (scopedCommand) => {
+          leafActive = true;
+          try {
+            return await runManagedCommandInner(scopedCommand, false);
+          } finally {
+            leafActive = false;
+          }
+        });
+        if (receivedSignal) {
+          return signalExitCode(receivedSignal);
+        }
+        if (command.signal?.aborted) {
+          throw Object.assign(new Error("Managed command aborted"), { code: "ABORT_ERR" });
+        }
+        return status;
+      } catch (error) {
+        joined = !hasUnjoinedWork(error);
+        throw error;
+      } finally {
+        try {
+          if (joined) {
+            releaseClaim?.();
+          }
+        } finally {
+          managedChildren.delete(rememberSignal);
+          removeSignalHandlersIfIdle();
+        }
+      }
+    }
+    throw new Error(
+      "Semantic checks require verified kernel memory containment. Run this command through Crabbox or a memory-limited Linux VM; native containment is not qualified on this platform.",
+    );
+  }
+  return await runManagedCommandInner(options);
+}
+
+async function runManagedCommandInner(
+  {
+    stdio = "inherit",
+    platform = process.platform,
+    memoryLimitBytes: _memoryLimitBytes,
+    onMemoryScope: _onMemoryScope,
+    timeoutMs,
+    timeoutKillGraceMs,
+    signalKillGraceMs,
+    timeoutForceKillOnLeaderExit = false,
+    requireProcessTreeExit = false,
+    runTaskkill = spawnSync,
+    onReady,
+    signal,
+    abortKillGraceMs,
+    cleanupDrainTimeoutMs,
+    onSignal,
+    ...commandOptions
+  }: RunManagedCommandOptions,
+  claimResources = true,
+) {
   if (platform === "win32" && requireProcessTreeExit) {
     throw Object.assign(
       new Error("Strict managed process-tree verification is not supported on Windows"),
@@ -505,9 +637,11 @@ export async function runManagedCommand({
   const loading = loadManagedChildSpawner(platform);
   const spawnManagedChild = typeof loading === "function" ? loading : await loading;
   signal?.throwIfAborted();
-  let releaseClaim = findVitestResourceOwner(
-    commandEnv.TMPDIR || commandEnv.TMP || commandEnv.TEMP || tmpdir(),
-  )?.claim();
+  let releaseClaim = claimResources
+    ? findVitestResourceOwner(
+        commandEnv.TMPDIR || commandEnv.TMP || commandEnv.TEMP || tmpdir(),
+      )?.claim()
+    : undefined;
   const releaseOwnership = () => {
     releaseClaim?.();
     releaseClaim = undefined;
@@ -523,6 +657,16 @@ export async function runManagedCommand({
     throw error;
   }
   const ownsProcessTree = requireProcessTreeExit || windowsJobs.has(child);
+  // Socket.closed can precede its native close callback. Observe real pipe
+  // completion before onReady can cancel or otherwise reenter finalization.
+  const pendingOutputCloses = new Set([child.stdout, child.stderr].filter((pipe) => pipe != null));
+  const removeOutputCloseListeners = [...pendingOutputCloses].map((pipe) => {
+    const onClose = () => {
+      pendingOutputCloses.delete(pipe);
+    };
+    pipe.once("close", onClose);
+    return () => pipe.off("close", onClose);
+  });
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
   let finalization: Promise<{ type: "failed"; error: unknown } | undefined> | undefined;
   let cancellation: ManagedCommandOutcome | undefined;
@@ -543,6 +687,7 @@ export async function runManagedCommand({
       forceKillDelayMs,
       forceKillOnLeaderExit,
       drainTimeoutMs: cleanupDrainTimeoutMs,
+      areOutputPipesClosed: () => pendingOutputCloses.size === 0,
       onTerminated: releaseOwnership,
     }).then(
       () => undefined,
@@ -645,6 +790,9 @@ export async function runManagedCommand({
     }
     return typeof outcome.exit === "string" ? signalExitCode(outcome.exit) : outcome.exit;
   } finally {
+    for (const removeListener of removeOutputCloseListeners) {
+      removeListener();
+    }
     clearTimeout(timeoutTimer);
     signal?.removeEventListener("abort", abort);
     managedChildren.delete(forwardSignal);
@@ -665,6 +813,7 @@ export async function finalizeManagedChild(
     forceKillOnLeaderExit = false,
     drainTimeoutMs = PROCESS_GROUP_DRAIN_TIMEOUT_MS,
     retainOutputOnFailure = false,
+    areOutputPipesClosed,
     onTerminated = () => {},
   }: {
     platform: NodeJS.Platform;
@@ -673,6 +822,7 @@ export async function finalizeManagedChild(
     forceKillOnLeaderExit?: boolean;
     drainTimeoutMs?: number;
     retainOutputOnFailure?: boolean;
+    areOutputPipesClosed?: () => boolean;
     onTerminated?: () => void;
   },
 ) {
@@ -688,6 +838,8 @@ export async function finalizeManagedChild(
     }
   };
   const terminationOptions = {
+    // Cancellation's loop owns observation time; do not delay its force-kill boundary here.
+    deadlineAt: signal ? startedAt : startedAt + drainTimeoutMs,
     platform,
     runTaskkill,
     onChildSignalError: recordSignalError,
@@ -695,7 +847,9 @@ export async function finalizeManagedChild(
   };
   const job = windowsJobs.get(child);
   const normalJobExit = !signal && job !== undefined;
-  const outputClosed = () => [child.stdout, child.stderr].every((pipe) => !pipe || pipe.closed);
+  const outputClosed =
+    areOutputPipesClosed ??
+    (() => [child.stdout, child.stderr].every((pipe) => !pipe || pipe.closed));
   let joined = false;
   const failures: unknown[] = [];
   try {
@@ -800,7 +954,7 @@ export async function finalizeManagedChild(
       if (!forced && (now >= forceAt || (forceKillOnLeaderExit && exited))) {
         forced = true;
         if (groupState !== "dead") {
-          terminateManagedChild(child, "SIGKILL", terminationOptions);
+          terminateManagedChild(child, "SIGKILL", { ...terminationOptions, deadlineAt: deadline });
         }
       }
       if (now >= deadline) {

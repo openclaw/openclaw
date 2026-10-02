@@ -153,13 +153,7 @@ export function formatMeetingRealtimeVoiceModelLog(params: {
   return [
     `${params.logScope} realtime voice bridge starting: strategy=${formatLogValue(params.strategy)}`,
     `provider=${formatLogValue(params.provider.id)}`,
-    `model=${formatLogValue(
-      resolveProviderModelForLog({
-        provider: params.provider,
-        providerConfig: params.providerConfig,
-        fallbackModel: params.fallbackModel,
-      }),
-    )}`,
+    `model=${formatLogValue(resolveProviderModelForLog(params))}`,
     `audioFormat=${formatLogValue(params.audioFormat)}`,
   ].join(" ");
 }
@@ -174,12 +168,7 @@ export function formatMeetingAgentAudioModelLog(params: {
     `${params.logScope} agent audio bridge starting: transcriptionProvider=${formatLogValue(
       params.provider.id,
     )}`,
-    `transcriptionModel=${formatLogValue(
-      resolveProviderModelForLog({
-        provider: params.provider,
-        providerConfig: params.providerConfig,
-      }),
-    )}`,
+    `transcriptionModel=${formatLogValue(resolveProviderModelForLog(params))}`,
     "tts=telephony",
     `audioFormat=${formatLogValue(params.audioFormat)}`,
   ].join(" ");

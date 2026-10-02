@@ -1,12 +1,15 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, type TestContext } from "vitest";
+import { Agent, fetch as fetchProvider } from "undici";
+import { expect } from "vitest";
 import { WebSocketServer } from "ws";
 import { createExternalAuthRuntime } from "../../../../src/agents/auth-profiles/external-auth.js";
 import {
@@ -112,7 +115,11 @@ function assistantTexts(history: ChatHistory): string[] {
     );
 }
 
-export async function startQuotaProvider(source: BlockSource, responseText: string) {
+export async function startQuotaProvider(
+  source: BlockSource,
+  responseText: string,
+  tls?: { key: Buffer; cert: Buffer },
+) {
   let phase: Phase = "healthy";
   let nextSuccessObserver: { observe: () => void; model: string; path: string } | undefined;
   let nextUsageHold: { arrived: Deferred<HeldProviderResponse>; released: Deferred } | undefined;
@@ -298,7 +305,8 @@ export async function startQuotaProvider(source: BlockSource, responseText: stri
       { type: "response.completed", response },
     ];
   };
-  const server = createServer((request, response) => {
+  const server = tls ? createHttpsServer(tls) : createServer();
+  server.on("request", (request, response) => {
     void (async () => {
       const chunks: Buffer[] = [];
       for await (const chunk of request) {
@@ -332,7 +340,16 @@ export async function startQuotaProvider(source: BlockSource, responseText: stri
         response.writeHead(status, { "content-type": "application/json", ...headers });
         response.end(JSON.stringify(value));
       };
-      if (requestPath === "/core-wham/usage" || requestPath === "/backend-api/wham/usage") {
+      if (requestPath === "/backend-api/wham/accounts/check") {
+        json(200, {
+          accounts: [ACCOUNT_ID, "quota-alternate-account"].map((id) => ({
+            id,
+            workspace_backend_origin: "NO_CONSTRAINT",
+            account_routing_override: "NO_CONSTRAINT",
+          })),
+          default_account_id: ACCOUNT_ID,
+        });
+      } else if (requestPath === "/core-wham/usage" || requestPath === "/backend-api/wham/usage") {
         // Preserve the native block source only on the original quota failure.
         if (
           requestPath === "/core-wham/usage" &&
@@ -498,8 +515,13 @@ export async function startQuotaProvider(source: BlockSource, responseText: stri
   if (!address || typeof address === "string") {
     throw new Error("Provider did not bind loopback");
   }
+  const baseUrl = `${tls ? "https" : "http"}://127.0.0.1:${address.port}`;
+  const dispatcher = new Agent(tls ? { connect: { ca: tls.cert } } : {});
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl,
+    fetch(requestPath: string, init?: Parameters<typeof fetchProvider>[1]) {
+      return fetchProvider(`${baseUrl}${requestPath}`, { ...init, dispatcher });
+    },
     requests,
     upgrades,
     responses,
@@ -535,6 +557,7 @@ export async function startQuotaProvider(source: BlockSource, responseText: stri
       return { arrived: hold.arrived.promise, release: () => hold.released.resolve() };
     },
     async stop() {
+      await dispatcher.destroy();
       for (const socket of sockets.clients) {
         socket.terminate();
       }
@@ -550,7 +573,10 @@ export async function startQuotaProvider(source: BlockSource, responseText: stri
 }
 
 export async function createQuotaResetFixture(
-  context: TestContext,
+  context: {
+    onTestFinished: (cleanup: () => void | Promise<void>) => void;
+    onTestFailed: (report: () => void | Promise<void>) => void;
+  },
   {
     source,
     expiresDuringBlock = false,
@@ -577,7 +603,37 @@ export async function createQuotaResetFixture(
 ) {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => context.onTestFinished(cleanup));
   const root = tempDirs.make("openclaw-quota-reset-");
-  const provider = await startQuotaProvider(source, responseText);
+  // Native workspace routing requires an HTTPS backend; retain certificate verification.
+  const caPath = path.join(root, "provider-ca.pem");
+  const keyPath = path.join(root, "provider-key.pem");
+  let tls: { key: Buffer; cert: Buffer } | undefined;
+  if (runtime === "codex") {
+    execFileSync(
+      "openssl",
+      [
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        keyPath,
+        "-out",
+        caPath,
+        "-days",
+        "1",
+        "-subj",
+        "/CN=localhost",
+        "-addext",
+        "subjectAltName=DNS:localhost,IP:127.0.0.1",
+        "-addext",
+        "basicConstraints=critical,CA:FALSE",
+      ],
+      { stdio: "ignore" },
+    );
+    tls = { key: await fs.readFile(keyPath), cert: await fs.readFile(caPath) };
+  }
+  const provider = await startQuotaProvider(source, responseText, tls);
   context.onTestFinished(() => provider.stop());
   const nativeLogFile = path.join(root, "native.private.log");
   const refreshReceipt = path.join(root, "refresh-receipt.jsonl");
@@ -626,6 +682,7 @@ export async function createQuotaResetFixture(
       : [process.execPath, "--import", preload.href],
     startTimeoutMs: 120_000,
     env: {
+      ...(tls ? { NODE_EXTRA_CA_CERTS: caPath, CODEX_CA_CERTIFICATE: caPath } : {}),
       OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
       OPENCLAW_SKIP_PROVIDERS: undefined,
       OPENCLAW_AGENT_HARNESS_FALLBACK: "none",

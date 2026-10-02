@@ -96,18 +96,6 @@ public struct MLXTTSSynthesizeRequest: Codable, Equatable, Sendable {
         self.referenceText = try container.decodeIfPresent(String.self, forKey: .referenceText)
         self.stream = try container.decodeIfPresent(Bool.self, forKey: .stream) ?? false
     }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(self.id, forKey: .id)
-        try container.encode(self.text, forKey: .text)
-        try container.encode(self.modelRepo, forKey: .modelRepo)
-        try container.encodeIfPresent(self.language, forKey: .language)
-        try container.encodeIfPresent(self.voice, forKey: .voice)
-        try container.encodeIfPresent(self.referenceAudioPath, forKey: .referenceAudioPath)
-        try container.encodeIfPresent(self.referenceText, forKey: .referenceText)
-        try container.encode(self.stream, forKey: .stream)
-    }
 }
 
 public enum MLXTTSAudioFormat: String, Codable, Equatable, Sendable {

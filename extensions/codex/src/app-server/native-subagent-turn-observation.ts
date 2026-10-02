@@ -4,18 +4,14 @@ import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce
 import { projectNormalizedToolItem } from "./event-projector-events.js";
 import { readItem } from "./event-projector-values.js";
 import {
-  normalizeIdentifier,
-  readLastAgentMessage,
-  readNativeTurnEnd,
-  readTurnErrorMessage,
-} from "./native-subagent-history-recovery.js";
-import type { ChildState, NativeExecutionWait } from "./native-subagent-monitor-types.js";
-import type { CodexNativeSubagentCompletion } from "./native-subagent-notification.js";
-import {
   codexNativeSubagentRunId,
+  normalizeIdentifier,
   readCodexNativeSubagentRunId,
-} from "./native-subagent-task-ids.js";
-import type { CodexServerNotification, JsonObject } from "./protocol.js";
+  readNativeSubagentThreadIds,
+} from "./native-subagent-assignment.js";
+import { readNativeTurnEnd } from "./native-subagent-history-recovery.js";
+import type { ChildState, NativeExecutionWait } from "./native-subagent-monitor-types.js";
+import type { CodexServerNotification } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
 type NativeSubagentTurnObservationCallbacks = {
@@ -115,6 +111,16 @@ export class CodexNativeSubagentTurnObservation {
     });
   }
 
+  private emitActivityEvent(
+    child: ChildState,
+    event: Parameters<NativeSubagentTurnObservationCallbacks["emitTaskEvent"]>[1],
+  ): void {
+    if (!child.activityObserved) {
+      this.observeActivity(child, "running");
+    }
+    this.callbacks.emitTaskEvent(child, event);
+  }
+
   emitChildTaskActivity(notification: CodexServerNotification, childState: ChildState): void {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     if (!params) {
@@ -183,10 +189,7 @@ export class CodexNativeSubagentTurnObservation {
     ) {
       const delta = readString(params, "delta");
       if (delta) {
-        if (!childState.activityObserved) {
-          observe("running");
-        }
-        this.callbacks.emitTaskEvent(childState, {
+        this.emitActivityEvent(childState, {
           stream: notification.method === "item/agentMessage/delta" ? "assistant" : "thinking",
           data: { delta },
         });
@@ -204,11 +207,7 @@ export class CodexNativeSubagentTurnObservation {
     ) {
       if (notification.method === "item/started") {
         const receivers = [
-          ...new Set(
-            item.receiverThreadIds.flatMap((id) =>
-              typeof id === "string" && id.trim() ? [id.trim()] : [],
-            ),
-          ),
+          ...new Set(readNativeSubagentThreadIds(item.receiverThreadIds).map((id) => id.trim())),
         ];
         // V2 has no target IDs; V1 exposes its selected children explicitly.
         const wait: NativeExecutionWait =
@@ -232,45 +231,14 @@ export class CodexNativeSubagentTurnObservation {
       return;
     }
     if (item?.type === "agentMessage" && notification.method === "item/completed" && item.text) {
-      if (!childState.activityObserved) {
-        observe("running");
-      }
-      this.callbacks.emitTaskEvent(childState, { stream: "assistant", data: { text: item.text } });
+      this.emitActivityEvent(childState, { stream: "assistant", data: { text: item.text } });
     }
     const projection = projectNormalizedToolItem({
       phase: notification.method === "item/started" ? "start" : "result",
       item,
     });
     if (projection?.event) {
-      if (!childState.activityObserved) {
-        observe("running");
-      }
-      this.callbacks.emitTaskEvent(childState, projection.event);
+      this.emitActivityEvent(childState, projection.event);
     }
-  }
-
-  toChildTurnCompletion(
-    childState: ChildState,
-    turn: JsonObject,
-  ): CodexNativeSubagentCompletion | undefined {
-    const status = normalizeIdentifier(readString(turn, "status"));
-    if (status === "completed") {
-      const result = readLastAgentMessage(turn);
-      return {
-        childThreadId: childState.childThreadId,
-        status: "succeeded",
-        statusLabel: result ? "turn_completed" : "completed_without_final_message",
-        result: result ?? "Subagent completed without a final assistant message.",
-      };
-    }
-    if (status === "failed") {
-      return {
-        childThreadId: childState.childThreadId,
-        status: "failed",
-        statusLabel: "turn_failed",
-        result: readTurnErrorMessage(turn) ?? "Subagent failed.",
-      };
-    }
-    return undefined;
   }
 }

@@ -187,16 +187,18 @@ export async function handleToolExecutionEnd(
     typeof result === "object" &&
     "terminate" in result &&
     result.terminate === true;
-  ctx.state.toolMetas.push({
+  const terminalMeta: (typeof ctx.state.toolMetas)[number] = {
     toolName,
     toolCallId,
+    ...(startData?.parentToolCallId ? { parentToolCallId: startData.parentToolCallId } : {}),
     meta,
     replaySafe: callSummary.replaySafe,
     isError: observerIsError,
     ...(terminate ? { terminate: true } : {}),
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
     ...(codeModeSuspended ? { codeModeSuspended: true } : {}),
-  });
+  };
+  ctx.state.toolMetas.push(terminalMeta);
   const acceptedSessionSpawn =
     toolName === "sessions_spawn" && !isToolError
       ? normalizeAcceptedSessionSpawnResult(sanitizedResult)
@@ -389,6 +391,13 @@ export async function handleToolExecutionEnd(
       ctx.trimMessagingToolSent();
     }
   }
+  ctx.state.turnToolsOnlySourceProgress =
+    (ctx.state.turnToolsOnlySourceProgress ?? true) &&
+    sourceReplyFinal === false &&
+    isMessagingSend &&
+    !isToolError &&
+    !messageDelivery?.partialDelivery;
+  ctx.state.lastToolTurnOnlySourceProgress = ctx.state.turnToolsOnlySourceProgress;
   // Track committed reminders only when cron.add completed successfully.
   if (
     !isToolError &&
@@ -450,36 +459,30 @@ export async function handleToolExecutionEnd(
     ...(errorMessage ? { error: errorMessage } : {}),
   };
   const hideFromChannelProgress = explicitHideFromChannelProgress;
+  terminalMeta.activity = itemData;
+  const createResultData = () => ({
+    phase: "result",
+    name: toolName,
+    toolCallId,
+    ...(startData?.parentToolCallId ? { parentToolCallId: startData.parentToolCallId } : {}),
+    meta,
+    isError: isToolError,
+    commandBearing: callSummary.commandBearing,
+    ...(toolErrorSummary ? { toolErrorSummary } : {}),
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+  });
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "tool",
     data: {
-      phase: "result",
-      name: toolName,
-      toolCallId,
-      ...(startData?.parentToolCallId ? { parentToolCallId: startData.parentToolCallId } : {}),
-      meta,
-      isError: isToolError,
-      commandBearing: callSummary.commandBearing,
+      ...createResultData(),
       result: eventResult,
-      ...(toolErrorSummary ? { toolErrorSummary } : {}),
-      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
   });
   emitTrackedItemEvent(ctx, itemData);
   emitAgentEventCallbackBestEffort(ctx, {
     stream: "tool",
-    data: {
-      phase: "result",
-      name: toolName,
-      toolCallId,
-      ...(startData?.parentToolCallId ? { parentToolCallId: startData.parentToolCallId } : {}),
-      meta,
-      isError: isToolError,
-      commandBearing: callSummary.commandBearing,
-      ...(toolErrorSummary ? { toolErrorSummary } : {}),
-      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-    },
+    data: createResultData(),
   });
 
   if (isExecToolName(toolName)) {
@@ -573,7 +576,6 @@ export async function handleToolExecutionEnd(
   if (resolveFileMutationToolName(toolName) === "apply_patch") {
     const patchSummary = readApplyPatchSummary(sanitizedResult);
     const patchItemId = buildPatchItemId(toolCallId);
-    const summaryText = patchSummary ? buildPatchSummaryText(patchSummary) : undefined;
     if (patchSummary) {
       const patchData: AgentPatchSummaryEventData = {
         itemId: patchItemId,
@@ -584,7 +586,7 @@ export async function handleToolExecutionEnd(
         added: patchSummary.added,
         modified: patchSummary.modified,
         deleted: patchSummary.deleted,
-        summary: summaryText ?? buildPatchSummaryText(patchSummary),
+        summary: buildPatchSummaryText(patchSummary),
       };
       emitToolActivityEvent(ctx, {
         stream: "patch",

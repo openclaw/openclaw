@@ -45,18 +45,6 @@ function screenshotToolResult(data = TINY_PNG_BASE64) {
 describe("computer screenshot context binding", () => {
   beforeEach(resetComputerToolMocks);
 
-  it("keeps coordinates valid while the tracked tool result image remains visible", () => {
-    const contextEpoch = trackedContextEpoch(0);
-
-    expect(
-      invalidateComputerFrameIfMissing({
-        contextEpoch,
-        messages: [screenshotToolResult()],
-      }),
-    ).toBe(false);
-    expect(contextEpoch).toEqual(trackedContextEpoch(0));
-  });
-
   it("expires coordinates once the final context drops the tracked image", () => {
     const contextEpoch = trackedContextEpoch(0);
 

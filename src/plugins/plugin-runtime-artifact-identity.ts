@@ -7,14 +7,27 @@ import { hashFileDescriptorSync } from "../infra/file-descriptor.js";
 import { FsSafeError, walkDirectorySync } from "../infra/fs-safe.js";
 import type { OpenClawPackageBuild } from "./manifest.js";
 import { safeRealpathSync } from "./path-safety.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import {
+  loadPluginRegistrySnapshot,
+  type LoadPluginRegistryParams,
+} from "./plugin-registry-snapshot.js";
 import { resolvePluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
+import {
+  prefersBuiltPluginArtifacts,
+  resolvePluginRuntimeArtifactPreference,
+} from "./plugin-runtime-artifact-selection.js";
+import { isPluginSourceEntry } from "./plugin-source-file.js";
+import { getPluginRegistryForContext } from "./runtime.js";
+import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 
 const MAX_RUNTIME_ARTIFACT_DEPTH = 64;
 const MAX_RUNTIME_ARTIFACT_ENTRIES = 50_000;
 const MAX_RUNTIME_ARTIFACT_FILE_BYTES = 256 * 1024 * 1024;
 const MAX_RUNTIME_ARTIFACT_TOTAL_BYTES = 512 * 1024 * 1024;
-const EXCLUDED_RUNTIME_ARTIFACT_DIRECTORIES = new Set([".git", ".hg", ".svn", "node_modules"]);
+const isRuntimeArtifactEntry = (name: string) =>
+  isPluginSourceEntry(name) && name !== ".hg" && name !== ".svn";
 
 export type PluginRuntimeArtifactIdentitySource = Readonly<{
   pluginId: string;
@@ -22,7 +35,24 @@ export type PluginRuntimeArtifactIdentitySource = Readonly<{
   rootDir: string;
   source?: string;
   packageBuild?: OpenClawPackageBuild;
+  sourcePreferred?: true;
 }>;
+
+export function loadPluginRuntimeArtifactIdentitySources(
+  params: Pick<LoadPluginRegistryParams, "config" | "workspaceDir" | "env">,
+): PluginRuntimeArtifactIdentitySource[] {
+  const registry = loadPluginRegistrySnapshot(params);
+  const metadata = loadPluginMetadataSnapshot({ ...params, index: registry });
+  return registry.plugins.map((record) => ({
+    pluginId: record.pluginId,
+    origin: record.origin,
+    rootDir: record.rootDir,
+    source: record.source,
+    packageBuild: record.packageBuild,
+    // Source overlays and explicit bundled paths are process-local selection facts.
+    sourcePreferred: metadata.byPluginId.get(record.pluginId)?.sourcePreferred,
+  }));
+}
 
 function normalizeRelativePath(filePath: string): string {
   return filePath.split(path.sep).join("/");
@@ -33,9 +63,8 @@ function listRuntimeArtifactFiles(rootDir: string): string[] {
     maxDepth: MAX_RUNTIME_ARTIFACT_DEPTH,
     maxEntries: MAX_RUNTIME_ARTIFACT_ENTRIES,
     symlinks: "include",
-    descend: (entry) => !EXCLUDED_RUNTIME_ARTIFACT_DIRECTORIES.has(entry.name),
-    include: (entry) =>
-      entry.kind !== "directory" && !EXCLUDED_RUNTIME_ARTIFACT_DIRECTORIES.has(entry.name),
+    descend: (entry) => isRuntimeArtifactEntry(entry.name),
+    include: (entry) => entry.kind !== "directory" && isRuntimeArtifactEntry(entry.name),
   });
   if (scan.truncated) {
     throw new Error("plugin runtime artifact exceeds the bounded file scan");
@@ -112,8 +141,15 @@ export function fingerprintPluginRuntimeArtifact(
         source: record.source,
         rootDir: record.rootDir,
         origin: record.origin,
-        // Gateway and standalone agent runtimes select built artifacts.
-        preferBuiltPluginArtifacts: true,
+        // Identity must choose the same source/build policy as runtime registration.
+        preferBuiltPluginArtifacts: prefersBuiltPluginArtifacts(
+          resolvePluginRuntimeArtifactPreference(
+            getPluginRuntimeLoadContextState(getPluginRegistryForContext() ?? undefined)
+              ?.preferBuiltPluginArtifacts,
+          ),
+          record.origin,
+        ),
+        sourcePreferred: record.sourcePreferred,
         ...(record.packageBuild ? { packageManifest: { build: record.packageBuild } } : {}),
       })
     : { rootDir: record.rootDir, source: undefined };

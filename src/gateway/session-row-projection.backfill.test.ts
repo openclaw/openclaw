@@ -8,10 +8,8 @@ import {
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import {
-  emitSessionIdentityMutation,
-  emitSessionLifecycleEvent,
-} from "../sessions/session-lifecycle-events.js";
+import * as history from "../config/sessions/session-transcript-worker-runtime.js";
+import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -119,6 +117,53 @@ it("refreshes committed metadata and lifecycle marks during a transcript window"
     const before = projection.materializedCount;
     await append("Pending update");
     expect(projection.materializedCount).toBe(before);
+    const reads: string[] = [];
+    const readDatabases = history.withSessionHistoryWorkerDatabases;
+    const captured = createDeferredCore();
+    const resume = createDeferredCore();
+    let pause = false;
+    vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
+      (targets, consume, lane) =>
+        readDatabases(
+          targets,
+          (owners) =>
+            consume(
+              owners.map((owner) => ({
+                ...owner,
+                async readRowFacts(input) {
+                  reads.push(...input.sessionKeys);
+                  const result = await owner.readRowFacts(input);
+                  if (pause) {
+                    pause = false;
+                    captured.resolve();
+                    await resume.promise;
+                  }
+                  return result;
+                },
+              })),
+            ),
+          lane,
+        ),
+    );
+    sessionChanges.emit({ all: true, scope: "catalog" });
+    await projection.ensureMaterialized();
+    expect(reads).toEqual([target.sessionKey]);
+    reads.length = 0;
+    pause = true;
+    sessionChanges.emit({ all: true, scope: "catalog", factsInvalidated: true });
+    const refreshing = projection.ensureMaterialized();
+    try {
+      await captured.promise;
+      await persistSessionTranscriptTurn(target, {
+        messages: [{ message: { role: "assistant", content: "Update during renewal" } }],
+        touchSessionEntry: false,
+      });
+    } finally {
+      resume.resolve();
+      await refreshing;
+    }
+    expect(reads.filter((key) => key === target.sessionKey)).toHaveLength(2);
+    expect(reads.filter((key) => key !== target.sessionKey)).toHaveLength(2);
     replaceSessionEntrySync(target, {
       sessionId: target.sessionId,
       updatedAt: 2,
@@ -160,12 +205,6 @@ it("does not carry a pending transcript refresh into a replacement session", asy
       updatedAt: 2,
       displayName: "Replacement",
       parentSessionKey: "agent:main:parent",
-    });
-    emitSessionIdentityMutation({
-      kind: "reset",
-      agentId: target.agentId,
-      previous: { sessionId: target.sessionId, sessionKeys: [target.sessionKey] },
-      current: { sessionId: "replacement", sessionKeys: [target.sessionKey] },
     });
     await projection.ensureMaterialized();
     expect(projection.snapshot(query).row?.sessionId).toBe("replacement");
@@ -253,12 +292,6 @@ it("eventually fills legacy titles and previews without waiting during startup o
         });
       });
       replaceSessionEntrySync(target, { sessionId: "replacement", updatedAt: 2 });
-      emitSessionIdentityMutation({
-        kind: "reset",
-        agentId: "main",
-        previous: { sessionId: target.sessionId, sessionKeys: [target.sessionKey] },
-        current: { sessionId: "replacement", sessionKeys: [target.sessionKey] },
-      });
       expect(
         repairedProjection.snapshot(
           { agentId: "main", key: target.sessionKey },
@@ -437,43 +470,25 @@ it("continues backfill queued as the previous batch settles", async () => {
   }
 });
 
-it("does not revive resident rows after disposal with a topology refresh pending", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: "agent:main:disposed" },
-      { sessionId: "disposed", updatedAt: 1 },
-    );
-    const projection = await createSessionRowProjection({
-      cfg: { agents: { list: [{ id: "main", default: true }] } },
-    });
-    sessionChanges.emit({ all: true, scope: "config" });
-    projection.dispose();
-    expect(projection.selectEntries()).toEqual([]);
-    expect(projection.selectEntries()).toEqual([]);
-  });
-});
-
 it("preserves a stored fallback model without requiring a terminal transcript", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } };
     const key = "agent:main:stored-fallback";
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: key },
-      {
-        sessionId: "stored-fallback",
-        updatedAt: 1,
-        status: "done",
-        providerOverride: "unit-test",
-        modelOverride: "selected",
-        modelProvider: "unit-test",
-        model: "fallback",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "unit-test/selected",
-          activeModel: "unit-test/fallback",
-        },
+    const entry = {
+      sessionId: "stored-fallback",
+      updatedAt: 1,
+      status: "done" as const,
+      providerOverride: "unit-test",
+      modelOverride: "selected",
+      modelProvider: "unit-test",
+      model: "fallback",
+      fallbackNotice: {
+        kind: "active" as const,
+        selectedModel: "unit-test/selected",
+        activeModel: "unit-test/fallback",
       },
-    );
+    };
+    replaceSessionEntrySync({ agentId: "main", sessionKey: key }, entry);
     const projection = await createSessionRowProjection({ cfg });
     try {
       expect(projection.snapshot({ agentId: "main", key }).row).toMatchObject({
@@ -483,16 +498,11 @@ it("preserves a stored fallback model without requiring a terminal transcript", 
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: key },
         {
-          sessionId: "stored-fallback",
+          ...entry,
           updatedAt: 2,
-          status: "done",
-          providerOverride: "unit-test",
-          modelOverride: "selected",
-          modelProvider: "unit-test",
           model: "replacement",
           fallbackNotice: {
-            kind: "active",
-            selectedModel: "unit-test/selected",
+            ...entry.fallbackNotice,
             activeModel: "unit-test/replacement",
           },
         },

@@ -5,7 +5,6 @@ import {
   isInsideCode,
   stripReasoningTagsFromText,
 } from "openclaw/plugin-sdk/text-chunking";
-import type { TelegramReasoningStepState } from "./bot-message-dispatch.types.js";
 
 // A durable reasoning message already marked channel-side: 🧠 + italic body
 // (see markReasoningMessage). Detect it so a re-split passes it through
@@ -119,45 +118,31 @@ export function splitTelegramReasoningText(
   };
 }
 
-export function createTelegramReasoningStepState(): TelegramReasoningStepState {
+export function createTelegramReasoningStepState() {
   let reasoningStatus: "none" | "hinted" | "delivered" = "none";
   let bufferedFinalAnswer: ReplyPayload | undefined;
 
-  const noteReasoningHint = () => {
-    if (reasoningStatus === "none") {
-      reasoningStatus = "hinted";
-    }
-  };
-
-  const noteReasoningDelivered = () => {
-    reasoningStatus = "delivered";
-  };
-
-  const shouldBufferFinalAnswer = () => {
-    return reasoningStatus === "hinted" && !bufferedFinalAnswer;
-  };
-
-  const bufferFinalAnswer = (value: ReplyPayload) => {
-    bufferedFinalAnswer = value;
-  };
-
-  const takeBufferedFinalAnswer = (): ReplyPayload | undefined => {
-    const value = bufferedFinalAnswer;
-    bufferedFinalAnswer = undefined;
-    return value;
-  };
-
-  const resetForNextStep = () => {
-    reasoningStatus = "none";
-    bufferedFinalAnswer = undefined;
-  };
-
   return {
-    noteReasoningHint,
-    noteReasoningDelivered,
-    shouldBufferFinalAnswer,
-    bufferFinalAnswer,
-    takeBufferedFinalAnswer,
-    resetForNextStep,
+    noteReasoningHint() {
+      if (reasoningStatus === "none") {
+        reasoningStatus = "hinted";
+      }
+    },
+    noteReasoningDelivered() {
+      reasoningStatus = "delivered";
+    },
+    shouldBufferFinalAnswer: () => reasoningStatus === "hinted" && !bufferedFinalAnswer,
+    bufferFinalAnswer(value: ReplyPayload) {
+      bufferedFinalAnswer = value;
+    },
+    takeBufferedFinalAnswer() {
+      const value = bufferedFinalAnswer;
+      bufferedFinalAnswer = undefined;
+      return value;
+    },
+    resetForNextStep() {
+      reasoningStatus = "none";
+      bufferedFinalAnswer = undefined;
+    },
   };
 }

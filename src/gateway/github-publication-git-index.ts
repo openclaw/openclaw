@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { hasErrnoCode, isErrno } from "../infra/errno.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import { GitHubPublicationWorkspaceChangedError } from "./github-publication-failure.js";
 
@@ -35,18 +36,13 @@ async function syncDirectory(directory: string): Promise<void> {
     handle = await fs.open(directory, "r");
     await handle.sync();
   } catch (error) {
-    const code =
-      typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+    const code = isErrno(error) ? error.code : undefined;
     if (process.platform !== "win32" || (code !== "EINVAL" && code !== "EPERM")) {
       throw error;
     }
   } finally {
     await handle?.close().catch(() => undefined);
   }
-}
-
-function errorCode(error: unknown): unknown {
-  return typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
 }
 
 async function sameFile(left: string, right: string): Promise<boolean> {
@@ -59,7 +55,7 @@ async function sameFile(left: string, right: string): Promise<boolean> {
       leftStat.ino === rightStat.ino
     );
   } catch (error) {
-    if (errorCode(error) === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return false;
     }
     throw error;
@@ -71,7 +67,7 @@ async function pathExists(file: string): Promise<boolean> {
     await fs.stat(file);
     return true;
   } catch (error) {
-    if (errorCode(error) === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return false;
     }
     throw error;
@@ -223,7 +219,7 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
     try {
       recoveryIndex = await fs.readFile(recoveryPath);
     } catch (error) {
-      if (errorCode(error) !== "ENOENT") {
+      if (!hasErrnoCode(error, "ENOENT")) {
         throw error;
       }
     }

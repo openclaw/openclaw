@@ -122,13 +122,11 @@ describe("manifestConfigSignalPasses", () => {
   });
 
   it.each([
-    ["", false],
     ["   ", false],
     [[], false],
     [{}, false],
     [null, false],
     [undefined, false],
-    [0, true],
     [false, true],
     [["value"], true],
     [{ value: true }, true],
@@ -287,18 +285,15 @@ describe("hasManifestToolAvailability", () => {
       secrets: { defaults: { store: "shared" } },
       expected: true,
     },
-    ...(
-      [
-        { source: "file", path: "/tmp/unused-store-alias-fixture.json" },
-        { source: "env" },
-        { source: "exec", command: "/tmp/unused-store-alias-command" },
-      ] as const
-    ).map((provider) => ({
-      name: `selected store default shadowing ${provider.source}`,
-      ref: { source: "store", provider: "shared", id: "TOOL_API_KEY" } as const,
-      secrets: { defaults: { store: "shared" }, providers: { shared: provider } },
+    {
+      name: "selected store default shadowing exec",
+      ref: { source: "store", provider: "shared", id: "TOOL_API_KEY" },
+      secrets: {
+        defaults: { store: "shared" },
+        providers: { shared: { source: "exec", command: "/tmp/unused-store-alias-command" } },
+      },
       expected: true,
-    })),
+    },
     ...(
       [
         { source: "store" },

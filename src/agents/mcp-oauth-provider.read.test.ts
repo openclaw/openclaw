@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   operatorMcpOAuthIdentity,
@@ -23,7 +24,7 @@ import { seedMcpOAuthStoreForTest, withMcpOAuthProviderForTest } from "./mcp-oau
 describe("MCP OAuth worker reads", () => {
   it("prepares provider facts and reopens persisted reads without parent SQL", async () => {
     await withOpenClawTestState({ prefix: "openclaw-mcp-oauth-worker-read-" }, async () => {
-      const { DatabaseSync, StatementSync } = requireNodeSqlite();
+      requireNodeSqlite();
       const operator = operatorMcpOAuthIdentity("worker-read", "https://mcp.example.test/rpc");
       const first = requesterMcpOAuthIdentity(operator.serverName, operator.serverUrl, {
         requesterSenderId: "first",
@@ -58,14 +59,7 @@ describe("MCP OAuth worker reads", () => {
       await closeOpenClawStateDatabaseAsync();
 
       // Capability checks and native fixture writes precede the measured read lifecycle.
-      const sql = {
-        prepare: vi.spyOn(DatabaseSync.prototype, "prepare"),
-        exec: vi.spyOn(DatabaseSync.prototype, "exec"),
-        get: vi.spyOn(StatementSync.prototype, "get"),
-        all: vi.spyOn(StatementSync.prototype, "all"),
-        run: vi.spyOn(StatementSync.prototype, "run"),
-        iterate: vi.spyOn(StatementSync.prototype, "iterate"),
-      };
+      const sql = observeMainThreadSql();
       try {
         for (let pass = 0; pass < 2; pass++) {
           await withMcpOAuthProviderForTest(
@@ -96,18 +90,12 @@ describe("MCP OAuth worker reads", () => {
           expect(await countMcpOAuthPrincipals(operator)).toBe(2);
           await closeOpenClawStateDatabaseAsync();
         }
-        expect(
-          Object.fromEntries(
-            Object.entries(sql).map(([name, spy]) => [name, spy.mock.calls.length]),
-          ),
-        ).toEqual({ prepare: 0, exec: 0, get: 0, all: 0, run: 0, iterate: 0 });
+        sql.expectIdle();
       } finally {
         try {
           await closeOpenClawStateDatabaseAsync();
         } finally {
-          for (const spy of Object.values(sql)) {
-            spy.mockRestore();
-          }
+          sql.restore();
         }
       }
     });

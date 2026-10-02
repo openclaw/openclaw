@@ -1,6 +1,8 @@
+import { StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { readTranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import {
   appendTranscriptMessage,
@@ -97,11 +99,17 @@ describe("persisted chat image artifact recovery", () => {
       const ids = Array.isArray(messages) ? messages.flatMap(imageIds) : [];
       expect(ids).toHaveLength(2);
       expect(new Set(ids).size).toBe(2);
-      for (const [index, artifactId] of ids.entries()) {
-        expect(await invoke("artifacts.download", { artifactId })).toMatchObject({
-          ok: true,
-          payload: { encoding: "base64", data: images[index] },
-        });
+      const reads = observeSqliteReadSql(StatementSync.prototype);
+      try {
+        for (const [index, artifactId] of ids.entries()) {
+          expect(await invoke("artifacts.download", { artifactId })).toMatchObject({
+            ok: true,
+            payload: { encoding: "base64", data: images[index] },
+          });
+        }
+        expect(reads.queries.filter((sql) => /\btranscript_events\b/i.test(sql))).toEqual([]);
+      } finally {
+        reads.restore();
       }
     });
   });
@@ -254,7 +262,7 @@ describe("persisted chat image artifact recovery", () => {
       expect(await invoke("artifacts.download", { artifactId }, client, context)).toMatchObject({
         ok: true,
       });
-      const read = transcriptReaders.readSessionMessagesPageWithStatsAsync;
+      const read = transcriptReaders.readSessionArtifacts;
       const lookup = transcriptImageArtifacts.findTranscriptImageArtifact;
       const revoke = async () => {
         if (revocation === "runtime policy") {
@@ -273,9 +281,9 @@ describe("persisted chat image artifact recovery", () => {
       const spy =
         phase === "read"
           ? vi
-              .spyOn(transcriptReaders, "readSessionMessagesPageWithStatsAsync")
-              .mockImplementationOnce(async (...args) => {
-                const result = await read(...args);
+              .spyOn(transcriptReaders, "readSessionArtifacts")
+              .mockImplementationOnce(async (readScope, query) => {
+                const result = await read(readScope, query);
                 await revoke();
                 return result;
               })

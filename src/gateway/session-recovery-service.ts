@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -19,6 +20,7 @@ import {
   inheritSessionCreationPolicy,
   type SessionCreatedActor,
 } from "../config/sessions/session-entry-provenance.js";
+import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -29,17 +31,21 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { normalizeSessionIdentities } from "../sessions/session-lifecycle-identity.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
-import { buildDashboardSessionKey } from "./session-create-service.js";
+import { buildDashboardSessionKey } from "./session-create-key.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { buildRestartRecoverySuccessorEntry } from "./session-recovery-entry.js";
+import { invalidSessionRequest } from "./session-request-error.js";
 import {
-  loadGatewaySessionEntryReadOnly,
-  resolveGatewaySessionStoreTarget,
-} from "./session-utils.js";
+  prepareSessionMutationFacts,
+  SessionMutationFactsUnavailableError,
+} from "./session-sharing-preparation.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 import {
   prepareSessionWorkerPlacementMutationCheck,
   prepareSessionWorkerPlacementStop,
@@ -75,10 +81,120 @@ function recoveryConflictError(reason: string): ErrorShape {
   );
 }
 
+class SessionRecoverySourceChangedError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("Session changed before recovery; refresh and retry.", options);
+    this.name = "SessionRecoverySourceChangedError";
+  }
+}
+
+/** Keep full recovery metadata tied to the existing sharing/source publication lifetime. */
+async function prepareRecoverySource(params: {
+  cfg: OpenClawConfig;
+  target: GatewaySessionStoreTarget;
+  commitGuard?: () => void;
+}) {
+  const { target } = params;
+  const facts = await prepareSessionMutationFacts({
+    cfg: params.cfg,
+    sessionKey: target.canonicalKey,
+    agentId: target.agentId,
+    allowMissing: true,
+  });
+  let generation = 0;
+  let selectedGeneration = -1;
+  let selected: InternalSessionEntry | undefined;
+  const sourcePaths = new Set([path.resolve(target.storePath)]);
+  const readFacts = () => {
+    try {
+      const current = facts.readCurrent(params.cfg);
+      if (
+        facts.storageTarget.agentId !== target.agentId ||
+        facts.storageTarget.canonicalKey !== target.canonicalKey ||
+        path.resolve(facts.storageTarget.storePath) !== path.resolve(target.storePath)
+      ) {
+        throw new SessionRecoverySourceChangedError();
+      }
+      return current;
+    } catch (error) {
+      if (error instanceof SessionMutationFactsUnavailableError) {
+        throw new SessionRecoverySourceChangedError({ cause: error });
+      }
+      throw error;
+    }
+  };
+  try {
+    const source = readFacts();
+    if (source.sourcePath) {
+      sourcePaths.add(path.resolve(source.sourcePath));
+    }
+  } catch (error) {
+    facts.release();
+    throw error;
+  }
+  const unsubscribe = sessionChanges.subscribeFacts((change) => {
+    if (
+      !("all" in change) &&
+      change.storePath &&
+      sourcePaths.has(path.resolve(change.storePath)) &&
+      target.storeKeys.includes(change.sessionKey)
+    ) {
+      generation += 1;
+    }
+  });
+  const assertCurrent = () => {
+    params.commitGuard?.();
+    readFacts();
+    if (selectedGeneration !== generation) {
+      throw new SessionRecoverySourceChangedError();
+    }
+  };
+  return {
+    current() {
+      assertCurrent();
+      return selected;
+    },
+    async refresh() {
+      params.commitGuard?.();
+      const before = generation;
+      const current = readFacts();
+      if (!current.target) {
+        selected = undefined;
+        selectedGeneration = before;
+        assertCurrent();
+        return undefined;
+      }
+      const read = await withSessionEntryReadOnlyInWorker(
+        {
+          agentId: target.agentId,
+          sessionKey: current.target.storeKey,
+          storePath: current.sourcePath ?? target.storePath,
+        },
+        () => params.commitGuard?.(),
+        async (result, owner) => {
+          owner.assertCurrent();
+          if (!result.ok) {
+            throw result.error;
+          }
+          return result.value;
+        },
+      );
+      selected = read;
+      selectedGeneration = before;
+      assertCurrent();
+      return selected;
+    },
+    [Symbol.dispose]() {
+      unsubscribe();
+      facts.release();
+    },
+  };
+}
+
 /** Reconcile dead recovery ownership before a new send can replace its delivery claim. */
 export async function reconcileOrphanedGatewaySessionRecovery(params: {
   cfg: OpenClawConfig;
-  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
+  target: GatewaySessionStoreTarget;
   entry: InternalSessionEntry;
   authorizedPluginId?: string;
   commitGuard?: () => void;
@@ -92,8 +208,7 @@ export async function reconcileOrphanedGatewaySessionRecovery(params: {
   ) {
     return undefined;
   }
-  const readSource = () =>
-    loadGatewaySessionEntryReadOnly(target.canonicalKey, { agentId: target.agentId }).entry;
+  using source = await prepareRecoverySource(params);
   return await runExclusiveSessionLifecycleMutation({
     scope: target.storePath,
     identities,
@@ -101,6 +216,7 @@ export async function reconcileOrphanedGatewaySessionRecovery(params: {
       if (isSessionWorkAdmissionActive(target.storePath, identities)) {
         return undefined;
       }
+      await source.refresh();
       const assertPlacementCurrent = prepareSessionWorkerPlacementMutationCheck({
         context: params.workerPlacementContext,
         sessionId: initialSource.sessionId,
@@ -108,7 +224,7 @@ export async function reconcileOrphanedGatewaySessionRecovery(params: {
       const assertCurrent = () => {
         params.commitGuard?.();
         assertPlacementCurrent();
-        const current = readSource();
+        const current = source.current();
         const ownershipError = resolvePluginSessionOwnershipError({
           action: "recover",
           entry: current,
@@ -138,7 +254,7 @@ export async function reconcileOrphanedGatewaySessionRecovery(params: {
         cfg: params.cfg,
         assertCommitAllowed: assertCurrent,
       });
-      return result.marked > 0 ? readSource() : undefined;
+      return result.marked > 0 ? await source.refresh() : undefined;
     },
   });
 }
@@ -162,21 +278,16 @@ export async function recoverGatewaySession(params: {
     storePath: string;
   }) => Promise<SessionRecoveryContinuationOutcome>;
 }): Promise<RecoverGatewaySessionResult> {
-  const sourceTarget = resolveGatewaySessionStoreTarget({
+  const sourceTarget = await resolveGatewaySessionStoreTargetInWorker({
     cfg: params.cfg,
     key: params.key,
     ...(params.agentId ? { agentId: params.agentId } : {}),
+    assertActive: params.commitGuard,
   });
-  const readSource = () =>
-    loadGatewaySessionEntryReadOnly(sourceTarget.canonicalKey, {
-      agentId: sourceTarget.agentId,
-    }).entry as InternalSessionEntry | undefined;
-  const initialSource = readSource();
+  using source = await prepareRecoverySource({ ...params, target: sourceTarget });
+  const initialSource = await source.refresh();
   if (!initialSource?.sessionId) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, "Session recovery source was not found."),
-    };
+    return invalidSessionRequest("Session recovery source was not found.");
   }
   if (isMainSessionRecoveryReconciliationCandidate(initialSource)) {
     const repaired = await reconcileOrphanedGatewaySessionRecovery({
@@ -185,13 +296,9 @@ export async function recoverGatewaySession(params: {
       entry: initialSource,
     });
     if (!repaired) {
-      return {
-        ok: false,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Session recovery is unavailable while the source still has active work.",
-        ),
-      };
+      return invalidSessionRequest(
+        "Session recovery is unavailable while the source still has active work.",
+      );
     }
     const continuation = await params.launchContinuation({
       agentId: sourceTarget.agentId,
@@ -212,32 +319,24 @@ export async function recoverGatewaySession(params: {
   }
   const initialEligibility = inspectMainRestartRecoveryRolloverEligibility(initialSource);
   if (!initialEligibility.eligible && initialEligibility.reason !== "already_recovered") {
-    return {
-      ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "Session recovery requires a restart-tombstoned session.",
-      ),
-    };
+    return invalidSessionRequest("Session recovery requires a restart-tombstoned session.");
   }
   const recovery = initialSource.mainRestartRecovery;
   if (!recovery?.tombstone) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, "Session is not recoverable."),
-    };
+    return invalidSessionRequest("Session is not recoverable.");
   }
   const generatedSuccessorKey = buildDashboardSessionKey(sourceTarget.agentId);
-  const successorTarget = resolveGatewaySessionStoreTarget({
+  const successorTarget = await resolveGatewaySessionStoreTargetInWorker({
     cfg: params.cfg,
     key: generatedSuccessorKey,
     agentId: sourceTarget.agentId,
+    assertActive: params.commitGuard,
   });
   const successorSessionId = randomUUID();
 
   const resolveCurrentSource = () => {
     params.commitGuard?.();
-    const currentSource = readSource();
+    const currentSource = source.current();
     const currentOwnershipError = resolvePluginSessionOwnershipError({
       action: "recover",
       entry: currentSource,
@@ -276,13 +375,9 @@ export async function recoverGatewaySession(params: {
         currentSource.sessionId,
       ])
     ) {
-      return {
-        ok: false as const,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Session recovery is unavailable while the source still has active work.",
-        ),
-      };
+      return invalidSessionRequest(
+        "Session recovery is unavailable while the source still has active work.",
+      );
     }
     return { ok: true as const, source: currentSource };
   };
@@ -310,6 +405,7 @@ export async function recoverGatewaySession(params: {
         scope: sourceTarget.storePath,
         identities: sourceIdentities,
         run: async () => {
+          await source.refresh();
           const current = resolveCurrentSource();
           if (!current.ok) {
             return current;
@@ -350,6 +446,7 @@ export async function recoverGatewaySession(params: {
             sessionId: initialSource.sessionId,
           });
         } catch (error) {
+          await source.refresh();
           const current = resolveCurrentSource();
           return current.ok ? { ok: false as const, error: stopFailure(error) } : current;
         }
@@ -364,6 +461,7 @@ export async function recoverGatewaySession(params: {
         ],
         prepare: async () => release(),
         run: async () => {
+          await source.refresh();
           const settled = resolveCurrentSource();
           if (!settled.ok) {
             return settled;
@@ -418,6 +516,11 @@ export async function recoverGatewaySession(params: {
           };
         },
       });
+    } catch (error) {
+      if (error instanceof SessionRecoverySourceChangedError) {
+        return { ok: false as const, error: recoveryConflictError("source-changed") };
+      }
+      throw error;
     } finally {
       release();
     }

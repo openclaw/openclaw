@@ -1,4 +1,3 @@
-// Slack helper module supports account configured behavior.
 import { hasConfiguredAccountValue } from "openclaw/plugin-sdk/account-resolution";
 import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";

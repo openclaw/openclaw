@@ -213,7 +213,8 @@ export async function buildLiveModelProviderConfig<T extends ModelDefinitionConf
         liveModelCatalogAuthCacheKey(params),
       ],
       ttlMs: params.ttlMs,
-      load: async () => await fetchLiveProviderModelIds(params),
+      signal: params.signal,
+      load: async (signal) => await fetchLiveProviderModelIds({ ...params, signal }),
       shouldCache: (modelIds) => modelIds.length > 0 || params.discoveryMode === "strict",
     });
     const liveModelIdSet = new Set(liveModelIds);
@@ -248,6 +249,7 @@ export function createUpstreamProviderCatalog(params: {
   timeoutMs: number;
   ttlMs: number;
   auditContext: string;
+  starterModelAuditContext: string;
   isStaticEntryActive: (entry: ReturnType<ProviderCatalogSnapshot["get"]>) => boolean;
   decorateModel?: Parameters<typeof projectUpstreamProviderCatalogSnapshot>[0]["decorateModel"];
 }) {
@@ -285,7 +287,27 @@ export function createUpstreamProviderCatalog(params: {
     getSnapshot: () => snapshot,
     buildStaticProvider,
     refreshMetadata,
+    async resolveStarterModel(
+      this: void,
+      request: Pick<UpstreamProviderCatalogRequest, "fetchGuard" | "signal"> & {
+        apiKey: string;
+        preferredModelRef: string;
+      },
+    ): Promise<string | undefined> {
+      const liveModelIds = await fetchLiveProviderModelIds({
+        providerId: params.providerId,
+        endpoint: params.modelsEndpoint,
+        discoveryApiKey: request.apiKey,
+        fetchGuard: request.fetchGuard,
+        signal: request.signal,
+        timeoutMs: params.timeoutMs,
+        auditContext: params.starterModelAuditContext,
+      });
+      const preferredModelId = request.preferredModelRef.replace(`${params.providerId}/`, "");
+      return liveModelIds.includes(preferredModelId) ? request.preferredModelRef : undefined;
+    },
     async buildLiveProvider(
+      this: void,
       request: UpstreamProviderCatalogRequest = {},
     ): Promise<ModelProviderConfig> {
       if (!request.apiKey && !request.discoveryApiKey) {
@@ -450,6 +472,7 @@ export function buildOpenAICompatibleProviderFamilyCatalog(params: {
               apiKey: auth.apiKey,
               discoveryApiKey: auth.discoveryApiKey,
               profileId: auth.profileId,
+              signal: ctx.signal,
               discoveryMode: params.discoveryMode,
             }),
           })),
@@ -496,6 +519,7 @@ export async function buildOpenAICompatibleProviderCatalog(
     discoveryApiKey: auth.discoveryApiKey,
     modelDiscovery: params.modelDiscovery,
     profileId: auth.profileId,
+    signal: params.ctx.signal,
     discoveryMode: params.discoveryMode,
   });
 }

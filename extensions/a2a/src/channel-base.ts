@@ -1,3 +1,4 @@
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 import { patchTopLevelChannelConfigSection } from "openclaw/plugin-sdk/setup";
 import {
@@ -6,7 +7,6 @@ import {
   resolveDefaultA2aChannelAccountId,
 } from "./accounts.js";
 import { a2aPluginConfigSchema } from "./config-schema.js";
-import type { ChannelPlugin } from "./runtime-api.js";
 import type { ResolvedA2aChannelAccount } from "./types.js";
 
 export const A2A_CHANNEL_ID = "a2a" as const;

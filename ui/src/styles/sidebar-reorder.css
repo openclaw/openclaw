@@ -3,7 +3,8 @@
   align-items: center;
 }
 
-.sidebar-zone-entry > :first-child {
+.sidebar-zone-entry > :first-child,
+.sidebar-zone-entry .nav-item {
   flex: 1 1 auto;
   min-width: 0;
 }

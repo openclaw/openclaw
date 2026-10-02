@@ -1,19 +1,11 @@
 import { resolveBundledChannelGatewayAuthBypassPaths } from "../channels/plugins/gateway-auth-bypass.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
-import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import type { PluginNodeCapabilitySurface } from "./plugin-node-capability.js";
 import {
   isProtectedPluginRoutePathFromContext,
   type PluginRoutePathContext,
 } from "./server/plugins-http/path-context.js";
-
-export type PluginGatewayDispatchContext = {
-  gatewayAuthSatisfied?: boolean;
-  gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
-  gatewayRequestOperatorScopes?: readonly string[];
-  gatewayRequestClientIp?: string;
-};
 
 export type ResolvePluginNodeCapabilityRoute = (
   pathContext: PluginRoutePathContext,

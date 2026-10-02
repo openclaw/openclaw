@@ -77,8 +77,6 @@ type SqliteSnapshotIdentity = { role: "global" } | { role: "agent"; agentId: str
 
 type SqliteSnapshotEntry = NormalizedArchiveEntry & SqliteSnapshotIdentity;
 
-type ExpectedSqliteRole = "agent" | "global";
-
 async function listArchiveEntries(archivePath: string) {
   const entries: ArchiveEntry[] = [];
   let invalidReason: string | undefined;
@@ -170,22 +168,17 @@ function isRegularArchiveFile(entryType: string | undefined): boolean {
   return entryType === "File" || entryType === "OldFile" || entryType === "ContiguousFile";
 }
 
-function resolveCanonicalStateAssetRoot(manifest: BackupManifest): string | undefined {
+function assertCanonicalStateAssetRoot(manifest: BackupManifest): void {
   const stateAssets = manifest.assets.filter((asset) => asset.kind === "state");
-  if (stateAssets.length === 0) {
-    return undefined;
+  const stateAsset = stateAssets[0];
+  if (!stateAsset) {
+    return;
   }
   if (stateAssets.length !== 1) {
     throw new Error(
       `Backup manifest must contain at most one state asset; found ${stateAssets.length}.`,
     );
   }
-
-  const stateAsset = stateAssets[0];
-  if (!stateAsset) {
-    return undefined;
-  }
-
   const stateAssetRoot = normalizeArchivePath(
     stateAsset.archivePath,
     "Backup manifest state asset path",
@@ -197,7 +190,6 @@ function resolveCanonicalStateAssetRoot(manifest: BackupManifest): string | unde
   if (stateAssetRoot !== expectedStateAssetRoot) {
     throw new Error("Backup manifest state asset archivePath does not match its sourcePath.");
   }
-  return stateAssetRoot;
 }
 
 type SqliteSnapshotOwner = { archivePath: string } & SqliteSnapshotIdentity;
@@ -297,7 +289,7 @@ function assertSqliteExtractionBudget(params: {
 function assertExpectedSqliteRole(
   database: DatabaseSync,
   archivePath: string,
-  expectedRole: ExpectedSqliteRole,
+  expectedRole: SqliteSnapshotIdentity["role"],
 ): void {
   const schemaMetaTable = database
     .prepare("SELECT type FROM sqlite_schema WHERE name = 'schema_meta'")
@@ -378,16 +370,26 @@ async function verifySqliteSnapshots(params: {
     archivePath: path.posix.join(stateAssetRoot, "state/openclaw.sqlite"),
     role: "global",
   };
-  const globalEntries = listSqliteSnapshotEntries(params.entries, [globalOwner]);
-  if (globalEntries.length === 0) {
+  const declaredOwners: SqliteSnapshotOwner[] = [
+    globalOwner,
+    ...(params.manifest.sqliteSnapshots ?? [])
+      .filter((snapshot) => snapshot.role === "agent")
+      .map(({ sourcePath, role, agentId }) => ({
+        role,
+        agentId,
+        archivePath: buildBackupArchivePath(params.manifest.archiveRoot, sourcePath),
+      })),
+  ];
+  const initialEntries = listSqliteSnapshotEntries(params.entries, declaredOwners);
+  if (initialEntries.length === 0) {
     return verifiedOwners;
   }
-  resolveCanonicalStateAssetRoot(params.manifest);
+  assertCanonicalStateAssetRoot(params.manifest);
   const tempRoot = os.tmpdir();
-  assertSqliteExtractionBudget({ entries: globalEntries, tempRoot });
+  assertSqliteExtractionBudget({ entries: initialEntries, tempRoot });
   const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-verify-sqlite-"));
   try {
-    const batches = [globalEntries];
+    const batches = [initialEntries];
     const extractedEntries: SqliteSnapshotEntry[] = [];
     for (const sqliteEntries of batches) {
       const extractedBytes = resolveSqliteExtractionBytes(extractedEntries);
@@ -452,9 +454,12 @@ async function verifySqliteSnapshots(params: {
               params.manifest,
               stateDir,
             );
-            const ownerByPath = new Map<string, SqliteSnapshotOwner>([
-              [resolvePortableArchivePathKey(globalOwner.archivePath), globalOwner],
-            ]);
+            const ownerByPath = new Map<string, SqliteSnapshotOwner>(
+              declaredOwners.map((owner) => [
+                resolvePortableArchivePathKey(owner.archivePath),
+                owner,
+              ]),
+            );
             for (const owner of agentOwners) {
               const ownerKey = resolvePortableArchivePathKey(owner.archivePath);
               const previous = ownerByPath.get(ownerKey);
@@ -471,7 +476,9 @@ async function verifySqliteSnapshots(params: {
               }
               ownerByPath.set(ownerKey, owner);
             }
-            const agentEntries = listSqliteSnapshotEntries(params.entries, agentOwners);
+            const agentEntries = listSqliteSnapshotEntries(params.entries, agentOwners).filter(
+              (candidate) => !extractedEntries.some((extracted) => extracted.raw === candidate.raw),
+            );
             if (agentEntries.length > 0) {
               batches.push(agentEntries);
             }

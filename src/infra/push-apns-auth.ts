@@ -1,8 +1,8 @@
 // Resolves APNs provider credentials and owns provider-token signing/cache state.
 import { createHash, createPrivateKey, sign as signJwt } from "node:crypto";
+import { readSecretFile } from "@openclaw/fs-safe/secret";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "./errors.js";
-import { readSecretFile } from "./fs-safe-advanced.js";
 
 /** Direct APNs provider authentication used to mint ES256 bearer tokens. */
 export type ApnsAuthConfig = {
@@ -17,16 +17,8 @@ const APNS_JWT_TTL_MS = 50 * 60 * 1000;
 
 let cachedJwt: { cacheKey: string; token: string; expiresAtMs: number } | null = null;
 
-function toBase64UrlBytes(value: Uint8Array): string {
-  return Buffer.from(value)
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
-}
-
 function toBase64UrlJson(value: object): string {
-  return toBase64UrlBytes(Buffer.from(JSON.stringify(value)));
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
 }
 
 function getJwtCacheKey(auth: ApnsAuthConfig): string {
@@ -50,7 +42,7 @@ export function getApnsBearerToken(auth: ApnsAuthConfig, nowMs: number = Date.no
     key: createPrivateKey(auth.privateKey),
     dsaEncoding: "ieee-p1363",
   });
-  const token = `${signingInput}.${toBase64UrlBytes(signature)}`;
+  const token = `${signingInput}.${signature.toString("base64url")}`;
   cachedJwt = {
     cacheKey,
     token,
@@ -63,17 +55,12 @@ function normalizePrivateKey(value: string): string {
   return value.trim().replace(/\\n/g, "\n");
 }
 
-function normalizeNonEmptyString(value: string | undefined): string | null {
-  const trimmed = normalizeOptionalString(value) ?? "";
-  return trimmed.length > 0 ? trimmed : null;
-}
-
 /** Resolves direct APNs provider auth from env, accepting inline or file-backed keys. */
 export async function resolveApnsAuthConfigFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ApnsAuthConfigResolution> {
-  const teamId = normalizeNonEmptyString(env.OPENCLAW_APNS_TEAM_ID);
-  const keyId = normalizeNonEmptyString(env.OPENCLAW_APNS_KEY_ID);
+  const teamId = normalizeOptionalString(env.OPENCLAW_APNS_TEAM_ID);
+  const keyId = normalizeOptionalString(env.OPENCLAW_APNS_KEY_ID);
   if (!teamId || !keyId) {
     return {
       ok: false,
@@ -82,8 +69,8 @@ export async function resolveApnsAuthConfigFromEnv(
   }
 
   const inlineKeyRaw =
-    normalizeNonEmptyString(env.OPENCLAW_APNS_PRIVATE_KEY_P8) ??
-    normalizeNonEmptyString(env.OPENCLAW_APNS_PRIVATE_KEY);
+    normalizeOptionalString(env.OPENCLAW_APNS_PRIVATE_KEY_P8) ??
+    normalizeOptionalString(env.OPENCLAW_APNS_PRIVATE_KEY);
   if (inlineKeyRaw) {
     return {
       ok: true,
@@ -95,7 +82,7 @@ export async function resolveApnsAuthConfigFromEnv(
     };
   }
 
-  const keyPath = normalizeNonEmptyString(env.OPENCLAW_APNS_PRIVATE_KEY_PATH);
+  const keyPath = normalizeOptionalString(env.OPENCLAW_APNS_PRIVATE_KEY_PATH);
   if (!keyPath) {
     return {
       ok: false,

@@ -5,6 +5,7 @@ import {
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { startCodexAttemptThread } from "./attempt-startup.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { readBoundedCodexRemoteWorkspaceFile } from "./remote-workspace-media.js";
 import {
@@ -12,7 +13,6 @@ import {
   withCodexAppServerFastModeServiceTier,
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
-import { joinPresentSections } from "./run-attempt-state.js";
 import { CodexThreadPolicyHandoffError } from "./thread-policy.js";
 
 export async function startCodexAttemptRuntime(resources: CodexAttemptResources) {
@@ -34,7 +34,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     connection,
     runtimeParams,
     preparedAuthBinding,
-    buildActiveRunAttemptParams,
     startupAuthAccountCacheKey,
     startupEnvApiKeyCacheKey,
     bundleMcpThreadConfig,
@@ -100,8 +99,9 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       agentDir,
       config: params.config,
       shellEnvironment: connection.shellEnvironment,
+      shellPathPrepend: connection.shellPathPrepend,
       disableLoginShell: connection.disableLoginShell,
-      buildAttemptParams: buildActiveRunAttemptParams,
+      buildAttemptParams: () => ({ ...runtimeParams }),
       ...(effectiveRuntimeModelId !== runtimeParams.modelId
         ? { runtimeModelId: effectiveRuntimeModelId }
         : {}),
@@ -112,17 +112,23 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       persistentWebSearchAllowed: toolState.persistentWebSearchAllowed,
       webSearchAllowed: toolState.webSearchAllowed,
       developerInstructions,
+      refreshableInstructions: context.refreshableInstructions,
       agentWorkspaceDeveloperInstructions: context.agentWorkspaceDeveloperInstructions,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
+      nativeModelAdmission: resources.nativeModelAdmission,
       nativeHookRelayRequired:
-        Boolean(resources.nativeProcessAuthority && nativeToolSurfaceEnabled) ||
-        (connection.options.nativeHookRelay?.enabled !== false &&
+        params.requireWorkspaceOnly !== true &&
+        ((nativeToolSurfaceEnabled &&
           params.pluginHarnessToolPolicyRestricted !== true &&
-          connection.nativeHookRelayEvents.includes("pre_tool_use") &&
-          (hasBeforeToolCallPolicy() ||
-            (appServer.loopDetectionPreToolUseRelay &&
-              Boolean(connection.sandboxSessionKey) &&
-              loopDetectionEnabled))),
+          (resources.nativeProcessAuthority?.requiresProcessAdmission ||
+            resources.nativeModelAdmission === "required")) ||
+          (connection.options.nativeHookRelay?.enabled !== false &&
+            params.pluginHarnessToolPolicyRestricted !== true &&
+            connection.nativeHookRelayEvents.includes("pre_tool_use") &&
+            (hasBeforeToolCallPolicy() ||
+              (appServer.loopDetectionPreToolUseRelay &&
+                Boolean(connection.sandboxSessionKey) &&
+                loopDetectionEnabled)))),
       bundleMcpThreadConfig,
       configuredMcpDynamicSurface: attemptTools.configuredMcp !== undefined,
       configuredMcpOwnershipVersion: attemptTools.configuredMcpOwnershipVersion,
@@ -154,16 +160,11 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     // preflight succeeds; startup retries may have replaced the initial client.
     await attemptTools.captureCronCreatorToolAllowlist();
     pluginAppServer = startupResult.pluginAppServer;
-    toolBridge.setRemoteWorkspaceFileReader?.(
-      ({ path, maxBytes, workspaceRoot, signal, timeoutMs }) =>
-        readBoundedCodexRemoteWorkspaceFile({
-          client: startupResult.client,
-          path,
-          maxBytes,
-          workspaceRoot,
-          signal,
-          timeoutMs,
-        }),
+    toolBridge.setRemoteWorkspaceFileReader?.((request) =>
+      readBoundedCodexRemoteWorkspaceFile({
+        ...request,
+        client: startupResult.client,
+      }),
     );
     if (
       usesSupervisionConnection &&

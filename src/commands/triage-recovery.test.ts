@@ -29,7 +29,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: mocks.spawn,
 }));
-vi.mock("./doctor-lint.js", () => ({ collectDoctorFindings: mocks.collectDoctorFindings }));
+vi.mock("./doctor-lint-runner.js", () => ({ collectDoctorFindings: mocks.collectDoctorFindings }));
 vi.mock("../logging/diagnostic-support-export.js", () => ({
   writeDiagnosticSupportExport: mocks.writeDiagnosticSupportExport,
 }));

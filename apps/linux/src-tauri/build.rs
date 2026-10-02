@@ -1,5 +1,13 @@
 fn main() {
     link_macos_swift_runtime();
+    // Cargo builds do not require Node; this is the same literal include used by
+    // scripts/lib/standalone-installers.mjs, with no candidate code execution.
+    let installer = include_str!("../../../scripts/install-cli.sh").replace(
+        r#"source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}./install-policy.sh""#,
+        include_str!("../../../scripts/install-policy.sh").trim_end(),
+    );
+    std::fs::create_dir_all("target/installers").expect("installer output directory");
+    std::fs::write("target/installers/install-cli.sh", installer).expect("standalone installer");
     const COMMANDS: &[&str] = &[
         "bootstrap",
         "build_info",

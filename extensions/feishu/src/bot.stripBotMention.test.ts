@@ -1,84 +1,101 @@
-// Feishu tests cover bot.stripBotMention plugin behavior.
 import { describe, expect, it } from "vitest";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
+import { createFeishuTestEvent } from "./bot.test-support.js";
 
-function makeEvent(
+const bot = "ou_bot";
+type Mention = NonNullable<FeishuMessageEvent["message"]["mentions"]>[number];
+const mention = (key: string, name: string, open_id: string): Mention => ({
+  key,
+  name,
+  id: { open_id },
+});
+function parse(
   text: string,
-  mentions?: Array<{ key: string; name: string; id: { open_id?: string; user_id?: string } }>,
-  chatType: "p2p" | "group" = "p2p",
-): FeishuMessageEvent {
-  return {
-    sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
-    message: {
-      message_id: "msg_1",
-      chat_id: "oc_chat1",
-      chat_type: chatType,
-      message_type: "text",
-      content: JSON.stringify({ text }),
-      mentions,
-    },
-  };
+  mentions?: Mention[],
+  chatType: "p2p" | "group" = "group",
+  botId = bot,
+) {
+  return parseFeishuMessageEvent(
+    createFeishuTestEvent({
+      messageId: "message",
+      chatType,
+      text,
+      message: { mentions },
+    }),
+    botId,
+  );
+}
+function post(content: unknown, botId = bot) {
+  return parseFeishuMessageEvent(
+    createFeishuTestEvent({
+      messageId: "post",
+      chatType: "group",
+      messageType: "post",
+      content: JSON.stringify(content),
+    }),
+    botId,
+  );
 }
 
-const BOT_OPEN_ID = "ou_bot";
-
-describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
+describe("Feishu inbound mentions", () => {
   it.each(["p2p", "group"] as const)(
-    "preserves prefix-sharing mention identities and adjacent text in %s",
+    "preserves mention identities and literal names in %s",
     (chatType) => {
       const mentions = [
-        { key: "@_user_1", name: "Bot", id: { open_id: BOT_OPEN_ID } },
-        { key: "@_user_10", name: "Alice", id: { open_id: "ou_alice" } },
-        { key: "@_user_11", name: "Bob", id: { open_id: "ou_bob" } },
+        mention("@_user_1", "Bot", bot),
+        mention("@_user_10", "Alice @_user_1", "ou_alice"),
+        mention("@_user_11", "$& <Bob>", "ou_bob"),
+        mention("@_all", "all", "all"),
       ];
-      const originalMentions = structuredClone(mentions);
-      const ctx = parseFeishuMessageEvent(
-        makeEvent("@_user_1 @_user_10 @_user_11thanks", mentions, chatType),
-        BOT_OPEN_ID,
-      );
+      const before = structuredClone(mentions);
+      const ctx = parse("@_user_1 @_user_10 @_user_11thanks @_all", mentions, chatType);
       expect(ctx.content).toBe(
-        '<at user_id="ou_alice">Alice</at> <at user_id="ou_bob">Bob</at>thanks',
+        '<at user_id="ou_alice">Alice @_user_1</at> <at user_id="ou_bob">$& &lt;Bob&gt;</at>thanks <at user_id="all">all</at>',
       );
       expect(ctx.mentionedBot).toBe(true);
-      expect(ctx.mentionTargets?.map((target) => target.openId)).toEqual(["ou_alice", "ou_bob"]);
-      expect(mentions).toEqual(originalMentions);
+      expect(ctx.mentionTargets).toEqual([
+        { openId: "ou_alice", name: "Alice @_user_1", key: "@_user_10" },
+        { openId: "ou_bob", name: "$& <Bob>", key: "@_user_11" },
+      ]);
+      expect(mentions).toEqual(before);
     },
   );
 
-  it("keeps placeholder-like display names literal", () => {
-    const ctx = parseFeishuMessageEvent(
-      makeEvent("@_user_10 @_user_1", [
-        { key: "@_user_10", name: "Alice @_user_1", id: { open_id: "ou_alice" } },
-        { key: "@_user_1", name: "Bob", id: { open_id: "ou_bob" } },
-      ]),
-    );
-    expect(ctx.content).toBe(
-      '<at user_id="ou_alice">Alice @_user_1</at> <at user_id="ou_bob">Bob</at>',
+  it("strips bot addressing without consuming slash commands (#35994)", () => {
+    expect(parse("@_bot /model", [mention("@_bot", "Alias", bot)]).content).toBe("/model");
+  });
+
+  it("treats mention keys and names as literal text", () => {
+    expect(parse("@NotBot hello", [mention(".*", ".*", bot)]).content).toBe("@NotBot hello");
+  });
+
+  it("falls back to display name when the mention has no open ID", () => {
+    expect(
+      parse("@_user hi", [{ key: "@_user", name: "Alice", id: { user_id: "uid_alice" } }], "p2p")
+        .content,
+    ).toBe("@Alice hi");
+  });
+
+  it("does not create forward targets without a known bot identity", () => {
+    const ctx = parse("@_alice hi", [mention("@_alice", "Alice", "ou_alice")], "p2p", "  ");
+    expect(ctx.mentionedBot).toBe(false);
+    expect(ctx.mentionTargets).toBeUndefined();
+  });
+
+  it("does not treat broadcast metadata as a bot mention", () => {
+    expect(parse("@_all", [mention("@_all", "all", "all")], "group", "all").mentionedBot).toBe(
+      false,
     );
   });
 
-  it("classifies Feishu bot senders without changing legacy sender defaults", () => {
-    const botEvent = makeEvent("hello");
-    botEvent.sender.sender_type = "bot";
-
-    expect(parseFeishuMessageEvent(botEvent, BOT_OPEN_ID).senderType).toBe("bot");
-    expect(parseFeishuMessageEvent(makeEvent("hello"), BOT_OPEN_ID).senderType).toBe("user");
-  });
-
-  it("returns original text when mentions are missing", () => {
-    const ctx = parseFeishuMessageEvent(makeEvent("hello world", undefined), BOT_OPEN_ID);
-    expect(ctx.content).toBe("hello world");
-  });
-
-  it("parses an empty group message body with bot-mention metadata", () => {
-    const event = makeEvent(
-      "",
-      [{ key: "@_bot_1", name: "Bot", id: { open_id: BOT_OPEN_ID } }],
-      "group",
-    );
-    event.message.content = "";
-
-    expect(parseFeishuMessageEvent(event, BOT_OPEN_ID)).toMatchObject({
+  it("parses empty text with mention metadata", () => {
+    const event = createFeishuTestEvent({
+      messageId: "empty",
+      chatType: "group",
+      content: "",
+      message: { mentions: [mention("@_bot", "Bot", bot)] },
+    });
+    expect(parseFeishuMessageEvent(event, bot)).toMatchObject({
       content: "",
       chatType: "group",
       mentionedBot: true,
@@ -86,100 +103,48 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
     });
   });
 
-  it("strips bot mention in p2p (addressing prefix, not semantic content)", () => {
-    const ctx = parseFeishuMessageEvent(
-      makeEvent("@_bot_1 hello", [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }]),
-      BOT_OPEN_ID,
+  it("preserves post code while ignoring broadcast-only addressing", () => {
+    const ctx = post(
+      {
+        content: [
+          [
+            { tag: "at", user_id: "ou_other", user_name: "Other" },
+            { tag: "at", user_id: "all", user_name: "all" },
+            { tag: "text", text: "before " },
+            { tag: "code", text: "inline()" },
+          ],
+          [{ tag: "code_block", language: "ts", text: "const x = 1;" }],
+        ],
+      },
+      "all",
     );
-    expect(ctx.content).toBe("hello");
+    expect(ctx.mentionedBot).toBe(false);
+    expect(ctx.content).toContain("before `inline()`");
+    expect(ctx.content).toContain("```ts\nconst x = 1;\n```");
   });
 
-  it("strips bot mention in group so slash commands work (#35994)", () => {
-    const ctx = parseFeishuMessageEvent(
-      makeEvent(
-        "@_bot_1 hello",
-        [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }],
-        "group",
-      ),
-      BOT_OPEN_ID,
-    );
-    expect(ctx.content).toBe("hello");
+  it("detects a post bot mention alongside broadcast addressing", () => {
+    expect(
+      post({
+        content: [
+          [
+            { tag: "at", user_id: "all", user_name: "all" },
+            { tag: "at", user_id: bot, user_name: "Bot" },
+          ],
+        ],
+      }).mentionedBot,
+    ).toBe(true);
   });
 
-  it("strips bot mention in group preserving slash command prefix (#35994)", () => {
-    const ctx = parseFeishuMessageEvent(
-      makeEvent(
-        "@_bot_1 /model",
-        [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }],
-        "group",
-      ),
-      BOT_OPEN_ID,
-    );
-    expect(ctx.content).toBe("/model");
-  });
-
-  it("strips bot mention but normalizes other mentions in p2p (mention-forward)", () => {
-    const ctx = parseFeishuMessageEvent(
-      makeEvent("@_bot_1 @_user_alice hello", [
-        { key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } },
-        { key: "@_user_alice", name: "Alice", id: { open_id: "ou_alice" } },
-      ]),
-      BOT_OPEN_ID,
-    );
-    expect(ctx.content).toBe('<at user_id="ou_alice">Alice</at> hello');
-  });
-
-  it("falls back to @name when open_id is absent", () => {
-    const ctx = parseFeishuMessageEvent(
-      makeEvent("@_user_1 hi", [{ key: "@_user_1", name: "Alice", id: { user_id: "uid_alice" } }]),
-      BOT_OPEN_ID,
-    );
-    expect(ctx.content).toBe("@Alice hi");
-  });
-
-  it("falls back to plain @name when no id is present", () => {
-    const ctx = parseFeishuMessageEvent(
-      makeEvent("@_unknown hey", [{ key: "@_unknown", name: "Nobody", id: {} }]),
-      BOT_OPEN_ID,
-    );
-    expect(ctx.content).toBe("@Nobody hey");
-  });
-
-  it("treats mention key regex metacharacters as literal text", () => {
-    const ctx = parseFeishuMessageEvent(
-      makeEvent("hello world", [{ key: ".*", name: "Bot", id: { open_id: "ou_bot" } }]),
-      BOT_OPEN_ID,
-    );
-    expect(ctx.content).toBe("hello world");
-  });
-
-  it("normalizes multiple mentions in one pass", () => {
-    const ctx = parseFeishuMessageEvent(
-      makeEvent("@_bot_1 hi @_user_2", [
-        { key: "@_bot_1", name: "Bot One", id: { open_id: "ou_bot_1" } },
-        { key: "@_user_2", name: "User Two", id: { open_id: "ou_user_2" } },
-      ]),
-      BOT_OPEN_ID,
-    );
-    expect(ctx.content).toBe(
-      '<at user_id="ou_bot_1">Bot One</at> hi <at user_id="ou_user_2">User Two</at>',
-    );
-  });
-
-  it("treats $ in display name as literal (no replacement-pattern interpolation)", () => {
-    const ctx = parseFeishuMessageEvent(
-      makeEvent("@_user_1 hi", [{ key: "@_user_1", name: "$& the user", id: { open_id: "ou_x" } }]),
-      BOT_OPEN_ID,
-    );
-    // $ is preserved literally (no $& pattern substitution); & is not escaped in tag body
-    expect(ctx.content).toBe('<at user_id="ou_x">$& the user</at> hi');
-  });
-
-  it("escapes < and > in mention name to protect tag structure", () => {
-    const ctx = parseFeishuMessageEvent(
-      makeEvent("@_user_1 test", [{ key: "@_user_1", name: "<script>", id: { open_id: "ou_x" } }]),
-      BOT_OPEN_ID,
-    );
-    expect(ctx.content).toBe('<at user_id="ou_x">&lt;script&gt;</at> test');
+  it.each([
+    [{ body: "Merged message", share_chat_id: "sc_123" }, "Merged message"],
+    [{ share_chat_id: "sc_123" }, "[Forwarded message: sc_123]"],
+  ])("parses shared conversations: %j", (content, expected) => {
+    const event = createFeishuTestEvent({
+      messageId: "share",
+      messageType: "share_chat",
+      content: JSON.stringify(content),
+    });
+    expect(parseFeishuMessageEvent(event).content).toBe(expected);
   });
 });

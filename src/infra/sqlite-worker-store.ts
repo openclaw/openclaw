@@ -4,6 +4,7 @@ import { hydrateOpenClawStateWorkerError } from "../state/openclaw-state-worker-
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import type {
   SqliteWorkerInputPreparation,
+  SqliteWorkerInputRetention,
   SqliteWorkerOpenCustody,
   SqliteWorkerStoreOptions,
 } from "./sqlite-worker-broker.types.js";
@@ -15,6 +16,7 @@ import {
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionFactory,
+  type SqliteWorkerAdmissionRequest,
 } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
@@ -55,7 +57,6 @@ export function runSqliteWorkerStoreOperation<Operations extends SqliteWorkerOpe
   stateContext?: SqliteWorkerStateContext,
   assertCurrent?: (commandType: PropertyKey) => void,
   createAdmission?: SqliteWorkerAdmissionFactory,
-  requireStateLifecycle = false,
 ): Promise<T> {
   return withCallerErrors(
     resolveSqliteWorkerBroker().runOperation(
@@ -64,7 +65,6 @@ export function runSqliteWorkerStoreOperation<Operations extends SqliteWorkerOpe
       stateContext,
       assertCurrent,
       createAdmission,
-      requireStateLifecycle,
     ),
   );
 }
@@ -80,8 +80,11 @@ function resolveSqliteWorkerBroker() {
 export type { SqliteWorkerInputPreparation } from "./sqlite-worker-broker.types.js";
 
 /** Charge captured input before actor preparation can yield, then hand it to normal dispatch. */
-export function reserveSqliteWorkerInputPreparation(bytes: number): SqliteWorkerInputPreparation {
-  return resolveSqliteWorkerBroker().reserveInputPreparation(bytes);
+export function reserveSqliteWorkerInputPreparation(
+  bytes: number,
+  retention: SqliteWorkerInputRetention = "stream",
+): SqliteWorkerInputPreparation {
+  return resolveSqliteWorkerBroker().reserveInputPreparation(bytes, retention);
 }
 
 /**
@@ -105,7 +108,7 @@ export function runSqliteWorkerStoreWrite<Operations extends SqliteWorkerOperati
 }
 
 export function createSqliteWorkerWriteAdmission(
-  assertCurrent: () => void,
+  assertCurrent: (request: SqliteWorkerAdmissionRequest) => void,
   nativeLocations: readonly string[],
 ): SqliteWorkerAdmissionFactory {
   return () => {
@@ -121,7 +124,7 @@ export function createSqliteWorkerWriteAdmission(
         ) {
           throw new Error("SQLite worker write authority requested out of order");
         }
-        assertCurrent();
+        assertCurrent(request);
         if (!grant()) {
           throw new Error("SQLite worker write authority expired");
         }
@@ -137,7 +140,9 @@ export function isSqliteWorkerStoreAvailable(store: object): boolean {
 }
 
 /** Internal identity for the existing canonical actor, never a transferable authority. */
-export function getSqliteWorkerActorIdentity(store: object): object {
+export function getSqliteWorkerActorIdentity(
+  store: object,
+): ReturnType<SqliteWorkerBroker["getActorIdentity"]> {
   return resolveSqliteWorkerBroker().getActorIdentity(store);
 }
 
@@ -185,6 +190,7 @@ export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWork
     stateContext?: SqliteWorkerStateContext;
     stateDatabasePath?: string;
     onNativeStopped?: SqliteWorkerOpenCustody["onNativeStopped"];
+    signal?: AbortSignal;
     assertCurrent(): void;
     createAdmission: SqliteWorkerAdmissionFactory;
   },
@@ -204,6 +210,7 @@ export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWork
         createAdmission: custody.createAdmission,
         stateDatabasePath: custody.stateDatabasePath,
         onNativeStopped: custody.onNativeStopped,
+        signal: custody.signal,
       },
     ),
   );

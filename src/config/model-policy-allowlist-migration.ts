@@ -4,15 +4,12 @@ import { createModelPolicyRefValidator } from "./model-policy-ref.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 export function hasModelPolicyAllowlistMigrationMarker(value: unknown): boolean {
-  if (
+  return (
     isRecord(value) &&
     isRecord(value.meta) &&
     isRecord(value.meta.migrations) &&
     value.meta.migrations.modelPolicyAllowlist === true
-  ) {
-    return true;
-  }
-  return false;
+  );
 }
 
 /** A per-agent policy replaces inherited defaults only when it owns `allow`. */

@@ -5,7 +5,7 @@ import {
   createMockDraftApi,
   type MockSentMessage,
 } from "./draft-stream.api.test-helpers.js";
-import { buildTelegramRichMarkdown } from "./rich-message.js";
+import { buildTelegramRichMarkdownPlan } from "./rich-message.js";
 
 const replyQuote = {
   text: "Original request",
@@ -30,7 +30,7 @@ describe("Telegram preview native quotes", () => {
         richMessages: rich,
         renderText: (text) =>
           rich
-            ? { text, richMessage: buildTelegramRichMarkdown(text) }
+            ? { text, richMessage: buildTelegramRichMarkdownPlan(text).richMessage }
             : { text, parseMode: "HTML" },
       });
       try {
@@ -105,7 +105,10 @@ describe("Telegram preview native quotes", () => {
         replyToMode: "all",
         replyQuote,
         richMessages: true,
-        renderText: (text) => ({ text, richMessage: buildTelegramRichMarkdown(text) }),
+        renderText: (text) => ({
+          text,
+          richMessage: buildTelegramRichMarkdownPlan(text).richMessage,
+        }),
         warn: vi.fn(),
       });
       let discarding: Promise<void> | undefined;

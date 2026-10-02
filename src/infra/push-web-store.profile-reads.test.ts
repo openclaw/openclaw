@@ -12,9 +12,8 @@ import {
   upsertWebPushSubscription,
   type WebPushMutationGuard,
 } from "./push-web-store.js";
-import { executeWebPushCommand } from "./push-web-store.worker.js";
+import { webPushOperations } from "./push-web-store.worker.js";
 import { runWithSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
-import { captureStateDatabaseCoordinatorRuntime } from "./state-database-coordinator.js";
 
 const admission = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock("./sqlite-worker-operation-admission.js", async (importOriginal) => ({
@@ -57,21 +56,20 @@ it("resolves repeated Web Push profile references once per mutation and rereads 
     runWithSqliteWorkerStateContext(
       {
         environment: { OPENCLAW_STATE_DIR: stateDir },
-        coordinatorRuntime: captureStateDatabaseCoordinatorRuntime(),
       },
       () =>
-        executeWebPushCommand(
+        webPushOperations["webPush.deleteBoundWebPushSubscription"](
           {
-            type: "webPush.deleteBoundWebPushSubscription",
-            input: {
-              endpointHash: "missing-endpoint",
-              endpoint: "https://push.example.test/subscription",
-              expectedDeviceId: "browser",
-              expectedUserProfileId: bound,
-              requestProfiles: { original, current },
-            },
+            endpointHash: "missing-endpoint",
+            endpoint: "https://push.example.test/subscription",
+            expectedDeviceId: "browser",
+            expectedUserProfileId: bound,
+            requestProfiles: { original, current },
           },
-          database,
+          {
+            open: () => database,
+            stateOptions: () => ({ path: database.path, env: { OPENCLAW_STATE_DIR: stateDir } }),
+          },
         ),
     );
   try {

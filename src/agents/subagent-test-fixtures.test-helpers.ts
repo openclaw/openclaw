@@ -2,9 +2,9 @@ import { expect, vi } from "vitest";
 import type { InternalSessionEntry } from "../config/sessions.js";
 import type { SessionOrigin } from "../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
-import { notifyListeners, registerListener } from "../shared/listeners.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { AgentInternalEvent } from "./internal-events.js";
+import { publishSubagentRunChanges } from "./subagents/registry/subagent-registry-publication.js";
 import type { RegisterSubagentRunParams } from "./subagents/registry/subagent-registry-run-launch-record.js";
 import type * as RegistryPersistence from "./subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
@@ -52,20 +52,60 @@ export function createSubagentPersistenceMock(
     typeof RegistryPersistence,
     "persistSubagentRunsToDisk" | "persistSubagentRunsToDiskOrThrow" | "restoreSubagentRunsFromDisk"
   >,
+  onPublished?: () => void,
 ) {
-  const listeners = new Set<() => void>();
+  const publish = () => {
+    publishSubagentRunChanges(undefined, undefined, "persistence");
+    onPublished?.();
+  };
   const publishAfter =
     <Args extends unknown[], Result>(operation: (...args: Args) => Result) =>
     (...args: Args): Result => {
       const result = operation(...args);
-      notifyListeners(listeners, undefined);
+      publish();
       return result;
     };
   return {
-    onSubagentRegistryPersisted: (listener: () => void) => registerListener(listeners, listener),
+    // Policy fixtures supply retained rows in memory; worker custody uses the real state owner.
+    withSubagentRunReadSnapshot: (async (runs, select, consume) => {
+      await Promise.resolve();
+      const selected = select(new Map(runs));
+      const runIds = new Set(selected.runIds);
+      const sessionKeys = new Set(selected.sessionKeys);
+      return consume(
+        selected,
+        new Map(
+          [...runs].filter(
+            ([runId, entry]) =>
+              runIds.has(runId) ||
+              sessionKeys.has(entry.requesterSessionKey.trim()) ||
+              Boolean(
+                entry.controllerSessionKey && sessionKeys.has(entry.controllerSessionKey.trim()),
+              ),
+          ),
+        ),
+      );
+    }) satisfies typeof RegistryPersistence.withSubagentRunReadSnapshot,
     persistSubagentRunsToDisk: publishAfter(methods.persistSubagentRunsToDisk),
     persistSubagentRunsToDiskOrThrow: publishAfter(methods.persistSubagentRunsToDiskOrThrow),
-    restoreSubagentRunsFromDisk: publishAfter(methods.restoreSubagentRunsFromDisk),
+    restoreSubagentRunsFromDisk: async (
+      ...args: Parameters<typeof methods.restoreSubagentRunsFromDisk>
+    ) => {
+      const result = await methods.restoreSubagentRunsFromDisk(...args);
+      publish();
+      return result;
+    },
+    persistSubagentRunsToDiskAsyncOrThrow: (async (runs, ids, options) => {
+      const snapshot = structuredClone(runs);
+      for (const runId of options.retireRunIds ?? []) {
+        snapshot.delete(runId);
+      }
+      await Promise.resolve();
+      options.assertCurrent?.();
+      methods.persistSubagentRunsToDiskOrThrow(snapshot, ids);
+      options.onCommitted?.();
+      publish();
+    }) satisfies typeof RegistryPersistence.persistSubagentRunsToDiskAsyncOrThrow,
   };
 }
 
@@ -243,7 +283,9 @@ export function mockCallArg(
 type SubagentRegistryModule =
   typeof import("./subagents/registry/subagent-registry.test-helpers.js");
 export type SubagentRegistryHarness = Omit<SubagentRegistryModule, "registerSubagentRun"> & {
-  registerSubagentRun(params: SubagentRunParamsOverrides): void;
+  registerSubagentRun(
+    params: SubagentRunParamsOverrides,
+  ): ReturnType<SubagentRegistryModule["registerSubagentRun"]>;
 };
 
 export function createSubagentRegistryHarness(
@@ -251,18 +293,6 @@ export function createSubagentRegistryHarness(
 ): SubagentRegistryHarness {
   return {
     ...registry,
-    registerSubagentRun: (params) => {
-      const registration = createSubagentRunParams(params);
-      if (registration.taskRowOwnership !== "required") {
-        return registry.registerSubagentRun({
-          ...registration,
-          taskRowOwnership: registration.taskRowOwnership,
-        });
-      }
-      if (registration.queued) {
-        throw new Error("Required queued registration belongs in awaited fixtures");
-      }
-      return registry.registerSubagentRun({ ...registration, queued: false });
-    },
+    registerSubagentRun: (params) => registry.registerSubagentRun(createSubagentRunParams(params)),
   };
 }

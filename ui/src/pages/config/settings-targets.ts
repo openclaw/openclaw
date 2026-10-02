@@ -17,6 +17,7 @@ export const COMMUNICATION_SETTINGS_TARGET_IDS = {
 
 export const PROFILE_SETTINGS_TARGET_IDS = {
   identity: "settings-profile-identity",
+  personalInstructions: "settings-profile-personal-instructions",
   githubConnections: "settings-profile-github-connections",
 } as const;
 
@@ -31,6 +32,7 @@ export type SettingsSearchTarget = {
   readonly search?: string;
   readonly aliases?: string;
   readonly requiresIdentity?: true;
+  readonly requiresMultipleProfiles?: true;
   readonly requiresNativeDeviceSettings?: true;
 };
 
@@ -89,6 +91,10 @@ export const SETTINGS_SEARCH_TARGETS = {
         snapshot.app?.showDockIcon !== undefined,
       "configPage.deviceSettings.launchAtLogin": (snapshot) =>
         snapshot.app?.launchAtLogin !== undefined,
+      "configPage.deviceSettings.keepGatewayRunning": (snapshot) =>
+        snapshot.app?.keepGatewayRunning !== undefined,
+      "configPage.deviceSettings.keepGatewayRunningHint": (snapshot) =>
+        snapshot.app?.keepGatewayRunning !== undefined,
       "configPage.deviceSettings.quickChat": (snapshot) =>
         snapshot.app?.quickChatEnabled !== undefined,
       "configPage.deviceSettings.capabilities": (snapshot) => snapshot.capabilities !== undefined,
@@ -211,6 +217,15 @@ export const SETTINGS_SEARCH_TARGETS = {
     ],
     aliases: "profile avatar image email",
     requiresIdentity: true,
+  },
+  personalInstructions: {
+    routeId: "profile",
+    labelKey: "profilePage.personalInstructions.title",
+    hash: `#${PROFILE_SETTINGS_TARGET_IDS.personalInstructions}`,
+    searchKeys: ["profilePage.personalInstructions.description"],
+    aliases: "USER.md personal instructions preferences",
+    requiresIdentity: true,
+    requiresMultipleProfiles: true,
   },
   githubConnections: {
     routeId: "profile",
@@ -344,6 +359,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     search: "?section=__appearance__",
     hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.chat}`,
     searchKeys: [
+      "configView.chatPrefs.openLinksExternally",
+      "configView.chatPrefs.openLinksExternallyHint",
       "configView.chatPrefs.messageWidth",
       "configView.chatPrefs.messageWidthHint",
       "configView.chatPrefs.showTaskProgress",

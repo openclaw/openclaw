@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CDPSession, Page } from "playwright-core";
+import type { Browser, BrowserContext, CDPSession, Page } from "playwright-core";
 import { PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS } from "./cdp-timeouts.js";
 
 type PageTargetInfo = { targetId: string; title: string };
@@ -7,6 +8,25 @@ type PageTargetInfo = { targetId: string; title: string };
 // A Page owns one bounded target-info read at a time so concurrent enumerations share its
 // temporary CDP session. Settled reads evict themselves so later calls observe fresh metadata.
 const targetInfoReads = new WeakMap<Page, Promise<PageTargetInfo | null>>();
+
+// Ephemeral engines reuse native target IDs after disconnect. Never let a ref
+// from one connection select a replacement page on the next connection.
+const connectionNamespaces = new WeakMap<BrowserContext, string>();
+
+export function markConnectionScopedBrowser(browser: Browser): void {
+  const namespace = randomUUID();
+  for (const context of browser.contexts()) {
+    connectionNamespaces.set(context, namespace);
+  }
+}
+
+export function isConnectionScopedPage(page: Page): boolean {
+  return connectionNamespaces.has(page.context());
+}
+
+export function isConnectionScopedTargetId(targetId: string | undefined): boolean {
+  return targetId?.startsWith("connection:") === true;
+}
 
 async function readPageTargetInfo(page: Page): Promise<PageTargetInfo | null> {
   let session: CDPSession | undefined;
@@ -40,7 +60,11 @@ async function readPageTargetInfo(page: Page): Promise<PageTargetInfo | null> {
       if (!targetId) {
         return null;
       }
-      return { targetId, title: targetInfo.title };
+      const namespace = connectionNamespaces.get(page.context());
+      return {
+        targetId: namespace ? `connection:${namespace}:${targetId}` : targetId,
+        title: targetInfo.title,
+      };
     } finally {
       detach();
     }

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createCronRegressionState,
@@ -11,21 +12,30 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { CronService } from "../service.js";
-import { loadCronJobsStoreWithConfigJobs, loadCronStore, saveCronStore } from "../store.js";
+import {
+  loadCronJobsStoreWithConfigJobs,
+  loadCronStore,
+  noteCronJobsStoreCommit,
+  saveCronStore,
+} from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
-  assertCronRunReceiptCurrent,
-  claimCronRunReceiptInDatabase,
+  readCronRunReceiptCurrentJob,
   CronRunReceiptRevisionError,
-  finishCronRunReceipt,
+  finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
+import { claimCronRunReceiptInDatabaseForTest } from "../store/run-receipt-store.test-support.js";
+import { mutateCronRuntimeRowsInDatabase } from "../store/runtime-rows.kernel.js";
 import type { CronStoredJob } from "../types.js";
 import { stop } from "./ops-lifecycle.js";
-import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
+import {
+  applyCronRuntimeRowsToState,
+  publishDurableNextRunChanges,
+} from "./runtime-publication.js";
 import { armTimer } from "./timer.js";
 
 const runtimeStoreFixtures = setupCronRegressionFixtures({ prefix: "cron-runtime-store-" });
@@ -45,6 +55,49 @@ function trackCronRowReads() {
 
 describe("cron runtime row publication", () => {
   afterEach(() => vi.useRealTimers());
+
+  it("publishes committed wake transitions once while tracking topology and suppressed slots", () => {
+    const now = Date.now();
+    const job = createDueIsolatedJob({ id: "published-wake", nowMs: now, nextRunAtMs: now });
+    const onEvent = vi.fn();
+    const state = createCronRegressionState({
+      storePath: "/tmp/cron-published-wake.json",
+      runIsolatedAgentJob: vi.fn(),
+      onEvent,
+    });
+    onEvent.mockImplementation(() => publishDurableNextRunChanges({ state, storeJobs: [job] }));
+    publishDurableNextRunChanges({ state, storeJobs: [job] });
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(state.durableNextRunAtMsByJobId.get(job.id)).toBe(now);
+
+    job.state.nextRunAtMs = now + 60_000;
+    publishDurableNextRunChanges({ state, storeJobs: [job], suppressScheduledJobId: job.id });
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(state.durableNextRunAtMsByJobId.get(job.id)).toBe(now + 60_000);
+
+    job.state.nextRunAtMs = now + 120_000;
+    publishDurableNextRunChanges({ state, storeJobs: [job] });
+    expect(onEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ action: "scheduled", jobId: job.id, nextRunAtMs: now + 120_000 }),
+    );
+    publishDurableNextRunChanges({ state, storeJobs: [job] });
+    expect(onEvent).toHaveBeenCalledOnce();
+
+    job.state.nextRunAtMs = undefined;
+    publishDurableNextRunChanges({ state, storeJobs: [job] });
+    expect(onEvent).toHaveBeenCalledTimes(2);
+    expect(onEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({ action: "scheduled", jobId: job.id, nextRunAtMs: undefined }),
+    );
+    expect(state.durableNextRunAtMsByJobId.has(job.id)).toBe(true);
+
+    publishDurableNextRunChanges({ state, storeJobs: [] });
+    expect(state.durableNextRunAtMsByJobId.size).toBe(0);
+    job.state.nextRunAtMs = now + 180_000;
+    publishDurableNextRunChanges({ state, storeJobs: [job] });
+    expect(state.durableNextRunAtMsByJobId.get(job.id)).toBe(now + 180_000);
+    expect(onEvent).toHaveBeenCalledTimes(2);
+  });
 
   it("materializes only selected jobs and authority while preserving ordered, exact targets", async () => {
     const { storePath } = runtimeStoreFixtures.makeStorePath();
@@ -73,6 +126,16 @@ describe("cron runtime row publication", () => {
         "UPDATE cron_job_runtime_authorities SET authority_json = '{}' WHERE store_key = ? AND job_id IN (?, ?)",
       )
       .run(storeKey, "row-1", "row-8");
+    database
+      .prepare(
+        "UPDATE cron_jobs SET agent_id = 'research', job_json = json_set(job_json, '$.authoredNote', 'preserve me') WHERE store_key = ? AND job_id IN (?, ?)",
+      )
+      .run(storeKey, "row-2", "row-9");
+    database
+      .prepare(
+        "UPDATE cron_jobs SET job_json = json_remove(job_json, '$.enabled') WHERE store_key = ? AND job_id = ?",
+      )
+      .run(storeKey, "row-9");
     const before = database
       .prepare("SELECT * FROM cron_jobs WHERE store_key = ? ORDER BY sort_order")
       .all(storeKey);
@@ -90,10 +153,6 @@ describe("cron runtime row publication", () => {
     }
     // Allow short row metadata without fetching another copy of each description.
     const textBudget = payloadBytes + 256 * materializedRows.length;
-    const state = createCronRegressionState({
-      storePath,
-      runIsolatedAgentJob: vi.fn(),
-    });
     // A large missing-ID set must not hit SQLite's bound-parameter limit or widen the read.
     const targets = [
       "row-9",
@@ -107,19 +166,28 @@ describe("cron runtime row publication", () => {
     const reads = trackCronRowReads();
     let committed: string[];
     try {
-      committed = commitCronRuntimeRows({
-        state,
-        jobIds: targets,
-        operationLabel: "cron.selected-row-proof",
-        mutate: ({ jobs: current }) => {
-          expect(current.get("row-8")?.runtimeAuthorityRecoveryRequired).toBe(true);
-          expect(current.get("row-2")?.runtimeAuthority).toEqual(jobs[2]!.runtimeAuthority);
-          for (const job of current.values()) {
-            job.state.lastError = "selected-row-marker";
-          }
-          return { value: [...current.keys()], upsertJobIds: current.keys() };
-        },
-      });
+      const result = runOpenClawStateWriteTransaction(({ db }) =>
+        mutateCronRuntimeRowsInDatabase({
+          database: db,
+          storeKey,
+          jobIds: new Set(targets),
+          mutate: ({ jobs: current }) => {
+            expect(current.get("row-8")?.runtimeAuthorityRecoveryRequired).toBe(true);
+            expect(current.get("row-2")?.runtimeAuthority).toEqual(jobs[2]!.runtimeAuthority);
+            for (const job of current.values()) {
+              job.state.lastError = "selected-row-marker";
+              if (job.id === "row-9") {
+                job.enabled = false;
+              }
+            }
+            return { value: [...current.keys()], upsertJobIds: current.keys() };
+          },
+        }),
+      );
+      committed = result.value;
+      if (result.changed) {
+        noteCronJobsStoreCommit(storeKey);
+      }
       expect(committed).toEqual(["row-2", "row-8", "row-9"]);
       // Include the malformed target and UTF-8 binding collision, but no unrelated job rows.
       expect(reads.rowCounts.jobs).toBeLessThanOrEqual(5);
@@ -137,6 +205,26 @@ describe("cron runtime row publication", () => {
       updatedAt: row.grant_definition_updated_at,
     });
     expect(after.map(grantDefinitionProjection)).toEqual(before.map(grantDefinitionProjection));
+    for (const jobId of ["row-2", "row-9"]) {
+      const beforeRow = expectDefined(
+        before.find((row) => row.job_id === jobId),
+        "before row",
+      );
+      const afterRow = expectDefined(
+        after.find((row) => row.job_id === jobId),
+        "after row",
+      );
+      expect(afterRow.agent_id).toBe("research");
+      if (typeof beforeRow.job_json !== "string" || typeof afterRow.job_json !== "string") {
+        throw new Error("Expected persisted cron definitions.");
+      }
+      expect(afterRow.job_json).toBe(
+        jobId === "row-9"
+          ? JSON.stringify({ ...JSON.parse(beforeRow.job_json), enabled: false })
+          : beforeRow.job_json,
+      );
+      expect(afterRow.enabled).toBe(jobId === "row-9" ? 0 : 1);
+    }
     expect(after.filter((row) => !committed.includes(row.job_id as string))).toEqual(
       before.filter((row) => !committed.includes(row.job_id as string)),
     );
@@ -161,12 +249,14 @@ describe("cron runtime row publication", () => {
     const emptyReads = trackCronRowReads();
     try {
       expect(
-        commitCronRuntimeRows({
-          state,
-          jobIds: [],
-          operationLabel: "cron.empty-row-proof",
-          mutate: ({ jobs: current }) => ({ value: current.size }),
-        }),
+        runOpenClawStateWriteTransaction(({ db }) =>
+          mutateCronRuntimeRowsInDatabase({
+            database: db,
+            storeKey,
+            jobIds: new Set(),
+            mutate: ({ jobs: current }) => ({ value: current.size }),
+          }),
+        ).value,
       ).toBe(0);
       expect(emptyReads.rowCounts).toEqual({ jobs: 0, authorities: 0 });
     } finally {
@@ -183,6 +273,7 @@ describe("cron runtime row publication", () => {
     await saveCronStore(storePath, { version: 1, jobs });
     const job = jobs[64]!;
     const prepared = prepareCronRunReceiptClaim({
+      observed: undefined,
       storePath,
       job,
       agentId: "main",
@@ -190,14 +281,14 @@ describe("cron runtime row publication", () => {
     });
     const reads = trackCronRowReads();
     const handle = runOpenClawStateWriteTransaction(({ db }) =>
-      claimCronRunReceiptInDatabase({
+      claimCronRunReceiptInDatabaseForTest({
         database: db,
         prepared,
         resolveAgentId: (current) => current.agentId ?? "main",
       }),
     );
     try {
-      assertCronRunReceiptCurrent({
+      readCronRunReceiptCurrentJob({
         handle,
         resolveAgentId: (current) => current.agentId ?? "main",
       });
@@ -205,18 +296,17 @@ describe("cron runtime row publication", () => {
       openOpenClawStateDatabase()
         .db.prepare("UPDATE cron_jobs SET job_json = '{}' WHERE store_key = ? AND job_id = ?")
         .run(handle.storeKey, job.id);
-      expect(() => assertCronRunReceiptCurrent({ handle, resolveAgentId: () => "main" })).toThrow(
+      expect(() => readCronRunReceiptCurrentJob({ handle, resolveAgentId: () => "main" })).toThrow(
         CronRunReceiptRevisionError,
       );
       expect(reads.rowCounts.jobs).toBeLessThanOrEqual(3);
     } finally {
       reads.restore();
-      finishCronRunReceipt({ handle, status: "superseded", finishedAtMs: now + 1 });
+      await finishCronRunReceiptAsync({ handle, status: "superseded", finishedAtMs: now + 1 });
     }
   });
 
   it("hands persisted authority to the runner and records its revocation failure", async () => {
-    resetTaskRegistryForTests();
     const store = runtimeStoreFixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
     const job: CronStoredJob = createDueIsolatedJob({
@@ -238,6 +328,7 @@ describe("cron runtime row publication", () => {
     const runIsolatedAgentJob = vi.fn().mockRejectedValue(new AgentHarnessPreflightError(error));
     const onEvent = vi.fn();
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       cronEnabled: true,
       storePath: store.storePath,
       log: noopLogger,
@@ -259,7 +350,7 @@ describe("cron runtime row publication", () => {
         expect.objectContaining({ action: "finished", jobId: job.id, status: "error", error }),
       );
       expect(
-        readCronTaskRunHistoryPage({
+        readCronRunHistoryPageForTests({
           storeKey: cronStoreKey(store.storePath),
           jobId: job.id,
           limit: 1,
@@ -275,7 +366,6 @@ describe("cron runtime row publication", () => {
       ]);
     } finally {
       cron.stop();
-      resetTaskRegistryForTests();
     }
   });
 

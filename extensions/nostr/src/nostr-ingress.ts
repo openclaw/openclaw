@@ -1,4 +1,3 @@
-// Nostr plugin module owns durable relay-event admission and replay draining.
 import type { Event } from "nostr-tools";
 import {
   createChannelIngressError,
@@ -10,9 +9,9 @@ import {
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   inspectNostrIngressEvent,
-  isNostrIngressRecord,
   migrateNostrLegacyRecentEventIds,
   NOSTR_INGRESS_PAYLOAD_VERSION,
   NostrIngressPermanentError,
@@ -57,13 +56,8 @@ function deserializeNostrIngressEvent(rawEvent: string, claimedId: string): Even
       { cause: error },
     );
   }
-  if (!isNostrIngressRecord(parsed)) {
-    throw new NostrIngressPermanentError(
-      "invalid-event",
-      `Nostr ingress row ${claimedId} has an invalid event shape.`,
-    );
-  }
   if (
+    !isRecord(parsed) ||
     typeof parsed.kind !== "number" ||
     typeof parsed.created_at !== "number" ||
     typeof parsed.content !== "string" ||
@@ -154,7 +148,7 @@ export function createNostrIngress(options: {
             : `Nostr ingress row ${claim.id} changed event identity.`,
         ),
     },
-    deliver: (event, lifecycle) => options.deliver(event, lifecycle),
+    deliver: options.deliver,
     pollIntervalMs: options.pollIntervalMs ?? NOSTR_INGRESS_POLL_INTERVAL_MS,
     retention: {
       completedMaxEntries: 100_000,

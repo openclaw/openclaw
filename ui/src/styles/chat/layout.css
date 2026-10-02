@@ -625,10 +625,6 @@ openclaw-pending-session-create {
   min-height: 0;
 }
 
-.chat-session {
-  min-width: 240px;
-}
-
 /* Virtual geometry must commit with its rows. A global reduced-motion duration
    otherwise activates the default "all" transition for offsets and height. */
 .chat-virtual-sizer,
@@ -639,6 +635,11 @@ openclaw-pending-session-create {
 .chat-virtual-sizer {
   position: relative;
   width: 100%;
+}
+
+.chat-thread-inner--virtual {
+  /* The owner sets the height; isolate intrinsic row sizing without clipping paint. */
+  contain: size layout;
 }
 
 .chat-virtual-block {
@@ -667,6 +668,18 @@ openclaw-pending-session-create {
    Native reader takeover restores ordinary overscan layout skipping. */
 .chat-thread-inner[data-measuring-rows] .chat-virtual-row {
   content-visibility: visible;
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  /* Revealed 44px footer targets can overhang the compact row by half their
+     height. Widen the paint clip rather than toggling content-visibility:
+     flipping it from :hover while a context menu opens crashes Chromium's
+     renderer (Chrome for Testing 153). */
+  .chat-virtual-row:has(.chat-group:hover),
+  .chat-virtual-row:has(.chat-group:is(:focus-within, .chat-group--meta-revealed)) {
+    overflow-clip-margin: 22px;
+    z-index: 1;
+  }
 }
 
 .chat-virtual-row--first > :first-child {
@@ -825,6 +838,8 @@ openclaw-pending-session-create {
   transition:
     transform var(--duration-slow) var(--ease-in-out),
     opacity var(--duration-slow) var(--ease-in-out),
+    background-color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
     visibility 0s linear var(--duration-slow);
 }
 
@@ -836,7 +851,16 @@ openclaw-pending-session-create {
   transition:
     transform var(--duration-normal) var(--ease-out),
     opacity var(--duration-normal) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
     visibility 0s;
+}
+
+@media (hover: hover) {
+  .chat-scroll-to-bottom:hover {
+    background: var(--panel-hover);
+    border-color: var(--border-hover);
+  }
 }
 
 @starting-style {
@@ -1209,18 +1233,14 @@ openclaw-chat-video-player {
   padding: 0;
   border: 0;
   border-radius: 999px;
-  color: var(--accent-foreground);
-  background: var(--accent);
+  color: var(--primary-foreground);
+  background: var(--primary);
   cursor: var(--cursor-action);
   transition: background-color 120ms ease;
 }
 
-:root:not([data-theme-mode="light"]) .chat-audio-player__toggle {
-  color: var(--media-bg);
-}
-
 .chat-audio-player__toggle:hover {
-  background: var(--accent-hover);
+  background: var(--primary-hover);
 }
 
 .chat-audio-player__toggle:focus-visible {
@@ -1350,7 +1370,7 @@ openclaw-chat-video-player {
 
 .chat-audio-player__volume:hover {
   color: var(--text-strong);
-  background: color-mix(in srgb, var(--media-foreground) 10%, transparent);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
 }
 
 .chat-audio-player__volume:focus-visible {
@@ -2154,7 +2174,8 @@ openclaw-chat-video-player {
   align-items: center;
   gap: 10px;
   min-width: 0;
-  padding: 4px 12px;
+  min-height: var(--chat-stack-header-height, 40px);
+  padding: 6px 12px;
   border: 1px solid var(--border);
   background: var(--panel);
   font-size: 13px;
@@ -2336,7 +2357,8 @@ button.chat-pr__diff {
   transform: rotate(180deg);
 }
 
-.chat-pr__checks-dot {
+.chat-pr__checks-dot,
+.chat-pr__checks-row-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -2399,13 +2421,6 @@ button.chat-pr__diff {
   white-space: nowrap;
 }
 
-.chat-pr__checks-row-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
-}
-
 .chat-pr__checks-row--passed .chat-pr__checks-row-dot {
   background: var(--ok);
 }
@@ -2431,6 +2446,156 @@ button.chat-pr__diff {
   font-variant-numeric: tabular-nums;
 }
 
+.chat-ci__automation {
+  padding: 8px 0;
+  border-top: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  white-space: normal;
+}
+
+.chat-ci__automation-options {
+  display: grid;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.chat-ci__automation-option {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 7px 4px;
+  border-radius: 5px;
+  cursor: var(--cursor-action);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.chat-ci__automation-options:not(:disabled) .chat-ci__automation-option:hover {
+  background: var(--bg-hover);
+}
+
+.chat-ci__automation-options:disabled .chat-ci__automation-option {
+  opacity: 0.6;
+}
+
+.chat-ci__automation-checkbox {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  cursor: var(--cursor-action);
+}
+
+.chat-ci__automation-checkbox:focus-visible,
+.chat-ci__automation-retry:focus-visible,
+.chat-ci__automation-job-status a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.chat-ci__automation-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.chat-ci__automation-status {
+  margin: 4px 4px 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.chat-ci__automation-status:empty {
+  display: none;
+}
+
+.chat-ci__automation-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 4px 0;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.chat-ci__automation-error > span {
+  flex: 1 1 180px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.chat-ci__automation-retry {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: var(--cursor-action);
+  font: inherit;
+}
+
+.chat-ci__automation-retry:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.chat-ci__automation-retry:disabled {
+  opacity: 0.5;
+}
+
+.chat-ci__automation-row {
+  min-width: 0;
+}
+
+.chat-ci__automation-job {
+  margin: 0 4px 6px 28px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.chat-ci__automation-job-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.chat-ci__automation-job-status a {
+  flex: 0 0 auto;
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.chat-ci__automation-job-status a:hover {
+  color: var(--text);
+}
+
+.chat-ci__automation-job-error {
+  margin-top: 4px;
+  color: var(--danger);
+}
+
+.chat-ci__automation-warning {
+  margin: 8px 4px 0;
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+openclaw-chat-ci-automation,
 openclaw-chat-ci-details {
   display: block;
   min-width: 0;
@@ -2678,7 +2843,24 @@ openclaw-chat-ci-details {
   line-height: 1.4;
 }
 
-.chat-pr__publication-outcome[data-state="failed"] {
+.chat-pr__publication-history {
+  padding: 2px 12px;
+  font-size: 12px;
+}
+
+.chat-pr__publication-history > summary {
+  color: var(--danger);
+  cursor: var(--cursor-action);
+}
+
+.chat-pr__publication-recovery {
+  display: grid;
+  gap: 6px;
+  padding: 6px 0;
+}
+
+.chat-pr__publication-outcome[data-state="failed"] > [role="status"],
+.chat-pr__publication-outcome > [role="alert"] {
   color: var(--danger);
 }
 
@@ -2702,8 +2884,19 @@ openclaw-chat-ci-details {
 }
 
 @media (max-width: 640px) {
-  .chat-pr__identity {
+  .chat-pr__identity,
+  .chat-pr__link--static .chat-pr__repo {
     display: none;
+  }
+
+  .chat-pr__link--static .chat-pr__identity {
+    display: flex;
+  }
+
+  .chat-pr__link--static .chat-pr__branch {
+    flex: 1;
+    text-overflow: clip;
+    mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
   }
 }
 
@@ -2931,15 +3124,12 @@ openclaw-chat-ci-details {
 
 @media (max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .context-usage__popover {
-    width: calc(100vw - max(12px, var(--safe-area-left)) - max(12px, var(--safe-area-right)));
+    width: calc(
+      100vw - var(--safe-area-left) - var(--safe-area-right) - 2 * var(--shell-popup-inline-gutter)
+    );
   }
 }
 
-@media (max-width: 900px) {
-  .chat-session {
-    min-width: 180px;
-  }
-}
 @container chat-composer (max-width: 480px) {
   @media (hover: none) {
     /* Touch has no hover reveal, so the microphone picker stays reachable as a

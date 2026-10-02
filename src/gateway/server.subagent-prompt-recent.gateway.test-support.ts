@@ -263,7 +263,7 @@ describe("Completed child results on a real parent-agent turn", () => {
           return;
         }
 
-        registerSubagentRun({
+        await registerSubagentRun({
           runId: RUN_ID,
           childSessionKey: CHILD_SESSION_KEY,
           requesterSessionKey: PARENT_SESSION_KEY,

@@ -211,7 +211,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       });
       onTestFinished(() => sheets.forEach((sheet) => sheet.remove()));
       const shell = document.createElement("div");
-      shell.className = "shell shell--nav-collapsed";
+      shell.className = "shell shell--nav-collapsed shell--home-control shell--floating-attention";
       shell.innerHTML = `
       <div class="shell-chrome-controls">
         <button class="shell-chrome-controls__button"></button>
@@ -285,6 +285,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       expect(getComputedStyle(inbox).boxShadow).toBe("none");
       expect(getComputedStyle(inbox).backdropFilter).toBe("none");
       attention.classList.remove("sidebar-attention--floating");
+      shell.classList.remove("shell--floating-attention");
       expect(paint()).toEqual({ border: "0px", background: "rgba(0, 0, 0, 0)" });
       expect(getComputedStyle(inbox).boxShadow).toBe("none");
       expect(getComputedStyle(inbox).backdropFilter).toBe("none");

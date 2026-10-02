@@ -3,6 +3,23 @@ import { createWorkboardLifecycleService } from "./lifecycle-sync.js";
 import { createDeferred, createLinkedCard } from "./lifecycle-sync.test-support.js";
 import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
 
+function createSessionReader(sessionKey: string, updatedAt: number) {
+  return vi
+    .fn()
+    .mockResolvedValueOnce({
+      sessions: [
+        { key: sessionKey, status: "running", hasActiveRun: true, updatedAt: updatedAt + 1 },
+      ],
+      complete: true,
+    })
+    .mockResolvedValueOnce({
+      sessions: [
+        { key: sessionKey, status: "done", hasActiveRun: false, updatedAt: updatedAt + 2 },
+      ],
+      complete: true,
+    });
+}
+
 describe("Workboard lifecycle service", () => {
   it("waits for gateway startup before beginning the lifecycle sweep", async () => {
     const store = createWorkboardSqliteTestStore();
@@ -47,18 +64,7 @@ describe("Workboard lifecycle service", () => {
     const store = createWorkboardSqliteTestStore();
     const sessionKey = "agent:main:dashboard:plugin-reload";
     const card = await createLinkedCard(store, { status: "todo", sessionKey });
-    const readSessions = vi
-      .fn()
-      .mockResolvedValueOnce({
-        sessions: [
-          { key: sessionKey, status: "running", hasActiveRun: true, updatedAt: card.updatedAt + 1 },
-        ],
-        complete: true,
-      })
-      .mockResolvedValueOnce({
-        sessions: [{ key: sessionKey, status: "done", updatedAt: card.updatedAt + 2 }],
-        complete: true,
-      });
+    const readSessions = createSessionReader(sessionKey, card.updatedAt);
     const warn = vi.fn();
     const context = { logger: { warn } } as never;
     const original = createWorkboardLifecycleService({ store, readSessions });
@@ -99,25 +105,7 @@ describe("Workboard lifecycle service", () => {
     try {
       const sessionKey = "agent:main:dashboard:service";
       const card = await createLinkedCard(store, { status: "todo", sessionKey });
-      const readSessions = vi
-        .fn()
-        .mockResolvedValueOnce({
-          sessions: [
-            {
-              key: sessionKey,
-              status: "running",
-              hasActiveRun: true,
-              updatedAt: card.updatedAt + 1,
-            },
-          ],
-          complete: true,
-        })
-        .mockResolvedValueOnce({
-          sessions: [
-            { key: sessionKey, status: "done", hasActiveRun: false, updatedAt: card.updatedAt + 2 },
-          ],
-          complete: true,
-        });
+      const readSessions = createSessionReader(sessionKey, card.updatedAt);
       service = createWorkboardLifecycleService({ store, readSessions });
       runOperation.mockClear();
       await service.start({ logger: { warn: vi.fn() } } as never);
@@ -142,48 +130,39 @@ describe("Workboard lifecycle service", () => {
     }
   });
 
-  it.each(["scheduled", "reading"] as const)(
-    "fences the %s lifecycle sweep as soon as the Gateway drains",
-    async (phase) => {
-      const store = createWorkboardSqliteTestStore();
-      await createLinkedCard(store, { sessionKey: "agent:main:dashboard:draining" });
-      const runOperation = vi.spyOn(store, "runOperation");
-      const lifetime = new AbortController();
-      const readEntered = createDeferred<void>();
-      const readResult = createDeferred<{ sessions: []; complete: boolean }>();
-      const readSessions = vi.fn(async () => {
-        readEntered.resolve();
-        return phase === "reading" ? await readResult.promise : { sessions: [], complete: true };
-      });
-      const warn = vi.fn();
-      const service = createWorkboardLifecycleService({ store, readSessions });
-      vi.useFakeTimers();
-      try {
-        await service.start({ logger: { warn } } as never);
-        service.onGatewayStart(lifetime.signal);
-        await readEntered.promise;
-        if (phase === "scheduled") {
-          await runOperation.mock.results[0]?.value;
-        }
+  it("fences an in-flight session read as soon as the Gateway drains", async () => {
+    const store = createWorkboardSqliteTestStore();
+    await createLinkedCard(store, { sessionKey: "agent:main:dashboard:draining" });
+    const runOperation = vi.spyOn(store, "runOperation");
+    const lifetime = new AbortController();
+    const readEntered = createDeferred<void>();
+    const readResult = createDeferred<{ sessions: []; complete: boolean }>();
+    const readSessions = vi.fn(async () => {
+      readEntered.resolve();
+      return await readResult.promise;
+    });
+    const warn = vi.fn();
+    const service = createWorkboardLifecycleService({ store, readSessions });
+    vi.useFakeTimers();
+    try {
+      await service.start({ logger: { warn } } as never);
+      service.onGatewayStart(lifetime.signal);
+      await readEntered.promise;
+      lifetime.abort();
+      readResult.reject(new Error("Gateway request entry is closed"));
+      await runOperation.mock.results[0]?.value;
+      const admittedSweeps = runOperation.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
 
-        lifetime.abort();
-        if (phase === "reading") {
-          readResult.reject(new Error("Gateway request entry is closed"));
-          await runOperation.mock.results[0]?.value;
-        }
-        const admittedSweeps = runOperation.mock.calls.length;
-        await vi.advanceTimersByTimeAsync(3 * 60_000);
-
-        expect(runOperation).toHaveBeenCalledTimes(admittedSweeps);
-        expect(readSessions).toHaveBeenCalledOnce();
-        expect(warn).not.toHaveBeenCalled();
-      } finally {
-        readResult.resolve({ sessions: [], complete: true });
-        service.onGatewayStop();
-        await runOperation.mock.results[0]?.value;
-        runOperation.mockRestore();
-        vi.useRealTimers();
-      }
-    },
-  );
+      expect(runOperation).toHaveBeenCalledTimes(admittedSweeps);
+      expect(readSessions).toHaveBeenCalledOnce();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      readResult.resolve({ sessions: [], complete: true });
+      service.onGatewayStop();
+      await runOperation.mock.results[0]?.value;
+      runOperation.mockRestore();
+      vi.useRealTimers();
+    }
+  });
 });

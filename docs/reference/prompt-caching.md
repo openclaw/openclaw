@@ -36,6 +36,22 @@ necessarily delete the provider's older cache entry before its normal expiry.
 
 ## Primary knobs
 
+### Worker turns
+
+Gateway-proxied worker inference uses the same OpenAI cache-key derivation as local
+turns: an explicit Gateway key takes precedence; otherwise the key combines the
+session ID with the authoritative transcript's reset and compaction boundary count.
+The Gateway retains these facts with the admitted turn, rather than accepting a
+worker-provided cache key or deriving one from trimmed replay history.
+
+Delivered worker skills use stable session-scoped, content-addressed paths and a
+deterministic catalog order. Unchanged skills therefore keep the system prompt
+prefix stable between turns. Skill refreshes still deliver current verified bytes;
+a content change intentionally changes that skill's path. Worker and local prompts
+remain different in scope: workers load bounded workspace `AGENTS.md` and the
+Gateway's supplied instructions with their restricted tool set. Moving a session
+between runtimes or workspaces can still invalidate its cached prefix.
+
 ### `cacheRetention`
 
 Values: `"none" | "short" | "long"`. Configurable as a global default, per model, and per agent.
@@ -197,6 +213,8 @@ Source: `src/agents/embedded-agent-runner/google-prompt-cache.ts`.
 CLI backends that emit JSONL usage events (`jsonlDialect: "claude-stream-json"` or `"gemini-stream-json"`) go through a shared usage parser that recognizes several field-name variants, including a plain `cached` counter mapped to `cacheRead`. When the CLI's JSON payload omits a direct input-token field, OpenClaw derives it as `input_tokens - cached`. This is usage normalization only - it does not create Anthropic/OpenAI-style prompt-cache markers for these CLI-driven models.
 
 Claude Code has no OpenClaw-controlled `cache_control` breakpoint on `--append-system-prompt-file`, so OpenClaw keeps its complete system prompt in that transport. When the bounded version probe finds Claude Code 2.1.98 or newer, bundled `claude-cli` also passes `--exclude-dynamic-system-prompt-sections`. The first CLI execution or direct Anthropic OAuth request starts the shared probe; concurrent executions reuse it, and API catalog discovery does not start it. That Claude Code flag moves only Claude's own per-machine cwd, environment, memory-path, and Git-status sections out of its native system prompt; an older, unknown, or failed probe keeps the established argv. `cacheRetention` still has no effect on this path.
+
+One-shot helper runs dispatched through a CLI backend, such as Active Memory recall on `claude-cli`, get a new session key on every run. Those runs carry the Runtime facts line (agent, session, model, channel) in their only user turn instead of the system prompt, so repeated recalls of one agent send a byte-identical system prompt and can reuse Claude's prompt cache. Normal CLI turns keep the Runtime line in the system prompt.
 
 Source: `src/agents/cli-output.ts` (`toCliUsage`).
 
@@ -383,15 +401,11 @@ Prompt-cache observations record `input`, `cacheRead`, and `cacheWrite` per comp
 - **No effect from `cacheRetention`**: confirm the model key matches `agents.defaults.models["provider/model"]`.
 - **Bedrock Nova requests without cache hits**: set `cacheRetention` explicitly to `short` or `long`, verify that the model is one of the supported variants above, and check that the prefix meets AWS's token limits; `long` still uses a five-minute TTL.
 
-Related docs:
-
-- [Anthropic](/providers/anthropic)
-- [Token use and costs](/reference/token-use)
-- [Session pruning](/concepts/session-pruning)
-- [Gateway configuration reference](/gateway/configuration-reference)
-
 ## Related
 
 - [Token use and costs](/reference/token-use)
 - [API usage and costs](/reference/api-usage-costs)
 - [Usage tracking](/concepts/usage-tracking)
+- [Anthropic](/providers/anthropic)
+- [Session pruning](/concepts/session-pruning)
+- [Gateway configuration reference](/gateway/configuration-reference)

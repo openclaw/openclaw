@@ -1,16 +1,15 @@
 import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import {
-  readSessionTranscriptHistoryEventCount,
-  readSessionTranscriptHistoryEventPage,
-} from "../config/sessions/session-accessor.sqlite-history-events.js";
+import { readSessionTranscriptHistoryEventPage } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import {
   readSessionTranscriptHistoryEvents,
+  readSessionTranscriptHistoryEventCount,
   readSessionTranscriptHistoryEventById,
 } from "../config/sessions/session-accessor.sqlite-history.test-support.js";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
+import { writeSessionSqliteMigrationManifest } from "../infra/session-sqlite-migration-manifest.js";
 import * as sqliteReaders from "../infra/session-sqlite-migration-readers.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
@@ -205,12 +204,12 @@ describe("runDoctorSessionSqlite", () => {
   it.each([
     {
       name: "identical",
-      repeated: { role: "assistant", content: "same replay" },
+      repeated: { role: "assistant", content: [{ type: "text", text: "same replay" }] },
       archived: true,
     },
     {
       name: "divergent",
-      repeated: { role: "assistant", content: "different replay" },
+      repeated: { role: "assistant", content: [{ type: "text", text: "different replay" }] },
       archived: false,
     },
   ])(
@@ -220,10 +219,10 @@ describe("runDoctorSessionSqlite", () => {
         type: "message",
         id: "reply",
         parentId: "root",
-        message: { role: "assistant", content: "same replay" },
+        message: { role: "assistant", content: [{ type: "text", text: "same replay" }] },
       };
       const sourceEvents = [
-        { type: "session", id: "session-1", version: 3 },
+        { type: "session", id: "session-1", version: 3, timestamp: "", cwd: "" },
         {
           type: "message",
           id: "root",
@@ -278,7 +277,7 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it("retires verified exact originals while preserving current SQLite and unknown archives", async () => {
+  it("retires verified originals after remount while preserving current SQLite and unknown archives", async () => {
     const store = createLegacyStore({
       transcriptLines: [
         JSON.stringify({ type: "session", id: "session-1", version: 3 }),
@@ -310,6 +309,17 @@ describe("runDoctorSessionSqlite", () => {
     const imported = await importLegacyStore(store);
     expect(imported.targets[0]?.issues).toEqual([]);
     const manifest = readMigrationManifest(imported.migrationRun?.manifestPath);
+    for (const target of manifest.targets) {
+      for (const move of [...target.plannedMoves, ...target.completedMoves]) {
+        if (move.artifact) {
+          move.artifact.identity.dev = String(BigInt(move.artifact.identity.dev) + 1n);
+        }
+      }
+    }
+    writeSessionSqliteMigrationManifest({
+      manifest,
+      manifestPath: imported.migrationRun!.manifestPath,
+    });
     const originalMove = manifest.targets[0]!.completedMoves.find(
       (move) => move.kind === "transcript",
     )!;

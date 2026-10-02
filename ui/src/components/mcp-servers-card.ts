@@ -4,6 +4,7 @@ import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
+import { registerMcpEnglish } from "../i18n/locales/en-mcp.ts";
 import { resolveEditableSnapshotConfig } from "../lib/config/config-state-model.ts";
 import {
   buildAddMcpServerPatch,
@@ -31,6 +32,8 @@ import {
   renderSettingsStatus,
 } from "./settings-ui.ts";
 import { WizardLoginController } from "./wizard-login-controller.ts";
+
+registerMcpEnglish();
 
 type McpServerMessage = { kind: "error" | "success"; text: string };
 

@@ -33,16 +33,23 @@ vi.mock("../agents/prepared-model-runtime.test-support.js", async (importOrigina
 const listeners = vi.hoisted(() => new Set<import("node:net").Server>());
 // The fixture owns a disposable server, not Gateway business logic. Keep its
 // real port, socket, harness and environment lifetime; fork tests cover RPC boot.
+vi.mock("./server-runtime-state.js", () => ({
+  createGatewayHttpTransport: async (params: { testListener?: import("node:http").Server }) => {
+    if (!params.testListener) {
+      throw new Error("Gateway fixture did not adopt its reserved listener");
+    }
+    return { httpServer: params.testListener };
+  },
+}));
 vi.mock("./server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./server.js")>()),
   startGatewayServer: async (port: number) => {
-    const { createServer } = await import("node:net");
-    const listener = createServer();
+    const { createGatewayHttpTransport } = await import("./server-runtime-state.js");
+    // The harness dispatcher injects its bound listener into this transport call.
+    const { httpServer: listener } = await createGatewayHttpTransport({
+      port,
+    } as Parameters<typeof createGatewayHttpTransport>[0]);
     listeners.add(listener);
-    await new Promise<void>((resolve, reject) => {
-      listener.once("error", reject);
-      listener.listen(port, "127.0.0.1", resolve);
-    });
     return {
       startupSettled: Promise.resolve(),
       getTailscaleIngressEndpoint: () => undefined,
@@ -60,7 +67,7 @@ vi.mock("./server.js", async (importOriginal) => ({
 const { afterAll, afterEach, beforeEach, expect, test } =
   await vi.importActual<typeof import("vitest")>("vitest");
 const runGatewayFixtureFork = createGatewayFixtureFork(afterAll);
-await import("./server.sessions.create.test.js");
+await import("./server.sessions.create.worktrees.test.js");
 const consumerHooks = { setup: hooks.setup.splice(0), cleanup: hooks.cleanup.splice(0) };
 const sessions = await import("./test/server-sessions.test-helpers.js");
 const serverHarness = await import("./server.e2e-ws-harness.js");

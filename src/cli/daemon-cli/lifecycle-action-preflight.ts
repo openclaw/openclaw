@@ -13,17 +13,6 @@ type ServiceActionPreflightFailure = {
   hints?: string[];
 };
 
-const ACTION_PROSE: Record<DaemonServiceAction, string> = {
-  start: "start the gateway service",
-  restart: "restart the gateway service",
-  stop: "stop the gateway service",
-  uninstall: "uninstall the gateway service",
-};
-
-function formatPluginPackagingRuntimeOutputRecoveryHints(): string[] {
-  return formatPluginPackagingRuntimeOutputRecoveryHint().split("\n");
-}
-
 /** Best-effort validation before a service action mutates runtime state. */
 export async function getServiceActionPreflightFailure(
   action: DaemonServiceAction,
@@ -44,7 +33,7 @@ export async function getServiceActionPreflightFailure(
       return {
         message,
         ...(isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
-          ? { hints: formatPluginPackagingRuntimeOutputRecoveryHints() }
+          ? { hints: formatPluginPackagingRuntimeOutputRecoveryHint().split("\n") }
           : {}),
       };
     }
@@ -52,7 +41,10 @@ export async function getServiceActionPreflightFailure(
     return null;
   }
 
-  const futureBlock = resolveFutureConfigActionBlock({ action: ACTION_PROSE[action], snapshot });
+  const futureBlock = resolveFutureConfigActionBlock({
+    action: `${action} the gateway service`,
+    snapshot,
+  });
   if (futureBlock) {
     return { message: futureBlock.message, hints: futureBlock.hints };
   }

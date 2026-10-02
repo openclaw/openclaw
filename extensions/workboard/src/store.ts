@@ -1,4 +1,3 @@
-// Workboard plugin module implements store behavior.
 import { randomUUID } from "node:crypto";
 import type {
   WorkboardAttachment,
@@ -190,7 +189,7 @@ function lifecycleExecution(params: {
   };
 }
 
-// Capability layers split review boundaries only; the core still owns persistence and mutation order.
+// Capability layers share persistence handles and the runtime's mutation ordering.
 export class WorkboardStore extends WorkboardNotificationStore {
   async prepareExecutionLaunch(
     id: string,
@@ -456,6 +455,9 @@ export class WorkboardStore extends WorkboardNotificationStore {
     const boardId = typeof input === "number" ? undefined : normalizeBoardId(input.boardId);
     const assertOwnerCurrent = typeof input === "number" ? undefined : input.assertOwnerCurrent;
     return await this.enqueueMutation(async () => {
+      if (boardId) {
+        await this.assertCardsBoard(boardId);
+      }
       const promoted: WorkboardCard[] = [];
       const reclaimed: WorkboardCard[] = [];
       const blocked: WorkboardCard[] = [];
@@ -654,10 +656,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
   }
 
   async buildWorkerContext(id: string): Promise<string> {
-    const card = await this.get(id);
-    if (!card) {
-      throw new Error(`card not found: ${id}`);
-    }
+    const card = await this.requireCard(id);
     return buildWorkerContext(
       card,
       await readCards(this.store, {

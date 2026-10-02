@@ -39,7 +39,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
       - name: Dispatch non-publishing preparation
         id: dispatch
         env:
@@ -94,7 +94,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
       - name: Fetch and verify every prepared package
         id: seal
         env:

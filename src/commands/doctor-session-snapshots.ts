@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { decodeXml } from "../shared/xml.js";
 import { resolveBundledSkillsDir } from "../skills/loading/bundled-dir.js";
 import { resolveConfigDir, shortenHomePath } from "../utils.js";
 
@@ -65,15 +66,6 @@ function resolveSessionSnapshotBundledSkillsDir(params?: {
   return packageRoot ? path.join(packageRoot, "skills") : undefined;
 }
 
-function decodeXmlText(value: string): string {
-  return value
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
-}
-
 function extractSkillLocations(prompt: unknown): string[] {
   if (typeof prompt !== "string" || !prompt.trim()) {
     return [];
@@ -83,7 +75,7 @@ function extractSkillLocations(prompt: unknown): string[] {
   for (const match of prompt.matchAll(locationPattern)) {
     const raw = match[1]?.trim();
     if (raw) {
-      locations.push(decodeXmlText(raw));
+      locations.push(decodeXml(raw));
     }
   }
   return locations;
@@ -98,18 +90,16 @@ function collectResolvedSkillPaths(value: unknown): string[] {
     if (!isRecord(skill)) {
       continue;
     }
-    if (typeof skill.filePath === "string" && skill.filePath.trim()) {
-      paths.push(skill.filePath.trim());
-    }
-    if (typeof skill.baseDir === "string" && skill.baseDir.trim()) {
-      paths.push(path.join(skill.baseDir.trim(), "SKILL.md"));
-    }
-    if (isRecord(skill.sourceInfo)) {
-      if (typeof skill.sourceInfo.path === "string" && skill.sourceInfo.path.trim()) {
-        paths.push(skill.sourceInfo.path.trim());
+    const sourceInfo = isRecord(skill.sourceInfo) ? skill.sourceInfo : undefined;
+    for (const [filePath, baseDir] of [
+      [skill.filePath, skill.baseDir],
+      [sourceInfo?.path, sourceInfo?.baseDir],
+    ]) {
+      if (typeof filePath === "string" && filePath.trim()) {
+        paths.push(filePath.trim());
       }
-      if (typeof skill.sourceInfo.baseDir === "string" && skill.sourceInfo.baseDir.trim()) {
-        paths.push(path.join(skill.sourceInfo.baseDir.trim(), "SKILL.md"));
+      if (typeof baseDir === "string" && baseDir.trim()) {
+        paths.push(path.join(baseDir.trim(), "SKILL.md"));
       }
     }
   }
@@ -198,10 +188,7 @@ function isInsidePath(baseDir: string, candidatePath: string): boolean {
   }
   const pathApi = baseIsWindows ? path.win32 : path;
   const relative = pathApi.relative(pathApi.resolve(baseDir), pathApi.resolve(candidatePath));
-  return (
-    relative === "" ||
-    (relative !== "" && !relative.startsWith("..") && !pathApi.isAbsolute(relative))
-  );
+  return relative === "" || (!relative.startsWith("..") && !pathApi.isAbsolute(relative));
 }
 function joinPathForRoot(root: string, ...segments: string[]): string {
   return isWindowsAbsolutePath(root)
@@ -339,46 +326,54 @@ function loadSessionStoreForSnapshotScan(storePath: string): Record<string, Sess
   return store;
 }
 
-export async function detectSessionSnapshotHealthIssues(params?: {
+type SessionSnapshotScanOptions = {
   storePaths?: string[];
   bundledSkillsDir?: string;
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-}): Promise<SessionSnapshotHealthIssue[]> {
+};
+
+async function scanSessionSnapshotHealth(
+  params: SessionSnapshotScanOptions = {},
+  onError?: (storePath: string, error: unknown) => void,
+) {
   const bundledSkillsDir = resolveSessionSnapshotBundledSkillsDir({
-    bundledSkillsDir: params?.bundledSkillsDir,
+    bundledSkillsDir: params.bundledSkillsDir,
   });
-  if (!bundledSkillsDir) {
-    return [];
-  }
-  const storePaths =
-    params?.storePaths ??
-    resolveSessionStorePaths({ cfg: params?.cfg, env: params?.env }) ??
-    (await listSessionStorePaths(resolveStateDir(params?.env)));
-  const issues: SessionSnapshotHealthIssue[] = [];
-  for (const storePath of storePaths) {
-    let store: Record<string, SessionEntry>;
-    try {
-      store = loadSessionStoreForSnapshotScan(storePath);
-    } catch {
-      continue;
-    }
-    const findings = scanSessionStoreForStaleRuntimeSnapshotPaths({
-      store,
-      bundledSkillsDir,
-      env: params?.env,
-    });
-    for (const finding of findings) {
-      issues.push({
-        sessionKey: finding.sessionKey,
-        field: finding.field,
-        cachedPath: finding.cachedPath,
-        expectedPath: finding.expectedPath,
-        storePath,
+  const stores: Array<{ storePath: string; findings: StaleSessionSnapshotPathFinding[] }> = [];
+  if (bundledSkillsDir) {
+    const storePaths =
+      params.storePaths ??
+      resolveSessionStorePaths(params) ??
+      (await listSessionStorePaths(resolveStateDir(params.env)));
+    for (const storePath of storePaths) {
+      let store: Record<string, SessionEntry>;
+      try {
+        store = loadSessionStoreForSnapshotScan(storePath);
+      } catch (error) {
+        onError?.(storePath, error);
+        continue;
+      }
+      const findings = scanSessionStoreForStaleRuntimeSnapshotPaths({
+        store,
+        bundledSkillsDir,
+        env: params.env,
       });
+      if (findings.length > 0) {
+        stores.push({ storePath, findings });
+      }
     }
   }
-  return issues;
+  return { bundledSkillsDir, stores };
+}
+
+export async function detectSessionSnapshotHealthIssues(
+  params?: SessionSnapshotScanOptions,
+): Promise<SessionSnapshotHealthIssue[]> {
+  const { stores } = await scanSessionSnapshotHealth(params);
+  return stores.flatMap(({ storePath, findings }) =>
+    findings.map((finding) => ({ ...finding, storePath })),
+  );
 }
 
 export function sessionSnapshotIssueToHealthFinding(
@@ -397,43 +392,20 @@ export function sessionSnapshotIssueToHealthFinding(
 }
 
 /** Reports historical snapshot paths without rewriting migration source bytes. */
-export async function noteSessionSnapshotHealth(params?: {
-  storePaths?: string[];
-  bundledSkillsDir?: string;
-  cfg?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}) {
-  const bundledSkillsDir = resolveSessionSnapshotBundledSkillsDir({
-    bundledSkillsDir: params?.bundledSkillsDir,
-  });
+export async function noteSessionSnapshotHealth(params?: SessionSnapshotScanOptions) {
+  const { bundledSkillsDir, stores } = await scanSessionSnapshotHealth(
+    params,
+    (storePath, error) => {
+      note(
+        `- Failed to inspect session snapshot metadata in ${shortenHomePath(storePath)}: ${String(error)}`,
+        "Session snapshots",
+      );
+    },
+  );
   if (!bundledSkillsDir) {
     return;
   }
-  const storePaths =
-    params?.storePaths ??
-    resolveSessionStorePaths({ cfg: params?.cfg, env: params?.env }) ??
-    (await listSessionStorePaths(resolveStateDir(params?.env)));
-  const findingsByStore = new Map<string, StaleSessionSnapshotPathFinding[]>();
-  for (const storePath of storePaths) {
-    let store: Record<string, SessionEntry>;
-    try {
-      store = loadSessionStoreForSnapshotScan(storePath);
-    } catch (err) {
-      note(
-        `- Failed to inspect session snapshot metadata in ${shortenHomePath(storePath)}: ${String(err)}`,
-        "Session snapshots",
-      );
-      continue;
-    }
-    const findings = scanSessionStoreForStaleRuntimeSnapshotPaths({
-      store,
-      bundledSkillsDir,
-      env: params?.env,
-    });
-    if (findings.length > 0) {
-      findingsByStore.set(storePath, findings);
-    }
-  }
+  const findingsByStore = new Map(stores.map(({ storePath, findings }) => [storePath, findings]));
   const totalFindings = [...findingsByStore.values()].reduce(
     (total, findings) => total + findings.length,
     0,

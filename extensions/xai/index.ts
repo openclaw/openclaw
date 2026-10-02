@@ -1,5 +1,4 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Xai plugin entrypoint registers its OpenClaw integration.
 import type {
   OpenClawPluginToolContext,
   ProviderFailoverErrorContext,
@@ -32,13 +31,10 @@ import {
   isXaiGrokProxyBaseUrl,
 } from "./provider-catalog.js";
 import { isXaiProviderId } from "./provider-id.js";
-import {
-  isModernXaiModel,
-  normalizeXaiResolvedModel,
-  resolveXaiForwardCompatModel,
-} from "./provider-models.js";
+import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { resolveXaiTransport } from "./provider-routing.js";
+import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import {
   readPluginCodeExecutionConfig,
   resolveCodeExecutionEnabled,
@@ -96,10 +92,6 @@ function classifyXaiFailoverReason({
   return undefined;
 }
 
-function hasResolvableXaiApiKey(config: unknown, auth?: XaiToolAuthContext): boolean {
-  return isXaiToolEnabled({ sourceConfig: config as never, auth });
-}
-
 function isCodeExecutionEnabled(config: unknown, auth?: XaiToolAuthContext): boolean {
   return resolveCodeExecutionEnabled({
     sourceConfig: config,
@@ -117,7 +109,7 @@ function isXSearchEnabled(config: unknown, auth?: XaiToolAuthContext): boolean {
   if (resolved?.enabled === false) {
     return false;
   }
-  return hasResolvableXaiApiKey(config, auth);
+  return isXaiToolEnabled({ sourceConfig: config as never, auth });
 }
 
 function shouldExposeXaiBilledTool(params: {
@@ -311,7 +303,7 @@ export default defineSingleProviderPluginEntry({
         mode: "api-key" as const,
       };
     },
-    normalizeResolvedModel: ({ model }) => normalizeXaiResolvedModel(model),
+    normalizeResolvedModel: ({ model }) => applyXaiRuntimeModelCompat(model),
     normalizeTransport: ({ provider, api, baseUrl }) =>
       resolveXaiTransport({ provider, api, baseUrl }),
     normalizeModelId: ({ modelId }) => normalizeNativeXaiModelId(modelId),

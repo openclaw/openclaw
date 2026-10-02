@@ -55,9 +55,14 @@ objects and prototypes are not passed through the JSON result bridge. This
 bridge contract does not make the Node executor a security boundary; see
 [Code Mode executors](/tools/code-mode/executors).
 
-A bridge failure can occur after a tool has performed its action. When a result
-reports `failurePhase: "bridge"` and `replaySafe: false`, check the destination
-before repeating a send or another action that changes state. A failed `exec`
+`failurePhase` identifies where the terminal error originated. An uncaught
+rejected tool call reports `"bridge"`; a new JavaScript error after a successful
+call or a caught tool rejection reports `"guest"`. Rethrowing the original tool
+error keeps `"bridge"`, including after `wait`.
+
+Failure origin is separate from replay safety. When `bridgeDispatchStarted` is
+`true` and `replaySafe` is `false`, check the destination before repeating a send
+or another action that changes state—even for a guest error. A failed `exec`
 does not by itself prove that a message was not delivered.
 
 ## Telemetry

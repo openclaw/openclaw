@@ -14,7 +14,7 @@ import {
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 import type { TelegramPromptContextProjectionSequence } from "./prompt-context-projection.js";
@@ -83,6 +83,10 @@ type CreateLaneTextDelivererParams = {
     payload: ReplyPayload;
     candidateTexts: readonly (string | undefined)[];
   }) => Promise<ReplyPayload | undefined> | ReplyPayload | undefined;
+  resolveFinalPresentationText?: (params: {
+    payload: ReplyPayload;
+    text: string;
+  }) => Promise<string | undefined> | string | undefined;
   log: (message: string) => void;
   markDelivered: () => void;
 };
@@ -115,11 +119,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     if (!options?.stripButtons) {
       return channelData;
     }
-    const telegramData = channelData?.telegram;
-    if (!telegramData || typeof telegramData !== "object" || Array.isArray(telegramData)) {
+    const telegramData = asOptionalRecord(channelData?.telegram);
+    if (!telegramData) {
       return channelData;
     }
-    const { buttons: _buttons, ...telegramRest } = telegramData as Record<string, unknown>;
+    const { buttons: _buttons, ...telegramRest } = telegramData;
     if (_buttons === undefined) {
       return channelData;
     }
@@ -153,22 +157,16 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
       return payload;
     }
     const channelData = payload.channelData ?? {};
-    const telegramData = channelData.telegram;
-    if (
-      telegramData &&
-      typeof telegramData === "object" &&
-      !Array.isArray(telegramData) &&
-      "buttons" in telegramData
-    ) {
+    const telegramData = asOptionalRecord(channelData.telegram);
+    if (telegramData && "buttons" in telegramData) {
       return payload;
     }
-    const telegramRest = asNonArrayRecord(telegramData);
     return copyReplyPayloadMetadata(payload, {
       ...payload,
       channelData: {
         ...channelData,
         telegram: {
-          ...telegramRest,
+          ...telegramData,
           buttons,
         },
       },
@@ -179,41 +177,24 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     text: string,
     options?: { stripButtons?: boolean; fallbackButtons?: TelegramInlineButtons },
   ): ReplyPayload => {
+    let mediaPayload: ReplyPayload;
     if (getReplyPayloadTtsSupplement(payload)) {
-      return withFallbackTelegramButtons(
-        withMediaChannelData(
-          buildTtsSupplementMediaPayload(params.applyTextToPayload(payload, text)),
-          options,
-        ),
-        options?.fallbackButtons,
-      );
-    }
-    if (payload.audioAsVoice === true) {
+      mediaPayload = buildTtsSupplementMediaPayload(params.applyTextToPayload(payload, text));
+    } else {
       const {
         text: _text,
         presentation: _presentation,
         interactive: _interactive,
         btw: _btw,
-        spokenText: _spokenText,
-        ...voicePayload
-      } = params.applyTextToPayload(payload, text);
-      return withFallbackTelegramButtons(
-        withMediaChannelData(
-          copyReplyPayloadMetadata(payload, { ...voicePayload, spokenText: text }),
-          options,
-        ),
-        options?.fallbackButtons,
+        ...rest
+      } = payload.audioAsVoice === true ? params.applyTextToPayload(payload, text) : payload;
+      mediaPayload = copyReplyPayloadMetadata(
+        payload,
+        payload.audioAsVoice === true ? { ...rest, spokenText: text } : rest,
       );
     }
-    const {
-      text: _text,
-      presentation: _presentation,
-      interactive: _interactive,
-      btw: _btw,
-      ...rest
-    } = payload;
     return withFallbackTelegramButtons(
-      withMediaChannelData(copyReplyPayloadMetadata(payload, rest), options),
+      withMediaChannelData(mediaPayload, options),
       options?.fallbackButtons,
     );
   };
@@ -278,7 +259,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     rotateFinalizedStream(lane);
 
     const finalText = text.trimEnd();
-    const previewText = useFinalTextRecovery
+    const recoveredText = useFinalTextRecovery
       ? await resolveTranscriptBackedChannelFinalText({
           payload,
           finalText,
@@ -289,6 +270,13 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
             }),
         })
       : finalText;
+    const previewText =
+      finalizePreview && payload.presentation
+        ? ((await params.resolveFinalPresentationText?.({
+            payload,
+            text: recoveredText,
+          })) ?? recoveredText)
+        : recoveredText;
     lane.lastPartialText = previewText;
     lane.hasStreamedMessage = true;
     lane.finalized = false;

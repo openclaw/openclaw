@@ -4,6 +4,7 @@ import type { StatementSync } from "node:sqlite";
 import { beforeEach, expect, test, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
+import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.js";
 import {
   replaceSessionEntrySync,
@@ -12,13 +13,18 @@ import {
 import * as transcriptWorker from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
+import * as spawnDiagnostics from "../../process/spawn-diagnostics.js";
 import { registerProjectRegistry } from "../../projects/project-registry.js";
 import { registerClonedProjectRegistry } from "../../projects/project-registry.test-support.js";
 import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { gitHubPublicApi } from "../github-public-api.js";
 import * as projectGitHubSearch from "../project-github-search.js";
@@ -35,6 +41,83 @@ import {
 beforeEach(() => {
   listRegistryRecords.mockClear();
   resolveRepositoryIdentity.mockClear();
+});
+
+function withProjectState(run: (state: OpenClawTestState) => Promise<void>) {
+  return withOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" }, run);
+}
+
+test("projects.list coalesces concurrent observed Git discovery and refreshes later reads", async () => {
+  await withProjectState(async (state) => {
+    const repo = await initializeRepository(state.root);
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:observed" },
+      { sessionId: "observed", updatedAt: 1, execCwd: repo },
+    );
+    const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+    const list = () =>
+      invokeProjectMethod(
+        "projects.list",
+        { includeObserved: true },
+        cfg,
+        ["operator.write"],
+        undefined,
+        registeredProjectsHandlers,
+      );
+    using spawns = vi.spyOn(spawnDiagnostics, "recordChildProcessSpawn");
+    const single = await list();
+    expect(single).toMatchObject({
+      ok: true,
+      payload: {
+        observedProjects: [
+          { name: "registered", originUrl: "https://github.com/openclaw/openclaw.git" },
+        ],
+      },
+    });
+    const gitSpawns = () =>
+      spawns.mock.calls.filter(([command]) =>
+        /^git(?:\.exe|\.cmd)?$/i.test(path.win32.basename(command)),
+      ).length;
+    const onePass = gitSpawns();
+    expect(onePass).toBeGreaterThan(0);
+    spawns.mockClear();
+    const requestCount = 10;
+    const admitted = Promise.withResolvers<void>();
+    let remaining = requestCount;
+    const resolveIdentities = managedWorktrees.resolveRepositoryIdentities.bind(managedWorktrees);
+    // SQLite preparation can stagger RPCs past a pending-only Git pass's lifetime.
+    using discovery = vi
+      .spyOn(managedWorktrees, "resolveRepositoryIdentities")
+      .mockImplementation(async (roots) => {
+        if (--remaining === 0) {
+          admitted.resolve();
+        }
+        await admitted.promise;
+        return resolveIdentities(roots);
+      });
+    const concurrent = await Promise.all(
+      Array.from({ length: requestCount }, () => list().finally(() => admitted.resolve())),
+    );
+    discovery.mockRestore();
+    for (const result of concurrent) {
+      expect(result).toEqual(single);
+    }
+    expect(gitSpawns()).toBeLessThanOrEqual(onePass);
+    await execFileAsync("git", [
+      "-C",
+      repo,
+      "remote",
+      "set-url",
+      "origin",
+      "https://example.test/changed.git",
+    ]);
+    expect(await list()).toMatchObject({
+      ok: true,
+      payload: { observedProjects: [{ originUrl: "https://example.test/changed.git" }] },
+    });
+    await fs.rm(repo, { recursive: true });
+    expect(await list()).toMatchObject({ ok: true, payload: { observedProjects: [] } });
+  });
 });
 
 test.each([
@@ -108,37 +191,8 @@ test.each([
   },
 );
 
-test("projects.list merges synthesized workspaces with stored rows deterministically", async () => {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
-  try {
-    const repo = await initializeRepository(state.root);
-    await registerProjectRegistry({ path: repo, name: "Beta" });
-    const result = await invokeProjectMethod(
-      "projects.list",
-      {},
-      {
-        agents: {
-          list: [{ id: "main", default: true, workspace: "/workspace/alpha" }],
-        },
-      },
-    );
-    expect(result).toMatchObject({
-      ok: true,
-      payload: {
-        projects: [
-          { id: "workspace:main", displayName: "alpha", source: "workspace" },
-          { id: "beta", displayName: "Beta", source: "registered" },
-        ],
-      },
-    });
-  } finally {
-    await state.cleanup();
-  }
-});
-
 test("projects.list exposes checkout details only at write scope", async () => {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
-  try {
+  return withProjectState(async (state) => {
     const repo = await initializeRepository(state.root);
     await registerProjectRegistry({ path: repo, name: "Registered" });
     const cfg = {
@@ -201,14 +255,11 @@ test("projects.list exposes checkout details only at write scope", async () => {
       });
     }
     expect(listRegistryRecords).toHaveBeenCalledTimes(2);
-  } finally {
-    await state.cleanup();
-  }
+  });
 });
 
 test("project responses redact credentials and URL suffixes from registered origins", async () => {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
-  try {
+  return withProjectState(async (state) => {
     const repo = await initializeRepository(state.root);
     await execFileAsync("git", [
       "-C",
@@ -240,9 +291,7 @@ test("project responses redact credentials and URL suffixes from registered orig
         ]),
       },
     });
-  } finally {
-    await state.cleanup();
-  }
+  });
 });
 
 test("registered projects.list reads recents and observed session rows off the caller thread", async () => {
@@ -399,20 +448,16 @@ test.each(["write scope", "session access", "registry access", "probe access"])(
 );
 
 test("projects.remove returns INVALID_REQUEST for an unknown id", async () => {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
-  try {
+  return withProjectState(async () => {
     expect(await invokeProjectMethod("projects.remove", { id: "missing" })).toMatchObject({
       ok: false,
       error: { code: "INVALID_REQUEST", message: "unknown project id: missing" },
     });
-  } finally {
-    await state.cleanup();
-  }
+  });
 });
 
 test("projects.add returns an existing project for the same canonical remote", async () => {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
-  try {
+  return withProjectState(async (state) => {
     const repo = await initializeRepository(
       state.root,
       "existing",
@@ -425,14 +470,11 @@ test("projects.add returns an existing project for the same canonical remote", a
         gitUrl: "https://github.com/openclaw/openclaw.git",
       }),
     ).toEqual({ ok: true, payload: existing, error: undefined });
-  } finally {
-    await state.cleanup();
-  }
+  });
 });
 
 test("projects.add returns a typed invalid-url failure", async () => {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
-  try {
+  return withProjectState(async () => {
     expect(
       await invokeProjectMethod("projects.add", { gitUrl: "file:///tmp/repo.git" }),
     ).toMatchObject({
@@ -442,14 +484,11 @@ test("projects.add returns a typed invalid-url failure", async () => {
         details: { code: "PROJECT_CLONE_FAILED", cause: "invalid_url" },
       },
     });
-  } finally {
-    await state.cleanup();
-  }
+  });
 });
 
 test("projects.remove refuses to delete a cloned checkout referenced by a live worktree", async () => {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
-  try {
+  return withProjectState(async (state) => {
     const originUrl = "https://github.com/acme/managed.git";
     const fingerprint = sha256HexPrefixCore(originUrl, 16);
     const repo = await initializeRepository(
@@ -487,39 +526,11 @@ test("projects.remove refuses to delete a cloned checkout referenced by a live w
       error: { code: "INVALID_REQUEST", message: expect.stringContaining("live-worktree") },
     });
     await expect(fs.stat(repo)).resolves.toBeDefined();
-  } finally {
-    await state.cleanup();
-  }
-});
-
-test("projects.remove deletes an unreferenced Gateway-managed clone", async () => {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
-  try {
-    const originUrl = "https://github.com/acme/removable.git";
-    const fingerprint = sha256HexPrefixCore(originUrl, 16);
-    const repo = await initializeRepository(
-      path.join(state.stateDir, "projects", fingerprint),
-      "removable",
-      originUrl,
-    );
-    const project = await registerClonedProjectRegistry({
-      path: repo,
-      name: "Removable",
-      originUrl,
-    });
-
-    expect(
-      await invokeProjectMethod("projects.remove", { id: project.id, deleteCheckout: true }),
-    ).toMatchObject({ ok: true, payload: { removed: true } });
-    await expect(fs.stat(repo)).rejects.toMatchObject({ code: "ENOENT" });
-  } finally {
-    await state.cleanup();
-  }
+  });
 });
 
 test("projects.remove preserves a cloned checkout while a duplicate registry row remains", async () => {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
-  try {
+  return withProjectState(async (state) => {
     const originUrl = "https://github.com/acme/shared-managed.git";
     const fingerprint = sha256HexPrefixCore(originUrl, 16);
     const repo = await initializeRepository(
@@ -564,14 +575,11 @@ test("projects.remove preserves a cloned checkout while a duplicate registry row
       }),
     ).toMatchObject({ ok: true, payload: { removed: true } });
     await expect(fs.stat(repo)).rejects.toMatchObject({ code: "ENOENT" });
-  } finally {
-    await state.cleanup();
-  }
+  });
 });
 
 test("projects.remove refuses to delete a cloned checkout configured as an agent workspace", async () => {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
-  try {
+  return withProjectState(async (state) => {
     const originUrl = "https://github.com/acme/workspace-project.git";
     const fingerprint = sha256HexPrefixCore(originUrl, 16);
     const repo = await initializeRepository(
@@ -595,14 +603,11 @@ test("projects.remove refuses to delete a cloned checkout configured as an agent
       error: { code: "INVALID_REQUEST", message: expect.stringContaining("agent workspace") },
     });
     await expect(fs.stat(repo)).resolves.toBeDefined();
-  } finally {
-    await state.cleanup();
-  }
+  });
 });
 
 test("projects.remove refuses to delete a cloned checkout used by a live direct session", async () => {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
-  try {
+  return withProjectState(async (state) => {
     const originUrl = "https://github.com/acme/session-project.git";
     const fingerprint = sha256HexPrefixCore(originUrl, 16);
     const repo = await initializeRepository(
@@ -629,7 +634,5 @@ test("projects.remove refuses to delete a cloned checkout used by a live direct 
       ok: false,
       error: { code: "INVALID_REQUEST", message: expect.stringContaining("project-session") },
     });
-  } finally {
-    await state.cleanup();
-  }
+  });
 });

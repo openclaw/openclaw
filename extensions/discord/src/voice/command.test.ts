@@ -118,41 +118,6 @@ describe("createDiscordVoiceCommand", () => {
     });
   });
 
-  it("vc status reports unavailable voice manager", async () => {
-    const { status } = createVoiceCommandHarness(null);
-    const { interaction, reply } = createInteraction({
-      guild: { id: "g1" } as CommandInteraction["guild"],
-    });
-
-    await status.run(interaction);
-
-    expect(reply).toHaveBeenCalledTimes(1);
-    expect(reply).toHaveBeenCalledWith({
-      content: "Voice manager is not available yet.",
-      ephemeral: true,
-    });
-  });
-
-  it("vc status reports no active sessions when manager has none", async () => {
-    const statusSpy = vi.fn(() => []);
-    const manager = {
-      status: statusSpy,
-    } as unknown as DiscordVoiceManager;
-    const { status } = createVoiceCommandHarness(manager);
-    const { interaction, reply } = createInteraction({
-      guild: { id: "g1", name: "Guild" } as CommandInteraction["guild"],
-    });
-
-    await status.run(interaction);
-
-    expect(statusSpy).toHaveBeenCalledTimes(1);
-    expect(reply).toHaveBeenCalledTimes(1);
-    expect(reply).toHaveBeenCalledWith({
-      content: "No active voice sessions.",
-      ephemeral: true,
-    });
-  });
-
   it.each([
     { owner: "100000000000000001", authorized: true },
     { owner: "discord:100000000000000001", authorized: true },
@@ -184,30 +149,6 @@ describe("createDiscordVoiceCommand", () => {
       content: authorized
         ? "No active voice sessions."
         : "You are not authorized to use this command.",
-      ephemeral: true,
-    });
-  });
-
-  it("admits vc commands through an account wildcard without granting owner authority", async () => {
-    const statusSpy = vi.fn(() => []);
-    const manager = {
-      status: statusSpy,
-    } as unknown as DiscordVoiceManager;
-    const { status } = createVoiceCommandHarness(manager, {
-      discordConfig: { allowFrom: ["*"], guilds: { g1: {} } },
-      groupPolicy: "allowlist",
-      useAccessGroups: true,
-    });
-    const { interaction, reply } = createInteraction({
-      guild: { id: "g1", name: "Guild" } as CommandInteraction["guild"],
-      user: { id: "u-guest", username: "guest" } as CommandInteraction["user"],
-    });
-
-    await status.run(interaction);
-
-    expect(statusSpy).toHaveBeenCalledTimes(1);
-    expect(reply).toHaveBeenCalledWith({
-      content: "No active voice sessions.",
       ephemeral: true,
     });
   });

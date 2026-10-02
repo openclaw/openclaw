@@ -1,13 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { reconcileSessionHistory } from "../../lib/sessions/reconcile.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import {
-  applySelectedSessionProjection,
-  resolveChatArtifactDownload,
-  SessionParticipationTracker,
-} from "./chat-pane-state.ts";
+import { applySelectedSessionProjection, SessionParticipationTracker } from "./chat-pane-state.ts";
 
 function projectionState(): Parameters<typeof applySelectedSessionProjection>[0] {
   return {
@@ -88,7 +85,7 @@ describe("applySelectedSessionProjection", () => {
   });
 });
 
-describe("resolveChatArtifactDownload", () => {
+describe("resolveArtifactDownloadSource", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   const artifact = {
@@ -102,50 +99,79 @@ describe("resolveChatArtifactDownload", () => {
   const ticket = "/api/artifacts/download/connection/ticket";
 
   it.each([
-    { page: "https://control.test", gateway: "wss://control.test", http: true },
-    { page: "https://control.test", gateway: "wss://remote.test", http: false },
-    { page: "http://control.test", gateway: "ws://control.test", http: false },
-  ])("uses raw HTTP bytes only for $page with $gateway", async ({ page, gateway, http }) => {
-    vi.stubGlobal("location", new URL(page));
-    const blob = new Blob(["png"], { type: "image/png" });
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
-      headers: new Headers({ "Content-Disposition": ' AtTaChMeNt ; filename="image.png" ' }),
-      blob: async () => blob,
-    }));
-    vi.stubGlobal("fetch", fetchMock);
-    const request = vi.fn().mockResolvedValue(http ? { artifact, url: ticket } : inline);
-    const result = await resolveChatArtifactDownload(
-      {
-        connected: true,
-        resourceBasePath: "/mount",
-        client: { gatewayUrl: gateway, request } as never,
-      },
-      { sessionKey: "agent:main:main", artifactId: artifact.id },
-    );
-    expect(request).toHaveBeenCalledExactlyOnceWith(
-      "artifacts.download",
-      {
-        sessionKey: "agent:main:main",
-        artifactId: artifact.id,
-        ...(http ? { transport: "http" } : {}),
-      },
-      { timeoutMs: 30_000 },
-    );
-    if (http) {
-      expect(result).toEqual({ url: `/mount${ticket}`, blob });
-      expect(fetchMock).toHaveBeenCalledExactlyOnceWith(`/mount${ticket}`, {
-        credentials: "same-origin",
-        redirect: "error",
-        signal: expect.any(AbortSignal),
-      });
-    } else {
-      expect(result).toEqual({ url: "data:image/png;base64,cG5n" });
-      expect(fetchMock).not.toHaveBeenCalled();
-    }
-  });
+    { page: "https://control.test", gateway: "wss://control.test", http: true, variant: undefined },
+    {
+      page: "https://control.test",
+      gateway: "wss://control.test",
+      http: true,
+      variant: "thumbnail",
+    },
+    { page: "https://control.test", gateway: "wss://control.test", http: true, variant: "full" },
+    {
+      page: "https://control.test",
+      gateway: "wss://remote.test",
+      http: false,
+      variant: "thumbnail",
+    },
+    {
+      page: "http://control.test",
+      gateway: "ws://control.test",
+      http: false,
+      variant: "thumbnail",
+    },
+  ] as const)(
+    "uses raw HTTP bytes only for $page with $gateway ($variant)",
+    async ({ page, gateway, http, variant }) => {
+      vi.stubGlobal("location", new URL(page));
+      const blob = new Blob(["png"], { type: "image/png" });
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        headers: new Headers({ "Content-Disposition": ' AtTaChMeNt ; filename="image.png" ' }),
+        blob: async () => blob,
+      }));
+      vi.stubGlobal("fetch", fetchMock);
+      const request = vi.fn().mockResolvedValue(
+        http
+          ? {
+              artifact:
+                variant === "thumbnail" ? { ...artifact, mimeType: "image/jpeg" } : artifact,
+              url: ticket,
+            }
+          : inline,
+      );
+      const result = await resolveArtifactDownloadSource(
+        {
+          connected: true,
+          resourceBasePath: "/mount",
+          client: { gatewayUrl: gateway, request } as never,
+        },
+        { sessionKey: "agent:main:main", artifactId: artifact.id, variant },
+      );
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "artifacts.download",
+        {
+          sessionKey: "agent:main:main",
+          artifactId: artifact.id,
+          ...(http ? { transport: "http" } : {}),
+        },
+        { timeoutMs: 30_000 },
+      );
+      if (http) {
+        const url = `/mount${ticket}${variant === "thumbnail" ? "?variant=thumbnail" : ""}`;
+        expect(result).toEqual({ url, blob });
+        expect(fetchMock).toHaveBeenCalledExactlyOnceWith(url, {
+          credentials: "same-origin",
+          redirect: "error",
+          signal: expect.any(AbortSignal),
+        });
+      } else {
+        expect(result).toEqual({ url: "data:image/png;base64,cG5n" });
+        expect(fetchMock).not.toHaveBeenCalled();
+      }
+    },
+  );
 
-  it.each(["network", "missing route", "SPA fallback"])(
+  it.each(["network", "missing route", "SPA fallback", "wrong content type"])(
     "reauthorizes inline bytes when the HTTPS proxy returns %s",
     async (failure) => {
       vi.stubGlobal("location", new URL("https://control.test"));
@@ -158,7 +184,9 @@ describe("resolveChatArtifactDownload", () => {
           return {
             ok: failure !== "missing route",
             status: failure === "missing route" ? 404 : 200,
-            headers: new Headers(),
+            headers: new Headers(
+              failure === "wrong content type" ? { "Content-Disposition": "attachment" } : {},
+            ),
             blob: async () => new Blob(["UI"], { type: "text/html" }),
           };
         }),
@@ -167,7 +195,7 @@ describe("resolveChatArtifactDownload", () => {
         .fn()
         .mockResolvedValueOnce({ artifact, url: ticket })
         .mockResolvedValue(inline);
-      const result = await resolveChatArtifactDownload(
+      const result = await resolveArtifactDownloadSource(
         { connected: true, client: { gatewayUrl: "wss://control.test", request } as never },
         { sessionKey: "agent:main:main", artifactId: artifact.id },
       );
@@ -197,7 +225,7 @@ describe("resolveChatArtifactDownload", () => {
       artifact: { ...artifact, mimeType, type },
       url: ticket,
     });
-    const result = await resolveChatArtifactDownload(
+    const result = await resolveArtifactDownloadSource(
       { connected: true, client: { gatewayUrl: "wss://control.test", request } as never },
       { sessionKey: "agent:main:main", artifactId: artifact.id },
     );
@@ -222,7 +250,7 @@ describe("resolveChatArtifactDownload", () => {
       connectionEpoch: 1,
       client: { gatewayUrl: "wss://control.test", request } as never,
     };
-    const pending = resolveChatArtifactDownload(state, {
+    const pending = resolveArtifactDownloadSource(state, {
       sessionKey: "main",
       artifactId: artifact.id,
     });
@@ -235,7 +263,7 @@ describe("resolveChatArtifactDownload", () => {
 
   it("returns a trimmed ticket without exposing a gateway bearer credential", async () => {
     const requests: Array<{ method: string; params: unknown; options: unknown }> = [];
-    const result = await resolveChatArtifactDownload(
+    const result = await resolveArtifactDownloadSource(
       {
         connected: true,
         client: {
@@ -283,10 +311,6 @@ describe("SessionParticipationTracker", () => {
       session: undefined,
       ...patch,
     });
-
-  it("does not block a brand-new key that never had a row", () => {
-    expect(resolve(new SessionParticipationTracker())).toBe(false);
-  });
 
   it("blocks only on a positively observed restricted state", () => {
     expect(

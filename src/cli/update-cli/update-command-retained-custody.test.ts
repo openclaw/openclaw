@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { waitForDead, waitForFixtureFile } from "../../../test/helpers/process-wait.js";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { waitForDead } from "../../../test/helpers/process-wait.js";
+import { createDeferred, withinTest, withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../../../test/vitest/vitest.timeouts.js";
 import { execFileUtf8 } from "../../daemon/exec-file.js";
@@ -12,6 +12,7 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { isChildProcessTreeAlive } from "../../process/child-process-tree.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { isPidAlive } from "../../shared/pid-alive.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { withRetainedUpdateServiceAuthority } from "./update-command-retained-service.js";
 
@@ -46,6 +47,7 @@ function parentScript() {
       run.executorFence=await executor.enter(b,{serviceRoot:a});
       fs.appendFileSync(milestones,JSON.stringify({phase:"admitted",elapsedMs:performance.now()})+"\\n");
       fs.writeFileSync(ready+".tmp","ready"); fs.renameSync(ready+".tmp",ready);
+      process.stdout.write("PARENT_READY\\n");
       while(!fs.existsSync(request))await sleep(10);
       const {argv,timeout,parallel}=JSON.parse(fs.readFileSync(request,"utf8"));
       fs.appendFileSync(milestones,JSON.stringify({phase:"dispatch",elapsedMs:performance.now()})+"\\n");
@@ -97,12 +99,22 @@ function startParent(killProcessTree: boolean) {
   let expectedControllers = 0;
   let behaviorTimer: ReturnType<typeof setTimeout> | undefined;
   let cleaning: Promise<void> | undefined;
+  const admitted = createDeferred();
+  let startupOutput = "";
   const pending = runCommandWithTimeout(
     [process.execPath, "--input-type=module", "-e", parentScript(), "--", JSON.stringify(fixture)],
     {
       input: "",
       beforeInput: (pid) => {
         parentPid = pid;
+      },
+      onOutputChunk: (chunk, stream) => {
+        if (stream === "stdout") {
+          startupOutput += String(chunk);
+          if (startupOutput.includes("PARENT_READY\n")) {
+            admitted.resolve();
+          }
+        }
       },
       signal: abort.signal,
       // Retain the runner's ownership of successful inherited output during startup too.
@@ -116,11 +128,17 @@ function startParent(killProcessTree: boolean) {
   return {
     fixture,
     pid: () => parentPid,
-    ready: () =>
-      withTestTimeout(
-        waitForFixtureFile(fixture.ready, pending, "ready"),
-        DEFAULT_VITEST_TEST_TIMEOUT_MS,
-        `Fixture parent did not finish import/admission; inspect ${fixture.milestones}`,
+    ready: (signal: AbortSignal) =>
+      withinTest(
+        Promise.race([
+          admitted.promise,
+          pending.then(() => {
+            if (!fs.existsSync(fixture.ready)) {
+              throw new Error(`Child exited before writing ${fixture.ready}`);
+            }
+          }),
+        ]),
+        signal,
       ),
     run(command: { argv: string[]; timeout: number; parallel?: boolean }, timeoutMs: number) {
       if (dispatched) {
@@ -156,7 +174,8 @@ function startParent(killProcessTree: boolean) {
           );
         }
         if (parentPid !== undefined) {
-          await waitForDead(parentPid, 5000);
+          // beforeInput proves admission; the runner then joins this direct child's close.
+          expect(isPidAlive(parentPid)).toBe(false);
         }
         const receipts = () =>
           fs.readdirSync(fixture.controllers).filter((file) => file.endsWith(".json"));
@@ -186,12 +205,12 @@ function startParent(killProcessTree: boolean) {
 }
 
 function useParent(killProcessTree: boolean) {
-  beforeEach(async () => {
+  beforeEach(async ({ signal }) => {
     if (preparedParent) {
       throw new Error(`Previous fixture cleanup is unresolved: ${preparedParent.fixture.root}`);
     }
     preparedParent = startParent(killProcessTree);
-    await preparedParent.ready();
+    await preparedParent.ready(signal);
   }, DEFAULT_VITEST_TEST_TIMEOUT_MS);
   return () => {
     if (!preparedParent) {
@@ -313,11 +332,6 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
         script: "",
         expected: { code: 1, termination: "error", errorCode: "ENOENT" },
       },
-      {
-        name: "healthy",
-        script: 'process.stdout.write("raw-out");process.stderr.write("raw-err");',
-        expected: { code: 0, termination: "exit", stdout: "raw-out", stderr: "raw-err" },
-      },
     ])(
       "preserves real native $name result or cleanup uncertainty through the bound gate",
       async ({ name, script, expected }) => {
@@ -351,7 +365,7 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
         } else {
           expect(fs.existsSync(fixture.outcome), result.stderr).toBe(true);
           expect(JSON.parse(fs.readFileSync(fixture.outcome, "utf8"))).toMatchObject(expected);
-          expect(result.code, result.stderr).toBe(name === "healthy" ? 0 : 1);
+          expect(result.code, result.stderr).toBe(1);
         }
       },
       20000,

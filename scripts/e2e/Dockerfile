@@ -1,12 +1,12 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.27.0
 #
 # Shared Docker E2E image.
 # `bare` is a clean Node/Git runner for install/update lanes. `functional`
 # installs the prepared OpenClaw npm tarball into /app for built-app lanes.
 
-ARG OPENCLAW_NODE_ALPINE_IMAGE="docker.io/library/node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43"
+ARG OPENCLAW_NODE_ALPINE_IMAGE="docker.io/library/node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1"
 
-FROM node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS e2e-runner
+FROM node:24-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS e2e-runner
 
 # openssl provisions short-lived fixture certificates for HTTPS-only provider
 # routes. python3 covers package/plugin install paths that execute helper scripts.
@@ -17,7 +17,18 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable
-RUN npm install -g tsx@4.23.12 --no-fund --no-audit
+RUN npm install -g tsx@4.23.15 --no-fund --no-audit
+
+# Mounted survivor helpers resolve compiler tooling independently of installed packages.
+COPY package.json /tmp/openclaw-e2e-package.json
+RUN <<'INSTALL_TYPESCRIPT'
+set -eu
+typescript_version="$(node -p 'require("/tmp/openclaw-e2e-package.json").devDependencies.typescript')"
+npm install --prefix /opt/openclaw-e2e "typescript@$typescript_version" \
+  --no-save --package-lock=false --no-fund --no-audit
+ln -s /opt/openclaw-e2e/node_modules /node_modules
+rm /tmp/openclaw-e2e-package.json
+INSTALL_TYPESCRIPT
 
 COPY --chmod=0644 scripts/prepublish-plugin-registry-artifact.mjs /opt/openclaw-e2e/scripts/
 COPY --chmod=0755 scripts/e2e/lib/prepublish-plugin-registry.sh /opt/openclaw-e2e/scripts/e2e/lib/

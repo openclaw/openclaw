@@ -136,29 +136,32 @@ it.each([
     sql: "UPDATE schema_meta SET role = 'state' WHERE meta_key = 'primary'",
     error: "has schema role state",
   },
-])("revalidates retained read admission after a committed change: $sql", async ({ sql, error }) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const options = { agentId: "main", env: state.env };
-    const { path } = openOpenClawAgentDatabase(options);
-    await closeOpenClawAgentDatabaseByPathAsync(path);
-    const target = { agentId: "main", path };
-    const scope = new OpenClawAgentDatabaseReadOnlyScope();
-    const read = () =>
-      scope.run(target, () => withOpenClawAgentDatabaseReadOnly(() => "admitted", options));
-    try {
-      expect(read()).toEqual({ found: true, value: "admitted" });
-      const writer = new (requireNodeSqlite().DatabaseSync)(path);
+])(
+  "revalidates retained read admission on the next read after a commit: $sql",
+  async ({ sql, error }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const options = { agentId: "main", env: state.env };
+      const { path } = openOpenClawAgentDatabase(options);
+      await closeOpenClawAgentDatabaseByPathAsync(path);
+      const target = { agentId: "main", path };
+      const scope = new OpenClawAgentDatabaseReadOnlyScope();
+      const read = () =>
+        scope.run(target, () => withOpenClawAgentDatabaseReadOnly(() => "admitted", options));
       try {
-        writer.exec(sql);
+        expect(read()).toEqual({ found: true, value: "admitted" });
+        const writer = new (requireNodeSqlite().DatabaseSync)(path);
+        try {
+          writer.exec(sql);
+        } finally {
+          writer.close();
+        }
+        expect(read).toThrow(error);
       } finally {
-        writer.close();
+        scope.close();
       }
-      expect(read).toThrow(error);
-    } finally {
-      scope.close();
-    }
-  });
-});
+    });
+  },
+);
 
 it("reuses ordinary readers until idle expiry and reopens after lifecycle invalidation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

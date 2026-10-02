@@ -37,7 +37,6 @@ import {
 } from "../config/sessions/paths.js";
 import {
   applySessionEntryReplacements,
-  iterateDoctorSessionKeyBatches,
   loadExactSessionEntryReadOnly,
   scanDoctorSessionEntriesStrict,
 } from "../config/sessions/session-accessor.js";
@@ -51,9 +50,11 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { safeRealpathSync } from "../infra/boundary-path.js";
-import { findGitRoot } from "../infra/git-root.js";
+import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import { preserveDeferredPluginSessionSource } from "../infra/deferred-plugin-session-sources.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
+import { existsDir, migrationFileExists as existsFile } from "../infra/state-migrations.fs.js";
 import {
   loadLegacySessionStore,
   updateLegacySessionStore,
@@ -71,39 +72,20 @@ import {
   noteMainSessionRecoveryIntegrity,
   type MainSessionRecoveryIntegrityCandidate,
 } from "./doctor-main-session-recovery.js";
+import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   createPluginSessionStateDoctorScanner,
   runPluginSessionStateDoctorRepairs,
 } from "./doctor-session-state-providers.js";
 import { countLabel, type OrphanAgentDir } from "./doctor-state-integrity-format.js";
 import { collectRetainedUnconfiguredAgentDatabaseWarnings } from "./doctor-unconfigured-agent-databases.js";
+import { iterateDoctorSessionKeyBatches } from "./doctor/shared/session-entry-rewrite.js";
 
 const STATE_INTEGRITY_CHECK_ID = "core/doctor/state-integrity";
 
-type DoctorPrompterLike = {
-  confirmRuntimeRepair: (params: {
-    message: string;
-    initialValue?: boolean;
-    requiresInteractiveConfirmation?: boolean;
-  }) => Promise<boolean>;
+type DoctorPrompterLike = Pick<DoctorPrompter, "confirmRuntimeRepair"> & {
   note?: typeof note;
 };
-
-function existsDir(dir: string): boolean {
-  try {
-    return fs.existsSync(dir) && fs.statSync(dir).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-function existsFile(filePath: string): boolean {
-  try {
-    return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
-}
 
 type RuntimeDirLabel = "Sessions dir" | "Session store dir" | "OAuth dir";
 
@@ -281,6 +263,15 @@ function dirPermissionHint(dir: string): string | null {
   return null;
 }
 
+function readGroupOrWorldAccessibleMode(targetPath: string): number | null {
+  const linkStat = fs.lstatSync(targetPath);
+  const isSymlink = linkStat.isSymbolicLink();
+  // Symlink permissions describe the link, not the target. Immutable stores cannot be repaired.
+  const stat = isSymlink ? fs.statSync(targetPath) : linkStat;
+  const resolvedPath = isSymlink ? fs.realpathSync(targetPath) : targetPath;
+  return !resolvedPath.startsWith("/nix/store/") && (stat.mode & 0o077) !== 0 ? stat.mode : null;
+}
+
 function addUserRwx(mode: number): number {
   const perms = mode & 0o777;
   return perms | 0o700;
@@ -322,10 +313,6 @@ function countJsonlLines(filePath: string): number {
   }
 }
 
-function isPathUnderRoot(targetPath: string, rootPath: string): boolean {
-  return isPathUnderRootWithPathOps(targetPath, rootPath, path);
-}
-
 function resolvePathThroughExistingAncestor(
   targetPath: string,
   resolveRealPath: (targetPath: string) => string | null,
@@ -348,36 +335,13 @@ function resolvePathThroughExistingAncestor(
 }
 
 function escapeControlCharsForTerminal(value: string): string {
-  let escaped = "";
-  for (const char of value) {
-    if (char === "\u001b") {
-      escaped += "\\x1b";
-      continue;
-    }
-    if (char === "\r") {
-      escaped += "\\r";
-      continue;
-    }
-    if (char === "\n") {
-      escaped += "\\n";
-      continue;
-    }
-    if (char === "\t") {
-      escaped += "\\t";
-      continue;
-    }
+  const named: Record<string, string> = { "\r": "\\r", "\n": "\\n", "\t": "\\t" };
+  return Array.from(value, (char) => {
     const code = char.charCodeAt(0);
-    if ((code >= 0 && code <= 8) || code === 11 || code === 12 || (code >= 14 && code <= 31)) {
-      escaped += `\\x${code.toString(16).padStart(2, "0")}`;
-      continue;
-    }
-    if (code === 127) {
-      escaped += "\\x7f";
-      continue;
-    }
-    escaped += char;
-  }
-  return escaped;
+    return code <= 31 || code === 127
+      ? (named[char] ?? `\\x${code.toString(16).padStart(2, "0")}`)
+      : char;
+  }).join("");
 }
 
 type LinuxMountInfoEntry = {
@@ -422,10 +386,10 @@ function parseLinuxMountInfo(rawMountInfo: string): LinuxMountInfoEntry[] {
   return entries;
 }
 
-function isPathUnderRootWithPathOps(
+function isPathUnderRoot(
   targetPath: string,
   rootPath: string,
-  pathOps: Pick<typeof path, "resolve" | "sep" | "parse">,
+  pathOps: Pick<typeof path, "resolve" | "sep" | "parse"> = path,
 ): boolean {
   const normalizedTarget = pathOps.resolve(targetPath);
   const normalizedRoot = pathOps.resolve(rootPath);
@@ -447,7 +411,7 @@ function findLinuxMountInfoEntryForPath(
   const normalizedTarget = pathOps.resolve(targetPath);
   let bestMatch: LinuxMountInfoEntry | null = null;
   for (const entry of entries) {
-    if (!isPathUnderRootWithPathOps(normalizedTarget, entry.mountPoint, pathOps)) {
+    if (!isPathUnderRoot(normalizedTarget, entry.mountPoint, pathOps)) {
       continue;
     }
     if (
@@ -721,23 +685,11 @@ function hasPairingPolicy(value: unknown): boolean {
   if (!record) {
     return false;
   }
-  if (isPairingPolicy(record.dmPolicy)) {
-    return true;
-  }
-  const dm = asNullableObjectRecord(record.dm);
-  if (dm && isPairingPolicy(dm.policy)) {
-    return true;
-  }
-  const accounts = asNullableObjectRecord(record.accounts);
-  if (!accounts) {
-    return false;
-  }
-  for (const accountCfg of Object.values(accounts)) {
-    if (hasPairingPolicy(accountCfg)) {
-      return true;
-    }
-  }
-  return false;
+  return (
+    isPairingPolicy(record.dmPolicy) ||
+    isPairingPolicy(asNullableObjectRecord(record.dm)?.policy) ||
+    Object.values(asNullableObjectRecord(record.accounts) ?? {}).some(hasPairingPolicy)
+  );
 }
 
 function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
@@ -805,8 +757,7 @@ export function detectStateIntegrityHealthIssues(
   if (cloudSyncedStateDir) {
     issues.push({
       kind: "mac-cloud-state-dir",
-      path: cloudSyncedStateDir.path,
-      storage: cloudSyncedStateDir.storage,
+      ...cloudSyncedStateDir,
     });
   }
 
@@ -814,8 +765,7 @@ export function detectStateIntegrityHealthIssues(
   if (windowsCloudSyncedStateDir) {
     issues.push({
       kind: "windows-cloud-state-dir",
-      path: windowsCloudSyncedStateDir.path,
-      storage: windowsCloudSyncedStateDir.storage,
+      ...windowsCloudSyncedStateDir,
     });
   }
 
@@ -823,10 +773,7 @@ export function detectStateIntegrityHealthIssues(
   if (linuxSdBackedStateDir) {
     issues.push({
       kind: "linux-sd-state-dir",
-      path: linuxSdBackedStateDir.path,
-      mountPoint: linuxSdBackedStateDir.mountPoint,
-      fsType: linuxSdBackedStateDir.fsType,
-      source: linuxSdBackedStateDir.source,
+      ...linuxSdBackedStateDir,
     });
   }
 
@@ -834,9 +781,7 @@ export function detectStateIntegrityHealthIssues(
   if (linuxVolatileStateDir) {
     issues.push({
       kind: "linux-volatile-state-dir",
-      path: linuxVolatileStateDir.path,
-      mountPoint: linuxVolatileStateDir.mountPoint,
-      fsType: linuxVolatileStateDir.fsType,
+      ...linuxVolatileStateDir,
     });
   }
 
@@ -856,12 +801,9 @@ export function detectStateIntegrityHealthIssues(
 
   if (stateDirExists && process.platform !== "win32") {
     try {
-      const dirLstat = fs.lstatSync(stateDir);
-      const isDirSymlink = dirLstat.isSymbolicLink();
-      const stat = isDirSymlink ? fs.statSync(stateDir) : dirLstat;
-      const resolvedDir = isDirSymlink ? fs.realpathSync(stateDir) : stateDir;
-      if (!resolvedDir.startsWith("/nix/store/") && (stat.mode & 0o077) !== 0) {
-        issues.push({ kind: "state-dir-too-open", path: stateDir, mode: stat.mode });
+      const mode = readGroupOrWorldAccessibleMode(stateDir);
+      if (mode !== null) {
+        issues.push({ kind: "state-dir-too-open", path: stateDir, mode });
       }
     } catch {
       // Legacy noteStateIntegrity reports stat failures. Structured findings
@@ -871,12 +813,9 @@ export function detectStateIntegrityHealthIssues(
 
   if (params?.configPath && existsFile(params.configPath) && process.platform !== "win32") {
     try {
-      const configLstat = fs.lstatSync(params.configPath);
-      const isSymlink = configLstat.isSymbolicLink();
-      const stat = isSymlink ? fs.statSync(params.configPath) : configLstat;
-      const resolvedConfig = isSymlink ? fs.realpathSync(params.configPath) : params.configPath;
-      if (!resolvedConfig.startsWith("/nix/store/") && (stat.mode & 0o077) !== 0) {
-        issues.push({ kind: "config-file-too-open", path: params.configPath, mode: stat.mode });
+      const mode = readGroupOrWorldAccessibleMode(params.configPath);
+      if (mode !== null) {
+        issues.push({ kind: "config-file-too-open", path: params.configPath, mode });
       }
     } catch {
       // See state-dir stat handling above.
@@ -922,95 +861,82 @@ export function detectStateIntegrityHealthIssues(
 export function stateIntegrityIssueToHealthFinding(
   issue: StateIntegrityHealthIssue,
 ): HealthFinding {
+  const finding = (
+    message: string,
+    fixHint: string,
+    severity: HealthFinding["severity"] = "warning",
+    target?: string,
+  ): HealthFinding => ({
+    checkId: STATE_INTEGRITY_CHECK_ID,
+    severity,
+    message,
+    path: issue.path,
+    ...(target !== undefined ? { target } : {}),
+    fixHint,
+  });
   switch (issue.kind) {
     case "mac-cloud-state-dir":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "warning",
-        message: `State directory is under macOS cloud-synced storage (${issue.storage}), which can cause slow I/O and sync races.`,
-        path: issue.path,
-        fixHint: "Move OPENCLAW_STATE_DIR to local non-synced storage such as ~/.openclaw.",
-      };
+      return finding(
+        `State directory is under macOS cloud-synced storage (${issue.storage}), which can cause slow I/O and sync races.`,
+        "Move OPENCLAW_STATE_DIR to local non-synced storage such as ~/.openclaw.",
+      );
     case "windows-cloud-state-dir":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "warning",
-        message: `State directory is under Windows cloud-synced storage (${issue.storage}), which can cause slow I/O, sync races, and Files On-Demand dehydration.`,
-        path: issue.path,
-        fixHint:
-          "Move OPENCLAW_STATE_DIR to local non-synced storage such as %USERPROFILE%\\.openclaw.",
-      };
+      return finding(
+        `State directory is under Windows cloud-synced storage (${issue.storage}), which can cause slow I/O, sync races, and Files On-Demand dehydration.`,
+        "Move OPENCLAW_STATE_DIR to local non-synced storage such as %USERPROFILE%\\.openclaw.",
+      );
     case "linux-sd-state-dir":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "warning",
-        message: `State directory appears to be on SD/eMMC storage (${issue.source}, ${issue.fsType}), which can hurt startup and durability.`,
-        path: issue.path,
-        target: issue.mountPoint,
-        fixHint: "Move OPENCLAW_STATE_DIR to SSD/NVMe-backed storage.",
-      };
+      return finding(
+        `State directory appears to be on SD/eMMC storage (${issue.source}, ${issue.fsType}), which can hurt startup and durability.`,
+        "Move OPENCLAW_STATE_DIR to SSD/NVMe-backed storage.",
+        "warning",
+        issue.mountPoint,
+      );
     case "linux-volatile-state-dir":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "warning",
-        message: `State directory is on volatile ${issue.fsType} storage and may disappear on reboot.`,
-        path: issue.path,
-        target: issue.mountPoint,
-        fixHint: "Move OPENCLAW_STATE_DIR to persistent local storage.",
-      };
+      return finding(
+        `State directory is on volatile ${issue.fsType} storage and may disappear on reboot.`,
+        "Move OPENCLAW_STATE_DIR to persistent local storage.",
+        "warning",
+        issue.mountPoint,
+      );
     case "missing-state-dir":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "error",
-        message:
-          "State directory is missing. Sessions, credentials, logs, and config are stored there.",
-        path: issue.path,
-        fixHint: "Run `openclaw doctor --fix` to create the state directory.",
-      };
+      return finding(
+        "State directory is missing. Sessions, credentials, logs, and config are stored there.",
+        "Run `openclaw doctor --fix` to create the state directory.",
+        "error",
+      );
     case "state-dir-not-writable":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "error",
-        message: issue.hint
+      return finding(
+        issue.hint
           ? `State directory is not writable. ${issue.hint}`
           : "State directory is not writable.",
-        path: issue.path,
-        fixHint: "Run `openclaw doctor --fix` to repair state directory permissions.",
-      };
+        "Run `openclaw doctor --fix` to repair state directory permissions.",
+        "error",
+      );
     case "state-dir-too-open":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "warning",
-        message: "State directory permissions are too open. Recommend chmod 700.",
-        path: issue.path,
-        fixHint: "Run `openclaw doctor --fix` to tighten state directory permissions.",
-      };
+      return finding(
+        "State directory permissions are too open. Recommend chmod 700.",
+        "Run `openclaw doctor --fix` to tighten state directory permissions.",
+      );
     case "config-file-too-open":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "warning",
-        message: "Config file is group/world readable. Recommend chmod 600.",
-        path: issue.path,
-        fixHint: "Run `openclaw doctor --fix` to tighten config file permissions.",
-      };
+      return finding(
+        "Config file is group/world readable. Recommend chmod 600.",
+        "Run `openclaw doctor --fix` to tighten config file permissions.",
+      );
     case "missing-runtime-dir":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "error",
-        message: `${issue.label} is missing.`,
-        path: issue.path,
-        fixHint: "Run `openclaw doctor --fix` to create missing runtime state directories.",
-      };
+      return finding(
+        `${issue.label} is missing.`,
+        "Run `openclaw doctor --fix` to create missing runtime state directories.",
+        "error",
+      );
     case "runtime-dir-not-writable":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "error",
-        message: issue.hint
+      return finding(
+        issue.hint
           ? `${issue.label} is not writable. ${issue.hint}`
           : `${issue.label} is not writable.`,
-        path: issue.path,
-        fixHint: "Run `openclaw doctor --fix` to repair runtime state directory permissions.",
-      };
+        "Run `openclaw doctor --fix` to repair runtime state directory permissions.",
+        "error",
+      );
   }
   return assertNeverStateIntegrityIssue(issue);
 }
@@ -1018,53 +944,28 @@ export function stateIntegrityIssueToHealthFinding(
 export function stateIntegrityIssueToRepairEffect(
   issue: StateIntegrityHealthIssue,
 ): HealthRepairEffect {
+  const effect = (
+    action: string,
+    dryRunSafe = false,
+    kind: HealthRepairEffect["kind"] = "state",
+  ): HealthRepairEffect => ({ kind, action, target: issue.path, dryRunSafe });
   switch (issue.kind) {
     case "mac-cloud-state-dir":
     case "windows-cloud-state-dir":
     case "linux-sd-state-dir":
     case "linux-volatile-state-dir":
-      return {
-        kind: "state",
-        action: "would-recommend-moving-state-dir",
-        target: issue.path,
-        dryRunSafe: true,
-      };
+      return effect("would-recommend-moving-state-dir", true);
     case "missing-state-dir":
-      return {
-        kind: "state",
-        action: "would-create-state-dir",
-        target: issue.path,
-        dryRunSafe: false,
-      };
+      return effect("would-create-state-dir");
     case "state-dir-not-writable":
     case "state-dir-too-open":
-      return {
-        kind: "state",
-        action: "would-repair-state-dir-permissions",
-        target: issue.path,
-        dryRunSafe: false,
-      };
+      return effect("would-repair-state-dir-permissions");
     case "config-file-too-open":
-      return {
-        kind: "file",
-        action: "would-tighten-config-file-permissions",
-        target: issue.path,
-        dryRunSafe: false,
-      };
+      return effect("would-tighten-config-file-permissions", false, "file");
     case "missing-runtime-dir":
-      return {
-        kind: "state",
-        action: "would-create-runtime-state-dir",
-        target: issue.path,
-        dryRunSafe: false,
-      };
+      return effect("would-create-runtime-state-dir");
     case "runtime-dir-not-writable":
-      return {
-        kind: "state",
-        action: "would-repair-runtime-state-dir-permissions",
-        target: issue.path,
-        dryRunSafe: false,
-      };
+      return effect("would-repair-runtime-state-dir-permissions");
   }
   return assertNeverStateIntegrityIssue(issue);
 }
@@ -1182,15 +1083,7 @@ export async function noteStateIntegrity(
   }
   if (stateDirExists && process.platform !== "win32") {
     try {
-      const dirLstat = fs.lstatSync(stateDir);
-      const isDirSymlink = dirLstat.isSymbolicLink();
-      // For symlinks, check the resolved target permissions instead of the
-      // symlink itself (which always reports 777). Skip the warning only when
-      // the target lives in a known immutable store (e.g. /nix/store/).
-      const stat = isDirSymlink ? fs.statSync(stateDir) : dirLstat;
-      const resolvedDir = isDirSymlink ? fs.realpathSync(stateDir) : stateDir;
-      const isImmutableStore = resolvedDir.startsWith("/nix/store/");
-      if (!isImmutableStore && (stat.mode & 0o077) !== 0) {
+      if (readGroupOrWorldAccessibleMode(stateDir) !== null) {
         warnings.push(
           `- State directory permissions are too open (${displayStateDir}). Recommend chmod 700.`,
         );
@@ -1210,14 +1103,7 @@ export async function noteStateIntegrity(
 
   if (configPath && existsFile(configPath) && process.platform !== "win32") {
     try {
-      const configLstat = fs.lstatSync(configPath);
-      const isSymlink = configLstat.isSymbolicLink();
-      // For symlinks, check the resolved target permissions. Skip the warning
-      // only when the target lives in an immutable store (e.g. /nix/store/).
-      const stat = isSymlink ? fs.statSync(configPath) : configLstat;
-      const resolvedConfig = isSymlink ? fs.realpathSync(configPath) : configPath;
-      const isImmutableConfig = resolvedConfig.startsWith("/nix/store/");
-      if (!isImmutableConfig && (stat.mode & 0o077) !== 0) {
+      if (readGroupOrWorldAccessibleMode(configPath) !== null) {
         warnings.push(
           `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
         );
@@ -1332,6 +1218,7 @@ export async function noteStateIntegrity(
   }
 
   const compatibilityAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
+  const pending = readDeferredPluginMigrations({ env });
   const isRetained = createRetainedAgentDatabaseMatcher(env, () =>
     resolveConfiguredAgentDatabaseTargets(cfg, { env }),
   );
@@ -1355,10 +1242,10 @@ export async function noteStateIntegrity(
     if (isRetained(sqliteStorePath, agentId)) {
       return;
     }
-    // A successful SQLite import archives sessions.json. Its continued presence
-    // is therefore the explicit signal that pre-import rows still need inspection.
     const legacyStore =
-      inspectLegacyStore && existsFile(absoluteStorePath)
+      inspectLegacyStore &&
+      existsFile(absoluteStorePath) &&
+      !preserveDeferredPluginSessionSource({ cfg, env, target, pending })
         ? loadLegacySessionStore(absoluteStorePath)
         : {};
     const legacyEntries = Object.entries(legacyStore).filter(
@@ -1426,12 +1313,12 @@ export async function noteStateIntegrity(
         warnings.push(
           [
             `- Found ${wedgedCount} with automatic restart recovery tombstoned.`,
-            "  OpenClaw will not auto-resume these child sessions on restart; reconcile their task records instead.",
+            "  OpenClaw will not auto-resume these child sessions on restart; use Doctor to repair stale native subagent recovery state.",
             `  Examples: ${wedgedSubagentSessions
               .slice(0, 3)
               .map(({ key }) => key)
               .join(", ")}`,
-            `  Fix: ${formatCliCommand("openclaw tasks maintenance --apply")}`,
+            `  Fix: ${formatCliCommand("openclaw doctor --fix")}`,
           ].join("\n"),
         );
         const repairWedged = await prompter.confirmRuntimeRepair({
@@ -1566,7 +1453,7 @@ export async function noteStateIntegrity(
     await inspectAgentSessionIntegrity(target, inspectLegacyStore);
     inspectedLegacyStores.add(legacyStorePath);
   }
-  for (const warning of describeHeartbeatSessionTargetIssues(cfg)) {
+  for (const warning of await describeHeartbeatSessionTargetIssues(cfg)) {
     warnings.push(warning);
   }
 
@@ -1578,23 +1465,4 @@ export async function noteStateIntegrity(
   }
 }
 
-/** Returns the workspace git-backup tip when the workspace exists but is not a git repo. */
-export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
-  if (!existsDir(workspaceDir)) {
-    return null;
-  }
-  const resolvedWorkspaceDir = safeRealpathSync(workspaceDir);
-  if (!resolvedWorkspaceDir || findGitRoot(resolvedWorkspaceDir)) {
-    return null;
-  }
-  return "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended-private";
-}
-
-/** Emits the workspace backup tip when applicable. */
-export function noteWorkspaceBackupTip(workspaceDir: string) {
-  const tip = collectWorkspaceBackupTip(workspaceDir);
-  if (tip) {
-    note(tip, "Workspace");
-  }
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

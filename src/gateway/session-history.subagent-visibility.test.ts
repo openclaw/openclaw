@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
@@ -11,6 +10,7 @@ import {
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
 import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-history-events.js";
+import * as inputVisibility from "../config/sessions/session-accessor.sqlite-history-input-visibility.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -29,6 +29,7 @@ import {
   SessionHistorySseState,
 } from "./session-history-state.js";
 import { createSessionHistorySubagentProjection } from "./session-history-subagent-projection.js";
+import * as subagentSources from "./session-history-subagent-sources.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
 
 const childKey = "agent:main:dashboard:spawned-worker";
@@ -103,7 +104,7 @@ async function withHistory(
 }
 
 describe("subagent coordination history", () => {
-  it("appends ordinary updates without probing session source paths", async () => {
+  it("prepares inline source and run visibility without calling native readers on the host", async () => {
     await withHistory(
       [["human-input", { role: "user", content: "Question", idempotencyKey: "human-run:user" }]],
       async ({ scope, entry, readers }) => {
@@ -112,8 +113,16 @@ describe("subagent coordination history", () => {
           { target: { ...scope, sessionEntry: entry } },
           { readers, readOnly: true },
         );
-        const stat = vi.spyOn(fs, "lstatSync");
-        const realpath = vi.spyOn(fs.realpathSync, "native");
+        const inputRead = vi
+          .spyOn(inputVisibility, "readSessionTranscriptRunInputVisibilityFromProjection")
+          .mockImplementation(() => {
+            throw new Error("host run visibility read");
+          });
+        const sourceRead = vi
+          .spyOn(subagentSources, "createBoundSessionHistorySubagentSource")
+          .mockImplementation(() => {
+            throw new Error("host source visibility read");
+          });
         try {
           for (const message of [
             { role: "user", content: "Next question" },
@@ -131,7 +140,7 @@ describe("subagent coordination history", () => {
               target: { ...scope, sessionEntry: entry },
               snapshot,
             });
-            const result = history.appendInlineMessage({ message, messageSeq: 2 });
+            const result = (await history.prepareInlineMessage({ message, messageSeq: 2 }))();
             if ("provenance" in message) {
               expect(result).toBeNull();
               expect(history.snapshot().messages).toEqual(snapshot.history.messages);
@@ -140,11 +149,11 @@ describe("subagent coordination history", () => {
               expect(history.snapshot().messages).toHaveLength(2);
             }
           }
-          expect(stat).not.toHaveBeenCalled();
-          expect(realpath).not.toHaveBeenCalled();
+          expect(inputRead).not.toHaveBeenCalled();
+          expect(sourceRead).not.toHaveBeenCalled();
         } finally {
-          stat.mockRestore();
-          realpath.mockRestore();
+          inputRead.mockRestore();
+          sourceRead.mockRestore();
         }
       },
     );
@@ -203,16 +212,20 @@ describe("subagent coordination history", () => {
         message: response("cross-late-run", "Later cross-agent acknowledgement"),
       });
       expect(
-        sse.appendInlineMessage({
-          message: forwarded("cross-late-run", sourceChild),
-          messageSeq: 5,
-        }),
+        (
+          await sse.prepareInlineMessage({
+            message: forwarded("cross-late-run", sourceChild),
+            messageSeq: 5,
+          })
+        )(),
       ).toBeNull();
       expect(
-        sse.appendInlineMessage({
-          message: response("cross-late-run", "Later cross-agent acknowledgement"),
-          messageSeq: 6,
-        }),
+        (
+          await sse.prepareInlineMessage({
+            message: response("cross-late-run", "Later cross-agent acknowledgement"),
+            messageSeq: 6,
+          })
+        )(),
       ).toBeNull();
       expect(sse.snapshot().messages).toEqual(page.history.messages);
       const delta = await readChatHistoryDelta({
@@ -235,16 +248,30 @@ describe("subagent coordination history", () => {
     });
   });
 
-  it.each(
-    [false, true].flatMap((deferSources) =>
-      ["uncached-source", "cached-source", "cached-run", "projected-fast-path"].map((readKind) => ({
-        readKind,
-        deferSources,
-      })),
-    ),
-  )(
-    "rejects local history after shared-state retirement ($readKind, deferred=$deferSources)",
-    async ({ readKind, deferSources }) => {
+  it("rejects prepared inline visibility when shared-state custody retires before publication", async () => {
+    await withHistory([["worker-input", childInput("worker-run")]], async ({ scope, entry }) => {
+      const snapshot = await readSessionHistorySnapshotAsync({
+        target: { ...scope, sessionEntry: entry },
+      });
+      const history = SessionHistorySseState.fromSnapshot({
+        target: { ...scope, sessionEntry: entry },
+        snapshot,
+      });
+      const append = await history.prepareInlineMessage({
+        message: response("worker-run", "Internal acknowledgement"),
+        messageSeq: 2,
+      });
+      const database = openOpenClawStateDatabase();
+      await closeOpenClawStateDatabaseByPathAsync(database.path);
+      openOpenClawStateDatabase({ path: database.path });
+      expect(append).toThrow(/state database read admission changed/u);
+      expect(history.snapshot()).toBe(snapshot.history);
+    });
+  });
+
+  it.each(["uncached-source", "cached-source", "cached-run", "projected-fast-path"])(
+    "rejects local history after shared-state retirement (%s)",
+    async (readKind) => {
       await withHistory(
         [
           ["worker-input", childInput("worker-run")],
@@ -252,9 +279,7 @@ describe("subagent coordination history", () => {
         ],
         async ({ scope }) => {
           const database = openOpenClawStateDatabase();
-          const subagentCoordination = createSessionHistorySubagentProjection(scope, {
-            deferSources,
-          });
+          const subagentCoordination = createSessionHistorySubagentProjection(scope);
           if (readKind === "cached-source") {
             expect(subagentCoordination.isSubagentSession(childKey)).toBe(true);
           } else if (readKind === "cached-run") {
@@ -286,22 +311,17 @@ describe("subagent coordination history", () => {
     },
   );
 
-  it.each([false, true])(
-    "rejects plain projections after agent registration (deferred=%s)",
-    async (deferSources) => {
-      await withHistory([], async ({ scope }) => {
-        const subagentCoordination = createSessionHistorySubagentProjection(scope, {
-          deferSources,
-        });
-        openOpenClawAgentDatabase({ agentId: "registered-later" });
-        expect(() =>
-          projectChatDisplayMessages([{ role: "user", content: "Visible message" }], {
-            subagentCoordination,
-          }),
-        ).toThrow("Session store changed");
-      });
-    },
-  );
+  it("rejects plain projections after agent registration", async () => {
+    await withHistory([], async ({ scope }) => {
+      const subagentCoordination = createSessionHistorySubagentProjection(scope);
+      openOpenClawAgentDatabase({ agentId: "registered-later" });
+      expect(() =>
+        projectChatDisplayMessages([{ role: "user", content: "Visible message" }], {
+          subagentCoordination,
+        }),
+      ).toThrow("Session store changed");
+    });
+  });
 
   it.each(["parentSessionKey", "spawnedBy"] as const)(
     "reads ACP %s lineage from bound shared state and rejects stale bindings",
@@ -375,7 +395,6 @@ describe("subagent coordination history", () => {
           stateDatabase: {
             path: stateContext.admission.databasePath,
             environment: stateContext.environment,
-            coordinatorRuntime: stateContext.coordinatorRuntime,
           },
         });
         const snapshot = await readSessionHistorySnapshotKernel(
@@ -537,7 +556,9 @@ describe("subagent coordination history", () => {
         };
         await appendTranscriptMessage(scope, { eventId: "later", now: 2, message: later });
         expect(
-          state.appendInlineMessage({ message: later, messageId: "later", messageSeq: 4 }),
+          (
+            await state.prepareInlineMessage({ message: later, messageId: "later", messageSeq: 4 })
+          )(),
         ).toBeNull();
         const delta = await readChatHistoryDelta({
           agentId: scope.agentId,
@@ -564,6 +585,29 @@ describe("subagent coordination history", () => {
           eventId: "human-answer",
           now: 4,
           message: response("worker-run", "The release still needs final validation."),
+        });
+        const humanSteer = (
+          await state.prepareInlineMessage({
+            message: {
+              role: "user",
+              content: "Give me the remaining blockers.",
+              __openclaw: { steerTargetRunId: "worker-run" },
+            },
+            messageId: "human-steer",
+            messageSeq: 5,
+          })
+        )();
+        const humanAnswer = (
+          await state.prepareInlineMessage({
+            message: response("worker-run", "The release still needs final validation."),
+            messageId: "human-answer",
+            messageSeq: 6,
+          })
+        )();
+        expect(humanSteer?.messageSeq).toBe(5);
+        expect(humanAnswer?.message).toMatchObject({
+          content: "The release still needs final validation.",
+          __openclaw: { seq: 6 },
         });
         const resumed = await readChatHistoryDelta({
           agentId: scope.agentId,

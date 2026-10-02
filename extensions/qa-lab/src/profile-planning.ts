@@ -1,4 +1,3 @@
-// Qa Lab plugin module owns canonical taxonomy profile membership planning.
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import {
@@ -88,19 +87,10 @@ export function resolveQaRunProfileMembership(
   const requestedScenarioIds = uniqueStrings(
     (opts.scenarioIds ?? []).map((scenarioId) => scenarioId.trim()).filter(Boolean),
   );
-  if (requestedScenarioIds.length === 0) {
-    return {
-      categories,
-      excludedScenarioIds: [],
-      profile,
-      profileScenarios,
-      selectedScenarios: profileScenarios,
-    };
-  }
   const requestedScenarioIdSet = new Set(requestedScenarioIds);
-  const selectedScenarios = profileScenarios.filter((scenario) =>
-    requestedScenarioIdSet.has(scenario.id),
-  );
+  const selectedScenarios = requestedScenarioIds.length
+    ? profileScenarios.filter((scenario) => requestedScenarioIdSet.has(scenario.id))
+    : profileScenarios;
   const selectedScenarioIdSet = new Set(selectedScenarios.map((scenario) => scenario.id));
   return {
     categories,

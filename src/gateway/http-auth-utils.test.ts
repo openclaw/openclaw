@@ -1,24 +1,30 @@
 import { getEventListeners, once } from "node:events";
 import type { IncomingMessage } from "node:http";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as schemaFacts from "../infra/sqlite-schema-facts.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   ensureCanonicalUserProfileForEmail,
   linkCanonicalUserProfileEmail,
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
-import { getUserProfileListItem, linkEmail, setDisplayName } from "../state/user-profiles.js";
+import { linkEmail, setDisplayName } from "../state/user-profile-writes.worker.js";
+import * as profileSchema from "../state/user-profiles-schema.js";
+import { getUserProfileListItem } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayAuthResult } from "./auth.js";
 import {
@@ -113,6 +119,8 @@ async function registerPersonAccessFixture() {
   };
   const email = "visitor@example.test";
   const person = await ensureCanonicalUserProfileForEmail(email);
+  const catalog = await prepareUserProfileCatalog();
+  onTestFinished(catalog.release);
   const access: { grant?: AbortController; inapplicable?: boolean; onAuthorize?: () => void } = {};
   registerVirtualTestPlugin({
     registry,
@@ -147,6 +155,56 @@ describe("HTTP gateway owner profiles", () => {
   afterEach(() => {
     clearRuntimeConfigSnapshot();
     resetPluginRuntimeStateForTest();
+  });
+
+  it("reuses admitted state schema across 200 HTTP profile authorizations", async () => {
+    await withOpenClawTestState({ label: "http-profile-schema-admission" }, async () => {
+      const { cfg, email, person, access } = await registerPersonAccessFixture();
+      access.grant = new AbortController();
+      expect((await authenticate("trusted-proxy", cfg, email)).ok).toBe(true);
+      const observation = observeSqliteReadSql(StatementSync.prototype);
+      const facts = vi.spyOn(schemaFacts, "getAdmittedSqliteSchemaFacts");
+      const ensures = vi.spyOn(profileSchema, "ensureUserProfilesSchema");
+      const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+      try {
+        for (let index = 0; index < 200; index += 1) {
+          authorize.mockResolvedValueOnce({ ok: true, method: "trusted-proxy", user: email });
+          const result = await checkGatewayHttpRequestAuth({
+            req,
+            auth: { mode: "none", allowTailscale: false },
+            cfg,
+            getRuntimeConfig: () => cfg,
+          });
+          expect(result).toMatchObject({
+            ok: true,
+            requestAuth: { authenticatedUserProfile: { profileId: person.id } },
+          });
+        }
+        const counts = {
+          schemaFacts: facts.mock.calls.length,
+          ensureCalls: ensures.mock.calls.length,
+          profileSchemaWrites: exec.mock.calls.filter(([sql]) =>
+            /CREATE TABLE IF NOT EXISTS user_profiles/iu.test(sql),
+          ).length,
+          schemaReads: observation.queries.filter((sql) =>
+            /sqlite_schema|sqlite_master|pragma_table_info|PRAGMA user_version/iu.test(sql),
+          ).length,
+          dataVersionReads: observation.queries.filter((sql) => /PRAGMA data_version/iu.test(sql))
+            .length,
+        };
+        console.log("HTTP profile admission counters", counts);
+        expect(counts).toMatchObject({
+          profileSchemaWrites: 0,
+          schemaReads: 0,
+        });
+        expect(counts.dataVersionReads).toBeLessThanOrEqual(1000);
+      } finally {
+        observation.restore();
+        facts.mockRestore();
+        ensures.mockRestore();
+        exec.mockRestore();
+      }
+    });
   });
 
   it.each(["missing", "disabled", "failed", "unregistered", "inapplicable", "unrelated"] as const)(
@@ -338,7 +396,7 @@ describe("HTTP gateway owner profiles", () => {
 
         await admitResponse(aliasStreaming, email);
         // The child keeps its source after the parent releases it and its response disconnects.
-        const captured = captureGatewayOperatorRunAuthority({
+        const captured = await captureGatewayOperatorRunAuthority({
           client: {
             connect: {
               minProtocol: 1,

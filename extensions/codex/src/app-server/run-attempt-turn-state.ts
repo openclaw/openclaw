@@ -232,7 +232,6 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     steeringQueueRef,
     completeTurn,
     interruptTurn,
-    renewNativeHookRelayForTurnProgress,
     noteProgress,
     deadlines,
   };

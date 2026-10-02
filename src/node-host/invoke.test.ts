@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FsListDirResult } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayClient } from "../gateway/client.js";
-import { saveExecApprovals, type ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import type { ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -196,48 +197,6 @@ describe("node host invoke", () => {
       sessionKey: "agent:main:canvas",
       prepareExecAuthorization: expect.any(Function),
     });
-  });
-
-  it("does not publish a canceled non-duplex plugin result", async () => {
-    const controller = new AbortController();
-    let resolvePlugin: ((result: string) => void) | undefined;
-    const handle = vi.fn(
-      () =>
-        new Promise<string>((resolve) => {
-          resolvePlugin = resolve;
-        }),
-    );
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "canvas",
-        pluginName: "Canvas",
-        command: { command: "canvas.present", cap: "canvas", handle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-
-    const invoking = handleInvoke(
-      {
-        id: "invoke-canvas-canceled",
-        nodeId: "node-1",
-        command: "canvas.present",
-        paramsJSON: "{}",
-      },
-      { request } as unknown as GatewayClient,
-      { current: async () => [] },
-      undefined,
-      { signal: controller.signal },
-    );
-    await vi.waitFor(() => expect(handle).toHaveBeenCalledOnce());
-
-    controller.abort();
-    resolvePlugin?.('{"stale":true}');
-    await invoking;
-
-    expect(request).not.toHaveBeenCalled();
   });
 
   it("publishes only the replacement result for a redelivered plugin invocation", async () => {

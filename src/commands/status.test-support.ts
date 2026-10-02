@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { isBetaTag } from "../infra/update-channels.js";
-import type { Tone } from "../memory-host-sdk/status.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { MemoryPluginStatus } from "../status/memory-plugin.js";
 import type { StatusSummary } from "../status/summary.js";
@@ -116,8 +115,6 @@ export function getStatusOverviewRowValue(
 }
 
 const baseStatusSummary = {
-  tasks: { total: 3, active: 1, failures: 0, byStatus: { queued: 1, running: 1 } },
-  taskAudit: { errors: 1, warnings: 0 },
   heartbeat: {
     defaultAgentId: "main",
     agents: [{ agentId: "main", enabled: true, everyMs: 60_000, every: "1m" }],
@@ -237,23 +234,6 @@ function createStatusHealth() {
   };
 }
 
-const statusTestDecorators = {
-  ok: (value: string) => `ok(${value})`,
-  warn: (value: string) => `warn(${value})`,
-  muted: (value: string) => `muted(${value})`,
-};
-
-const statusTestFormatting = {
-  formatTimeAgo: (value: number) => `${value}ms`,
-  formatKTokens: (value: number) => `${Math.round(value / 1000)}k`,
-};
-
-const statusTestMemoryResolvers = {
-  resolveMemoryVectorState: () => ({ state: "ready", tone: "ok" as Tone }),
-  resolveMemoryFtsState: () => ({ state: "ready", tone: "warn" as Tone }),
-  resolveMemoryCacheSummary: () => ({ text: "cache warm", tone: "muted" as Tone }),
-};
-
 export function createStatusCommandOverviewRowsParams(
   overrides: Partial<StatusCommandOverviewRowsParams> = {},
 ): StatusCommandOverviewRowsParams {
@@ -270,9 +250,6 @@ export function createStatusCommandOverviewRowsParams(
     memory: baseStatusMemory,
     memoryPlugin: baseStatusMemoryPlugin,
     pluginCompatibility: baseStatusPluginCompatibility,
-    ...statusTestDecorators,
-    ...statusTestFormatting,
-    ...statusTestMemoryResolvers,
     updateValue: "available · custom update",
     ...overrides,
   };

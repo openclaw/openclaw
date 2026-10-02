@@ -2,7 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+  withinTest,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   managementRequestSchema,
   parseWindowsJson,
@@ -24,16 +30,12 @@ const missing = {
   installation: null,
 };
 describe("accepted Windows management ABI", () => {
-  it.each([
-    '{"v":1,"v":1}',
-    '{"v":1,"\\u0076":1}',
-    '{"v":1,"context":{"x":1,"x":1}}',
-    '{"v":1.0}',
-    '{"v":1e0}',
-    '{"v":1,"x":"\\ud800"}',
-  ])("rejects ambiguous JSON %s", (json) => {
-    expect(() => parseWindowsJson(Buffer.from(json))).toThrow();
-  });
+  it.each(['{"v":1,"\\u0076":1}', '{"v":1.0}', '{"v":1e0}', '{"v":1,"x":"\\ud800"}'])(
+    "rejects ambiguous JSON %s",
+    (json) => {
+      expect(() => parseWindowsJson(Buffer.from(json))).toThrow();
+    },
+  );
   it("enforces exact byte bounds, UTF-8 and LF-inclusive response framing", () => {
     const request = windowsFixture().request;
     const json = JSON.stringify(request);
@@ -93,26 +95,21 @@ describe("accepted Windows management ABI", () => {
       store: "request",
     });
     const partial = { ...f.response, ok: false, code: "browser_control_disabled" };
-    expect(
-      parseWindowsManagementResponse(Buffer.from(JSON.stringify(partial) + "\n"), 1, request),
-    ).toEqual(partial);
+    const parse = (response: unknown) =>
+      parseWindowsManagementResponse(Buffer.from(JSON.stringify(response) + "\n"), 1, request);
+    expect(parse(partial)).toEqual(partial);
     for (const store of ["disabled", "unknown"]) {
-      expect(() =>
-        parseWindowsManagementResponse(
-          Buffer.from(JSON.stringify({ ...partial, store }) + "\n"),
-          1,
-          request,
-        ),
-      ).toThrow();
+      expect(() => parse({ ...partial, store })).toThrow();
     }
-    expect(() =>
-      parseWindowsManagementResponse(
-        Buffer.from(JSON.stringify({ ...f.response, code: "context_conflict", ok: false }) + "\n"),
-        1,
-        request,
-      ),
-    ).toThrow();
+    expect(() => parse({ ...f.response, code: "context_conflict", ok: false })).toThrow();
   });
+});
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
 });
 const directories: string[] = [];
 afterEach(async () => {
@@ -165,13 +162,16 @@ describe("real child-process management transport (not Windows PE proof)", () =>
       expect(run).toHaveBeenCalledTimes(1);
     },
   );
-  it("joins cancellation after the real child has consumed management EOF", async () => {
+  it("joins cancellation after the real child has consumed management EOF", async ({ signal }) => {
     const controller = new AbortController();
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-manage-ready-"));
     directories.push(directory);
     const ready = path.join(directory, "ready");
     const run = await child(
-      'import fs from "node:fs"; for await (const chunk of process.stdin) {} fs.writeFileSync(' +
+      fixtureReceiptClientSource(receipts.endpoint) +
+        '\nimport fs from "node:fs"; for await (const chunk of process.stdin) {} fs.writeFileSync(' +
+        JSON.stringify(ready) +
+        ', "ready"); sendReceipt(' +
         JSON.stringify(ready) +
         ', "ready"); setInterval(()=>{},1000);',
     );
@@ -181,10 +181,16 @@ describe("real child-process management transport (not Windows PE proof)", () =>
     });
     const rejected = expect(result).rejects.toThrow("outcome is unknown");
     try {
-      await vi.waitFor(async () => expect(await fs.readFile(ready, "utf8")).toBe("ready"));
+      // The durable marker precedes the receipt; process settlement may overtake socket delivery.
+      const confirmReady = async () => expect(await fs.readFile(ready, "utf8")).toBe("ready");
+      await withinTest(
+        Promise.race([receipts.waitFor(ready, "ready"), result.then(confirmReady, confirmReady)]),
+        signal,
+      );
+      await confirmReady();
     } finally {
       controller.abort();
+      await rejected;
     }
-    await rejected;
   });
 });

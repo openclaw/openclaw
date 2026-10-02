@@ -52,6 +52,12 @@ describe("managed GitHub profile startup cleanup", () => {
     const stagingProfile = path.join(systemRoot, ".github-profile.staging-leftover", "profile");
     await fs.mkdir(stagingProfile, { recursive: true, mode: 0o700 });
     await fs.writeFile(path.join(stagingProfile, "hosts.yml"), "github.com:\n", { mode: 0o600 });
+    const outside = tempDirs.make("openclaw-github-cleanup-nested-link-");
+    await fs.symlink(
+      outside,
+      path.join(systemRoot, systemRetired, "prior-export"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
 
     const result = await cleanupRetiredManagedGitHubProfiles({
       config: {
@@ -80,7 +86,84 @@ describe("managed GitHub profile startup cleanup", () => {
     await expect(
       fs.stat(path.join(systemRoot, ".github-profile.staging-leftover")),
     ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(outside)).resolves.toBeDefined();
     expect(result.warnings).toEqual([]);
+  });
+
+  it.each(["root", "ancestor"])("preserves profiles behind a symlinked %s", async (alias) => {
+    const stateDir = tempDirs.make("openclaw-github-cleanup-root-link-");
+    const outside = tempDirs.make("openclaw-github-cleanup-root-target-");
+    const credentials = path.join(outside, "credentials");
+    const profileRoot = path.join(credentials, "github", "system");
+    const profile = await createProfile(profileRoot, "ghp_55555555555555555555555555555555");
+    await fs.mkdir(path.join(credentials, "github", "agents"));
+    const target = alias === "root" ? profileRoot : credentials;
+    const link =
+      alias === "root"
+        ? path.join(stateDir, "credentials", "github", "system")
+        : path.join(stateDir, "credentials");
+    await fs.mkdir(path.dirname(link), { recursive: true });
+    await fs.symlink(target, link, process.platform === "win32" ? "junction" : "dir");
+
+    const result = await cleanupRetiredManagedGitHubProfiles({
+      config: {},
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    expect(result.removed).toBe(0);
+    expect(result.warnings).toHaveLength(alias === "root" ? 1 : 2);
+    expect(await fs.readFile(path.join(profile, "hosts.yml"), "utf8")).toBe("github.com:\n");
+  });
+
+  it.each(["unexpected", "symlink"])(
+    "preserves an entire orphan agent root with a later %s child",
+    async (kind) => {
+      const stateDir = tempDirs.make("openclaw-github-cleanup-orphan-admission-");
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      const agentRoot = resolveManagedGitHubProfileRoot({
+        agentId: "removed-agent",
+        scope: "agent",
+        env,
+      });
+      const profile = await createProfile(agentRoot, "ghp_11111111111111111111111111111111");
+      if (kind === "unexpected") {
+        await fs.writeFile(path.join(agentRoot, "zzz-unexpected"), "preserve\n");
+      } else {
+        await fs.symlink(
+          tempDirs.make("openclaw-github-cleanup-orphan-link-"),
+          path.join(agentRoot, "ghp_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      }
+
+      const result = await cleanupRetiredManagedGitHubProfiles({ config: {}, env });
+
+      expect(result.removed).toBe(0);
+      expect(result.warnings).toHaveLength(1);
+      expect(await fs.readFile(path.join(profile, "hosts.yml"), "utf8")).toBe("github.com:\n");
+      expect(await fs.readdir(agentRoot)).toHaveLength(2);
+    },
+  );
+
+  it("bounds warnings while preserving every unexpected profile entry", async () => {
+    const stateDir = tempDirs.make("openclaw-github-cleanup-warning-cap-");
+    const systemRoot = path.join(stateDir, "credentials", "github", "system");
+    await fs.mkdir(systemRoot, { recursive: true });
+    await Promise.all(
+      Array.from({ length: 23 }, (_, index) => fs.mkdir(path.join(systemRoot, `unknown-${index}`))),
+    );
+
+    const result = await cleanupRetiredManagedGitHubProfiles({
+      config: {},
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    expect(result.removed).toBe(0);
+    expect(result.warnings).toHaveLength(21);
+    expect(result.warnings.at(-1)).toBe(
+      "omitted 3 additional managed GitHub profile cleanup warnings",
+    );
+    expect(await fs.readdir(systemRoot)).toHaveLength(23);
   });
 
   it("removes the complete safe profile root for an agent no longer configured", async () => {

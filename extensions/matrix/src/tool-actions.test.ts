@@ -664,24 +664,6 @@ describe("Matrix public message actions", () => {
     });
   });
 
-  it("passes account-scoped opts to pin listing", async () => {
-    const cfg = { channels: { matrix: { actions: { pins: true } } } } as CoreConfig;
-    await runMatrixAction(
-      "list-pins",
-      {
-        roomId: "!room:example",
-      },
-      cfg,
-      { accountId: "ops" },
-    );
-
-    expect(mocks.listMatrixPins).toHaveBeenCalledWith("!room:example", {
-      cfg,
-      accountId: "ops",
-      client: mocks.matrixClient,
-    });
-  });
-
   it("projects pinned Matrix events without removing their original event fields", async () => {
     const event = {
       eventId: "$pin",
@@ -691,15 +673,15 @@ describe("Matrix public message actions", () => {
     };
     mocks.listMatrixPins.mockResolvedValueOnce({ pinned: ["$pin"], events: [event] });
 
-    const result = await runMatrixAction(
-      "list-pins",
-      {
-        roomId: "!room:example",
-      },
-      {
-        channels: { matrix: { actions: { pins: true } } },
-      } as CoreConfig,
-    );
+    const cfg = { channels: { matrix: { actions: { pins: true } } } } as CoreConfig;
+    const result = await runMatrixAction("list-pins", { roomId: "!room:example" }, cfg, {
+      accountId: "ops",
+    });
+    expect(mocks.listMatrixPins).toHaveBeenCalledWith("!room:example", {
+      cfg,
+      accountId: "ops",
+      client: mocks.matrixClient,
+    });
 
     expect(result.details).toEqual({
       ok: true,

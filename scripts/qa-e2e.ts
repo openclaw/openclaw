@@ -21,7 +21,7 @@ async function loadQaE2eRuntime(): Promise<QaE2eRuntime> {
   return await import("../extensions/qa-lab/api.js");
 }
 
-export function enablePrivateQaScriptEnv(env: NodeJS.ProcessEnv = process.env) {
+function enablePrivateQaScriptEnv(env: NodeJS.ProcessEnv = process.env) {
   env.OPENCLAW_BUILD_PRIVATE_QA = "1";
   env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
   env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "0";

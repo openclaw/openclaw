@@ -62,12 +62,26 @@ export function withExistingOpenClawStateSchema<T>(
   }
 }
 
-export function getExistingOpenClawStateSchemaPath(): string | undefined {
-  const scope = schemaPolicies.scopes.getStore();
+function assertSchemaScopeActive(scope: ExistingSchemaScope | undefined): void {
   if (scope && !scope.active) {
     throw new Error("Existing shared-state schema admission has ended.");
   }
+}
+
+export function getExistingOpenClawStateSchemaPath(): string | undefined {
+  const scope = schemaPolicies.scopes.getStore();
+  assertSchemaScopeActive(scope);
   return scope?.path;
+}
+
+/** Admit this source once; retained reads only need the original scope's live lifetime. */
+export function captureOpenClawStateSchemaReadAdmission(pathname: string) {
+  const scope = schemaPolicies.scopes.getStore();
+  if (!scope) {
+    return undefined;
+  }
+  isExistingOpenClawStateSchema(pathname);
+  return { path: scope.path, assertCurrent: () => assertSchemaScopeActive(scope) };
 }
 
 /** Check supplied and cached handles before exposing them to another admission policy. */

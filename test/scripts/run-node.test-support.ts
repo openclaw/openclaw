@@ -10,7 +10,7 @@ import {
   bundledPluginFile,
   bundledPluginRoot,
 } from "openclaw/plugin-sdk/test-fixtures";
-import { expect, it as baseIt } from "vitest";
+import { expect, it as baseIt, vi } from "vitest";
 import { copyBundledPluginMetadata } from "../../scripts/copy-bundled-plugin-metadata.mts";
 import {
   BUILD_STAMP_FILE,
@@ -26,6 +26,13 @@ import {
 } from "../../scripts/lib/update-compat-chunks.mts";
 import { runNodeMain } from "../../scripts/run-node.mts";
 import { withTestDir } from "../../src/test-helpers/temp-dir.js";
+// These launcher fixtures have no service. Publication custody is covered at its owner.
+vi.mock("../../src/cli/update-cli/update-command-service-publication.js", () => ({
+  withGatewayRuntimeArtifactPublication: async (
+    _params: unknown,
+    publish: () => Promise<unknown>,
+  ) => publish(),
+}));
 import {
   previousReleaseInventory,
   writeUpdateCompatibilityBuildFixture,
@@ -62,13 +69,11 @@ export const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT = "dist/shared-Y6bNiw2w.js";
 export const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT = "dist/shared-DTaQo6Hi.js";
 export const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108 = "dist/shared-1Uyqkfns.js";
 export const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_2026_9_1 = "dist/shared-DFJEouXv.js";
-export const DIST_LEGACY_CLI_EXIT_COMPAT = "dist/memory-state-CcqRgDZU.js";
-export const DIST_LEGACY_CLI_EXIT_COMPAT_ALT = "dist/memory-state-DwGdReW4.js";
 export const DIST_STABLE_ROOT_RUNTIME_SOURCE = "dist/model-catalog.runtime-AbCd1234.js";
 export const DIST_STABLE_ROOT_RUNTIME_SOURCE_ALT = "dist/model-catalog.runtime-EfGh5678.js";
 export const DIST_STABLE_ROOT_RUNTIME_ALIAS = "dist/model-catalog.runtime.js";
-export const DIST_LEGACY_ROOT_RUNTIME_TARGET = "dist/abort.runtime.js";
-export const DIST_LEGACY_ROOT_RUNTIME_COMPAT = "dist/abort.runtime-DX6vo4yJ.js";
+export const DIST_LEGACY_ROOT_RUNTIME_TARGET = "dist/text-transforms.runtime.js";
+export const DIST_LEGACY_ROOT_RUNTIME_COMPAT = "dist/text-transforms.runtime-sEqsN4pN.js";
 export const QA_LAB_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-lab.js";
 export const QA_RUNTIME_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-runtime.js";
 export const EXTENSION_INDEX = bundledPluginFile("demo", "index.ts");
@@ -181,8 +186,6 @@ export async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> 
     [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT]: "export function resolveNodeRunner() {}\n",
     [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT]: "export function resolveNodeRunner() {}\n",
     [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108]: "export function resolveNodeRunner() {}\n",
-    [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
-    [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]: "export function hasMemoryRuntime() { return false; }\n",
     [DIST_OPENCLAW_ALIAS_PACKAGE]:
       '{"name":"openclaw","type":"module","exports":{"./plugin-sdk/core":"./plugin-sdk/core.js"}}\n',
     [DIST_OPENCLAW_ALIAS_PLUGIN_SDK_CORE]: "export * from '../../../../plugin-sdk/core.js';\n",
@@ -206,8 +209,6 @@ export async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> 
       ...previousReleaseInventory.releases.flatMap((release) =>
         release.chunks.map((chunk) => `dist/${chunk.path}`),
       ),
-      DIST_LEGACY_CLI_EXIT_COMPAT,
-      DIST_LEGACY_CLI_EXIT_COMPAT_ALT,
       DIST_OPENCLAW_ALIAS_PACKAGE,
       DIST_OPENCLAW_ALIAS_PLUGIN_SDK_CORE,
     ],
@@ -216,7 +217,14 @@ export async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> 
 }
 
 export function expectedBuildSpawn() {
-  return [process.execPath, "--import", "tsx", "scripts/build-all.mts", "qaRuntime"];
+  return [
+    process.execPath,
+    "--import",
+    expect.stringMatching(/\/scripts\/tsx\.mjs$/),
+    expect.stringMatching(/[\\/]scripts[\\/]lib[\\/]dist-artifact-ownership\.mts$/),
+    expect.stringMatching(/\/scripts\/build-all\.mts$/),
+    "qaRuntime",
+  ];
 }
 
 export function statusCommandSpawn() {
@@ -240,7 +248,7 @@ export function resolvePath(tmp: string, relativePath: string) {
 }
 
 export function isTsxScriptArgs(args: string[], scriptPath: string): boolean {
-  return args[0] === "--import" && args[1] === "tsx" && args[2] === scriptPath;
+  return args[0] === "--import" && args.some((arg) => arg.endsWith(scriptPath));
 }
 
 export async function expectPathMissing(targetPath: string): Promise<void> {

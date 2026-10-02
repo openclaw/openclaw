@@ -157,7 +157,7 @@ suite.define(() => {
               thinkingLevel: "ultra",
             });
           }
-          const speed = composer.getByRole("switch", { name: /Fast responses/ });
+          const speed = composer.getByRole("radio", { name: "Fast", exact: true });
           await expect.poll(() => speed.isEnabled()).toBe(true);
           await page.screenshot({
             path: path.join(suite.artifactDir, `${route}-effort.png`),
@@ -229,6 +229,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const effort = page.locator("[data-chat-thinking-select]");
       await expect.poll(() => effort.isVisible()).toBe(true);
+      await page.locator('[data-chat-thinking-select][aria-disabled="false"]').waitFor();
       expect(await effort.getAttribute("aria-disabled")).toBe("false");
       expect(await page.locator(".chat-controls__effort-picker").getAttribute("aria-hidden")).toBe(
         "false",

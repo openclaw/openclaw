@@ -1,21 +1,11 @@
-import { GATEWAY_CLIENT_MODES } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../agents/internal-event-contract.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import {
-  resolveAgentIdFromSessionKey,
-  resolveSessionWorkStartError,
-  type SessionEntry,
-} from "../../config/sessions.js";
+import { resolveSessionWorkStartError, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type {
-  CronScheduledToolCallerOrigin,
-  CronScheduledToolPolicy,
-  CronToolsAllowExecTarget,
-} from "../../cron/scheduled-tool-policy.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import {
   AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE,
@@ -26,6 +16,7 @@ import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
+import { createClosedSessionTranscriptSource } from "../session-end-transcript-reader.js";
 import {
   emitGatewaySessionEndPluginHook,
   emitGatewaySessionStartPluginHook,
@@ -34,22 +25,20 @@ import { loadSessionEntry, resolveDeletedAgentIdFromSessionKey } from "../sessio
 
 export const CRON_CONTINUATION_RELEASE_RECOVERY_DELAYS_MS = [250, 1_000, 4_000, 15_000] as const;
 
-export type RestoredCronContinuation = {
-  lifecycleRevision: string;
+export type RestoredCronContinuation = Pick<
+  NonNullable<SessionEntry["cronRunContinuation"]>,
+  | "lifecycleRevision"
+  | "toolsAllow"
+  | "toolsAllowIsDefault"
+  | "scheduledToolPolicy"
+  | "scheduledToolCallerOrigin"
+  | "toolsAllowExecTarget"
+  | "cliSessionBindingFacts"
+> & {
   sessionId: string;
   provider: string;
   model: string;
   thinking?: string;
-  toolsAllow?: string[];
-  toolsAllowIsDefault?: boolean;
-  scheduledToolPolicy?: CronScheduledToolPolicy;
-  scheduledToolCallerOrigin?: CronScheduledToolCallerOrigin;
-  toolsAllowExecTarget?: CronToolsAllowExecTarget;
-  cliSessionBindingFacts?: {
-    extraSystemPromptStatic?: string;
-    sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
-    requireExplicitMessageTarget?: boolean;
-  };
 };
 
 export function clientHasAdminScope(client: GatewayRequestHandlerOptions["client"]): boolean {
@@ -107,51 +96,18 @@ export function respondUnavailableAgentSessionForKey(params: {
   ) {
     return true;
   }
-  const harnessSessionError = resolveAgentHarnessSessionContextError(canonicalKey, entry);
-  if (harnessSessionError) {
-    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, harnessSessionError));
-    return true;
-  }
-  const harnessSessionIdError = resolveAgentHarnessSessionIdMismatchError(
-    entry,
-    params.requestedSessionId,
-  );
-  if (harnessSessionIdError) {
-    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, harnessSessionIdError));
-    return true;
-  }
-  if (params.isRawModelRun && entry?.modelSelectionLocked === true) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE),
-    );
-    return true;
-  }
-  const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry);
-  if (!archivedSessionError) {
+  const sessionError =
+    resolveAgentHarnessSessionContextError(canonicalKey, entry) ||
+    resolveAgentHarnessSessionIdMismatchError(entry, params.requestedSessionId) ||
+    (params.isRawModelRun && entry?.modelSelectionLocked === true
+      ? AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE
+      : undefined) ||
+    resolveSessionWorkStartError(canonicalKey, entry);
+  if (!sessionError) {
     return false;
   }
-  params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
+  params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, sessionError));
   return true;
-}
-
-export function resolveAllowModelOverrideFromClient(
-  client: GatewayRequestHandlerOptions["client"],
-): boolean {
-  return clientHasAdminScope(client) || client?.internal?.allowModelOverride === true;
-}
-
-export function resolveCanUseInternalRuntimeHandoff(
-  client: GatewayRequestHandlerOptions["client"],
-): boolean {
-  return client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND;
-}
-
-export function resolveCanUseCronRunContinuation(
-  client: GatewayRequestHandlerOptions["client"],
-): boolean {
-  return client?.internal?.cronRunContinuation === true;
 }
 
 export function cronContinuationHasReusableRuntime(params: {
@@ -210,6 +166,13 @@ export function emitAgentSendSessionLifecycleTransition(
       reason: transition.previousEndReason ?? "unknown",
       nextSessionId: transition.sessionId,
       nextSessionKey: transition.sessionKey,
+      endedTranscript: createClosedSessionTranscriptSource({
+        agentId: transition.agentId,
+        sessionId: transition.previousSessionId,
+        sessionKey: transition.sessionKey,
+        storePath: transition.storePath,
+        ...(transition.previousSessionFile ? { sessionFile: transition.previousSessionFile } : {}),
+      }),
     });
   }
   emitGatewaySessionStartPluginHook({
@@ -235,19 +198,6 @@ export function shouldSuppressAgentPromptPersistence(params: {
         event.type === AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION && event.source === "subagent",
     ) === true
   );
-}
-
-export function withSqliteSessionFileMarker(params: {
-  agentId: string | undefined;
-  entry: SessionEntry;
-  sessionKey: string;
-  storePath: string;
-}): SessionEntry {
-  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
-  if (!agentId) {
-    return params.entry;
-  }
-  return params.entry;
 }
 
 export function yieldAfterAgentAcceptedAck(): Promise<void> {

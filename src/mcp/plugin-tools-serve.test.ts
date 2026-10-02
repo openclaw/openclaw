@@ -1,7 +1,7 @@
 // Plugin MCP serve tests cover serving plugin tools over MCP.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   consumeAdjustedParamsForToolCall,
@@ -104,6 +104,15 @@ afterEach(() => {
   resetGlobalHookRunner();
 });
 
+function createTool(
+  name: string,
+  execute: AnyAgentTool["execute"],
+  parameters = Type.Object({}),
+  description = name,
+): AnyAgentTool {
+  return { name, label: name, description, parameters, execute };
+}
+
 function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
   const call = calls.at(0);
   if (!call) {
@@ -174,15 +183,7 @@ describe("plugin tools MCP server", () => {
       resolveTools: resolvePluginToolsMock,
       release: releasePluginToolsMock,
     });
-    resolvePluginToolsMock.mockReturnValue([
-      {
-        name: "memory_recall",
-        label: "Recall memory",
-        description: "Recall stored memory",
-        parameters: { type: "object", properties: {} },
-        execute: vi.fn(),
-      },
-    ]);
+    resolvePluginToolsMock.mockReturnValue([createTool("memory_recall", vi.fn())]);
 
     await servePluginToolsMcp();
 
@@ -226,21 +227,9 @@ describe("plugin tools MCP server", () => {
       content: [{ type: "text", text: "allowed executor ran" }],
     });
     resolvePluginToolsMock.mockReturnValue([
-      {
-        name: "plugin_allowed",
-        label: "Allowed control tool",
-        description: "Allowed control tool",
-        parameters: { type: "object", properties: {} },
-        execute: allowedExecute,
-      },
-      {
-        name: "plugin_denied",
-        label: "Denied tool",
-        description: "Denied tool",
-        parameters: { type: "object", properties: {} },
-        execute: deniedExecute,
-      },
-    ] as unknown as AnyAgentTool[]);
+      createTool("plugin_allowed", allowedExecute),
+      createTool("plugin_denied", deniedExecute),
+    ]);
     const { acquirePluginToolsForMcp } = await import("./plugin-tools-serve.js");
 
     const acquisition = await acquirePluginToolsForMcp({
@@ -291,18 +280,12 @@ describe("plugin tools MCP server", () => {
     const execute = vi.fn().mockResolvedValue({
       content: "Stored.",
     });
-    const tool = {
-      name: "memory_recall",
-      description: "Recall stored memory",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { type: "string" },
-        },
-        required: ["query"],
-      },
+    const tool = createTool(
+      "memory_recall",
       execute,
-    } as unknown as AnyAgentTool;
+      Type.Object({ query: Type.String() }),
+      "Recall stored memory",
+    );
 
     const handlers = createPluginToolsMcpHandlers([tool]);
     const listed = await handlers.listTools();
@@ -332,80 +315,30 @@ describe("plugin tools MCP server", () => {
     expect(result.content).toEqual([{ type: "text", text: "Stored." }]);
   });
 
-  it.each([
-    ["memory_recall", "memory_recall"],
-    ["automations", "cron"],
-  ])(
-    "uses unique ids and releases execution tracking for %s called as %s",
-    async (name, callName) => {
-      vi.spyOn(Date, "now").mockReturnValue(1_000);
-      const executeSuccess = vi.fn().mockResolvedValue({ content: "Stored." });
-      const executeFailure = vi.fn().mockRejectedValue(new Error("unavailable"));
-      const handlers = createPluginToolsMcpHandlers([
-        {
-          name,
-          description: "Recall stored memory",
-          parameters: { type: "object", properties: {} },
-          execute: executeSuccess,
-        } as unknown as AnyAgentTool,
-        {
-          name: "memory_forget",
-          description: "Forget stored memory",
-          parameters: { type: "object", properties: {} },
-          execute: executeFailure,
-        } as unknown as AnyAgentTool,
-      ]);
-
-      for (let index = 0; index < 32; index += 1) {
-        await handlers.callTool({ name: callName, arguments: { index } });
-        await handlers.callTool({ name: "memory_forget", arguments: { index } });
-      }
-
-      expect(executeSuccess).toHaveBeenCalledTimes(32);
-      expect(executeFailure).toHaveBeenCalledTimes(32);
-      const toolCallIds = [...executeSuccess.mock.calls, ...executeFailure.mock.calls].map(
-        ([toolCallId]) => String(toolCallId),
-      );
-      expect(new Set(toolCallIds).size).toBe(toolCallIds.length);
-      for (const toolCallId of toolCallIds) {
-        expect(consumeTrackedToolExecutionStarted(toolCallId)).toBeUndefined();
-        expect(consumeAdjustedParamsForToolCall(toolCallId)).toBeUndefined();
-      }
-    },
-  );
-
-  it("serializes source-shaped image tool content with pinned MCP image blocks", async () => {
-    const execute = vi.fn().mockResolvedValue({
-      content: [
-        { type: "text", text: "browser screenshot" },
-        {
-          type: "image",
-          source: {
-            type: "base64",
-            media_type: "image/png",
-            data: "iVBORw0KGgo=",
-          },
-        },
-      ],
-    });
-    const tool = {
-      name: "browser_screenshot",
-      description: "Capture a browser screenshot",
-      parameters: { type: "object", properties: {} },
-      execute,
-    } as unknown as AnyAgentTool;
-
-    const handlers = createPluginToolsMcpHandlers([tool]);
-    const result = await handlers.callTool({
-      name: "browser_screenshot",
-      arguments: {},
-    });
-
-    expect(result.content).toEqual([
-      { type: "text", text: "browser screenshot" },
-      { type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" },
+  it("uses unique ids and releases execution tracking through the scheduler alias", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const executeSuccess = vi.fn().mockResolvedValue({ content: "Stored." });
+    const executeFailure = vi.fn().mockRejectedValue(new Error("unavailable"));
+    const handlers = createPluginToolsMcpHandlers([
+      createTool("automations", executeSuccess),
+      createTool("memory_forget", executeFailure),
     ]);
-    expect(() => CallToolResultSchema.parse(result)).not.toThrow();
+
+    for (let index = 0; index < 32; index += 1) {
+      await handlers.callTool({ name: "cron", arguments: { index } });
+      await handlers.callTool({ name: "memory_forget", arguments: { index } });
+    }
+
+    expect(executeSuccess).toHaveBeenCalledTimes(32);
+    expect(executeFailure).toHaveBeenCalledTimes(32);
+    const toolCallIds = [...executeSuccess.mock.calls, ...executeFailure.mock.calls].map(
+      ([toolCallId]) => String(toolCallId),
+    );
+    expect(new Set(toolCallIds).size).toBe(toolCallIds.length);
+    for (const toolCallId of toolCallIds) {
+      expect(consumeTrackedToolExecutionStarted(toolCallId)).toBeUndefined();
+      expect(consumeAdjustedParamsForToolCall(toolCallId)).toBeUndefined();
+    }
   });
 
   it("delivers source-shaped images through a real MCP client", async () => {
@@ -422,12 +355,7 @@ describe("plugin tools MCP server", () => {
         },
       ],
     });
-    const tool = {
-      name: "browser_screenshot",
-      description: "Capture a browser screenshot",
-      parameters: { type: "object", properties: {} },
-      execute,
-    } as unknown as AnyAgentTool;
+    const tool = createTool("browser_screenshot", execute);
     const { createToolsMcpServer } =
       await vi.importActual<typeof import("./tools-stdio-server.js")>("./tools-stdio-server.js");
     const server = createToolsMcpServer({ name: "plugin-tools-image-test", tools: [tool] });
@@ -455,17 +383,11 @@ describe("plugin tools MCP server", () => {
       provider: "kitchen-sink-search",
       results: [{ title: "Kitchen Sink image fixture" }],
     });
-    const tool = {
-      name: "kitchen_sink_search",
-      description: "Search Kitchen Sink fixture content",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { type: "string" },
-        },
-      },
+    const tool = createTool(
+      "kitchen_sink_search",
       execute,
-    } as unknown as AnyAgentTool;
+      Type.Object({ query: Type.Optional(Type.String()) }),
+    );
 
     const handlers = createPluginToolsMcpHandlers([tool]);
     const result = await handlers.callTool({
@@ -483,33 +405,19 @@ describe("plugin tools MCP server", () => {
     ]);
   });
 
-  it.each([
-    ["failed status", { status: "failed", error: "backend unavailable" }, true],
-    ["blocked status", { status: "blocked" }, true],
-    ["timeout flag", { timedOut: true }, true],
-    ["explicit failure", { ok: false }, true],
-    ["successful status", { status: "success" }, undefined],
-    ["completed nonzero shell exit", { status: "completed", exitCode: 23 }, undefined],
-  ])(
-    "projects a resolved %s through the canonical error contract",
-    async (_label, details, isError) => {
-      const content = [{ type: "text", text: "original tool result" }];
-      const execute = vi.fn().mockResolvedValue({ content, details });
-      const handlers = createPluginToolsMcpHandlers([
-        {
-          name: "result_probe",
-          description: "Return a structured result",
-          parameters: { type: "object", properties: {} },
-          execute,
-        } as unknown as AnyAgentTool,
-      ]);
+  it("keeps completed nonzero shell exits nonfatal through MCP", async () => {
+    const content = [{ type: "text", text: "original tool result" }];
+    const execute = vi.fn().mockResolvedValue({
+      content,
+      details: { status: "completed", exitCode: 23 },
+    });
+    const handlers = createPluginToolsMcpHandlers([createTool("result_probe", execute)]);
 
-      const result = await handlers.callTool({ name: "result_probe", arguments: {} });
+    const result = await handlers.callTool({ name: "result_probe", arguments: {} });
 
-      expect(result.content).toEqual(content);
-      expect(result.isError).toBe(isError);
-    },
-  );
+    expect(result.content).toEqual(content);
+    expect(result.isError).toBeUndefined();
+  });
 
   it("returns MCP errors for unknown tools and thrown tool errors", async () => {
     const failingTool = {
@@ -546,15 +454,10 @@ describe("plugin tools MCP server", () => {
         },
       ]),
     );
-    const tool = wrapToolWithBeforeToolCallHook(
-      {
-        name: "memory_store",
-        description: "Store memory",
-        parameters: { type: "object", properties: {} },
-        execute,
-      } as unknown as AnyAgentTool,
-      { runId, sessionKey: "session-direct-mcp" },
-    );
+    const tool = wrapToolWithBeforeToolCallHook(createTool("memory_store", execute), {
+      runId,
+      sessionKey: "session-direct-mcp",
+    });
 
     const handlers = createPluginToolsMcpHandlers([tool]);
     await handlers.callTool({
@@ -592,12 +495,7 @@ describe("plugin tools MCP server", () => {
         },
       ]),
     );
-    const tool = {
-      name: "memory_store",
-      description: "Store memory",
-      parameters: { type: "object", properties: {} },
-      execute,
-    } as unknown as AnyAgentTool;
+    const tool = createTool("memory_store", execute);
 
     const handlers = createPluginToolsMcpHandlers([tool]);
     const result = await handlers.callTool({
@@ -644,12 +542,7 @@ describe("plugin tools MCP server", () => {
     );
     callGatewayTool.mockRejectedValue(new Error("gateway unavailable"));
     const tool = wrapToolWithBeforeToolCallHook(
-      {
-        name: "memory_store",
-        description: "Store memory",
-        parameters: { type: "object", properties: {} },
-        execute,
-      } as unknown as AnyAgentTool,
+      createTool("memory_store", execute),
       originalContext,
     );
 

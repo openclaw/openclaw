@@ -8,7 +8,7 @@ import {
 import type { LiveMessageState, MessageReceipt, RenderedMessageBatch } from "./types.js";
 
 /** A transport-owned preview. discardPending must stop new work before awaiting in-flight work. */
-export type LivePreviewFinalizerDraft<TId> = {
+type LivePreviewFinalizerDraft<TId> = {
   flush: () => Promise<void>;
   id: () => TId | undefined;
   seal?: () => Promise<void>;
@@ -23,7 +23,7 @@ export type LivePreviewDraft<TId> = Omit<LivePreviewFinalizerDraft<TId>, "clear"
 export type LivePreviewDeliveryResult = ChannelDeliveryResult & { visibleReplySent: boolean };
 type PreviewSendResult = LivePreviewDeliveryResult | boolean | void;
 
-export type LivePreviewFinalizerResultKind =
+type LivePreviewFinalizerResultKind =
   | "normal-delivered"
   | "normal-skipped"
   | "preview-finalized"
@@ -82,18 +82,6 @@ type FinalizableLivePreviewAdapter<TPayload, TId, TEdit> = Omit<
   deliverSupplemental?: (payload: TPayload) => Promise<PreviewSendResult>;
 };
 
-type PublishedPreviewDeliveryParams<TPayload, TId, TEdit> = PublishedPreviewAdapter<
-  TPayload,
-  TId,
-  TEdit
-> & {
-  kind: "tool" | "block" | "final";
-  payload: TPayload;
-  liveState?: LiveMessageState<TPayload>;
-  deliverNormally: (payload: TPayload) => Promise<boolean | void>;
-  onNormalDelivered?: () => Promise<void> | void;
-};
-
 type PreviewDeliveryOwner<TPayload> = {
   isCurrent: () => boolean;
   update: (state: LiveMessageState<TPayload>) => void;
@@ -149,14 +137,6 @@ export function createPreviewMessageReceipt(params: {
   };
 }
 
-function visibleDelivery(result: PreviewSendResult): LivePreviewDeliveryResult | undefined {
-  if (typeof result === "object") {
-    return result.visibleReplySent ? result : undefined;
-  }
-  // Published stateless SDK callers historically acknowledge a send by resolving void.
-  return result === false ? undefined : { visibleReplySent: true };
-}
-
 function combineDelivery(
   first: LivePreviewDeliveryResult | undefined,
   next: LivePreviewDeliveryResult,
@@ -208,10 +188,8 @@ async function deliverPreview<TPayload, TId, TEdit>(
       }
       throw error;
     }
-    const normalized =
-      typeof result === "object"
-        ? result
-        : (visibleDelivery(result) ?? { visibleReplySent: false });
+    // Published stateless SDK callers acknowledge a send by resolving void.
+    const normalized = typeof result === "object" ? result : { visibleReplySent: result !== false };
     if (normalized.visibleReplySent) {
       accept(normalized);
     }
@@ -370,13 +348,6 @@ async function deliverPreview<TPayload, TId, TEdit>(
     }
     throw error;
   }
-}
-
-/** Published stateless contract. Bundled channels use createLivePreviewLifecycle. */
-export async function deliverFinalizableLivePreview<TPayload, TId, TEdit>(
-  params: PublishedPreviewDeliveryParams<TPayload, TId, TEdit>,
-): Promise<LivePreviewFinalizerResult<TPayload>> {
-  return await deliverPreview(params);
 }
 
 /** Published adapter contract; shares the stateful owner's delivery implementation. */

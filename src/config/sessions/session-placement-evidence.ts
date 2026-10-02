@@ -16,13 +16,13 @@ import {
   type SessionIdentityEvidenceIdentity,
   type SessionIdentityEvidenceResult,
 } from "./session-accessor.sqlite-entry-availability.js";
-import { normalizeSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
 import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "./session-transcript-worker-runtime.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 
 export type PlacementSessionIdentityProbe = {
   agentId: string;
@@ -157,7 +157,7 @@ export async function readPlacementSessionIdentityEvidence(
           const group = groups.get(key) ?? { database, identities: [], indexes: [] };
           group.identities.push({
             sessionId: probe.sessionId,
-            sessionKey: normalizeSqliteSessionKey(probe.sessionKey),
+            sessionKey: normalizeStoreSessionKey(probe.sessionKey),
           });
           group.indexes.push(index);
           groups.set(key, group);

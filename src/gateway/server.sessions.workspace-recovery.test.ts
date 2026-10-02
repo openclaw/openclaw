@@ -2,10 +2,8 @@ import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as StateDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -30,7 +28,7 @@ const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 afterEach(async () => {
   await disposeSessionReadContexts();
   vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
 });
 
 type RecoveryScenario =
@@ -56,8 +54,8 @@ async function seedPendingWorkspace(scenario: RecoveryScenario) {
     nodeDeviceId: "runner-1",
   };
   writePlacementEnvironmentFixture(database, environment);
-  seedActivePlacement(placements, environment);
-  const claim = placements.claimTurn({
+  await seedActivePlacement(placements, environment);
+  const claim = await placements.claimTurn({
     sessionId,
     sessionKey,
     agentId,
@@ -169,14 +167,18 @@ describe.each([
     fixture.expectPreserved();
   });
 
-  test.each([
-    "accepted result on offline runner",
-    "available runner",
-    "unknown runner",
-    "stale pending generation",
-    "stale pending environment",
-    "stale pending epoch",
-  ] as const)("keeps the ordinary drain for %s", async (scenario) => {
+  // Both RPCs use the same drain owner; cover each ordinary-drain branch once.
+  const scenarios: RecoveryScenario[] =
+    method === "sessions.patch"
+      ? ["accepted result on offline runner"]
+      : [
+          "available runner",
+          "unknown runner",
+          "stale pending generation",
+          "stale pending environment",
+          "stale pending epoch",
+        ];
+  test.each(scenarios)("keeps the ordinary drain for %s", async (scenario) => {
     const fixture = await seedPendingWorkspace(scenario);
     const result = await directSessionReq(
       method,

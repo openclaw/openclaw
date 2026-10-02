@@ -1,4 +1,3 @@
-// Video capability overlays merge config overrides into provider capabilities.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import type { GenerateVideoParams } from "./runtime-types.js";
@@ -9,8 +8,6 @@ import type {
   VideoGenerationTransformCapabilities,
 } from "./types.js";
 
-// Runtime/model capability overlays let a provider refine static manifest caps
-// for the selected model without rebuilding the registry.
 function isVideoGenerationTransformCapabilities(
   capabilities: VideoGenerationModeCapabilities | VideoGenerationTransformCapabilities | undefined,
 ): capabilities is VideoGenerationTransformCapabilities {
@@ -53,10 +50,7 @@ export function buildVideoGenerationCapabilityFailure(params: {
         : inputImageCount > 0
           ? "reference image inputs"
           : "reference video inputs";
-    if (!capabilities || !isVideoGenerationTransformCapabilities(capabilities)) {
-      return `${label} does not support ${visualLabel}; skipping to avoid silent reference drop`;
-    }
-    if (!capabilities.enabled) {
+    if (!isVideoGenerationTransformCapabilities(capabilities) || !capabilities.enabled) {
       return `${label} does not support ${visualLabel}; skipping to avoid silent reference drop`;
     }
   }

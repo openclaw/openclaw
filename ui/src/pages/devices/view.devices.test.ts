@@ -75,38 +75,6 @@ function statusesByText(scope: Element, text: string): HTMLElement[] {
 }
 
 describe("devices pending rendering", () => {
-  it("shows requested and approved access for a scope upgrade", () => {
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [
-          {
-            requestId: "req-1",
-            deviceId: "device-1",
-            displayName: "Device One",
-            role: "operator",
-            scopes: ["operator.admin", "operator.read"],
-            ts: Date.now(),
-          },
-        ],
-        paired: [
-          {
-            deviceId: "device-1",
-            displayName: "Device One",
-            roles: ["operator"],
-            scopes: ["operator.read"],
-          },
-        ],
-      },
-    });
-    const details = getPendingDeviceDetails(container);
-
-    expect(details[0]).toMatch(/^scope upgrade requires approval · requested /u);
-    expect(details.slice(1)).toEqual([
-      "requested: roles: operator · scopes: operator.admin, operator.read, operator.write",
-      "approved now: roles: operator · scopes: operator.read",
-    ]);
-  });
-
   it("normalizes pending device ids before matching paired access", () => {
     const container = renderDevicesContainer({
       devicesList: {
@@ -133,7 +101,10 @@ describe("devices pending rendering", () => {
     const details = getPendingDeviceDetails(container);
 
     expect(details[0]).toMatch(/^scope upgrade requires approval · requested /u);
-    expect(details.at(-1)).toBe("approved now: roles: operator · scopes: operator.read");
+    expect(details.slice(1)).toEqual([
+      "requested: roles: operator · scopes: operator.admin, operator.read, operator.write",
+      "approved now: roles: operator · scopes: operator.read",
+    ]);
   });
 
   it("does not show upgrade context for key-mismatched pending requests", () => {

@@ -79,7 +79,7 @@ describe("gateway error helpers", () => {
     ).toBe(true);
   });
 
-  it("keeps compatibility with legacy scope messages and detail codes", () => {
+  it("uses the shared client's missing-scope message reader", () => {
     expect(
       isMissingOperatorReadScopeError(
         gatewayRequestError({
@@ -88,6 +88,9 @@ describe("gateway error helpers", () => {
         }),
       ),
     ).toBe(true);
+  });
+
+  it("does not treat connect authorization errors as missing read scope", () => {
     expect(
       isMissingOperatorReadScopeError(
         gatewayRequestError({
@@ -96,7 +99,7 @@ describe("gateway error helpers", () => {
           details: { code: "AUTH_UNAUTHORIZED" },
         }),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("does not confuse another missing scope with operator.read", () => {

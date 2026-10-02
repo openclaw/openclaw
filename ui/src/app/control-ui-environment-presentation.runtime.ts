@@ -2,6 +2,7 @@ import {
   CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
   type ControlUiEnvironment,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { getOrCreatePromise } from "../../../src/shared/lazy-promise.js";
 import { currentThemeBranding, neutralMarkSvg } from "../components/neutral-mark.ts";
 import { applyControlUiOperatorSeamColor } from "./control-ui-presentation.ts";
 
@@ -197,18 +198,12 @@ async function loadSource(href: string, type: string | null): Promise<FaviconSou
 }
 
 async function composeFavicon(href: string, type: string | null, color: string, ring: string) {
-  const key = JSON.stringify([href, type]);
-  let pending = faviconSources.get(key);
-  if (!pending) {
-    pending = loadSource(href, type);
-    faviconSources.set(key, pending);
-    void pending.catch(() => {
-      if (faviconSources.get(key) === pending) {
-        faviconSources.delete(key);
-      }
-    });
-  }
-  const source = await pending;
+  const source = await getOrCreatePromise(
+    faviconSources,
+    JSON.stringify([href, type]),
+    () => loadSource(href, type),
+    { cacheRejections: false },
+  );
   if ("svg" in source) {
     const svg = new DOMParser().parseFromString(
       `<svg xmlns="${SVG_NAMESPACE}" viewBox="0 0 32 32" width="32" height="32"><circle cx="25.5" cy="25.5" r="5" stroke-width="2"/></svg>`,

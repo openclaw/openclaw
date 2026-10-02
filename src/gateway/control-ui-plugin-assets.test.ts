@@ -53,6 +53,7 @@ function activateFixture(origin: PluginRecord["origin"] = "bundled") {
     origin,
     rootDir,
     controlUi: { entry: "dist/control-ui/index.js", styles: ["dist/control-ui/theme.css"] },
+    uiCapabilities: ["page", "widget"],
   });
   fs.writeFileSync(
     path.join(rootDir, "openclaw.plugin.json"),
@@ -60,6 +61,7 @@ function activateFixture(origin: PluginRecord["origin"] = "bundled") {
       id: record.id,
       configSchema: { type: "object", additionalProperties: false },
       controlUi: record.controlUi,
+      uiCapabilities: record.uiCapabilities,
     }),
   );
   registry.plugins.push(record);
@@ -112,32 +114,29 @@ describe("native Control UI browser assets", () => {
     await import("./control-ui.js");
   });
 
-  it.each(["global", "workspace", "config"] as const)(
-    "keeps Custom plugin UI off by default for %s plugins",
-    async (origin) => {
-      await withTempConfig({
-        cfg: {},
-        run: async () => {
-          const fixture = activateFixture(origin);
-          fixture.record.trustedOfficialInstall = true;
-          const catalog = await listControlUiPluginCatalog();
-          expect(catalog.plugins).toEqual([]);
-          expect(catalog.diagnostics).toEqual([
-            {
-              pluginId: fixture.record.id,
-              code: "custom-plugin-ui-disabled",
-              message: expect.stringContaining("Settings > Labs"),
-            },
-          ]);
-          expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
-          expect(listControlUiPluginWidgetKinds(["operator.read"])).not.toContainEqual(
-            expect.objectContaining({ pluginId: fixture.record.id }),
-          );
-          expect(await reloadControlUiPluginCatalog(fixture.record.id)).toEqual(catalog);
-        },
-      });
-    },
-  );
+  it("keeps Custom plugin UI off by default for nonbundled plugins", async () => {
+    await withTempConfig({
+      cfg: {},
+      run: async () => {
+        const fixture = activateFixture("workspace");
+        fixture.record.trustedOfficialInstall = true;
+        const catalog = await listControlUiPluginCatalog();
+        expect(catalog.plugins).toEqual([]);
+        expect(catalog.diagnostics).toEqual([
+          {
+            pluginId: fixture.record.id,
+            code: "custom-plugin-ui-disabled",
+            message: expect.stringContaining("Settings > Labs"),
+          },
+        ]);
+        expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
+        expect(listControlUiPluginWidgetKinds(["operator.read"])).not.toContainEqual(
+          expect.objectContaining({ pluginId: fixture.record.id }),
+        );
+        expect(await reloadControlUiPluginCatalog(fixture.record.id)).toEqual(catalog);
+      },
+    });
+  });
 
   it("hot-applies Custom plugin UI admission without replacing the backend plugin", async () => {
     await withTempConfig({
@@ -213,11 +212,11 @@ describe("native Control UI browser assets", () => {
     });
   });
 
-  it.each(
-    [AUTH_NONE, AUTH_TOKEN].flatMap((auth) =>
-      ["", "/openclaw"].map((basePath) => ({ auth, basePath })),
-    ),
-  )(
+  it.each([
+    { auth: AUTH_NONE, basePath: "" },
+    { auth: AUTH_TOKEN, basePath: "" },
+    { auth: AUTH_TOKEN, basePath: "/openclaw" },
+  ])(
     "reports and enforces native asset authentication for $auth.mode Gateways at '$basePath'",
     async ({ auth, basePath }) => {
       const requiresAuth = auth.mode !== "none";
@@ -448,6 +447,7 @@ describe("native Control UI browser assets", () => {
     const first = await listControlUiPluginCatalog();
     expect(first.diagnostics).toEqual([]);
     const entry = first.plugins[0]!;
+    expect(entry.uiCapabilities).toEqual(["page", "widget"]);
     const browser = {};
     expect(
       reportControlUiPluginActivation(browser, {
@@ -784,12 +784,15 @@ describe("native Control UI browser assets", () => {
         id: "native-ui",
         configSchema: { type: "object" },
         controlUi: { entry: "dist/control-ui/published/index.js" },
+        uiCapabilities: ["page", "navigation"],
       }),
     );
     expect(await listControlUiPluginCatalog()).toEqual(first);
     const second = await reloadControlUiPluginCatalog("native-ui");
     expect(second.diagnostics).toEqual([]);
     expect(second.plugins[0]!.revision).not.toBe(report.revision);
+    expect(second.plugins[0]!.uiCapabilities).toEqual(["page", "navigation"]);
+    expect(fixture.record.uiCapabilities).toEqual(["page", "widget"]);
     expect(fixture.record.controlUi?.entry).toBe("dist/control-ui/index.js");
     expect(listControlUiPluginActivations(browser)).toEqual([]);
     expect(reportControlUiPluginActivation(browser, report)).toBe(false);
@@ -803,6 +806,44 @@ describe("native Control UI browser assets", () => {
     expect(listControlUiPluginActivations(browser)).toEqual([pending]);
     setActivePluginRegistry(createEmptyPluginRegistry());
     expect(reportControlUiPluginActivation(browser, pending)).toBe(false);
+  });
+
+  it("refreshes UI declarations and retires receipts when browser bytes stay unchanged", async () => {
+    const fixture = activateFixture();
+    const first = await listControlUiPluginCatalog();
+    const browser = {};
+    const report = {
+      pluginId: fixture.record.id,
+      revision: first.plugins[0]!.revision,
+      status: "activated" as const,
+    };
+    expect(reportControlUiPluginActivation(browser, report)).toBe(true);
+    fs.writeFileSync(
+      path.join(fixture.rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: fixture.record.id,
+        configSchema: { type: "object" },
+        controlUi: fixture.record.controlUi,
+        uiCapabilities: [],
+      }),
+    );
+    expect(await listControlUiPluginCatalog()).toEqual(first);
+    const next = await reloadControlUiPluginCatalog(fixture.record.id);
+    expect(next.plugins[0]!.uiCapabilities).toEqual([]);
+    expect(next.plugins[0]!.revision).not.toBe(first.plugins[0]!.revision);
+    expect(listControlUiPluginActivations(browser)).toEqual([]);
+    expect(reportControlUiPluginActivation(browser, report)).toBe(false);
+    fs.writeFileSync(
+      path.join(fixture.rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: fixture.record.id,
+        configSchema: { type: "object" },
+        controlUi: fixture.record.controlUi,
+      }),
+    );
+    const undeclared = await reloadControlUiPluginCatalog(fixture.record.id);
+    expect(undeclared.plugins[0]).not.toHaveProperty("uiCapabilities");
+    expect(undeclared.plugins[0]!.revision).not.toBe(next.plugins[0]!.revision);
   });
 
   it("fences a queued reload after registry replacement and builds a fresh backend owner", async () => {

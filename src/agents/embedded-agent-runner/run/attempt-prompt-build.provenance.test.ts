@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import type { PluginHookBeforePromptBuildResult } from "../../../plugins/hook-before-agent-start.types.js";
 import type { PluginHookAgentContext } from "../../../plugins/hook-types.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
+import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import {
@@ -37,14 +38,8 @@ vi.mock("../../subagents/registry/subagent-registry.js", async () => {
 });
 
 // Completion storage and queue consumption stay real; terminal cleanup is outside this turn.
-vi.mock("../../subagents/registry/subagent-registry-lifecycle-cleanup.js", () => ({
+vi.mock("../../subagents/registry/subagent-registry-terminal-effects.js", () => ({
   completeTerminalEffects: vi.fn(async () => {}),
-}));
-
-vi.mock("../../../tasks/detached-task-runtime.js", () => ({
-  completeTaskRunByRunId: vi.fn(() => []),
-  failTaskRunByRunId: vi.fn(() => []),
-  setDetachedTaskDeliveryStatusByRunId: vi.fn(() => []),
 }));
 
 registerAgentSessionLoopTestLifecycle();
@@ -70,6 +65,7 @@ async function assembleWithCapturedHookCtx(
     prepareSystemPrompt?: Parameters<
       typeof prepareEmbeddedAttemptPromptAssembly
     >[0]["prepareSystemPrompt"];
+    requiresToolAuthority?: true;
   } = {},
 ) {
   const { session, sessionManager, modelRegistry } = await createTestSession();
@@ -109,6 +105,7 @@ async function assembleWithCapturedHookCtx(
         pluginId: "provenance-hook-test",
         hookName: "before_prompt_build",
         source: "test",
+        requiresToolAuthority: promptPolicy.requiresToolAuthority,
         handler: async (_event: unknown, ctx: PluginHookAgentContext) => {
           captured.push(ctx);
           return promptPolicy.hookResult;
@@ -131,6 +128,7 @@ async function assembleWithCapturedHookCtx(
     sessionAgentId: "main",
     runtimeModel: testModel.id,
     systemPromptText: "Base system prompt",
+    runAbortSignal: new AbortController().signal,
     applyPromptBuildToolsAllow: promptPolicy.applyPromptBuildToolsAllow ?? (() => []),
     prepareSystemPrompt: promptPolicy.prepareSystemPrompt,
     setActiveSessionSystemPrompt: setSystemPrompt,
@@ -176,6 +174,34 @@ describe("prompt-build hook context input provenance", () => {
     expect(finalPrompt).not.toContain("Base system prompt");
     expect(finalPrompt.match(/Hook prefix/g)).toHaveLength(1);
     expect(finalPrompt.match(/Hook suffix/g)).toHaveLength(1);
+  });
+
+  it("lets ordinary prompt-build output reach the semantic prefilter admission", async () => {
+    const { prompt } = await assembleWithCapturedHookCtx(
+      "ordinary-hook-decision-context",
+      { supportsTurnScopedToolRestrictions: true },
+      { hookResult: { appendContext: "Answer warmly without tools." } },
+    );
+
+    expect(prompt.decisionPrefilter).toMatchObject({
+      shouldPruneTools: false,
+      status: "skipped",
+      reason: "ineligible",
+    });
+  });
+
+  it("continues to block prefiltering for authority-dependent prompt hooks", async () => {
+    const { prompt } = await assembleWithCapturedHookCtx(
+      "authorized-hook-prefilter-guard",
+      { supportsTurnScopedToolRestrictions: true },
+      { requiresToolAuthority: true },
+    );
+
+    expect(prompt.decisionPrefilter).toMatchObject({
+      shouldPruneTools: false,
+      status: "skipped",
+      reason: "pending-action-context",
+    });
   });
 
   it("exposes inter-session provenance on the before_prompt_build context", async () => {
@@ -239,11 +265,16 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
     getRuntimeConfig: () => ({}),
     persist,
     persistOrThrow: persist,
+    persistAsyncOrThrow: async (_context, publication, ...runIds) => {
+      publication.assertCurrent();
+      persist(...runIds);
+      await Promise.resolve();
+      publication.onCommitted?.();
+    },
     clearPendingLifecycleError: vi.fn(),
-    countPendingDescendantRuns: () => 0,
+    countPendingDescendantRuns: async () => 0,
     getLatestRunForChildSession: () => null,
     suppressAnnounceForSteerRestart: () => false,
-    resolveSubagentTask: () => ({ lookup: "available" }),
     shouldEmitEndedHookForRun: () => false,
     emitSubagentEndedHookForRun: vi.fn(async () => {}),
     emitSubagentProgressEndedForRun: vi.fn(async () => {}),
@@ -299,7 +330,9 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
   const storedCompletion = structuredClone(first.completion);
   announceTesting.setDepsForTest({
     findTranscriptEvent: async ({ sessionId }, match) => {
-      const event = transcripts.get(sessionId)?.findLast(match);
+      const event = transcripts
+        .get(sessionId)
+        ?.findLast((candidate) => matchesTranscriptEvent(candidate, match));
       return event === undefined ? undefined : { event };
     },
   });
@@ -307,9 +340,11 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
     runs,
     persist,
     persistOrThrow: persist,
-    restoreOnce: vi.fn(),
+    persistAsyncOrThrow: controller.options.persistAsyncOrThrow,
+    restoreOnce: vi.fn(async () => {}),
     startAnnounceCleanup: vi.fn(() => false),
     settleRequesterTurn: controller.settleRequesterTurnAfterSessionSpawns,
+    markRequesterYielded: controller.markRequesterTurnYielded,
   });
   steeringMocks.lease.mockImplementation(api.leasePendingAgentSteeringItems);
 

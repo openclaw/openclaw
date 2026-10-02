@@ -9,6 +9,7 @@ import {
 import { withTrustedWebSearchEndpoint } from "openclaw/plugin-sdk/provider-web-search";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { ParallelSearchResponse } from "./parallel-search-normalize.js";
 
 // Free hosted Search MCP. This keyless transport is used only after the user
 // explicitly selects the `parallel-free` web_search provider. Docs:
@@ -30,15 +31,6 @@ const USER_AGENT = `openclaw-parallel/${PLUGIN_VERSION} (${process.platform})`;
 type JsonRpcMessage = Record<string, unknown>;
 
 type McpToolPayload = Record<string, unknown>;
-
-/** ParallelSearchResponse-compatible shape consumed by the runtime normalizer. */
-type ParallelMcpSearchResponse = {
-  search_id?: unknown;
-  session_id?: unknown;
-  results: unknown[];
-  warnings?: unknown;
-  usage?: unknown;
-};
 
 function mcpHeaders(params: {
   sessionId?: string;
@@ -156,21 +148,13 @@ function extractMcpToolPayload(envelope: JsonRpcMessage): McpToolPayload {
   );
 }
 
-type McpHttpResult = {
-  ok: boolean;
-  status: number;
-  statusText: string;
-  text: string;
-  sessionIdHeader: string | null;
-};
-
 async function postMcp(params: {
-  body: JsonRpcMessage;
+  body: JsonRpcMessage & { method: string };
   sessionId?: string;
   protocolVersion?: string;
   timeoutSeconds: number;
   signal?: AbortSignal;
-}): Promise<McpHttpResult> {
+}): Promise<{ text: string; sessionIdHeader: string | null }> {
   return withTrustedWebSearchEndpoint(
     {
       url: PARALLEL_MCP_SEARCH_URL,
@@ -188,15 +172,19 @@ async function postMcp(params: {
     // Read the body inside the callback: the trusted-endpoint wrapper ties the
     // request's abort/timeout lifecycle to this scope (same pattern as the REST
     // path), so the Response must be consumed here, not returned and read later.
-    async (response) => ({
-      ok: response.ok,
-      status: response.status,
-      statusText: response.statusText,
-      text: response.ok
-        ? await readProviderTextResponse(response, "Parallel MCP")
-        : await readResponseTextLimited(response, PARALLEL_MCP_ERROR_BODY_LIMIT_BYTES),
-      sessionIdHeader: response.headers.get("mcp-session-id"),
-    }),
+    async (response) => {
+      if (!response.ok) {
+        const detail = await readResponseTextLimited(response, PARALLEL_MCP_ERROR_BODY_LIMIT_BYTES);
+        throw new ProviderHttpError(
+          `Parallel MCP ${params.body.method} failed (${response.status}): ${detail || response.statusText}`,
+          { status: response.status },
+        );
+      }
+      return {
+        text: await readProviderTextResponse(response, "Parallel MCP"),
+        sessionIdHeader: response.headers.get("mcp-session-id"),
+      };
+    },
   );
 }
 
@@ -212,7 +200,6 @@ async function mcpCall(
   timeoutSeconds: number,
   signal?: AbortSignal,
 ): Promise<McpToolPayload> {
-  // 1. initialize — capture the server-assigned session id + negotiated version.
   const initId = randomUUID();
   const init = await postMcp({
     timeoutSeconds,
@@ -228,12 +215,6 @@ async function mcpCall(
       },
     },
   });
-  if (!init.ok) {
-    throw new ProviderHttpError(
-      `Parallel MCP initialize failed (${init.status}): ${init.text || init.statusText}`,
-      { status: init.status },
-    );
-  }
   // Only echo a server-assigned session id. Stateless Streamable HTTP servers
   // omit Mcp-Session-Id; inventing one can make such servers reject follow-ups.
   const sessionId = init.sessionIdHeader ?? undefined;
@@ -243,24 +224,13 @@ async function mcpCall(
       ? initEnvelope.result.protocolVersion
       : undefined) ?? MCP_PROTOCOL_VERSION;
 
-  // 2. notifications/initialized — required handshake ack (no response body).
-  const initialized = await postMcp({
+  await postMcp({
     body: { jsonrpc: "2.0", method: "notifications/initialized" },
     sessionId,
     protocolVersion: negotiatedVersion,
     timeoutSeconds,
     signal,
   });
-  if (!initialized.ok) {
-    throw new ProviderHttpError(
-      `Parallel MCP notifications/initialized failed (${initialized.status}): ${
-        initialized.text || initialized.statusText
-      }`,
-      { status: initialized.status },
-    );
-  }
-
-  // 3. tools/call.
   const callId = randomUUID();
   const call = await postMcp({
     body: {
@@ -274,12 +244,6 @@ async function mcpCall(
     timeoutSeconds,
     signal,
   });
-  if (!call.ok) {
-    throw new ProviderHttpError(
-      `Parallel MCP tools/call failed (${call.status}): ${call.text || call.statusText}`,
-      { status: call.status },
-    );
-  }
   return extractMcpToolPayload(selectMcpEnvelope(call.text, callId));
 }
 
@@ -305,7 +269,7 @@ export async function runParallelMcpSearch(params: {
   modelName?: string;
   timeoutSeconds?: number;
   signal?: AbortSignal;
-}): Promise<ParallelMcpSearchResponse> {
+}): Promise<ParallelSearchResponse & { results: unknown[] }> {
   const sessionId = normalizeMcpSessionId(params.sessionId);
   const args: Record<string, unknown> = {
     // MCP requires a non-empty objective (REST treats it as optional); when the

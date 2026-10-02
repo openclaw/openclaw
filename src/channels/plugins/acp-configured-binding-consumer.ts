@@ -1,8 +1,3 @@
-/**
- * ACP configured binding consumer.
- *
- * Converts channel configured-binding rules into persistent ACP binding records.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   buildConfiguredAcpSessionKey,
@@ -56,10 +51,7 @@ function resolveConfiguredBindingWorkspaceCwd(params: {
   const explicitAgentWorkspace = normalizeText(
     resolveAgentConfig(params.cfg, params.agentId)?.workspace,
   );
-  if (explicitAgentWorkspace) {
-    return resolveAgentWorkspaceDir(params.cfg, params.agentId);
-  }
-  if (normalizeText(params.cfg.agents?.defaults?.workspace)) {
+  if (explicitAgentWorkspace || normalizeText(params.cfg.agents?.defaults?.workspace)) {
     return resolveAgentWorkspaceDir(params.cfg, params.agentId);
   }
   return undefined;
@@ -100,7 +92,6 @@ function buildAcpTargetFactory(params: {
     });
   const backend = bindingOverrides.backend ?? runtimeDefaults.backend;
   const label = bindingOverrides.label;
-  const acpAgentId = normalizeText(runtimeDefaults.acpAgentId);
 
   return {
     driverId: "acp",
@@ -113,7 +104,7 @@ function buildAcpTargetFactory(params: {
         conversationId: conversation.conversationId,
         parentConversationId: conversation.parentConversationId,
         agentId: params.agentId,
-        acpAgentId,
+        acpAgentId: runtimeDefaults.acpAgentId,
         mode,
         model,
         thinking,
@@ -142,13 +133,7 @@ function buildAcpTargetFactory(params: {
 export const acpConfiguredBindingConsumer: ConfiguredBindingConsumer = {
   id: "acp",
   supports: (binding) => binding.type === "acp",
-  buildTargetFactory: (params) =>
-    buildAcpTargetFactory({
-      cfg: params.cfg,
-      binding: params.binding,
-      channel: params.channel,
-      agentId: params.agentId,
-    }),
+  buildTargetFactory: buildAcpTargetFactory,
   parseSessionKey: ({ sessionKey }) => parseConfiguredAcpSessionKey(sessionKey),
   matchesSessionKey: ({ sessionKey, materializedTarget }) =>
     materializedTarget.record.targetSessionKey === sessionKey,

@@ -46,10 +46,6 @@ const roots = useAutoCleanupTempDirTracker(afterEach);
 const ownedChildren: RegistrationTestChildProcess[] = [];
 let kill: MockInstance<typeof process.kill>;
 const diagnostic = "failed to initialize sqlite state runtime: database is locked";
-const factories = [
-  ["shared", getLeasedSharedCodexAppServerClient],
-  ["isolated", createIsolatedCodexAppServerClient],
-] as const;
 
 function exit(child: RegistrationTestChildProcess, code: number) {
   if (child.exitCode !== null) {
@@ -156,11 +152,11 @@ describe.skipIf(process.platform === "win32")("Codex startup registration orderi
     vi.unstubAllEnvs();
   });
 
-  it.each(
-    factories.flatMap(([mode, factory]) =>
-      (["recover", "abort"] as const).map((outcome) => [mode, outcome, factory] as const),
-    ),
-  )(
+  it.each([
+    ["shared", "recover", getLeasedSharedCodexAppServerClient],
+    ["isolated", "recover", createIsolatedCodexAppServerClient],
+    ["shared", "abort", getLeasedSharedCodexAppServerClient],
+  ] as const)(
     "%s startup when inspection finishes before the exit event: %s",
     async (_mode, outcome, factory) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });

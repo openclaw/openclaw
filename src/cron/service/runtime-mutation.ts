@@ -10,8 +10,11 @@ import type {
 } from "../../infra/sqlite-worker-operation-settlement.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import type { CronRunReceipt } from "../store/run-receipt.types.js";
 import type { CronRuntimeMutationContracts } from "../store/runtime-mutation.types.js";
 import type {
+  CronReceiptRevisionRefusal,
+  CronJobMutationRefusal,
   CronRuntimeMutationType,
   CronRuntimeWorkerOperations,
 } from "../store/runtime-worker.types.js";
@@ -27,12 +30,19 @@ export async function runCronRuntimeMutation<Type extends CronRuntimeMutationTyp
     assertCurrent: () => void;
   };
   publish: (outcome: CronRuntimeMutationContracts[Type]["outcome"]) => void;
+  onSettled?: (outcome: "committed" | "not-committed" | "unknown") => void;
+  onRolledBackConflict?: (receipt: CronRunReceipt) => void;
+  onRolledBackReceiptRevision?: (refusal: CronReceiptRevisionRefusal) => never;
+  onRolledBackMutation?: (refusal: CronJobMutationRefusal) => never;
 }): Promise<void> {
   const nonce = randomUUID();
   let settlement: Promise<SqliteWorkerOperationSettlement> | undefined;
   let native: SqliteWorkerNativeSettlementOwner | undefined;
   let bytes: Uint8Array | undefined;
   let published = false;
+  let conflict: CronRunReceipt | undefined;
+  let receiptRevision: CronReceiptRevisionRefusal | undefined;
+  let mutationRefusal: CronJobMutationRefusal | undefined;
   const assertCurrent = () => {
     params.context.admission.assertCurrent();
     params.assertCurrent();
@@ -64,6 +74,24 @@ export async function runCronRuntimeMutation<Type extends CronRuntimeMutationTyp
           const result = await scope.execute(command);
           if (result.nonce !== nonce) {
             throw new Error("Cron mutation returned a different operation nonce");
+          }
+          if ("conflict" in result) {
+            if (params.type !== "cron.reserveRuns" || !params.onRolledBackConflict) {
+              throw new Error("Cron mutation returned an unexpected reservation conflict");
+            }
+            conflict = result.conflict;
+          }
+          if ("receiptRevision" in result) {
+            if (params.type !== "cron.finalizeRuns" || !params.onRolledBackReceiptRevision) {
+              throw new Error("Cron mutation returned an unexpected receipt revision refusal");
+            }
+            receiptRevision = result.receiptRevision;
+          }
+          if ("mutationRefusal" in result) {
+            if (params.type !== "cron.mutateJobs" || !params.onRolledBackMutation) {
+              throw new Error("Cron mutation returned an unexpected job mutation refusal");
+            }
+            mutationRefusal = result.mutationRefusal;
           }
         } finally {
           await settlement;
@@ -117,12 +145,54 @@ export async function runCronRuntimeMutation<Type extends CronRuntimeMutationTyp
         },
       },
     );
-    if (!published) {
+    if (conflict) {
+      const settled = await settlement;
+      if (
+        native?.committed ||
+        native?.settlement?.kind !== "completed" ||
+        settled?.kind !== "completed"
+      ) {
+        throw new Error("Cron reservation conflict has no confirmed native rollback");
+      }
+      params.onRolledBackConflict!(conflict);
+    } else if (receiptRevision) {
+      const settled = await settlement;
+      if (
+        native?.committed ||
+        native?.settlement?.kind !== "completed" ||
+        settled?.kind !== "completed"
+      ) {
+        throw new Error("Cron receipt revision refusal has no confirmed native rollback");
+      }
+      params.onRolledBackReceiptRevision!(receiptRevision);
+    } else if (mutationRefusal) {
+      const settled = await settlement;
+      if (
+        native?.committed ||
+        native?.settlement?.kind !== "completed" ||
+        settled?.kind !== "completed"
+      ) {
+        throw new Error("Cron job mutation refusal has no confirmed native rollback");
+      }
+      params.onRolledBackMutation!(mutationRefusal);
+    } else if (!published) {
       throw new Error("Cron mutation did not publish a committed outcome");
     }
   } finally {
-    await settlement;
-    publishCommitted();
-    bytes = undefined;
+    const settled = await settlement;
+    try {
+      publishCommitted();
+    } finally {
+      params.onSettled?.(
+        native?.committed
+          ? "committed"
+          : settled === undefined ||
+              settled.kind === "not-entered" ||
+              native?.settlement?.kind === "completed"
+            ? "not-committed"
+            : "unknown",
+      );
+      bytes = undefined;
+    }
   }
 }

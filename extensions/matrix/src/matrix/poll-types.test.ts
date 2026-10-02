@@ -6,13 +6,12 @@ import {
   buildPollStartContent,
   formatPollResultsAsText,
   parsePollStart,
-  parsePollStartContent,
   resolvePollReferenceEventId,
 } from "./poll-types.js";
 
-describe("parsePollStartContent", () => {
+describe("parsePollStart", () => {
   it("parses legacy m.poll payloads", () => {
-    const summary = parsePollStartContent({
+    const summary = parsePollStart({
       "m.poll": {
         question: { "m.text": "Lunch?" },
         kind: "m.poll.disclosed",
@@ -25,7 +24,10 @@ describe("parsePollStartContent", () => {
     });
 
     expect(summary?.question).toBe("Lunch?");
-    expect(summary?.answers).toEqual(["Yes", "No"]);
+    expect(summary?.answers).toEqual([
+      { id: "answer1", text: "Yes" },
+      { id: "answer2", text: "No" },
+    ]);
   });
 
   it("preserves answer ids when parsing poll start content", () => {

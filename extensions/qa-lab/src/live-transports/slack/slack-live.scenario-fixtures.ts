@@ -1,4 +1,3 @@
-// QA Lab Slack presentation and progress scenario fixtures.
 import { randomUUID } from "node:crypto";
 import {
   SLACK_QA_CHART_TITLE,

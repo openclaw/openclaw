@@ -12,13 +12,16 @@ const baseMessage = {
   __openclaw: { id: "input-1", seq: 2, idempotencyKey: "run:user", transport: { clients } },
 };
 
-function pending(message: object): ChatPendingInputsPage["items"] {
+function pending(
+  message: object,
+  state: ChatPendingInputsPage["items"][number]["state"] = "queued",
+): ChatPendingInputsPage["items"] {
   return [
     {
       id: "input-1",
       runId: "run",
       acceptedAt: 1000,
-      state: "queued",
+      state,
       message: { ...message, __openclaw: { id: "pending:input-1", transport: { clients } } },
     },
   ];
@@ -47,6 +50,35 @@ function render(
 afterEach(() => resetChatThreadState());
 
 describe("system notices through pending-to-history promotion", () => {
+  it.each(["interrupted", "cancelled"] as const)(
+    "shows one accurate recovery notice when the request is %s before starting",
+    (state) => {
+      const message = {
+        ...baseMessage,
+        provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
+      };
+      expect(render([], pending(message))).toMatchObject([
+        { kind: "notice", label: "System · restart recovery" },
+      ]);
+      expect(render([], pending(message, state))).toMatchObject([
+        {
+          kind: "notice",
+          label: "System · restart recovery",
+          text: `The Gateway restarted. Automatic recovery was ${state} before the agent could resume. Send a message to continue.`,
+          startsTurn: true,
+        },
+      ]);
+      expect(render([message], pending(message, state))).toMatchObject([
+        {
+          kind: "notice",
+          label: "System · restart recovery",
+          text: "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
+          boundaryId: "send:run",
+        },
+      ]);
+    },
+  );
+
   it.each([
     [
       "main_session_restart_recovery",
@@ -130,13 +162,12 @@ describe("system notices through pending-to-history promotion", () => {
         }
         expect(notice.startsTurn).toBe(midTurn ? undefined : true);
         expect(notice.collapsedBody).toBe(midTurn ? true : undefined);
-        expect(
-          coalesceAgentRunFrames(items).filter((item) => item.kind === "agent-run-frame"),
-        ).toMatchObject(
-          stage === 1 && !midTurn
-            ? [{ runId: "run", boundaryId: "send:run", parts: [items[2]] }]
-            : [],
-        );
+        const framed = coalesceAgentRunFrames(items);
+        expect(framed).toContain(notice);
+        // A known-run reply frames even before promotion supplies a causal boundary.
+        expect(framed.filter((item) => item.kind === "agent-run-frame")).toMatchObject([
+          { runId: "run", boundaryId: "send:run", parts: [items[stage === 1 ? 2 : 1]] },
+        ]);
         expect(notice.boundaryId).toBe(stage === 1 && !imported ? "send:run" : undefined);
       }
       for (const messages of stages) {

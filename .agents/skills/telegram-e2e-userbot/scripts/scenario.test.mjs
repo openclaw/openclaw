@@ -11,7 +11,7 @@ test("normalizes Telegram and gateway actions", () => {
   assert.deepEqual(
     parseScenario({
       actions: [
-        { type: "send", text: "@{sut} first" },
+        { type: "send", text: "@{sut} first", awaitReply: { text: "BEFORE", requireQuote: true } },
         {
           type: "click",
           atMs: 500,
@@ -34,7 +34,12 @@ test("normalizes Telegram and gateway actions", () => {
     }),
     {
       actions: [
-        { type: "send", atMs: 0, text: "@{sut} first" },
+        {
+          type: "send",
+          atMs: 0,
+          text: "@{sut} first",
+          awaitReply: { text: "BEFORE", requireQuote: true },
+        },
         {
           type: "click",
           atMs: 500,
@@ -117,6 +122,15 @@ test("rejects fields and action types outside the closed schema", () => {
     () => parseScenario({ actions: [{ type: "cron", message: "deliver", bestEffort: "yes" }] }),
     /bestEffort must be a boolean/u,
   );
+  const send = { type: "send", text: "request", awaitReply: { text: "SAME" } };
+  assert.throws(() => parseScenario({ actions: [send, send] }), /must be distinct/);
+  for (const awaitReply of [
+    { text: "" },
+    { text: "X", requireQuote: false },
+    { text: "X", timeoutMs: 100 },
+  ]) {
+    assert.throws(() => parseScenario({ actions: [{ ...send, awaitReply }] }), /awaitReply/);
+  }
 });
 
 test("validates the recorder-ready artifact as a closed shape", () => {
@@ -185,4 +199,35 @@ test("photo sends allow an empty caption and replyToPrevious targets an earlier 
     /replyToPrevious/,
   );
   assert.throws(() => parseScenario({ actions: [{ type: "send", atMs: 0 }] }), /text/);
+});
+
+test("forward bursts normalize and support a later replyToPrevious after sorting", () => {
+  const burst = { type: "forwardBurst", text: "forwarded text", photo: "/tmp/fixture.png" };
+  const reply = { type: "send", atMs: 5, text: "follow-up", replyToPrevious: true };
+  assert.deepEqual(parseScenario({ actions: [reply, burst] }).actions, [
+    { ...burst, atMs: 0 },
+    reply,
+  ]);
+  assert.throws(
+    () => parseScenario({ actions: [reply, { ...burst, atMs: 10 }] }),
+    /replyToPrevious/,
+  );
+});
+
+test("forward bursts require text and photo and reject unknown keys", () => {
+  const burst = { type: "forwardBurst", text: "forwarded text", photo: "/tmp/fixture.png" };
+  for (const key of ["text", "photo"]) {
+    for (const value of [undefined, "", " ", 42]) {
+      assert.throws(
+        () => parseScenario({ actions: [{ ...burst, [key]: value }] }),
+        new RegExp(`${key} must be a non-empty string`),
+      );
+    }
+  }
+  for (const key of ["extra", "awaitReply", "forumTopicId"]) {
+    assert.throws(
+      () => parseScenario({ actions: [{ ...burst, [key]: true }] }),
+      new RegExp(`unknown field: ${key}`),
+    );
+  }
 });

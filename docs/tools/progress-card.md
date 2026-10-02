@@ -57,6 +57,45 @@ Every call is a replacement, not a patch. Omitting `markdown` removes the previo
 
 The tool returns a short receipt such as `Progress card updated (rev 4, 1/3 done)` or `Progress card updated (rev 4)` when there is no plan. Its structured result contains the revision and completed/total step counts, or `null` without a plan. Successful writes also update channel previews from the complete plan state. Failed or blocked writes leave the previous plan in place. Active channel previews retain a safe failure notice.
 
+## Before an active run ends
+
+When a run still owes a visible reply, the built-in agent runtime performs at most
+one completion self-check if that run successfully saves an unfinished checklist
+and then produces a normal final answer. The agent rechecks the latest user instructions: continue feasible,
+already-authorized work, reconcile completed steps, or explain the concrete reason
+it cannot continue. This may add one model response; it does not guarantee that the
+model finishes every task.
+
+The check continues the same active run with its existing transcript, permissions,
+time limit, and completed tool results. It does not replay earlier actions or
+restart the original request. A checkpoint already shown in chat stays in the
+conversation while work continues. A genuine blocker can leave steps pending after
+the check.
+
+Old cards do not restart idle work. Completed, cleared, and note-only replacements
+do not request a check. Cancellation, approval waits, accepted child/media completion handoffs,
+status-only refreshes, and explicit plugin finalization retain their
+existing behavior. Other agent harnesses retain their own finalization policies.
+
+## Pause without marking work complete
+
+If no authorized step can proceed because of an explicit pause, required approval,
+or an external dependency, replace the checklist with a Markdown-only card. Keep
+the unfinished work, blocker, responsible owner, and resume condition visible.
+Do not mark blocked steps completed or imply that the request is finished.
+
+```json
+{
+  "markdown": "Update remains open and paused. Waiting for the source owner to publish the reviewed repair. No deployment is authorized; reconcile the new packet and current instructions before resuming."
+}
+```
+
+Omitting `plan` removes the checklist, not the note or the task’s unresolved work.
+A note-only replacement does not request a completion self-check. Re-saving an
+unfinished checklist during a later ordinary turn can request another check, even
+when the same blocker remains. Restore a checklist when authorized work can
+proceed; keep any other unresolved dependencies in the note.
+
 ## Format the note
 
 For eligible multi-step work with a known total, prefer a leading progress bar using observed completed/total counts: PRs reviewed, tests finished, files processed, or other meaningful work units. Prefer those counts over coarse phase counts such as "1 of 3 steps." Label exactly what the count measures: reviewed PRs are not merged PRs, and finished tests are not necessarily passing tests. Never invent percentages or infer completion from elapsed time. When the total is unknown, use a compact status note or table instead.
@@ -95,6 +134,8 @@ Call `progress_card` with both parts absent or empty to remove the current card:
 
 An empty plan plus empty or whitespace-only Markdown also clears it. A successful clear returns `Progress card cleared`. Channel previews remove the checklist and its status, keep other activity, and delete an otherwise empty draft. A later card update can create a new draft.
 
+In the Control UI, users with write access can clear the current card with **Dismiss progress card** (×), whether it is expanded or collapsed. The button is available for unfinished, paused, completed, and note-only cards. Dismissal clears the saved card, not the conversation or active agent run; a later progress update can create a new card. Dismissal clears only the revision the user saw; if the agent has written a newer revision, the newer card is kept and shown instead.
+
 A full in-place conversation reset (`/reset` without `soft`, or `sessions.reset`) also clears the previous task’s card. The clear commits with the reset boundary and refreshes subscribed clients; a fresh page load also sees no old card. Writes admitted before that reset cannot restore it. Reset preserves transcript history and dashboard layout. Automatic continuity resets that preserve prior context do not clear the card.
 
 ## Where the card appears
@@ -106,6 +147,8 @@ By default, the current chat keeps exactly one live card, in the collapsible sur
 In the Control UI, **Settings → Appearance → Chat → Show task progress cards** hides or shows the composer card. It is enabled by default and stored in this browser only. Turning it off also removes the loading placeholder, without stopping agent work, clearing saved progress, or changing dashboard widgets and session previews. Turn it back on to see the current card. The separate **Collapse task progress by default on desktop** preference is preserved while cards are hidden.
 
 On mobile, the composer card starts collapsed and sending new messages does not open it. On desktop, a newly created card starts expanded unless **Collapse task progress by default on desktop** is enabled. Mounting the card or switching sessions displays its initial state without a fold animation. While reading earlier messages, automatic collapse requires at least two upward scroll gestures totaling at least 320 pixels, followed by 300 milliseconds without scrolling. Wheel bursts separated by more than 200 milliseconds count separately; each touch drag counts as one gesture, including its inertia. Only upward movement consumed by the transcript counts; scrolling inside tool output, canceled input, and programmatic position adjustments do not. Returning to the bottom resets the counts.
+
+While an expanded question replaces the composer, the task progress card is hidden with it. Answering, skipping, or collapsing the question restores the card with its disclosure state retained. Scrolling the transcript while the question is expanded does not collapse the hidden card.
 
 Sending a new message, completing a run, returning to the bottom, and progress updates never reopen a collapsed card. An open card likewise keeps its selected opening through new messages and completion. A new card gets its initial desktop or mobile default only after the Gateway confirms that the previous card was cleared; changing the note or checklist is an update, not creation. If the client cannot confirm a clear, it preserves the previous choice rather than guessing that a new task started.
 

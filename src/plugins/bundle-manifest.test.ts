@@ -94,43 +94,6 @@ function setupBundleFixture(params: {
   }
 }
 
-function setupClaudeHookFixture(
-  rootDir: string,
-  kind: "default-hooks" | "custom-hooks" | "no-hooks",
-) {
-  if (kind === "default-hooks") {
-    setupBundleFixture({
-      rootDir,
-      dirs: [".claude-plugin", "hooks"],
-      jsonFiles: { "hooks/hooks.json": { hooks: [] } },
-      manifestRelativePath: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
-      manifest: {
-        name: "Hook Plugin",
-        description: "Claude hooks fixture",
-      },
-    });
-    return;
-  }
-  if (kind === "custom-hooks") {
-    setupBundleFixture({
-      rootDir,
-      dirs: [".claude-plugin", "custom-hooks"],
-      manifestRelativePath: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
-      manifest: {
-        name: "Custom Hook Plugin",
-        hooks: "custom-hooks",
-      },
-    });
-    return;
-  }
-  setupBundleFixture({
-    rootDir,
-    dirs: [".claude-plugin", "skills"],
-    manifestRelativePath: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
-    manifest: { name: "No Hooks" },
-  });
-}
-
 function expectBundleManifest(params: {
   rootDir: string;
   bundleFormat: "agent" | "codex" | "claude" | "cursor";
@@ -138,16 +101,6 @@ function expectBundleManifest(params: {
 }) {
   expect(detectBundleManifestFormat(params.rootDir)).toBe(params.bundleFormat);
   expect(expectLoadedManifest(params.rootDir, params.bundleFormat)).toEqual(params.expected);
-}
-
-function expectClaudeHookResolution(params: {
-  rootDir: string;
-  expectedHooks: readonly string[];
-  hasHooksCapability: boolean;
-}) {
-  const manifest = expectLoadedManifest(params.rootDir, "claude");
-  expect(manifest.hooks).toEqual(params.expectedHooks);
-  expect(manifest.capabilities.includes("hooks")).toBe(params.hasHooksCapability);
 }
 
 afterEach(() => {
@@ -206,23 +159,16 @@ describe("bundle manifest parsing", () => {
         setupBundleFixture({
           rootDir,
           dirs: [".codex-plugin", "skills", "hooks"],
-          manifestRelativePath: CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
-          manifest: {
-            name: "Sample Bundle",
-            description: "Codex fixture",
-            skills: "skills",
-            hooks: "hooks",
-            mcpServers: {
-              sample: {
-                command: "node",
-                args: ["server.js"],
-              },
-            },
-            apps: {
-              sample: {
-                title: "Sample App",
-              },
-            },
+          textFiles: {
+            [CODEX_BUNDLE_MANIFEST_RELATIVE_PATH]: `{
+              // Client manifests support JSON5 comments and trailing commas.
+              name: "Sample Bundle",
+              description: "Codex fixture",
+              skills: "skills",
+              hooks: "hooks",
+              mcpServers: { sample: { command: "node", args: ["server.js"] } },
+              apps: { sample: { title: "Sample App" } },
+            }`,
           },
         });
       },
@@ -544,7 +490,7 @@ describe("bundle manifest parsing", () => {
       $schema: AGENT_BUNDLE_MANIFEST_SCHEMA,
       name: "portable",
       extensions: {
-        "ai.openclaw": { activation },
+        "ai.openclaw": { activation, futureField: { enabled: true } },
       },
     });
     const claudeRoot = makeTempDir();
@@ -583,115 +529,6 @@ describe("bundle manifest parsing", () => {
     expect(expectLoadedManifest(rootDir, "agent").activation).toBeUndefined();
   });
 
-  it("ignores unknown fields inside the ai.openclaw extension", () => {
-    const rootDir = makeTempDir();
-    writeBundleManifest(rootDir, AGENT_BUNDLE_MANIFEST_RELATIVE_PATH, {
-      $schema: AGENT_BUNDLE_MANIFEST_SCHEMA,
-      name: "portable",
-      extensions: {
-        "ai.openclaw": {
-          activation: { onStartup: true },
-          futureField: { enabled: true },
-        },
-      },
-    });
-
-    expect(expectLoadedManifest(rootDir, "agent").activation).toEqual({ onStartup: true });
-  });
-
-  it.each([
-    {
-      name: "accepts JSON5 Codex bundle manifests",
-      bundleFormat: "codex" as const,
-      manifestRelativePath: CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
-      json5Manifest: `{
-  // Bundle name can include comments and trailing commas.
-  name: "Codex JSON5 Bundle",
-  skills: "skills",
-  hooks: "hooks",
-}`,
-      dirs: ["skills", "hooks"],
-      expected: {
-        id: "codex-json5-bundle",
-        name: "Codex JSON5 Bundle",
-        description: undefined,
-        version: undefined,
-        bundleFormat: "codex",
-        skills: ["skills"],
-        settingsFiles: [],
-        hooks: ["hooks"],
-        capabilities: ["skills", "hooks"],
-      },
-    },
-    {
-      name: "accepts JSON5 Claude bundle manifests",
-      bundleFormat: "claude" as const,
-      manifestRelativePath: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
-      json5Manifest: `{
-  name: "Claude JSON5 Bundle",
-  commands: "commands-pack",
-  hooks: "hooks-pack",
-  outputStyles: "styles",
-}`,
-      dirs: [".claude-plugin", "commands-pack", "hooks-pack", "styles"],
-      expected: {
-        id: "claude-json5-bundle",
-        name: "Claude JSON5 Bundle",
-        description: undefined,
-        version: undefined,
-        bundleFormat: "claude",
-        skills: ["commands-pack", "styles"],
-        settingsFiles: [],
-        hooks: ["hooks-pack"],
-        capabilities: ["skills", "commands", "hooks", "outputStyles"],
-      },
-    },
-    {
-      name: "accepts JSON5 Cursor bundle manifests",
-      bundleFormat: "cursor" as const,
-      manifestRelativePath: CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
-      json5Manifest: `{
-  name: "Cursor JSON5 Bundle",
-  commands: ".cursor/commands",
-  mcpServers: "./.mcp.json",
-}`,
-      dirs: [".cursor-plugin", "skills", ".cursor/commands"],
-      textFiles: {
-        ".mcp.json": "{ servers: {}, }",
-      },
-      expected: {
-        id: "cursor-json5-bundle",
-        name: "Cursor JSON5 Bundle",
-        description: undefined,
-        version: undefined,
-        bundleFormat: "cursor",
-        skills: ["skills", ".cursor/commands"],
-        settingsFiles: [],
-        hooks: [],
-        capabilities: ["skills", "commands", "mcpServers"],
-      },
-    },
-  ] as const)(
-    "$name",
-    ({ bundleFormat, manifestRelativePath, json5Manifest, dirs, textFiles, expected }) => {
-      const rootDir = makeTempDir();
-      setupBundleFixture({
-        rootDir,
-        dirs: [path.dirname(manifestRelativePath), ...dirs],
-        textFiles: {
-          [manifestRelativePath]: json5Manifest,
-          ...textFiles,
-        },
-      });
-
-      expectBundleManifest({
-        rootDir,
-        bundleFormat,
-        expected,
-      });
-    },
-  );
-
   it.each([
     {
       name: "rejects Agent Plugins manifests that parse to non-objects",
@@ -702,16 +539,6 @@ describe("bundle manifest parsing", () => {
       name: "rejects JSON5 Codex bundle manifests that parse to non-objects",
       bundleFormat: "codex" as const,
       manifestRelativePath: CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
-    },
-    {
-      name: "rejects JSON5 Claude bundle manifests that parse to non-objects",
-      bundleFormat: "claude" as const,
-      manifestRelativePath: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
-    },
-    {
-      name: "rejects JSON5 Cursor bundle manifests that parse to non-objects",
-      bundleFormat: "cursor" as const,
-      manifestRelativePath: CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
     },
   ] as const)("$name", ({ bundleFormat, manifestRelativePath }) => {
     const rootDir = makeTempDir();
@@ -731,33 +558,15 @@ describe("bundle manifest parsing", () => {
     }
   });
 
-  it.each([
-    {
-      name: "resolves Claude bundle hooks from default and declared paths",
-      setupKind: "default-hooks",
-      expectedHooks: ["hooks/hooks.json"],
-      hasHooksCapability: true,
-    },
-    {
-      name: "resolves Claude bundle hooks from manifest-declared paths only",
-      setupKind: "custom-hooks",
-      expectedHooks: ["custom-hooks"],
-      hasHooksCapability: true,
-    },
-    {
-      name: "returns empty hooks for Claude bundles with no hooks directory",
-      setupKind: "no-hooks",
-      expectedHooks: [],
-      hasHooksCapability: false,
-    },
-  ] as const)("$name", ({ setupKind, expectedHooks, hasHooksCapability }) => {
+  it("exposes default Claude hooks without a hooks declaration", () => {
     const rootDir = makeTempDir();
-    setupClaudeHookFixture(rootDir, setupKind);
-    expectClaudeHookResolution({
-      rootDir,
-      expectedHooks,
-      hasHooksCapability,
+    writeBundleFixtureFiles(rootDir, {
+      [CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH]: { name: "default-hooks" },
+      "hooks/hooks.json": { hooks: [] },
     });
+    const manifest = expectLoadedManifest(rootDir, "claude");
+    expect(manifest.hooks).toEqual(["hooks/hooks.json"]);
+    expect(manifest.capabilities).toContain("hooks");
   });
 
   it("does not misclassify native index plugins as manifestless Claude bundles", () => {

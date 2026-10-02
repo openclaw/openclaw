@@ -51,9 +51,7 @@ type WorkboardCardSurface = "page" | "widget" | "list";
 function renderCard(props: WorkboardProps, card: WorkboardCard, surface: WorkboardCardSurface) {
   const {
     state,
-    task,
     busy,
-    activeTask,
     live,
     linkedSessionKey,
     sessionTarget,
@@ -63,10 +61,10 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
   } = getCardActionState(props, card);
   const widget = surface === "widget";
   const dependencies = getWorkboardDependencyState(card, state.cards);
-  const lifecycle = getWorkboardLifecycle(card, props.sessions, task, props.sessionResolution);
+  const lifecycle = getWorkboardLifecycle(card, props.sessions, props.sessionResolution);
   const now = Date.now();
   const updatedAt = asDateTimestampMs(card.updatedAt);
-  const sessionStatus = getSessionStatus(card, lifecycle, task, now);
+  const sessionStatus = getSessionStatus(card, lifecycle, now);
   const alerts = visibleCardAlerts(
     getCardAlerts(card, lifecycle, dependencies, now),
     sessionStatus.visible || sessionStatus.state === "running" ? sessionStatus.state : undefined,
@@ -98,7 +96,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
       `;
   const sessionAction = widget ? nothing : renderOpenSessionCardAction(props, sessionTarget);
   const stopAction =
-    !widget && writable && (linkedSessionKey ? live : activeTask)
+    !widget && writable && linkedSessionKey && live
       ? renderStopCardAction(props, card, busy)
       : nothing;
   const moveAction =
@@ -232,7 +230,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
             </div>
           </div>
           <div class="workboard-list-row__session">
-            ${renderCardSession(props, card, lifecycle, task, sessionStatus)}
+            ${renderCardSession(props, card, lifecycle, sessionStatus)}
           </div>
           <div class="workboard-list-row__updated">${updatedTime}</div>
           <div class="workboard-list-row__actions">${actionsMenu}</div>
@@ -332,7 +330,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
                 <h3 class="workboard-truncate-two" title=${card.title}>${card.title}</h3>
                 <div class="workboard-card__header-actions">${actionsMenu}</div>
               </header>
-              ${renderCardSession(props, card, lifecycle, task, sessionStatus)}
+              ${renderCardSession(props, card, lifecycle, sessionStatus)}
               ${renderCardMeta(card, archived)} ${renderCardAlert(alerts, alertDescriptionId)}
               ${renderCardCounts(card)}
               <footer class="workboard-card__footer">${priority} ${updatedTime}</footer>

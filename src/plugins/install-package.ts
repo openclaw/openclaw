@@ -4,7 +4,6 @@ import { resolveUserPath } from "../utils.js";
 import {
   inspectBundlePluginArtifact,
   inspectNativePluginArtifact,
-  type PluginInstallArtifactInspection,
 } from "./install-artifact-inspection.js";
 import {
   scanAndLinkInstalledPackage,
@@ -213,43 +212,24 @@ async function installBundleFromSourceDir(
     : installed;
 }
 
-function withArtifactInspection(
-  result: InstallPluginResult,
-  artifactInspection: PluginInstallArtifactInspection,
-): InstallPluginResult {
-  return result.ok ? { ...result, artifactInspection } : result;
-}
-
 async function installPluginFromSourceDir(
   params: {
     sourceDir: string;
   } & InternalPackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
   const nativePackageManifest = await detectNativePackageInstallSource(params.sourceDir);
-  if (nativePackageManifest) {
-    return withArtifactInspection(
-      await installPluginFromPackageDir({
-        packageDir: params.sourceDir,
-        packageManifest: nativePackageManifest,
-        ...pickPackageInstallCommonParams(params),
-      }),
-      inspectNativePluginArtifact(),
-    );
+  if (!nativePackageManifest) {
+    const bundleResult = await installBundleFromSourceDir(params);
+    if (bundleResult) {
+      return bundleResult;
+    }
   }
-  const bundleResult = await installBundleFromSourceDir({
-    sourceDir: params.sourceDir,
-    ...pickPackageInstallCommonParams(params),
+  const result = await installPluginFromPackageDir({
+    ...params,
+    packageDir: params.sourceDir,
+    packageManifest: nativePackageManifest,
   });
-  if (bundleResult) {
-    return bundleResult;
-  }
-  return withArtifactInspection(
-    await installPluginFromPackageDir({
-      packageDir: params.sourceDir,
-      ...pickPackageInstallCommonParams(params),
-    }),
-    inspectNativePluginArtifact(),
-  );
+  return result.ok ? { ...result, artifactInspection: inspectNativePluginArtifact() } : result;
 }
 
 async function detectNativePackageInstallSource(
@@ -395,30 +375,28 @@ export async function installPluginFromArchive<
     verification: params.verification,
     rootMarkers: PLUGIN_ARCHIVE_ROOT_MARKERS,
     onExtracted: async (sourceDir) =>
-      await installPluginFromSourceDir({
-        sourceDir,
-        ...pickPackageInstallCommonParams(
-          copyPluginInstallTransactionRequest(params, {
-            onInstallPolicyWarning: params.onInstallPolicyWarning,
-            extensionsDir: params.extensionsDir,
-            timeoutMs,
-            workTimeoutMs,
-            logger,
-            mode,
-            dryRun: params.dryRun,
-            config: params.config,
-            expectedPluginId: params.expectedPluginId,
-            trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-            requirePluginManifest: true,
-            installPolicyRequest,
-            onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
-            beforePersistentApply: params.beforePersistentApply,
-            onEffectiveMode: (resolvedMode) => {
-              effectiveMode = resolvedMode;
-            },
-          }),
-        ),
-      }),
+      await installPluginFromSourceDir(
+        copyPluginInstallTransactionRequest(params, {
+          sourceDir,
+          onInstallPolicyWarning: params.onInstallPolicyWarning,
+          extensionsDir: params.extensionsDir,
+          timeoutMs,
+          workTimeoutMs,
+          logger,
+          mode,
+          dryRun: params.dryRun,
+          config: params.config,
+          expectedPluginId: params.expectedPluginId,
+          trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+          requirePluginManifest: true,
+          installPolicyRequest,
+          onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+          beforePersistentApply: params.beforePersistentApply,
+          onEffectiveMode: (resolvedMode) => {
+            effectiveMode = resolvedMode;
+          },
+        }),
+      ),
   });
   if (result.ok) {
     emitSuccessfulPluginInstallSecurityEvent(result, {
@@ -453,14 +431,12 @@ async function installPluginFromDir(
 
   let effectiveMode = params.mode ?? "install";
   const result = await installPluginFromSourceDir({
+    ...params,
     sourceDir: dirPath,
-    ...pickPackageInstallCommonParams({
-      ...params,
-      installPolicyRequest,
-      onEffectiveMode: (resolvedMode) => {
-        effectiveMode = resolvedMode;
-      },
-    }),
+    installPolicyRequest,
+    onEffectiveMode: (resolvedMode) => {
+      effectiveMode = resolvedMode;
+    },
   });
   emitSuccessfulPluginInstallSecurityEvent(result, {
     dryRun: params.dryRun,

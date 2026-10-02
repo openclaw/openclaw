@@ -1,4 +1,3 @@
-// Unified operator approval lookup and first-answer resolution handlers.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -6,9 +5,7 @@ import {
   errorShape,
   isWellFormedApprovalId,
   type ApprovalDecision,
-  type ApprovalHistoryParams,
   type ApprovalHistoryResult,
-  type ApprovalResolveParams,
   type ApprovalSnapshot,
   validateApprovalGetParams,
   validateApprovalHistoryParams,
@@ -125,14 +122,6 @@ type ApplyApprovalDecisionResult<TPayload> =
     }
   | { ok: false };
 
-function resolveLiveRecord<TPayload>(params: {
-  manager: ExecApprovalManager<TPayload>;
-  id: string;
-  liveRecord?: ExecApprovalRecord<TPayload>;
-}): ExecApprovalRecord<TPayload> | undefined {
-  return params.liveRecord ?? params.manager.getLiveSnapshot(params.id) ?? undefined;
-}
-
 async function applyApprovalDecision<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   id: string;
@@ -180,12 +169,11 @@ async function applyApprovalDecision<TPayload>(params: {
     applied,
     record: result.record,
     liveRecord: applied
-      ? resolveLiveRecord({ manager: params.manager, id: params.id, liveRecord: result.liveRecord })
+      ? (result.liveRecord ?? params.manager.getLiveSnapshot(params.id) ?? undefined)
       : result.liveRecord,
   };
 }
 
-/** Creates kind-agnostic approval lookup and resolution handlers. */
 export function createApprovalHandlers(
   params: CreateApprovalHandlersParams,
 ): GatewayRequestHandlers {
@@ -201,7 +189,6 @@ export function createApprovalHandlers(
         );
         return;
       }
-      const historyParams = rawParams as ApprovalHistoryParams;
       if (!authority.isCurrent()) {
         respondApprovalNotFound(respond);
         return;
@@ -209,9 +196,9 @@ export function createApprovalHandlers(
       let history: Awaited<ReturnType<typeof listTerminalOperatorApprovals>>;
       try {
         history = await listTerminalOperatorApprovals({
-          cursor: historyParams.cursor,
-          limit: historyParams.limit,
-          kind: historyParams.kind,
+          cursor: rawParams.cursor,
+          limit: rawParams.limit,
+          kind: rawParams.kind,
           databaseOptions: params.databaseOptions,
           guard: authority.guard,
         });
@@ -308,7 +295,7 @@ export function createApprovalHandlers(
       const { params: rawParams, respond, client, context } = options;
       using authority = createApprovalRequestAuthority(options);
       const validParams = validateApprovalResolveParams(rawParams);
-      const resolveParams = validParams ? (rawParams as ApprovalResolveParams) : null;
+      const resolveParams = validParams ? rawParams : null;
       const hasReviewer = isRecord(rawParams) && "reviewer" in rawParams;
       if (hasReviewer && !resolveParams?.reviewer) {
         respondApprovalNotFound(respond);
@@ -424,16 +411,19 @@ export function createApprovalHandlers(
         | ApplyApprovalDecisionResult<PluginApprovalRequestPayload>
         | ApplyApprovalDecisionResult<SystemAgentApprovalRequestPayload>;
       try {
+        const decisionParams = {
+          id: record.id,
+          decision: requestedDecision,
+          forceMalformedDeny,
+          resolver,
+          localResolvedBy,
+          guard: { family: approvalGuard.family, assertCurrent },
+        };
         resolution =
           record.kind === "exec"
             ? await applyApprovalDecision({
+                ...decisionParams,
                 manager: params.execApprovalManager,
-                id: record.id,
-                decision: requestedDecision,
-                forceMalformedDeny,
-                resolver,
-                localResolvedBy,
-                guard: { family: approvalGuard.family, assertCurrent },
                 // Grant terms freeze at resolve; an explicit per-resolve
                 // override (custom operator UIs, CLI) beats the config default.
                 ...(requestedDecision === "allow-always" &&
@@ -446,22 +436,12 @@ export function createApprovalHandlers(
               })
             : record.kind === "plugin"
               ? await applyApprovalDecision({
+                  ...decisionParams,
                   manager: params.pluginApprovalManager,
-                  id: record.id,
-                  decision: requestedDecision,
-                  forceMalformedDeny,
-                  resolver,
-                  localResolvedBy,
-                  guard: { family: approvalGuard.family, assertCurrent },
                 })
               : await applyApprovalDecision({
+                  ...decisionParams,
                   manager: params.systemAgentApprovalManager!,
-                  id: record.id,
-                  decision: requestedDecision,
-                  forceMalformedDeny,
-                  resolver,
-                  localResolvedBy,
-                  guard: { family: approvalGuard.family, assertCurrent },
                 });
       } catch (error) {
         if (!readCurrent()) {

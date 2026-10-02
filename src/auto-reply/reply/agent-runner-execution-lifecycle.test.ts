@@ -370,7 +370,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
 
       expect(state.runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.thinkLevel)).toEqual([
         "ultra",
-        "high",
+        "ultra",
       ]);
       expect(followupRun.run.thinkLevel).toBe(override === "ultra" ? "off" : "ultra");
     },

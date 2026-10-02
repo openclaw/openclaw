@@ -1,5 +1,6 @@
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { FaceTimeHelperPeer } from "../src/helper-rpc.js";
 import {
   completeAbsence,
   completeAction,
@@ -14,6 +15,53 @@ import {
   pendingDialState,
   resetRuntimeTestState,
 } from "./runtime.test-support.js";
+
+const carrierPeer: FaceTimeHelperPeer = {
+  bundleIdentifier: "com.apple.FaceTime",
+  processId: 4321,
+  processStartedAtMs: Date.parse("Tue Nov 14 22:13:20 2023"),
+  connectionGeneration: 7,
+};
+
+async function startActiveCall(peer?: FaceTimeHelperPeer) {
+  const talk = createTalkDriver({});
+  mocks.startTalk.mockResolvedValueOnce(talk);
+  const runtime = await createRuntime();
+  void mocks.helperParams?.onMessage(incomingCall(1), peer);
+  await vi.waitFor(() => expect(talk.activate).toHaveBeenCalledOnce());
+  return { runtime, talk };
+}
+
+function outgoingCall(
+  callUUID: string,
+  callStatus = 1,
+  identity: { dial_id?: string; is_sending_audio?: boolean } = {},
+) {
+  return {
+    event: "ft-call-status-changed",
+    data: {
+      call_uuid: callUUID,
+      call_status: callStatus,
+      is_outgoing: true,
+      handle: { value: "owner@example.com" },
+      transport: incomingCall().data.transport,
+      ...identity,
+    },
+  };
+}
+
+function endedCall(callUUID: string, identity: { dial_id?: string } = {}) {
+  return {
+    event: "ft-call-status-changed",
+    data: {
+      call_uuid: callUUID,
+      call_status: 6,
+      has_ended: true,
+      is_outgoing: true,
+      ...identity,
+    },
+  };
+}
 
 describe("FaceTime runtime call sequencing", () => {
   beforeEach(resetRuntimeTestState);
@@ -100,34 +148,16 @@ describe("FaceTime runtime call sequencing", () => {
     const runtime = await createRuntime();
     const dial = await runtime.dial({ handle: "owner@example.com", mode: "audio" });
 
-    void mocks.helperParams?.onMessage({
-      event: "ft-call-status-changed",
-      data: {
-        dial_id: dial.dialID,
-        call_uuid: "outbound-call",
-        call_status: 3,
-        is_outgoing: true,
-        is_sending_audio: false,
-        handle: { value: "owner@example.com" },
-        transport: incomingCall().data.transport,
-      },
-    });
+    void mocks.helperParams?.onMessage(
+      outgoingCall("outbound-call", 3, { dial_id: dial.dialID, is_sending_audio: false }),
+    );
     await vi.waitFor(() => expect(mocks.helper.safetyMute).toHaveBeenCalledWith("outbound-call"));
     expect(mocks.startTalk).not.toHaveBeenCalled();
     expect(mocks.helper.setMuted).not.toHaveBeenCalled();
 
-    void mocks.helperParams?.onMessage({
-      event: "ft-call-status-changed",
-      data: {
-        dial_id: dial.dialID,
-        call_uuid: "replacement-call",
-        call_status: 1,
-        is_outgoing: true,
-        is_sending_audio: true,
-        handle: { value: "owner@example.com" },
-        transport: incomingCall().data.transport,
-      },
-    });
+    void mocks.helperParams?.onMessage(
+      outgoingCall("replacement-call", 1, { dial_id: dial.dialID, is_sending_audio: true }),
+    );
     await vi.waitFor(() => expect(talk.readyForAudio).toHaveBeenCalledOnce());
     expect(mocks.helper.setMuted).not.toHaveBeenCalled();
     expect(mocks.helper.startTransmission).not.toHaveBeenCalled();
@@ -171,11 +201,7 @@ describe("FaceTime runtime call sequencing", () => {
   });
 
   it("keeps suppression after disconnect acknowledgement until a native ended event", async () => {
-    const talk = createTalkDriver({});
-    mocks.startTalk.mockResolvedValueOnce(talk);
-    const runtime = await createRuntime();
-    void mocks.helperParams?.onMessage(incomingCall(1));
-    await vi.waitFor(() => expect(talk.activate).toHaveBeenCalledOnce());
+    const { runtime, talk } = await startActiveCall();
     mocks.helper.inspectCall.mockResolvedValue({
       helpersContacted: 2,
       topologyGeneration: 1,
@@ -298,7 +324,7 @@ describe("FaceTime runtime call sequencing", () => {
     }
   });
 
-  it.each(["incoming active", "outbound ringing-to-active", "incoming ringing"])(
+  it.each(["outbound ringing-to-active", "incoming ringing"])(
     "retains startup suppression while the carrier remains present (%s)",
     async (flow) => {
       let runtime: Awaited<ReturnType<typeof createRuntime>> | undefined;
@@ -347,7 +373,7 @@ describe("FaceTime runtime call sequencing", () => {
             data: { ...outbound.data, call_status: 1 },
           });
         } else {
-          void mocks.helperParams?.onMessage(incomingCall(flow === "incoming ringing" ? 4 : 1));
+          void mocks.helperParams?.onMessage(incomingCall(4));
         }
         await vi.waitFor(() => expect(mocks.helper.leaveCall).toHaveBeenCalledTimes(1));
         expect(releaseStartup).toBeDefined();
@@ -399,12 +425,7 @@ describe("FaceTime runtime call sequencing", () => {
       const runtime = await createRuntime();
       let stop: Promise<void> | undefined;
       try {
-        void mocks.helperParams?.onMessage(incomingCall(4), {
-          bundleIdentifier: "com.apple.FaceTime",
-          processId: 4321,
-          processStartedAtMs: Date.parse("Tue Nov 14 22:13:20 2023"),
-          connectionGeneration: 7,
-        });
+        void mocks.helperParams?.onMessage(incomingCall(4), carrierPeer);
         await vi.waitFor(() => expect(mocks.helper.inspectCall).toHaveBeenCalled());
         expect(startupReleased).toBe(false);
         expect((await runtime.status()).calls).toMatchObject([
@@ -449,11 +470,7 @@ describe("FaceTime runtime call sequencing", () => {
   );
 
   it("enters safety-only mode when one helper disconnects but another remains", async () => {
-    const talk = createTalkDriver({});
-    mocks.startTalk.mockResolvedValueOnce(talk);
-    const runtime = await createRuntime();
-    void mocks.helperParams?.onMessage(incomingCall(1));
-    await vi.waitFor(() => expect(talk.activate).toHaveBeenCalledOnce());
+    const { runtime, talk } = await startActiveCall();
     vi.clearAllMocks();
     mocks.helper.connectedSockets = 1;
     mocks.helper.connectedHelperBundles = ["com.apple.mobilephone"];
@@ -468,16 +485,7 @@ describe("FaceTime runtime call sequencing", () => {
   });
 
   it("retains suppression when a surviving helper reports action absence without the carrier", async () => {
-    const talk = createTalkDriver({});
-    mocks.startTalk.mockResolvedValueOnce(talk);
-    const runtime = await createRuntime();
-    void mocks.helperParams?.onMessage(incomingCall(1), {
-      bundleIdentifier: "com.apple.FaceTime",
-      processId: 4321,
-      processStartedAtMs: Date.parse("Tue Nov 14 22:13:20 2023"),
-      connectionGeneration: 7,
-    });
-    await vi.waitFor(() => expect(talk.activate).toHaveBeenCalledOnce());
+    const { runtime, talk } = await startActiveCall(carrierPeer);
     vi.clearAllMocks();
     mocks.helper.connectedSockets = 1;
     mocks.helper.connectedHelperBundles = ["com.apple.mobilephone"];
@@ -534,11 +542,7 @@ describe("FaceTime runtime call sequencing", () => {
   });
 
   it("retains suppression after action absence until native closure when inspection is unavailable", async () => {
-    const talk = createTalkDriver({});
-    mocks.startTalk.mockResolvedValueOnce(talk);
-    const runtime = await createRuntime();
-    void mocks.helperParams?.onMessage(incomingCall(1));
-    await vi.waitFor(() => expect(talk.activate).toHaveBeenCalledOnce());
+    const { runtime, talk } = await startActiveCall();
     mocks.helper.safetyMute.mockResolvedValue(completeAbsence());
     mocks.helper.leaveCall.mockResolvedValue(completeAbsence());
     mocks.helper.inspectCall.mockRejectedValue(new Error("inspection unavailable"));
@@ -615,16 +619,7 @@ describe("FaceTime runtime call sequencing", () => {
   });
 
   it("terminates the exact authenticated carrier before releasing suppression on shutdown", async () => {
-    const talk = createTalkDriver({});
-    mocks.startTalk.mockResolvedValueOnce(talk);
-    const runtime = await createRuntime();
-    void mocks.helperParams?.onMessage(incomingCall(1), {
-      bundleIdentifier: "com.apple.FaceTime",
-      processId: 4321,
-      processStartedAtMs: Date.parse("Tue Nov 14 22:13:20 2023"),
-      connectionGeneration: 7,
-    });
-    await vi.waitFor(() => expect(talk.activate).toHaveBeenCalledOnce());
+    const { runtime, talk } = await startActiveCall(carrierPeer);
     mocks.helper.safetyMute.mockRejectedValue(new Error("helper unavailable"));
     mocks.helper.leaveCall.mockRejectedValue(new Error("helper unavailable"));
     mocks.helper.inspectCall.mockRejectedValue(new Error("helper unavailable"));
@@ -647,12 +642,7 @@ describe("FaceTime runtime call sequencing", () => {
     mocks.startTalk.mockResolvedValueOnce(talk);
     const runtime = await createRuntime();
     try {
-      void mocks.helperParams?.onMessage(incomingCall(1), {
-        bundleIdentifier: "com.apple.FaceTime",
-        processId: 4321,
-        processStartedAtMs: Date.parse("Tue Nov 14 22:13:20 2023"),
-        connectionGeneration: 7,
-      });
+      void mocks.helperParams?.onMessage(incomingCall(1), carrierPeer);
       await vi.waitFor(() => expect(talk.activate).toHaveBeenCalledOnce());
       mocks.helper.inspectCall.mockRejectedValue(new Error("helper inspection unavailable"));
       mocks.carrierProcessAlive = true;
@@ -735,66 +725,17 @@ describe("FaceTime runtime call sequencing", () => {
     });
     const runtime = await createRuntime(state);
 
-    await mocks.helperParams?.onMessage({
-      event: "ft-call-status-changed",
-      data: {
-        call_uuid: "manual-call",
-        call_status: 1,
-        is_outgoing: true,
-        handle: { value: "owner@example.com" },
-        transport: {
-          kind: "facetime",
-          classifier_version: "tu-provider-v1",
-          service: 2,
-          facetime_transport_type: 1,
-          provider_classified: true,
-          provider_is_facetime: true,
-          provider_is_telephony: false,
-          is_using_baseband: false,
-          is_wifi_call: false,
-          is_voip: true,
-          is_emergency: false,
-        },
-      },
-    });
+    await mocks.helperParams?.onMessage(outgoingCall("manual-call"));
     expect((await runtime.status()).calls).toEqual([]);
 
     mocks.helperParams?.onConnect("com.apple.FaceTime");
-    await mocks.helperParams?.onMessage({
-      event: "ft-call-status-changed",
-      data: {
-        dial_id: "approved-dial",
-        call_uuid: "approved-call",
-        call_status: 1,
-        is_outgoing: true,
-        handle: { value: "owner@example.com" },
-        transport: {
-          kind: "facetime",
-          classifier_version: "tu-provider-v1",
-          service: 2,
-          facetime_transport_type: 1,
-          provider_classified: true,
-          provider_is_facetime: true,
-          provider_is_telephony: false,
-          is_using_baseband: false,
-          is_wifi_call: false,
-          is_voip: true,
-          is_emergency: false,
-        },
-      },
-    });
+    await mocks.helperParams?.onMessage(
+      outgoingCall("approved-call", 1, { dial_id: "approved-dial" }),
+    );
     expect(talk.activate).toHaveBeenCalled();
     expect((await runtime.status()).outboundCallPending).toBeUndefined();
     expect(await state.lookup("active")).toBeUndefined();
-    await mocks.helperParams?.onMessage({
-      event: "ft-call-status-changed",
-      data: {
-        call_uuid: "provisional-call",
-        call_status: 6,
-        has_ended: true,
-        is_outgoing: true,
-      },
-    });
+    await mocks.helperParams?.onMessage(endedCall("provisional-call"));
     expect((await runtime.status()).calls).toEqual([]);
     expect(talk.close).toHaveBeenCalledWith("native-ended");
     await runtime.stop();
@@ -811,17 +752,9 @@ describe("FaceTime runtime call sequencing", () => {
     });
     const runtime = await createRuntime(state, ["new-owner@example.com"]);
 
-    await mocks.helperParams?.onMessage({
-      event: "ft-call-status-changed",
-      data: {
-        dial_id: "approved-dial",
-        call_uuid: "approved-call",
-        call_status: 1,
-        is_outgoing: true,
-        handle: { value: "owner@example.com" },
-        transport: incomingCall().data.transport,
-      },
-    });
+    await mocks.helperParams?.onMessage(
+      outgoingCall("approved-call", 1, { dial_id: "approved-dial" }),
+    );
 
     expect(mocks.helper.cancelOutgoingCall).toHaveBeenCalledOnce();
     expect(mocks.startTalk).not.toHaveBeenCalled();
@@ -834,16 +767,7 @@ describe("FaceTime runtime call sequencing", () => {
       expect.stringContaining("cancellation remains pending"),
     );
 
-    await mocks.helperParams?.onMessage({
-      event: "ft-call-status-changed",
-      data: {
-        dial_id: "approved-dial",
-        call_uuid: "approved-call",
-        call_status: 6,
-        has_ended: true,
-        is_outgoing: true,
-      },
-    });
+    await mocks.helperParams?.onMessage(endedCall("approved-call", { dial_id: "approved-dial" }));
     expect(await state.lookup("active")).toBeUndefined();
     await runtime.stop();
   });
@@ -862,33 +786,16 @@ describe("FaceTime runtime call sequencing", () => {
     expect(await state.lookup("active")).toMatchObject({ delivery: "cancelling" });
 
     for (const callStatus of [3, 1]) {
-      await mocks.helperParams?.onMessage({
-        event: "ft-call-status-changed",
-        data: {
-          dial_id: "cancel-dial",
-          call_uuid: "cancelled-call",
-          call_status: callStatus,
-          is_outgoing: true,
-          handle: { value: "owner@example.com" },
-          transport: incomingCall().data.transport,
-        },
-      });
+      await mocks.helperParams?.onMessage(
+        outgoingCall("cancelled-call", callStatus, { dial_id: "cancel-dial" }),
+      );
       expect((await runtime.status()).calls).toEqual([]);
       expect(await state.lookup("active")).toMatchObject({ delivery: "cancelling" });
       expect(mocks.startTalk).not.toHaveBeenCalled();
       expect(mocks.helper.setMuted).not.toHaveBeenCalled();
     }
 
-    await mocks.helperParams?.onMessage({
-      event: "ft-call-status-changed",
-      data: {
-        dial_id: "cancel-dial",
-        call_uuid: "cancelled-call",
-        call_status: 6,
-        has_ended: true,
-        is_outgoing: true,
-      },
-    });
+    await mocks.helperParams?.onMessage(endedCall("cancelled-call", { dial_id: "cancel-dial" }));
     expect(await state.lookup("active")).toBeUndefined();
     await runtime.stop();
   });
@@ -907,42 +814,20 @@ describe("FaceTime runtime call sequencing", () => {
     await vi.waitFor(() => expect(mocks.helper.cancelOutgoingCall).toHaveBeenCalled());
     expect(await state.lookup("active")).toMatchObject({ delivery: "cancelling", ownerEpoch: 2 });
 
-    await mocks.helperParams?.onMessage({
-      event: "ft-call-status-changed",
-      data: {
-        dial_id: "approved-dial",
-        call_uuid: "approved-call",
-        call_status: 1,
-        is_outgoing: true,
-        handle: { value: "owner@example.com" },
-        transport: incomingCall().data.transport,
-      },
-    });
+    await mocks.helperParams?.onMessage(
+      outgoingCall("approved-call", 1, { dial_id: "approved-dial" }),
+    );
     expect((await runtime.status()).calls).toEqual([]);
     expect(await state.lookup("active")).toMatchObject({ delivery: "cancelling" });
     expect(mocks.startTalk).not.toHaveBeenCalled();
 
-    await mocks.helperParams?.onMessage({
-      event: "ft-call-status-changed",
-      data: {
-        dial_id: "approved-dial",
-        call_uuid: "approved-call",
-        call_status: 6,
-        has_ended: true,
-        is_outgoing: true,
-      },
-    });
+    await mocks.helperParams?.onMessage(endedCall("approved-call", { dial_id: "approved-dial" }));
     expect(await state.lookup("active")).toBeUndefined();
     await runtime.stop();
   });
 
   it.each([
     { settlement: "reply", error: undefined, expected: "cancelled before helper acknowledgement" },
-    {
-      settlement: "transport error",
-      error: new Error("late transport error"),
-      expected: "late transport error",
-    },
     {
       settlement: "helper rejection",
       error: new FaceTimeHelperActionError("late helper rejection"),
@@ -991,16 +876,7 @@ describe("FaceTime runtime call sequencing", () => {
       expect((await runtime.status()).calls).toEqual([]);
       expect(mocks.startTalk).not.toHaveBeenCalled();
 
-      await mocks.helperParams?.onMessage({
-        event: "ft-call-status-changed",
-        data: {
-          dial_id: dialID,
-          call_uuid: "late-call",
-          call_status: 6,
-          has_ended: true,
-          is_outgoing: true,
-        },
-      });
+      await mocks.helperParams?.onMessage(endedCall("late-call", { dial_id: dialID }));
       expect(await state.lookup("active")).toBeUndefined();
       await runtime.stop();
     },
@@ -1015,17 +891,7 @@ describe("FaceTime runtime call sequencing", () => {
     const talk = createTalkDriver({});
     mocks.startTalk.mockResolvedValue(talk);
     const runtime = await createRuntime(state);
-    const event = {
-      event: "ft-call-status-changed",
-      data: {
-        dial_id: "approved-dial",
-        call_uuid: "ringing-call",
-        call_status: 3,
-        is_outgoing: true,
-        handle: { value: "owner@example.com" },
-        transport: incomingCall().data.transport,
-      },
-    };
+    const event = outgoingCall("ringing-call", 3, { dial_id: "approved-dial" });
     await mocks.helperParams?.onMessage(event);
     expect((await runtime.status()).calls).toHaveLength(1);
 

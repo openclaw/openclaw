@@ -5,10 +5,7 @@
  * behavior are split into focused internal modules.
  */
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
-import {
-  appendTranscriptMessageSync,
-  type SessionTranscriptRuntimeTarget,
-} from "../../config/sessions/session-accessor.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
 import { prepareTranscriptRewriteSync } from "../../config/sessions/session-accessor.sqlite-branch-rewrite.js";
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
@@ -21,6 +18,7 @@ import {
   validateSessionTranscriptContextVersion,
 } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import { loadTranscriptReadSnapshotSync } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
@@ -38,8 +36,10 @@ import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { Message } from "../../llm/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
+import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import type { AppendPersistenceOptions, FileEntry, SessionEntry } from "./session-manager-types.js";
 import type {
   SessionManagerBoundedContext,
@@ -90,10 +90,28 @@ export class SessionManager extends SessionManagerBranching {
     this.retainTranscriptWriter();
   }
 
-  /** Makes pending append-oriented persistence durable without rewriting committed entries. */
-  override flushPendingPersistence(): void {
-    super.flushPendingPersistence();
+  async [sessionManagerReadInitialContext]() {
+    if (!this.persistenceTarget || !this.boundedContextLimits || this.pendingDeliberateAppend) {
+      return this.buildSessionContext();
+    }
+    // A deliberate local branch owns its view; a concurrent selection must not
+    // install the database's different active path into the same writer.
+    const initial = this.captureTranscriptView();
+    const context = await SessionManager.openModelContextAsync(this.persistenceTarget, {
+      cwd: this.cwd,
+      limits: this.boundedContextLimits,
+    });
+    const current = this.captureTranscriptView();
+    if (
+      Object.keys(initial).some((key) => Reflect.get(initial, key) !== Reflect.get(current, key))
+    ) {
+      throw new Error("Session manager changed during initial context read");
+    }
+    return context.buildSessionContext();
   }
+
+  /** No buffered writes remain here; asynchronous metadata methods own their settlement. */
+  flushPendingPersistence(): void {}
 
   // Worker rollback instrumentation wraps the method on this public prototype.
   override appendMessage(
@@ -375,7 +393,8 @@ export class SessionManager extends SessionManagerBranching {
     options.signal?.throwIfAborted();
     const context = await withSessionContextAdmission(readTarget, admission, () =>
       // Incognito belongs to this process; capture its snapshot before the first await.
-      isIncognitoSessionKey(readTarget.sessionKey)
+      isIncognitoSessionKey(readTarget.sessionKey) ||
+      isIncognitoOpenClawAgentSqlitePath(readTarget.storePath, readTarget)
         ? readSessionTranscriptModelContext(readTarget, through, limits)
         : readSessionTranscriptModelContextAsync(
             readTarget,
@@ -425,7 +444,10 @@ export class SessionManager extends SessionManagerBranching {
     );
   }
 
-  /** Appends to the current transcript leaf without hydrating its history. */
+  /**
+   * @deprecated Retained for the v2026.9.5 plugin SDK contract.
+   * Removal requires a versioned SDK replacement and plugin migration window.
+   */
   static appendMessageToTranscript(
     target: SessionTranscriptRuntimeTarget,
     message: Message | CustomMessage | BashExecutionMessage,
@@ -451,14 +473,7 @@ export class SessionManager extends SessionManagerBranching {
   }
 
   static fromEntries(entries: readonly unknown[], cwdOverride?: string): SessionManager {
-    return SessionManager.fromOwnedEntries(structuredClone(entries), cwdOverride);
-  }
-
-  private static fromOwnedEntries(
-    entries: readonly unknown[],
-    cwdOverride?: string,
-  ): SessionManager {
-    const fileEntries = entries as FileEntry[];
+    const fileEntries = structuredClone(entries) as FileEntry[];
     const header = fileEntries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );

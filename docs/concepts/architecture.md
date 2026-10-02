@@ -141,6 +141,27 @@ Details: [Gateway protocol](/gateway/protocol), [Pairing](/channels/pairing),
 - Health: `health` over WS (also included in `hello-ok`).
 - Supervision: launchd/systemd for auto-restart.
 
+### Timed work and shutdown
+
+The Gateway kernel owns one `GatewayScheduler` for registered maintenance and cron
+wakeups. Owners receive that instance and register jobs; one host timer drives the
+next wake. For durable work, stores retain deadlines and their owners reconstruct
+schedules at startup rather than persisting a second scheduler state.
+
+After sleep, a late wake dispatches each runnable, due registration once for that
+wake. A periodic registration waits for its callback and tracked work to finish
+before starting its next interval; missed ticks are coalesced. Wall time catches
+sleep, while elapsed time keeps relative delays and cadences moving through a
+backward clock correction. Rescheduling replaces a waiting job by default;
+`mode: "earliest"` preserves earlier wall and elapsed deadlines for the same job ID
+so a stale read cannot postpone an already promised wake.
+
+`beginClose()` closes scheduling admission, cancels pending wakes, and signals
+shutdown. `stop()` joins callbacks already running and work tracked by their async
+scope; the Gateway lifecycle owns the outer shutdown budget and resource teardown.
+Request deadlines, stream-local timers, and child-process cleanup stay with their
+operation owners. SQLite WAL checkpoint timers stay with the storage owner.
+
 ## Invariants
 
 - Exactly one Gateway controls a single Baileys session per host.

@@ -66,37 +66,38 @@ vi.mock("./manifest-registry.js", () => ({
   resolveManifestContractOwnerPluginId: vi.fn(() => undefined),
 }));
 
-describe.each(["allowlist", "compat"] as const)("resolvePluginDocumentExtractors (%s)", (mode) => {
+describe("resolvePluginDocumentExtractors", () => {
   beforeEach(() => {
-    mocks.readBundledDiscoveryModeMemoized.mockReturnValue(mode);
+    mocks.readBundledDiscoveryModeMemoized.mockReturnValue("compat");
   });
 
-  it("reuses one manifest registry pass for compat and enabled bundled extractors", () => {
-    vi.mocked(loadPluginMetadataSnapshot).mockClear();
-
-    expect(resolvePluginDocumentExtractors().map((extractor) => extractor.id)).toEqual(["pdf"]);
-    expect(loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
-  });
-
-  it.each([{ allow: undefined }, { allow: ["document-extract"] }])(
-    "respects global plugin disablement with allow=$allow",
-    ({ allow }) => {
+  it.each(["allowlist", "compat"] as const)(
+    "reuses one manifest registry pass in %s mode",
+    (mode) => {
+      mocks.readBundledDiscoveryModeMemoized.mockReturnValue(mode);
       vi.mocked(loadPluginMetadataSnapshot).mockClear();
-      vi.mocked(loadBundledDocumentExtractorEntriesFromDir).mockClear();
-      expect(
-        resolvePluginDocumentExtractors({
-          config: {
-            plugins: {
-              enabled: false,
-              allow,
-            },
-          },
-        }),
-      ).toStrictEqual([]);
-      expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
-      expect(loadBundledDocumentExtractorEntriesFromDir).not.toHaveBeenCalled();
+
+      expect(resolvePluginDocumentExtractors().map((extractor) => extractor.id)).toEqual(["pdf"]);
+      expect(loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
     },
   );
+
+  it("respects global plugin disablement even for an allowlisted extractor", () => {
+    vi.mocked(loadPluginMetadataSnapshot).mockClear();
+    vi.mocked(loadBundledDocumentExtractorEntriesFromDir).mockClear();
+    expect(
+      resolvePluginDocumentExtractors({
+        config: {
+          plugins: {
+            enabled: false,
+            allow: ["document-extract"],
+          },
+        },
+      }),
+    ).toStrictEqual([]);
+    expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+    expect(loadBundledDocumentExtractorEntriesFromDir).not.toHaveBeenCalled();
+  });
 
   it.each([{ onlyPluginIds: undefined }, { onlyPluginIds: ["document-extract"] }])(
     "does not expand an operator plugin allowlist with scope=$onlyPluginIds",

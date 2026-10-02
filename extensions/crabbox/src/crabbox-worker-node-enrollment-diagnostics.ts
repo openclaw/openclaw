@@ -1,7 +1,11 @@
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
-import { crabboxCommandError } from "./crabbox-worker-command-error.js";
-import { runCrabboxCommand, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
+import {
+  crabboxCommandOutput,
+  leaseRunArgs,
+  runCrabboxCommand,
+  type CrabboxCommandRunner,
+} from "./crabbox-worker-command.js";
 import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
 import { wrapCrabboxNodeScript } from "./crabbox-worker-script.js";
 import { CRABBOX_NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
@@ -9,7 +13,7 @@ import { CRABBOX_NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS } from "./crabbox-worker-
 const MAX_NODE_ENROLLMENT_EVIDENCE_BYTES = 2_048;
 
 export async function collectCrabboxNodeEnrollmentEvidence(params: {
-  args: string[];
+  provider: string;
   binary: string;
   id: string;
   target?: CrabboxOperatingSystem;
@@ -21,7 +25,7 @@ export async function collectCrabboxNodeEnrollmentEvidence(params: {
   try {
     const result = await runCrabboxCommand({
       action: "enrollment diagnostics",
-      args: params.args,
+      args: leaseRunArgs(params),
       binary: params.binary,
       input: wrapCrabboxNodeScript(
         `const fs = require("node:fs");
@@ -57,10 +61,7 @@ process.stdout.write("node-runtime=" + runtime + " node-pid=" + (alive ? "alive"
       // The enrollment deadline has already elapsed; diagnostics need their own bounded budget.
       timeoutMs: CRABBOX_NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS,
     });
-    if (result.termination !== "exit" || result.code !== 0) {
-      throw crabboxCommandError("enrollment diagnostics", result);
-    }
-    detail = result.stdout.trim();
+    detail = crabboxCommandOutput("enrollment diagnostics", result).trim();
     if (!detail) {
       throw new Error("diagnostic command returned no output");
     }

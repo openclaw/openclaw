@@ -315,7 +315,7 @@ suite.define(() => {
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { width: 1280, height: 900 },
-      recordVideo: { dir: artifacts },
+      recordVideo: process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" ? { dir: artifacts } : undefined,
     });
     const page = await context.newPage();
     const sessionKey = "agent:main:main";
@@ -439,7 +439,7 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await composer.waitFor();
         await gateway.setOnline(false);
-        await page.locator('.agent-chat__composer-status[data-tone="info"]').waitFor();
+        await page.locator(".agent-chat__input--offline").waitFor();
         await composer.fill(`retain destination ${sessionKey}`);
         await page.getByRole("button", { name: "Send message" }).click();
         await page.locator(".chat-queue").getByText("Waiting for reconnect").waitFor();

@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, expect, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import {
   createAdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+  type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -24,10 +26,16 @@ import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
-import { createWorkerSessionToolExecutor } from "./worker-session-tool-executor.js";
+import {
+  createWorkerGatewayTools,
+  createWorkerSessionToolExecutor,
+} from "./worker-session-tool-executor.js";
+import { prepareWorkerAgentRuntimeIdentity } from "./worker-turn-payload.js";
 
 const sharedMocks = vi.hoisted(() => ({
   sessionEntries: new Map<string, SessionEntry>(),
+  sessionEntriesByStorePath: new Map<string, Map<string, SessionEntry>>(),
+  sessionStorePaths: new Map<string, string>(),
   delivered: vi.fn(),
   gatewayRequest: vi.fn(),
   gatewayCreate: vi.fn(),
@@ -35,27 +43,53 @@ const sharedMocks = vi.hoisted(() => ({
   dispatchChild: vi.fn(),
   spawnCallerIdentity: vi.fn(),
   spawnArgs: vi.fn(),
-  scopedSessionAccess: vi.fn(async (params: { run: () => Promise<unknown> }) => await params.run()),
+  scopedSessionAccess: vi.fn(
+    async (params: { targetSessionKey: string; run: () => Promise<unknown> }) => await params.run(),
+  ),
 }));
 
 export function workerSessionToolTestMocks() {
   return sharedMocks;
 }
 
-vi.mock("../session-utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../session-utils.js")>();
-  return {
-    ...actual,
-    loadGatewaySessionEntryReadOnly: (sessionKey: string) => ({
-      agentId: parseAgentSessionKey(sessionKey)?.agentId,
-      canonicalKey: sessionKey,
-      entry: structuredClone(sharedMocks.sessionEntries.get(sessionKey)),
-    }),
-  };
-});
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  withSessionEntryReadOnlyInWorker: async (
+    scope: { sessionKey: string; storePath?: string },
+    assertCurrent: () => void,
+    consume: (read: { ok: true; value: SessionEntry | undefined }) => Promise<unknown>,
+  ) => {
+    assertCurrent();
+    const entries =
+      sharedMocks.sessionEntriesByStorePath.get(scope.storePath ?? "") ??
+      sharedMocks.sessionEntries;
+    const result = await consume({
+      ok: true,
+      value: structuredClone(entries.get(scope.sessionKey)),
+    });
+    assertCurrent();
+    return result;
+  },
+}));
+
+vi.mock("../session-utils-store-worker.js", () => ({
+  resolveGatewaySessionStoreTargetInWorker: async ({ key }: { key: string }) => ({
+    agentId: parseAgentSessionKey(key)?.agentId,
+    canonicalKey: key,
+    storePath: "/configured/sessions.sqlite",
+    readSource: {
+      agentId: "main",
+      path: sharedMocks.sessionStorePaths.get(key) ?? "/physical/session-owner.sqlite",
+    },
+    store: { [key]: structuredClone(sharedMocks.sessionEntries.get(key)) },
+  }),
+}));
 
 vi.mock("../../agents/tools/sessions-send-tool.js", () => ({
   createSessionsSendTool: (options: unknown) => ({
+    name: "sessions_send",
+    label: "Session Send",
+    description: "Send",
+    parameters: {},
     execute: async (toolCallId: string, args: unknown) => {
       await sharedMocks.delivered({ args, options, toolCallId });
       return {
@@ -74,6 +108,10 @@ vi.mock("../../agents/tools/sessions-spawn-tool.js", async () => {
       agentSessionKey: string;
       callGateway: (method: string, params: Record<string, unknown>) => Promise<unknown>;
     }) => ({
+      name: "sessions_spawn",
+      label: "Sessions",
+      description: "Spawn",
+      parameters: {},
       execute: async (_toolCallId: string, args: { task: string; worktree?: boolean }) => {
         sharedMocks.spawnCallerIdentity(getGatewayToolCallerIdentity());
         sharedMocks.spawnArgs(args);
@@ -151,21 +189,13 @@ export const PARENT_EXECUTION_IDENTITY_TOKEN = {
 
 export const resolveGatewayContext = () => undefined;
 
-type WorkerSessionToolTestMocks = {
-  sessionEntries: Map<string, SessionEntry>;
-  delivered: Mock;
-  gatewayRequest: Mock;
-  gatewayCreate: Mock;
-  gatewayRuntimeIdentity: Mock;
-  dispatchChild: Mock;
-  spawnCallerIdentity: Mock;
-  spawnArgs: Mock;
-  scopedSessionAccess: Mock<(params: { run: () => Promise<unknown> }) => Promise<unknown>>;
-};
+type WorkerSessionToolTestMocks = typeof sharedMocks;
 
 type WorkerSessionToolTestOptions = {
+  admissionSource?: AdmittedRunContext["admissionSource"];
   collectExecutionIdentity?: boolean;
   operatorProfileId?: string;
+  operatorScopes?: readonly string[];
 };
 
 async function createWorkerSessionToolTestFixture(
@@ -188,9 +218,9 @@ async function createWorkerSessionToolTestFixture(
   );
   const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
   const placements = createWorkerSessionPlacementStore({ database });
-  activate(SOURCE);
-  activate(TARGET);
-  const sourceClaim = placements.claimTurn({
+  await activate(SOURCE);
+  await activate(TARGET);
+  const sourceClaim = await placements.claimTurn({
     sessionId: SOURCE.sessionId,
     agentId: SOURCE.agentId,
     sessionKey: SOURCE.sessionKey,
@@ -202,33 +232,84 @@ async function createWorkerSessionToolTestFixture(
       ownerEpoch: SOURCE.ownerEpoch,
     },
   });
-  placements.authorizeWorkerTurnTools(sourceClaim, ["sessions_send", "sessions_spawn"]);
+  await placements.authorizeWorkerTurnTools(sourceClaim, ["sessions_send", "sessions_spawn"]);
   const delegatedAuthorities: AgentRunDelegatedAuthority[] = [];
   const sourceOperationalRun = createOperationalRunInstanceRef(sourceClaim.runId);
-  delegatedAuthorities.push(claimAgentRunDelegatedAuthority(sourceOperationalRun));
   let sourceRunActive = true;
+  let operatorAuthorityActive = true;
+  const assertSourceCurrent = () => {
+    if (!sourceRunActive) {
+      throw new Error("source worker run ended");
+    }
+  };
+  const sessionTarget = {
+    agentId: SOURCE.agentId,
+    sessionId: SOURCE.sessionId,
+    sessionKey: SOURCE.sessionKey,
+    storePath: path.join(root, "sessions.json"),
+  };
+  const scheduledAdmission = options.admissionSource
+    ? prepareAgentRunAdmission({
+        cfg: {},
+        admissionSource: options.admissionSource,
+        operationalRunInstance: sourceOperationalRun,
+        assertSourceCurrent,
+        facts: {
+          runId: sourceClaim.runId,
+          agentId: SOURCE.agentId,
+          ingress: { kind: "system", boundary: "test.worker-presence-schedule", state: "present" },
+        },
+      })
+    : undefined;
+  if (!scheduledAdmission) {
+    delegatedAuthorities.push(claimAgentRunDelegatedAuthority(sourceOperationalRun));
+  }
   const rootAdmission = tryBeginGatewayRootWorkAdmission();
   if (!rootAdmission) {
     throw new Error("Worker fixture could not admit its parent turn");
   }
   await rootAdmission.run(async () => {
-    bindWorkerTurnOwner(
+    if (scheduledAdmission) {
+      await prepareWorkerAgentRuntimeIdentity({
+        agentId: SOURCE.agentId,
+        sessionKey: SOURCE.sessionKey,
+        sessionTarget,
+        promptCacheContext: { boundaryCount: 0 },
+        assertSourceCurrent,
+        runtimeInstanceId: SOURCE.environmentId,
+        placements,
+        turnClaim: sourceClaim,
+        turn: {
+          agentId: SOURCE.agentId,
+          sessionId: SOURCE.sessionId,
+          sessionKey: SOURCE.sessionKey,
+          sessionFile: path.join(root, "transcript.jsonl"),
+          workspaceDir: root,
+          prompt: "Who is online?",
+          timeoutMs: 5_000,
+          runId: sourceClaim.runId,
+          preparedRunAdmission: scheduledAdmission,
+        },
+      });
+      return;
+    }
+    await bindWorkerTurnOwner(
       placements,
       sourceClaim,
       options.collectExecutionIdentity !== false ? PARENT_EXECUTION_IDENTITY_TOKEN : undefined,
       sourceOperationalRun,
-      { agentId: SOURCE.agentId, sessionKey: SOURCE.sessionKey },
-      () => {
-        if (!sourceRunActive) {
-          throw new Error("source worker run ended");
-        }
-      },
+      sessionTarget,
+      assertSourceCurrent,
       undefined,
       options.operatorProfileId
         ? createAdmittedRunOperatorAuthority({
             profileId: options.operatorProfileId,
-            scopes: ["operator.write"],
-            assertCurrent: () => {},
+            scopes: options.operatorScopes ?? ["operator.write"],
+            assertCurrent: () => {
+              if (!operatorAuthorityActive) {
+                throw new Error("source operator authority revoked");
+              }
+            },
           })
         : undefined,
     );
@@ -242,10 +323,12 @@ async function createWorkerSessionToolTestFixture(
     turnClaim: sourceClaim,
     ownerEpoch: SOURCE.ownerEpoch,
     rpcSetVersion: 1,
-    protocolFeatures: ["worker-session-tools-v1"],
+    protocolFeatures: ["worker-gateway-tools-v1"],
     credentialExpiresAtMs: Date.now() + 60_000,
   };
   sessionEntries.clear();
+  sharedMocks.sessionEntriesByStorePath.clear();
+  sharedMocks.sessionStorePaths.clear();
   delivered.mockReset();
   gatewayRequest.mockReset();
   gatewayCreate.mockReset();
@@ -274,7 +357,7 @@ async function createWorkerSessionToolTestFixture(
   dispatchChild.mockImplementation(async (request: { sessionKey: string }) => {
     spawnState.order.push("dispatch");
     expect(placements.get(CHILD.sessionId)).toBeUndefined();
-    activate({
+    await activate({
       ...CHILD,
       sessionKey: request.sessionKey,
     });
@@ -290,7 +373,7 @@ async function createWorkerSessionToolTestFixture(
       throw new Error(`Unexpected gateway request: ${request.method}`);
     },
   );
-  const execute = createWorkerSessionToolExecutor({
+  const executorParams: Parameters<typeof createWorkerSessionToolExecutor>[0] = {
     resolveGatewayContext,
     placements,
     dispatchChild,
@@ -334,15 +417,19 @@ async function createWorkerSessionToolTestFixture(
         return undefined;
       },
     } as never,
+  };
+  const ownerExecute = createWorkerSessionToolExecutor(executorParams);
+  const execute = async (request: Parameters<typeof ownerExecute>[0]) => ({
+    resultJson: JSON.stringify(await ownerExecute(request)),
   });
-  function activate(session: {
+  async function activate(session: {
     agentId: string;
     environmentId: string;
     ownerEpoch: number;
     sessionId: string;
     sessionKey: string;
-  }): void {
-    let placement = placements.startDispatch(session);
+  }): Promise<void> {
+    let placement = await placements.startDispatch(session);
     placement = placements.transition({
       sessionId: session.sessionId,
       from: "requested",
@@ -415,10 +502,17 @@ async function createWorkerSessionToolTestFixture(
     placements,
     identity,
     execute,
+    createTools: (
+      skillWorkshop?: Parameters<typeof createWorkerGatewayTools>[0]["skillWorkshop"],
+    ) => createWorkerGatewayTools({ ...executorParams, identity, skillWorkshop }),
     sourceClaim,
     delegatedAuthorities,
     closeSourceRun: () => {
       sourceRunActive = false;
+      scheduledAdmission?.close();
+    },
+    revokeOperatorAuthority: () => {
+      operatorAuthorityActive = false;
     },
     spawnState,
     activate,
@@ -428,11 +522,12 @@ async function createWorkerSessionToolTestFixture(
     async dispose() {
       if (placements.validateTurnClaim(sourceClaim)) {
         await placements.closeWorkerTurnToolState(sourceClaim);
-        placements.releaseTurn(sourceClaim);
+        await placements.releaseTurn(sourceClaim);
       }
       for (const authority of delegatedAuthorities) {
         releaseAgentRunDelegatedAuthority(authority);
       }
+      scheduledAdmission?.close();
       rootAdmission.release();
       await closeOpenClawStateDatabaseByPathAsync(database.path);
       closeOpenClawStateDatabaseForTest();

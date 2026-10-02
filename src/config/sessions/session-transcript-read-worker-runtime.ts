@@ -11,52 +11,43 @@ import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fen
 import type {
   SessionBranchSummaryWorkerInput,
   SessionEntryWorkerInput,
+  SessionResetRecallWorkerInput,
   SessionModelContextWorkerInput,
   SessionSqliteTargetWorkerInput,
+  SessionTranscriptWorkerInput,
   SessionTranscriptWorkerReply,
 } from "./session-transcript-worker.types.js";
 
-// Bun loads one SQLite library per process; workers must inherit the parent's selection.
-function prepareSqliteReadWorker() {
-  ensureSqliteLibrarySelected();
-  return { options: {} };
+const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
+
+function createTranscriptReadPool<Input extends SessionTranscriptWorkerInput>(
+  sharedCompute?: boolean,
+) {
+  return new WorkerTaskPool<Input, SessionTranscriptWorkerReply<Input["kind"]>>({
+    workerUrl,
+    prepareWorker: () => {
+      // Bun loads one SQLite library per process; workers inherit the parent's selection.
+      ensureSqliteLibrarySelected();
+      return { options: {} };
+    },
+    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
+    maxWorkers: 1,
+    ...(sharedCompute === undefined ? {} : { sharedCompute }),
+  });
 }
 
-const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
-const modelContextReads = new WorkerTaskPool<
-  SessionModelContextWorkerInput | SessionSqliteTargetWorkerInput,
-  SessionTranscriptWorkerReply<"model-context" | "sqlite-target">
->({
-  workerUrl,
-  prepareWorker: prepareSqliteReadWorker,
-  workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-  // Preserve context-read admission order and avoid multiplying large SQLite scans.
-  maxWorkers: 1,
-});
+// Preserve context-read admission order and avoid multiplying large SQLite scans.
+const modelContextReads = createTranscriptReadPool<
+  SessionModelContextWorkerInput | SessionSqliteTargetWorkerInput
+>();
 
 // Background transcript exports cannot occupy the foreground context worker.
-const sessionEntries = new WorkerTaskPool<
-  SessionEntryWorkerInput,
-  SessionTranscriptWorkerReply<"session-entry">
->({
-  workerUrl,
-  prepareWorker: prepareSqliteReadWorker,
-  workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-  maxWorkers: 1,
-  sharedCompute: true,
-});
+const sessionEntries = createTranscriptReadPool<
+  SessionEntryWorkerInput | SessionResetRecallWorkerInput
+>(true);
 
 // Branch scans share background compute admission without delaying foreground history or context.
-const branchSummaries = new WorkerTaskPool<
-  SessionBranchSummaryWorkerInput,
-  SessionTranscriptWorkerReply<"branch-summaries">
->({
-  workerUrl,
-  prepareWorker: prepareSqliteReadWorker,
-  workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-  maxWorkers: 1,
-  sharedCompute: true,
-});
+const branchSummaries = createTranscriptReadPool<SessionBranchSummaryWorkerInput>(true);
 
 export async function readSessionTranscriptModelContextAsync(
   target: SessionTranscriptRuntimeTarget,
@@ -101,7 +92,7 @@ export async function prepareSessionEntryInWorker(
   redaction: SensitiveTextRedactionSnapshot,
 ) {
   const receipt = resolveSessionTranscriptReadFence(options);
-  return unwrapSessionTranscriptWorkerReply<"session-entry">(
+  const result = unwrapSessionTranscriptWorkerReply<"session-entry" | "session-reset-recall">(
     await sessionEntries.run(
       {
         kind: "session-entry",
@@ -122,6 +113,30 @@ export async function prepareSessionEntryInWorker(
       },
     ),
   );
+  if (!("entry" in result)) {
+    throw new Error("Session transcript worker returned reset metadata instead of an export");
+  }
+  return result;
+}
+
+export async function readSessionResetRecallCutoffInWorker(
+  scope: SessionResetRecallWorkerInput["scope"],
+) {
+  const receipt = resolveSessionTranscriptReadFence(scope);
+  const result = unwrapSessionTranscriptWorkerReply<"session-entry" | "session-reset-recall">(
+    await sessionEntries.run(
+      {
+        kind: "session-reset-recall",
+        scope,
+        ...(receipt ? { admission: { ...receipt } } : {}),
+      },
+      { inputBytes: JSON.stringify(scope).length * 2 },
+    ),
+  );
+  if (!("cutoff" in result)) {
+    throw new Error("Session transcript worker returned an export instead of reset metadata");
+  }
+  return result.cutoff;
 }
 
 export async function runSessionBranchSummaryWorkerRequest(

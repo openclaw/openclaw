@@ -49,7 +49,7 @@ const mocks = vi.hoisted(() => ({
 
 // Diagnostics are fixture leaves; triage, exec, config, env filtering,
 // and child processes stay real so the handoff cannot hide behind an exec mock.
-vi.mock("./doctor-lint.js", () => ({ collectDoctorFindings: mocks.collectDoctorFindings }));
+vi.mock("./doctor-lint-runner.js", () => ({ collectDoctorFindings: mocks.collectDoctorFindings }));
 vi.mock("../logging/diagnostic-support-export.js", () => ({
   writeDiagnosticSupportExport: mocks.writeDiagnosticSupportExport,
 }));

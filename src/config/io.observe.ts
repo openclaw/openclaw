@@ -1,6 +1,10 @@
 import type fs from "node:fs";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
-import { appendConfigAuditRecord, appendConfigAuditRecordSync } from "./io.audit.js";
+import {
+  appendConfigAuditRecord,
+  appendConfigAuditRecordSync,
+  createConfigObserveAuditRecord,
+} from "./io.audit.js";
 import {
   captureConfigHealthStateStore,
   supersedeConfigHealthObservations,
@@ -14,13 +18,12 @@ import type {
 } from "./io.health-state.types.js";
 import {
   createConfigHealthFingerprint,
-  createConfigObserveAuditRecord,
   readConfigFingerprintForPath,
   readConfigFingerprintForPathSync,
   readConfigHealthEntry,
 } from "./io.observe-state.js";
 import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
-import type { NormalizedConfigIoDeps } from "./io.types.js";
+import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
 function sameFingerprint(

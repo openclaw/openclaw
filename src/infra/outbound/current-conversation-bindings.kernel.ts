@@ -331,3 +331,34 @@ export function listCurrentConversationBindingRowsBySession(
   }
   return list.bySession(targetSessionKey).rows;
 }
+
+/** Warm listings avoid writer admission unless an expired record requires the existing repair. */
+export function readCurrentConversationBindingListInDatabase(
+  db: DatabaseSync,
+  targetSessionKey: string,
+  scope?: CurrentConversationBindingScope,
+): { records: SessionBindingRecord[]; requiresPrune: boolean } {
+  const records = bindingRowsToRecords(
+    listCurrentConversationBindingRowsBySession(db, targetSessionKey, scope),
+  );
+  return { records, requiresPrune: records.some((record) => isBindingExpired(record)) };
+}
+
+/** Reread after writer admission; malformed rows keep the same expiry-triggered repair contract. */
+export function pruneCurrentConversationBindingListInTransaction(
+  db: DatabaseSync,
+  targetSessionKey: string,
+  scope?: CurrentConversationBindingScope,
+): SessionBindingRecord[] {
+  const rows = listCurrentConversationBindingRowsBySession(db, targetSessionKey, scope);
+  const active: SessionBindingRecord[] = [];
+  for (const row of rows) {
+    const record = bindingRowsToRecords([row])[0];
+    if (!record || isBindingExpired(record)) {
+      deleteCurrentConversationBindingRow(db, row.binding_key);
+    } else {
+      active.push(record);
+    }
+  }
+  return active;
+}

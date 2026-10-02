@@ -67,6 +67,16 @@ export function createPrometheusMetricStore() {
     gauges.set(key, { help, labels, value });
   };
 
+  const counterValue = (name: string, help: string, labels: LabelSet, value: number) => {
+    if (!Number.isFinite(value) || value < 0) {
+      return;
+    }
+    const key = metricKey(name, labels);
+    if (canCreateSeries(counters, key)) {
+      counters.set(key, { help, labels, value: Math.max(counters.get(key)?.value ?? 0, value) });
+    }
+  };
+
   const clearGauges = (name: string) => {
     for (const key of gauges.keys()) {
       if (key.startsWith(`${name}|`)) {
@@ -137,5 +147,5 @@ export function createPrometheusMetricStore() {
     droppedSeries = 0;
   };
 
-  return { counter, gauge, clearGauges, histogram, reset, snapshot };
+  return { counter, counterValue, gauge, clearGauges, histogram, reset, snapshot };
 }

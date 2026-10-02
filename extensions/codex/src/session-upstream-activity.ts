@@ -36,12 +36,15 @@ function readMarker(probe: SessionUpstreamProbe): CodexUpstreamMarker | undefine
     return undefined;
   }
   const count = probe.marker.userMessageCount;
-  if (count !== undefined && (!Number.isSafeInteger(count) || (count as number) < 0)) {
+  if (
+    count !== undefined &&
+    (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0)
+  ) {
     return undefined;
   }
   return {
     turnId,
-    ...(count === undefined ? {} : { userMessageCount: count as number }),
+    ...(count === undefined ? {} : { userMessageCount: count }),
   };
 }
 
@@ -67,7 +70,7 @@ function classifyCodexUpstreamTurns(params: {
   const markerIndex =
     marker.turnId === null ? -1 : params.turns.findIndex((turn) => turn.id === marker.turnId);
   const candidateTurns = markerIndex < 0 ? params.turns : params.turns.slice(0, markerIndex + 1);
-  const newestUserMessageCount = countUserMessages(newest);
+  const newestUserMessageCount = newest.items.filter((item) => item.type === "userMessage").length;
   const markerAdvanced =
     marker.turnId !== newest.id ||
     marker.userMessageCount === undefined ||
@@ -110,10 +113,6 @@ function classifyCodexUpstreamTurns(params: {
       ? { occurredAt: occurredAt ?? params.now ?? Date.now(), dedupeId: activityId }
       : {}),
   };
-}
-
-function countUserMessages(turn: CodexTurn): number {
-  return turn.items.filter((item) => item.type === "userMessage").length;
 }
 
 function normalizeUserMessageTexts(item: CodexTurn["items"][number]): string[] {

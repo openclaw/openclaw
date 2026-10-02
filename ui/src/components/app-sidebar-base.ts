@@ -3,6 +3,7 @@ import { property, state } from "lit/decorators.js";
 import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
+import type { OutboxStoreRuntime } from "../app/app-shell-gateway.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -12,7 +13,11 @@ import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import type { GatewayStatus } from "../lib/gateway-status.ts";
-import { readSessionMethodAccess, type SessionMethodAccess } from "../lib/session-method-access.ts";
+import {
+  readSessionMethodAccess,
+  type SessionMethodAccess,
+  type SessionMethodAccessRequest,
+} from "../lib/session-method-access.ts";
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
 import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
@@ -34,8 +39,9 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) connected = false;
   @property({ attribute: false }) connectionStatus: GatewayStatus | null = null;
   @property({ attribute: false }) lastError: string | null = null;
-  @property({ attribute: false }) outboxAttentionCountForSession = (_sessionKey: string) => 0;
-  @property({ attribute: false }) hasSessionDraft: (sessionKey: string) => boolean = () => false;
+  @property({ attribute: false }) storedOutboxes:
+    | ReturnType<OutboxStoreRuntime["read"]>
+    | undefined;
   @property({ attribute: false }) terminalAvailable = false;
   @property({ attribute: false }) catalogOpenTarget: CatalogOpenTarget = "viewer";
   @property({ attribute: false }) canPairDevice = false;
@@ -113,14 +119,11 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
     return readSessionMethodAccess(this.connected ? this.context?.gateway.snapshot : null, {
       method: "sessions.create",
       params: {},
+      sessionScope: true,
     });
   }
 
-  readSessionMutationAccess(request: {
-    method: string;
-    params?: unknown;
-    requiredScope?: "operator.write" | "operator.admin";
-  }): SessionMethodAccess {
+  readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess {
     return readSessionMethodAccess(this.connected ? this.context?.gateway.snapshot : null, request);
   }
 

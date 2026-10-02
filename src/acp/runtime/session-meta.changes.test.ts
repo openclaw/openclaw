@@ -3,13 +3,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildAcpDatabaseSessionKey, selectAcpSessionRow } from "./session-meta-keys.js";
 import {
@@ -17,10 +16,11 @@ import {
   upsertAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "./session-meta.js";
+import { withAcpSessionTestDir as withTestDir } from "./session-meta.test-support.js";
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
 });
 
 it.each([

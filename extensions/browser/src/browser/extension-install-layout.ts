@@ -100,79 +100,58 @@ export function chromeProductRoots(deps: ExtensionInstallDeps = {}): ChromeProdu
   const platform = deps.platform ?? process.platform;
   const env = deps.env ?? process.env;
   const home = homeDirectory({ ...deps, env });
+  const root = (
+    product: ChromeProduct,
+    label: string,
+    userDataDir: string,
+    nativeManifestDir = path.join(userDataDir, "NativeMessagingHosts"),
+  ): ChromeProductRoot => ({ product, label, userDataDir, nativeManifestDir });
   if (platform === "darwin") {
     const appSupport = path.join(home, "Library", "Application Support");
     const testingData = path.join(appSupport, "Google", "Chrome for Testing");
     return [
-      {
-        product: "chrome",
-        label: "Google Chrome",
-        userDataDir: path.join(appSupport, "Google", "Chrome"),
-        nativeManifestDir: path.join(appSupport, "Google", "Chrome", "NativeMessagingHosts"),
-      },
-      {
-        product: "chrome-for-testing",
-        label: "Google Chrome for Testing",
-        userDataDir: testingData,
-        nativeManifestDir: path.join(testingData, "NativeMessagingHosts"),
-      },
+      root("chrome", "Google Chrome", path.join(appSupport, "Google", "Chrome")),
+      root("chrome-for-testing", "Google Chrome for Testing", testingData),
       // Chromium derives this root from user data; Chrome's public table
       // currently documents the no-space spelling. Cover both until aligned.
-      {
-        product: "chrome-for-testing",
-        label: "Google Chrome for Testing (documented host root)",
-        userDataDir: testingData,
-        nativeManifestDir: path.join(
-          appSupport,
-          "Google",
-          "ChromeForTesting",
-          "NativeMessagingHosts",
-        ),
-      },
-      {
-        product: "chromium",
-        label: "Chromium",
-        userDataDir: path.join(appSupport, "Chromium"),
-        nativeManifestDir: path.join(appSupport, "Chromium", "NativeMessagingHosts"),
-      },
+      root(
+        "chrome-for-testing",
+        "Google Chrome for Testing (documented host root)",
+        testingData,
+        path.join(appSupport, "Google", "ChromeForTesting", "NativeMessagingHosts"),
+      ),
+      root("chromium", "Chromium", path.join(appSupport, "Chromium")),
     ];
   }
   if (platform === "linux") {
     const configHome = path.resolve(
       env.CHROME_CONFIG_HOME?.trim() || env.XDG_CONFIG_HOME?.trim() || path.join(home, ".config"),
     );
-    const roots: Array<[ChromeProduct, string, string]> = [
-      ["chrome", "Google Chrome", "google-chrome"],
-      ["chrome-for-testing", "Google Chrome for Testing", "google-chrome-for-testing"],
-      ["chromium", "Chromium", "chromium"],
+    return [
+      root("chrome", "Google Chrome", path.join(configHome, "google-chrome")),
+      root(
+        "chrome-for-testing",
+        "Google Chrome for Testing",
+        path.join(configHome, "google-chrome-for-testing"),
+      ),
+      root("chromium", "Chromium", path.join(configHome, "chromium")),
     ];
-    return roots.map(([product, label, basename]) => ({
-      product: product as ChromeProduct,
-      label,
-      userDataDir: path.join(configHome, basename),
-      nativeManifestDir: path.join(configHome, basename, "NativeMessagingHosts"),
-    }));
   }
   if (platform === "win32") {
     const localAppData = env.LOCALAPPDATA?.trim();
     if (!localAppData) {
       return [];
     }
-    const roots: Array<[ChromeProduct, string, string]> = [
-      ["chrome", "Google Chrome", path.join("Google", "Chrome", "User Data")],
-      [
+    return [
+      root("chrome", "Google Chrome", path.join(localAppData, "Google", "Chrome", "User Data"), ""),
+      root(
         "chrome-for-testing",
         "Google Chrome for Testing",
-        path.join("Google", "Chrome for Testing", "User Data"),
-      ],
-      ["chromium", "Chromium", path.join("Chromium", "User Data")],
+        path.join(localAppData, "Google", "Chrome for Testing", "User Data"),
+        "",
+      ),
+      root("chromium", "Chromium", path.join(localAppData, "Chromium", "User Data"), ""),
     ];
-    return roots.map(([product, label, suffix]) => ({
-      product: product as ChromeProduct,
-      label,
-      userDataDir: path.join(localAppData, suffix),
-      nativeManifestDir: "",
-    }));
   }
   return [];
 }

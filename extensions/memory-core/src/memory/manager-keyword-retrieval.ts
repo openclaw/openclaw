@@ -1,4 +1,3 @@
-// Memory Core plugin module owns keyword retrieval and ranking.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -6,13 +5,14 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
-  MEMORY_INDEX_FTS_TABLE,
-  MEMORY_INDEX_PATHS_FTS_TABLE,
+  MEMORY_INDEX_FTS_TABLE as FTS_TABLE,
+  MEMORY_INDEX_PATHS_FTS_TABLE as PATH_FTS_TABLE,
   type MemorySearchResult,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { buildFtsQuery, scoreExactPathTieForTemporalDecay } from "./hybrid.js";
+import { scoreExactPathTieForTemporalDecay } from "./hybrid.js";
 import { applyImportanceMultiplier } from "./importance.js";
+import { buildFtsQuery } from "./keyword-query.js";
 import {
   runMemoryCuratedCandidates,
   runMemoryKeywordSearch,
@@ -33,8 +33,6 @@ import {
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const SNIPPET_MAX_CHARS = 700;
-const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
-const PATH_FTS_TABLE = MEMORY_INDEX_PATHS_FTS_TABLE;
 const KEYWORD_FALLBACK_SEARCH_TERM_LIMIT = 6;
 const EXACT_PATH_CANDIDATE_LIMIT = 200;
 const log = createSubsystemLogger("memory");
@@ -56,10 +54,6 @@ type KeywordSearchOptions = {
   rankingQuery?: string;
 };
 
-function keywordHitHasBody(hit: KeywordSearchHit): boolean {
-  return hit.hasBodyMatch;
-}
-
 function compareKeywordSearchHits(
   a: KeywordSearchHit,
   b: KeywordSearchHit,
@@ -70,7 +64,7 @@ function compareKeywordSearchHits(
     return specificityDelta;
   }
   if (preferExactBody && a.exactPathSpecificity > 0) {
-    const bodyPresenceDelta = Number(keywordHitHasBody(b)) - Number(keywordHitHasBody(a));
+    const bodyPresenceDelta = Number(b.hasBodyMatch) - Number(a.hasBodyMatch);
     if (bodyPresenceDelta !== 0) {
       return bodyPresenceDelta;
     }
@@ -95,19 +89,6 @@ function compareKeywordSearchHits(
 }
 
 export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
-  private selectScoredResults<T extends MemorySearchResult & { score: number }>(
-    results: T[],
-    maxResults: number,
-    minScore: number,
-    relaxedMinScore = minScore,
-  ): T[] {
-    const strict = results.filter((entry) => entry.score >= minScore);
-    if (strict.length > 0) {
-      return strict.slice(0, maxResults);
-    }
-    return results.filter((entry) => entry.score >= relaxedMinScore).slice(0, maxResults);
-  }
-
   async listTriggerCandidates(opts?: {
     limit?: number;
     activeProjectKeys?: string[];
@@ -204,7 +185,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
           if (entry.exactPathSpecificity === 0) {
             return entry;
           }
-          const contentScore = keywordHitHasBody(entry) ? entry.score : 0;
+          const contentScore = entry.hasBodyMatch ? entry.score : 0;
           return { ...entry, score: scoreExactPathTieForTemporalDecay(contentScore) };
         })
       : params.results;
@@ -212,8 +193,8 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       results: decayInputs,
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,
-      sessionSourceMtimes: this.loadSessionSourceMtimes(params.results),
-      memorySourceMtimes: this.loadRemoteMemorySourceMtimes(params.results),
+      sessionSourceMtimes: this.loadSourceMtimes("sessions", params.results),
+      memorySourceMtimes: this.loadSourceMtimes("memory", params.results),
     });
     // Preserve specificity and adjusted body relevance before normalizing exact public scores.
     const activeProjects = prepareActiveProjectKeys(params.activeProjectKeys);
@@ -226,28 +207,19 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
             })
           : entry,
       );
-    return this.toMemorySearchResults(
-      this.selectScoredResults(ranked, params.maxResults, params.minScore, 0),
-    );
+    const strict = ranked.filter((entry) => entry.score >= params.minScore);
+    const selected = strict.length > 0 ? strict : ranked.filter((entry) => entry.score >= 0);
+    return this.toMemorySearchResults(selected.slice(0, params.maxResults));
   }
 
-  protected loadRemoteMemorySourceMtimes(
+  protected loadSourceMtimes(
+    source: MemorySource,
     results: ReadonlyArray<Pick<MemoryRetrievalResult, "path" | "source" | "sourceMtime">>,
   ): ReadonlyMap<string, number | undefined> | undefined {
-    if (!this.memoryFiles) {
+    if (source === "memory" && !this.memoryFiles) {
       return undefined;
     }
-    const entries = results.filter((entry) => entry.source === "memory");
-    if (entries.length === 0) {
-      return undefined;
-    }
-    return new Map(entries.map((entry) => [entry.path, entry.sourceMtime]));
-  }
-
-  protected loadSessionSourceMtimes(
-    results: ReadonlyArray<Pick<MemoryRetrievalResult, "path" | "source" | "sourceMtime">>,
-  ): ReadonlyMap<string, number | undefined> | undefined {
-    const entries = results.filter((entry) => entry.source === "sessions");
+    const entries = results.filter((entry) => entry.source === source);
     if (entries.length === 0) {
       return undefined;
     }
@@ -472,7 +444,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
           );
           continue;
         }
-        const existingHasBody = keywordHitHasBody(existing);
+        const existingHasBody = existing.hasBodyMatch;
         const resultHasBody = result.hasBodyMatch;
         const existingBodyScore = existingHasBody ? existing.score : 0;
         const resultBodyScore = resultHasBody ? result.score : 0;
@@ -493,13 +465,13 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     }
     const merged = [...seenIds.values()];
     for (const result of merged) {
-      if (!keywordHitHasBody(result)) {
+      if (!result.hasBodyMatch) {
         // A uniform exact-only baseline lets temporal decay order otherwise
         // equivalent filename hits without reusing incomparable path BM25.
         result.score = result.exactPathSpecificity > 0 ? 1 : result.pathScore;
       }
     }
-    return merged.toSorted(compareKeywordSearchHits);
+    return merged;
   }
 
   private limitKeywordSearchHits(
@@ -508,10 +480,10 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
   ): KeywordSearchHit[] {
     const ranked = results.toSorted(compareKeywordSearchHits);
     const exactBody = ranked
-      .filter((entry) => entry.exactPathSpecificity > 0 && keywordHitHasBody(entry))
+      .filter((entry) => entry.exactPathSpecificity > 0 && entry.hasBodyMatch)
       .slice(0, nonExactLimit);
     const exactPathOnly = ranked.filter(
-      (entry) => entry.exactPathSpecificity > 0 && !keywordHitHasBody(entry),
+      (entry) => entry.exactPathSpecificity > 0 && !entry.hasBodyMatch,
     );
     const boundedExact = exactBody.concat(exactPathOnly).toSorted(compareKeywordSearchHits);
     const selectedPathKeys = new Set<string>();
@@ -537,8 +509,16 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         pathScore: _pathScore,
         exactPathSpecificity: _exactPathSpecificity,
         hasBodyMatch: _hasBodyMatch,
-        ...result
-      }) => result,
+        path,
+        startLine,
+        endLine,
+        score,
+        textScore,
+        snippet,
+        source,
+        ...metadata
+      }) =>
+        Object.assign({ path, startLine, endLine, score, textScore, snippet, source }, metadata),
     );
   }
 }

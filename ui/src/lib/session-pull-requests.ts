@@ -1,3 +1,4 @@
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type {
@@ -59,7 +60,7 @@ export type SessionPullRequestSnapshotStore = {
   watch: (
     owner: object,
     sessionKeys: readonly string[],
-    options?: { foreground?: boolean },
+    options?: { foreground?: boolean; passive?: boolean },
   ) => void;
   unwatch: (owner: object) => void;
   load: (
@@ -84,7 +85,12 @@ function readChangedSessions(
 }
 
 function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotStore {
-  const watchedByOwner = new Map<object, { keys: Set<string>; foreground: boolean }>();
+  const watchedByOwner = new Map<
+    object,
+    { keys: Set<string>; foreground: boolean; passive: boolean }
+  >();
+  let orderedWatchedKeys: string[] | undefined;
+  let orderedRequestedKeys: string[] = [];
   const loadTokens = new WeakMap<object, object>();
   const snapshots = new Map<string, ControlUiSessionPullRequestSnapshot>();
   const listeners = new Set<() => void>();
@@ -100,6 +106,12 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
   let syncRequestGeneration = 0;
   let refreshingGeneration: number | null = null;
   let refreshingKeys: readonly string[] = [];
+  let requestController: AbortController | null = null;
+
+  const retireRequest = () => {
+    requestController?.abort();
+    requestController = null;
+  };
 
   const notify = () => {
     for (const listener of Array.from(listeners)) {
@@ -119,36 +131,49 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
   };
 
   const watchedKeys = (): string[] => {
-    const keys = new Map<string, boolean>();
+    if (orderedWatchedKeys) {
+      return orderedWatchedKeys;
+    }
+    const keys = new Map<string, number>();
     for (const watched of watchedByOwner.values()) {
       for (const key of watched.keys) {
-        keys.set(key, (keys.get(key) ?? false) || watched.foreground);
+        const priority = watched.passive ? 0 : watched.foreground ? 2 : 1;
+        keys.set(key, Math.max(keys.get(key) ?? 0, priority));
       }
     }
-    return [...keys]
+    const ordered = [...keys]
       .toSorted(
-        ([leftKey, leftForeground], [rightKey, rightForeground]) =>
-          Number(rightForeground) - Number(leftForeground) || leftKey.localeCompare(rightKey),
+        ([leftKey, leftPriority], [rightKey, rightPriority]) =>
+          rightPriority - leftPriority || leftKey.localeCompare(rightKey),
       )
-      .slice(0, CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS)
-      .map(([key]) => key);
+      .slice(0, CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS);
+    orderedWatchedKeys = ordered.map(([key]) => key);
+    orderedRequestedKeys = ordered.filter(([, priority]) => priority > 0).map(([key]) => key);
+    return orderedWatchedKeys;
+  };
+
+  // Passive row decoration retains snapshots without asking the Gateway to poll Git.
+  const requestedKeys = () => {
+    watchedKeys();
+    return orderedRequestedKeys;
   };
 
   const pruneUnwatched = () => {
     const watched = new Set(watchedKeys());
+    const requested = new Set(requestedKeys());
     for (const [key, timer] of automaticRefreshTimers) {
-      if (!watched.has(key)) {
+      if (!requested.has(key)) {
         clearTimeout(timer);
         automaticRefreshTimers.delete(key);
       }
     }
     for (const key of pendingRefreshKeys) {
-      if (!watched.has(key)) {
+      if (!requested.has(key)) {
         pendingRefreshKeys.delete(key);
       }
     }
     for (const key of waiters.keys()) {
-      if (!watched.has(key)) {
+      if (!requested.has(key)) {
         settle(key);
       }
     }
@@ -172,6 +197,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
   const retireConnection = () => {
     retainRefreshIntent(watchedKeys());
     syncRequestGeneration += 1;
+    retireRequest();
     refreshingGeneration = null;
     refreshingKeys = [];
     lastHello = null;
@@ -198,6 +224,35 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
   };
 
   const handleGatewayEvent: Parameters<ApplicationGateway["subscribeEvents"]>[0] = (event) => {
+    if (event.event === "agent" || event.event === "session.tool") {
+      const payload = asNullableRecord(event.payload);
+      const data = asNullableRecord(payload?.data);
+      if (
+        typeof payload?.sessionKey !== "string" ||
+        !(
+          (payload.stream === "tool" && data?.phase === "result") ||
+          (payload.stream === "lifecycle" && (data?.phase === "end" || data?.phase === "error"))
+        )
+      ) {
+        return;
+      }
+      for (const sessionKey of requestedKeys()) {
+        if (
+          uiSessionEventMatches(
+            {
+              assistantAgentId: gateway.snapshot.assistantAgentId,
+              hello: gateway.snapshot.hello,
+              sessionKey,
+            },
+            payload.sessionKey,
+            typeof payload.agentId === "string" ? payload.agentId : undefined,
+          )
+        ) {
+          refresh(sessionKey, { automatic: true });
+        }
+      }
+      return;
+    }
     if (event.event === "sessions.changed") {
       const changed = readSessionChangedEvent(event.payload);
       const reason = asNullableRecord(event.payload)?.reason;
@@ -286,6 +341,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     },
     onDetach: () => {
       syncRequestGeneration += 1;
+      retireRequest();
       refreshingGeneration = null;
       refreshingKeys = [];
       lastHello = null;
@@ -308,8 +364,10 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       snapshot.hello !== null &&
       isGatewayMethodAdvertised(snapshot, SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD) === true;
     if (!available) {
+      retainRefreshIntent(watchedKeys());
       lastHello = null;
       lastSignature = null;
+      retireRequest();
       for (const key of waiters.keys()) {
         settle(key);
       }
@@ -318,7 +376,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       }
       return;
     }
-    const desiredKeys = watchedKeys();
+    const desiredKeys = requestedKeys();
     const sessionKeys =
       typeof document !== "undefined" && document.visibilityState === "hidden" ? [] : desiredKeys;
     const signature = JSON.stringify(sessionKeys.toSorted());
@@ -354,6 +412,9 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     lastHello = snapshot.hello;
     lastSignature = signature;
     const requestGeneration = ++syncRequestGeneration;
+    // Fence retired catches before aborting a superseded local waiter.
+    retireRequest();
+    requestController = new AbortController();
     const isCurrentRequest = () =>
       lifecycle.attached &&
       isActive() &&
@@ -366,10 +427,11 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     for (const key of refreshSessionKeys) {
       pendingRefreshKeys.delete(key);
     }
-    const request = client.request(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys,
-      ...(refreshSessionKeys.length > 0 ? { refreshSessionKeys } : {}),
-    });
+    const request = client.request(
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      { sessionKeys, ...(refreshSessionKeys.length > 0 ? { refreshSessionKeys } : {}) },
+      { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS, signal: requestController.signal },
+    );
     if (!isActive()) {
       lifecycle.detach();
     }
@@ -409,7 +471,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
   const watch = (
     owner: object,
     sessionKeys: readonly string[],
-    options: { foreground?: boolean } = {},
+    options: { foreground?: boolean; passive?: boolean } = {},
   ) => {
     const wasActive = isActive();
     const next = new Set(sessionKeys.map((key) => key.trim()).filter(Boolean));
@@ -419,6 +481,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
         ? next.size === 0
         : current.keys.size === next.size &&
           current.foreground === (options.foreground === true) &&
+          current.passive === (options.passive === true) &&
           [...next].every((sessionKey) => current.keys.has(sessionKey));
     if (unchanged) {
       return;
@@ -426,8 +489,13 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     if (next.size === 0) {
       watchedByOwner.delete(owner);
     } else {
-      watchedByOwner.set(owner, { keys: next, foreground: options.foreground === true });
+      watchedByOwner.set(owner, {
+        keys: next,
+        foreground: options.foreground === true,
+        passive: options.passive === true,
+      });
     }
+    orderedWatchedKeys = undefined;
     retry.reset();
     pruneUnwatched();
     if (isActive()) {
@@ -444,7 +512,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
 
   function refresh(sessionKey: string, options: { automatic?: boolean } = {}): boolean {
     const key = sessionKey.trim();
-    if (!key || !watchedKeys().includes(key)) {
+    if (!key || !requestedKeys().includes(key)) {
       return false;
     }
     clearTimeout(automaticRefreshTimers.get(key));
@@ -475,13 +543,17 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       }
       const loadToken = {};
       loadTokens.set(owner, loadToken);
+      const alreadyRequested = requestedKeys().includes(key);
       // A one-shot load owns a foreground watch until it settles, which attaches the store
       // before the waiter is registered and keeps gateway events available for resolution.
       watch(owner, [key], { foreground: true });
       try {
         const current = snapshots.get(key);
-        if (current) {
+        if (current && alreadyRequested) {
           return current;
+        }
+        if (current) {
+          refresh(key);
         }
         if (
           gateway.snapshot.phase !== "connected" ||

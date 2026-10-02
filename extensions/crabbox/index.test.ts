@@ -84,7 +84,7 @@ describe("Crabbox plugin generation lifecycle", () => {
   beforeEach(() => {
     vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => ({
       binary: params?.binary ?? "crabbox",
-      version: "0.55.0",
+      version: "999.0.0",
     }));
   });
   afterEach(async () => {
@@ -158,7 +158,7 @@ describe("Crabbox plugin generation lifecycle", () => {
         // complete diagnostics, Stop and child-settlement cleanup envelope. Native
         // capture adds 45m plus seven 10s command settlements to the former budgets.
         expect(generation.provider.resolveProvisionTimeoutMs?.(profile)).toBe(
-          216 * 60_000 + 25_000,
+          217 * 60_000 + 25_000,
         );
         expect(generation.provider.resolveDestroyTimeoutMs?.(profile)).toBe(74 * 60_000 + 15_000);
         expect(await generation.provider.listMachineOptions?.(profile)).toEqual([]);
@@ -184,7 +184,7 @@ describe("Crabbox plugin generation lifecycle", () => {
         expect(waitForDeviceId).toHaveBeenCalledOnce();
         await expect(
           generation.provider.inspect({ leaseId: lease.leaseId, profile }),
-        ).resolves.toEqual({ status: "active" });
+        ).resolves.toEqual({ status: "active", sharedHost: false });
         await expect(
           generation.provider.destroy({ leaseId: lease.leaseId, profile }),
         ).resolves.toBeUndefined();
@@ -355,7 +355,7 @@ describe("Crabbox plugin generation lifecycle", () => {
           started.resolve(params.signal);
           await finish.promise;
           params.signal.throwIfAborted();
-          return { binary: params.binary ?? "crabbox", version: "0.55.0" };
+          return { binary: params.binary ?? "crabbox", version: "999.0.0" };
         });
       }
       const generation = registerCrabboxGeneration();

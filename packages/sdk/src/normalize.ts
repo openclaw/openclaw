@@ -34,9 +34,9 @@ function normalizeAgentEventType(payload: JsonObject): OpenClawEventType {
       return "tool.call.delta";
     }
     // Terminal tool/item events carry phase:"end" together with the real status, so a failed or
-    // blocked tool must be classified before the end/completed branch — otherwise phase:"end" wins
+    // blocked or skipped tool must precede the end/completed branch — otherwise phase:"end" wins
     // and failures are reported as tool.call.completed.
-    if (status === "failed" || status === "blocked") {
+    if (status === "failed" || status === "blocked" || status === "skipped") {
       return "tool.call.failed";
     }
     if (phase === "end" || status === "completed") {
@@ -78,9 +78,6 @@ function normalizeNamedEventType(event: GatewayEvent): OpenClawEventType {
     case "exec.approval.resolved":
     case "plugin.approval.resolved":
       return "approval.resolved";
-    case "task.updated":
-    case "tasks.changed":
-      return "task.updated";
     default:
       return "raw";
   }
@@ -92,7 +89,6 @@ export function normalizeGatewayEvent(event: GatewayEvent): OpenClawEvent {
   const runId = readNonEmptyString(payload.runId);
   const sessionId = readNonEmptyString(payload.sessionId);
   const sessionKey = readNonEmptyString(payload.sessionKey);
-  const taskId = readNonEmptyString(payload.taskId);
   const agentId = readNonEmptyString(payload.agentId);
   const ts = asFiniteNumber(payload.ts) ?? Date.now();
   const idParts = [event.seq ?? "local", event.event, runId, sessionKey, ts].filter(
@@ -107,7 +103,6 @@ export function normalizeGatewayEvent(event: GatewayEvent): OpenClawEvent {
     ...(runId ? { runId } : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(sessionKey ? { sessionKey } : {}),
-    ...(taskId ? { taskId } : {}),
     ...(agentId ? { agentId } : {}),
     data: payload.data ?? payload,
     raw: event,

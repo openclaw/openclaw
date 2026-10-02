@@ -2,6 +2,10 @@
 // Keep lane names, commands, image kind, timeout, resources, and release chunks
 // here. Planning and execution live in separate modules.
 import { fileURLToPath } from "node:url";
+import {
+  listRecordedFirstHopSourceVersions,
+  updateFirstHopCompatLaneName,
+} from "./update-first-hop-lanes.mjs";
 
 export type DockerE2eImageKind = "bare" | "functional";
 export type DockerE2eReleaseProfile = "beta" | "stable" | "full";
@@ -19,8 +23,6 @@ export type DockerE2eLane = {
   noOutputTimeoutMs?: number;
   prepublishPluginPackages?: string[];
   resources: string[];
-  retries: number;
-  retryPatterns: RegExp[];
   stateScenario?: string;
   timeoutMs?: number;
   upgradeSurvivorScenario?: string;
@@ -32,7 +34,6 @@ type LaneOptions = Partial<Omit<DockerE2eLane, "command" | "e2eImageKind" | "nam
   providers?: string[];
 };
 
-export const DEFAULT_LIVE_RETRIES = 1;
 const LIVE_DOCKER_DEFAULT_HARNESS_DIR =
   /[\\/]\.release-harness[\\/]/u.test(fileURLToPath(import.meta.url)) &&
   process.env.OPENCLAW_DOCKER_E2E_REPO_ROOT
@@ -46,26 +47,50 @@ const RELEASE_OPENWEBUI_COMMAND =
   "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui";
 export const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS = 24;
 const upgradeSurvivorCommand = upgradeSurvivorScriptCommand();
+// CI Docker seed runs this lane in auto-auth mode, so it carries the running-Gateway
+// recovery update and needs the restart-auth budgets below. Hosted 4-vCPU seed runs
+// measured 846s and 1054s passes, then 1515s and 1516s timeouts (CI 36496123315,
+// 36519374717, in upgrade-survivor:recovery-update-restart). Testbox 8-vCPU: 627s
+// lane, 325s recovery update; x ~2.4 hosted ratio => ~1505s, x ~1.5 => 2280s inner;
+// add 300s host margin => 2580s lane. Recovery update: 325s x 2.4 ~= 780s (hosted
+// 856s in 36506210440) against the 900s default, so use restart-auth's 1500s.
 const publishedUpgradeSurvivorCommand = upgradeSurvivorScriptCommand(
-  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
-  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
+  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s",
+  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-2280s}"',
 );
 const rootManagedVpsUpgradeCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=1",
   'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
 );
+// Run 36506342273 (hosted 4-vCPU): lane exceeded 1515s; x ~1.5 => 2280s inner.
+// Run 36506210440: restart update took 856s; Crabbox 4-CPU took 993s x ~1.5 => 1500s.
 const updateRestartAuthCommand = upgradeSurvivorScriptCommand(
-  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth",
-  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
+  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s",
+  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-2280s}"',
 );
 const updateMigrationCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
   'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup}"',
 );
-const updateRunPackageSelfUpgradeCommand =
-  "OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-run-package-self-upgrade";
-const updateFirstHopCompatCommand =
-  "OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat";
+const dreamingCronDoctorCommand = upgradeSurvivorScriptCommand(
+  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.9.6 OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE=current OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=dreaming-cron-doctor OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=manual OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=0 OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS= OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=0",
+);
+// One lane per recorded source release so the hops can run concurrently.
+const updateFirstHopCompatLanes = listRecordedFirstHopSourceVersions().map((version) =>
+  npmLane(
+    updateFirstHopCompatLaneName(version),
+    `OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_UPDATE_FIRST_HOP_SOURCE_VERSIONS=${version} OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat`,
+    {
+      resources: ["service"],
+      stateScenario: "upgrade-survivor",
+      // Run 36506342273 (hosted 4-vCPU): projected 2125s x ~1.5 => 3200s inner;
+      // add 300s for host-side fixtures, package preparation, and cleanup.
+      timeoutMs: 3500 * 1000,
+      // Limit npm/disk contention to two hops at npm limit 5; a weight-3 survivor can overlap one.
+      weight: 2,
+    },
+  ),
+);
 const CODEX_HARNESS_API_KEY_ENV = "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key";
 const npmOnboardLaneOptions = {
   prepublishPluginPackages: ["@openclaw/codex"],
@@ -73,15 +98,6 @@ const npmOnboardLaneOptions = {
   stateScenario: "empty",
   weight: 3,
 } satisfies LaneOptions;
-
-const LIVE_RETRY_PATTERNS = [
-  /529\b/i,
-  /overloaded/i,
-  /capacity/i,
-  /rate.?limit/i,
-  /gateway closed \(1000 normal closure\)/i,
-  /ECONNRESET|ETIMEDOUT|ENOTFOUND/i,
-];
 
 export function liveDockerScriptCommand(
   script: string,
@@ -118,8 +134,6 @@ function lane(name: string, command: string, options: LaneOptions = {}): DockerE
     ...(options.needsPackage ? { needsPackage: true } : {}),
     needsLiveImage: options.needsLiveImage,
     prepublishPluginPackages: options.prepublishPluginPackages,
-    retryPatterns: options.retryPatterns ?? [],
-    retries: options.retries ?? 0,
     resources: options.resources ?? [],
     stateScenario: options.stateScenario,
     timeoutMs: options.timeoutMs,
@@ -138,17 +152,8 @@ function liveProviderResource(provider: string) {
   if (provider === "codex-cli" || provider === "codex") {
     return "live:codex";
   }
-  if (provider === "droid") {
-    return "live:droid";
-  }
   if (provider === "google-gemini-cli" || provider === "gemini") {
     return "live:gemini";
-  }
-  if (provider === "opencode") {
-    return "live:opencode";
-  }
-  if (provider === "openai") {
-    return "live:openai";
   }
   return `live:${provider}`;
 }
@@ -166,8 +171,6 @@ function liveLane(name: string, command: string, options: LaneOptions = {}) {
     // not require building the separate source live-test image.
     needsLiveImage: options.needsLiveImage ?? !options.e2eImageKind,
     resources: ["live", ...liveProviderResources(options), ...(options.resources ?? [])],
-    retryPatterns: options.retryPatterns ?? LIVE_RETRY_PATTERNS,
-    retries: options.retries ?? DEFAULT_LIVE_RETRIES,
     weight: options.weight ?? 3,
   });
 }
@@ -216,8 +219,6 @@ function createPackageUpdateMaintenanceLanes() {
       },
     ),
     npmLane("skill-install", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install", {
-      retryPatterns: LIVE_RETRY_PATTERNS,
-      retries: 1,
       stateScenario: "empty",
       timeoutMs: 10 * 60 * 1000,
       weight: 2,
@@ -230,8 +231,27 @@ function createPackageUpdateMaintenanceLanes() {
     }),
     npmLane("published-upgrade-survivor", publishedUpgradeSurvivorCommand, {
       stateScenario: "upgrade-survivor",
-      timeoutMs: 25 * 60 * 1000,
+      timeoutMs: 2580 * 1000,
       upgradeSurvivorScenario: "base",
+      weight: 3,
+    }),
+    // Explicit Docker/release regression; the per-PR cell still runs only one real update.
+    lane("published-driver-lifecycle", "pnpm test:docker:published-driver-lifecycle", {
+      e2eImageKind: "bare",
+      resources: ["service"],
+      estimateSeconds: 15,
+      timeoutMs: 10 * 60 * 1000,
+    }),
+    npmLane(
+      "published-driver-update",
+      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:published-driver-update",
+      // Outlives the script's 1125 s envelope; hosted after #162858: p50 521 s, max 659 s.
+      { resources: ["service"], stateScenario: "empty", timeoutMs: 20 * 60 * 1000 },
+    ),
+    npmLane("dreaming-cron-doctor", dreamingCronDoctorCommand, {
+      stateScenario: "upgrade-survivor",
+      timeoutMs: 25 * 60 * 1000,
+      upgradeSurvivorScenario: "dreaming-cron-doctor",
       weight: 3,
     }),
     npmLane("root-managed-vps-upgrade", rootManagedVpsUpgradeCommand, {
@@ -242,24 +262,12 @@ function createPackageUpdateMaintenanceLanes() {
     }),
     npmLane("update-restart-auth", updateRestartAuthCommand, {
       stateScenario: "upgrade-survivor",
-      timeoutMs: 25 * 60 * 1000,
+      // Run 36506342273: 1515s x ~1.5 => 2280s inner + 300s host-side margin.
+      timeoutMs: 43 * 60 * 1000,
       upgradeSurvivorScenario: "base",
       weight: 3,
     }),
-    npmLane("update-first-hop-compat", updateFirstHopCompatCommand, {
-      resources: ["service"],
-      stateScenario: "upgrade-survivor",
-      // Four serial packaged-updater hops (2026.9.1 through 2026.9.4) take
-      // ~6 minutes each on hosted runners; 25 minutes cut the fourth hop off.
-      timeoutMs: 45 * 60 * 1000,
-      weight: 3,
-    }),
-    npmLane("update-run-package-self-upgrade", updateRunPackageSelfUpgradeCommand, {
-      resources: ["service"],
-      stateScenario: "upgrade-survivor",
-      timeoutMs: 45 * 60 * 1000,
-      weight: 3,
-    }),
+    ...updateFirstHopCompatLanes,
   ];
 }
 
@@ -378,6 +386,16 @@ export const fleetCacheLane = lane("fleet-cache", "pnpm test:docker:fleet-cache"
 
 export const mainLanes: DockerE2eLane[] = [
   lane(
+    "container-image-upgrade",
+    "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:container-image-upgrade",
+    {
+      e2eImageKind: false,
+      resources: ["docker", "service"],
+      timeoutMs: 30 * 60 * 1000,
+      weight: 4,
+    },
+  ),
+  lane(
     "docker-selected-plugins",
     "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:selected-plugins",
     {
@@ -421,8 +439,6 @@ export const mainLanes: DockerE2eLane[] = [
   liveLane("live-anthropic-cache", liveDockerScriptCommand("e2e/anthropic-cache-live-docker.sh"), {
     e2eImageKind: "functional",
     provider: "claude",
-    retries: 0,
-    retryPatterns: [],
     timeoutMs: 15 * 60 * 1000,
     weight: 2,
   }),
@@ -456,7 +472,7 @@ export const mainLanes: DockerE2eLane[] = [
     "live-cli-backend-gemini",
     liveDockerScriptCommand(
       "test-live-cli-backend-docker.sh",
-      "OPENCLAW_LIVE_CLI_BACKEND_ADVISORY=1 OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP=1 OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview",
+      "OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview",
     ),
     {
       cacheKey: "cli-backend-gemini",
@@ -765,66 +781,27 @@ export const tailLanes: DockerE2eLane[] = [
   liveCodexNpmPluginLane(),
   liveMcpCodeModeGatewayLane(),
   livePluginToolLane(),
-  liveLane(
-    "live-acp-bind-claude",
-    liveDockerScriptCommand("test-live-acp-bind-docker.sh", "OPENCLAW_LIVE_ACP_BIND_AGENT=claude"),
-    {
-      cacheKey: "acp-bind-claude",
-      provider: "claude-cli",
-      resources: ["npm"],
-      timeoutMs: LIVE_ACP_TIMEOUT_MS,
-      weight: 3,
-    },
-  ),
-  liveLane(
-    "live-acp-bind-codex",
-    liveDockerScriptCommand("test-live-acp-bind-docker.sh", "OPENCLAW_LIVE_ACP_BIND_AGENT=codex"),
-    {
-      cacheKey: "acp-bind-codex",
-      provider: "codex-cli",
-      resources: ["live:openai", "npm"],
-      timeoutMs: LIVE_ACP_TIMEOUT_MS,
-      weight: 3,
-    },
-  ),
-  liveLane(
-    "live-acp-bind-droid",
-    liveDockerScriptCommand(
-      "test-live-acp-bind-docker.sh",
-      "OPENCLAW_LIVE_ACP_BIND_AGENT=droid OPENCLAW_LIVE_ACP_BIND_REQUIRE_TRANSCRIPT=1",
+  ...[
+    { agent: "claude", provider: "claude-cli", requireTranscript: false },
+    { agent: "codex", provider: "codex-cli", requireTranscript: false },
+    { agent: "droid", provider: "droid", requireTranscript: true },
+    { agent: "gemini", provider: "google-gemini-cli", requireTranscript: false },
+    { agent: "opencode", provider: "opencode", requireTranscript: true },
+  ].map(({ agent, provider, requireTranscript }) =>
+    liveLane(
+      `live-acp-bind-${agent}`,
+      liveDockerScriptCommand(
+        "test-live-acp-bind-docker.sh",
+        `OPENCLAW_LIVE_ACP_BIND_AGENT=${agent}${requireTranscript ? " OPENCLAW_LIVE_ACP_BIND_REQUIRE_TRANSCRIPT=1" : ""}`,
+      ),
+      {
+        cacheKey: `acp-bind-${agent}`,
+        provider,
+        resources: agent === "codex" ? ["live:openai", "npm"] : ["npm"],
+        timeoutMs: LIVE_ACP_TIMEOUT_MS,
+        weight: 3,
+      },
     ),
-    {
-      cacheKey: "acp-bind-droid",
-      provider: "droid",
-      resources: ["npm"],
-      timeoutMs: LIVE_ACP_TIMEOUT_MS,
-      weight: 3,
-    },
-  ),
-  liveLane(
-    "live-acp-bind-gemini",
-    liveDockerScriptCommand("test-live-acp-bind-docker.sh", "OPENCLAW_LIVE_ACP_BIND_AGENT=gemini"),
-    {
-      cacheKey: "acp-bind-gemini",
-      provider: "google-gemini-cli",
-      resources: ["npm"],
-      timeoutMs: LIVE_ACP_TIMEOUT_MS,
-      weight: 3,
-    },
-  ),
-  liveLane(
-    "live-acp-bind-opencode",
-    liveDockerScriptCommand(
-      "test-live-acp-bind-docker.sh",
-      "OPENCLAW_LIVE_ACP_BIND_AGENT=opencode OPENCLAW_LIVE_ACP_BIND_REQUIRE_TRANSCRIPT=1",
-    ),
-    {
-      cacheKey: "acp-bind-opencode",
-      provider: "opencode",
-      resources: ["npm"],
-      timeoutMs: LIVE_ACP_TIMEOUT_MS,
-      weight: 3,
-    },
   ),
 ];
 
@@ -926,8 +903,7 @@ const releasePathPackageMigrationLanes = scheduledLaneList(
 );
 const releasePathPackageSelfUpgradeLanes = scheduledLaneList(
   "upgrade-survivor",
-  "update-first-hop-compat",
-  "update-run-package-self-upgrade",
+  ...updateFirstHopCompatLanes.map((entry) => entry.name),
 );
 const releasePathPackageUpdateCoreLanes = [
   ...releasePathPackageOnboardingLanes,

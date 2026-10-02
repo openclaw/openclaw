@@ -9,7 +9,9 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   readCommittedSessionEntryCache,
@@ -23,12 +25,17 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { readCommittedIncognitoSessionSharing } from "./session-accessor.sqlite-incognito-sharing.js";
 import {
   applySessionEntryCanonicalReplacements,
   applySessionEntryExactReplacements,
 } from "./session-accessor.sqlite-replacement-projection.js";
+import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
+import { captureSessionEntryCurrentRead } from "./session-entry-current-runtime.js";
+import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
+import type { InternalSessionEntry } from "./types.js";
 
 // The canonical executor still owns real SQL, admission, and settlement; only reply delivery changes.
 const delivery = vi.hoisted(() => ({
@@ -76,6 +83,172 @@ afterEach(() => {
   delivery.releaseFailure = undefined;
 });
 
+it("fences a delivery generation during native writes and restores it only on rollback", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const options = { agentId: "main", path: database.path };
+    const sessionKey = "agent:main:native-generation-publication";
+    const original = {
+      sessionId: "native-generation",
+      lifecycleRevision: "original-generation",
+      updatedAt: 1,
+    };
+    writeSessionEntry(database, sessionKey, original);
+    const originalRow = readExactSessionEntryRow(database, sessionKey);
+    expect(originalRow).toBeDefined();
+    const generation = await prepareSessionDeliveryGeneration({
+      agentId: options.agentId,
+      storePath: database.path,
+      sessionKey,
+      sessionId: original.sessionId,
+      lifecycleRevision: original.lifecycleRevision,
+    });
+    const rollback = new Error("roll back staged generation");
+    try {
+      generation.assertCurrent();
+      expect(() =>
+        runOpenClawAgentWriteTransaction((writer) => {
+          writeSessionEntry(writer, sessionKey, {
+            ...original,
+            lifecycleRevision: "uncommitted-generation",
+            updatedAt: 2,
+          });
+          expect(writer.db.isTransaction).toBe(true);
+          expect(readExactSessionEntryRow(writer, sessionKey)?.entry.lifecycleRevision).toBe(
+            "uncommitted-generation",
+          );
+          expect(generation.assertCurrent).toThrow(
+            expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
+          );
+          throw rollback;
+        }, options),
+      ).toThrow(rollback);
+      expect(database.db.isTransaction).toBe(false);
+      expect(readExactSessionEntryRow(database, sessionKey)).toEqual(originalRow);
+      generation.assertCurrent();
+
+      runOpenClawAgentWriteTransaction((writer) => {
+        writeSessionEntry(writer, sessionKey, {
+          ...original,
+          lifecycleRevision: "committed-replacement",
+          updatedAt: 3,
+        });
+      }, options);
+      expect(readExactSessionEntryRow(database, sessionKey)?.entry.lifecycleRevision).toBe(
+        "committed-replacement",
+      );
+      // Restoring the old values cannot restore a generation already replaced at COMMIT.
+      runOpenClawAgentWriteTransaction((writer) => {
+        writeSessionEntry(writer, sessionKey, original);
+      }, options);
+      expect(generation.assertCurrent).toThrow(
+        expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }),
+      );
+    } finally {
+      generation.release();
+    }
+  });
+});
+
+it("uses incognito transaction postimages for currency while delivery retains committed facts", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "main";
+    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: state.env });
+    const options = { agentId, path: storePath, env: state.env };
+    const scope = {
+      agentId,
+      storePath,
+      env: state.env,
+      sessionKey: "agent:main:subagent:incognito-currency",
+    };
+    const originalCurrency = {
+      sessionId: "incognito-currency-session",
+      lifecycleRevision: "incognito-currency-lifecycle",
+      lifecycleRunId: "original-run",
+      activeWriterRunId: "original-writer",
+      subagentRecovery: { lastRunId: "original-hidden-run" },
+    };
+    const original = {
+      ...originalCurrency,
+      incognito: true,
+      updatedAt: 1,
+    } satisfies InternalSessionEntry;
+    const database = openOpenClawAgentDatabase(options);
+    runOpenClawAgentWriteTransaction(
+      (writer) => writeSessionEntry(writer, scope.sessionKey, original),
+      options,
+    );
+    const reader = await withSessionEntryReadOnlyInWorker(
+      scope,
+      () => {},
+      async (read, owner) => {
+        expect(read.ok).toBe(true);
+        return captureSessionEntryCurrentRead(scope, owner);
+      },
+    );
+    if (reader.source) {
+      throw new Error("Expected a process-held incognito currency reader");
+    }
+    const generation = await prepareSessionDeliveryGeneration({
+      agentId,
+      storePath,
+      sessionKey: scope.sessionKey,
+      sessionId: original.sessionId,
+      lifecycleRevision: original.lifecycleRevision,
+    });
+    const rollback = new Error("roll back incognito currency postimage");
+    try {
+      expect(reader.readCurrent()).toMatchObject(originalCurrency);
+      expect(() =>
+        runOpenClawAgentWriteTransaction((writer) => {
+          writeSessionEntry(writer, scope.sessionKey, {
+            ...original,
+            lifecycleRunId: "pending-run",
+            activeWriterRunId: "pending-writer",
+            subagentRecovery: { lastRunId: "pending-hidden-run" },
+            updatedAt: 2,
+          });
+          // A later field publication must retain the staged entry's currency fields.
+          addSessionMember(scope, { identityId: "member", addedBy: "operator" });
+          expect(reader.readCurrent()).toMatchObject({
+            lifecycleRunId: "pending-run",
+            activeWriterRunId: "pending-writer",
+            subagentRecovery: { lastRunId: "pending-hidden-run" },
+          });
+          expect(() => readCommittedIncognitoSessionSharing(writer.db, scope.sessionKey)).toThrow(
+            "publication is pending",
+          );
+          expect(generation.assertCurrent).toThrow(
+            expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
+          );
+          throw rollback;
+        }, options),
+      ).toThrow(rollback);
+      expect(database.db.isTransaction).toBe(false);
+      expect(reader.readCurrent()).toMatchObject(originalCurrency);
+      generation.assertCurrent();
+      runOpenClawAgentWriteTransaction(
+        (writer) =>
+          writeSessionEntry(writer, scope.sessionKey, {
+            ...original,
+            lifecycleRunId: "committed-run",
+            subagentRecovery: { lastRunId: "committed-hidden-run" },
+            updatedAt: 3,
+          }),
+        options,
+      );
+      expect(reader.readCurrent()).toMatchObject({
+        lifecycleRunId: "committed-run",
+        subagentRecovery: { lastRunId: "committed-hidden-run" },
+      });
+      // Delivery owns session/lifecycle identity, not recovery's execution predicate.
+      generation.assertCurrent();
+    } finally {
+      generation.release();
+    }
+  });
+});
+
 it.each([
   "lost result",
   "release failure",
@@ -108,6 +281,14 @@ it.each([
       entry: projectSessionSharingEntry(original),
       membership: new Set(["member"]),
     });
+    const generation = await prepareSessionDeliveryGeneration({
+      agentId: "main",
+      storePath: database.path,
+      sessionKey,
+      sessionId: original.sessionId,
+      lifecycleRevision: original.lifecycleRevision,
+    });
+    generation.assertCurrent();
     const projection = createSessionMembershipProjection();
     projection.updateTargets([
       { ...options, storePath: database.path, ...readOpenClawAgentDatabaseIdentity(database) },
@@ -137,6 +318,9 @@ it.each([
     delivery.afterResult = () => {
       executions++;
       whileWaiting = sharing.readCurrent();
+      expect(generation.assertCurrent).toThrow(
+        expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
+      );
       if (boundary === "lost result") {
         throw failure;
       }
@@ -199,11 +383,23 @@ it.each([
           membership: new Set(["member"]),
         });
       }
+      if (reset) {
+        expect(generation.assertCurrent).toThrow(
+          expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }),
+        );
+      } else if (boundary === "late writer") {
+        expect(generation.assertCurrent).toThrow(
+          expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
+        );
+      } else {
+        generation.assertCurrent();
+      }
       expect(mutations).toEqual(
         reset
           ? [
               {
                 agentId: "main",
+                databaseIdentity: identity,
                 kind: "reset",
                 previous: { sessionId: "settlement", sessionKeys: [sessionKey] },
                 current: { sessionId: "settlement", sessionKeys: [sessionKey] },
@@ -230,6 +426,7 @@ it.each([
       stopFacts();
       projection.dispose();
       sharing.release();
+      generation.release();
     }
   });
 });
@@ -260,10 +457,10 @@ it("keeps uncertain alias membership unavailable after newer native metadata set
       storePath: database.path,
       databaseIdentity: identity,
     });
-    const invalidations: string[] = [];
+    const invalidations: Array<{ sessionKey: string; scope: string | undefined }> = [];
     const stop = sessionChanges.subscribeFacts((change) => {
       if ("sessionKey" in change && change.sessionKey === sessionKey && change.factsInvalidated) {
-        invalidations.push(change.sessionKey);
+        invalidations.push({ sessionKey: change.sessionKey, scope: change.scope });
       }
     });
     try {
@@ -276,7 +473,7 @@ it("keeps uncertain alias membership unavailable after newer native metadata set
       expect(invalidations).toEqual([]);
       publication.settle(undefined, true);
       expect(sharing.readCurrent()).toBeUndefined();
-      expect(invalidations).toEqual([sessionKey]);
+      expect(invalidations).toEqual([{ sessionKey, scope: undefined }]);
       expect(readExactSessionEntryRow(database, sessionKey)?.entry.visibility).toBe("draft");
     } finally {
       publication.settle(undefined, false);

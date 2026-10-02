@@ -35,101 +35,29 @@ import { findInstalledSystemdGatewayScope } from "./systemd-scope.js";
 import { readSystemdServiceExecStart, resolveSystemdServiceName } from "./systemd-service-files.js";
 import { readSystemdUserTransport } from "./systemd-user-transport.js";
 
-type SystemdServiceInfo = {
-  loadState?: string;
-  activeState?: string;
-  subState?: string;
-  mainPid?: number;
-  execMainStatus?: number;
-  execMainCode?: string;
-  result?: string;
-  nRestarts?: number;
-  startLimitBurst?: number;
-  unit?: string;
-  killMode?: string;
-  tasksCurrent?: number;
-  memoryCurrent?: number;
-};
-
-function parseSystemdShow(output: string): SystemdServiceInfo {
+function parseSystemdShow(output: string) {
   const entries = parseKeyValueOutput(output, "=");
-  const info: SystemdServiceInfo = {};
-  const loadState = entries.loadstate;
-  if (loadState) {
-    info.loadState = loadState;
-  }
-  const activeState = entries.activestate;
-  if (activeState) {
-    info.activeState = activeState;
-  }
-  const subState = entries.substate;
-  if (subState) {
-    info.subState = subState;
-  }
-  const mainPidValue = entries.mainpid;
-  if (mainPidValue) {
-    const pid = parseStrictPositiveInteger(mainPidValue);
-    if (pid !== undefined) {
-      info.mainPid = pid;
-    }
-  }
-  const execMainStatusValue = entries.execmainstatus;
-  if (execMainStatusValue) {
-    const status = parseStrictInteger(execMainStatusValue);
-    if (status !== undefined) {
-      info.execMainStatus = status;
-    }
-  }
-  const execMainCode = entries.execmaincode;
-  if (execMainCode) {
-    info.execMainCode = execMainCode;
-  }
-  const result = entries.result;
-  if (result) {
-    info.result = result;
-  }
-  const nRestartsValue = entries.nrestarts;
-  if (nRestartsValue) {
-    const nRestarts = parseStrictInteger(nRestartsValue);
-    if (nRestarts !== undefined) {
-      info.nRestarts = nRestarts;
-    }
-  }
-  const startLimitBurstValue = entries.startlimitburst;
-  if (startLimitBurstValue) {
-    const startLimitBurst = parseStrictInteger(startLimitBurstValue);
-    if (startLimitBurst !== undefined) {
-      info.startLimitBurst = startLimitBurst;
-    }
-  }
-  const unit = entries.id;
-  if (unit) {
-    info.unit = unit;
-  }
-  const killMode = entries.killmode;
-  if (killMode) {
-    info.killMode = killMode;
-  }
-  const tasksCurrentValue = entries.taskscurrent;
-  if (tasksCurrentValue) {
-    const tasksCurrent = parseStrictNonNegativeInteger(tasksCurrentValue);
-    if (tasksCurrent !== undefined) {
-      info.tasksCurrent = tasksCurrent;
-    }
-  }
-  const memoryCurrentValue = entries.memorycurrent;
-  if (memoryCurrentValue) {
-    const memoryCurrent = parseStrictNonNegativeInteger(memoryCurrentValue);
-    if (memoryCurrent !== undefined) {
-      info.memoryCurrent = memoryCurrent;
-    }
-  }
-  return info;
+  return {
+    loadState: entries.loadstate || undefined,
+    activeState: entries.activestate || undefined,
+    subState: entries.substate || undefined,
+    mainPid: parseStrictPositiveInteger(entries.mainpid),
+    execMainStatus: parseStrictInteger(entries.execmainstatus),
+    execMainCode: entries.execmaincode || undefined,
+    result: entries.result || undefined,
+    nRestarts: parseStrictInteger(entries.nrestarts),
+    startLimitBurst: parseStrictInteger(entries.startlimitburst),
+    unit: entries.id || undefined,
+    controlGroup: entries.controlgroup || undefined,
+    killMode: entries.killmode || undefined,
+    tasksCurrent: parseStrictNonNegativeInteger(entries.taskscurrent),
+    memoryCurrent: parseStrictNonNegativeInteger(entries.memorycurrent),
+  };
 }
 
 export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
   const env = args.env ?? process.env;
-  const installed = await findInstalledSystemdGatewayScope(env);
+  const installed = await findInstalledSystemdGatewayScope(env, { timeoutMs: args.timeoutMs });
   if (!installed) {
     return false;
   }
@@ -155,7 +83,7 @@ export async function readSystemdServiceRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
   opts?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceRuntime> {
-  const installed = opts?.systemdReadTarget ?? (await findInstalledSystemdGatewayScope(env));
+  const installed = opts?.systemdReadTarget ?? (await findInstalledSystemdGatewayScope(env, opts));
   if (opts?.requireLoaded) {
     return await readLoadedSystemdServiceRuntime(
       env,
@@ -214,7 +142,7 @@ export async function readSystemdServiceRuntime(
     unitName,
     "--no-page",
     "--property",
-    "Id,LoadState,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
+    "Id,LoadState,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent,ControlGroup",
   ];
   const res =
     installed?.scope === "system"
@@ -264,6 +192,7 @@ export async function readSystemdServiceRuntime(
       scope: installed?.scope ?? "user",
       transport: installed?.scope === "system" ? undefined : await readSystemdUserTransport(env),
       unit: parsed.unit ?? unitName,
+      controlGroup: parsed.controlGroup,
       killMode: parsed.killMode,
       tasksCurrent: parsed.tasksCurrent,
       memoryCurrent: parsed.memoryCurrent,

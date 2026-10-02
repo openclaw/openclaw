@@ -240,7 +240,7 @@ export function appendMeetingTranscriptUtterance(params: {
   );
 }
 
-function parseOptionalJsonRecord(value: string | null): Record<string, unknown> | undefined {
+export function parseOptionalJsonRecord(value: string | null): Record<string, unknown> | undefined {
   if (!value) {
     return undefined;
   }

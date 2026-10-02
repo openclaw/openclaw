@@ -54,6 +54,9 @@ it.each([263, 362])(
       error: null,
       remoteError: null,
       categories: [],
+      categoriesLoading: false,
+      categoriesError: null,
+      onRetryCategories: vi.fn(),
       featured: [],
       featuredLoading: false,
       trending: [],
@@ -127,7 +130,9 @@ it.each([40, 80])("fills icon tiles without cropping a %ipx-wide source", async 
   const icon = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="40"><rect width="100%" height="100%" fill="red"/></svg>`)}`;
   render(
     html`
-      <span class="installed-plugins-card__art">${renderArtTile("demo", "Demo", icon)}</span>
+      <span class="installed-plugins-card__art"
+        >${renderArtTile("demo", "Demo", { iconUrl: icon })}</span
+      >
       ${renderPluginDetailShell({
         id: "demo",
         name: "Demo",
@@ -136,15 +141,23 @@ it.each([40, 80])("fills icon tiles without cropping a %ipx-wide source", async 
         onBack: vi.fn(),
         identity: html``,
         panel: html``,
-        icon: renderArtTile("demo", "Demo", icon),
+        icon: renderArtTile("demo", "Demo", { iconUrl: icon }),
       })}
     `,
     container,
   );
+  await Promise.all(
+    [...container.querySelectorAll<HTMLImageElement>(".plugins-icon")].map(
+      (image) =>
+        new Promise<void>((resolve, reject) => {
+          image.addEventListener("load", () => resolve(), { once: true });
+          image.addEventListener("error", reject, { once: true });
+        }),
+    ),
+  );
   for (const selector of [".installed-plugins-card__art", ".plugin-catalog-detail__icon"]) {
     const frame = container.querySelector<HTMLElement>(selector)!;
     const image = frame.querySelector<HTMLImageElement>("img")!;
-    await image.decode();
     expect(image.naturalWidth).toBe(width);
     const frameBounds = frame.getBoundingClientRect();
     const imageBounds = image.getBoundingClientRect();
@@ -154,4 +167,22 @@ it.each([40, 80])("fills icon tiles without cropping a %ipx-wide source", async 
     expect(getComputedStyle(image).objectFit).toBe("contain");
     expect(getComputedStyle(image.parentElement!).borderWidth).toBe("0px");
   }
+});
+
+it("renders the official icon background as opaque white", async () => {
+  const icon = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><circle cx="20" cy="20" r="15" fill="blue"/></svg>')}`;
+  render(
+    renderArtTile("official", "Official", { iconUrl: icon, whiteBackground: true }),
+    container,
+  );
+  const image = container.querySelector<HTMLImageElement>(".plugins-icon")!;
+  await new Promise<void>((resolve, reject) => {
+    image.addEventListener("load", () => resolve(), { once: true });
+    image.addEventListener("error", reject, { once: true });
+  });
+
+  const tile = image.parentElement!;
+  expect(tile.classList.contains("plugins-tile--white")).toBe(true);
+  expect(getComputedStyle(tile).backgroundColor).toBe("rgb(255, 255, 255)");
+  expect(getComputedStyle(image).padding).toBe("4px");
 });

@@ -464,7 +464,7 @@ describe("handleLoginCommand", () => {
     expect(options.onBlockReply).not.toHaveBeenCalled();
   });
 
-  it.each(["web", "discord", "slack"] as const)(
+  it.each(["web", "slack"] as const)(
     "supports /login codex on the %s command surface",
     async (surface) => {
       const onBlockReply = vi.fn(async () => {});

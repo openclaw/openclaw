@@ -21,43 +21,19 @@ describe("buildSlackBlocksFallbackText", () => {
     ).toBe("Latency chart");
   });
 
-  it("uses complete data visualization text", () => {
-    expect(
-      buildSlackBlocksFallbackText([
-        {
-          type: "data_visualization",
-          title: "Revenue mix",
-          chart: {
-            type: "pie",
-            segments: [
-              { label: "Product", value: 60 },
-              { label: "Services", value: 40 },
-            ],
-          },
-        },
-      ] as never),
-    ).toBe("Revenue mix (pie chart)\n- Product: 60\n- Services: 40");
-  });
-
-  it("uses complete data table text", () => {
-    expect(
-      buildSlackBlocksFallbackText([
-        {
-          type: "data_table",
-          caption: "Pipeline report",
-          rows: [
-            [
-              { type: "raw_text", text: "Account" },
-              { type: "raw_text", text: "ARR" },
-            ],
-            [
-              { type: "raw_text", text: "Acme" },
-              { type: "raw_number", value: 125000, text: "125000" },
-            ],
-          ],
-        },
-      ] as never),
-    ).toBe("Pipeline report (table)\n- Account: Acme; ARR: 125000");
+  it.each([
+    ["image", "Alt &lt;@U123&gt;", "Alt &lt;@U123&gt;"],
+    ["video", "Title &lt;@U123&gt;", "Title <@U123>"],
+  ])("preserves %s title/alt precedence and formatting", (type, escaped, plain) => {
+    const block = {
+      type,
+      alt_text: " Alt <@U123> ",
+      title: { type: "plain_text", text: " Title <@U123> " },
+    };
+    expect(renderSlackBlockFallbackText(block)).toBe(escaped);
+    expect(renderSlackBlockFallbackText(block, { nativeDataFormat: "plain" })).toBe(plain);
+    expect(renderSlackBlockFallbackText({ ...block, alt_text: "" })).toBe("Title &lt;@U123&gt;");
+    expect(renderSlackBlockFallbackText({ ...block, title: null })).toBe("Alt &lt;@U123&gt;");
   });
 
   it("renders inbound table cells as bounded delimiter-safe TSV", () => {

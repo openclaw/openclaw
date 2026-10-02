@@ -339,6 +339,7 @@ describe("package scripts", () => {
       "src/infra/process-env.test.ts",
       "src/cli/mcp-cli.path-case.windows.test.ts",
       "extensions/memory-core/src/memory-extra-file-path.windows.test.ts",
+      "extensions/browser/src/browser/chrome.executable-probe.windows.test.ts",
     ];
     const actualTargets = new Set(readWindowsCiPartScripts().flatMap(readProjectTestTargets));
 

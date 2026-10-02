@@ -179,20 +179,6 @@ async function publishLocalOverrideTarget(params: {
   });
 }
 
-async function restoreMovedLocalOverrideTarget(params: {
-  packageFs: LocalOverridePackageRoot;
-  runtimeUrls: readonly string[];
-  movedPath: string;
-  relativePath: string;
-}): Promise<void> {
-  await publishLocalOverrideTarget({
-    packageFs: params.packageFs,
-    runtimeUrls: params.runtimeUrls,
-    sourcePath: params.movedPath,
-    relativePath: params.relativePath,
-  });
-}
-
 async function throwAfterRestoringMovedLocalOverrideTarget(params: {
   packageFs: LocalOverridePackageRoot;
   runtimeUrls: readonly string[];
@@ -202,10 +188,10 @@ async function throwAfterRestoringMovedLocalOverrideTarget(params: {
   removeMovedAfterFailedRestore: boolean;
 }): Promise<never> {
   try {
-    await restoreMovedLocalOverrideTarget({
+    await publishLocalOverrideTarget({
       packageFs: params.packageFs,
       runtimeUrls: params.runtimeUrls,
-      movedPath: params.movedPath,
+      sourcePath: params.movedPath,
       relativePath: params.relativePath,
     });
   } catch (rollbackError) {
@@ -406,6 +392,25 @@ async function deleteLocalOverrideTarget(params: {
   }
 }
 
+function appliedLocalOverridesResult(
+  plan: LocalPackageOverridesPlan,
+  conflicts: LocalPackageOverridesResult["conflicts"],
+  applied: number,
+): LocalPackageOverridesResult {
+  return {
+    ...plan.result,
+    status: conflicts.length > 0 ? "conflict" : "applied",
+    applied,
+    conflicts,
+    warnings:
+      conflicts.length > 0
+        ? [
+            "Local OpenClaw changes were preserved but not reapplied because the update changed the same file(s).",
+          ]
+        : [],
+  };
+}
+
 export async function applyLocalPackageOverrides(params: {
   packageRoot: string;
   plan: LocalPackageOverridesPlan | null;
@@ -473,18 +478,7 @@ export async function applyLocalPackageOverrides(params: {
     changesToApply.push(change);
   }
   if (changesToApply.length === 0) {
-    return {
-      ...params.plan.result,
-      status: conflicts.length > 0 ? "conflict" : "applied",
-      applied: 0,
-      conflicts,
-      warnings:
-        conflicts.length > 0
-          ? [
-              "Local OpenClaw changes were preserved but not reapplied because the update changed the same file(s).",
-            ]
-          : [],
-    };
+    return appliedLocalOverridesResult(params.plan, conflicts, 0);
   }
 
   let rollbackDir: string | null = null;
@@ -652,16 +646,5 @@ export async function applyLocalPackageOverrides(params: {
     }
   }
 
-  return {
-    ...params.plan.result,
-    status: conflicts.length > 0 ? "conflict" : "applied",
-    applied,
-    conflicts,
-    warnings:
-      conflicts.length > 0
-        ? [
-            "Local OpenClaw changes were preserved but not reapplied because the update changed the same file(s).",
-          ]
-        : [],
-  };
+  return appliedLocalOverridesResult(params.plan, conflicts, applied);
 }

@@ -1,4 +1,3 @@
-// Interactive payload helpers normalize structured interactive UI payloads.
 import { asOptionalRecord as toRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
@@ -36,47 +35,35 @@ type QuestionPresentationAction =
 /** Core-owned model-picker action; channels serialize it only inside private envelopes. */
 export type ModelPickerAction = (
   | {
-      type: "model-picker";
-      version: 1;
-      snapshotToken: string;
       intent: "show-providers";
       cursor?: string;
     }
   | {
-      type: "model-picker";
-      version: 1;
-      snapshotToken: string;
       intent: "show-models";
       providerToken: string;
       cursor?: string;
     }
   | {
-      type: "model-picker";
-      version: 1;
-      snapshotToken: string;
       intent: "show-recents";
       cursor?: string;
     }
   | {
-      type: "model-picker";
-      version: 1;
-      snapshotToken: string;
       intent: "choose-model";
       providerToken: string;
       modelToken: string;
     }
   | {
-      type: "model-picker";
-      version: 1;
-      snapshotToken: string;
       intent: "choose-runtime";
       providerToken: string;
       modelToken: string;
       runtimeToken: string;
     }
-  | { type: "model-picker"; version: 1; snapshotToken: string; intent: "reset" }
-  | { type: "model-picker"; version: 1; snapshotToken: string; intent: "cancel" }
+  | { intent: "reset" }
+  | { intent: "cancel" }
 ) & {
+  type: "model-picker";
+  version: 1;
+  snapshotToken: string;
   /** Legacy command/callback payload fields are deliberately unavailable on picker actions. */
   readonly command?: never;
   readonly value?: never;
@@ -660,6 +647,13 @@ function normalizeInteractiveBlock(raw: unknown): InteractiveReplyBlock | undefi
     const text = normalizeOptionalString(record.text);
     return text ? { type: "text", text } : undefined;
   }
+  return normalizeInteractiveControls(record, type);
+}
+
+function normalizeInteractiveControls(
+  record: Record<string, unknown>,
+  type: string | undefined,
+): MessagePresentationInteractiveBlock | undefined {
   if (type === "buttons") {
     const buttons = normalizeList(record.buttons, normalizeButton);
     return buttons.length > 0 ? { type: "buttons", buttons } : undefined;
@@ -696,16 +690,15 @@ function normalizeChartSegments(value: unknown): MessagePresentationChartSegment
     : undefined;
 }
 
-function normalizeChartCategories(value: unknown): string[] | undefined {
+function normalizeUniqueLabels(value: unknown): string[] | undefined {
   if (!Array.isArray(value) || value.length === 0) {
     return undefined;
   }
-  const categories = value.map((entry) => normalizeOptionalString(entry));
-  if (categories.some((entry) => !entry)) {
+  const labels = value.map((entry) => normalizeOptionalString(entry));
+  if (!labels.every((entry): entry is string => Boolean(entry))) {
     return undefined;
   }
-  const normalized = categories as string[];
-  return new Set(normalized).size === normalized.length ? normalized : undefined;
+  return new Set(labels).size === labels.length ? labels : undefined;
 }
 
 function normalizeChartSeries(params: {
@@ -753,7 +746,7 @@ function normalizeChartBlock(
   if (chartType !== "bar" && chartType !== "area" && chartType !== "line") {
     return undefined;
   }
-  const categories = normalizeChartCategories(record.categories);
+  const categories = normalizeUniqueLabels(record.categories);
   if (!categories) {
     return undefined;
   }
@@ -778,16 +771,8 @@ function normalizeTableBlock(
   record: Record<string, unknown>,
 ): MessagePresentationTableBlock | undefined {
   const caption = normalizeOptionalString(record.caption);
-  if (!caption || !Array.isArray(record.headers) || record.headers.length === 0) {
-    return undefined;
-  }
-  const headers = record.headers.map((header) => normalizeOptionalString(header));
-  if (
-    !headers.every((header): header is string => Boolean(header)) ||
-    new Set(headers).size !== headers.length ||
-    !Array.isArray(record.rows) ||
-    record.rows.length === 0
-  ) {
+  const headers = normalizeUniqueLabels(record.headers);
+  if (!caption || !headers || !Array.isArray(record.rows) || record.rows.length === 0) {
     return undefined;
   }
   const rows = record.rows.map((row) => {
@@ -872,27 +857,13 @@ function normalizePresentationBlock(
   if (type === "divider") {
     return { type: "divider" };
   }
-  if (type === "buttons") {
-    const buttons = normalizeList(record.buttons, normalizeButton);
-    return buttons.length > 0 ? { type: "buttons", buttons } : undefined;
-  }
-  if (type === "select") {
-    const options = normalizeList(record.options, normalizeOption);
-    return options.length > 0
-      ? {
-          type: "select",
-          placeholder: normalizeOptionalString(record.placeholder),
-          options,
-        }
-      : undefined;
-  }
   if (type === "chart") {
     return normalizeChartBlock(record);
   }
   if (type === "table") {
     return normalizeTableBlock(record);
   }
-  return undefined;
+  return normalizeInteractiveControls(record, type);
 }
 
 export function normalizeMessagePresentation(raw: unknown): MessagePresentation | undefined {

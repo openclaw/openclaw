@@ -1,13 +1,10 @@
-/**
- * Channel ingress runtime resolver.
- *
- * Merges route, sender, command, access-group, and pairing-store facts before decision evaluation.
- */
 import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/account-id.js";
+import { prepareUserChannelIdentityAuthority } from "../../state/user-channel-identity-operations.js";
 import { recordChannelIngressResolution } from "./admission-evidence.js";
 import { decideChannelIngress } from "./decision.js";
 import { resolveChannelIngressEffectiveAllowFromLists } from "./effective-allow-from.js";
@@ -25,7 +22,6 @@ import {
 import { routeFactsFromDescriptors, projectRouteAccess } from "./runtime-routes.js";
 import type {
   ChannelMessageIngressCommandInput,
-  ChannelIngressCommandPresetInput,
   ChannelIngressEventPresetInput,
   ChannelIngressActivationAccess,
   ChannelIngressCommandAccess,
@@ -40,7 +36,6 @@ import type {
 import { resolveChannelIngressState } from "./state.js";
 import { readChannelIngressStoreAllowFrom } from "./store-allow-from.js";
 import type {
-  AccessGraphGate,
   ChannelIngressChannelId,
   ChannelIngressEventInput,
   ChannelIngressPolicyInput,
@@ -48,10 +43,6 @@ import type {
 } from "./types.js";
 
 export { channelIngressRoutes } from "./runtime-routes.js";
-
-function commandRequested(policy: ChannelIngressPolicyInput): boolean {
-  return policy.command != null;
-}
 
 function normalizeChannelId(id: string): ChannelIngressChannelId {
   const trimmed = id.trim();
@@ -61,49 +52,19 @@ function normalizeChannelId(id: string): ChannelIngressChannelId {
   return trimmed;
 }
 
-function findIngressGate(params: {
-  ingress: ResolvedChannelMessageIngress["ingress"];
-  phase: AccessGraphGate["phase"];
-  kind: AccessGraphGate["kind"];
-}): AccessGraphGate | undefined {
-  return params.ingress.graph.gates.find(
-    (gate) => gate.phase === params.phase && gate.kind === params.kind,
-  );
-}
-
-function findSenderGate(
-  ingress: ResolvedChannelMessageIngress["ingress"],
-  isGroup: boolean,
-): AccessGraphGate | undefined {
-  return findIngressGate({
-    ingress,
-    phase: "sender",
-    kind: isGroup ? "groupSender" : "dmSender",
-  });
-}
-
-function useAccessGroupsFromConfig(params: {
-  useAccessGroups?: boolean | null;
-  cfg?: ChannelIngressCommandPresetInput["cfg"];
-}): boolean {
-  return params.useAccessGroups ?? true;
-}
-
-function channelIngressCommand(
-  params: ChannelIngressCommandPresetInput = {},
+function resolveCommandInput(
+  input: ChannelIngressResolverMessageParams["command"],
+  useAccessGroups: boolean | null | undefined,
 ): ChannelMessageIngressCommandInput | undefined {
-  if (params.requested === false) {
+  if (input === false || input == null || input.requested === false) {
     return undefined;
   }
-  const { requested: _requested, cfg, ...command } = params;
+  const { requested: _requested, cfg: _cfg, ...command } = input;
   return {
     ...command,
-    useAccessGroups: useAccessGroupsFromConfig({
-      useAccessGroups: params.useAccessGroups,
-      cfg,
-    }),
-    allowTextCommands: params.allowTextCommands ?? false,
-    hasControlCommand: params.hasControlCommand ?? true,
+    useAccessGroups: input.useAccessGroups ?? useAccessGroups ?? true,
+    allowTextCommands: input.allowTextCommands ?? false,
+    hasControlCommand: input.hasControlCommand ?? true,
   };
 }
 
@@ -117,19 +78,6 @@ function channelIngressEvent(
     mayPair: params.mayPair ?? !isGroup,
     ...(params.originSubject ? { originSubject: params.originSubject } : {}),
   };
-}
-
-function resolveCommandInput(params: {
-  command?: ChannelIngressResolverMessageParams["command"];
-  useAccessGroups?: boolean | null;
-}): ChannelMessageIngressCommandInput | undefined {
-  if (params.command === false || params.command == null) {
-    return undefined;
-  }
-  return channelIngressCommand({
-    ...params.command,
-    useAccessGroups: params.command.useAccessGroups ?? params.useAccessGroups,
-  });
 }
 
 function resolveResolverPolicy(params: {
@@ -150,10 +98,6 @@ function resolveResolverPolicy(params: {
   };
 }
 
-/**
- * Create a reusable ingress resolver for one channel account and identity
- * descriptor.
- */
 function createChannelIngressResolverForOwner(
   base: CreateChannelIngressResolverParams,
   owner?: ChannelIngressHostOwner,
@@ -163,10 +107,6 @@ function createChannelIngressResolverForOwner(
     eventDefaults?: ChannelIngressEventPresetInput,
   ) => {
     const isGroup = input.conversation.kind !== "direct";
-    const useAccessGroups = useAccessGroupsFromConfig({
-      useAccessGroups: base.useAccessGroups,
-      cfg: base.cfg,
-    });
     return await resolveChannelMessageIngressForOwner(
       {
         channelId: base.channelId,
@@ -196,10 +136,7 @@ function createChannelIngressResolverForOwner(
         mentionFacts: input.mentionFacts,
         readStoreAllowFrom: base.readStoreAllowFrom,
         useDefaultPairingStore: base.useDefaultPairingStore,
-        command: resolveCommandInput({
-          command: input.command,
-          useAccessGroups,
-        }),
+        command: resolveCommandInput(input.command, base.useAccessGroups),
       },
       owner,
     );
@@ -237,9 +174,6 @@ export function createHostChannelIngressRuntime(owner: ChannelIngressHostOwner) 
   });
 }
 
-/**
- * Resolve one inbound event using a simple stable subject identity descriptor.
- */
 export async function resolveStableChannelIngressPolicy(
   params: ResolveStableChannelMessageIngressParams,
 ): Promise<ResolvedChannelMessageIngress> {
@@ -256,7 +190,10 @@ function projectSenderAccess(params: {
   effectiveGroupAllowFrom: string[];
   providerMissingFallbackApplied?: boolean;
 }): ChannelIngressSenderAccess {
-  const gate = findSenderGate(params.ingress, params.isGroup);
+  const gate = params.ingress.graph.gates.find(
+    (entry) =>
+      entry.phase === "sender" && entry.kind === (params.isGroup ? "groupSender" : "dmSender"),
+  );
   const reasonCode =
     !gate &&
     params.isGroup &&
@@ -285,14 +222,12 @@ function projectCommandAccess(params: {
   ingress: ResolvedChannelMessageIngress["ingress"];
   policy: ChannelIngressPolicyInput;
 }): ChannelIngressCommandAccess {
-  const gate = findIngressGate({
-    ingress: params.ingress,
-    phase: "command",
-    kind: "command",
-  });
+  const gate = params.ingress.graph.gates.find(
+    (entry) => entry.phase === "command" && entry.kind === "command",
+  );
   return {
-    requested: commandRequested(params.policy),
-    authorized: commandRequested(params.policy) ? gate?.allowed === true : false,
+    requested: params.policy.command != null,
+    authorized: params.policy.command != null && gate?.allowed === true,
     shouldBlockControlCommand: gate?.command?.shouldBlockControlCommand === true,
     reasonCode: gate?.reasonCode ?? params.ingress.reasonCode,
     ...(gate ? { gate } : {}),
@@ -302,11 +237,9 @@ function projectCommandAccess(params: {
 function projectActivationAccess(params: {
   ingress: ResolvedChannelMessageIngress["ingress"];
 }): ChannelIngressActivationAccess {
-  const gate = findIngressGate({
-    ingress: params.ingress,
-    phase: "activation",
-    kind: "mention",
-  });
+  const gate = params.ingress.graph.gates.find(
+    (entry) => entry.phase === "activation" && entry.kind === "mention",
+  );
   return {
     ran: gate != null,
     allowed: gate?.allowed === true,
@@ -337,19 +270,6 @@ function commandOwnerAllowFrom(params: {
   return params.command?.groupOwnerAllowFrom === "none" ? [] : params.configuredAllowFrom;
 }
 
-function commandGroupAllowFrom(params: {
-  command?: ChannelMessageIngressCommandInput;
-  isGroup: boolean;
-  effectiveCommandGroupAllowFrom: string[];
-}): Array<string | number> {
-  if (params.isGroup) {
-    return params.effectiveCommandGroupAllowFrom;
-  }
-  return params.command?.directGroupAllowFrom === "effective"
-    ? params.effectiveCommandGroupAllowFrom
-    : [];
-}
-
 function accessGroupMatchedEntry(params: ResolveChannelMessageIngressParams): string | null {
   const entry = params.accessGroupMatchedAllowFromEntry ?? params.subject.stableId;
   return entry == null ? null : String(entry);
@@ -365,10 +285,6 @@ function appendAccessGroupMatchedEntry(params: {
     : params.entries;
 }
 
-/**
- * Resolve sender, route, command, event, and activation gates for one inbound
- * channel event.
- */
 export async function resolveChannelIngressPolicy(
   params: ResolveChannelMessageIngressParams,
 ): Promise<ResolvedChannelMessageIngress> {
@@ -468,11 +384,10 @@ async function resolveChannelMessageIngressForOwner(
         configuredAllowFrom: rawAllowFrom,
         effectiveAllowFrom: rawEffective.effectiveAllowFrom,
       }),
-      commandGroup: commandGroupAllowFrom({
-        command: params.command,
-        isGroup,
-        effectiveCommandGroupAllowFrom: rawCommandGroup.effectiveGroupAllowFrom,
-      }),
+      commandGroup:
+        isGroup || params.command?.directGroupAllowFrom === "effective"
+          ? rawCommandGroup.effectiveGroupAllowFrom
+          : [],
     },
   });
   const ingress = decideChannelIngress(state, policy);
@@ -519,16 +434,19 @@ async function resolveChannelMessageIngressForOwner(
       subject.identifiers[0]?.value
         ? {
             channelId,
-            accountId: params.accountId ?? "default",
+            accountId: params.accountId ?? DEFAULT_ACCOUNT_ID,
             senderId: subject.identifiers[0].value,
           }
+        : undefined;
+    const requester =
+      verifiedPrincipal && participantGatewayContext
+        ? await prepareUserChannelIdentityAuthority(verifiedPrincipal)
         : undefined;
     const commandOwnerAuthority =
       verifiedPrincipal && participantGatewayContext
         ? await prepareCommandOwnerAuthority(participantGatewayContext.getRuntimeConfig(), {
-            channel: verifiedPrincipal.channelId,
-            accountId: verifiedPrincipal.accountId,
-            senderId: verifiedPrincipal.senderId,
+            identity: verifiedPrincipal,
+            prepared: requester,
           })
         : undefined;
     participantInput = {
@@ -549,6 +467,14 @@ async function resolveChannelMessageIngressForOwner(
           },
       binding: participantBinding,
       verifiedPrincipal,
+      requesterProfile:
+        requester && ownerIsCurrent()
+          ? {
+              id: requester.linked.profileId,
+              displayName: requester.linked.displayName,
+              isCurrent: requester.isCurrent,
+            }
+          : undefined,
       commandOwnerAuthority: ownerIsCurrent() ? commandOwnerAuthority : undefined,
       promptedAt,
       owner: participantOwner,

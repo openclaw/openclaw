@@ -74,7 +74,6 @@ vi.mock("./session-change-event.js", () => ({ emitSessionsChanged: edge.emit }))
 vi.mock("./session-goal-request.js", () => ({
   fingerprintSessionGoalRequest: () => "fingerprint",
 }));
-vi.mock("./validation.js", () => ({ assertValidParams: () => true }));
 
 function invoke() {
   const respond = vi.fn();

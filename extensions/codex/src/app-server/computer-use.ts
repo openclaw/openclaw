@@ -1,8 +1,3 @@
-/**
- * Computer Use plugin/MCP readiness checks and optional install flow for Codex
- * app-server sessions.
- */
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { reconcileCodexComputerUseStartArtifacts } from "./auth-bridge.js";
@@ -14,26 +9,35 @@ import {
   isCodexAppServerIndeterminateTransportError,
   type CodexAppServerClient,
 } from "./client.js";
-import { resolveCodexManagedBundledMarketplacePath } from "./computer-use-marketplace.js";
+import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
+import {
+  resolveBundledComputerUseMarketplacePath,
+  resolveClientManagedBundledMarketplacePath,
+} from "./computer-use-marketplace.js";
 import {
   createComputerUseRequest,
   runCodexComputerUseLiveTest,
   skippedLiveTestStatus,
-  type CodexComputerUseLiveTestStatus,
-  type CodexComputerUseRepairStatus,
   type CodexComputerUseRequest,
 } from "./computer-use-readiness.js";
 import { assertNotSymlink } from "./computer-use-service-path.js";
+import {
+  unavailableStatus,
+  type CodexComputerUseStatus,
+  type CodexComputerUseStatusReason,
+} from "./computer-use-status.js";
+import {
+  hasLegacyCodexComputerUseMcpPolicy,
+  isLegacyCodexComputerUsePluginDisabled,
+  resolveManagedCodexComputerUseConfig,
+} from "./computer-use-unified.js";
 import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
   type CodexComputerUseConfig,
   type ResolvedCodexComputerUseConfig,
 } from "./config.js";
-import {
-  resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath,
-  resolveMacOSDesktopCodexBundledMarketplaceCandidates,
-} from "./desktop-app-paths.js";
+import { resolveMacOSDesktopCodexBundledMarketplaceCandidates } from "./desktop-app-paths.js";
 import { isManagedCodexDesktopCommand } from "./managed-binary.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import type {
@@ -60,56 +64,7 @@ import {
   type CodexAppServerClientLease,
 } from "./shared-client.js";
 
-type CodexComputerUseStatusReason =
-  | "disabled"
-  | "marketplace_missing"
-  | "plugin_not_installed"
-  | "plugin_disabled"
-  | "mcp_missing"
-  | "live_test_failed"
-  | "ready"
-  | "check_failed"
-  | "auto_install_blocked";
-
-type CodexComputerUseInstallationStatus =
-  | "disabled"
-  | "marketplace_missing"
-  | "not_installed"
-  | "installed_disabled"
-  | "installed";
-
-type CodexComputerUseExposureStatus = "skipped" | "missing" | "available";
-
-type CodexComputerUseStatusSection = {
-  status: string;
-  ok: boolean;
-  message: string;
-};
-
-/** Readiness status for Codex Computer Use plugin and MCP server wiring. */
-export type CodexComputerUseStatus = {
-  enabled: boolean;
-  ready: boolean;
-  reason: CodexComputerUseStatusReason;
-  installed: boolean;
-  pluginEnabled: boolean;
-  mcpServerAvailable: boolean;
-  pluginName: string;
-  mcpServerName: string;
-  marketplaceName?: string;
-  marketplacePath?: string;
-  tools: string[];
-  installation: CodexComputerUseStatusSection & {
-    status: CodexComputerUseInstallationStatus;
-  };
-  exposure: CodexComputerUseStatusSection & {
-    status: CodexComputerUseExposureStatus;
-  };
-  liveTest: CodexComputerUseLiveTestStatus;
-  repair?: CodexComputerUseRepairStatus;
-  warnings: string[];
-  message: string;
-};
+export type { CodexComputerUseStatus } from "./computer-use-status.js";
 
 class CodexComputerUseSetupError extends Error {
   readonly status: CodexComputerUseStatus;
@@ -121,7 +76,6 @@ class CodexComputerUseSetupError extends Error {
   }
 }
 
-/** Inputs for checking, ensuring, or installing Codex Computer Use support. */
 export type CodexComputerUseSetupParams = {
   pluginConfig?: unknown;
   config?: Parameters<typeof requestCodexAppServerClientJson>[0]["config"];
@@ -139,21 +93,14 @@ export type CodexComputerUseSetupParams = {
   releaseNativeConfigFence?: () => void;
 };
 
-type CodexComputerUseInspectionParams = {
-  pluginConfig?: unknown;
-  config?: CodexComputerUseSetupParams["config"];
-  agentDir?: string;
-  request?: CodexComputerUseRequest;
-  client?: CodexAppServerClient;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-  assertCurrent?: () => void;
+type CodexComputerUseInspectionParams = Omit<
+  CodexComputerUseSetupParams,
+  "overrides" | "forceEnable"
+> & {
   computerUseConfig: ResolvedCodexComputerUseConfig;
   runLiveTest: boolean;
-  installPlugin: boolean;
-  defaultBundledMarketplacePath?: string;
-  defaultBundledMarketplacePathCandidates?: readonly string[];
-  releaseNativeConfigFence?: () => void;
+  installMode: "none" | "automatic" | "explicit";
+  refreshSharedCache?: boolean;
   explicitManagedInstall?: ExplicitManagedComputerUseInstallContext;
 };
 
@@ -174,7 +121,6 @@ type MarketplaceRef =
   | {
       kind: "remote";
       name: string;
-      remoteMarketplaceName: string;
       remotePluginId: string;
     };
 
@@ -208,14 +154,14 @@ export async function readCodexComputerUseStatus(
 ): Promise<CodexComputerUseStatus> {
   const config = resolveComputerUseConfig(params);
   if (!config.enabled) {
-    return disabledStatus(config);
+    return unavailableStatus(config, "disabled", "Computer Use is disabled.");
   }
   try {
     return await inspectCodexComputerUse({
       ...params,
       computerUseConfig: config,
       runLiveTest: true,
-      installPlugin: false,
+      installMode: "none",
     });
   } catch (error) {
     return unavailableStatus(
@@ -235,13 +181,14 @@ export async function ensureCodexComputerUse(
 ): Promise<CodexComputerUseStatus> {
   const config = resolveComputerUseConfig(params);
   if (!config.enabled) {
-    return disabledStatus(config);
+    return unavailableStatus(config, "disabled", "Computer Use is disabled.");
   }
   const status = await inspectCodexComputerUse({
     ...params,
     computerUseConfig: config,
     runLiveTest: config.strictReadiness,
-    installPlugin: false,
+    installMode: "none",
+    refreshSharedCache: config.autoInstall,
   });
   if (status.ready) {
     return status;
@@ -255,17 +202,15 @@ export async function ensureCodexComputerUse(
       ...params,
       computerUseConfig: config,
       runLiveTest: config.strictReadiness,
-      installPlugin: true,
+      installMode: "automatic",
+      refreshSharedCache: true,
     });
     if (!installedStatus.ready) {
       throw new CodexComputerUseSetupError(installedStatus);
     }
     return installedStatus;
   }
-  if (!status.ready) {
-    throw new CodexComputerUseSetupError(status);
-  }
-  return status;
+  throw new CodexComputerUseSetupError(status);
 }
 
 /** Forces Computer Use plugin installation and returns the ready status. */
@@ -281,7 +226,7 @@ export async function installCodexComputerUse(
     ...params,
     computerUseConfig: config,
     runLiveTest: true,
-    installPlugin: true,
+    installMode: "explicit",
   });
   if (!status.ready) {
     throw new CodexComputerUseSetupError(status);
@@ -297,9 +242,10 @@ async function inspectCodexComputerUse(
     managedCommandOrder: "desktop-first",
   });
   const operationTimeoutMs = params.timeoutMs ?? resolvedRuntime.requestTimeoutMs;
-  const deadline = operationTimeoutMs > 0 ? Date.now() + operationTimeoutMs : undefined;
+  // Match the client's monotonic clock so wall-clock changes cannot distort the budget.
+  const deadline = operationTimeoutMs > 0 ? performance.now() + operationTimeoutMs : undefined;
   const remainingTimeoutMs = () =>
-    deadline === undefined ? operationTimeoutMs : Math.max(1, deadline - Date.now());
+    deadline === undefined ? operationTimeoutMs : Math.max(1, deadline - performance.now());
   const clientOptions = {
     startOptions: resolvedRuntime.start,
     pluginConfig: params.pluginConfig,
@@ -318,7 +264,7 @@ async function inspectCodexComputerUse(
       });
       lease.client = client;
     }
-    if (!params.installPlugin) {
+    if (params.installMode === "none" && !params.refreshSharedCache) {
       if (!lease.client) {
         return await inspectCodexComputerUseWithoutFence(params);
       }
@@ -397,25 +343,23 @@ async function inspectCodexComputerUse(
     });
     let releaseFenceOnReturn = true;
     try {
-      try {
-        return await inspectCodexComputerUseWithoutFence({
-          ...inspectionParams,
-          releaseNativeConfigFence: release,
-        });
-      } catch (error) {
-        if (
-          client &&
-          (isCodexAppServerIndeterminateRequestCancellationError(error) ||
-            isCodexAppServerIndeterminateTransportError(error) ||
-            isCodexAppServerConnectionClosedError(error))
-        ) {
-          // Codex may still commit a config mutation after local cancellation.
-          // Transfer fence ownership to physical process exit before surfacing it.
-          releaseFenceOnReturn = false;
-          await client.closeAndRunAfterExit(release, "Computer Use config mutation");
-        }
-        throw error;
+      return await inspectCodexComputerUseWithoutFence({
+        ...inspectionParams,
+        releaseNativeConfigFence: release,
+      });
+    } catch (error) {
+      if (
+        client &&
+        (isCodexAppServerIndeterminateRequestCancellationError(error) ||
+          isCodexAppServerIndeterminateTransportError(error) ||
+          isCodexAppServerConnectionClosedError(error))
+      ) {
+        // Codex may still commit a config mutation after local cancellation.
+        // Transfer fence ownership to physical process exit before surfacing it.
+        releaseFenceOnReturn = false;
+        await client.closeAndRunAfterExit(release, "Computer Use config mutation");
       }
+      throw error;
     } finally {
       if (releaseFenceOnReturn) {
         release();
@@ -432,29 +376,54 @@ async function inspectCodexComputerUseWithoutFence(
   params: CodexComputerUseInspectionParams,
 ): Promise<CodexComputerUseStatus> {
   const request = createComputerUseRequest(params);
-  if (params.installPlugin) {
+  if (params.installMode !== "none") {
     if (!resolveCodexComputerUseConfig({ pluginConfig: params.pluginConfig }).autoInstall) {
       await prepareExplicitManagedComputerUseInstall(params);
     }
-    await request<JsonValue>("experimentalFeature/enablement/set", {
-      enablement: { plugins: true },
-    } satisfies CodexRequestObject);
   }
 
   const managedMarketplacePath = await resolveClientManagedBundledMarketplacePath(
-    params.client,
+    params.client?.getRuntimeIdentity()?.codexHome,
     params.agentDir,
   );
   const managedCodexHome = managedMarketplacePath
     ? params.client?.getRuntimeIdentity()?.codexHome
     : undefined;
-  if (params.installPlugin && managedCodexHome) {
+  let computerUseConfig = await resolveManagedCodexComputerUseConfig(
+    params.computerUseConfig,
+    managedMarketplacePath,
+  );
+  const nativeDisableStatus =
+    computerUseConfig !== params.computerUseConfig && params.installMode !== "explicit"
+      ? unavailableStatus(
+          params.computerUseConfig,
+          "plugin_disabled",
+          "Computer Use is disabled by native plugin policy. Run /codex computer-use install for explicit recovery, or enable computer-use@openai-bundled in native Codex config for automatic replacement.",
+        )
+      : undefined;
+  if (computerUseConfig !== params.computerUseConfig) {
+    const nativeConfig = await request<CodexConfigReadResponse>("config/read", {
+      includeLayers: false,
+    });
+    if (nativeDisableStatus && isLegacyCodexComputerUsePluginDisabled(nativeConfig.config)) {
+      return nativeDisableStatus;
+    }
+    if (hasLegacyCodexComputerUseMcpPolicy(nativeConfig.config)) {
+      computerUseConfig = params.computerUseConfig;
+    }
+  }
+  if (params.installMode !== "none") {
+    await request<JsonValue>("experimentalFeature/enablement/set", {
+      enablement: { plugins: true },
+    } satisfies CodexRequestObject);
+  }
+  if (params.installMode !== "none" && managedCodexHome) {
     await assertNotSymlink(path.join(managedCodexHome, "config.toml"), "Codex config");
   }
   const marketplace = await resolveMarketplaceRef({
     request,
-    config: params.computerUseConfig,
-    allowAdd: params.installPlugin,
+    config: computerUseConfig,
+    allowAdd: params.installMode !== "none",
     signal: params.signal,
     defaultBundledMarketplacePath: params.defaultBundledMarketplacePath ?? managedMarketplacePath,
     defaultBundledMarketplacePathCandidates: params.defaultBundledMarketplacePathCandidates,
@@ -462,31 +431,53 @@ async function inspectCodexComputerUseWithoutFence(
   });
   if (!marketplace.marketplace) {
     return unavailableStatus(
-      params.computerUseConfig,
+      computerUseConfig,
       "marketplace_missing",
       marketplace.message ??
-        `No Codex marketplace containing ${params.computerUseConfig.pluginName} is registered. Configure computerUse.marketplaceSource or computerUse.marketplacePath, then run /codex computer-use install.`,
+        `No Codex marketplace containing ${computerUseConfig.pluginName} is registered. Configure computerUse.marketplaceSource or computerUse.marketplacePath, then run /codex computer-use install.`,
     );
   }
 
   const pluginInspection = await ensureComputerUsePlugin({
     request,
-    config: params.computerUseConfig,
+    config: computerUseConfig,
     marketplace: marketplace.marketplace,
-    installPlugin: params.installPlugin,
+    nativeDisableStatus,
+    installPlugin: params.installMode !== "none",
   });
   if (!pluginInspection.ok) {
     return pluginInspection.status;
+  }
+
+  if (
+    params.refreshSharedCache &&
+    computerUseConfig !== params.computerUseConfig &&
+    managedCodexHome &&
+    managedMarketplacePath &&
+    params.agentDir &&
+    params.client
+  ) {
+    const client = params.client;
+    await ensureCodexComputerUseSharedPluginCache({
+      codexHome: managedCodexHome,
+      ownershipRoot: params.agentDir,
+      bundledMarketplacePath: managedMarketplacePath,
+      config: computerUseConfig,
+      assertCurrent: () => {
+        params.assertCurrent?.();
+        assertCodexAppServerClientStartSelectionCurrent({ client });
+      },
+    });
   }
 
   return await readComputerUseTools({
     request,
     client: params.client,
     signal: params.signal,
-    config: params.computerUseConfig,
+    config: computerUseConfig,
     plugin: pluginInspection.plugin,
     runLiveTest: params.runLiveTest,
-    installPlugin: params.installPlugin,
+    installPlugin: params.installMode !== "none",
     releaseNativeConfigFence: params.releaseNativeConfigFence,
   });
 }
@@ -558,54 +549,33 @@ async function resolveExplicitManagedComputerUseInstallContext(
   };
 }
 
-async function resolveClientManagedBundledMarketplacePath(
-  client: CodexAppServerClient | undefined,
-  agentDir: string | undefined,
-): Promise<string | undefined> {
-  const codexHome = client?.getRuntimeIdentity()?.codexHome;
-  if (!codexHome || !agentDir) {
-    return undefined;
-  }
-  const [actualRealHome, expectedRealHome] = await Promise.all([
-    fs.realpath(codexHome).catch(() => undefined),
-    fs.realpath(resolveCodexAppServerHomeDir(agentDir)).catch(() => undefined),
-  ]);
-  if (!actualRealHome || actualRealHome !== expectedRealHome) {
-    return undefined;
-  }
-  const managedPath = resolveCodexManagedBundledMarketplacePath(codexHome);
-  return existsSync(managedPath) ? managedPath : undefined;
-}
-
 async function ensureComputerUsePlugin(params: {
   request: CodexComputerUseRequest;
   config: ResolvedCodexComputerUseConfig;
   marketplace: MarketplaceRef;
   installPlugin: boolean;
+  nativeDisableStatus?: CodexComputerUseStatus;
 }): Promise<PluginInspection> {
   let plugin = await readComputerUsePlugin(
     params.request,
     params.marketplace,
     params.config.pluginName,
   );
-  if (!plugin.summary.installed || !plugin.summary.enabled) {
-    if (!params.installPlugin) {
-      return {
-        ok: false,
-        status: statusFromPlugin({
-          config: params.config,
-          plugin,
-          tools: [],
-          reason: pluginSetupReason(plugin),
-          message: pluginSetupMessage(params.config, plugin),
-        }),
-      };
+  if (params.nativeDisableStatus) {
+    // Discovery and plugin inspection can await external work after the initial policy read.
+    const nativeConfig = await params.request<CodexConfigReadResponse>("config/read", {
+      includeLayers: false,
+    });
+    if (isLegacyCodexComputerUsePluginDisabled(nativeConfig.config)) {
+      return { ok: false, status: params.nativeDisableStatus };
     }
+  }
+  if (params.installPlugin && (!plugin.summary.installed || !plugin.summary.enabled)) {
     await params.request<JsonValue>(
       "plugin/install",
       pluginRequestParams(params.marketplace, params.config.pluginName),
     );
-    await reloadMcpServers(params.request);
+    await params.request("config/mcpServer/reload", undefined);
     plugin = await readComputerUsePlugin(
       params.request,
       params.marketplace,
@@ -619,8 +589,10 @@ async function ensureComputerUsePlugin(params: {
         config: params.config,
         plugin,
         tools: [],
-        reason: pluginSetupReason(plugin),
-        message: pluginSetupMessage(params.config, plugin),
+        reason: plugin.summary.installed ? "plugin_disabled" : "plugin_not_installed",
+        message: plugin.summary.installed
+          ? `Computer Use is installed, but the ${params.config.pluginName} plugin is disabled. Run /codex computer-use install or enable computerUse.autoInstall to re-enable it.`
+          : "Computer Use is available but not installed. Run /codex computer-use install or enable computerUse.autoInstall.",
       }),
     };
   }
@@ -640,26 +612,19 @@ async function readComputerUseTools(params: {
   let server = await readMcpServerStatus(params.request, params.config.mcpServerName);
   let tools = Object.keys(server?.tools ?? {}).toSorted();
   if ((!server || tools.length === 0) && params.installPlugin) {
-    await reloadMcpServers(params.request);
+    await params.request("config/mcpServer/reload", undefined);
     server = await readMcpServerStatus(params.request, params.config.mcpServerName);
     tools = Object.keys(server?.tools ?? {}).toSorted();
   }
-  if (!server) {
-    return statusFromPlugin({
-      config: params.config,
-      plugin: params.plugin,
-      tools: [],
-      reason: "mcp_missing",
-      message: `Computer Use is installed, but the ${params.config.mcpServerName} MCP server is not available.`,
-    });
-  }
-  if (tools.length === 0) {
+  if (!server || tools.length === 0) {
     return statusFromPlugin({
       config: params.config,
       plugin: params.plugin,
       tools,
       reason: "mcp_missing",
-      message: `Computer Use is installed, but the ${params.config.mcpServerName} MCP server exposes no tools.`,
+      message: server
+        ? `Computer Use is installed, but the ${params.config.mcpServerName} MCP server exposes no tools.`
+        : `Computer Use is installed, but the ${params.config.mcpServerName} MCP server is not available.`,
     });
   }
 
@@ -734,11 +699,12 @@ async function resolveMarketplaceRef(params: {
 
   let candidates = await listComputerUseMarketplaceCandidates(params.request, params.config);
   const bundledMarketplacePath = resolveBundledComputerUseMarketplacePath(params);
-  if (
-    candidates.length === 0 &&
-    bundledMarketplacePath &&
-    shouldAddBundledComputerUseMarketplace(params)
-  ) {
+  const discoverDefaultMarketplace =
+    params.allowAdd &&
+    !params.config.marketplaceSource &&
+    !params.config.marketplacePath &&
+    !params.config.marketplaceName;
+  if (candidates.length === 0 && bundledMarketplacePath && discoverDefaultMarketplace) {
     if (params.managedCodexHome) {
       await migrateLegacyBundledMarketplaceSource({
         request: params.request,
@@ -754,7 +720,9 @@ async function resolveMarketplaceRef(params: {
     candidates = await listComputerUseMarketplaceCandidates(params.request, params.config);
   }
 
-  const waitUntil = marketplaceDiscoveryWaitUntil(params);
+  const waitUntil = discoverDefaultMarketplace
+    ? Date.now() + params.config.marketplaceDiscoveryTimeoutMs
+    : 0;
   if (
     candidates.length === 0 &&
     waitUntil > Date.now() &&
@@ -873,38 +841,6 @@ function blockUnsafeAutoInstallStatus(
   );
 }
 
-function shouldAddBundledComputerUseMarketplace(params: {
-  config: ResolvedCodexComputerUseConfig;
-  allowAdd: boolean;
-  defaultBundledMarketplacePath?: string;
-  defaultBundledMarketplacePathCandidates?: readonly string[];
-}): boolean {
-  return (
-    params.allowAdd &&
-    !params.config.marketplaceSource &&
-    !params.config.marketplacePath &&
-    !params.config.marketplaceName &&
-    Boolean(resolveBundledComputerUseMarketplacePath(params))
-  );
-}
-
-function resolveBundledComputerUseMarketplacePath(params: {
-  defaultBundledMarketplacePath?: string;
-  defaultBundledMarketplacePathCandidates?: readonly string[];
-}): string | undefined {
-  if (params.defaultBundledMarketplacePath) {
-    return existsSync(params.defaultBundledMarketplacePath)
-      ? params.defaultBundledMarketplacePath
-      : undefined;
-  }
-  if (!params.defaultBundledMarketplacePathCandidates) {
-    return undefined;
-  }
-  return resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath({
-    candidates: params.defaultBundledMarketplacePathCandidates,
-  });
-}
-
 function findComputerUseMarketplaces(
   listed: CodexPluginListResponse,
   pluginName: string,
@@ -931,7 +867,6 @@ function findComputerUseMarketplaces(
       {
         kind: "remote",
         name: marketplace.name,
-        remoteMarketplaceName: marketplace.name,
         remotePluginId,
       },
     ];
@@ -948,21 +883,6 @@ function chooseKnownComputerUseMarketplace(
     }
   }
   return undefined;
-}
-
-function marketplaceDiscoveryWaitUntil(params: {
-  config: ResolvedCodexComputerUseConfig;
-  allowAdd: boolean;
-}): number {
-  if (
-    params.allowAdd &&
-    !params.config.marketplaceSource &&
-    !params.config.marketplacePath &&
-    !params.config.marketplaceName
-  ) {
-    return Date.now() + params.config.marketplaceDiscoveryTimeoutMs;
-  }
-  return 0;
 }
 
 async function delay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -1020,31 +940,13 @@ async function readMcpServerStatus(
   return undefined;
 }
 
-async function reloadMcpServers(request: CodexComputerUseRequest): Promise<void> {
-  await request("config/mcpServer/reload", undefined);
-}
-
 function pluginRequestParams(marketplace: MarketplaceRef, pluginName: string) {
   return marketplace.kind === "local"
     ? { marketplacePath: marketplace.path, pluginName }
     : {
-        remoteMarketplaceName: marketplace.remoteMarketplaceName,
+        remoteMarketplaceName: marketplace.name,
         pluginName: marketplace.remotePluginId,
       };
-}
-
-function pluginSetupReason(plugin: CodexPluginDetail): CodexComputerUseStatusReason {
-  return plugin.summary.installed ? "plugin_disabled" : "plugin_not_installed";
-}
-
-function pluginSetupMessage(
-  config: ResolvedCodexComputerUseConfig,
-  plugin: CodexPluginDetail,
-): string {
-  if (!plugin.summary.installed) {
-    return "Computer Use is available but not installed. Run /codex computer-use install or enable computerUse.autoInstall.";
-  }
-  return `Computer Use is installed, but the ${config.pluginName} plugin is disabled. Run /codex computer-use install or enable computerUse.autoInstall to re-enable it.`;
 }
 
 function statusFromPlugin(params: {
@@ -1054,145 +956,46 @@ function statusFromPlugin(params: {
   reason: CodexComputerUseStatusReason;
   message: string;
 }): CodexComputerUseStatus {
+  const { config, plugin, tools, reason, message } = params;
+  const installed = plugin.summary.installed && plugin.summary.enabled;
+  const available = tools.length > 0;
   return {
     enabled: true,
-    ready:
-      params.plugin.summary.installed && params.plugin.summary.enabled && params.tools.length > 0,
-    reason: params.reason,
-    installed: params.plugin.summary.installed,
-    pluginEnabled: params.plugin.summary.enabled,
-    mcpServerAvailable: params.tools.length > 0,
-    pluginName: params.config.pluginName,
-    mcpServerName: params.config.mcpServerName,
-    marketplaceName: params.plugin.marketplaceName,
-    ...(params.plugin.marketplacePath ? { marketplacePath: params.plugin.marketplacePath } : {}),
-    tools: params.tools,
-    installation: installationStatusFromPlugin(params.plugin, params.message),
-    exposure: exposureStatusFromTools(params.config, params.tools),
-    liveTest: skippedLiveTestStatus(params.config, "Computer Use live test was not run."),
-    warnings: pluginWarnings(params.plugin),
-    message: params.message,
-  };
-}
-
-function disabledStatus(config: ResolvedCodexComputerUseConfig): CodexComputerUseStatus {
-  return {
-    enabled: false,
-    ready: false,
-    reason: "disabled",
-    installed: false,
-    pluginEnabled: false,
-    mcpServerAvailable: false,
-    pluginName: config.pluginName,
-    mcpServerName: config.mcpServerName,
-    tools: [],
-    installation: {
-      status: "disabled",
-      ok: false,
-      message: "Computer Use is disabled.",
-    },
-    exposure: {
-      status: "skipped",
-      ok: false,
-      message: "MCP exposure was not checked because Computer Use is disabled.",
-    },
-    liveTest: skippedLiveTestStatus(
-      config,
-      "Computer Use live test was not run because Computer Use is disabled.",
-    ),
-    warnings: [],
-    message: "Computer Use is disabled.",
-  };
-}
-
-function unavailableStatus(
-  config: ResolvedCodexComputerUseConfig,
-  reason: CodexComputerUseStatusReason,
-  message: string,
-): CodexComputerUseStatus {
-  return {
-    enabled: true,
-    ready: false,
+    ready: installed && available,
     reason,
-    installed: false,
-    pluginEnabled: false,
-    mcpServerAvailable: false,
+    installed: plugin.summary.installed,
+    pluginEnabled: plugin.summary.enabled,
+    mcpServerAvailable: available,
     pluginName: config.pluginName,
     mcpServerName: config.mcpServerName,
-    ...(config.marketplaceName ? { marketplaceName: config.marketplaceName } : {}),
-    ...(config.marketplacePath ? { marketplacePath: config.marketplacePath } : {}),
-    tools: [],
+    marketplaceName: plugin.marketplaceName,
+    ...(plugin.marketplacePath ? { marketplacePath: plugin.marketplacePath } : {}),
+    tools,
     installation: {
-      status: reason === "marketplace_missing" ? "marketplace_missing" : "not_installed",
-      ok: false,
-      message,
+      status: !plugin.summary.installed
+        ? "not_installed"
+        : installed
+          ? "installed"
+          : "installed_disabled",
+      ok: installed,
+      message: installed ? "Computer Use plugin is installed and enabled." : message,
     },
     exposure: {
-      status: "skipped",
-      ok: false,
-      message: "MCP exposure was not checked because Computer Use installation is not ready.",
+      status: available ? "available" : "missing",
+      ok: available,
+      message: available
+        ? `Computer Use MCP server ${config.mcpServerName} exposes ${tools.length} tools.`
+        : `Computer Use MCP server ${config.mcpServerName} is not exposed.`,
     },
-    liveTest: skippedLiveTestStatus(
-      config,
-      "Computer Use live test was not run because installation is not ready.",
-    ),
-    warnings: [],
+    liveTest: skippedLiveTestStatus(config, "Computer Use live test was not run."),
+    warnings:
+      plugin.summary.source?.type === "remote"
+        ? [
+            "Computer Use plugin is resolved from a remote marketplace; live local bundles are preferred.",
+          ]
+        : [],
     message,
   };
-}
-
-function installationStatusFromPlugin(
-  plugin: CodexPluginDetail,
-  message: string,
-): CodexComputerUseStatus["installation"] {
-  if (!plugin.summary.installed) {
-    return {
-      status: "not_installed",
-      ok: false,
-      message,
-    };
-  }
-  if (!plugin.summary.enabled) {
-    return {
-      status: "installed_disabled",
-      ok: false,
-      message,
-    };
-  }
-  return {
-    status: "installed",
-    ok: true,
-    message: "Computer Use plugin is installed and enabled.",
-  };
-}
-
-function exposureStatusFromTools(
-  config: ResolvedCodexComputerUseConfig,
-  tools: string[],
-): CodexComputerUseStatus["exposure"] {
-  if (tools.length === 0) {
-    return {
-      status: "missing",
-      ok: false,
-      message: `Computer Use MCP server ${config.mcpServerName} is not exposed.`,
-    };
-  }
-  return {
-    status: "available",
-    ok: true,
-    message: `Computer Use MCP server ${config.mcpServerName} exposes ${tools.length} tools.`,
-  };
-}
-
-function pluginWarnings(plugin: CodexPluginDetail): string[] {
-  const warnings: string[] = [];
-  const source = plugin.summary.source;
-  if (source && typeof source === "object" && "type" in source && source.type === "remote") {
-    warnings.push(
-      "Computer Use plugin is resolved from a remote marketplace; live local bundles are preferred.",
-    );
-  }
-  return warnings;
 }
 
 function resolveComputerUseConfig(

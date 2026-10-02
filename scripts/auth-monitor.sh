@@ -44,10 +44,13 @@ send_notification() {
 
     # Send via OpenClaw if phone configured and auth still valid
     if [ -n "$NOTIFY_PHONE" ]; then
-        # Check if we can still use openclaw
-        if "$SCRIPT_DIR/claude-auth-status.sh" simple 2>/dev/null | grep -q "OK\|EXPIRING"; then
+        local auth_status="" auth_exit=0
+        auth_status="$("$SCRIPT_DIR/claude-auth-status.sh" simple 2>/dev/null)" || auth_exit=$?
+        # Expiring credentials remain usable; the status helper reports them with exit 2.
+        if [[ "$auth_exit" -eq 0 && "$auth_status" == "OK" ]] ||
+           [[ "$auth_exit" -eq 2 && ( "$auth_status" == "CLAUDE_EXPIRING" || "$auth_status" == "OPENCLAW_EXPIRING" ) ]]; then
             echo "Sending via OpenClaw to $NOTIFY_PHONE..."
-            if openclaw send --to "$NOTIFY_PHONE" --message "$message" 2>/dev/null; then
+            if openclaw message send --target "$NOTIFY_PHONE" --message "$message" 2>/dev/null; then
                 notification_sent=1
             fi
         fi

@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
@@ -16,7 +17,6 @@ import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context
 import { runWithGatewaySessionSpawnContext } from "../../tools/gateway-session-spawn-context.js";
 import { runWithGatewaySessionSpawnParentExecutionIdentity } from "../../tools/gateway-session-spawn-execution-identity.js";
 import { callGatewayTool } from "../../tools/gateway.js";
-import { resolveSubagentRunTimerDelayMs } from "../registry/subagent-run-timeout.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import { applySubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import { readSubagentGatewayExecutionIdentity } from "./subagent-spawn-execution-identity.js";
@@ -249,7 +249,7 @@ export async function callNativeSubagentGateway(
   gatewayContextResolver?: GatewayContextResolver,
 ): Promise<{
   response: SubagentGatewayResponse;
-  taskRowOwnership: "required" | "gateway_best_effort";
+  registrationRequired: boolean;
 }> {
   const result = await callSubagentGatewayWithDispatchMode(params, authorization, {
     agentRunTracking: "native_subagent",
@@ -259,7 +259,7 @@ export async function callNativeSubagentGateway(
     response: result.response,
     // The trusted marker exists only on direct dispatch. A WebSocket fallback keeps the
     // ordinary Gateway CLI policy: tracking is best-effort and never rejects an accepted run.
-    taskRowOwnership: result.dispatchMode === "in_process" ? "required" : "gateway_best_effort",
+    registrationRequired: result.dispatchMode === "in_process",
   };
 }
 
@@ -270,7 +270,8 @@ export function readGatewayRunId(
 }
 
 export function resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds: number): number {
-  const runTimeoutMs = resolveSubagentRunTimerDelayMs(runTimeoutSeconds) ?? 0;
+  const runTimeoutMs =
+    finiteSecondsToTimerSafeMilliseconds(runTimeoutSeconds, { floorSeconds: true }) ?? 0;
   if (runTimeoutMs <= 0) {
     return DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS;
   }

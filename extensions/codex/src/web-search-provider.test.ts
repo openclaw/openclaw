@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createCodexWebSearchProvider as createContractCodexWebSearchProvider } from "../web-search-contract-api.js";
 import type { CodexAppServerClient } from "./app-server/client.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
@@ -11,6 +11,8 @@ import {
   type JsonValue,
 } from "./app-server/protocol.js";
 import { createCodexWebSearchProvider } from "./web-search-provider.js";
+// Loads the provider's lazy runtime at collection, outside the first test's deadline.
+import "./web-search-provider.runtime.js";
 
 function codexModel(
   options: {
@@ -187,11 +189,14 @@ function createConfig(): OpenClawConfig {
   };
 }
 
-beforeAll(async () => {
-  // Execution cases share this lazy runtime. Import it once so the first case
-  // does not absorb module initialization that every later case reuses.
-  await import("./web-search-provider.runtime.js");
-});
+function createSearchTool(provider: ReturnType<typeof createCodexWebSearchProvider>) {
+  const config = createConfig();
+  return provider.createTool({
+    config,
+    searchConfig: config.tools?.web?.search,
+    agentDir: "/tmp/openclaw-agent",
+  });
+}
 
 describe("codex web search provider", () => {
   it("registers a selectable keyless provider contract", () => {
@@ -226,12 +231,7 @@ describe("codex web search provider", () => {
       }),
       clientFactory: async () => client,
     });
-    const config = createConfig();
-    const tool = provider.createTool({
-      config,
-      searchConfig: config.tools?.web?.search,
-      agentDir: "/tmp/openclaw-agent",
-    });
+    const tool = createSearchTool(provider);
 
     await expect(tool?.execute({ query: "plumbers in Edmonton Alberta" })).rejects.toThrow(
       "Bounded Codex turns require stdio transport so native tools can be isolated.",
@@ -262,12 +262,7 @@ describe("codex web search provider", () => {
         return client;
       },
     });
-    const config = createConfig();
-    const tool = provider.createTool({
-      config,
-      searchConfig: config.tools?.web?.search,
-      agentDir: "/tmp/openclaw-agent",
-    });
+    const tool = createSearchTool(provider);
 
     const result = await tool?.execute({ query: "plumbers in Edmonton Alberta" });
 
@@ -353,12 +348,7 @@ describe("codex web search provider", () => {
     const provider = createCodexWebSearchProvider({
       clientFactory: async () => client,
     });
-    const config = createConfig();
-    const tool = provider.createTool({
-      config,
-      searchConfig: config.tools?.web?.search,
-      agentDir: "/tmp/openclaw-agent",
-    });
+    const tool = createSearchTool(provider);
 
     const result = await tool?.execute({ query: "plumbers in Edmonton Alberta" });
 
@@ -408,12 +398,7 @@ describe("codex web search provider", () => {
     const provider = createCodexWebSearchProvider({
       clientFactory: async () => client,
     });
-    const config = createConfig();
-    const tool = provider.createTool({
-      config,
-      searchConfig: config.tools?.web?.search,
-      agentDir: "/tmp/openclaw-agent",
-    });
+    const tool = createSearchTool(provider);
 
     await expect(tool?.execute({ query: "plumbers in Edmonton Alberta" })).rejects.toThrow(
       "Codex app-server has no model supporting text input.",
@@ -426,12 +411,7 @@ describe("codex web search provider", () => {
     const provider = createCodexWebSearchProvider({
       clientFactory: async () => client,
     });
-    const config = createConfig();
-    const tool = provider.createTool({
-      config,
-      searchConfig: config.tools?.web?.search,
-      agentDir: "/tmp/openclaw-agent",
-    });
+    const tool = createSearchTool(provider);
 
     await expect(tool?.execute({ query: "plumbers in Edmonton Alberta" })).rejects.toThrow(
       "Codex hosted search completed without invoking web search.",

@@ -86,7 +86,10 @@ OpenClaw does not download from skills.sh. These entries are shown as
 **Not scanned by ClawHub**, and that trust state is preserved through updates
 and verification. Claimed or ClawHub-scanned skills use `@owner/<slug>`.
 `install git:owner/repo[@ref]` clones an unmanaged Git skill, and `install
-./path` copies a local skill directory. By default, `install`,
+./path` copies a local skill directory. Both fail before copying when the root
+`SKILL.md` is not loadable under the same content rules: frontmatter with a
+description, within `skills.limits.maxSkillFileBytes`. A hardlinked source file
+is copied as a new file, so that link does not fail the check. By default, `install`,
 `update`, and `verify` target the active workspace `skills/` directory; with
 `--global`, they target the shared managed skills directory. `list`/`info`/`check`
 and bare `openclaw skills` request the selected Gateway's authoritative skill
@@ -111,10 +114,23 @@ and separator-normalized matches must identify one skill; ambiguous selectors
 fail instead of choosing discovery order. Workshop reads and update targeting
 use the same lookup.
 
+`check` separates **inventory**, **readiness**, and **visibility**:
+
+- **Inventory** means OpenClaw found the skill in a configured root or bundled
+  source and can report its status.
+- **Readiness** means the skill's declared prerequisites are satisfied for the
+  selected Gateway or node, so it is eligible to run.
+- **Visibility** means an eligible skill is exposed to the selected agent's
+  prompt, picker, or command surface after agent filters and invocation flags
+  are applied.
+
 `check` reports missing prerequisites independently of agent exclusion: a skill
 excluded by the agent allowlist can also appear under **Missing requirements**.
 Disabled skills and skills blocked by the bundled allowlist keep their separate
-readiness categories.
+readiness categories. Treat a listed skill with missing requirements as present
+in inventory but not currently eligible or visible to the agent; install or
+configure the reported prerequisite before expecting the model to use it
+successfully.
 
 Curator `status`, `pin`, `unpin`, and `restore`, plus Workshop `apply`, preserve
 the same target boundary. They never read or mutate client-local state after an

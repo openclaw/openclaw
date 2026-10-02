@@ -2,18 +2,23 @@ import path from "node:path";
 import { MessageChannel } from "node:worker_threads";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { withWorktreeAllocationLease } from "../agents/worktrees/allocation.js";
 import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { OpenClawStateLeaseError } from "../state/openclaw-state-lease-error.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { removeClonedProjectCheckout } from "./project-clone.js";
 import { selectStoredProjectRegistry } from "./project-registry.js";
-import type { ProjectRegistryRecord } from "./project-registry.kernel.js";
+import type { ProjectRegistryRecord } from "./project-registry.types.js";
 
 const fixture = vi.hoisted(() => ({
   expiresAt: 40_000,
   resolveProject: vi.fn<() => Promise<ProjectRegistryRecord>>(),
+  removeReference: vi.fn<() => Promise<"missing" | "changed" | "remaining" | "final">>(),
+  removeCheckout: vi.fn<() => Promise<void>>(),
+  removeParent: vi.fn<() => Promise<void>>(),
   settlement: vi.fn<() => Promise<SqliteWorkerOperationSettlement>>(),
   afterCallback: vi.fn<() => void>(),
   captureWorkerGuard: vi.fn<(assertCurrent: () => void) => void>(),
@@ -24,6 +29,20 @@ const fixture = vi.hoisted(() => ({
   }),
 }));
 
+vi.mock("node:fs/promises", () => ({
+  default: {
+    realpath: async (value: string) => value,
+    rm: fixture.removeCheckout,
+    rmdir: fixture.removeParent,
+  },
+}));
+vi.mock("./project-clone-runtime.js", () => ({
+  ProjectCloneError: class extends Error {
+    constructor(_code: string, message: string) {
+      super(message);
+    }
+  },
+}));
 vi.mock("../agents/agent-scope-config.js", () => ({ withAgentRosterFactsBatch: vi.fn() }));
 vi.mock("../agents/agent-scope.js", () => ({
   listAgentIds: vi.fn(),
@@ -56,18 +75,11 @@ vi.mock("../state/openclaw-state-db-cache.js", () => ({
 vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
   getOpenClawDatabaseMaintenanceScope: () => undefined,
 }));
-vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/state-database-coordinator.js")>();
-  return {
-    StateDatabaseCoordinatorContentionError: actual.StateDatabaseCoordinatorContentionError,
-    captureStateDatabaseCoordinatorRuntime: () => ({
-      directory: "/synthetic-coordinator",
-      keepAlive: false,
-    }),
-  };
-});
-vi.mock("../state/openclaw-state-lease-storage.js", () => ({
+vi.mock("../state/openclaw-state-lease-worker-storage.js", () => ({
   acquireLease: async () => ({ kind: "acquired", expiresAt: fixture.expiresAt }),
+  createOpenClawStateLeaseWorkerStorage: fixture.forbiddenNative,
+}));
+vi.mock("../state/openclaw-state-lease-storage.js", () => ({
   prepareLeaseDatabase: fixture.forbiddenNative,
   resolveLeaseDatabasePath: () => path.resolve("/synthetic-state/lease.sqlite"),
   verifyOpenClawStateLeaseOwnership: () => {
@@ -87,14 +99,6 @@ vi.mock("../state/openclaw-state-lease-storage.js", () => ({
   },
   releaseOpenClawStateLease: fixture.release,
 }));
-vi.mock("../state/openclaw-state-lease-exclusion.js", () => ({
-  createOpenClawStateLeaseExclusion: () => ({
-    canRelease: () => true,
-    assertIfExcluded: () => false,
-    runWithOwnerScope: (run: () => Promise<unknown>) => run(),
-    drain: async () => {},
-  }),
-}));
 vi.mock("../state/openclaw-state-lease-heartbeat.js", () => ({
   startOpenClawStateLeaseHeartbeat: fixture.forbiddenNative,
 }));
@@ -104,7 +108,7 @@ type WorkerOptions = {
   createAdmission?: SqliteWorkerAdmissionFactory;
 };
 type ProjectReadScope = {
-  execute: () => Promise<ProjectRegistryRecord>;
+  execute: (command: { type: string }) => Promise<unknown>;
 };
 
 // Storage and transport are synthetic; admission retention and lease drainage
@@ -124,7 +128,12 @@ vi.mock("../state/openclaw-state-worker-store.js", () => ({
     fixture.captureWorkerGuard(options.assertCurrent);
     const retained = options.createAdmission({ settled: fixture.settlement() });
     try {
-      return await operation({ execute: () => fixture.resolveProject() });
+      return await operation({
+        execute: (command) =>
+          command.type === "projects.removeCheckoutReference"
+            ? fixture.removeReference()
+            : fixture.resolveProject(),
+      });
     } finally {
       retained.admission.finish();
       fixture.afterCallback();
@@ -172,6 +181,9 @@ beforeEach(() => {
     throw new Error("Project authority controls must not open SQLite, Git, or heartbeat workers");
   });
   fixture.resolveProject.mockResolvedValue(project);
+  fixture.removeReference.mockResolvedValue("final");
+  fixture.removeCheckout.mockResolvedValue();
+  fixture.removeParent.mockResolvedValue();
   fixture.settlement.mockResolvedValue({ kind: "completed" });
   fixture.expiresAt = 40_000;
   vi.useFakeTimers();
@@ -413,6 +425,94 @@ it.each(["known", "unknown", "wrapped-unknown"] as const)(
     } finally {
       retained.resolve({ kind: "completed" });
       await joined;
+    }
+  },
+);
+
+const clonedProject: ProjectRegistryRecord = {
+  ...project,
+  source: "cloned",
+  repoRoot: path.resolve("/synthetic-state/projects/0123456789abcdef/project"),
+};
+
+function removeCheckout(assertUnreferenced: () => void | Promise<void> = () => {}) {
+  return removeClonedProjectCheckout(clonedProject, assertUnreferenced, {
+    path: path.resolve("/synthetic-state/lease.sqlite"),
+    env: { OPENCLAW_STATE_DIR: "/synthetic-state" },
+  });
+}
+
+it("retains checkout custody until the removal worker and native settlement finish", async () => {
+  const result = createDeferredCore<"final">();
+  const entered = createDeferredCore();
+  const exited = createDeferredCore();
+  const settled = createDeferredCore<SqliteWorkerOperationSettlement>();
+  fixture.removeReference.mockImplementation(() => {
+    entered.resolve();
+    return result.promise;
+  });
+  fixture.settlement.mockReturnValue(settled.promise);
+  fixture.afterCallback.mockImplementation(() => exited.resolve());
+  const operation = removeCheckout();
+  try {
+    await awaitGateBeforeSettlement(entered.promise, operation, "Removal bypassed the worker");
+    expect(fixture.removeCheckout).not.toHaveBeenCalled();
+    expect(fixture.release).not.toHaveBeenCalled();
+    result.resolve("final");
+    await awaitGateBeforeSettlement(exited.promise, operation, "Removal skipped native settlement");
+    expect(fixture.removeCheckout).not.toHaveBeenCalled();
+    expect(fixture.release).not.toHaveBeenCalled();
+    settled.resolve({ kind: "completed" });
+    await expect(operation).resolves.toBe(true);
+    expect(fixture.removeCheckout).toHaveBeenCalledWith(clonedProject.repoRoot, {
+      recursive: true,
+    });
+    expect(fixture.removeParent).toHaveBeenCalledWith(path.dirname(clonedProject.repoRoot));
+    expect(fixture.release).toHaveBeenCalledOnce();
+  } finally {
+    result.resolve("final");
+    settled.resolve({ kind: "completed" });
+    await operation.catch(() => {});
+  }
+});
+
+it.each(["rejected", "unknown", "lease", "database", "reference"] as const)(
+  "preserves the checkout when removal has a %s outcome or authority",
+  async (failureKind) => {
+    const failure = new Error("Removal no longer authorized");
+    const assertUnreferenced = vi.fn();
+    if (failureKind === "rejected") {
+      fixture.removeReference.mockRejectedValue(failure);
+    } else if (failureKind === "unknown") {
+      fixture.settlement.mockResolvedValue({ kind: "unknown", error: failure });
+    } else {
+      fixture.afterCallback.mockImplementation(() => {
+        if (failureKind === "lease") {
+          fixture.expiresAt = Date.now();
+        } else if (failureKind === "database") {
+          fixture.assertDatabaseCurrent.mockImplementation(() => {
+            throw failure;
+          });
+        } else {
+          assertUnreferenced.mockImplementation(() => {
+            throw failure;
+          });
+        }
+      });
+    }
+    const operation = removeCheckout(assertUnreferenced);
+    if (failureKind === "unknown" || failureKind === "lease") {
+      await expect(operation).rejects.toMatchObject({
+        code: failureKind === "unknown" ? "outcome-unknown" : "OPENCLAW_STATE_LEASE_LOST",
+      });
+    } else {
+      await expect(operation).rejects.toBe(failure);
+    }
+    expect(fixture.removeReference).toHaveBeenCalledOnce();
+    expect(fixture.removeCheckout).not.toHaveBeenCalled();
+    expect(fixture.removeParent).not.toHaveBeenCalled();
+    if (failureKind === "reference") {
+      expect(assertUnreferenced).toHaveBeenCalledTimes(2);
     }
   },
 );

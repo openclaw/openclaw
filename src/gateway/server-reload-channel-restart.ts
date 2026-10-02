@@ -1,3 +1,4 @@
+import { resolveChannelAccount } from "../channels/account-resolution.js";
 import { getLoadedChannelPluginEntryById } from "../channels/plugins/registry-loaded.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -41,7 +42,7 @@ export async function restartGatewayChannels(options: {
   } = options;
   // Suppressed and normal reloads share fallback selection so stale account
   // ids always reach the wholesale path that evicts their old runtime.
-  const collectChannelAccountTargets = (): Array<[ChannelKind, string]> => {
+  const collectChannelAccountTargets = async (): Promise<Array<[ChannelKind, string]>> => {
     const targets: Array<[ChannelKind, string]> = [];
     for (const [channel, accountIds] of restartChannelAccounts) {
       if (
@@ -64,7 +65,9 @@ export async function restartGatewayChannels(options: {
       }
       try {
         for (const accountId of accountIds) {
-          plugin?.config.resolveAccount(nextConfig, accountId);
+          if (plugin) {
+            await resolveChannelAccount({ plugin, cfg: nextConfig, accountId });
+          }
         }
       } catch (err) {
         params.logChannels.info(
@@ -87,11 +90,15 @@ export async function restartGatewayChannels(options: {
     params.logChannels.info(skipChannelRestartLogMessage);
     return;
   }
+  const accountTargets = await collectChannelAccountTargets();
+  if (isLifecycleReloadAborted()) {
+    return;
+  }
   const suppressed = Boolean(getChannelAutostartSuppression());
   const operation = suppressed ? "stop" : "restart";
   const phase = suppressed ? "suppressed hot reload" : "hot reload";
   const targets: Array<[ChannelKind, string?]> = [
-    ...collectChannelAccountTargets(),
+    ...accountTargets,
     ...[...channelsToRestart].map((channel): [ChannelKind] => [channel]),
   ];
   const failures: string[] = [];

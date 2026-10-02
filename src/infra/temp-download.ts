@@ -1,12 +1,11 @@
 // Creates private temporary workspaces for downloads.
-import "./fs-safe-defaults.js";
 import path from "node:path";
 import {
   buildRandomTempFilePath as buildRandomTempFilePathBase,
   sanitizeTempFileName,
 } from "@openclaw/fs-safe/advanced";
+import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { tempWorkspace } from "./private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 const logger = createSubsystemLogger("infra:temp-download");

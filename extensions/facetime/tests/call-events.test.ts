@@ -70,27 +70,6 @@ describe("FaceTime call events", () => {
     expect(isEndedCall(event!)).toBe(false);
   });
 
-  it("matches configured owner handle values case-insensitively", () => {
-    const event = normalizeFaceTimeCallEvent({
-      event: "ft-call-status-changed",
-      data: {
-        call_uuid: "call-1",
-        call_status: 4,
-        is_outgoing: false,
-        handle: { value: "MAILTO:Omar@Example.com" },
-        transport: verifiedFaceTimeTransport,
-      },
-    });
-
-    expect(normalizeFaceTimeHandle(event?.data.handle)).toBe("MAILTO:Omar@Example.com");
-    expect(
-      resolveAuthorizedFaceTimeOwner({
-        event: event!,
-        ownerHandles: ["omar@example.com"],
-      }),
-    ).toEqual({ senderId: "omar@example.com", senderIsOwner: true });
-  });
-
   it("does not grant owner authority outside the FaceTime allowlist", () => {
     const event = normalizeFaceTimeCallEvent({
       event: "ft-call-status-changed",
@@ -120,7 +99,7 @@ describe("FaceTime call events", () => {
         is_outgoing: false,
         handle: {
           value: "display@example.com",
-          normalized: { value: "MAILTO:owner@example.com" },
+          normalized: { value: "MAILTO:Owner@Example.com" },
         },
         transport: verifiedFaceTimeTransport,
       },

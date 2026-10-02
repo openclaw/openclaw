@@ -134,7 +134,7 @@ it("processes an oversized first row alone and preserves the exact validated sna
         {
           sessionId: id,
           updatedAt: 1,
-          skillsSnapshot: { prompt: "x".repeat(8192), skills: [] },
+          label: "x".repeat(8192),
         },
       );
     }

@@ -1,7 +1,8 @@
-// @vitest-environment node
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+// @vitest-environment node
+import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -42,6 +43,50 @@ const paused: GatewaySessionRow = {
   },
 };
 
+it.each([
+  { selected: " MAIN ", candidates: ["other", "agent:main:main", "main"], index: 1 },
+  { selected: "Agent:Work:CHAT", candidates: ["agent:work:chat"], index: 0 },
+  { selected: " ", candidates: ["", " "], index: -1 },
+  {
+    selected: "agent:main:matrix:group:Room",
+    candidates: ["agent:main:matrix:group:room", "AGENT:MAIN:MATRIX:GROUP:Room"],
+    index: 1,
+  },
+  {
+    selected: "agent:main:catalog:Source",
+    candidates: ["agent:main:catalog:source", "AGENT:MAIN:catalog:Source"],
+    index: 1,
+  },
+  { selected: " GLOBAL ", candidates: ["global", "global"], index: 1 },
+])("keeps provider-review row selection for $selected", ({ selected, candidates, index }) => {
+  const rows = candidates.map((key, candidate) => ({
+    ...paused,
+    key,
+    agentId: candidate === 0 ? "other" : "main",
+  }));
+  const fallback = { ...paused, key: selected };
+  const host = {
+    sessionKey: selected,
+    sessionsResult: sessionsResult(rows, 1),
+    sessions: {
+      state: {
+        result: sessionsResult([fallback], 1),
+        agentId: "main",
+        modelOverrides: {},
+        loading: false,
+        error: null,
+        deletedSessions: [],
+        groups: [],
+        groupSettings: [],
+        sectionOrder: [],
+      },
+    },
+  };
+  expect(chatProviderReviewRow(host, selected, "main")).toBe(index < 0 ? undefined : rows[index]);
+  host.sessionsResult = sessionsResult([], 1);
+  expect(chatProviderReviewRow(host, selected, "main")).toBe(index < 0 ? undefined : fallback);
+});
+
 it("holds composer and queued inputs across the provider pause and only retries an explicitly selected row", async () => {
   let row = paused;
   const request = makeRequestMock({
@@ -66,7 +111,11 @@ it("holds composer and queued inputs across the provider pause and only retries 
     expect(
       admitQueuedMessageForSession(
         host,
-        { scope: outbox, awaitingDefaults: false },
+        {
+          ...captureChatOutboxAdmission(host, outbox.sessionKey, outbox.agentId),
+          scope: outbox,
+          awaitingDefaults: false,
+        },
         {
           id,
           text: `Retained ${id} input`,
@@ -188,11 +237,7 @@ it("keeps a paused queue input held when its earlier settings wait finishes afte
     sendState: "waiting-idle" as const,
   };
   expect(
-    admitQueuedMessageForSession(
-      host,
-      { scope: { sessionKey: paused.key, agentId: "main" }, awaitingDefaults: false },
-      item,
-    ),
+    admitQueuedMessageForSession(host, captureChatOutboxAdmission(host, paused.key, "main"), item),
   ).toBe(true);
   host.requestUpdate = () => {
     if (host.chatQueue[0]?.sendState === "waiting-model") {

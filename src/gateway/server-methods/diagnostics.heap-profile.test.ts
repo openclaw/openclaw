@@ -14,6 +14,8 @@ vi.mock("../../logging/diagnostic-heap-profile.js", () => ({
 const result = {
   durationMs: 5_000,
   samplingIntervalBytes: 32_768,
+  includeObjectsCollectedByMajorGC: false,
+  includeObjectsCollectedByMinorGC: false,
   heapUsedBefore: 100,
   heapUsedAfter: 200,
   rssBefore: 300,
@@ -86,12 +88,24 @@ describe("diagnostics.heapProfile dispatch", () => {
     );
   });
 
-  it.each([undefined, {}, { durationMs: 200, samplingIntervalBytes: 4096 }])(
+  it.each([
+    undefined,
+    {},
+    { durationMs: 200, samplingIntervalBytes: 4096 },
+    { includeObjectsCollectedByMajorGC: true },
+    { includeObjectsCollectedByMinorGC: true },
+    { includeObjectsCollectedByMajorGC: false, includeObjectsCollectedByMinorGC: false },
+    { includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true },
+  ])(
     "serves allocation attribution through the registered admin RPC with params %j",
     async (params) => {
       const call = request({ params });
       await call.pending;
-      expect(capture).toHaveBeenCalledOnce();
+      expect(capture).toHaveBeenCalledExactlyOnceWith({
+        ...params,
+        signal: expect.any(AbortSignal),
+        hasAuthority: expect.any(Function),
+      });
       expect(call.respond).toHaveBeenCalledWith(true, result, undefined);
     },
   );
@@ -107,6 +121,10 @@ describe("diagnostics.heapProfile dispatch", () => {
     { samplingIntervalBytes: -1 },
     { samplingIntervalBytes: Infinity },
     { filename: "profile" },
+    { includeObjectsCollectedByMajorGC: "true" },
+    { includeObjectsCollectedByMinorGC: 1 },
+    { includeObjectsCollectedByMajorGC: null },
+    { includeObjectsCollectedByMinorGC: null },
   ])("rejects invalid params %j before capture", async (params) => {
     const call = request({ params });
     await call.pending;

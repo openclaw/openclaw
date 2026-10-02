@@ -39,7 +39,7 @@ function launcher(result: { status: number; stdout?: string; stderr?: string }) 
   const run = vi.fn(() => result);
   const runtime = runInNewContext(
     `${createCrabboxWindowsDesktopNodeLauncher()}
-({ launch: launchWindowsDesktopNode, inspect: readWindowsDesktopSessionIdentity })`,
+({ launch: launchWindowsDesktopNode })`,
     {
       Buffer,
       require: (name: string) => {
@@ -60,7 +60,6 @@ function launcher(result: { status: number; stdout?: string; stderr?: string }) 
     },
   ) as {
     launch: (input: typeof options) => Promise<typeof identity>;
-    inspect: () => { sessionId: number; userSid: string };
   };
   return { ...runtime, fs: mockFs, source: () => source };
 }
@@ -125,11 +124,6 @@ describe("Windows desktop node service handoff", () => {
     const runtime = launcher({ status: 0, stdout: JSON.stringify({ ...identity, ...changed }) });
     await expect(runtime.launch(options)).rejects.toThrow("interactive node identity is invalid");
     expect(runtime.fs.rmSync).toHaveBeenCalledOnce();
-  });
-
-  it("rejects a missing interactive session during replay inspection", () => {
-    const runtime = launcher({ status: 0, stdout: JSON.stringify({ ...identity, sessionId: 0 }) });
-    expect(() => runtime.inspect()).toThrow("interactive session identity is invalid");
   });
 
   it("preserves service failure diagnostics and cleans the temporary caller script", async () => {

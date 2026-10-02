@@ -21,7 +21,8 @@ it("preserves Gateway fixture identity within a file and retires state before th
     first.runtime.testState.sessionStorePath = "first-file.sqlite";
     first.runtime.testConfigRoot.value = "first-file-config";
     first.runtime.embeddedRunMock.activeIds.add("first-file-run");
-    first.runtime.dispatchInboundMessageMock.mockResolvedValue("first-file-dispatch");
+    const dispatch = async () => "first-file-dispatch";
+    first.runtime.dispatchInboundMessageMock.mockImplementation(dispatch);
     first.runtime
       .getGatewayTestHoistedState()
       .runBtwSideQuestion.mockResolvedValue("first-file-btw");
@@ -37,9 +38,7 @@ it("preserves Gateway fixture identity within a file and retires state before th
     );
     expect(reloaded.plugins.getTestPluginRegistry()).toBe(firstRegistry);
     expect(reloaded.runtime.testState.sessionStorePath).toBe("first-file.sqlite");
-    await expect(reloaded.runtime.dispatchInboundMessageMock()).resolves.toBe(
-      "first-file-dispatch",
-    );
+    expect(reloaded.runtime.dispatchInboundMessageMock.getMockImplementation()).toBe(dispatch);
 
     fileContext.mockReturnValue({
       ...initialState,

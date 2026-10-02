@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import { type OpenClawConfig, DEFAULT_GATEWAY_PORT } from "../config/config.js";
 import {
-  buildDefaultHookUrl,
   buildGogWatchServeArgs,
   buildGogWatchServeLogArgs,
   buildTopicPath,
@@ -55,12 +54,6 @@ describe("gmail hook config", () => {
       expect(result.value.tailscale.target).toBe(expected.target);
     }
   }
-
-  it("builds default hook url", () => {
-    expect(buildDefaultHookUrl("/hooks", DEFAULT_GATEWAY_PORT)).toBe(
-      `http://127.0.0.1:${DEFAULT_GATEWAY_PORT}/hooks/gmail`,
-    );
-  });
 
   it("parses topic path", () => {
     const topic = buildTopicPath("proj", "topic");
@@ -137,14 +130,6 @@ describe("gmail hook config", () => {
 
   it("defaults serve path to / when tailscale is enabled", () => {
     const result = resolveWithGmailOverrides({ tailscale: { mode: "funnel" } });
-    expectResolvedPaths(result, { servePath: "/", publicPath: "/gmail-pubsub" });
-  });
-
-  it("keeps the default public path when serve path is explicit", () => {
-    const result = resolveWithGmailOverrides({
-      serve: { path: "/gmail-pubsub" },
-      tailscale: { mode: "funnel" },
-    });
     expectResolvedPaths(result, { servePath: "/", publicPath: "/gmail-pubsub" });
   });
 

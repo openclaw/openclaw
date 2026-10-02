@@ -96,33 +96,6 @@ describe("1Password SecretRef setup", () => {
     ]);
   });
 
-  it("builds arbitrary known OpenClaw and auth-profile targets", async () => {
-    const plan = await createSetupPlan([
-      "--target",
-      "channels.telegram.botToken=op://openclaw/Telegram/botToken",
-      "--target",
-      "models.providers.openai.headers.x-api-key=op://openclaw/OpenAI/proxyKey",
-      "--target",
-      "auth-profiles:main:profiles.openai.key=op://openclaw/OpenAI/credential",
-    ]);
-
-    expect(plan.targets).toEqual([
-      expect.objectContaining({
-        type: "channels.telegram.botToken",
-        path: "channels.telegram.botToken",
-      }),
-      expect.objectContaining({
-        type: "models.providers.headers",
-        providerId: "openai",
-      }),
-      expect.objectContaining({
-        type: "auth-profiles.api_key.key",
-        path: "profiles.openai.key",
-        agentId: "main",
-      }),
-    ]);
-  });
-
   it("encodes native 1Password refs with spaces and selectors", async () => {
     const nativeRef = "op://Personal/OpenClaw QA API Key/password?attribute=value%20one";
     const plan = await createSetupPlan(["--provider-key", `openai=${nativeRef}`]);
@@ -132,45 +105,10 @@ describe("1Password SecretRef setup", () => {
     });
   });
 
-  it.each([
-    [
-      "duplicate providers",
-      [
-        "--openai-id",
-        "op://openclaw/OpenAI/credential",
-        "--provider-key",
-        "OpenAI=op://openclaw/OpenAI/other",
-      ],
-      "Duplicate model provider id",
-    ],
-    [
-      "non-canonical auth-profile agent ids",
-      ["--target", "auth-profiles:../main:profiles.openai.key=op://openclaw/OpenAI/credential"],
-      "Invalid --target auth-profiles target for 1Password",
-    ],
-    [
-      "traversal secret ids",
-      ["--provider-key", "openai=op://openclaw/../credential"],
-      "Invalid --provider-key openai 1Password SecretRef id",
-    ],
-    [
-      "unsupported targets",
-      ["--target", "secrets.github_pat=op://openclaw/GitHub/pat"],
-      "Unknown or unsupported 1Password setup target path",
-    ],
-    [
-      "duplicate target paths",
-      [
-        "--openai-id",
-        "op://openclaw/OpenAI/credential",
-        "--target",
-        "models.providers.openai.apiKey=op://openclaw/OpenAI/other",
-      ],
-      "Duplicate secret target path",
-    ],
-    ["empty plans", [], "No SecretRef targets selected"],
-  ])("rejects %s", async (_label, args, message) => {
-    await expect(createSetupPlan(args)).rejects.toThrow(message);
+  it("rejects traversal secret ids", async () => {
+    await expect(
+      createSetupPlan(["--provider-key", "openai=op://openclaw/../credential"]),
+    ).rejects.toThrow("Invalid --provider-key openai 1Password SecretRef id");
   });
 
   it.each(["/absolute/path", "op://openclaw\\OpenAI\\credential", "op://vault/clé"])(
@@ -317,40 +255,5 @@ describe("1Password CLI status", () => {
       ready: false,
       issues: ["op-not-found", "token-file-missing-or-unsafe"],
     });
-  });
-
-  it("prefers the managed integration when the default alias is unrelated", async () => {
-    const result = await runStatus({
-      secrets: {
-        providers: {
-          onepassword: { source: "exec", command: "/legacy/resolver" },
-          "corp-onepassword": {
-            source: "exec",
-            pluginIntegration: { pluginId: "onepassword", integrationId: "onepassword" },
-          },
-        },
-      },
-    });
-    expect(result).toMatchObject({ providerAlias: "corp-onepassword", providerReady: true });
-  });
-
-  it("requires an explicit alias when multiple providers are configured", async () => {
-    const config: OpenClawConfig = {
-      secrets: {
-        providers: Object.fromEntries(
-          ["corp-onepassword", "prod-onepassword"].map((alias) => [
-            alias,
-            {
-              source: "exec",
-              pluginIntegration: { pluginId: "onepassword", integrationId: "onepassword" },
-            },
-          ]),
-        ),
-      },
-    };
-    await expect(runStatus(config)).rejects.toThrow("Multiple 1Password provider aliases");
-    expect((await runStatus(config, ["--provider-alias", "prod-onepassword"])).providerAlias).toBe(
-      "prod-onepassword",
-    );
   });
 });

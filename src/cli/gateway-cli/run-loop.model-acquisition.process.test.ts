@@ -2,8 +2,12 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { afterEach, expect, it } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../../daemon/launchd-plist.js";
 import { GATEWAY_SUPERVISOR_EXIT_MARGIN_MS } from "../../infra/gateway-shutdown-budget.js";
@@ -20,9 +24,10 @@ const shutdownTimeoutMs = stopTimeoutMs - GATEWAY_SUPERVISOR_EXIT_MARGIN_MS;
 
 it
   .skipIf(process.platform !== "darwin" && process.platform !== "linux")
-  .each(["cooperative", "pending"])(
+  .for(["cooperative", "pending"])(
   "bounds a degraded fleet's %s acquisition through OS SIGTERM and the real shutdown owner",
-  async (mode) => {
+  { timeout: 75_000 },
+  async (mode, { signal }) => {
     const root = tempDirs.make("openclaw-model-shutdown-");
     const home = path.join(root, "home");
     const bin = path.join(root, "bin");
@@ -60,28 +65,48 @@ it
     const closed = once(child, "close");
     void closed.catch(() => {});
     let output = "";
-    child.stdout.on("data", (chunk: Buffer) => (output += chunk.toString()));
+    const ready = createDeferred();
+    child.stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+      if (output.includes("process proof: gateway-ready-degraded")) {
+        ready.resolve();
+      }
+    });
     child.stderr.on("data", (chunk: Buffer) => (output += chunk.toString()));
     try {
-      await vi.waitFor(() => expect(output).toContain("process proof: gateway-ready-degraded"), {
-        timeout: 45_000,
-        interval: 25,
-      });
+      await withinTest(
+        awaitGateBeforeSettlement(
+          ready.promise,
+          closed,
+          "process proof: gateway-ready-degraded was not produced",
+        ),
+        signal,
+      );
       expect(output).toContain(`shutdown=${shutdownTimeoutMs}ms`);
       const started = performance.now();
       expect(child.kill("SIGTERM")).toBe(true);
-      const exit = await withTestTimeout(
-        closed,
-        stopTimeoutMs,
-        "fleet exceeded native stop budget",
-      );
+      const exit = await withinTest(closed, signal);
       const elapsed = performance.now() - started;
       expect(exit, output).toEqual([0, null]);
       expect(elapsed, output).toBeLessThan(stopTimeoutMs);
       expect(output).toContain("process proof: acquisition-cancelled");
+      // The fixture's launchd label is synthetic, so the per-stop re-inspection cannot
+      // find a job to read and the startup budget is retained instead. Both
+      // attributions prove the same thing this case is guarding: the shutdown budget
+      // came from the 20 second native stop timeout and not from the platform-neutral
+      // policy, which would report a 330000ms source and a far longer deadline.
       expect(output).toMatch(
-        new RegExp(`shutdown budget at shutdown:.*source=.*=${stopTimeoutMs}ms`),
+        new RegExp(
+          `shutdown budget at shutdown:.*source=(?:.*=${stopTimeoutMs}ms|startup shutdown budget=${shutdownTimeoutMs}ms)`,
+        ),
       );
+      if (process.platform === "darwin") {
+        // The label resolves to no real job, so this cannot assert a successful read.
+        // What it does assert is that the darwin probe ran inside a real spawned
+        // Gateway on a real stop: only the launchd reader emits this, and reverting the
+        // darwin dispatch removes it.
+        expect(output).toContain("Unable to inspect the launchd job");
+      }
       if (mode === "cooperative") {
         expect(output).toContain("process proof: acquisition-joined");
         expect(output).not.toContain("shutdown deadline reached");
@@ -98,8 +123,7 @@ it
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");
       }
-      await withTestTimeout(closed, 5_000, "model shutdown fixture did not close");
+      await closed;
     }
   },
-  75_000,
 );

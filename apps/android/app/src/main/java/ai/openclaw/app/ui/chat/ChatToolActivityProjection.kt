@@ -75,7 +75,7 @@ internal fun projectToolActivity(
     // A row folded under Worked belongs there, not in a duplicate live disclosure.
     val visible = groups[scope]
     val folded = matches.size == 1 && visible?.toolKeys?.contains(key) != true
-    val alert = call.isError == true || call.activity?.status in setOf("blocked", "failed")
+    val alert = if (call.activity != null) call.activity.status in setOf("blocked", "failed") else call.isError == true
     if (folded && !alert) return@forEach
     val hiddenOwner = if (folded) durable.singleOrNull { it.disclosureKey == scope && key in it.toolKeys } else null
     val group =
@@ -98,7 +98,7 @@ internal fun projectToolActivity(
           arguments = tool.arguments ?: call.args,
           isError = tool.isError || call.isError == true,
           activity =
-            if (call.activity?.status in setOf("blocked", "failed")) {
+            if (call.activity?.status in setOf("blocked", "failed", "skipped")) {
               call.activity
             } else if (tool.activityPrepared) {
               tool.activity

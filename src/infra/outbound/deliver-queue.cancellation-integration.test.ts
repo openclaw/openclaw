@@ -553,7 +553,7 @@ describe("queued cancellation during adapter preparation", () => {
         await markDeliveryPlatformOutcomeUnknown(id, stateDir, producerClaimId);
       }
 
-      expect(retireUnsentDelivery({ id, producerClaimId, stateDir })).toBeUndefined();
+      expect(await retireUnsentDelivery({ id, producerClaimId, stateDir })).toBeUndefined();
       expect(readQueuedEntry(stateDir, id).recoveryState).toBe(state);
     },
   );

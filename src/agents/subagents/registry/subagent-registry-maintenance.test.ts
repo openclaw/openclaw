@@ -11,7 +11,7 @@ import {
   persistSubagentRunsToDisk,
   publishSubagentRunsAfterAtomicStore,
 } from "./subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import "./subagent-registry-maintenance.js";
 

@@ -12,11 +12,7 @@ import {
   type ReplyExpectation,
 } from "../../agents/reply-completion.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  resolveSessionPluginStatusLines,
-  resolveSessionPluginTraceLines,
-  type SessionEntry,
-} from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
@@ -45,20 +41,22 @@ import {
 } from "./agent-runner-failure-reply.js";
 import { hasBlockReplyDeliveryCustody } from "./block-reply-delivery.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
+import type { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery-state.js";
 import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./queue.js";
 import { normalizeReplyPayloadDirectives, type DirectBlockDelivery } from "./reply-delivery.js";
-import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
+import {
+  buildRestartLifecycleReplyText,
+  isReplyOperationSuperseded,
+  resolveReplyOperationAbortReason,
+} from "./reply-operation-abort.js";
 import { type ReplyOperation, runAfterReplyOperationClear } from "./reply-run-registry.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import type { TypingController } from "./typing.js";
 export const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
-
-const RESTART_LIFECYCLE_REPLY_TEXT =
-  "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
 
 export function scheduleFollowupDrainAfterReplyOperationClear(params: {
   operation: ReplyOperation;
@@ -160,14 +158,9 @@ export function resolveSourceReplyPolicy(params: {
   });
 }
 
-export function resolveReplyRunDeliveryContext(params: {
-  cfg: OpenClawConfig;
-  sessionCtx: TemplateContext;
-  sessionEntry?: SessionEntry;
-  sessionKey: string;
-  runtimePolicySessionKey?: string;
-  opts?: GetReplyOptions;
-}): DeliveryContext | undefined {
+export function resolveReplyRunDeliveryContext(
+  params: Parameters<typeof resolveSourceReplyPolicy>[0],
+): DeliveryContext | undefined {
   const sourceReplyPolicy = resolveSourceReplyPolicy(params);
   if (
     params.sessionCtx.InboundEventKind === "room_event" ||
@@ -280,22 +273,6 @@ export function resolveFallbackOriginModel(params: {
   };
 }
 
-export function buildInlinePluginStatusPayload(params: {
-  entry: SessionEntry | undefined;
-  includeStatusLines: boolean;
-  includeTraceLines: boolean;
-}): ReplyPayload | undefined {
-  const statusLines = params.includeStatusLines
-    ? resolveSessionPluginStatusLines(params.entry)
-    : [];
-  const traceLines = params.includeTraceLines ? resolveSessionPluginTraceLines(params.entry) : [];
-  const lines = [...statusLines, ...traceLines];
-  if (lines.length === 0) {
-    return undefined;
-  }
-  return { text: lines.join("\n") };
-}
-
 export function normalizeAssistantFinalDeliveryText(text: string): string {
   const parsed = normalizeReplyPayloadDirectives({
     payload: { text },
@@ -342,16 +319,10 @@ export function refreshSessionEntryFromStore(params: {
 }
 
 export function resolveAdmittedRunSessionFile(params: {
-  agentId: string;
-  sessionId: string;
   sessionFile?: string;
   sessionKey?: string;
-  storePath?: string;
 }): string | undefined {
-  if (params.sessionKey?.trim()) {
-    return params.sessionKey.trim();
-  }
-  return params.sessionFile;
+  return normalizeOptionalString(params.sessionKey) ?? params.sessionFile;
 }
 
 export async function handleReplyAgentRunError(
@@ -360,7 +331,7 @@ export async function handleReplyAgentRunError(
     resolveVisibleReplyDelivery: () => Promise<boolean>;
     isHeartbeat: boolean;
     replyExpectation: ReplyExpectation;
-    isRestartRecoveryArmed: () => boolean;
+    isRestartRecoveryArmed: () => Promise<boolean>;
     replyOperation: ReplyOperation;
     resolvedVerboseLevel: VerboseLevel;
     returnWithQueuedFollowupDrain: <T>(value: T) => T;
@@ -391,28 +362,27 @@ export async function handleReplyAgentRunError(
     replyOperation.result?.kind === "aborted" &&
     replyOperation.result.code === "aborted_for_restart"
   ) {
-    if (isRestartRecoveryArmed()) {
+    if (
+      (await isRestartRecoveryArmed()) ||
+      isReplyOperationSuperseded(replyOperation) ||
+      resolveReplyOperationAbortReason(replyOperation) === "user"
+    ) {
       return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
     }
     return returnWithQueuedFollowupDrain(
       markReplyPayloadForSourceSuppressionDelivery({
-        text: RESTART_LIFECYCLE_REPLY_TEXT,
+        text: buildRestartLifecycleReplyText(),
       }),
     );
   }
-  if (error instanceof GatewayDrainingError) {
-    replyOperation.fail("gateway_draining", error);
-    return returnWithQueuedFollowupDrain(
-      markReplyPayloadForSourceSuppressionDelivery({
-        text: RESTART_LIFECYCLE_REPLY_TEXT,
-      }),
+  if (error instanceof GatewayDrainingError || error instanceof CommandLaneClearedError) {
+    replyOperation.fail(
+      error instanceof GatewayDrainingError ? "gateway_draining" : "command_lane_cleared",
+      error,
     );
-  }
-  if (error instanceof CommandLaneClearedError) {
-    replyOperation.fail("command_lane_cleared", error);
     return returnWithQueuedFollowupDrain(
       markReplyPayloadForSourceSuppressionDelivery({
-        text: RESTART_LIFECYCLE_REPLY_TEXT,
+        text: buildRestartLifecycleReplyText(),
       }),
     );
   }
@@ -477,10 +447,8 @@ export async function cleanupReplyAgentRun(context: {
       queueKey,
       runFollowup: runFollowupTurn,
     });
-    if (!providedReplyOperation) {
-      replyOperation.complete();
-    }
-  } else if (!providedReplyOperation) {
+  }
+  if (!providedReplyOperation) {
     replyOperation.complete();
   }
   blockReplyPipeline?.stop();
@@ -502,7 +470,7 @@ export type RunReplyAgentParams = {
   resolvedQueue: QueueSettings;
   shouldSteer: boolean;
   shouldFollowup: boolean;
-  queueAdmissionState?: "empty" | "steering" | "ready";
+  hasQueuedFollowups?: boolean;
   isActive: boolean;
   isRunActive?: () => boolean;
   opts?: InternalGetReplyOptions;
@@ -517,12 +485,7 @@ export type RunReplyAgentParams = {
   toolProgressDetail?: "explain" | "raw";
   isNewSession: boolean;
   blockStreamingEnabled: boolean;
-  blockReplyChunking?: {
-    minChars: number;
-    maxChars: number;
-    breakPreference: "paragraph" | "newline" | "sentence";
-    flushOnParagraph?: boolean;
-  };
+  blockReplyChunking?: ReturnType<typeof resolveBlockStreamingChunking>;
   resolvedBlockStreamingBreak: "text_end" | "message_end";
   sessionCtx: TemplateContext;
   shouldInjectGroupIntro: boolean;

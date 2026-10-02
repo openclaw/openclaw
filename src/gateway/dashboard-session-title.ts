@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isValidBase64 } from "@openclaw/media-core/base64";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { resolveNativeModelPrimary } from "../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
@@ -97,7 +98,7 @@ export function buildDashboardSessionTitleSource(params: {
 type SessionTitleParams = {
   cfg: OpenClawConfig;
   agentId: string;
-  entry: SessionEntry | undefined;
+  entry?: SessionEntry;
   sessionId: string;
   sessionKey: string;
   storePath: string;
@@ -106,6 +107,7 @@ type SessionTitleParams = {
   commitGuard?: () => void;
   withSource?: WorktreeSourceStage;
   retryFailedJoin?: boolean;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 };
 
 function isAutoTitleSessionKey(sessionKey: string): boolean {
@@ -167,6 +169,7 @@ async function generateDashboardSessionTitle(params: {
   utilityOnly?: boolean;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<string | null> {
   const sourceText = buildDashboardSessionTitleSource({
     message: params.userMessage,
@@ -213,6 +216,7 @@ async function generateDashboardSessionTitle(params: {
       maxLength: DASHBOARD_SESSION_TITLE_MAX_CHARS,
       abortSignal: params.abortSignal,
       assertCurrent: params.assertCurrent,
+      operatorAuthority: params.operatorAuthority,
       ...(params.utilityOnly ? { utilityOnly: true } : {}),
     });
     if (generated) {
@@ -239,6 +243,7 @@ export async function prepareDashboardSessionTitle(params: {
   userMessage: string;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<string | null> {
   try {
     return await generateDashboardSessionTitle({ ...params, utilityOnly: true });
@@ -298,11 +303,6 @@ export async function maybeGenerateDashboardSessionTitle(
 export async function maybeGenerateSessionTitle(params: SessionTitleParams): Promise<boolean> {
   const sessionKey = resolveStoredSessionKeyForAgentStore(params);
   const scope = { agentId: params.agentId, sessionKey, storePath: params.storePath };
-  const entry = loadSessionEntry(scope);
-  if (hasExplicitSessionName(entry) || entry?.sessionId !== params.sessionId) {
-    return false;
-  }
-
   const requestTarget = { ...scope, sessionId: params.sessionId };
   const existing = sessionTitleRequests.get(requestTarget);
   if (existing) {
@@ -313,36 +313,6 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       : false;
   }
 
-  // A retry may be triggered by a later send or by discussion open. Always
-  // title the session from its original user message when the transcript owns it.
-  const transcriptSource = readSessionTitleFieldsFromTranscript({
-    agentId: params.agentId,
-    sessionEntry: entry,
-    sessionId: params.sessionId,
-    sessionKey,
-    storePath: params.storePath,
-  }).firstUserMessage;
-  const transcriptText = transcriptSource ? stripInboundMetadata(transcriptSource).trim() : "";
-  const currentText = params.currentUserMessage?.trim() ?? "";
-  // A first-turn transcript may win the persistence race before title work starts.
-  // When it is the current turn, retain the supplied attachment-enriched source.
-  const sourceText =
-    entry.pendingWorktree?.titleSource?.trim() ??
-    (!transcriptText || (currentText && currentText === transcriptText)
-      ? params.userMessage.trim()
-      : transcriptText);
-  if (!sourceText) {
-    return false;
-  }
-
-  const generate = (abortSignal?: AbortSignal) =>
-    generateDashboardSessionTitle({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      entry: params.entry ?? entry,
-      userMessage: sourceText,
-      ...(abortSignal ? { abortSignal } : {}),
-    });
   const finish = async (generation: Promise<string | null>) => {
     const displayName = await generation;
     if (!displayName) {
@@ -380,8 +350,44 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       : await persist();
   };
 
-  const request = sessionTitleRequests.run(requestTarget, () =>
+  return await sessionTitleRequests.run(requestTarget, () =>
     Promise.resolve().then(async () => {
+      const entry = loadSessionEntry(scope);
+      if (hasExplicitSessionName(entry) || entry?.sessionId !== params.sessionId) {
+        return false;
+      }
+
+      // A retry may be triggered by a later send or by discussion open. Always
+      // title the session from its original user message when the transcript owns it.
+      const transcriptSource = readSessionTitleFieldsFromTranscript({
+        agentId: params.agentId,
+        sessionEntry: entry,
+        sessionId: params.sessionId,
+        sessionKey,
+        storePath: params.storePath,
+      }).firstUserMessage;
+      const transcriptText = transcriptSource ? stripInboundMetadata(transcriptSource).trim() : "";
+      const currentText = params.currentUserMessage?.trim() ?? "";
+      // A first-turn transcript may win the persistence race before title work starts.
+      // When it is the current turn, retain the supplied attachment-enriched source.
+      const sourceText =
+        entry.pendingWorktree?.titleSource?.trim() ??
+        (!transcriptText || (currentText && currentText === transcriptText)
+          ? params.userMessage.trim()
+          : transcriptText);
+      if (!sourceText) {
+        return false;
+      }
+
+      const generate = (abortSignal?: AbortSignal) =>
+        generateDashboardSessionTitle({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          entry: params.entry ?? entry,
+          userMessage: sourceText,
+          operatorAuthority: params.operatorAuthority,
+          ...(abortSignal ? { abortSignal } : {}),
+        });
       const withSource = params.withSource;
       if (!withSource) {
         params.commitGuard?.();
@@ -406,5 +412,4 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       );
     }),
   );
-  return await request;
 }

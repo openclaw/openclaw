@@ -183,6 +183,9 @@ suite.define(() => {
             },
           });
           await page.addInitScript(createControlUiMockSameOriginGatewayScript());
+          if (direction === "rtl") {
+            await page.addInitScript(() => localStorage.setItem("openclaw.i18n.locale", "ar"));
+          }
           await page.goto(`${suite.server.baseUrl}chat`);
           await page.locator(`.chat-text[dir="${direction}"]`).first().waitFor();
           const card = page.locator(".session-progress-card--composer");
@@ -210,6 +213,9 @@ suite.define(() => {
           const bounds = () =>
             track.evaluate((element) => element.getBoundingClientRect().toJSON());
           const collapsed = await bounds();
+          const transcriptBounds = (await page.locator(".chat-thread").boundingBox())!;
+          expect(collapsed.left).toBeGreaterThanOrEqual(transcriptBounds.x);
+          expect(collapsed.right).toBeLessThanOrEqual(transcriptBounds.x + transcriptBounds.width);
           const collapsedComposer = (await composer.boundingBox())!;
           if (count === 80 && direction === "ltr") {
             const transcript = page.locator(".chat-thread");
@@ -366,7 +372,7 @@ suite.define(() => {
             }
             await gateway.setOnline(false);
             await gateway.closeLatest();
-            await page.locator('.agent-chat__composer-status[data-tone="info"]').waitFor();
+            await page.locator(".agent-chat__input--offline").waitFor();
             const queuedTexts = ["Review the next checkpoint", "Check the supporting notes"];
             for (const text of queuedTexts) {
               const queueSamples = sampleAnchor();
@@ -463,6 +469,11 @@ suite.define(() => {
             );
           await expect.poll(() => preview.textContent()).toContain(`checkpoint ${count}:`);
           await expect.poll(previewClearsComposer).toBe(true);
+          const previewBounds = (await preview.boundingBox())!;
+          expect(previewBounds.x).toBeGreaterThanOrEqual(transcriptBounds.x);
+          expect(previewBounds.x + previewBounds.width).toBeLessThanOrEqual(
+            transcriptBounds.x + transcriptBounds.width,
+          );
           await markers.last().press("Escape");
           // The button is already visible; avoid locator hover's extra scrollIntoView.
           const point = await markers.last().evaluate((element) => {

@@ -30,6 +30,7 @@ import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { renderGatewayStatus } from "./gateway-status.ts";
 import { icons } from "./icons.ts";
+import { renderKbd } from "./kbd.ts";
 import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
 import "./agent-select-registration.ts";
 import "./settings-save-indicator.ts";
@@ -169,7 +170,7 @@ function filterSettingsNavigationGroups(
   ];
 }
 
-function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: string) {
+function renderItem(props: SettingsSidebarProps, routeId: RouteId) {
   const active = settingsNavigationOwnerRoute(props.activeRouteId) === routeId;
   return html`
     <a
@@ -199,7 +200,7 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: strin
         >${icons[navigationIconForRoute(routeId)]}</span
       >
       <span class="settings-sidebar__item-label"
-        >${label ?? settingsNavigationLabelForRoute(routeId, props.nativeDeviceSettings?.snapshot)}</span
+        >${settingsNavigationLabelForRoute(routeId, props.nativeDeviceSettings?.snapshot)}</span
       >
       ${props.presentation === "embed-list" ? html`<span class="settings-row__chevron" aria-hidden="true">${icons.chevronRight}</span>` : nothing}
     </a>
@@ -311,6 +312,18 @@ function renderSettingsAgentSelector(props: SettingsSidebarProps) {
   </div>`;
 }
 
+function renderSettingsConnectionStatus(props: SettingsSidebarProps) {
+  return props.connectionStatus !== null
+    ? renderGatewayStatus({
+        kind: props.connectionStatus,
+        lastError: props.lastError,
+        onRetry: props.onRetryConnect,
+      })
+    : html`<openclaw-settings-save-indicator
+        .props=${props.saveIndicator}
+      ></openclaw-settings-save-indicator>`;
+}
+
 function renderEmbeddedSettingsHeader(props: SettingsSidebarProps) {
   return html`<header class="native-embed-header">
     ${
@@ -328,22 +341,7 @@ function renderEmbeddedSettingsHeader(props: SettingsSidebarProps) {
     <h1 class="page-title">
       ${props.presentation === "embed-list" ? t("nav.settings") : settingsNavigationLabelForRoute(props.activeRouteId, props.nativeDeviceSettings?.snapshot)}
     </h1>
-    ${
-      props.connectionStatus !== null
-        ? renderGatewayStatus({
-            kind: props.connectionStatus,
-            lastError: props.lastError,
-            onRetry: props.onRetryConnect,
-          })
-        : nothing
-    }
-    ${
-      props.connectionStatus === null
-        ? html`<openclaw-settings-save-indicator
-            .props=${props.saveIndicator}
-          ></openclaw-settings-save-indicator>`
-        : nothing
-    }
+    ${renderSettingsConnectionStatus(props)}
   </header>`;
 }
 
@@ -400,7 +398,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
         <button type="button" class="settings-sidebar__back" @click=${() => props.onExit()}>
           <span class="settings-sidebar__back-icon" aria-hidden="true">${icons.arrowLeft}</span>
           ${t("nav.exitSettings")}
-          <kbd class="settings-sidebar__esc" aria-hidden="true">esc</kbd>
+          ${renderKbd("esc", { className: "settings-sidebar__esc", ariaHidden: true })}
         </button>
         <h1 class="settings-sidebar__title">${t("nav.settings")}</h1>
       </header>
@@ -452,22 +450,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
       </div>
       ${navigation}
       <footer class="settings-sidebar__footer">
-        ${
-          props.connectionStatus !== null
-            ? renderGatewayStatus({
-                kind: props.connectionStatus,
-                lastError: props.lastError,
-                onRetry: props.onRetryConnect,
-              })
-            : nothing
-        }
-        ${
-          props.connectionStatus === null
-            ? html`<openclaw-settings-save-indicator
-                .props=${props.saveIndicator}
-              ></openclaw-settings-save-indicator>`
-            : nothing
-        }
+        ${renderSettingsConnectionStatus(props)}
         <openclaw-sidebar-build-chip
           .basePath=${props.basePath}
           .gatewayVersion=${props.gatewayVersion || null}

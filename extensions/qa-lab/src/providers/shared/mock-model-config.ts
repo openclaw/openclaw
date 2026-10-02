@@ -1,4 +1,3 @@
-// Qa Lab helper module supports mock model config behavior.
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 const ZERO_COST = Object.freeze({
@@ -43,6 +42,7 @@ function createMockOpenAiTextModel(id: string): ModelProviderConfig["models"][nu
     id,
     name: id,
     api: "openai-responses",
+    compat: { sendSessionIdHeader: true },
     reasoning: true,
     input: ["text", "image"],
     cost: ZERO_COST,
@@ -91,6 +91,7 @@ function createMockAnthropicMessagesProvider(baseUrl: string): ModelProviderConf
         id: "claude-opus-4-8",
         name: "claude-opus-4-8",
         api: "anthropic-messages",
+        compat: { sendSessionAffinityHeaders: true },
         reasoning: false,
         input: ["text", "image"],
         cost: ZERO_COST,
@@ -101,6 +102,7 @@ function createMockAnthropicMessagesProvider(baseUrl: string): ModelProviderConf
         id: "claude-sonnet-4-6",
         name: "claude-sonnet-4-6",
         api: "anthropic-messages",
+        compat: { sendSessionAffinityHeaders: true },
         reasoning: false,
         input: ["text", "image"],
         cost: ZERO_COST,

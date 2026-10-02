@@ -1,48 +1,60 @@
 import type {
   ApplicationNavigationPreferences,
   ApplicationNavigationPreferencesSnapshot,
+  ApplicationTheme,
 } from "./context.ts";
 import { patchSettings, type UiSettings } from "./settings.ts";
 
 export function createApplicationNavigationPreferences(
-  initialSettings: UiSettings,
+  preferences: Pick<ApplicationTheme, "settings" | "subscribe">,
 ): ApplicationNavigationPreferences {
-  let snapshot: ApplicationNavigationPreferencesSnapshot = {
-    navCollapsed: false,
-    navWidth: initialSettings.navWidth,
-    sidebarEntries: initialSettings.sidebarEntries,
-    pinnedAgentIds: initialSettings.pinnedAgentIds ?? [],
-  };
+  let navCollapsed = false;
+  const snapshot = (): ApplicationNavigationPreferencesSnapshot => ({
+    navCollapsed,
+    navWidth: preferences.settings.navWidth,
+    sidebarEntries: preferences.settings.sidebarEntries,
+    pinnedAgentIds: preferences.settings.pinnedAgentIds ?? [],
+  });
   const listeners = new Set<(next: ApplicationNavigationPreferencesSnapshot) => void>();
 
   return {
     get snapshot() {
-      return snapshot;
+      return snapshot();
     },
     update(patch) {
-      const nextSnapshot = { ...snapshot, ...patch };
-      const persistedChanged =
-        nextSnapshot.navWidth !== snapshot.navWidth ||
-        nextSnapshot.sidebarEntries !== snapshot.sidebarEntries ||
-        nextSnapshot.pinnedAgentIds !== snapshot.pinnedAgentIds;
-      if (!persistedChanged && nextSnapshot.navCollapsed === snapshot.navCollapsed) {
-        return;
+      const visibilityChanged =
+        patch.navCollapsed !== undefined && patch.navCollapsed !== navCollapsed;
+      if (patch.navCollapsed !== undefined) {
+        navCollapsed = patch.navCollapsed;
       }
-      if (persistedChanged) {
-        patchSettings({
-          navWidth: nextSnapshot.navWidth,
-          sidebarEntries: [...nextSnapshot.sidebarEntries],
-          pinnedAgentIds: [...nextSnapshot.pinnedAgentIds],
-        });
+      // Persist only this action's fields; a sibling tab may have saved other
+      // preferences before its storage event reaches this document.
+      const persisted: Partial<UiSettings> = {};
+      if (patch.navWidth !== undefined) {
+        persisted.navWidth = patch.navWidth;
       }
-      snapshot = nextSnapshot;
-      for (const listener of listeners) {
-        listener(snapshot);
+      if (patch.sidebarEntries !== undefined) {
+        persisted.sidebarEntries = [...patch.sidebarEntries];
+      }
+      if (patch.pinnedAgentIds !== undefined) {
+        persisted.pinnedAgentIds = [...patch.pinnedAgentIds];
+      }
+      if (Object.keys(persisted).length > 0) {
+        patchSettings(persisted);
+      }
+      if (visibilityChanged) {
+        for (const listener of listeners) {
+          listener(snapshot());
+        }
       }
     },
     subscribe(listener) {
       listeners.add(listener);
-      return () => listeners.delete(listener);
+      const stopPreferences = preferences.subscribe(() => listener(snapshot()));
+      return () => {
+        listeners.delete(listener);
+        stopPreferences();
+      };
     },
   };
 }

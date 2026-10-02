@@ -66,6 +66,14 @@ offsets for `isInsideCode`. Regions returned by `findCodeRegions` additionally
 include parser-owned `block` metadata; callers supplying their own ranges do not
 need to provide it.
 
+### WebSocket options and constructors
+
+`websocket-runtime` retains the `ws.ClientOptions` alias and `WebSocket`
+constructor signatures shipped in OpenClaw 2026.9.6. Host-internal TLS type
+corrections must not change plugin callback typing or constructor overloads.
+A source-incompatible correction to this public contract requires an approved,
+versioned SDK migration.
+
 ### Gateway worker environment creation
 
 `GatewayRequestHandlerOptions` from `core` and `gateway-runtime` retains the
@@ -104,6 +112,13 @@ Call `buildPreparedModelsProviderData` when forwarding model selections. Its
 result includes the required `modelCatalog` with
 the selected physical-route metadata. Both builders use one metadata producer;
 callers must carry prepared rows forward rather than reconstructing them from IDs.
+
+Both builders return the currently published menu rows without waiting for full
+discovery. Results may be partial while acquisition continues in the background;
+`pendingProviders` identifies providers still refreshing. Keep known choices usable
+and call the builder again when the menu is reopened. Awaiting a menu builder is
+not a complete-inventory guarantee. Use the catalog's explicit refresh operation
+when requesting inventory acquisition rather than treating a menu read as one.
 
 Use `getModelsRuntimeChoices(data, provider, model)` from the same SDK subpath
 for a selected model. A nonempty array contains that model's eligible runtime
@@ -174,6 +189,19 @@ Plan-based migrations can use
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy, preview,
 and plugin-state import behavior.
 
+Migrations may supply a read-only `collectBackupResources` callback, including
+through `definePluginDoctorMigrationFromPlans(...)`. Return absolute paths with
+kind `sqlite`, `file`, or `directory`, including destinations that do not exist
+yet. Never open a writable store or run the migration during inventory. When
+`requireLocalResources` is true, reject remote or unlisted data rather than
+reporting an incomplete inventory as complete.
+
+The recovery inventory collector reports one typed
+`undeclared-migration-resources` warning per plugin without a callback; its
+private state is not included in the recovery set. Malformed declarations and
+invalid inventories still fail. Collection does not capture or restore data,
+authorize a migration, or replace an updater's required capture checks.
+
 For single-file imports, `defineLegacyJsonStateMigration(...)` skips missing
 sources (`ENOENT`) and values the plugin parser rejects with `null`. Other read
 errors and invalid JSON reach Doctor's detection or migration warnings; the
@@ -187,6 +215,25 @@ provides bounded `readPluginStateEntriesInKeyRange` and
 `deletePluginStateEntriesIfUnchanged` only during a fenced repair. Preserve
 unknown or ambiguous ownership. Delete only the observed raw rows; callbacks
 retained after maintenance ends cannot authorize later writes.
+
+Trusted bundled and official plugins may also use the optional
+`inspectCronJobs` and `repairCronJobs` context methods for explicit cron
+migrations. Inspection is non-creating and returns raw definitions, row IDs,
+ordering, validation findings, and store keys for every persisted partition.
+`repairCronJobs(inventory, changes)` is available only during offline repair:
+it saves a verified shared-state SQLite backup, rechecks current authority and
+the inspected definitions, then applies all selected replacements or deletions
+in one transaction. A replacement preserves the row ID, partition, ordering,
+and runtime state. A deletion uses normal cron scratch and grant cleanup.
+The result reports `changed` and the retained `backupPath`; a no-op creates no
+backup. Plugins classify their own historical jobs and retain ambiguous rows.
+Older hosts may omit these methods, so a migration must check availability.
+
+These helpers follow the [native-plugin trust model](/plugins/architecture#execution-model):
+eligible plugins run with host privileges and own historical job classification.
+The host enforces installation provenance, offline repair authority, unchanged
+definitions, verified backup, and atomic persistence. The API does not promise
+isolation between mutually untrusted native plugins.
 
 The setup-entry `legacyStateMigrations` option and feature flag,
 `setupFeatures.legacyStateMigrations`,
@@ -225,7 +272,8 @@ existing plugins should not break during ordinary minor releases.
 The dated compatibility registry also tracks shipped annotations that do not
 belong to one legacy subpath. Unless a later date is listed below, these records
 use 2026-10-01 as the earliest review date; removal still requires the reader
-condition in the final column.
+condition in the final column. The October 1 families are `removal-pending`
+while those migrations remain unverified; their original dates are unchanged.
 
 | Compatibility code                                | Replacement                                                                                    | Removal condition                                                                                                    |
 | ------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
@@ -329,7 +377,8 @@ The `media-legacy-projection` compatibility record covers the old parallel
 media fields, payload builders, hook metadata aliases, and media template
 names. Its approved `removeAfter` date is **2026-10-01** (two release trains
 after the facts-first replacements shipped). Removal additionally requires a
-clean published-plugin artifact sweep at that time; migrate before the date.
+clean published-plugin artifact sweep. The record is now `removal-pending`
+with the original date preserved until that proof is complete.
 
 The unused `buildChannelTurnMediaPayload` alias has been removed from
 `openclaw/plugin-sdk/channel-inbound`. Its canonical

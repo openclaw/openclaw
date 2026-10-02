@@ -68,7 +68,11 @@ const ModelRuntimeProperties = {
   reasoning: Type.Optional(Type.Boolean()),
   thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
   thinkingDefault: Type.Optional(NonEmptyString),
-  effectiveFastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
+  effectiveFastMode: Type.Optional(
+    Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast")]),
+  ),
+  /** Account-scoped service tiers advertised for this selected runtime. Missing means unknown. */
+  serviceTiers: Type.Optional(Type.Array(NonEmptyString)),
   /** Local selected-request applicability, not preference or upstream fulfillment. */
   supportsFastMode: Type.Optional(Type.Boolean()),
   supportsTools: Type.Optional(Type.Boolean()),
@@ -119,6 +123,13 @@ export const ModelCatalogProviderOutcomeSchema = closedObject({
 
 export const ModelsListResultSchema = closedObject({
   models: Type.Array(ModelChoiceSchema),
+  /** The Gateway owns role restrictions and the effective permitted reset target. */
+  modelSelectionPolicy: Type.Optional(
+    closedObject({
+      restricted: Type.Literal(true),
+      defaultModel: Type.Union([NonEmptyString, Type.Null()]),
+    }),
+  ),
   /** Manifest-owned decision choices, separate from conversational model routing. */
   decisionModels: Type.Optional(
     Type.Array(

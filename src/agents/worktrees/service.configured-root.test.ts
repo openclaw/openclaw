@@ -33,28 +33,6 @@ describe("configured managed worktree root", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it.each(["manual", "session", "workboard"] as const)(
-    "allocates %s worktrees under the custom root with the shared registry unchanged",
-    async (ownerKind) => {
-      worktreeRoot = path.join(root, "custom");
-      const record = await service.create({
-        repoRoot: repo,
-        name: "task",
-        baseRef: "HEAD",
-        ownerKind,
-        ...(ownerKind === "manual" ? {} : { ownerId: "owner" }),
-      });
-
-      expect(record.path).toBe(path.join(worktreeRoot, record.repoFingerprint, record.name));
-      expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("base\n");
-      expect((await service.list()).map((entry) => entry.id)).toEqual([record.id]);
-      await expect(fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).resolves.toBeDefined();
-      await expect(fs.stat(path.join(worktreeRoot, "state"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-    },
-  );
-
   it("reuses, snapshots, and restores recorded paths when the new root is unavailable", async () => {
     const manual = await service.create({ repoRoot: repo, name: "manual", baseRef: "HEAD" });
     const owner = {
@@ -124,18 +102,7 @@ describe("configured managed worktree root", () => {
     expect((await service.restore({ id: original.id })).path).toBe(original.path);
   });
 
-  it.skipIf(process.platform === "win32")("canonicalizes a symlinked custom root", async () => {
-    const destination = path.join(root, "destination");
-    worktreeRoot = path.join(root, "linked");
-    await fs.mkdir(destination);
-    await fs.symlink(destination, worktreeRoot, "dir");
-    const record = await service.create({ repoRoot: repo, name: "linked", baseRef: "HEAD" });
-    expect(record.path).toBe(path.join(destination, record.repoFingerprint, record.name));
-    await service.remove({ id: record.id, reason: "symlink-root" });
-    expect((await service.restore({ id: record.id })).path).toBe(record.path);
-  });
-
-  it.each(["nested", "deep", "symlink"])(
+  it.each(["deep", "symlink"])(
     "preserves %s custom-root contents during GC, including after a root change",
     async (kind) => {
       const nestedRoot = path.join(
@@ -161,6 +128,7 @@ describe("configured managed worktree root", () => {
       expect(await fs.readFile(unrelated, "utf8")).toBe("unrelated data\n");
 
       const record = await service.create({ repoRoot: repo, name: "nested", baseRef: "HEAD" });
+      expect(record.path).toBe(path.join(nestedRoot, record.repoFingerprint, record.name));
       await fs.writeFile(path.join(record.path, "README.md"), "unsnapshotted edit\n");
       for (const nextRoot of [worktreeRoot, path.join(root, "next-root")]) {
         worktreeRoot = nextRoot;

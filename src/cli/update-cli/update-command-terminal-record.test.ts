@@ -95,39 +95,38 @@ function fixture(
   };
 }
 
+function setVerification(f: ReturnType<typeof fixture>, key: string, value: unknown) {
+  const db = new DatabaseSync(f.databasePath);
+  try {
+    if (value === undefined) {
+      db.prepare(
+        "UPDATE update_runs SET verification_json = json_remove(verification_json, ?) WHERE run_id = ?",
+      ).run(`$.${key}`, f.result.runId!);
+    } else {
+      db.prepare(
+        "UPDATE update_runs SET verification_json = json_set(verification_json, ?, json(?)) WHERE run_id = ?",
+      ).run(`$.${key}`, JSON.stringify(value), f.result.runId!);
+    }
+  } finally {
+    db.close();
+  }
+}
+
 describe("owned completed update publication", () => {
   it.each(["serviceRunning", "versionMatch", "channelsReady", "readyz", "settled"] as const)(
     "does not capture a completed row with unverified %s",
     async (key) => {
       const f = fixture();
-      const db = new DatabaseSync(f.databasePath);
-      db.prepare(
-        "UPDATE update_runs SET verification_json = json_set(verification_json, ?, json('false')) WHERE run_id = ?",
-      ).run(`$.${key}`, f.result.runId!);
-      db.close();
+      setVerification(f, key, false);
       expect(
         await captureUpdateCommandTerminalRecord(f.params, f.result, f.assertCurrent),
       ).toBeUndefined();
     },
   );
 
-  it.each([
-    ["runningBuildId", "unrelated-build"],
-    ["runningBuildId", null],
-    ["runningVersion", "2026.1.1"],
-  ] as const)("rejects incompatible observed %s=%s", async (key, value) => {
+  it("requires the observed build ID when an expected build ID is supplied", async () => {
     const f = fixture();
-    const db = new DatabaseSync(f.databasePath);
-    if (value === null) {
-      db.prepare(
-        "UPDATE update_runs SET verification_json = json_remove(verification_json, ?) WHERE run_id = ?",
-      ).run(`$.${key}`, f.result.runId!);
-    } else {
-      db.prepare(
-        "UPDATE update_runs SET verification_json = json_set(verification_json, ?, ?) WHERE run_id = ?",
-      ).run(`$.${key}`, value, f.result.runId!);
-    }
-    db.close();
+    setVerification(f, "runningBuildId", undefined);
     expect(
       await captureUpdateCommandTerminalRecord(f.params, f.result, f.assertCurrent),
     ).toBeUndefined();
@@ -136,11 +135,7 @@ describe("owned completed update publication", () => {
   it("requires the observed version when no expected build ID is supplied", async () => {
     const f = fixture();
     f.result.after = { version: after.version };
-    const db = new DatabaseSync(f.databasePath);
-    db.prepare(
-      "UPDATE update_runs SET verification_json = json_remove(verification_json, '$.runningVersion') WHERE run_id = ?",
-    ).run(f.result.runId!);
-    db.close();
+    setVerification(f, "runningVersion", undefined);
     expect(
       await captureUpdateCommandTerminalRecord(f.params, f.result, f.assertCurrent),
     ).toBeUndefined();
@@ -154,11 +149,7 @@ describe("owned completed update publication", () => {
     async ({ expected, key, value }) => {
       const f = fixture();
       f.result.after = expected;
-      const db = new DatabaseSync(f.databasePath);
-      db.prepare(
-        "UPDATE update_runs SET verification_json = json_set(verification_json, ?, ?) WHERE run_id = ?",
-      ).run(`$.${key}`, value, f.result.runId!);
-      db.close();
+      setVerification(f, key, value);
       expect(
         await captureUpdateCommandTerminalRecord(f.params, f.result, f.assertCurrent),
       ).toBeUndefined();
@@ -196,17 +187,7 @@ describe("owned completed update publication", () => {
     "does not capture a completed row without an explicit empty plugin error list: %j",
     async (pluginErrors) => {
       const f = fixture();
-      const db = new DatabaseSync(f.databasePath);
-      if (pluginErrors === undefined) {
-        db.prepare(
-          "UPDATE update_runs SET verification_json = json_remove(verification_json, '$.pluginErrors') WHERE run_id = ?",
-        ).run(f.result.runId!);
-      } else {
-        db.prepare(
-          "UPDATE update_runs SET verification_json = json_set(verification_json, '$.pluginErrors', json(?)) WHERE run_id = ?",
-        ).run(JSON.stringify(pluginErrors), f.result.runId!);
-      }
-      db.close();
+      setVerification(f, "pluginErrors", pluginErrors);
       expect(
         await captureUpdateCommandTerminalRecord(f.params, f.result, f.assertCurrent),
       ).toBeUndefined();
@@ -241,63 +222,50 @@ describe("owned completed update publication", () => {
       (await captureUpdateCommandTerminalRecord(f.params, f.result, f.assertCurrent))?.record.after,
     ).toEqual(after);
   });
-  it.each([true, false])(
-    "publishes the durable result without reopening snapshots (json=%s)",
-    async (json) => {
-      const f = fixture();
-      f.params.opts.json = json;
-      const captured = await captureUpdateCommandTerminalRecord(
-        f.params,
-        f.result,
-        f.assertCurrent,
-      );
-      expect(captured?.record.status).toBe("succeeded");
-      const before = fs.readFileSync(f.databasePath);
-      f.release();
-      const takeSnapshot = vi
-        .spyOn(snapshot, "prepareSqliteReadOnlyLocationSync")
-        .mockImplementation(() => {
-          throw new Error("live database is changing");
-        });
-      const reportPath = path.join(root, "update-reports", `${f.params.opts.run.runId}.md`);
-      let savedAtPublication: string | undefined;
-      const captureReport = () => {
-        savedAtPublication ??= fs.readFileSync(reportPath, "utf8");
-      };
-      const jsonOutput = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(captureReport);
-      const textOutput = vi.spyOn(defaultRuntime, "log").mockImplementation(captureReport);
-      const settled = await resolveSettledUpdateCommandResult(
-        f.params,
-        f.result,
-        undefined,
-        captured,
-      );
-      const result = await publishUpdateCommandTerminalResult(f.params, settled.result, {
-        rolledBack: false,
-        captured: settled.captured,
+  it("publishes the durable result without reopening snapshots", async () => {
+    const f = fixture();
+    const captured = await captureUpdateCommandTerminalRecord(f.params, f.result, f.assertCurrent);
+    expect(captured?.record.status).toBe("succeeded");
+    const before = fs.readFileSync(f.databasePath);
+    f.release();
+    const takeSnapshot = vi
+      .spyOn(snapshot, "prepareSqliteReadOnlyLocationSync")
+      .mockImplementation(() => {
+        throw new Error("live database is changing");
       });
-      expect(result.status).toBe("ok");
-      expect(savedAtPublication).toContain(after.version);
-      expect(takeSnapshot).not.toHaveBeenCalled();
-      expect(fs.readFileSync(f.databasePath)).toEqual(before);
-      if (json) {
-        expect(jsonOutput).toHaveBeenCalledWith(
-          expect.objectContaining({
-            status: "ok",
-            reportPath,
-            run: expect.objectContaining({ status: "succeeded" }),
-          }),
-        );
-        expect(jsonOutput.mock.calls[0]?.[0]).not.toHaveProperty("captured");
-      } else {
-        expect(textOutput.mock.calls.flat().join("\n")).toContain("Update");
-      }
-      // A historical report is not permission for the next update to skip admission.
-      await expect(assertUpdateRecoveryAdmission({ env: f.params.opts.run.env })).rejects.toThrow(
-        "live database is changing",
-      );
-    },
-  );
+    const reportPath = path.join(root, "update-reports", `${f.params.opts.run.runId}.md`);
+    let savedAtPublication: string | undefined;
+    const captureReport = () => {
+      savedAtPublication ??= fs.readFileSync(reportPath, "utf8");
+    };
+    const jsonOutput = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(captureReport);
+    const settled = await resolveSettledUpdateCommandResult(
+      f.params,
+      f.result,
+      undefined,
+      captured,
+    );
+    const result = await publishUpdateCommandTerminalResult(f.params, settled.result, {
+      rolledBack: false,
+      captured: settled.captured,
+    });
+    expect(result.status).toBe("ok");
+    expect(savedAtPublication).toContain(after.version);
+    expect(takeSnapshot).not.toHaveBeenCalled();
+    expect(fs.readFileSync(f.databasePath)).toEqual(before);
+    expect(jsonOutput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "ok",
+        reportPath,
+        run: expect.objectContaining({ status: "succeeded" }),
+      }),
+    );
+    expect(jsonOutput.mock.calls[0]?.[0]).not.toHaveProperty("captured");
+    // A historical report is not permission for the next update to skip admission.
+    await expect(assertUpdateRecoveryAdmission({ env: f.params.opts.run.env })).rejects.toThrow(
+      "live database is changing",
+    );
+  });
 
   it("does not let a prepared success mask failed executor cleanup", async () => {
     const f = fixture();

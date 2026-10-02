@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import type { UsersListResult } from "../../../packages/gateway-protocol/src/schema/users.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProof,
@@ -48,7 +49,7 @@ suite.define(() => {
     await suite.withPage(
       { viewport: { width: viewport.width, height: 900 }, colorScheme: viewport.colorScheme },
       async ({ page }) => {
-        const response = Promise.withResolvers<void>();
+        const response = createDeferred();
         await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
         await page.route("**/api/users/**/avatar*", async (route) => {
           await response.promise;
@@ -396,6 +397,7 @@ suite.define(() => {
       const copied = `Request\tStatus\nAsk ${label} today\tOpen`;
       await page.getByRole("button", { name: "Copy table", exact: true }).click();
       await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(copied);
+      await page.evaluate(() => navigator.clipboard.writeText("awaiting context-menu copy"));
       const avatar = await image.boundingBox();
       expect(avatar).not.toBeNull();
       await page.mouse.click(avatar!.x + avatar!.width / 2, avatar!.y + avatar!.height / 2, {

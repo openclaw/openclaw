@@ -7,7 +7,7 @@ import { buildPayloads } from "./payloads.test-helpers.js";
 import { mergeAttemptToolMediaPayloads } from "./tool-media-payloads.js";
 
 describe("quiet heartbeat failures", () => {
-  it.each(["message", "exec", "bash"])(
+  it.each(["message", "exec"])(
     "does not notify after a failed %s and generated media",
     (toolName) => {
       const payloads = buildPayloads({
@@ -36,6 +36,7 @@ describe("quiet heartbeat failures", () => {
             heartbeatTerminalToolFailure: { toolName },
             replyPayload: resolveHeartbeatReplyPayload(merged),
           },
+          useHeartbeatFailureCopy: true,
           hasRelayableExecCompletion: false,
           suppressUnmarkedSourceReplies: false,
           responsePrefix: undefined,

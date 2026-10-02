@@ -1,7 +1,6 @@
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT } from "@openclaw/gateway-protocol/gateway-error-details";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   renderAssistantRequestFailureCopy,
   renderRecordedAssistantFailureCopy,
@@ -16,7 +15,10 @@ import {
   readNestedToolActivity,
   nestedToolActivityContent,
 } from "../sessions/nested-tool-activity.js";
-import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
+import {
+  readSessionTranscriptFailureRunId,
+  readSessionTranscriptRunId,
+} from "../sessions/transcript-events.js";
 import { formatProviderRefusalText } from "../shared/assistant-error-format.js";
 import {
   isOpenClawMessageToolMirrorAssistantMessage,
@@ -187,9 +189,11 @@ function sanitizeAssistantErrorDisplayMessage(
     next.text = next.text.slice(STREAM_ERROR_FALLBACK_TEXT.length);
   }
   const terminalCopy =
+    formatProviderRefusalText(message) ??
     renderAssistantRequestFailureCopy({
       code: typeof message.errorCode === "string" ? message.errorCode : undefined,
-    }) ?? renderRecordedAssistantFailureCopy(message);
+    }) ??
+    renderRecordedAssistantFailureCopy(message);
   if (terminalCopy) {
     // Apply the normal visibility rules before adding host-owned failure copy.
     // Put it first in surviving text so phase filtering and display caps retain it.
@@ -387,19 +391,17 @@ function projectEmptyAssistantErrorMessages(
     if (message.role !== "assistant" || message.stopReason !== "error") {
       return message;
     }
+    changed = true;
     const hasDisplayableStructuredContent =
       hasAssistantDisplayableNonTextContent(message) || hasTranscriptMediaFacts(message);
     if (hasDisplayableStructuredContent) {
-      changed = true;
       return sanitizeAssistantErrorDisplayMessage(message);
     }
     const sanitized = sanitizeChatHistoryMessage(message, Number.MAX_SAFE_INTEGER)
       .message as Record<string, unknown>;
     if (!shouldDropAssistantHistoryMessage(sanitized) && hasVisibleAssistantReplyText(sanitized)) {
-      changed = true;
       return sanitizeAssistantErrorDisplayMessage(message);
     }
-    changed = true;
     const next: Record<string, unknown> = {
       ...sanitized,
       content: [{ type: "text", text: getAssistantErrorFallbackText(message) }],
@@ -421,19 +423,20 @@ type ChatHistoryRecoveryOptions = Pick<
   "maxChars" | "stripEnvelope" | "assistantErrorPending" | "subagentCoordination"
 >;
 
-function prepareChatHistoryRecoveryMessages(
+export function prepareChatHistoryRecoveryMessages(
   messages: unknown[],
   options?: ChatHistoryRecoveryOptions,
 ) {
   const projectedMessages = messages.map((original) => {
     const message = projectTranscriptImageArtifacts(original);
     const entry = asOptionalRecord(message);
-    if (entry?.role === "custom" && entry.customType === "run-failed-before-reply") {
-      const runId = normalizeOptionalString(asOptionalRecord(entry.details)?.runId);
-      if (runId) {
-        // Retain failure correlation before sanitation removes private report details.
-        return { ...entry, __openclaw: { ...asOptionalRecord(entry["__openclaw"]), runId } };
-      }
+    const failureRunId = readSessionTranscriptFailureRunId(entry);
+    if (failureRunId) {
+      // Retain failure correlation before sanitation removes private report details.
+      return {
+        ...entry,
+        __openclaw: { ...asOptionalRecord(entry?.["__openclaw"]), runId: failureRunId },
+      };
     }
     const activity = readNestedToolActivity(message);
     if (!activity) {
@@ -456,11 +459,9 @@ function prepareChatHistoryRecoveryMessages(
       content: [call, sanitized],
     };
   });
-  const source =
-    options?.stripEnvelope === false
-      ? projectedMessages
-      : stripEnvelopeFromMessages(projectedMessages);
-  return source;
+  return options?.stripEnvelope === false
+    ? projectedMessages
+    : stripEnvelopeFromMessages(projectedMessages);
 }
 
 export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecoveryOptions) {
@@ -480,16 +481,8 @@ export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecover
     get pending() {
       return recovery.pending;
     },
-    result() {
-      return recovery.result();
-    },
+    result: recovery.result.bind(recovery),
   };
-}
-
-function projectChatHistoryRecovery(messages: unknown[], options?: ChatHistoryRecoveryOptions) {
-  const projection = createChatHistoryRecoveryProjection(options);
-  projection.append(messages);
-  return projection.result();
 }
 
 export function projectChatDisplayMessagesWithState(
@@ -497,7 +490,9 @@ export function projectChatDisplayMessagesWithState(
   options?: ChatDisplayProjectionOptions,
 ): ChatDisplayProjectionResult {
   options?.subagentCoordination?.assertCurrent?.();
-  const recoveredErrors = projectChatHistoryRecovery(messages, options);
+  const recovery = createChatHistoryRecoveryProjection(options);
+  recovery.append(messages);
+  const recoveredErrors = recovery.result();
   const projectedErrors = projectEmptyAssistantErrorMessages(recoveredErrors.messages);
   const activity =
     options?.activity === false

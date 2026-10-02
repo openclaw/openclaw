@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { afterEach, describe, expect, it, onTestFailed, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
@@ -105,10 +105,10 @@ function streamReply(
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("visible yielded session continuation", () => {
-  it.each(["reset", "complete"] as const)(
+  it.for(["reset", "complete"] as const)(
     "preserves real chat yield metadata and the held descendant's %s outcome",
     { timeout: 90_000 },
-    async (outcome) => {
+    async (outcome, { signal }) => {
       const home = tempDirs.make("openclaw-visible-yield-reset-");
       const stateDir = path.join(home, ".openclaw");
       const workspace = path.join(home, "workspace");
@@ -142,6 +142,7 @@ describe("visible yielded session continuation", () => {
       const nestedClosed = createDeferred();
       const requesterWaitAttached = createDeferred();
       const requesterYielded = createDeferred();
+      const requesterFinished = createDeferred();
       const resumedCatalog = createDeferred<string[]>();
       const publicationCatalogs: string[][] = [];
       let childResponse: ServerResponse | undefined;
@@ -169,8 +170,6 @@ describe("visible yielded session continuation", () => {
       let stopping = false;
       let providerServer: ReturnType<typeof createServer> | undefined;
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-      const bound = <T>(promise: PromiseLike<T>, label: string) =>
-        withTestTimeout(promise, 30_000, label);
       const snapshot = (): Array<Record<string, unknown>> =>
         [requester, child].flatMap<Record<string, unknown>>((receipt) => {
           if (!receipt) {
@@ -201,6 +200,12 @@ describe("visible yielded session continuation", () => {
             }),
           ];
         });
+      onTestFailed(() => {
+        console.error(
+          "Visible yield fixture failed",
+          JSON.stringify({ fixtureErrors, runs: snapshot(), trace: failureTrace.slice(-12) }),
+        );
+      });
       const record = (kind: string, facts: Record<string, unknown> = {}) => {
         evidence.push({ at: Date.now(), kind, ...facts, runs: snapshot() });
       };
@@ -573,7 +578,19 @@ describe("visible yielded session continuation", () => {
               runId?: string;
               sessionKey?: string;
               state?: string;
+              yielded?: boolean;
+              message?: Record<string, unknown>;
             };
+            // Yield and queued admission also emit finals; wait for the resumed reply.
+            if (
+              requester &&
+              payload.sessionKey === requester.childSessionKey &&
+              payload.state === "final" &&
+              payload.yielded !== true &&
+              payload.message !== undefined
+            ) {
+              requesterFinished.resolve();
+            }
             if (payload.sessionKey !== sessionKey) {
               return;
             }
@@ -594,15 +611,10 @@ describe("visible yielded session continuation", () => {
           idempotencyKey: randomUUID(),
         });
         expect(started.status).toBe("started");
-        await bound(rootFinished.promise, "root did not finish");
-        await bound(
-          requesterYielded.promise,
-          "requester did not emit a real yield lifecycle event",
-        );
-        const waitResult = await bound(
-          requesterWaitFinished.promise,
-          "real requester chat waiter did not finish",
-        );
+        // Bind waits to the test signal so a stall still reaches the Gateway cleanup below.
+        await withinTest(rootFinished.promise, signal);
+        await withinTest(requesterYielded.promise, signal);
+        const waitResult = await withinTest(requesterWaitFinished.promise, signal);
         record("before-reset", { waitResult });
         expect
           .soft(waitResult, "chat waiter must retain actual yield metadata")
@@ -615,20 +627,7 @@ describe("visible yielded session continuation", () => {
             status: "completed",
             content: [{ type: "output_text", text: "Reviewer finished.", annotations: [] }],
           });
-          publicationCatalogs.push(
-            await bound(resumedCatalog.promise, "requester did not resume").catch(
-              (cause: unknown) => {
-                throw new Error(
-                  JSON.stringify({
-                    fixtureErrors,
-                    runs: snapshot(),
-                    trace: failureTrace.slice(-12),
-                  }),
-                  { cause },
-                );
-              },
-            ),
-          );
+          publicationCatalogs.push(await withinTest(resumedCatalog.promise, signal));
           expect(publicationCatalogs.length).toBeGreaterThanOrEqual(3);
           for (const catalog of publicationCatalogs) {
             expect(catalog).toEqual(
@@ -636,17 +635,13 @@ describe("visible yielded session continuation", () => {
             );
           }
           const client = gateway.client;
-          await vi.waitFor(
-            async () => {
-              const history = await client.request("chat.history", {
-                sessionKey: expectDefined(requester, "requester session").childSessionKey,
-                agentId: "main",
-                limit: 20,
-              });
-              expect(JSON.stringify(history)).toContain("Review complete.");
-            },
-            { timeout: 30_000, interval: 50 },
-          );
+          await withinTest(requesterFinished.promise, signal);
+          const history = await client.request("chat.history", {
+            sessionKey: expectDefined(requester, "requester session").childSessionKey,
+            agentId: "main",
+            limit: 20,
+          });
+          expect(JSON.stringify(history)).toContain("Review complete.");
           expect(fixtureErrors).toEqual([]);
           return;
         }
@@ -655,14 +650,11 @@ describe("visible yielded session continuation", () => {
           { sessionKey, message: "/new", deliver: false, idempotencyKey: resetId },
           { timeoutMs: 30_000 },
         );
-        const reset = await bound(resetAcknowledged.promise, "reset did not acknowledge");
+        const reset = await withinTest(resetAcknowledged.promise, signal);
         expect(reset.state).toBe("final");
         record("reset-acknowledged");
-        await bound(nestedClosed.promise, "reset did not close nested provider stream");
-        await bound(
-          settleSubagentRegistryPersistenceWork(),
-          "registry work did not settle after reset",
-        );
+        await withinTest(nestedClosed.promise, signal);
+        await withinTest(settleSubagentRegistryPersistenceWork(), signal);
         // The reported continuation arrived 127 ms after acknowledgement on 2026-09-10.
         // This window observes absence after synchronization with real cancellation.
         await new Promise<void>((resolve) => {
@@ -680,16 +672,13 @@ describe("visible yielded session continuation", () => {
           writableEnded: false,
           fixtureStopping: false,
         });
-        const tasks = await gateway.client.request<{
-          tasks: Array<{ runId: string; status: string }>;
-        }>("tasks.list", { agentId: "main" });
-        record("public-cancelled-tasks", { tasks });
-        expect(tasks.tasks.find((task) => task.runId === requester?.runId)).toMatchObject({
-          status: "cancelled",
-        });
-        expect(tasks.tasks.find((task) => task.runId === child?.runId)).toMatchObject({
-          status: "cancelled",
-        });
+        for (const receipt of [requester, child]) {
+          expect(receipt).toBeDefined();
+          const run = receipt ? subagentRuns.get(receipt.runId) : undefined;
+          expect(run?.execution).toMatchObject({ status: "terminal" });
+          expect(run?.endedReason).toBe("subagent-killed");
+        }
+        record("native-runs-cancelled");
       } finally {
         record("fixture-cleanup-start", { fixtureErrors, unexpectedInference });
         stopping = true;

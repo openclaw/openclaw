@@ -10,6 +10,11 @@ export function readChild(
   previous: ReleaseRecord | undefined,
   signal?: AbortSignal,
   options?: {
+    parentRunId?: string;
+    parentRunAttempt?: number;
+    targetSha?: string;
+    loadFlakeClassifications?: typeof import("./full-release-flake-classification.mjs").loadFlakeClassifications;
+    reuseSelection?: { runAttempt: number };
     readAttemptJobs?: (
       runId: string,
       runAttempt: number,

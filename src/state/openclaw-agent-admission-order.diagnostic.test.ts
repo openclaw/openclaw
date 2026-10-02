@@ -75,7 +75,7 @@ function seed() {
   expect(database.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   const pathname = database.path;
   closeOpenClawAgentDatabasesForTest();
-  // Independent fixture writers model unclean state that requires a full admission check.
+  // Independent fixture writers model unclean state that requires physical admission checks.
   clearOpenClawAgentIntegrityVerification(pathname, options.env);
   const writer = realOpen(pathname);
   independent.push(writer);
@@ -103,7 +103,10 @@ function tracePhysicalChecks(
     const prepare = db.prepare.bind(db);
     db.prepare = (sql) => {
       const statement = prepare(sql);
-      if (sql === "PRAGMA integrity_check;") {
+      if (
+        sql === "PRAGMA integrity_check;" ||
+        sql === "PRAGMA integrity_check('memory_index_chunk_recall_metadata');"
+      ) {
         const all = statement.all.bind(statement);
         statement.all = () => {
           const rows = all();
@@ -116,7 +119,10 @@ function tracePhysicalChecks(
           return rows;
         };
       }
-      if (sql === "PRAGMA foreign_key_check;") {
+      if (
+        sql === "PRAGMA foreign_key_check;" ||
+        sql === "PRAGMA foreign_key_check('memory_index_chunk_recall_metadata');"
+      ) {
         const iterate = statement.iterate.bind(statement);
         statement.iterate = function* () {
           yield* iterate();
@@ -150,7 +156,7 @@ function ordinaryWrite(options: Parameters<typeof openOpenClawAgentDatabase>[0])
 }
 
 describe("physical-open admission ordering", () => {
-  it("rejects an external FK violation committed between full integrity and FK checks", () => {
+  it("rejects an external FK violation committed between table integrity and FK checks", () => {
     const { options, pathname, writer } = seed();
     const trace = tracePhysicalChecks(pathname, "integrity", () => corruptForeignKey(writer));
     expect(() => openOpenClawAgentDatabase(options)).toThrow(/foreign_key_check failed/);
@@ -161,7 +167,7 @@ describe("physical-open admission ordering", () => {
     ]);
   });
 
-  it("exposes and writes after an external FK violation committed after the FK check", () => {
+  it("exposes and writes after an external FK violation committed after its table FK check", () => {
     const { options, pathname, writer } = seed();
     const trace = tracePhysicalChecks(pathname, "foreign-key", () => corruptForeignKey(writer));
     const database = openOpenClawAgentDatabase(options);
@@ -381,9 +387,9 @@ describe("asynchronous canonical admission", () => {
   });
 
   it.each([false, true])(
-    "preserves physical index repair policy (unrelated damage: %s)",
+    "refuses physical index corruption without changing it (unrelated damage: %s)",
     async (unrelated) => {
-      const { options, writer } = seed();
+      const { options, pathname, writer } = seed();
       writer.exec(`
       INSERT INTO cache_entries (scope,key,value_json,expires_at,updated_at)
       VALUES ('scope-a','key-a','{}',100,1);
@@ -409,20 +415,20 @@ describe("asynchronous canonical admission", () => {
       }
       const version = Number(writer.prepare("PRAGMA schema_version").get()?.schema_version);
       writer.exec(`PRAGMA writable_schema=OFF; PRAGMA schema_version=${version + 1};`);
-      expect(writer.prepare("PRAGMA integrity_check").all()).not.toEqual([
-        { integrity_check: "ok" },
-      ]);
+      const findings = writer.prepare("PRAGMA integrity_check").all();
+      expect(findings).not.toEqual([{ integrity_check: "ok" }]);
       writer.close();
-      if (unrelated) {
-        await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
-          /integrity_check failed/,
-        );
-      } else {
-        const database = await openOpenClawAgentDatabaseAsync(options);
-        expect(database.db.prepare("PRAGMA integrity_check").all()).toEqual([
-          { integrity_check: "ok" },
+      await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
+        /integrity_check failed.*openclaw doctor --fix/,
+      );
+      const unchanged = realOpen(pathname, { readOnly: true });
+      try {
+        expect(unchanged.prepare("PRAGMA integrity_check").all()).toEqual(findings);
+        expect(unchanged.prepare("SELECT key FROM cache_entries NOT INDEXED").all()).toEqual([
+          { key: "key-a" },
         ]);
-        expect(ordinaryWrite(options)).toEqual({ n: 1 });
+      } finally {
+        unchanged.close();
       }
     },
   );

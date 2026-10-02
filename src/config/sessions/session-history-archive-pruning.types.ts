@@ -13,6 +13,7 @@ export type PublishedSessionTranscriptArchive = {
 export type SessionLegacyArchiveRemovalResult = "removed" | "failed" | "preserved";
 
 export type SessionArchivePruningOperations = {
+  withWriter: <T>(run: () => Promise<T>) => Promise<T>;
   read: () => Promise<PublishedSessionTranscriptArchive | null>;
   removeLegacy: (filePath: string) => Promise<SessionLegacyArchiveRemovalResult>;
   deletePublished: (archive: PublishedSessionTranscriptArchive) => Promise<void>;

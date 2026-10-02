@@ -24,7 +24,8 @@ type ResumeTagRecord = {
   object?: Partial<Record<"sha" | "type", unknown>>;
   verification?: { verified?: unknown };
 };
-type ResumeJobRecord = Partial<Record<"conclusion" | "name", unknown>>;
+type ResumeStepRecord = Partial<Record<"conclusion" | "name", unknown>>;
+type ResumeJobRecord = Partial<Record<"conclusion" | "name" | "steps", unknown>>;
 type NpmPublication = { version: string; tarballSha512: string; document: unknown };
 
 export interface OpenClawNpmResumeValidationInput {
@@ -173,6 +174,34 @@ function resumeJobRecords(value: unknown): ResumeJobRecord[] {
   return Array.isArray(value) ? value.filter(isRecord) : [];
 }
 
+export function isRecoverableOpenClawNpmRegistryReadbackFailure(jobs: unknown): boolean {
+  const records = resumeJobRecords(jobs);
+  const publishJobs = records.filter((job) => job.name === "publish_openclaw_npm");
+  const [publishJob] = publishJobs;
+  if (publishJob?.conclusion !== "failure" || !Array.isArray(publishJob.steps)) {
+    return false;
+  }
+  const steps = publishJob.steps.filter(isRecord) as ResumeStepRecord[];
+  const failedSteps = steps.filter((step) => step.conclusion === "failure");
+  return (
+    publishJobs.length === 1 &&
+    records.every(
+      (job) => job === publishJob || job.conclusion === "success" || job.conclusion === "skipped",
+    ) &&
+    steps.some((step) => step.name === "Publish" && step.conclusion === "success") &&
+    failedSteps.length === 1 &&
+    failedSteps[0]?.name === "Verify extended-stable registry readback"
+  );
+}
+
+function hasAcceptedOpenClawNpmPublication(jobs: unknown): boolean {
+  const records = resumeJobRecords(jobs);
+  return (
+    records.some((job) => job.name === "publish_openclaw_npm" && job.conclusion === "success") ||
+    isRecoverableOpenClawNpmRegistryReadbackFailure(records)
+  );
+}
+
 function requiredString(value: unknown, label: string): string {
   if (typeof value !== "string" || value.length === 0) {
     fail(`OpenClaw npm resume run is missing ${label}.`);
@@ -210,7 +239,8 @@ export function validateOpenClawNpmResumeRun({
   const sha = requiredSha(run?.head_sha, "head_sha");
   const path = requiredString(run?.path, "path");
   if (
-    run?.conclusion !== "success" ||
+    (run?.conclusion !== "success" &&
+      !(run?.conclusion === "failure" && isRecoverableOpenClawNpmRegistryReadbackFailure(jobs))) ||
     run?.event !== "workflow_dispatch" ||
     path !== WORKFLOW_PATH ||
     run?.workflow_id !== canonicalWorkflowId ||
@@ -352,9 +382,9 @@ export function resolveOpenClawNpmResumeRun({
       "resume run jobs",
     ),
   );
-  if (!jobs.some((job) => job.name === "publish_openclaw_npm" && job.conclusion === "success")) {
+  if (!hasAcceptedOpenClawNpmPublication(jobs)) {
     fail(
-      "OpenClaw npm resume run lacks a successful npm publish job; preserve the original publication evidence.",
+      "OpenClaw npm resume run lacks a successful npm publish job or recoverable registry-readback receipt; preserve the original publication evidence.",
     );
   }
 

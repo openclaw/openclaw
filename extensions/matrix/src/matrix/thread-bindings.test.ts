@@ -96,10 +96,6 @@ describe("matrix thread bindings", () => {
     return manager;
   }
 
-  async function createStaticThreadBindingManager() {
-    return createBindingManager();
-  }
-
   async function bindCurrentThread(params?: {
     targetSessionKey?: string;
     conversationId?: string;
@@ -156,7 +152,6 @@ describe("matrix thread bindings", () => {
       env: { ...process.env, OPENCLAW_STATE_DIR: path.dirname(bindingsPath) },
     });
     return {
-      version: 1,
       bindings: (await store.entries())
         .map((entry) => entry.value)
         .filter((entry) => entry.accountId === accountId)
@@ -178,7 +173,6 @@ describe("matrix thread bindings", () => {
     },
   ) {
     const persisted = await readPersistedBindings(bindingsPath);
-    expect(persisted.version).toBe(1);
     expect(persisted.bindings).toHaveLength(1);
     expect(persisted.bindings?.[0]?.conversationId).toBe(expected.conversationId);
     expect(persisted.bindings?.[0]?.parentConversationId).toBe(
@@ -276,48 +270,6 @@ describe("matrix thread bindings", () => {
     expect(binding.metadata?.agentId).toBe("molty");
   });
 
-  it("expires idle bindings via the sweeper", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-08T12:00:00.000Z"));
-    try {
-      await createBindingManager({
-        idleTimeoutMs: 1_000,
-        maxAgeMs: 0,
-        enableSweeper: true,
-      });
-
-      await getSessionBindingService().bind({
-        targetSessionKey: "agent:ops:subagent:child",
-        targetKind: "subagent",
-        conversation: {
-          channel: "matrix",
-          accountId: "ops",
-          conversationId: "$thread",
-          parentConversationId: "!room:example",
-        },
-        placement: "current",
-        metadata: {
-          introText: "intro thread",
-        },
-      });
-
-      sendMessageMatrixMock.mockClear();
-      await vi.advanceTimersByTimeAsync(61_000);
-      await Promise.resolve();
-
-      expect(
-        getSessionBindingService().resolveByConversation({
-          channel: "matrix",
-          accountId: "ops",
-          conversationId: "$thread",
-          parentConversationId: "!room:example",
-        }),
-      ).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("persists expired bindings after a sweep", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-08T12:00:00.000Z"));
@@ -366,7 +318,11 @@ describe("matrix thread bindings", () => {
       await vi.waitFor(
         async () => {
           const persisted = await readPersistedBindings(await resolveBindingsFilePath());
-          expect(persisted.version).toBe(1);
+          expect(
+            getSessionBindingService().resolveByConversation(
+              currentThreadConversation({ conversationId: "$thread-1" }),
+            ),
+          ).toBeNull();
           expect(persisted.bindings).toEqual([]);
         },
         { interval: 10, timeout: 1_000 },
@@ -570,17 +526,7 @@ describe("matrix thread bindings", () => {
         maxAgeMs: 0,
       });
 
-      await getSessionBindingService().bind({
-        targetSessionKey: "agent:ops:subagent:child",
-        targetKind: "subagent",
-        conversation: {
-          channel: "matrix",
-          accountId: "ops",
-          conversationId: "$thread",
-          parentConversationId: "!room:example",
-        },
-        placement: "current",
-      });
+      await bindCurrentThread();
       const original = manager.listBySessionKey("agent:ops:subagent:child")[0];
       if (original === undefined) {
         throw new Error("expected original matrix thread binding");
@@ -621,7 +567,7 @@ describe("matrix thread bindings", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
     try {
-      const manager = await createStaticThreadBindingManager();
+      const manager = await createBindingManager();
       const binding = await bindCurrentThread();
 
       const bindingsPath = await resolveBindingsFilePath();
@@ -648,7 +594,7 @@ describe("matrix thread bindings", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
     try {
-      const manager = await createStaticThreadBindingManager();
+      const manager = await createBindingManager();
       const binding = await bindCurrentThread();
       const touchedAt = Date.parse("2026-03-06T12:00:00.000Z");
       getSessionBindingService().touch(binding.bindingId, touchedAt);

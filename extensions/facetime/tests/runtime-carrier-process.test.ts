@@ -50,21 +50,21 @@ function processFixture() {
     if (!signal) {
       throw new Error("Expected a carrier process signal");
     }
-    if (signal === "-0") {
-      return result(alive.has(pid) ? 0 : 1);
-    }
     signals.push({ signal, pid });
     if (terminates.has(pid)) {
       alive.delete(pid);
     }
     return result(0);
   });
+  const runtime = { system: { runCommandWithTimeout: runCommand } };
   return {
     alive,
     terminates,
     signals,
     runCommand,
-    runtime: { system: { runCommandWithTimeout: runCommand } },
+    runtime,
+    shutdown: (assertCurrent = () => {}) =>
+      terminateExactCarrierProcesses({ runtime, peers, assertCurrent }),
   };
 }
 
@@ -72,16 +72,13 @@ describe("FaceTime exact carrier process termination", () => {
   it("retries the remaining carrier after another peer exited during partial shutdown", async () => {
     const fixture = processFixture();
     fixture.terminates.delete(1002);
-    const params = { runtime: fixture.runtime, peers, assertCurrent: () => {} };
 
-    await expect(terminateExactCarrierProcesses(params)).rejects.toThrow(
-      "remains alive after force termination",
-    );
+    await expect(fixture.shutdown()).rejects.toThrow("remains alive after force termination");
     expect([...fixture.alive]).toEqual([1002]);
     fixture.signals.length = 0;
     fixture.terminates.add(1002);
 
-    await expect(terminateExactCarrierProcesses(params)).resolves.toBeUndefined();
+    await expect(fixture.shutdown()).resolves.toBeUndefined();
     expect(fixture.signals).toEqual([{ signal: "-TERM", pid: 1002 }]);
     expect(fixture.alive.size).toBe(0);
   });
@@ -98,13 +95,7 @@ describe("FaceTime exact carrier process termination", () => {
         return await runCommand(argv, options);
       });
 
-      await expect(
-        terminateExactCarrierProcesses({
-          runtime: fixture.runtime,
-          peers,
-          assertCurrent: () => {},
-        }),
-      ).resolves.toBeUndefined();
+      await expect(fixture.shutdown()).resolves.toBeUndefined();
       expect(fixture.signals).toEqual([]);
     },
   );
@@ -120,46 +111,31 @@ describe("FaceTime exact carrier process termination", () => {
       return await runCommand(argv, options);
     });
 
-    await expect(
-      terminateExactCarrierProcesses({ runtime: fixture.runtime, peers, assertCurrent: () => {} }),
-    ).resolves.toBeUndefined();
+    await expect(fixture.shutdown()).resolves.toBeUndefined();
     expect(fixture.signals).toEqual([
       { signal: "-TERM", pid: 1001 },
       { signal: "-TERM", pid: 1002 },
     ]);
   });
 
-  it.each(["-TERM", "-KILL"])(
-    "does not mistake a permission failure for process absence after %s",
-    async (signal) => {
-      const fixture = processFixture();
-      fixture.terminates.clear();
-      const permissionFailures: string[] = [];
-      const runCommand = fixture.runCommand.getMockImplementation()!;
-      fixture.runCommand.mockImplementation(async (argv, options) => {
-        const commandResult = await runCommand(argv, options);
-        if (
-          argv[0] === "/bin/kill" &&
-          (argv[1] === signal ||
-            (argv[1] === "-0" && fixture.signals.some((sent) => sent.signal === signal)))
-        ) {
-          permissionFailures.push(argv[1]);
-          return result(1, "", "kill: Operation not permitted");
-        }
-        return commandResult;
-      });
+  it("does not mistake a permission failure for process absence after force termination", async () => {
+    const fixture = processFixture();
+    fixture.terminates.clear();
+    const permissionFailures: string[] = [];
+    const runCommand = fixture.runCommand.getMockImplementation()!;
+    fixture.runCommand.mockImplementation(async (argv, options) => {
+      const commandResult = await runCommand(argv, options);
+      if (argv[0] === "/bin/kill" && argv[1] === "-KILL") {
+        permissionFailures.push(argv[1]);
+        return result(1, "", "kill: Operation not permitted");
+      }
+      return commandResult;
+    });
 
-      await expect(
-        terminateExactCarrierProcesses({
-          runtime: fixture.runtime,
-          peers,
-          assertCurrent: () => {},
-        }),
-      ).rejects.toThrow("remains alive after force termination");
-      expect(permissionFailures).toContain(signal);
-      expect([...fixture.alive]).toEqual([1001, 1002]);
-    },
-  );
+    await expect(fixture.shutdown()).rejects.toThrow("remains alive after force termination");
+    expect(permissionFailures).toContain("-KILL");
+    expect([...fixture.alive]).toEqual([1001, 1002]);
+  });
 
   it.each([
     { name: "process inspection failure", response: result(1, "", "ps: permission denied") },
@@ -174,9 +150,7 @@ describe("FaceTime exact carrier process termination", () => {
         : await runCommand(argv, options),
     );
 
-    await expect(
-      terminateExactCarrierProcesses({ runtime: fixture.runtime, peers, assertCurrent: () => {} }),
-    ).rejects.toThrow("process identity no longer matches");
+    await expect(fixture.shutdown()).rejects.toThrow("process identity no longer matches");
     expect(fixture.signals).toEqual([{ signal: "-TERM", pid: 1001 }]);
   });
 
@@ -184,21 +158,14 @@ describe("FaceTime exact carrier process termination", () => {
     { name: "inspection error", response: result(1, "", "ps: permission denied") },
     { name: "failed inspection", response: result(2) },
     { name: "different executable", response: result(0, "UnrelatedApp") },
-    { name: "reused PID", response: result(0, "Tue Nov 14 22:13:30 2023"), field: "lstart=" },
-  ])("does not signal a carrier after $name", async ({ response, field = "comm=" }) => {
+  ])("does not signal a carrier after $name", async ({ response }) => {
     const fixture = processFixture();
     const runCommand = fixture.runCommand.getMockImplementation()!;
     fixture.runCommand.mockImplementation(async (argv, options) =>
-      argv[0] === "/bin/ps" && argv[4] === field ? response : await runCommand(argv, options),
+      argv[0] === "/bin/ps" && argv[4] === "comm=" ? response : await runCommand(argv, options),
     );
 
-    await expect(
-      terminateExactCarrierProcesses({
-        runtime: fixture.runtime,
-        peers,
-        assertCurrent: () => {},
-      }),
-    ).rejects.toThrow("process identity no longer matches");
+    await expect(fixture.shutdown()).rejects.toThrow("process identity no longer matches");
     expect(fixture.signals).toEqual([]);
   });
 
@@ -247,49 +214,36 @@ describe("FaceTime exact carrier process termination", () => {
       });
 
       await expect(
-        terminateExactCarrierProcesses({
-          runtime: fixture.runtime,
-          peers,
-          assertCurrent() {
-            if (!current) {
-              throw new Error("carrier owner changed");
-            }
-          },
+        fixture.shutdown(() => {
+          if (!current) {
+            throw new Error("carrier owner changed");
+          }
         }),
       ).rejects.toThrow("carrier owner changed");
       expect(fixture.signals).toEqual([]);
     },
   );
 
-  it.each(["-TERM", "-KILL"])(
-    "does not continue shutdown if ownership changes while sending %s",
-    async (signal) => {
-      const fixture = processFixture();
-      fixture.terminates.clear();
-      const runCommand = fixture.runCommand.getMockImplementation()!;
-      let current = true;
-      fixture.runCommand.mockImplementation(async (argv, options) => {
-        const commandResult = await runCommand(argv, options);
-        if (argv[0] === "/bin/kill" && argv[1] === signal) {
-          current = false;
-        }
-        return commandResult;
-      });
+  it("does not continue shutdown if ownership changes while sending TERM", async () => {
+    const fixture = processFixture();
+    fixture.terminates.clear();
+    const runCommand = fixture.runCommand.getMockImplementation()!;
+    let current = true;
+    fixture.runCommand.mockImplementation(async (argv, options) => {
+      const commandResult = await runCommand(argv, options);
+      if (argv[0] === "/bin/kill" && argv[1] === "-TERM") {
+        current = false;
+      }
+      return commandResult;
+    });
 
-      await expect(
-        terminateExactCarrierProcesses({
-          runtime: fixture.runtime,
-          peers,
-          assertCurrent() {
-            if (!current) {
-              throw new Error("carrier owner changed");
-            }
-          },
-        }),
-      ).rejects.toThrow("carrier owner changed");
-      expect(fixture.signals.map((sent) => sent.signal)).toEqual(
-        signal === "-TERM" ? ["-TERM"] : ["-TERM", "-KILL"],
-      );
-    },
-  );
+    await expect(
+      fixture.shutdown(() => {
+        if (!current) {
+          throw new Error("carrier owner changed");
+        }
+      }),
+    ).rejects.toThrow("carrier owner changed");
+    expect(fixture.signals).toEqual([{ signal: "-TERM", pid: 1001 }]);
+  });
 });

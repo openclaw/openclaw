@@ -2,14 +2,21 @@ import fs from "node:fs";
 import path from "node:path";
 import type { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { AgentDatabaseRegistryChangedError } from "../../state/openclaw-agent-db-registry-listing.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
+import * as targetWorker from "./session-transcript-read-worker-runtime.js";
 
 it.each([
   { locator: "shared.sqlite", file: "shared.sqlite", logicalAgent: "worker", physicalAgent: "ops" },
@@ -87,3 +94,74 @@ it("observes registration changes across repeated preparations on the same worke
     expect((await prepareSqliteTranscriptReadScope(target)).databaseAgentId).toBe("main");
   });
 });
+
+it.each(["registration", "repeated registration", "source retirement", "read failure"] as const)(
+  "preserves target discovery after %s before a worker reply",
+  async (change) => {
+    await withOpenClawTestState({ label: "session-target-registry-in-flight" }, async (state) => {
+      const databasePath = path.join(state.root, "shared.sqlite");
+      openOpenClawAgentDatabase({ agentId: "ops", path: databasePath });
+      await closeOpenClawAgentDatabaseByPathAsync(databasePath);
+      const held = createDeferred();
+      const release = createDeferred();
+      const readError = new Error("Synthetic target read failed");
+      const resolve = targetWorker.resolveSessionSqliteTargetInWorker;
+      let firstRead = true;
+      const observation = vi
+        .spyOn(targetWorker, "resolveSessionSqliteTargetInWorker")
+        .mockImplementation(async (...args) => {
+          const result = await resolve(...args);
+          if (firstRead) {
+            firstRead = false;
+            held.resolve();
+            await release.promise;
+          } else if (change === "repeated registration") {
+            unregisterOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+            registerOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+          }
+          if (change === "read failure") {
+            throw readError;
+          }
+          return result;
+        });
+      const pending = prepareSqliteTranscriptReadScope({
+        agentId: "worker",
+        sessionKey: "agent:worker:main",
+        sessionId: "registry-in-flight",
+        storePath: databasePath,
+      });
+      try {
+        await Promise.race([
+          held.promise,
+          pending.then(() => {
+            throw new Error("Target discovery completed before the held worker reply");
+          }),
+        ]);
+        if (change === "source retirement") {
+          const shared = openOpenClawStateDatabase({ env: state.env });
+          await closeOpenClawStateDatabaseByPathAsync(shared.path);
+          openOpenClawStateDatabase({ env: state.env });
+        } else {
+          unregisterOpenClawAgentDatabase({ agentId: "ops", path: databasePath });
+          registerOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+        }
+        release.resolve();
+        if (change === "source retirement") {
+          await expect(pending).rejects.toMatchObject({
+            code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+          });
+        } else if (change === "read failure") {
+          await expect(pending).rejects.toBe(readError);
+        } else if (change === "repeated registration") {
+          await expect(pending).rejects.toBeInstanceOf(AgentDatabaseRegistryChangedError);
+        } else {
+          expect((await pending).databaseAgentId).toBe("main");
+        }
+      } finally {
+        release.resolve();
+        await pending.catch(() => undefined);
+        observation.mockRestore();
+      }
+    });
+  },
+);

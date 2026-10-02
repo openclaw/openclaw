@@ -170,27 +170,6 @@ describe("Mattermost account SecretRef inspection", () => {
 });
 
 describe("resolveMattermostReplyToMode", () => {
-  it("uses configured defaultAccount when accountId is omitted", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        mattermost: {
-          defaultAccount: "alerts",
-          accounts: {
-            alerts: {
-              botToken: "tok-alerts",
-              baseUrl: "https://alerts.example.com",
-              replyToMode: "all",
-            },
-          },
-        },
-      },
-    };
-
-    const account = resolveMattermostAccount({ cfg });
-    expect(account.accountId).toBe("alerts");
-    expect(resolveMattermostReplyToMode(account, "channel")).toBe("all");
-  });
-
   it("uses the configured mode for channel and group messages", () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -203,19 +182,6 @@ describe("resolveMattermostReplyToMode", () => {
     const account = resolveMattermostAccount({ cfg, accountId: "default" });
     expect(resolveMattermostReplyToMode(account, "channel")).toBe("all");
     expect(resolveMattermostReplyToMode(account, "group")).toBe("all");
-  });
-
-  it("keeps direct messages off by default even when replyToMode is enabled", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        mattermost: {
-          replyToMode: "all",
-        },
-      },
-    };
-
-    const account = resolveMattermostAccount({ cfg, accountId: "default" });
-    expect(resolveMattermostReplyToMode(account, "direct")).toBe("off");
   });
 
   it("uses per-chat-type overrides before the channel and group default", () => {

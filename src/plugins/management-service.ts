@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type {
   PluginInspectSource,
   PluginsInspectResult,
+  PluginsListResult,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import { resolveIsConfigReadOnly } from "../config/paths.js";
@@ -19,11 +20,13 @@ import {
   resolvePluginInstallRecordTrust,
   resolvePluginPackageDeclaredSurface,
 } from "./capability-summary.js";
+import { normalizeCatalogIconUrl } from "./catalog-icon-registry.js";
 import {
   appendPluginControlPlaneWorkspaceDiagnostic,
   resolvePluginControlPlaneWorkspace,
 } from "./control-plane-workspace.js";
 import { resolvePluginCredentialDescriptors } from "./credential-descriptors.js";
+import { inspectPluginCredentialValue } from "./credential-inspection.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import {
   emptyInstalledPluginComponents,
@@ -33,7 +36,10 @@ import {
   createInstalledPluginEnabledPredicate,
   isInstalledPluginEnabled,
 } from "./installed-plugin-index.js";
-import { readInstalledPluginOverview } from "./installed-plugin-overview.js";
+import {
+  projectPluginOverviewCapabilities,
+  readInstalledPluginOverview,
+} from "./installed-plugin-overview.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import {
   type ManagedPluginIconSource,
@@ -42,7 +48,6 @@ import {
   resolvePluginIconSources,
   resolvePluginActivityIconSource,
   type ManagedPluginCatalogEntry,
-  type ManagedPluginCatalog,
   getManagedPluginCache,
   withManagedPluginCache,
   prepareCatalogEntry,
@@ -53,13 +58,14 @@ import {
   normalizeFeaturedAt,
   firstPluginError,
   compareCatalogEntries,
-  deriveLegacyPluginCategory,
+  projectPluginCatalogCategoryFacts,
   resolveInstalledPluginPresentation,
   resolveInstalledHostedOfficialEntry,
   resolveOfficialEntryById,
 } from "./management-catalog.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import { readPluginMcpAuthStatus } from "./mcp-auth-status.js";
 import {
   getOfficialExternalPluginCatalogManifest,
   listOfficialExternalPluginCatalogEntries,
@@ -91,8 +97,6 @@ function resolveManagedPluginState(params: {
   }
   return params.setupMode === "missing" ? "needs-setup" : "disabled";
 }
-
-export type ManagedPluginInspection = PluginsInspectResult;
 
 const CLAWHUB_CATEGORY_BATCH_LIMIT = 200;
 
@@ -190,28 +194,13 @@ export const resolveManagedPluginActivityIconSource = withManagedPluginCache(
   },
 );
 
-function normalizeManagedCatalogIconUrl(value: unknown): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  if (!normalized || normalized.length > 2048) {
-    return undefined;
-  }
-  try {
-    const url = new URL(normalized);
-    return url.protocol === "https:" && url.hostname && !url.username && !url.password && !url.hash
-      ? url.href
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /** Resolve only URLs currently owned by a manifest or bundled presentation catalog. */
 export function resolveManagedSetupCatalogIconUrl(params: {
   config: OpenClawConfig;
   iconUrl: string;
   env?: NodeJS.ProcessEnv;
 }): string | undefined {
-  const requested = normalizeManagedCatalogIconUrl(params.iconUrl);
+  const requested = normalizeCatalogIconUrl(normalizeOptionalString(params.iconUrl) ?? "");
   if (!requested) {
     return undefined;
   }
@@ -225,7 +214,9 @@ export function resolveManagedSetupCatalogIconUrl(params: {
     }).map((choice) => choice.icon),
     ...listRecommendedToolInstalls().map((install) => install.icon),
   ];
-  return allowedUrls.some((iconUrl) => normalizeManagedCatalogIconUrl(iconUrl) === requested)
+  return allowedUrls.some(
+    (iconUrl) => normalizeCatalogIconUrl(normalizeOptionalString(iconUrl) ?? "") === requested,
+  )
     ? requested
     : undefined;
 }
@@ -237,7 +228,7 @@ export const listManagedPlugins = withManagedPluginCache(
     env?: NodeJS.ProcessEnv;
     officialCatalog?: OfficialCatalogResult;
     metadata?: PluginMetadataSnapshot;
-  }): Promise<ManagedPluginCatalog> => {
+  }): Promise<PluginsListResult> => {
     // Manifest schemas describe authored SecretRefs, not resolved runtime strings.
     // Retain the paired source before hosted catalog I/O can publish another generation.
     const sourceConfig = resolvePluginActivationSourceConfig({ config: params.config });
@@ -313,8 +304,6 @@ export const listManagedPlugins = withManagedPluginCache(
       const configError = setup.mode === "invalid" ? setup.error : undefined;
       const error = firstPluginError(pluginDiagnostics, record.pluginId) ?? configError;
       const kind = normalizeKinds(manifest?.kind);
-      const categories = manifest?.categories;
-      const legacyCategory = deriveLegacyPluginCategory(manifest);
       // Only externally installed plugins (tracked install record, non-bundled) can be removed.
       const removable = record.origin !== "bundled" && Boolean(installOwner);
       const hostedListingAuthoritative =
@@ -341,6 +330,7 @@ export const listManagedPlugins = withManagedPluginCache(
         }),
         removable,
       };
+      Object.assign(plugin, projectPluginCatalogCategoryFacts(manifest, enabled));
       if (record.packageName) {
         plugin.packageName = record.packageName;
       }
@@ -396,12 +386,11 @@ export const listManagedPlugins = withManagedPluginCache(
       if (error) {
         plugin.error = error;
       }
-      if (legacyCategory) {
-        plugin.category = legacyCategory;
-      }
-      if (categories?.length) {
-        plugin.categories = [...categories];
-      } else if (record.origin !== "bundled" && installRecord?.source === "clawhub") {
+      if (
+        !plugin.categories?.length &&
+        record.origin !== "bundled" &&
+        installRecord?.source === "clawhub"
+      ) {
         const name = normalizeOptionalString(installRecord.clawhubPackage);
         const version = normalizeOptionalString(installRecord.version);
         if (name && version) {
@@ -511,6 +500,7 @@ export const listManagedPlugins = withManagedPluginCache(
         id: pluginId,
         name: resolveOfficialExternalPluginLabel(entry),
         ...(packageName ? { packageName } : {}),
+        ...(clawhub ? { clawhubPackage: clawhub.name } : {}),
         ...(description ? { description } : {}),
         ...(version ? { version } : {}),
         ...(kind ? { kind } : {}),
@@ -547,7 +537,7 @@ export const inspectManagedPlugin = withManagedPluginCache(
     config: OpenClawConfig;
     pluginId: string;
     env?: NodeJS.ProcessEnv;
-  }): Promise<ManagedPluginInspection> => {
+  }): Promise<PluginsInspectResult> => {
     const env = params.env ?? process.env;
     const metadata = resolveManagedPluginMetadata(params.config, env);
     const pluginId = metadata.normalizePluginId(params.pluginId);
@@ -620,6 +610,9 @@ export const inspectManagedPlugin = withManagedPluginCache(
           `Plugin package "${installOwner}" has incomplete manifest metadata.`,
         );
       }
+      const mcpAuth = enabled
+        ? await readPluginMcpAuthStatus({ config: params.config, pluginId, metadata })
+        : undefined;
       return {
         ok: true,
         plugin: {
@@ -640,7 +633,23 @@ export const inspectManagedPlugin = withManagedPluginCache(
         declared,
         components: projectInstalledPluginComponents({ manifest, declared }),
         overview: readInstalledPluginOverview(manifest),
-        credentials: manifest ? resolvePluginCredentialDescriptors(manifest) : [],
+        credentials: manifest
+          ? resolvePluginCredentialDescriptors(manifest).map((descriptor) => {
+              const credential = inspectPluginCredentialValue(params.config, descriptor, env);
+              // Public inspection carries presence only. Private values and reference
+              // identifiers remain behind the administrator credential editor.
+              const status: NonNullable<PluginsInspectResult["credentials"]>[number]["status"] =
+                credential.kind === "reference"
+                  ? credential.unresolved
+                    ? "unresolved"
+                    : "configured"
+                  : credential.kind === "literal" || credential.kind === "environment"
+                    ? "configured"
+                    : credential.kind;
+              return Object.assign({}, descriptor, { status });
+            })
+          : [],
+        ...(mcpAuth ? { mcpAuth } : {}),
         reviewToken: computeDeclaredSurfaceHash(declared),
         ...(trust ? { trust } : {}),
       };
@@ -687,6 +696,9 @@ export const inspectManagedPlugin = withManagedPluginCache(
       },
       ...summary,
       components: emptyInstalledPluginComponents(),
+      overview: {
+        capabilities: projectPluginOverviewCapabilities(summary.declared, manifest?.uiCapabilities),
+      },
       reviewToken: computeDeclaredSurfaceHash(summary.declared),
     };
   },

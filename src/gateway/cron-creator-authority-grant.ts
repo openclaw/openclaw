@@ -284,16 +284,11 @@ export function revokeCronCreatorAuthorityRunScope(scope: CronCreatorAuthorityRu
   }
 }
 
-/** Consumes one live exact-run grant synchronously at the cron commit boundary. */
-export function consumeCronCreatorAuthorityGrant(
-  grant: CronCreatorAuthorityGrant,
-): CronRuntimeAuthority | undefined {
-  const runId = grant.runId.trim();
-  const token = grant.token.trim();
-  const entry = token ? grantsByToken.get(token) : undefined;
-  if (!entry) {
-    throw expiredAuthorityError();
-  }
+function assertCronCreatorAuthorityGrantCurrent(
+  entry: CronCreatorAuthorityGrantEntry,
+  runId: string,
+  token: string,
+): void {
   const scope = entry.scope;
   const issuerIsCurrent = entry.isCurrent?.() !== false;
   if (
@@ -317,8 +312,28 @@ export function consumeCronCreatorAuthorityGrant(
     }
     throw expiredAuthorityError();
   }
+}
+
+/** Consume once; repeated commit checks retain the original issuer and operation lifetime. */
+export function consumeCronCreatorAuthorityGrant(grant: CronCreatorAuthorityGrant): {
+  authority: CronRuntimeAuthority | undefined;
+  assertCurrent: () => void;
+} {
+  const runId = grant.runId.trim();
+  const token = grant.token.trim();
+  const entry = token ? grantsByToken.get(token) : undefined;
+  if (!entry) {
+    throw expiredAuthorityError();
+  }
+  const assertCurrent = () => assertCronCreatorAuthorityGrantCurrent(entry, runId, token);
+  assertCurrent();
   revokeCronCreatorAuthorityGrant(token);
-  return entry.runtimeAuthority ? cloneCronRuntimeAuthority(entry.runtimeAuthority) : undefined;
+  return {
+    authority: entry.runtimeAuthority
+      ? cloneCronRuntimeAuthority(entry.runtimeAuthority)
+      : undefined,
+    assertCurrent,
+  };
 }
 
 function expiredManagementError(): TypeError {
@@ -327,13 +342,11 @@ function expiredManagementError(): TypeError {
   );
 }
 
-/** Redeem once, retaining the exact operational owner through every await and commit. */
-export async function withCronManagementGrant<T>(
+function findCronManagementGrant(
   grant: CronCreatorAuthorityGrant,
   identity: CronManagementCaller,
   method: string,
-  run: () => Promise<T>,
-): Promise<T> {
+) {
   const entry = grantsByToken.get(grant.token);
   const management = entry?.management;
   const authority = identity.delegatedAuthority;
@@ -348,8 +361,35 @@ export async function withCronManagementGrant<T>(
     management.authority.lifecycleGeneration !== authority.lifecycleGeneration ||
     management.authority.claimId !== authority.claimId
   ) {
+    return undefined;
+  }
+  return { entry, management };
+}
+
+/**
+ * Lets the method-scope fence admit a caller holding an unredeemed grant bound to this
+ * method. The cron handler still redeems it once and checks it is active.
+ */
+export function holdsCronManagementGrant(
+  grant: CronCreatorAuthorityGrant,
+  identity: CronManagementCaller,
+  method: string,
+): boolean {
+  return findCronManagementGrant(grant, identity, method) !== undefined;
+}
+
+/** Redeem once, retaining the exact operational owner through every await and commit. */
+export async function withCronManagementGrant<T>(
+  grant: CronCreatorAuthorityGrant,
+  identity: CronManagementCaller,
+  method: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const found = findCronManagementGrant(grant, identity, method);
+  if (!found) {
     throw expiredManagementError();
   }
+  const { entry, management } = found;
   revokeCronCreatorAuthorityGrant(grant.token);
   const assertActive = () => {
     if (

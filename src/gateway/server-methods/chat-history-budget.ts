@@ -8,8 +8,9 @@ import {
 } from "../../chat/tool-content.js";
 import { readTranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
-import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { jsonUtf8Bytes, jsonUtf8BytesOrInfinity } from "../../infra/json-utf8-bytes.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
+import type { InFlightRunSnapshot } from "../chat-abort.js";
 import {
   extractChatHistoryBlockText,
   extractChatToolResultCanvasPreview,
@@ -81,6 +82,27 @@ export function chatHistoryActivityBytes(activity: readonly AgentHistoryActivity
   return activity.length > 0 ? jsonUtf8Bytes({ activity }) - 1 : 0;
 }
 
+/** Delta envelopes share one prepared plain-data snapshot throughout their synchronous projection. */
+export function createChatHistoryDeltaByteCounter(sessionSnapshot: Record<string, unknown>) {
+  let snapshot: { bytes: number; keys: Set<string> } | undefined;
+  return (envelope: Record<string, unknown>): number => {
+    snapshot ??= {
+      bytes: jsonUtf8BytesOrInfinity(sessionSnapshot),
+      keys: new Set(Object.keys(sessionSnapshot)),
+    };
+    const fields: Record<string, unknown> = {};
+    for (const key in envelope) {
+      // The snapshot is the final writer, including keys whose undefined value omits a field.
+      if (!snapshot.keys.has(key) && Object.hasOwn(envelope, key)) {
+        fields[key] = envelope[key];
+      }
+    }
+    const fieldsBytes = jsonUtf8BytesOrInfinity(fields);
+    // Merge the object bodies with one brace pair and, when both have fields, one comma.
+    return snapshot.bytes + fieldsBytes - 2 + (snapshot.bytes > 2 && fieldsBytes > 2 ? 1 : 0);
+  };
+}
+
 function hasHistoryToolPresentation(
   message: Record<string, unknown>,
   inheritedError?: boolean,
@@ -133,7 +155,7 @@ function isChatHistoryActivity(message: unknown): boolean {
     return false;
   }
   const role = normalizeLowercaseStringOrEmpty(entry.role);
-  if (role === "toolresult" || role === "tool_result" || role === "tool" || role === "function") {
+  if (isToolResultContentType(role) || role === "tool" || role === "function") {
     return isPlainHistoryToolResult(entry);
   }
   if (
@@ -216,6 +238,7 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
     __openclaw: {
       ...(metadata.toolOutput ? { toolOutput: metadata.toolOutput } : {}),
       ...(metadataId ? { id: metadataId } : {}),
+      ...(typeof metadata.runId === "string" ? { runId: metadata.runId } : {}),
       ...(metadataSeq !== undefined ? { seq: metadataSeq } : {}),
       ...(metadataIdempotencyKey ? { idempotencyKey: metadataIdempotencyKey } : {}),
       ...(turnBoundary ? { turnBoundary: true } : {}),
@@ -251,20 +274,12 @@ export function replaceOversizedChatHistoryMessages(params: {
 }
 
 export function reportOmittedChatHistory(params: {
-  originalMessages: unknown[];
-  finalMessages: unknown[];
-  getNormalizedBytes: () => number;
+  omittedCount: number;
+  normalizedBytes: number;
   maxHistoryBytes: number;
   logDebug: (message: string) => void;
 }): number {
-  const { originalMessages, finalMessages, getNormalizedBytes, maxHistoryBytes, logDebug } = params;
-  const survivors = new Set(finalMessages);
-  let omittedCount = 0;
-  for (const message of originalMessages) {
-    if (!survivors.has(message)) {
-      omittedCount += 1;
-    }
-  }
+  const { omittedCount, normalizedBytes, maxHistoryBytes, logDebug } = params;
   if (omittedCount === 0) {
     return 0;
   }
@@ -272,7 +287,7 @@ export function reportOmittedChatHistory(params: {
   logLargePayload({
     surface: "gateway.chat.history",
     action: "truncated",
-    bytes: getNormalizedBytes(),
+    bytes: normalizedBytes,
     limitBytes: maxHistoryBytes,
     count: omittedCount,
     reason: "chat_history_budget",
@@ -281,4 +296,66 @@ export function reportOmittedChatHistory(params: {
     `chat.history omitted oversized payloads count=${omittedCount} total=${chatHistoryOmittedEmitCount}`,
   );
   return omittedCount;
+}
+
+export function boundInFlightRunSnapshotForChatHistory(params: {
+  snapshot: InFlightRunSnapshot | undefined;
+  messages: unknown[];
+  getMessagesBytes?: () => number;
+  maxBytes: number;
+}): InFlightRunSnapshot | undefined {
+  if (!params.snapshot) {
+    return undefined;
+  }
+  const messagesBytes = params.getMessagesBytes?.() ?? jsonUtf8Bytes(params.messages);
+  const snapshotBytes = jsonUtf8Bytes(params.snapshot);
+  if (messagesBytes + snapshotBytes <= params.maxBytes) {
+    return params.snapshot;
+  }
+  // Recovery priority is run adoption, authoritative timing, active progress,
+  // plan replay, and opportunistic text. Explicit empty projections
+  // authoritatively clear stale client state when a richer snapshot cannot fit.
+  let bounded: InFlightRunSnapshot = {
+    runId: params.snapshot.runId,
+    text: "",
+    ...(params.snapshot.sessionAbortable ? { sessionAbortable: true } : {}),
+    ...(params.snapshot.events ? { events: [] } : {}),
+    ...(params.snapshot.plan ? { plan: { steps: [] } } : {}),
+  };
+  const retainIfWithinBudget = (candidate: InFlightRunSnapshot): boolean => {
+    if (!(messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes)) {
+      return false;
+    }
+    bounded = candidate;
+    return true;
+  };
+
+  if (params.snapshot.startedAt !== undefined) {
+    retainIfWithinBudget({ ...bounded, startedAt: params.snapshot.startedAt });
+  }
+
+  if (params.snapshot.events) {
+    const events = params.snapshot.events;
+    let start = 0;
+    let end = events.length;
+    // Try all progress first, then search suffixes instead of serializing each eviction.
+    let middle = 0;
+    while (start < end) {
+      if (retainIfWithinBudget({ ...bounded, events: events.slice(middle) })) {
+        end = middle;
+      } else {
+        start = middle + 1;
+      }
+      middle = Math.floor((start + end) / 2);
+    }
+  }
+
+  if (params.snapshot.plan) {
+    retainIfWithinBudget({ ...bounded, plan: params.snapshot.plan });
+  }
+
+  if (params.snapshot.text) {
+    retainIfWithinBudget({ ...bounded, text: params.snapshot.text });
+  }
+  return bounded;
 }

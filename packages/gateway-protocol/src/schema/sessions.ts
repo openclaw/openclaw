@@ -1,6 +1,7 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../session-companion-contract.js";
 import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./frames.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
@@ -21,7 +22,12 @@ export {
 export * from "./sessions-title.js";
 export * from "./sessions-goal.js";
 export * from "./sessions-provider-review.js";
-export { SessionsListParamsSchema, type SessionsListParams } from "./sessions-list.js";
+export {
+  SessionsListParamsSchema,
+  SessionOwnerSessionCountSchema,
+  type SessionsListParams,
+  type SessionOwnerSessionCount,
+} from "./sessions-list.js";
 export { SessionsRecoverParamsSchema, SessionsRecoverResultSchema };
 export {
   SessionParticipantIdentitySchema,
@@ -56,12 +62,16 @@ export {
   type SessionsPatchParams,
 } from "./sessions-patch.js";
 export {
+  SessionAncestorRefSchema,
   SessionCreatedActorSchema,
+  SessionEventAncestorsSchema,
   SessionPermissionModeSchema,
   SessionOwnerSchema,
   SessionRowSchema,
   SessionToolOverridesSchema,
+  type SessionAncestorRef,
   type SessionCreatedActor,
+  type SessionEventAncestors,
   type SessionOwner,
   type SessionPermissionMode,
   type SessionRow,
@@ -133,6 +143,10 @@ export const SessionsCompanionAskParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
   question: Type.String({ minLength: 1, maxLength: 400 }),
+  selectionContext: Type.Optional(
+    Type.String({ minLength: 1, maxLength: SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS }),
+  ),
+  attachments: Type.Optional(ChatAttachmentsSchema),
 });
 
 /** Companion answer returned only to the requesting operator. */
@@ -153,10 +167,9 @@ export const SessionsCompanionStateResultSchema = closedObject({
 });
 
 /** Selects the in-memory companion thread to clear. */
-export const SessionsCompanionResetParamsSchema = closedObject({
-  sessionKey: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
-});
+export const SessionsCompanionResetParamsSchema = closedObject(
+  SessionsCompanionStateParamsSchema.properties,
+);
 
 /** Acknowledges clearing one companion thread. */
 export const SessionsCompanionResetResultSchema = closedObject({
@@ -281,19 +294,13 @@ export const SessionsFilesGetResultSchema = closedObject({
 
 /** Overwrites one existing session workspace file with hash-based CAS. */
 export const SessionsFilesSetParamsSchema = closedObject({
-  sessionKey: NonEmptyString,
-  path: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
+  ...SessionsFilesGetParamsSchema.properties,
   content: Type.String(),
   expectedHash: SessionFileHashSchema,
 });
 
 /** Result for overwriting one session workspace file. */
-export const SessionsFilesSetResultSchema = closedObject({
-  sessionKey: NonEmptyString,
-  root: Type.Optional(NonEmptyString),
-  file: SessionFileEntrySchema,
-});
+export const SessionsFilesSetResultSchema = closedObject(SessionsFilesGetResultSchema.properties);
 
 /** Opens a session workspace on the Gateway host without accepting a client path. */
 export const SessionsFilesRevealParamsSchema = closedObject({
@@ -450,14 +457,27 @@ export const SessionsSendParamsSchema = closedObject({
 export const SessionsMessagesSubscribeParamsSchema = closedObject({
   key: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  /** Stable connection-local observer identity; omission replaces the legacy observer. */
+  subscriptionId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  /** Background narration receives bounded digests; omission preserves full transcript streams. */
+  mode: Type.Optional(Type.Literal("narration")),
   /** Opt in to sanitized durable approval events for this session and its descendants. */
   includeApprovals: Type.Optional(Type.Literal(true)),
+});
+
+/** Latest bounded assistant text for a background narration subscriber. */
+export const SessionNarrationEventSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  runId: NonEmptyString,
+  text: Type.String({ maxLength: 16384 }),
 });
 
 /** Removes a live message subscription for one session. */
 export const SessionsMessagesUnsubscribeParamsSchema = closedObject({
   key: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  subscriptionId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
 });
 
 /** Aborts the active or named run for a session. */
@@ -593,11 +613,7 @@ export const SessionsRewindParamsSchema = closedObject({
 });
 
 /** Creates a new session from the active-path state before one persisted user message. */
-export const SessionsForkParamsSchema = closedObject({
-  sessionKey: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
-  entryId: NonEmptyString,
-});
+export const SessionsForkParamsSchema = closedObject(SessionsRewindParamsSchema.properties);
 
 const SessionEditorAttachmentSchema = closedObject({
   mimeType: Type.String(),
@@ -732,6 +748,7 @@ export type SessionsRecoverParams = Static<typeof SessionsRecoverParamsSchema>;
 export type SessionsRecoverResult = Static<typeof SessionsRecoverResultSchema>;
 export type SessionsSendParams = Static<typeof SessionsSendParamsSchema>;
 export type SessionsMessagesSubscribeParams = Static<typeof SessionsMessagesSubscribeParamsSchema>;
+export type SessionNarrationEvent = Static<typeof SessionNarrationEventSchema>;
 export type SessionsMessagesUnsubscribeParams = Static<
   typeof SessionsMessagesUnsubscribeParamsSchema
 >;

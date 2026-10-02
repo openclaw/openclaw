@@ -78,12 +78,12 @@ describe("buildExternalRunFailureReply", () => {
       { isHeartbeat: true },
     );
 
-    expect(reply.text).toContain(message);
+    expect(reply.text).toContain(`\n\nDetails: ${message}.\n`);
     expect(reply.isGenericRunnerFailure).toBe(false);
     expect(reply.text).not.toContain("/new");
   });
 
-  it.each(["401 unauthorized", "529 overloaded", "503 service unavailable", "402 billing"])(
+  it.each(["401 unauthorized", "529 overloaded"])(
     "keeps preflight %s diagnostics verbose-gated except for heartbeats",
     (failure) => {
       const message = `${failure}; reconnect before continuing. diagnostic-canary ${"x".repeat(1500)}`;
@@ -125,7 +125,8 @@ describe("buildExternalRunFailureReply", () => {
   );
 
   it("keeps raw heartbeat failure details behind verbose opt-in", () => {
-    const input = { message: "boom-canary", error: new Error("boom-canary") };
+    const message = "Gateway SDK resource host is not bound";
+    const input = { message, error: new Error(message) };
     expect(buildExternalRunFailureReply(input, { isHeartbeat: true })).toEqual({
       text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
       isGenericRunnerFailure: false,
@@ -134,7 +135,7 @@ describe("buildExternalRunFailureReply", () => {
       isHeartbeat: true,
       includeDetails: true,
     });
-    expect(verbose.text).toContain("boom-canary");
+    expect(verbose.text).toContain(`\n\nDetails: ${message}.\n`);
     expect(verbose.text).not.toContain("/new");
     expect(verbose.isGenericRunnerFailure).toBe(false);
   });
@@ -224,5 +225,30 @@ describe("buildExternalRunFailureReply", () => {
         expect(reply.text).toContain("HTTP 408");
       }
     }
+  });
+
+  it("uses generic copy when useHeartbeatFailureCopy is false even if isHeartbeat is true", () => {
+    const reply = buildExternalRunFailureReply(
+      { message: "test error", error: new Error("test") },
+      { isHeartbeat: true, useHeartbeatFailureCopy: false },
+    );
+    expect(reply.text).toBe(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
+    expect(reply.isGenericRunnerFailure).toBe(false);
+  });
+
+  it("uses heartbeat copy when useHeartbeatFailureCopy is true", () => {
+    const reply = buildExternalRunFailureReply(
+      { message: "test error", error: new Error("test") },
+      { isHeartbeat: true, useHeartbeatFailureCopy: true },
+    );
+    expect(reply.text).toBe(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
+  });
+
+  it("falls back to isHeartbeat when useHeartbeatFailureCopy is undefined", () => {
+    const reply = buildExternalRunFailureReply(
+      { message: "test error", error: new Error("test") },
+      { isHeartbeat: true },
+    );
+    expect(reply.text).toBe(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
   });
 });

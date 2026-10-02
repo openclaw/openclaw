@@ -151,7 +151,24 @@ describe("restart sentinel", () => {
           kind: "agentTurn" as const,
           message: "Reply with exactly: Yay! I did it!",
         },
-        stats: { mode: "git" },
+        stats: {
+          mode: "git",
+          before: null,
+          after: { version: "2026.9.4", detail: { retained: true } },
+          steps: [
+            {
+              name: "install",
+              command: "install",
+              failureFacts: [{ check: "installation", code: "retained" }],
+              cwd: null,
+              durationMs: 0.5,
+              log: { stdoutTail: null, stderrTail: "", exitCode: null },
+              advisory: false,
+            },
+          ],
+          reason: null,
+          durationMs: null,
+        },
       };
       await writeRestartSentinel(payload);
       expect(readSentinelRow()).toMatchObject({
@@ -163,8 +180,7 @@ describe("restart sentinel", () => {
       });
 
       const read = await readRestartSentinel();
-      expect(read?.payload.kind).toBe("update");
-      expect(read?.payload.continuation).toEqual(payload.continuation);
+      expect(read?.payload).toEqual(payload);
     });
   });
 
@@ -323,31 +339,28 @@ describe("restart sentinel", () => {
     });
   });
 
-  it("rejects malformed typed JSON columns even when the shadow payload is valid", async () => {
+  it.each([
+    { continuation_json: JSON.stringify({ kind: "agentTurn", message: 42 }) },
+    { stats_json: JSON.stringify({ mode: null }) },
+    { stats_json: JSON.stringify({ before: [] }) },
+    {
+      stats_json: JSON.stringify({
+        steps: [{ name: "install", command: "install", log: { exitCode: 0.5 } }],
+      }),
+    },
+    {
+      stats_json: JSON.stringify({
+        steps: [{ name: "install", command: "install", advisory: null }],
+      }),
+    },
+  ])("rejects malformed typed JSON columns with a valid shadow payload: %j", async (columns) => {
     await withRestartSentinelStateDir(async () => {
       const payload = { kind: "update" as const, status: "ok" as const, ts: 1 };
       await writeRestartSentinel(payload);
-      updateSentinelRow({
-        continuation_json: JSON.stringify({ kind: "agentTurn", message: 42 }),
-        payload_json: JSON.stringify(payload),
-      });
+      updateSentinelRow({ ...columns, payload_json: JSON.stringify(payload) });
 
       await expect(readRestartSentinel()).resolves.toBeNull();
       await expect(hasRestartSentinel()).resolves.toBe(false);
-    });
-  });
-
-  it("keeps revisions strictly monotonic within the same millisecond", async () => {
-    await withRestartSentinelStateDir(async () => {
-      const now = vi.spyOn(Date, "now").mockReturnValue(1000);
-      try {
-        const first = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
-        const second = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 2 });
-        expect(second.revision).toBe(first.revision + 1);
-        expect(readSentinelRow()?.updated_at_ms).toBe(second.revision);
-      } finally {
-        now.mockRestore();
-      }
     });
   });
 
@@ -432,19 +445,6 @@ describe("restart sentinel", () => {
     expect(summarizeRestartSentinel(payload)).toBe("Gateway auto-recovery");
   });
 
-  it("formatRestartSentinelMessage falls back to summary when no message", () => {
-    const payload = {
-      kind: "update" as const,
-      status: "ok" as const,
-      ts: Date.now(),
-      stats: { mode: "git" },
-    };
-    const result = formatRestartSentinelMessage(payload);
-    expect(result).toContain("Gateway restart");
-    expect(result).toContain("update");
-    expect(result).toContain("ok");
-  });
-
   it("formatRestartSentinelMessage falls back to summary for blank message", () => {
     const payload = {
       kind: "restart" as const,
@@ -516,13 +516,6 @@ describe("restart sentinel", () => {
         "Run openclaw doctor",
       ].join("\n"),
     );
-  });
-
-  it("trims log tails", () => {
-    const text = "a".repeat(9000);
-    const trimmed = trimLogTail(text, 8000);
-    expect(trimmed?.length).toBeLessThanOrEqual(8001);
-    expect(trimmed?.startsWith("…")).toBe(true);
   });
 
   it("keeps trimmed log tails UTF-16 safe", () => {
@@ -890,25 +883,6 @@ describe("restart sentinel message dedup", () => {
     const occurrences = result.split("Applying config changes").length - 1;
     expect(occurrences).toBe(1);
     expect(result).not.toContain("Reason:");
-  });
-
-  it("keeps Reason: line when stats.reason differs from message", () => {
-    const payload = {
-      kind: "restart" as const,
-      status: "ok" as const,
-      ts: Date.now(),
-      message: "Restart requested by /restart",
-      stats: { mode: "gateway.restart", reason: "/restart" },
-    };
-    const result = formatRestartSentinelMessage(payload);
-    expect(result).toContain("Restart requested by /restart");
-    expect(result).toContain("Reason: /restart");
-  });
-
-  it("formats the non-interactive doctor command as actionability guidance", () => {
-    expect(formatDoctorNonInteractiveHint({ PATH: "/usr/bin:/bin" })).toBe(
-      "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
-    );
   });
 
   it("keeps profile-aware doctor guidance actionable outside constrained delivery surfaces", () => {

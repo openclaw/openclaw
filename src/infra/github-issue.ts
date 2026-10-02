@@ -81,18 +81,13 @@ function boundUtf8(value: string, maxBytes: number, suffix: string): string {
   return `${truncateUtf8Prefix(value, Math.max(0, maxBytes - suffixBytes))}${suffix}`;
 }
 
-function buildPrefilledUrl(title: string, body: string): string {
-  const query = new URLSearchParams({ body, title });
-  return `https://github.com/openclaw/openclaw/issues/new?${query.toString()}`;
-}
-
 /** Builds an exact browser fallback when its encoded request stays within a safe bound. */
 function prepareGithubIssueBrowserFallback(
   title: string,
   body: string,
 ): GithubIssueBrowserFallback {
-  const boundedTitle = boundUtf8(title, GITHUB_ISSUE_TITLE_MAX_BYTES, GITHUB_BODY_TRUNCATED_SUFFIX);
-  const url = buildPrefilledUrl(boundedTitle, body);
+  const query = new URLSearchParams({ body, title });
+  const url = `https://github.com/openclaw/openclaw/issues/new?${query.toString()}`;
   if (Buffer.byteLength(url, "utf8") > GITHUB_PREFILL_URL_MAX_BYTES) {
     return { reason: "url-too-long", status: "unavailable" };
   }

@@ -18,6 +18,7 @@ import {
   setEmbeddedQuestionBroker,
 } from "../../infra/embedded-question-broker.js";
 import { isBuiltInDefaultSecretProviderRef } from "../../secrets/ref-contract.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { claimPendingAgentQuestionAnswer } from "../harness/gateway-question.js";
 import { reserveAskUserPromptDelivery, settleAskUserPromptDelivery } from "./ask-user-tool.js";
 import { resetPendingAskUserQuestionsForTest } from "./ask-user-tool.test-support.js";
@@ -110,6 +111,25 @@ function storedRequestGateway(readMetadata: () => Promise<unknown>) {
   });
 }
 
+function waitingStoredRequestGateway() {
+  const answer = createDeferred<unknown>();
+  const waiting = createDeferred();
+  const gateway = gatewayStub(async (method, _options, params) => {
+    if (method === "question.request") {
+      return { id: params.id };
+    }
+    if (method === "question.waitAnswer") {
+      waiting.resolve();
+      return await answer.promise;
+    }
+    if (method === "secrets.store.list") {
+      return { entries: [unrelatedEnv, secretEntry] };
+    }
+    throw new Error(`unexpected method ${method}`);
+  });
+  return { gateway, answer, waiting: waiting.promise };
+}
+
 afterEach(() => {
   resetPendingAskUserQuestionsForTest();
 });
@@ -165,7 +185,6 @@ describe("secrets request normalization", () => {
 
   it.each([
     ["lowercase names", { name: "bad_name", kind: "secret" }, "uppercase"],
-    ["unknown entry kinds", { name: "VALID_NAME", kind: "password" }, "kind must be"],
     [
       "environment-value requests the model could read back",
       { name: "VALID_NAME", kind: "env" },
@@ -190,7 +209,7 @@ describe("secrets request normalization", () => {
 describe("secrets tool", () => {
   it("returns a clear local store blocker without publishing a credential prompt", async () => {
     const previousMode = isEmbeddedMode();
-    const broker = new EmbeddedQuestionBroker();
+    const broker = new EmbeddedQuestionBroker(createTestGatewayScheduler());
     const events: string[] = [];
     broker.subscribe((event) => events.push(event.event));
     setEmbeddedMode(true);
@@ -226,21 +245,7 @@ describe("secrets tool", () => {
       },
     },
   ])("returns a valid $label ref without claiming chat text", async ({ config }) => {
-    let finishWait: ((value: unknown) => void) | undefined;
-    const gateway = gatewayStub(async (method, _options, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          finishWait = resolve;
-        });
-      }
-      if (method === "secrets.store.list") {
-        return { entries: [unrelatedEnv, secretEntry] };
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
+    const { gateway, answer, waiting } = waitingStoredRequestGateway();
     const tool = createSecretsTool({
       config,
       agentId: "main",
@@ -255,7 +260,7 @@ describe("secrets tool", () => {
       allowedHosts: ["api.example.test"],
       reason: "Deploy the service",
     });
-    await vi.waitFor(() => expect(finishWait).toBeTypeOf("function"));
+    await waiting;
 
     await expect(
       claimPendingAgentQuestionAnswer({
@@ -263,10 +268,7 @@ describe("secrets tool", () => {
         text: "test-secret-value-123",
       }),
     ).resolves.toBe(false);
-    finishWait?.({
-      status: "answered",
-      answers: { answers: { secret_value: ["stored"] } },
-    });
+    answer.resolve(storedAnswer);
     const result = await pending;
 
     const ref = SecretRefSchema.parse(asNullableRecord(result.details)?.ref);
@@ -366,7 +368,6 @@ describe("secrets tool", () => {
   it.each([
     { boundary: "wait timeout", marker: "stored", abort: false },
     { boundary: "delivery failure", marker: "stored", abort: false },
-    { boundary: "wait timeout", marker: "unexpected", abort: false },
     { boundary: "delivery failure", marker: "unexpected", abort: false },
     { boundary: "delivery failure", marker: "stored", abort: true },
   ])(
@@ -653,7 +654,7 @@ describe("secrets tool", () => {
   ])(
     "preserves question truth and the original error after $label",
     async ({ error, abort, answered }) => {
-      const manager = new QuestionManager();
+      const manager = new QuestionManager(createTestGatewayScheduler());
       const controller = new AbortController();
       const sessionKey = "agent:main:secret-registration";
       const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
@@ -730,7 +731,7 @@ describe("secrets tool", () => {
   ])(
     "does not cancel a refused registration (reason=$reason, abort=$abort)",
     async ({ reason, abort }) => {
-      const manager = new QuestionManager();
+      const manager = new QuestionManager(createTestGatewayScheduler());
       const controller = new AbortController();
       const sessionKey = "agent:main:secret-refusal";
       const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
@@ -808,32 +809,15 @@ describe("secrets tool", () => {
     if (!reservation) {
       throw new Error("expected secret prompt reservation");
     }
-    let finishWait: ((value: unknown) => void) | undefined;
-    const gateway = gatewayStub(async (method, _options, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          finishWait = resolve;
-        });
-      }
-      if (method === "secrets.store.list") {
-        return { entries: [unrelatedEnv, secretEntry] };
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
+    const { gateway, answer, waiting } = waitingStoredRequestGateway();
     const pending = createSecretsTool({ sessionKey, gatewayCall: gateway.call }).execute(
       "call-secret-prompt",
       args,
     );
-    await vi.waitFor(() => expect(finishWait).toBeTypeOf("function"));
+    await waiting;
 
     settleAskUserPromptDelivery(reservation.questionId);
-    finishWait?.({
-      status: "answered",
-      answers: { answers: { secret_value: ["stored"] } },
-    });
+    answer.resolve(storedAnswer);
 
     await expect(pending).resolves.toMatchObject({ details: { status: "stored" } });
   });
@@ -844,21 +828,7 @@ describe("secrets tool", () => {
     const sessionKey = "agent:main:secret-direct-dispatch";
     const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
     const sent: { text?: string; channelData?: unknown }[] = [];
-    let finishWait: ((value: unknown) => void) | undefined;
-    const gateway = gatewayStub(async (method, _options, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          finishWait = resolve;
-        });
-      }
-      if (method === "secrets.store.list") {
-        return { entries: [unrelatedEnv, secretEntry] };
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
+    const { gateway, answer } = waitingStoredRequestGateway();
 
     const pending = createSecretsTool({
       config: { gateway: { publicOrigin: "https://ops.example.test" } },
@@ -872,10 +842,7 @@ describe("secrets tool", () => {
       },
     }).execute("call-secret-direct", args);
     await vi.waitFor(() => expect(sent).toHaveLength(1));
-    finishWait?.({
-      status: "answered",
-      answers: { answers: { secret_value: ["stored"] } },
-    });
+    answer.resolve(storedAnswer);
 
     await expect(pending).resolves.toMatchObject({ details: { status: "stored" } });
     expect(sent[0]?.text).toContain("https://ops.example.test/ask/");

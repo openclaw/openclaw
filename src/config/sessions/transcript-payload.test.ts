@@ -323,95 +323,98 @@ describe("transcript payload storage boundary", () => {
     }
   });
 
-  it.each(["native", "text fallback"])("preserves exact owner projections with %s JSON", (mode) => {
-    const jsonb =
-      mode === "text fallback"
-        ? vi.spyOn(nodeSqlite, "supportsNodeSqliteJsonb").mockReturnValue(false)
-        : undefined;
-    const database = openNodeSqliteDatabase(":memory:");
-    try {
-      createTable(database);
-      const original = `{"type":"message","type":"reset","id":"first","id":"last","parentId":"parent","targetId":"target","appendParentId":"append","appendMode":"preserve","firstKeptEntryId":"kept","timestamp":"2026-01-01","message":{"role":"assistant","content":[{"type":"toolCall","id":"call","name":"read","arguments":{"large":"${"argument ".repeat(512)}"}}],"providerReplay":{"type":"checkpoint","data":"opaque"}},"message":{"role":"user","role":"toolResult","toolCallId":"call"}}`;
-      const prepared = prepareTranscriptPayload(database, original);
-      expect(prepared.event_zstd).not.toBeNull();
-      insert(database, 0, {
-        event_json: original,
-        event_zstd: null,
-        event_utf8_bytes: null,
-        navigation_json: null,
-      });
-      insert(database, 1, prepared);
-      const db = getNodeSqliteKysely<PayloadDatabase>(database);
-      const stored = executeSqliteQueryTakeFirstSync(
-        database,
-        db
-          .selectFrom("transcript_events")
-          .select((eb) => [
-            transcriptEventNavigationSql().as("navigation"),
-            transcriptEventResetNavigationSql().as("reset"),
-            transcriptEventModelNavigationSql().as("model"),
-            transcriptEventModelBytesSql(sql.lit(0)).as("modelBytes"),
-            transcriptEventModelBytesSql(sql.lit(1)).as("modelWithoutCheckpointBytes"),
-            transcriptEventWithoutCustomDataBytesSql().as("withoutCustomDataBytes"),
-            eb
-              .fn<string>("json_extract", [transcriptEventNavigationSql(), eb.val("$.type")])
-              .as("first_type"),
-            eb
-              .fn<string>("json_extract", [
-                transcriptEventNavigationSql(),
-                eb.val("$.message.role"),
-              ])
-              .as("first_role"),
-          ])
-          .where("seq", "=", 1),
-      );
-      const native = executeSqliteQueryTakeFirstSync(
-        database,
-        db
-          .selectFrom("transcript_events")
-          .select((eb) => [
-            projectResetBoundaryNavigationSql(nativeFixtureEvent).as("reset"),
-            projectModelContextNavigationSql(nativeFixtureEvent).as("model"),
-            eb
-              .fn<number>("octet_length", [
-                projectModelContextEventSql(nativeFixtureEvent, sql.lit(0)),
-              ])
-              .as("modelBytes"),
-            eb
-              .fn<number>("octet_length", [
-                projectModelContextEventSql(nativeFixtureEvent, sql.lit(1)),
-              ])
-              .as("modelWithoutCheckpointBytes"),
-            eb
-              .fn<number>("octet_length", [
-                eb.fn<string>("json_remove", [nativeFixtureEvent, eb.val("$.data")]),
-              ])
-              .as("withoutCustomDataBytes"),
-          ])
-          .where("seq", "=", 0),
-      );
-      expect(stored?.first_type).toBe("message");
-      expect(stored?.first_role).toBe("assistant");
-      expect(JSON.parse(stored!.navigation)).toMatchObject({
-        type: "reset",
-        id: "last",
-        targetId: "target",
-        appendParentId: "append",
-        appendMode: "preserve",
-        firstKeptEntryId: "kept",
-        message: { role: "toolResult" },
-      });
-      expect(stored).toMatchObject(native!);
-      expect(readBody(database, 1)).toBe(original);
-      expect(JSON.parse(stored!.model).message.content).toEqual([
-        { type: "toolCall", id: "call", name: "read" },
-      ]);
-      expect(JSON.parse(stored!.model).message.providerReplay).toEqual({ type: "checkpoint" });
-    } finally {
-      database.close();
-      jsonb?.mockRestore();
-    }
-  });
+  it.each(["native", "text fallback", "large"])(
+    "preserves owner projections with %s JSON",
+    (mode) => {
+      const jsonb =
+        mode === "text fallback"
+          ? vi.spyOn(nodeSqlite, "supportsNodeSqliteJsonb").mockReturnValue(false)
+          : undefined;
+      const database = openNodeSqliteDatabase(":memory:");
+      try {
+        createTable(database);
+        const original = `{"type":"message","type":"reset","id":"first","id":"last","parentId":"parent","targetId":"target","appendParentId":"append","appendMode":"preserve","firstKeptEntryId":"kept","timestamp":"2026-01-01","message":{"role":"assistant","content":[{"type":"toolCall","id":"call","name":"read","arguments":{"large":"${"argument ".repeat(mode === "large" ? 256 * 1024 : 512)}"}}],"providerReplay":{"type":"checkpoint","data":"opaque"}},"message":{"role":"user","role":"toolResult","toolCallId":"call"}}`;
+        const prepared = prepareTranscriptPayload(database, original);
+        expect(prepared.event_zstd).not.toBeNull();
+        insert(database, 0, {
+          event_json: original,
+          event_zstd: null,
+          event_utf8_bytes: null,
+          navigation_json: null,
+        });
+        insert(database, 1, prepared);
+        const db = getNodeSqliteKysely<PayloadDatabase>(database);
+        const stored = executeSqliteQueryTakeFirstSync(
+          database,
+          db
+            .selectFrom("transcript_events")
+            .select((eb) => [
+              transcriptEventNavigationSql().as("navigation"),
+              transcriptEventResetNavigationSql().as("reset"),
+              transcriptEventModelNavigationSql().as("model"),
+              transcriptEventModelBytesSql(sql.lit(0)).as("modelBytes"),
+              transcriptEventModelBytesSql(sql.lit(1)).as("modelWithoutCheckpointBytes"),
+              transcriptEventWithoutCustomDataBytesSql().as("withoutCustomDataBytes"),
+              eb
+                .fn<string>("json_extract", [transcriptEventNavigationSql(), eb.val("$.type")])
+                .as("first_type"),
+              eb
+                .fn<string>("json_extract", [
+                  transcriptEventNavigationSql(),
+                  eb.val("$.message.role"),
+                ])
+                .as("first_role"),
+            ])
+            .where("seq", "=", 1),
+        );
+        const native = executeSqliteQueryTakeFirstSync(
+          database,
+          db
+            .selectFrom("transcript_events")
+            .select((eb) => [
+              projectResetBoundaryNavigationSql(nativeFixtureEvent).as("reset"),
+              projectModelContextNavigationSql(nativeFixtureEvent).as("model"),
+              eb
+                .fn<number>("octet_length", [
+                  projectModelContextEventSql(nativeFixtureEvent, sql.lit(0)),
+                ])
+                .as("modelBytes"),
+              eb
+                .fn<number>("octet_length", [
+                  projectModelContextEventSql(nativeFixtureEvent, sql.lit(1)),
+                ])
+                .as("modelWithoutCheckpointBytes"),
+              eb
+                .fn<number>("octet_length", [
+                  eb.fn<string>("json_remove", [nativeFixtureEvent, eb.val("$.data")]),
+                ])
+                .as("withoutCustomDataBytes"),
+            ])
+            .where("seq", "=", 0),
+        );
+        expect(stored?.first_type).toBe("message");
+        expect(stored?.first_role).toBe("assistant");
+        expect(JSON.parse(stored!.navigation)).toMatchObject({
+          type: "reset",
+          id: "last",
+          targetId: "target",
+          appendParentId: "append",
+          appendMode: "preserve",
+          firstKeptEntryId: "kept",
+          message: { role: "toolResult" },
+        });
+        expect(stored).toMatchObject(native!);
+        expect(readBody(database, 1)).toBe(original);
+        expect(JSON.parse(stored!.model).message.content).toEqual([
+          { type: "toolCall", id: "call", name: "read" },
+        ]);
+        expect(JSON.parse(stored!.model).message.providerReplay).toEqual({ type: "checkpoint" });
+      } finally {
+        database.close();
+        jsonb?.mockRestore();
+      }
+    },
+  );
 
   it("admits model and retained-custom projections using exact costs without decoding bodies", () => {
     const database = openNodeSqliteDatabase(":memory:");

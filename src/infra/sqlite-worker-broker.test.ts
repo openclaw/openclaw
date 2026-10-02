@@ -1,13 +1,21 @@
+import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { EventEmitter } from "node:events";
 import * as os from "node:os";
-import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { Worker } from "node:worker_threads";
+import { expect, it, vi } from "vitest";
 import * as logging from "../logging/logger.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import {
-  openSqliteWorkerStore,
+  useSqliteWorkerStoreFixture,
+  appendWorkerRow as append,
+  readWorkerRows as read,
+} from "./sqlite-worker-fixture.test-support.js";
+import {
+  reserveSqliteWorkerInputPreparation,
   runSqliteWorkerStoreOperation,
   runSqliteWorkerStoreWrite,
   type SqliteWorkerStore,
@@ -19,40 +27,85 @@ vi.mock("node:os", async (importOriginal) => ({
   availableParallelism: () => 32,
 }));
 
-const stores = new Set<SqliteWorkerStore<FixtureOperations>>();
-const dirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    try {
-      await Promise.all([...stores].map((store) => store.close()));
-    } finally {
-      stores.clear();
-      cleanup();
+const { databasePath, open } = useSqliteWorkerStoreFixture("sqlite-worker-broker-", () => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
+const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
+const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
+
+poolIt("keeps an independent database responsive while another worker is at capacity", async () => {
+  const busy = await open(databasePath());
+  const independent = await open(databasePath());
+  const busyThread = (await append(busy, "before saturation")).threadId;
+  const held = createDeferredCore();
+  let release: (() => void) | undefined;
+  const messages = vi.spyOn(Worker.prototype, "emit");
+  messages.mockImplementation(function (this: Worker, event: string | symbol, ...args: unknown[]) {
+    if (event === "message" && this.threadId === busyThread) {
+      messages.mockRestore();
+      release = () => EventEmitter.prototype.emit.call(this, event, ...args);
+      held.resolve();
+      return true;
     }
-  }),
-);
-const databasePath = () => path.join(dirs.make("sqlite-worker-broker-"), "store.sqlite");
-
-async function open(file: string) {
-  const store = await openSqliteWorkerStore<FixtureOperations>({
-    moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
-    databasePath: file,
-    input: undefined,
+    return EventEmitter.prototype.emit.call(this, event, ...args);
   });
-  stores.add(store);
-  return store;
-}
-
-function append(store: SqliteWorkerStore<FixtureOperations>, value: string) {
-  return store.execute({ type: "append", input: { value } });
-}
-
-function read(store: SqliteWorkerStore<FixtureOperations>) {
-  return store.execute({ type: "read", input: undefined });
-}
-
-const nodeIt = process.versions.bun ? it.skip : it;
+  const accepted = Promise.allSettled(
+    Array.from({ length: 128 }, (_, index) => append(busy, String(index))),
+  );
+  const canceled = new Error("Waiting command canceled");
+  const revoked = new Error("Waiting command authority revoked");
+  let waiting: Promise<PromiseSettledResult<unknown>[]> | undefined;
+  try {
+    await held.promise;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const completed = expect(append(independent, "independent write")).resolves.toMatchObject({
+      writes: 1,
+    });
+    // A different worker must not spend the busy worker's admission timeout waiting for room.
+    vi.advanceTimersByTime(10_000);
+    await completed;
+    expect(await read(independent)).toEqual(["independent write"]);
+    vi.useRealTimers();
+    const cancel = new AbortController();
+    let current = true;
+    waiting = Promise.allSettled([
+      busy.execute({ type: "append", input: { value: "canceled" } }, { signal: cancel.signal }),
+      runSqliteWorkerStoreOperation(
+        busy,
+        (scope) => scope.execute({ type: "append", input: { value: "revoked" } }),
+        undefined,
+        () => {
+          if (!current) {
+            throw revoked;
+          }
+        },
+      ),
+      append(busy, "oldest surviving waiter"),
+      append(busy, "later arrival"),
+    ]);
+    current = false;
+    cancel.abort(canceled);
+  } finally {
+    vi.useRealTimers();
+    messages.mockRestore();
+    release?.();
+    expect((await accepted).every((outcome) => outcome.status === "fulfilled")).toBe(true);
+  }
+  expect(await waiting).toMatchObject([
+    { status: "rejected", reason: canceled },
+    { status: "rejected", reason: revoked },
+    { status: "fulfilled" },
+    { status: "fulfilled" },
+  ]);
+  expect(await read(busy)).toEqual([
+    "before saturation",
+    ...Array.from({ length: 128 }, (_, index) => String(index)),
+    "oldest surviving waiter",
+    "later arrival",
+  ]);
+});
 
 it.each([
   { writeAdmission: false, revoke: false },
@@ -172,6 +225,10 @@ it.each(["abort", "drain", "timeout"] as const)(
 
 it("charges admission waiters to the byte budget and releases canceled reservations", async () => {
   const store = await open(databasePath());
+  const independent = await open(databasePath());
+  const concurrentInputs = Array.from({ length: 3 }, () =>
+    reserveSqliteWorkerInputPreparation(64 * 1024 * 1024),
+  );
   const accepted = Promise.allSettled(Array.from({ length: 128 }, () => read(store)));
   const cancel = new AbortController();
   const waiting = store.execute(
@@ -180,7 +237,7 @@ it("charges admission waiters to the byte budget and releases canceled reservati
   );
   const outcome = Promise.allSettled([waiting]);
   try {
-    await expect(append(store, "x".repeat(30 * 1024 * 1024))).rejects.toMatchObject({
+    await expect(append(independent, "x".repeat(30 * 1024 * 1024))).rejects.toMatchObject({
       code: "overloaded",
     });
     cancel.abort(new Error("release waiting bytes"));
@@ -199,6 +256,9 @@ it("charges admission waiters to the byte budget and releases canceled reservati
       { status: "rejected", reason: { message: "replacement admitted" } },
     ]);
   } finally {
+    for (const prepared of concurrentInputs) {
+      prepared.release();
+    }
     cancel.abort();
     await outcome;
     await accepted;
@@ -206,7 +266,7 @@ it("charges admission waiters to the byte budget and releases canceled reservati
   expect(await read(store)).toEqual([]);
 });
 
-nodeIt.each([
+poolIt.each([
   { cores: 1, workers: 2 },
   { cores: 24, workers: 3 },
   { cores: 128, workers: 8 },
@@ -221,9 +281,7 @@ nodeIt.each([
         databasePath: databasePath(),
         input: undefined,
       });
-      if (!store) {
-        throw new Error("Fixture store missing");
-      }
+      assert(store, "Fixture store missing");
       threads.add((await append(store, "thread count")).threadId);
     }
     expect(threads.size).toBe(workers);

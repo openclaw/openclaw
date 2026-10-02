@@ -20,7 +20,7 @@ import {
   type OpenClawTestState,
   withOpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import {
   mintMessageActionTurnCapability,
   resolveMessageActionTurnCapability,
@@ -180,7 +180,10 @@ async function createFixture(state: OpenClawTestState) {
     };
     const token = mintMessageActionTurnCapability({
       ...identity,
-      scheduled: { policy, assertCurrent: () => permission.signal.throwIfAborted() },
+      scheduled: {
+        policy,
+        assertCurrent: () => permission.signal.throwIfAborted(),
+      },
     });
     tokens.push(token);
     const messageActionContext = expectDefined(

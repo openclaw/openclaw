@@ -50,7 +50,7 @@ it("records serving health without replacing a persisted restart refusal", () =>
   );
   expect(recorded?.verification).toEqual({ ...verification, recovery });
   expect(renderUpdateRunReport(recorded!).markdown).toContain(
-    "Recovery: verified serving 2026.9.5; restart remains unsafe (runtime-verification-failed)",
+    "Recorded recovery: verified serving 2026.9.5; restart remains unsafe (runtime-verification-failed)",
   );
 });
 

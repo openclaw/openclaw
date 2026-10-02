@@ -52,6 +52,8 @@ Store values are not encrypted at rest. They are stored unencrypted in the share
 
 The secret egress proxy lets Gateway-hosted agent subprocesses use shared-store `secret` entries without receiving their plaintext. OpenClaw puts the existing authenticated sentinel in the subprocess environment, then a Gateway-owned loopback proxy replaces it in request URLs, headers, and streamed bodies immediately before egress.
 
+The listener runs in a dedicated Gateway Worker that owns TLS, certificate preparation, substitution, and forwarding. Request and response bytes stay off the Gateway's main event loop. The Gateway exchanges process grants and certificate health with that Worker; revocation immediately fences the grant before its connections are closed. A failed Worker closes protected egress and requires a Gateway restart.
+
 Each secret must also name the exact HTTPS hosts where substitution is allowed. Hostnames are stored lowercase in ASCII/punycode form and matched exactly; wildcards, suffix matching, and ports are not supported. A secret with no allowed hosts is never substituted. Bind a host without replacing the stored value:
 
 ```bash
@@ -110,7 +112,7 @@ Process exit, failed startup, cancellation, and timeout revoke that process's gr
 Each process receives a fixed copy of the owning run's secret snapshot, including each sentinel's secret name and allowed hosts. Later commands cannot change an existing process's grant. After proxy authentication, the proxy looks up the matched sentinel in that process's registration and authorizes the normalized destination hostname before decrypting the sentinel. A sentinel that is unregistered, unresolved, unbound, or bound to another host is refused before its plaintext is forwarded.
 
 <Warning>
-Destination binding does not make an allowed host trustworthy. A bound service that reflects request credentials can still return the plaintext to the agent. DNS-level compromise can redirect a permitted hostname because policy is hostname-based, not an IP pin. Non-HTTPS requests are refused rather than protected, and HTTPS interception still has the protocol limits below. Use external network policy or process isolation when those threats are in scope.
+Destination binding does not make an allowed host trustworthy. A bound service that reflects request credentials can still return the plaintext to the agent. DNS-level compromise can redirect a permitted hostname because policy is hostname-based, not an IP pin. Non-HTTPS requests are refused rather than protected, except plain-HTTP requests to literal loopback destinations, which the proxy forwards under its traffic policy without substituting secrets. HTTPS interception still has the protocol limits below. Use external network policy or process isolation when those threats are in scope.
 </Warning>
 
 The CA is generated once per Gateway start under the state directory with a ten-year certificate validity window. Its key is still process-owned, not retained for ten years. One-day leaf certificates renew on demand within their final hour without replacing the CA or interrupting established TLS connections. This keeps already-running subprocesses trusting the same issuer across renewal. Its directory is mode `0700`, its private keys are mode `0600`, it is removed during Gateway shutdown, and OpenClaw never installs it in a system trust store. Requests fail closed when a sentinel cannot be authenticated or resolved; the proxy never forwards or silently strips an unresolved sentinel. Request bodies are scanned as a stream with a bounded carry window, so substitution also works when a sentinel crosses chunk boundaries or appears in a large upload.
@@ -145,7 +147,7 @@ Current limits:
 - Non-443 HTTPS substitution is not a supported compatibility target.
 - Identity-scoped secrets are not supported; only the team store participates.
 - Allowed-host policy is exact-hostname authorization only. It does not validate the resolved IP or prevent an allowed origin from reflecting credentials.
-- Plain HTTP is refused; it is not upgraded or substituted.
+- Plain HTTP is refused except for direct proxy requests to literal loopback destinations (`localhost`, `127.0.0.0/8`, or `::1`). These requests stay under proxy authentication, traffic allowlist, audit, and upload limits. DNS answers do not qualify other hostnames for this exception. Loopback HTTP requests carrying a secret sentinel are still refused; secrets are never substituted onto cleartext HTTP.
 - Automatic shared-store secret egress applies only to Gateway-hosted exec. Sandbox and remote `node` exec receive neither proxy variables nor sentinels, so shared-store `secret` entries are unavailable there. Provider-native harness subprocesses also do not use this proxy. The explicit Crabbox command below grants a configured model credential separately.
 - Background subprocesses retain their original secret snapshot until they exit or are stopped. Changes to stored credentials or destination bindings require a new run and a new command; stop existing commands to revoke their older grants immediately.
 

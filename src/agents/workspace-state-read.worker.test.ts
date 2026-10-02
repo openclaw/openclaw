@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   withArtifactPreservingStateReads,
@@ -11,7 +10,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -52,6 +51,17 @@ async function seed() {
   return await readWorkspaceStateSnapshot(state.workspaceDir);
 }
 
+async function withoutMainThreadSql<T>(read: () => Promise<T>): Promise<T> {
+  const sql = observeMainThreadSql();
+  try {
+    const result = await read();
+    sql.expectIdle();
+    return result;
+  } finally {
+    sql.restore();
+  }
+}
+
 it.each([false, true])(
   "prepares bootstrap files for completed=%s without main-thread SQL",
   async (completed) => {
@@ -68,73 +78,25 @@ it.each([false, true])(
       });
     }
     await closeOpenClawStateDatabaseAsync();
-    const sql = observeMainThreadSql();
-    try {
-      const files = await resolveBootstrapFilesForPreparation({ workspaceDir: state.workspaceDir });
-      expect(files.find((file) => file.name === "AGENTS.md")?.content).toContain(
-        "Synthetic agent instructions.",
-      );
-      // Preparation treats read errors as incomplete setup, so success alone is insufficient.
-      expect(files.some((file) => file.name === "BOOTSTRAP.md")).toBe(!completed);
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
-  },
-);
-
-it("awaits configured Doctor workspace inspection without main-thread SQL", async () => {
-  await seed();
-  await closeOpenClawStateDatabaseAsync();
-  const sql = observeMainThreadSql();
-  try {
-    await assertConfiguredWorkspaceStateReady({
-      cfg: { agents: { defaults: { workspace: state.workspaceDir, sandbox: { mode: "off" } } } },
-      env: state.env,
-      operation: "doctor",
-    });
-    sql.expectIdle();
-  } finally {
-    sql.restore();
-  }
-});
-
-it.each(["cached", "cold"] as const)(
-  "reads %s workspace state without main-thread SQL",
-  async (mode) => {
-    const expected = await seed();
-    const database = openOpenClawStateDatabase();
-    if (mode === "cold") {
-      await closeOpenClawStateDatabaseAsync();
-    }
-    const sql = observeMainThreadSql();
-    const started = performance.now();
-    try {
-      expect(await readWorkspaceStateSnapshot(state.workspaceDir, { readOnly: true })).toEqual(
-        expected,
-      );
-      sql.expectIdle();
-      expect(database.db.isOpen).toBe(mode === "cached");
-      console.info("workspace read", { mode, elapsedMs: Math.round(performance.now() - started) });
-    } finally {
-      sql.restore();
-    }
+    const files = await withoutMainThreadSql(() =>
+      resolveBootstrapFilesForPreparation({ workspaceDir: state.workspaceDir }),
+    );
+    expect(files.find((file) => file.name === "AGENTS.md")?.content).toContain(
+      "Synthetic agent instructions.",
+    );
+    // Preparation treats read errors as incomplete setup, so success alone is insufficient.
+    expect(files.some((file) => file.name === "BOOTSTRAP.md")).toBe(!completed);
   },
 );
 
 it("keeps an absent workspace database absent", async () => {
   const databasePath = resolveOpenClawStateSqlitePath(state.env);
-  const sql = observeMainThreadSql();
-  try {
-    expect(await readWorkspaceStateSnapshot(state.workspaceDir, { readOnly: true })).toMatchObject({
-      setupExists: false,
-      setup: { version: 1 },
-    });
-    sql.expectIdle();
-    expect(fs.existsSync(databasePath)).toBe(false);
-  } finally {
-    sql.restore();
-  }
+  expect(
+    await withoutMainThreadSql(() =>
+      readWorkspaceStateSnapshot(state.workspaceDir, { readOnly: true }),
+    ),
+  ).toMatchObject({ setupExists: false, setup: { version: 1 } });
+  expect(fs.existsSync(databasePath)).toBe(false);
 });
 
 it("keeps workspace reads on the selected composite snapshot", async () => {
@@ -143,15 +105,11 @@ it("keeps workspace reads on the selected composite snapshot", async () => {
     await mergeWorkspaceSetupState(state.workspaceDir, {
       setupCompletedAt: "2026-07-16T02:00:00.000Z",
     });
-    const sql = observeMainThreadSql();
-    try {
-      expect(await readWorkspaceStateSnapshot(state.workspaceDir, { readOnly: true })).toEqual(
-        initial,
-      );
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
+    expect(
+      await withoutMainThreadSql(() =>
+        readWorkspaceStateSnapshot(state.workspaceDir, { readOnly: true }),
+      ),
+    ).toEqual(initial);
   });
   expect(
     (await readWorkspaceStateSnapshot(state.workspaceDir, { readOnly: true })).setup
@@ -167,15 +125,12 @@ it("reads committed workspace state while the cached writer has an open transact
     database.db
       .prepare("UPDATE workspace_setup_state SET setup_completed_at = ?")
       .run("2026-07-16T02:00:00.000Z");
-    const sql = observeMainThreadSql();
-    try {
-      expect(
-        await readWorkspaceStateSnapshot(state.workspaceDir, { database, readOnly: true }),
-      ).toEqual(expected);
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
+    expect(
+      await withoutMainThreadSql(() =>
+        readWorkspaceStateSnapshot(state.workspaceDir, { database, readOnly: true }),
+      ),
+    ).toEqual(expected);
+    expect(database.db.isOpen).toBe(true);
   } finally {
     database.db.exec("ROLLBACK");
   }
@@ -184,7 +139,7 @@ it("reads committed workspace state while the cached writer has an open transact
 it("preserves source artifacts and does not repair missing indexes on inspection", async () => {
   const expected = await seed();
   const database = openOpenClawStateDatabase();
-  database.db.exec("DROP INDEX idx_flow_runs_owner_key");
+  database.db.exec("DROP INDEX idx_task_runs_status");
   const databasePath = database.path;
   await closeOpenClawStateDatabaseAsync();
   const artifacts = () =>
@@ -192,17 +147,14 @@ it("preserves source artifacts and does not repair missing indexes on inspection
       fs.existsSync(file) ? fs.readFileSync(file) : null,
     );
   const before = artifacts();
-  const sql = observeMainThreadSql();
-  try {
-    expect(
-      await withArtifactPreservingStateReads(() =>
+  expect(
+    await withoutMainThreadSql(() =>
+      withArtifactPreservingStateReads(() =>
         readWorkspaceStateSnapshot(state.workspaceDir, { readOnly: true }),
       ),
-    ).toEqual(expected);
-    sql.expectIdle();
-  } finally {
-    sql.restore();
-  }
+    ),
+  ).toEqual(expected);
+  expect(database.db.isOpen).toBe(false);
   expect(artifacts()).toEqual(before);
 });
 
@@ -216,21 +168,17 @@ it("preserves repointed workspace alias error identity and repair details", asyn
   fs.unlinkSync(alias);
   fs.symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
   await closeOpenClawStateDatabaseAsync();
-  const sql = observeMainThreadSql();
-  try {
-    const error = await assertConfiguredWorkspaceStateReady({
+  const error = await withoutMainThreadSql(() =>
+    assertConfiguredWorkspaceStateReady({
       cfg: { agents: { defaults: { workspace: alias, sandbox: { mode: "off" } } } },
       env: state.env,
       operation: "doctor",
-    }).catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(WorkspaceAliasRepointedError);
-    expect(error).toMatchObject({
-      aliasPath: path.normalize(alias),
-      storedWorkspacePath: path.normalize(state.workspaceDir),
-      currentWorkspacePath: path.normalize(replacement),
-    });
-    sql.expectIdle();
-  } finally {
-    sql.restore();
-  }
+    }).catch((caught: unknown) => caught),
+  );
+  expect(error).toBeInstanceOf(WorkspaceAliasRepointedError);
+  expect(error).toMatchObject({
+    aliasPath: path.normalize(alias),
+    storedWorkspacePath: path.normalize(state.workspaceDir),
+    currentWorkspacePath: path.normalize(replacement),
+  });
 });

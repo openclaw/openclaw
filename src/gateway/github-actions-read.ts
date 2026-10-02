@@ -86,7 +86,7 @@ export async function prepareBoardGitHubIdentity(
 ) {
   try {
     const config = context.getRuntimeConfig();
-    const identity = await prepareGitHubReadIdentity({
+    return await prepareGitHubReadIdentity({
       config,
       sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
       agentId: authority.boardSession.agentId,
@@ -95,7 +95,6 @@ export async function prepareBoardGitHubIdentity(
       startActive: authority.useCurrent,
       refresh: () => requestCurrentGitHubOAuthRefresh(authority.boardSession.agentId),
     });
-    return identity;
   } catch (error) {
     if (
       error instanceof GitHubIdentityError ||

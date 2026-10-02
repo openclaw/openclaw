@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { normalizeOptionalString as normalizeOptionalStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
   getAgentWorkspaceAccess,
@@ -21,7 +22,6 @@ import {
   tryReadJson,
   writeJson,
 } from "../../infra/json-files.js";
-import { replaceFileAtomicSync } from "../../infra/replace-file.js";
 import {
   normalizeTrackedSkillSlug,
   resolveWorkspaceSkillInstallDir,
@@ -177,10 +177,8 @@ function normalizeClawHubSkillOrigin(
   ) {
     return null;
   }
-  const sourceUrl = normalizeOptionalStringValue((raw as { sourceUrl?: unknown }).sourceUrl);
-  const ownerHandleRaw = normalizeOptionalStringValue(
-    (raw as { ownerHandle?: unknown }).ownerHandle,
-  );
+  const sourceUrl = normalizeOptionalStringValue(raw.sourceUrl);
+  const ownerHandleRaw = normalizeOptionalStringValue(raw.ownerHandle);
   let ownerHandle: string | undefined;
   if (ownerHandleRaw) {
     try {
@@ -189,9 +187,7 @@ function normalizeClawHubSkillOrigin(
       return null;
     }
   }
-  const requestedReferenceRaw = normalizeOptionalStringValue(
-    (raw as { requestedReference?: unknown }).requestedReference,
-  );
+  const requestedReferenceRaw = normalizeOptionalStringValue(raw.requestedReference);
   let requestedReference: string | undefined;
   let trustState: ClawHubSkillsShTrustState | undefined;
   if (requestedReferenceRaw) {
@@ -201,9 +197,7 @@ function normalizeClawHubSkillOrigin(
         return null;
       }
       requestedReference = parsed.requestedReference;
-      const rawTrustState = normalizeOptionalStringValue(
-        (raw as { trustState?: unknown }).trustState,
-      );
+      const rawTrustState = normalizeOptionalStringValue(raw.trustState);
       if (rawTrustState !== CLAWHUB_SKILLS_SH_TRUST_STATE) {
         return null;
       }
@@ -211,14 +205,12 @@ function normalizeClawHubSkillOrigin(
     } catch {
       return null;
     }
-  } else if ((raw as { trustState?: unknown }).trustState !== undefined) {
+  } else if (raw.trustState !== undefined) {
     return null;
   }
-  const artifact = normalizeDownloadedArtifactLock((raw as { artifact?: unknown }).artifact);
-  const skillFile = normalizeSkillFileLock((raw as { skillFile?: unknown }).skillFile);
-  const fileTreeSha256 = normalizeOptionalStringValue(
-    (raw as { fileTreeSha256?: unknown }).fileTreeSha256,
-  );
+  const artifact = normalizeDownloadedArtifactLock(raw.artifact);
+  const skillFile = normalizeSkillFileLock(raw.skillFile);
+  const fileTreeSha256 = normalizeOptionalStringValue(raw.fileTreeSha256);
   return {
     version: 1,
     registry: normalizeStoredRegistry(raw.registry),
@@ -283,7 +275,7 @@ function readJsonIfExistsSync(
   try {
     return { exists: true, value: JSON.parse(fsSync.readFileSync(candidate, "utf8")) };
   } catch (err) {
-    if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
+    if (hasErrnoCode(err, "ENOENT")) {
       return { exists: false };
     }
     throw err;
@@ -415,15 +407,19 @@ export async function recordClawHubSkillInstall(
   await writeClawHubSkillsLockfile(params.workspaceDir, lock);
 }
 
-export async function readTrackedClawHubSkillSlugs(workspaceDir: string): Promise<string[]> {
-  const workspaceAccess = getAgentWorkspaceAccess(workspaceDir, "loadSkills");
-  const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
+export function resolveWorkspaceClawHubSkills(workspaceDir: string) {
+  const access = getAgentWorkspaceAccess(workspaceDir, "loadSkills");
   if (access && !access.clawHubSkills) {
     throw new WorkspaceAccessUnavailableError("Remote workspace ClawHub tracking is unavailable");
   }
-  const lock = await (
-    access?.clawHubSkills?.readClawHubSkillsLockfile ?? readClawHubSkillsLockfile
-  )(workspaceDir);
+  return access?.clawHubSkills;
+}
+
+export async function readTrackedClawHubSkillSlugs(workspaceDir: string): Promise<string[]> {
+  const tracking = resolveWorkspaceClawHubSkills(workspaceDir);
+  const lock = await (tracking?.readClawHubSkillsLockfile ?? readClawHubSkillsLockfile)(
+    workspaceDir,
+  );
   return Object.keys(lock.skills).toSorted();
 }
 

@@ -45,12 +45,7 @@ const chromeTransport = MeetingPlatformAdapter.createChromeTransportWithExternal
 export const assertGoogleMeetAudioAvailable = chromeTransport.assertAudioDeviceAvailable;
 export const launchChromeMeetOnNode = chromeTransport.launchOnNode;
 
-export async function launchChromeMeet(
-  params: Parameters<typeof chromeTransport.launchInChrome>[0],
-): ReturnType<typeof chromeTransport.launchInChrome> {
-  const result = await chromeTransport.launchInChrome(params);
-  return { ...result, audioBridge: result.audioBridge };
-}
+export const launchChromeMeet = chromeTransport.launchInChrome;
 
 function shouldCaptureCaptions(mode: GoogleMeetMode, fullConfig?: OpenClawConfig): boolean {
   return (

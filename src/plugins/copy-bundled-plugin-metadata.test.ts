@@ -85,7 +85,7 @@ afterEach(() => {
 });
 
 describe("copyBundledPluginMetadata", () => {
-  it("copies plugin metadata, activity artwork, and skills without replacing runtime assets", () => {
+  it("copies plugin metadata, README, activity artwork, and skills without replacing runtime assets", () => {
     const repoRoot = makeRepoRoot("openclaw-bundled-plugin-meta-");
     const pluginDir = createPlugin(repoRoot, {
       id: "acpx",
@@ -105,6 +105,7 @@ describe("copyBundledPluginMetadata", () => {
       },
       packageOpenClaw: { extensions: ["./index.ts"] },
     });
+    fs.writeFileSync(path.join(pluginDir, "README.md"), "# ACP overview\n");
     fs.mkdirSync(path.join(pluginDir, "skills", "acp-router"), { recursive: true });
     fs.writeFileSync(
       path.join(pluginDir, "skills", "acp-router", "SKILL.md"),
@@ -142,6 +143,9 @@ describe("copyBundledPluginMetadata", () => {
     ).toContain("ACP Router");
     expectBundledSkills(repoRoot, "acpx", ["./skills"]);
     expect(
+      fs.readFileSync(path.join(bundledPluginDir(repoRoot, "acpx"), "README.md"), "utf8"),
+    ).toBe("# ACP overview\n");
+    expect(
       fs.readFileSync(path.join(repoRoot, "dist", "extensions", "acpx", "assets", "icon.png")),
     ).toEqual(Buffer.from("package icon"));
     expect(fs.readFileSync(path.join(distAssetsDir, "activity.svg"), "utf8")).toBe(activityIcon);
@@ -168,14 +172,14 @@ describe("copyBundledPluginMetadata", () => {
     expect(packageJson.openclaw?.extensions).toEqual(["./index.js"]);
   });
 
-  it("ignores non-file icons and removes retired activity artwork", () => {
+  it("ignores non-file presentation assets and removes retired artwork", () => {
     const repoRoot = makeRepoRoot("openclaw-bundled-plugin-invalid-icon-");
     const pluginDir = createPlugin(repoRoot, {
       id: "acpx",
       packageName: "@openclaw/acpx",
       packageOpenClaw: { extensions: ["./index.ts"] },
     });
-    const iconPaths = ["assets/icon.png", "assets/activity.svg"];
+    const iconPaths = ["assets/icon.png", "assets/activity.svg", "README.md"];
     const staleIconPaths = [...iconPaths, "assets/activity/retired.svg"].map((relativePath) =>
       path.join(bundledPluginDir(repoRoot, "acpx"), relativePath),
     );

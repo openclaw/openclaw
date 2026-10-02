@@ -1,4 +1,6 @@
 import Foundation
+import OpenClawKit
+import OpenClawProtocol
 import UIKit
 
 enum BackgroundAliveBeacon {
@@ -23,11 +25,6 @@ enum BackgroundAliveBeacon {
         var deviceFamily: String
         var modelIdentifier: String
         var pushTransport: String?
-    }
-
-    struct NodeEventRequestPayload: Codable {
-        var event: String = BackgroundAliveBeacon.eventName
-        var payloadJSON: String
     }
 
     struct NodeEventResponsePayload: Decodable {
@@ -61,8 +58,8 @@ enum BackgroundAliveBeacon {
             sentAtMs: Int64(Date().timeIntervalSince1970 * 1000),
             displayName: displayName,
             version: DeviceInfoHelper.appVersion(),
-            platform: DeviceInfoHelper.platformString(),
-            deviceFamily: DeviceInfoHelper.deviceFamily(),
+            platform: InstanceIdentity.platformString,
+            deviceFamily: InstanceIdentity.deviceFamily,
             modelIdentifier: DeviceInfoHelper.modelIdentifier(),
             pushTransport: pushTransport)
     }
@@ -77,7 +74,7 @@ enum BackgroundAliveBeacon {
                 codingPath: [],
                 debugDescription: "Failed to encode background alive payload as UTF-8"))
         }
-        let requestData = try encoder.encode(NodeEventRequestPayload(payloadJSON: payloadJSON))
+        let requestData = try encoder.encode(NodeEventParams(event: self.eventName, payloadjson: payloadJSON))
         guard let requestJSON = String(data: requestData, encoding: .utf8) else {
             throw EncodingError.invalidValue(payload, EncodingError.Context(
                 codingPath: [],

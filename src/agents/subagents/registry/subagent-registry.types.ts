@@ -1,3 +1,8 @@
+import type {
+  SessionEntryCurrentCheck,
+  SessionEntryCurrentFacts,
+} from "../../../config/sessions/session-entry-current.types.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { SubagentEndReason } from "../../../context-engine/types.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
@@ -7,9 +12,21 @@ import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type {
-  SubagentRunReadRecord,
   SubagentCompletionDeliveryState,
+  SubagentRunReadRecord,
 } from "./subagent-registry-read.types.js";
+
+export type SubagentSessionEffects = {
+  isCurrent(): Promise<boolean>;
+  assertHostCurrent(): void;
+  assertCurrentEntry(this: void, facts: SessionEntryCurrentFacts | undefined): void;
+  nativeCheck?: SessionEntryCurrentCheck;
+};
+
+export type SubagentRecoveryCurrent = {
+  prepare(): Promise<boolean>;
+  isHostCurrent(): boolean;
+};
 
 export type SubagentCompletionRequest = {
   runId: string;
@@ -24,10 +41,10 @@ export type SubagentCompletionRequest = {
   startedAt?: number;
   suppressSessionEffects?: boolean;
   recoverInterrupted?: true;
-  /** Revalidates orphan ownership after waiting for the terminal completion lock. */
-  isRecoveryCurrent?: () => boolean;
+  /** Prepare database currency asynchronously; publication rechecks live host authority. */
+  recoveryCurrent?: SubagentRecoveryCurrent;
   /** Child effects may be fenced while the recorded result still owes requester delivery. */
-  isChildSessionEffectsCurrent?: () => boolean;
+  sessionEffects?: SubagentSessionEffects;
   completionSnapshot?: { resultText: string | null; capturedAt: number };
   terminalReply?: AgentRunTerminalReplySnapshot;
 };
@@ -67,7 +84,6 @@ type SubagentExecutionState = SubagentRunReadRecord["execution"] & {
   suppressSessionEffects?: true;
   acceptedAt?: number;
   interruptedAt?: number;
-  interruptionReason?: "gateway-restart";
   transcriptTarget?: AgentRunSessionTarget;
 };
 
@@ -103,6 +119,8 @@ type SwarmQueuedLaunch = {
 
 /** Durable outbox state for the top-level requester settle wake. */
 export type RequesterSettleWakeState = {
+  /** Pending message-wait notice; consuming it leaves the completion cohort armed. */
+  pauseNotice?: { acknowledgment: string };
   status: "pending" | "dispatching";
   /** Number of delivery attempts already admitted. */
   attemptCount: number;
@@ -116,6 +134,12 @@ export type RequesterSettleWakeState = {
   requesterYieldBatch?: true;
   /** Present only when an idle requester needs a new turn after yielding. */
   afterRequesterYield?: true;
+  /**
+   * A yielded batch with private results was admitted with a deliverable requester
+   * final. Absent on a dispatching private batch means an earlier build admitted it
+   * as a private turn; replay keeps that policy.
+   */
+  yieldedFinalDeliverable?: true;
   /** Monotonic process generation protecting a newer yield from stale completion. */
   rearmGeneration?: number;
   /** Reference to the conversation receipt for this presentation, not completion credit. */
@@ -147,8 +171,11 @@ type SubagentKillIntent = {
   suppressTaskDelivery?: boolean;
 };
 
-/** Persisted execution, completion, delivery, and attachment state for child runs. */
 export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "collectorCompletion"> & {
+  /** Agent captured at registration for raw child session keys. */
+  childAgentId?: string;
+  /** Child identity stays fixed when recovery redirects transcript writes. */
+  childSessionIdentity?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
   /** Exact requester attempt for cancellation, independent of completion messaging. */
   requesterTurnRunId?: string;
   /** Durable proof that this requester attempt invoked sessions_yield. */
@@ -180,6 +207,7 @@ export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "colle
   expectsCompletionMessage?: boolean;
   completionTarget?: "parent";
   completionRequesterSessionId?: string;
+  completionRequesterLifecycleRevision?: string;
   wakeOnDescendantSettle?: boolean;
   execution: SubagentExecutionState;
   completion?: SubagentCompletionState;
@@ -237,6 +265,7 @@ export type SubagentRunMaintenanceRecord = Pick<
 
 export type SubagentRegistrationScope = {
   readonly waitForClaim: () => Promise<void> | undefined;
+  readonly waitForRetirementPublication: () => Promise<void> | undefined;
   readonly canLaunch: () => boolean;
   readonly canCleanupSession: () => boolean;
   readonly canAcceptLaunch: () => boolean;
@@ -245,6 +274,8 @@ export type SubagentRegistrationScope = {
 };
 
 export type RegisterSubagentRunOptions = {
+  persistence?: "worker";
   assertCurrent?: () => void;
+  assertPublicationCurrent?: () => void;
   retainOwnership?: (scope: SubagentRegistrationScope) => void;
 };

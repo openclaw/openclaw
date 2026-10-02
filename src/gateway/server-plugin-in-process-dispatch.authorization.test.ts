@@ -8,7 +8,8 @@ import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { resolveNodeInvokeRuntimeAuthorityError } from "./server-methods/nodes.invoke-authority.js";
@@ -22,6 +23,7 @@ import {
   runWithOperatorToolGatewayCleanupContext,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
+import { registerInProcessGatewayDispatchPreparationTests } from "./server-plugin-in-process-dispatch.preparation.test-support.js";
 import {
   createContext,
   createOperatorClient,
@@ -88,7 +90,7 @@ describe("typed in-process agent authorization", () => {
   ] as const)(
     "uses the captured host factory for %s and refuses an ownerless context",
     async (method, params) => {
-      const client = createOperatorClient({ profileId: "owner", scopes: ["operator.write"] });
+      const client = createOperatorClient({ profileName: "owner", scopes: ["operator.write"] });
       const context = createContext();
       const createFacade = vi.fn(context.createAgentTurnFacade!);
       context.createAgentTurnFacade = createFacade;
@@ -104,7 +106,10 @@ describe("typed in-process agent authorization", () => {
       expect(capturedClient).toMatchObject(client);
       const authority = capturedClient?.internal?.operatorRunAuthority;
       assertAdmittedRunOperatorAuthority(authority);
-      expect(authority).toMatchObject({ profileId: "owner", scopes: ["operator.write"] });
+      expect(authority).toMatchObject({
+        profileId: client.authenticatedUserProfile!.profileId,
+        scopes: ["operator.write"],
+      });
       expect(client.internal?.operatorRunAuthority).toBeUndefined();
 
       delete context.createAgentTurnFacade;
@@ -147,6 +152,8 @@ describe("typed in-process agent authorization", () => {
     },
   );
 
+  registerInProcessGatewayDispatchPreparationTests({ startTurn, waitForTurn });
+
   it.each([
     { actorKind: "operator", callerScope: "operator.read", requestedScope: "operator.read" },
     { actorKind: "system", callerScope: "operator.read", requestedScope: "operator.read" },
@@ -158,7 +165,7 @@ describe("typed in-process agent authorization", () => {
     async ({ actorKind, callerScope, requestedScope }) => {
       const operatorRoleActor = actorKind === "system" ? { kind: "system" as const } : undefined;
       const owner = createOperatorClient({
-        profileId: "tool-owner",
+        profileName: "tool-owner",
         scopes: [callerScope],
       });
       let dispatched: GatewayRequestOptions["client"] = null;
@@ -195,7 +202,7 @@ describe("typed in-process agent authorization", () => {
       );
 
       expect(dispatched).toMatchObject({
-        authenticatedUserProfile: { profileId: "tool-owner" },
+        authenticatedUserProfile: owner.authenticatedUserProfile,
         connect: { scopes: [requestedScope] },
         internal: { syntheticClient: true, ...(operatorRoleActor ? { operatorRoleActor } : {}) },
       });
@@ -464,7 +471,7 @@ describe("typed in-process agent authorization", () => {
             syntheticScopes: ["operator.write"],
           },
         );
-      const owner = createOperatorClient({ profileId: "tool-owner", scopes: ["operator.write"] });
+      const owner = createOperatorClient({ profileName: "tool-owner", scopes: ["operator.write"] });
       const pending =
         source === "explicit"
           ? dispatch()
@@ -488,7 +495,7 @@ describe("typed in-process agent authorization", () => {
 
   it("preserves the scoped operator identity across synthetic model-initiated session creation", async () => {
     const owner = createOperatorClient({
-      profileId: "model-spawn-owner",
+      profileName: "model-spawn-owner",
       scopes: ["operator.write"],
     });
     let dispatched: GatewayRequestOptions["client"] = null;
@@ -529,14 +536,14 @@ describe("typed in-process agent authorization", () => {
     );
 
     expect(dispatched).toMatchObject({
-      authenticatedUserProfile: { profileId: "model-spawn-owner" },
+      authenticatedUserProfile: owner.authenticatedUserProfile,
       connect: { scopes: ["operator.write"] },
       internal: { syntheticClient: true },
     });
   });
 
   it("rejects retained tool authority after its owning invocation has completed", async () => {
-    const owner = createOperatorClient({ profileId: "expired-owner", scopes: ["operator.read"] });
+    const owner = createOperatorClient({ profileName: "expired-owner", scopes: ["operator.read"] });
     const { promise: dispatchGate, resolve: releaseDispatch } = createDeferredCore();
     let retained: Promise<unknown> | undefined;
 
@@ -566,7 +573,7 @@ describe("typed in-process agent authorization", () => {
     async (actorKind) => {
       const operatorRoleActor = actorKind === "system" ? { kind: "system" as const } : undefined;
       const owner = createOperatorClient({
-        profileId: "spawn-owner",
+        profileName: "spawn-owner",
         scopes: ["operator.write"],
       });
       const context = createContext();
@@ -586,7 +593,10 @@ describe("typed in-process agent authorization", () => {
       startTurn.mockImplementation(async ({ principal, io }) => {
         expect(principal.authenticatedUserProfile).toBeUndefined();
         expect(principal.internal).toMatchObject({
-          operatorRoleActor: operatorRoleActor ?? { kind: "operator", profileId: "spawn-owner" },
+          operatorRoleActor: operatorRoleActor ?? {
+            kind: "operator",
+            profileId: owner.authenticatedUserProfile!.profileId,
+          },
         });
         await dispatchGatewayMethodInProcess(
           "sessions.list",
@@ -622,7 +632,10 @@ describe("typed in-process agent authorization", () => {
       expect(autonomousClient).toMatchObject({
         connect: { scopes: ["operator.read"] },
         internal: {
-          operatorRoleActor: operatorRoleActor ?? { kind: "operator", profileId: "spawn-owner" },
+          operatorRoleActor: operatorRoleActor ?? {
+            kind: "operator",
+            profileId: owner.authenticatedUserProfile!.profileId,
+          },
         },
       });
       expect(autonomousClient).not.toHaveProperty("authenticatedUserProfile");
@@ -797,7 +810,7 @@ describe("typed in-process agent authorization", () => {
 
   it("retains the authenticated caller and its closure-bound authority for node duplex", async () => {
     const client = createOperatorClient({
-      profileId: "duplex-owner",
+      profileName: "duplex-owner",
       scopes: ["operator.write", "operator.approvals"],
     });
     const operationalRunInstance = createOperationalRunInstanceRef("duplex-owned-run");
@@ -857,9 +870,9 @@ describe("typed in-process agent authorization", () => {
     );
 
     expect(dispatched.client).toMatchObject({
-      connId: "conn-duplex-owner",
-      authenticatedUserId: "duplex-owner@example.com",
-      authenticatedUserProfile: { profileId: "duplex-owner" },
+      connId: client.connId,
+      authenticatedUserId: client.authenticatedUserId,
+      authenticatedUserProfile: client.authenticatedUserProfile,
       isDeviceTokenAuth: true,
       connect: { scopes: ["operator.write", "operator.approvals"] },
       internal: {
@@ -883,7 +896,7 @@ describe("typed in-process agent authorization", () => {
   it("rejects a scoped agent turn without operator.write", async () => {
     await expect(
       dispatchScopedAgent({
-        client: createOperatorClient({ profileId: "reader", scopes: ["operator.read"] }),
+        client: createOperatorClient({ profileName: "reader", scopes: ["operator.read"] }),
         context: createContext(),
       }),
     ).rejects.toThrow("missing scope: operator.write");
@@ -891,7 +904,7 @@ describe("typed in-process agent authorization", () => {
   });
 
   it("applies the pending-profile gate to typed in-process agent dispatch", async () => {
-    const client = createOperatorClient({ profileId: "pending", scopes: ["operator.write"] });
+    const client = createOperatorClient({ profileName: "pending", scopes: ["operator.write"] });
     delete client.authenticatedUserProfile;
     client.authenticatedGitHubIdentitySync = vi
       .fn()
@@ -919,7 +932,7 @@ describe("typed in-process agent authorization", () => {
 
       await expect(
         dispatchScopedAgent({
-          client: createOperatorClient({ profileId: "outsider", scopes: ["operator.write"] }),
+          client: createOperatorClient({ profileName: "outsider", scopes: ["operator.write"] }),
           context: createContext(),
           sessionKey,
         }),
@@ -931,7 +944,7 @@ describe("typed in-process agent authorization", () => {
   it("rejects invalid agent params before preflight", async () => {
     await expect(
       dispatchScopedMethod({
-        client: createOperatorClient({ profileId: "writer", scopes: ["operator.write"] }),
+        client: createOperatorClient({ profileName: "writer", scopes: ["operator.write"] }),
         context: createContext(),
         method: "agent",
         params: {
@@ -947,7 +960,7 @@ describe("typed in-process agent authorization", () => {
   it("rejects invalid agent.wait params before lifecycle lookup", async () => {
     await expect(
       dispatchScopedMethod({
-        client: createOperatorClient({ profileId: "writer", scopes: ["operator.write"] }),
+        client: createOperatorClient({ profileName: "writer", scopes: ["operator.write"] }),
         context: createContext(),
         method: "agent.wait",
         params: { runId: 42 },
@@ -964,19 +977,14 @@ describe("typed in-process agent authorization", () => {
       io.emitAcceptance([true, { runId: "observed-run", status: "accepted" }, undefined]);
     });
 
-    await dispatchScopedAgent({
-      client: createOperatorClient({
-        caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
-        profileId: "tool-observer",
-        scopes: ["operator.write"],
-      }),
-      context,
+    const client = createOperatorClient({
+      caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+      profileName: "tool-observer",
+      scopes: ["operator.write"],
     });
+    await dispatchScopedAgent({ client, context });
 
-    expect(context.registerToolEventRecipient).toHaveBeenCalledWith(
-      "observed-run",
-      "conn-tool-observer",
-    );
+    expect(context.registerToolEventRecipient).toHaveBeenCalledWith("observed-run", client.connId);
   });
 
   it.each([
@@ -988,7 +996,7 @@ describe("typed in-process agent authorization", () => {
 
     await expect(
       dispatchScopedMethod({
-        client: createOperatorClient({ profileId: "writer", scopes: ["operator.write"] }),
+        client: createOperatorClient({ profileName: "writer", scopes: ["operator.write"] }),
         context: createContext(),
         method,
         params,

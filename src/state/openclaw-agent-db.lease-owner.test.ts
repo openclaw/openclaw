@@ -98,7 +98,7 @@ describe("agent database lease acquisition owner", () => {
           }),
         operation,
       ),
-    ).rejects.toMatchObject({ message: denied.message, cause: denied });
+    ).rejects.toBe(denied);
 
     expect(operation).not.toHaveBeenCalled();
     expect(fs.readdirSync(directory)).toEqual([]);

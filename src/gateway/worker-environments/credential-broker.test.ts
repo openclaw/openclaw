@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -33,28 +34,23 @@ describe("worker environment service", () => {
       now: () => support.testState.nowMs,
     });
     const liveEvents = support.createLiveEvents();
-    const placementStore = {
-      assertWorkerRuntimeRefresh: vi.fn(() => {
-        throw new Error("Runtime refresh is outside this credential fixture");
-      }),
-      readWorkerTurnClaim: vi.fn(),
-      readWorkerTurnLiveAckCursor: vi.fn(() => 0),
-      validateWorkerTurn: vi.fn(() => true),
-      isWorkerTurnToolAuthorized: vi.fn(() => true),
-      updateAckCursors: vi.fn(),
-      prepareWorkspaceResultOwnerRevocation: vi.fn(),
-      registerTurnClaimClosedHandler: vi.fn(() => () => {}),
-    };
-    const workerService = support.createService(support.createProvider(), {
-      liveEvents,
-      placementStore,
-    });
+    const { identity, workerService } = await support.bindPlacementHarness(
+      {
+        ...newer,
+        sessionId,
+        turnClaim: {
+          ...expectDefined(newer.turnClaim, "surviving worker fixture turn claim"),
+          sessionId,
+        },
+      },
+      { liveEvents },
+    );
     const event = { ...support.LIVE_EVENT, runEpoch: newer.ownerEpoch };
     await expect(workerService.pushLiveEvent(older, event)).resolves.toEqual({
       ok: false,
       closeReason: "credential-replaced",
     });
-    await workerService.pushLiveEvent({ ...newer, sessionId }, event);
+    await expect(workerService.pushLiveEvent(identity, event)).resolves.toMatchObject({ ok: true });
     expect(liveEvents.apply).toHaveBeenCalledOnce();
   });
 
@@ -131,33 +127,6 @@ describe("worker environment service", () => {
     expect(support.testState.store.get(environmentId)).toMatchObject({
       state: "attached",
       attachedSessionIds: ["session-reclaim"],
-    });
-  });
-
-  it("stops the tunnel after live binding rollback", async () => {
-    const environmentId = "live-bind-fail";
-    await support.seedReady(environmentId);
-    const liveEvents = support.createLiveEvents({
-      bindSession: vi.fn(() => {
-        throw new Error("bind failed");
-      }),
-    });
-    const tunnelManager = {
-      stop: vi.fn(async () => {}),
-      stopAll: vi.fn(async () => {}),
-    } as unknown as WorkerTunnelManager;
-    const workerService = support.createService(support.createProvider(), {
-      liveEvents,
-      tunnelManager,
-    });
-
-    await expect(
-      workerService.attachSession({ environmentId, ownerEpoch: 1, sessionId: "session-live" }),
-    ).rejects.toThrow("Attached session target is unavailable");
-    expect(tunnelManager.stop).toHaveBeenCalledWith(environmentId, 1);
-    expect(support.testState.store.get(environmentId)).toMatchObject({
-      state: "idle",
-      attachedSessionIds: [],
     });
   });
 

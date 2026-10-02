@@ -15,11 +15,11 @@ import {
 } from "./update-command-executor.js";
 import { prepareUpdateCommandNativeGate } from "./update-command-native-gate.js";
 import type { PackageRuntimeRecovery } from "./update-command-node-runtime-resolution.js";
-import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import {
   resolvePackageRuntimePreflight,
   type PackageRuntimePreflight,
-} from "./update-command-service-plan.js";
+} from "./update-command-runtime-preflight.js";
+import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 
 /** Only a live updater may provision; discovery never reads dotenv-selected paths. */
 export function createPackageRuntimeRecovery(params: {
@@ -91,9 +91,7 @@ export function createPackageRuntimeRecovery(params: {
               { auxiliaryPreflight: true },
             );
             authority.assertCurrent();
-            return installResult.termination === "exit" && !installResult.killed
-              ? installResult.code
-              : null;
+            return installResult.code;
           },
         }
       : {}),
@@ -161,12 +159,14 @@ export async function preparePackageUpdateRuntime(params: {
     channel: params.channel,
     requestedChannel: params.requestedChannel,
     target: params.packageRuntimeTarget,
+    installedRoot: params.root,
     timeoutMs: params.timeoutMs,
     nodeRunner:
       params.managedServiceRoot && canRefreshManagedServiceNode
         ? params.packageUpdateNodeRunner
         : (managedServiceNodeRunner ?? params.packageUpdateNodeRunner),
-    fallbackNodeRunner: canRefreshManagedServiceNode ? resolveNodeRunner() : undefined,
+    fallbackNodeRunner:
+      canRefreshManagedServiceNode && !process.versions.bun ? resolveNodeRunner() : undefined,
     runtimeRecovery:
       !managedServiceNodeRunner || canRefreshManagedServiceNode
         ? createPackageRuntimeRecovery({

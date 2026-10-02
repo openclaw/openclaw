@@ -17,13 +17,17 @@ import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { resolveTimerTimeoutMs } from "../packages/normalization-core/src/number-coercion.ts";
 import { isRecord as isJsonRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
-import { appendBoundedTail } from "./lib/bounded-output-tail.mjs";
+import { appendBoundedTail, formatBoundedTail } from "./lib/bounded-output-tail.mjs";
 import { toErrorObject } from "./lib/error-format.mts";
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
-import { cleanPackedOpenClawTarballs } from "./lib/packed-openclaw-tarballs.mts";
+import {
+  cleanPackedOpenClawTarballs,
+  validatePackedTarballOutputName,
+} from "./lib/packed-openclaw-tarballs.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
 import { validatePackageSourceDir } from "./package-source-preflight.mjs";
@@ -40,15 +44,10 @@ const COMMAND_STDERR_CAPTURE_MAX_CHARS = 128 * 1024;
 const COMMAND_TIMEOUT_KILL_AFTER_MS = 5_000;
 const FORWARDED_SIGNAL_KILL_AFTER_MS = 250;
 const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 50;
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 type ChildSignal = ChildProcess["signalCode"];
 type TimerHandle = ReturnType<typeof setTimeout>;
 type ChildKiller = (signal: NodeJS.Signals) => void;
 type ProcessTreeChild = Pick<ChildProcess, "exitCode" | "kill" | "pid" | "signalCode">;
-type CommandOutputBuffer = {
-  text: string;
-  truncatedChars: number;
-};
 
 type RunOptions = {
   capture?: boolean;
@@ -177,7 +176,7 @@ for (const signal of Object.keys(SIGNAL_EXIT_CODES) as ForwardedSignal[]) {
   });
 }
 export const OPENCLAW_PACKAGE_SPEC_RE =
-  /^openclaw@(alpha|beta|extended-stable|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$/u;
+  /^openclaw@(beta|extended-stable|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$/u;
 
 function usage() {
   return `Usage: node --import tsx scripts/resolve-openclaw-package-candidate.mts --source <ref|npm|url|trusted-url|artifact> --output-dir <dir> [options]
@@ -266,14 +265,8 @@ export function parseArgs(argv: readonly string[]) {
       },
     },
   );
-  validateOutputName(options.outputName);
+  validatePackedTarballOutputName(options.outputName);
   return options;
-}
-
-function validateOutputName(value: string) {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.t(?:ar\.)?gz$/u.test(value)) {
-    throw new Error(`--output-name must be a tarball filename, not a path: ${value}`);
-  }
 }
 
 function resolvePackedOpenClawTarballFilename(value: unknown) {
@@ -292,9 +285,12 @@ function resolvePackedOpenClawTarballFilename(value: unknown) {
 }
 
 export function validateOpenClawPackageSpec(spec: string) {
+  if (spec === "openclaw@alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   if (!OPENCLAW_PACKAGE_SPEC_RE.test(spec)) {
     throw new Error(
-      `package_spec must be openclaw@alpha, openclaw@beta, openclaw@extended-stable, openclaw@latest, or an exact OpenClaw release version; got: ${spec}`,
+      `package_spec must be openclaw@beta, openclaw@extended-stable, openclaw@latest, or an exact OpenClaw release version; got: ${spec}`,
     );
   }
 }
@@ -321,31 +317,15 @@ export function resolveNpmPackageCandidatePackRunner(
   });
 }
 
-function numericTimerValueMs(valueMs: unknown) {
-  const value = Number(valueMs);
-  return Number.isFinite(value) ? Math.floor(value) : undefined;
-}
-
-function resolvePackageCandidateTimeoutMs(
-  valueMs: unknown,
-  fallbackMs: unknown = MAX_TIMER_TIMEOUT_MS,
-) {
-  const value = numericTimerValueMs(valueMs) ?? numericTimerValueMs(fallbackMs);
-  return Math.min(Math.max(value ?? MAX_TIMER_TIMEOUT_MS, 1), MAX_TIMER_TIMEOUT_MS);
-}
-
 function resolveOptionalTimerTimeoutMs(valueMs: unknown) {
-  if (valueMs === undefined) {
-    return undefined;
-  }
-  return resolvePackageCandidateTimeoutMs(valueMs, 1);
+  return valueMs === undefined ? undefined : resolveTimerTimeoutMs(Number(valueMs), 1);
 }
 
 function run(command: string, args: readonly string[], options: RunOptions = {}) {
   return new Promise<string>((resolve, reject) => {
     const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(options.timeoutMs);
-    const resolvedKillAfterMs = resolvePackageCandidateTimeoutMs(
-      options.killAfterMs,
+    const resolvedKillAfterMs = resolveTimerTimeoutMs(
+      Number(options.killAfterMs),
       COMMAND_TIMEOUT_KILL_AFTER_MS,
     );
     const useProcessGroup = process.platform !== "win32";
@@ -445,7 +425,7 @@ function run(command: string, args: readonly string[], options: RunOptions = {})
         resolve(stdout.text);
         return;
       }
-      const stderrText = formatCapturedCommandOutput(stderr).trim();
+      const stderrText = formatBoundedTail(stderr).trim();
       const detail = stderrText ? `\n${stderrText}` : "";
       reject(new Error(`${command} ${args.join(" ")} failed with ${status ?? signal}${detail}`));
     });
@@ -514,13 +494,6 @@ async function waitForProcessTreeExit(
     });
   }
   return !processTreeIsAlive(child, useProcessGroup);
-}
-
-function formatCapturedCommandOutput(buffer: CommandOutputBuffer) {
-  if (buffer.truncatedChars === 0) {
-    return buffer.text;
-  }
-  return `[output truncated ${buffer.truncatedChars} chars; showing tail]\n${buffer.text}`;
 }
 
 export const runCommandForTest = run;
@@ -1423,8 +1396,8 @@ async function openHttpsPackageDownloadResponse(
 
 async function openPackageDownloadResponse(url: string, options: PackageDownloadOptions) {
   const lookupHost = options.lookupHost ?? defaultLookupHost;
-  const timeoutMs = resolvePackageCandidateTimeoutMs(
-    options.timeoutMs,
+  const timeoutMs = resolveTimerTimeoutMs(
+    Number(options.timeoutMs),
     PACKAGE_URL_DOWNLOAD_TIMEOUT_MS,
   );
   const maxRedirects = options.maxRedirects ?? PACKAGE_URL_MAX_REDIRECTS;
@@ -1587,7 +1560,7 @@ async function readPackageJson(tarball: string) {
   };
 }
 
-export async function readPackageBuildSourceSha(tarball: string) {
+async function readPackageBuildSourceSha(tarball: string) {
   const raw = await run("tar", ["-xOf", tarball, "package/dist/build-info.json"], {
     capture: true,
   }).then(

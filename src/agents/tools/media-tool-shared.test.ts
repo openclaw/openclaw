@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { getMediaDir } from "../../media/store.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
@@ -84,6 +85,7 @@ describe("resolveMediaToolLocalRoots", () => {
     });
 
     expect(localRoots.map(normalizeHostPath)).toEqual([
+      normalizeHostPath(getMediaDir()),
       normalizeHostPath(workspaceDir),
       normalizeHostPath(attachmentRoot),
     ]);
@@ -229,7 +231,7 @@ describe("resolveMediaToolReferenceAccess", () => {
   it.each([
     ["file://attacker/share.png", /remote hosts/i],
     ["file:///tmp/encoded%2Fseparator.png", /encode path separators/i],
-    ["file:///tmp/malformed%ZZ.png", /invalid|malformed/i],
+    ["file:///tmp/malformed%ZZ.png", URIError],
   ])("rejects unsafe or malformed file URL %s", async (input, expected) => {
     await expect(
       resolveMediaToolReferenceAccess({

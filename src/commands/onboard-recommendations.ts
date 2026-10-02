@@ -11,13 +11,12 @@ import {
   type OnboardingRecommendationsRecord,
 } from "../state/onboarding-recommendations.js";
 
-type OnboardRecommendationsDeps = {
-  read?: OnboardingRecommendationsStore["read"];
-  acknowledge?: OnboardingRecommendationsStore["acknowledge"];
-  updatePending?: OnboardingRecommendationsStore["updatePending"];
-  clearPending?: OnboardingRecommendationsStore["clearPending"];
-  clear?: OnboardingRecommendationsStore["clear"];
-};
+type OnboardRecommendationsDeps = Partial<
+  Pick<
+    OnboardingRecommendationsStore,
+    "read" | "acknowledge" | "updatePending" | "clearPending" | "clear"
+  >
+>;
 
 type AcknowledgeOnboardRecommendationsOptions = {
   agent?: string;
@@ -155,8 +154,7 @@ export async function acknowledgeOnboardRecommendationsCommand(
       return;
     }
     const retryIdSet = new Set(retryIds);
-    const retryMatches =
-      record?.matches.filter((match) => retryIdSet.has(match.candidate.id)) ?? [];
+    const retryMatches = record.matches.filter((match) => retryIdSet.has(match.candidate.id));
     const updated = await (deps.updatePending ?? defaultStore().updatePending)({
       matches: retryMatches,
       expected: record,

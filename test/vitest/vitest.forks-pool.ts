@@ -53,7 +53,7 @@ class DiagnosticForksPoolWorker extends ForksPoolWorker {
         children.push(message.process);
       }
     };
-    // Vitest 5.0.0 + patches/vitest@5.0.0.patch (pnpm hash 5e7c1655) starts
+    // Vitest 5.0.1 + patches/vitest@5.0.1.patch (pnpm hash 90ba2969) starts
     // forks synchronously and calls stop() after its deadline or joined exit.
     // Recheck that contract on upgrades; the transport remains Vitest-owned.
     subscribe("child_process", observe);

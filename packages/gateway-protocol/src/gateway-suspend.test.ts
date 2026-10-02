@@ -1,6 +1,8 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  validateGatewaySuspendStatusParams,
+  validateGatewaySuspendResumeParams,
   GatewaySuspendBlockerSchema,
   validateGatewaySuspendPrepareResult,
   validateGatewaySuspendStatusResult,
@@ -9,6 +11,13 @@ import {
 } from "./index.js";
 
 describe("gateway suspension protocol", () => {
+  it("opts into status metadata without extending resume parameters", () => {
+    const params = { suspensionId: "held-lease", includeLifecycle: true };
+    expect(validateGatewaySuspendStatusParams(params)).toBe(true);
+    expect(validateGatewaySuspendStatusParams({ ...params, includeLifecycle: "true" })).toBe(false);
+    expect(validateGatewaySuspendResumeParams(params)).toBe(false);
+    expect(validateGatewaySuspendResumeParams({ suspensionId: "held-lease" })).toBe(true);
+  });
   it("requires an exact handoff target and rejects unrelated interruption policy", () => {
     const target = { pid: 1, processInstanceId: "gateway-process" };
     const params = { suspensionId: "held-lease", target };

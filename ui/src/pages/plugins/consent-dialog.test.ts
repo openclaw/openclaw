@@ -271,14 +271,10 @@ it("tries the author image after a broken package image, then retains initials u
   const container = document.createElement("div");
   document.body.append(container);
   const tile = (url: string) =>
-    renderArtTile(
-      "lossless-claw",
-      "Lossless Context Management",
-      url,
-      undefined,
-      "plugins-tile",
-      "blob:author",
-    );
+    renderArtTile("lossless-claw", "Lossless Context Management", {
+      iconUrl: url,
+      authorIconUrl: "blob:author",
+    });
   render(tile("blob:package"), container);
   expect(container.querySelector("img")?.getAttribute("src")).toBe("blob:package");
   container.querySelector("img")!.dispatchEvent(new Event("error"));

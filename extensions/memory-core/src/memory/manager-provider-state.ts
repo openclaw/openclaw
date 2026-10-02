@@ -47,35 +47,7 @@ export type MemoryProviderLifecycleState =
       attemptedProviderId?: string;
     };
 
-export function createPendingMemoryProviderLifecycle(
-  requestedProvider: string,
-): MemoryProviderLifecycleState {
-  return { mode: "pending", requestedProvider };
-}
-
-export function createDegradedMemoryProviderLifecycle(params: {
-  providerId: string;
-  reason: string;
-  code?: string;
-}): MemoryProviderLifecycleState {
-  return {
-    mode: "degraded",
-    providerId: params.providerId,
-    reason: params.reason,
-    ...(params.code ? { code: params.code } : {}),
-  };
-}
-
-function resolveProviderLifecycle(
-  result: Pick<
-    EmbeddingProviderResult,
-    | "provider"
-    | "fallbackFrom"
-    | "fallbackReason"
-    | "providerUnavailableReason"
-    | "requestedProvider"
-  >,
-): MemoryProviderLifecycleState {
+function resolveProviderLifecycle(result: EmbeddingProviderResult): MemoryProviderLifecycleState {
   if (result.provider && result.fallbackFrom) {
     return {
       mode: "fallback-active",
@@ -109,17 +81,7 @@ export function resolveFallbackCurrentProviderId(params: {
 
 export function resolveMemoryPrimaryProviderRequest(params: {
   settings: ResolvedMemorySearchConfig;
-}): {
-  provider: string;
-  model: string;
-  remote: ResolvedMemorySearchConfig["remote"];
-  inputType: ResolvedMemorySearchConfig["inputType"];
-  queryInputType: ResolvedMemorySearchConfig["queryInputType"];
-  documentInputType: ResolvedMemorySearchConfig["documentInputType"];
-  outputDimensionality: ResolvedMemorySearchConfig["outputDimensionality"];
-  fallback: ResolvedMemorySearchConfig["fallback"];
-  local: ResolvedMemorySearchConfig["local"];
-} {
+}) {
   return {
     provider: params.settings.provider,
     model: params.settings.model,
@@ -134,15 +96,7 @@ export function resolveMemoryPrimaryProviderRequest(params: {
 }
 
 export function resolveMemoryProviderState(
-  result: Pick<
-    EmbeddingProviderResult,
-    | "provider"
-    | "fallbackFrom"
-    | "fallbackReason"
-    | "providerUnavailableReason"
-    | "runtime"
-    | "requestedProvider"
-  >,
+  result: EmbeddingProviderResult,
 ): MemoryResolvedProviderState {
   return {
     provider: result.provider,
@@ -154,49 +108,11 @@ export function resolveMemoryProviderState(
   };
 }
 
-export function applyMemoryFallbackProviderState(params: {
-  current: MemoryResolvedProviderState;
-  fallbackFrom: string;
-  reason: string;
-  result: Pick<EmbeddingProviderResult, "provider" | "runtime">;
-}): MemoryResolvedProviderState {
-  return {
-    ...params.current,
-    fallbackFrom: params.fallbackFrom,
-    fallbackReason: params.reason,
-    providerUnavailableReason: undefined,
-    provider: params.result.provider,
-    providerRuntime: params.result.runtime,
-    lifecycle: params.result.provider
-      ? {
-          mode: "fallback-active",
-          providerId: params.result.provider.id,
-          fallbackFrom: params.fallbackFrom,
-          reason: params.reason,
-        }
-      : {
-          mode: "fts-only",
-          reason: params.reason,
-          attemptedProviderId: params.fallbackFrom,
-        },
-  };
-}
-
 export function resolveMemoryFallbackProviderRequest(params: {
   cfg: OpenClawConfig;
   settings: ResolvedMemorySearchConfig;
   currentProviderId: string | null;
-}): {
-  provider: string;
-  model: string;
-  remote: ResolvedMemorySearchConfig["remote"];
-  inputType: ResolvedMemorySearchConfig["inputType"];
-  queryInputType: ResolvedMemorySearchConfig["queryInputType"];
-  documentInputType: ResolvedMemorySearchConfig["documentInputType"];
-  outputDimensionality: ResolvedMemorySearchConfig["outputDimensionality"];
-  fallback: "none";
-  local: ResolvedMemorySearchConfig["local"];
-} | null {
+}) {
   const fallback = params.settings.fallback;
   if (
     !fallback ||
@@ -214,7 +130,7 @@ export function resolveMemoryFallbackProviderRequest(params: {
     queryInputType: params.settings.queryInputType,
     documentInputType: params.settings.documentInputType,
     outputDimensionality: params.settings.outputDimensionality,
-    fallback: "none",
+    fallback: "none" as const,
     local: params.settings.local,
   };
 }

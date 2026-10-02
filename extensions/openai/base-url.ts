@@ -1,4 +1,3 @@
-// Openai plugin module implements base url behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const OPENAI_CODEX_RESPONSES_BASE_URL = "https://chatgpt.com/backend-api/codex";
@@ -76,14 +75,6 @@ export function isOpenAIApiBaseUrl(baseUrl?: string): boolean {
 
 export function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
   return classifyOpenAIBaseUrl(baseUrl) === "chatgpt";
-}
-
-/** True only for an HTTPS OpenAI Platform endpoint eligible for native transport hooks. */
-export function isOpenAIHttpsApiBaseUrl(baseUrl?: string): boolean {
-  if (typeof baseUrl !== "string" || classifyOpenAIBaseUrl(baseUrl) !== "platform") {
-    return false;
-  }
-  return new URL(baseUrl.trim()).protocol === "https:";
 }
 
 export function canonicalizeCodexResponsesBaseUrl(baseUrl?: string): string | undefined {

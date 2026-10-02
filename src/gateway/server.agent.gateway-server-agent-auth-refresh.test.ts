@@ -20,6 +20,7 @@ import {
   clearSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
+import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
 import {
@@ -291,6 +292,16 @@ describe("gateway agent auth refresh dispatch", () => {
         published.resolve();
       }
     });
+    let participantRecorded = false;
+    const unsubscribeParticipant = onSessionLifecycleEvent((event) => {
+      if (
+        event.reason === "participants" &&
+        event.agentId === "main" &&
+        event.sessionKey === "agent:main:main"
+      ) {
+        participantRecorded = true;
+      }
+    });
     try {
       setRuntimeAuthProfileStoreSnapshot(
         {
@@ -321,6 +332,7 @@ describe("gateway agent auth refresh dispatch", () => {
       });
       await expect(sibling.final).resolves.toMatchObject({ ok: true, payload: { status: "ok" } });
       await siblingExecution.waitForCompletion();
+      expect(participantRecorded).toBe(true);
       expect(agentCommandCallsFor(siblingRunId)).toHaveLength(1);
       expect(agentCommandCallsFor(abortedRunId)).toHaveLength(0);
       expect(agentCommandCallsFor(waitingRunId)).toHaveLength(0);
@@ -383,7 +395,11 @@ describe("gateway agent auth refresh dispatch", () => {
       publicationGate.resolve({ agentDir: before.agentDir, wrote: false });
       unregister();
       ensureSpy.mockRestore();
-      await siblingExecution.restore();
+      try {
+        await siblingExecution.restore();
+      } finally {
+        unsubscribeParticipant();
+      }
     }
   });
 

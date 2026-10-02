@@ -173,6 +173,15 @@ function rotatedSelection(
   };
 }
 
+function needsRefresh(selection: UserGitHubConnected): boolean {
+  return (
+    Boolean(selection.refresh?.tokens) ||
+    (selection.refreshFailure !== "expired" &&
+      selection.refreshExpiresAtMs > Date.now() &&
+      (Boolean(selection.refresh) || selection.accessExpiresAtMs <= Date.now() + 600000))
+  );
+}
+
 /** Personal adapters share device transport and profile materialization with System/agent OAuth. */
 export function createPersonalGitHubOAuthLifecycle() {
   const abort = new AbortController();
@@ -434,6 +443,9 @@ export function createPersonalGitHubOAuthLifecycle() {
       return;
     }
     const id = initial.profileId;
+    if (!rotated.has(id) && !needsRefresh(initial)) {
+      return;
+    }
     await getOrCreatePromise(
       refreshes,
       id,
@@ -449,18 +461,16 @@ export function createPersonalGitHubOAuthLifecycle() {
           }
           const record = readUserGitHubConnection(owner);
           const selection = record?.selection;
-          if (!record || selection?.kind !== "connected" || selection.profileId !== id) {
+          if (
+            !record ||
+            selection?.kind !== "connected" ||
+            selection.profileId !== id ||
+            !needsRefresh(selection)
+          ) {
             return;
           }
           if (selection.refresh?.tokens) {
             await materializeRefresh(owner, id, selection.refresh.operationId, assertOwned);
-            return;
-          }
-          if (
-            selection.refreshFailure === "expired" ||
-            selection.refreshExpiresAtMs <= Date.now() ||
-            (!selection.refresh && selection.accessExpiresAtMs > Date.now() + 600000)
-          ) {
             return;
           }
           const operationId = selection.refresh?.operationId ?? randomUUID();

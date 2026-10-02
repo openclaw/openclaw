@@ -2,6 +2,7 @@ import type { Question } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import type { QuestionDraft } from "../../../app/question-prompt.ts";
+import { renderKbd, renderShortcutText } from "../../../components/kbd.ts";
 import { t } from "../../../i18n/index.ts";
 
 export function questionDraftValues(draft: QuestionDraft | undefined, isSecret = false): string[] {
@@ -55,10 +56,10 @@ export function renderQuestionOptions(props: QuestionOptionsProps) {
               ${selected ? "✓" : ""}
             </span>
             <span class="chat-question-panel__option-copy">
-              <strong>${option.label}</strong>
+              <strong class="chat-question-panel__option-label">${option.label}</strong>
               ${option.description ? html`<small>${option.description}</small>` : nothing}
             </span>
-            <kbd>${index + 1}</kbd>
+            ${renderKbd(index + 1)}
           </button>
         `;
       })}
@@ -96,7 +97,7 @@ function renderFreeTextControl(
         rows="1"
         placeholder=${placeholder}
         aria-label=${ifDefined(label)}
-        aria-description=${t("chat.questions.multilineHint")}
+        aria-description=${t("chat.questions.multilineHint", { shortcut: "Ctrl/⌘+Enter" })}
         .value=${props.value}
         ?disabled=${props.disabled}
         @input=${handleInput}
@@ -134,14 +135,14 @@ export function renderQuestionFreeText(props: QuestionFreeTextProps) {
               t("chat.questions.other"),
               t("chat.questions.ownAnswerFor", { header: question.header }),
             )}
-            <kbd>${question.options.length + 1}</kbd>
+            ${renderKbd(question.options.length + 1)}
           </label>`
     }
     ${
       question.isSecret
         ? nothing
         : html`<div class="chat-question-panel__input-hint">
-            ${t("chat.questions.multilineHint")}
+            ${renderShortcutText(t("chat.questions.multilineHint", { shortcut: "{shortcut}" }), renderKbd(["Ctrl", "/", "⌘", "+", "Enter"], { inline: true }))}
           </div>`
     }
   `;

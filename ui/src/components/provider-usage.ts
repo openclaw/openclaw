@@ -106,6 +106,25 @@ function providerHistoryAmount(snapshot: ProviderUsageDetails, days: number): nu
   }, 0);
 }
 
+function renderCostBreakdown<T extends { name: string }>(
+  title: string,
+  entries: T[],
+  formatValue: (entry: T) => string,
+) {
+  return entries.length > 0
+    ? html`<div class="provider-cost-breakdown">
+        <span class="provider-cost-breakdown__title">${title}</span>
+        ${entries
+          .slice(0, 3)
+          .map(
+            (entry) => html`<div>
+              <span>${entry.name}</span><strong>${formatValue(entry)}</strong>
+            </div>`,
+          )}
+      </div>`
+    : nothing;
+}
+
 function renderProviderCostHistory(snapshot: ProviderUsageDetails) {
   const history = snapshot.costHistory;
   if (!history || history.daily.length === 0) {
@@ -179,46 +198,14 @@ function renderProviderCostHistory(snapshot: ProviderUsageDetails) {
         history.models.length > 0 || history.categories.length > 0
           ? html`
               <div class="provider-cost-breakdowns">
-                ${
-                  history.models.length > 0
-                    ? html`
-                        <div class="provider-cost-breakdown">
-                          <span class="provider-cost-breakdown__title"
-                            >${t("usage.providerUsage.topModels")}</span
-                          >
-                          ${history.models
-                            .slice(0, 3)
-                            .map(
-                              (model) => html`
-                                <div>
-                                  <span>${model.name}</span
-                                  ><strong>${formatCompactTokenCount(model.totalTokens)}</strong>
-                                </div>
-                              `,
-                            )}
-                        </div>
-                      `
-                    : nothing
-                }
-                ${
-                  history.categories.length > 0
-                    ? html`
-                        <div class="provider-cost-breakdown">
-                          <span class="provider-cost-breakdown__title"
-                            >${t("usage.providerUsage.costCategories")}</span
-                          >
-                          ${history.categories.slice(0, 3).map(
-                            (category) => html`
-                              <div>
-                                <span>${category.name}</span>
-                                <strong>${formatAmount(category.amount)}</strong>
-                              </div>
-                            `,
-                          )}
-                        </div>
-                      `
-                    : nothing
-                }
+                ${renderCostBreakdown(t("usage.providerUsage.topModels"), history.models, (model) =>
+                  formatCompactTokenCount(model.totalTokens),
+                )}
+                ${renderCostBreakdown(
+                  t("usage.providerUsage.costCategories"),
+                  history.categories,
+                  (category) => formatAmount(category.amount),
+                )}
               </div>
             `
           : nothing

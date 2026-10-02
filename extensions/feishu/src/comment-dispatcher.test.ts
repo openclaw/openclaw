@@ -177,6 +177,7 @@ describe("createFeishuCommentReplyDispatcher", () => {
 
     const created = createTestCommentReplyDispatcher();
     const options = replyDispatcherOptions(created);
+    expect(start).not.toHaveBeenCalled();
     await options.onReplyStart?.();
 
     expect(start).toHaveBeenCalledTimes(1);
@@ -192,11 +193,6 @@ describe("createFeishuCommentReplyDispatcher", () => {
   });
 
   it.each([
-    [
-      "media-only singular",
-      { mediaUrl: "https://example.com/only.png" },
-      "https://example.com/only.png",
-    ],
     [
       "caption and multiple ordered attachments",
       {

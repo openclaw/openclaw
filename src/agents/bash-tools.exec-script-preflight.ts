@@ -37,10 +37,6 @@ const fsSafeModuleLoader = createLazyImportLoader<FsSafeModule>(
   () => import("../infra/fs-safe.js"),
 );
 
-async function loadFsSafeModule(): Promise<FsSafeModule> {
-  return await fsSafeModuleLoader.load();
-}
-
 // F-strings alternate literal text with executable replacement fields. Keep a lexical stack
 // so valid text stays invisible while nested replacement code uses the normal token check.
 function findPythonShellVariable(content: string): RegExpExecArray | null {
@@ -190,7 +186,7 @@ async function readLiteralTildePreflightScript(params: {
     if (!params.fsSafe.isPathInside(params.workspaceRoot.rootReal, realPath)) {
       throw new params.fsSafe.FsSafeError("outside-workspace", "file is outside workspace root");
     }
-    const { readFileHandleBounded } = await import("../infra/fs-safe-advanced.js");
+    const { readFileHandleBounded } = await import("@openclaw/fs-safe/advanced");
     const buffer = await readFileHandleBounded(handle, SCRIPT_PREFLIGHT_MAX_BYTES);
     return buffer.toString("utf-8");
   } finally {
@@ -235,7 +231,7 @@ export async function validateScriptFileForShellBleed(params: {
     return;
   }
 
-  const fsSafe = await loadFsSafeModule();
+  const fsSafe = await fsSafeModuleLoader.load();
   const { FsSafeError, root: fsRoot } = fsSafe;
   const workspaceRoot = await fsRoot(params.workdir);
   for (const relOrAbsPath of target.relOrAbsPaths) {

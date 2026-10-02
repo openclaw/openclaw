@@ -17,6 +17,16 @@ contract: the agent replies normally and OpenClaw posts the final text to the
 source conversation. Set `messages.visibleReplies: "message_tool"` to keep
 final assistant text private unless the agent calls `message(action="send")`.
 
+Commentary follows the conversation's progress settings and may be hidden or
+temporary. When a question arrives while work continues, the agent is instructed
+to send its answer with `message(action="send", final=false)` and continue the
+task. The final response covers answers and results that have not already been
+delivered. This does not enable commentary or change streaming settings.
+
+Native Codex messages explicitly marked for asynchronous delivery use an
+independent delivery intent. They are delivered separately from optional progress
+and from the eventual final answer, including when block streaming is disabled.
+
 Codex heartbeat turns get `heartbeat_respond` in the searchable OpenClaw tool
 catalog by default so the agent can record whether the wake should stay quiet
 or notify. Heartbeat turns use the same Codex Default collaboration mode as

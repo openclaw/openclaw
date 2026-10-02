@@ -54,6 +54,7 @@ export function createPluginRecord(params: {
   contracts?: PluginManifestContracts;
   dashboard?: PluginManifestDashboard;
   controlUi?: PluginManifestControlUi;
+  uiCapabilities?: PluginRecord["uiCapabilities"];
   mcpServers?: Record<string, PluginManifestMcpServer>;
 }): PluginRecord {
   return {
@@ -114,6 +115,7 @@ export function createPluginRecord(params: {
     contracts: params.contracts,
     dashboard: params.dashboard,
     controlUi: params.controlUi,
+    uiCapabilities: params.uiCapabilities,
     mcpServers: params.mcpServers,
   };
 }
@@ -340,18 +342,20 @@ export function recordBundleDiagnostics(params: {
   registry: PluginRegistry;
   inspectMcp: typeof import("./bundle-mcp.js").inspectBundleMcpRuntimeSupport;
 }): void {
+  const warn = (message: string) =>
+    params.registry.diagnostics.push({
+      level: "warn",
+      pluginId: params.record.id,
+      source: params.record.source,
+      message,
+    });
   const unsupportedCapabilities = (params.record.bundleCapabilities ?? []).filter(
     (capability) =>
       !params.record.bundleFormat ||
       !isBundleCapabilitySupported(params.record.bundleFormat, capability),
   );
   for (const capability of unsupportedCapabilities) {
-    params.registry.diagnostics.push({
-      level: "warn",
-      pluginId: params.record.id,
-      source: params.record.source,
-      message: `bundle capability detected but not wired into OpenClaw yet: ${capability}`,
-    });
+    warn(`bundle capability detected but not wired into OpenClaw yet: ${capability}`);
   }
   if (
     params.record.enabled &&
@@ -365,22 +369,13 @@ export function recordBundleDiagnostics(params: {
       bundleFormat: params.record.bundleFormat,
     });
     for (const message of runtimeSupport.diagnostics) {
-      params.registry.diagnostics.push({
-        level: "warn",
-        pluginId: params.record.id,
-        source: params.record.source,
-        message,
-      });
+      warn(message);
     }
     if (runtimeSupport.unsupportedServerNames.length > 0) {
-      params.registry.diagnostics.push({
-        level: "warn",
-        pluginId: params.record.id,
-        source: params.record.source,
-        message:
-          "bundle MCP servers use unsupported transports or incomplete configs " +
+      warn(
+        "bundle MCP servers use unsupported transports or incomplete configs " +
           `(${runtimeSupport.unsupportedServerNames.join(", ")})`,
-      });
+      );
     }
   }
   params.registry.plugins.push(params.record);

@@ -1,15 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../tasks/task-registry.store.sqlite.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { cronRunRecordStoreKey, cronRunRecordToRunLogEntry } from "./run-history-detail.js";
+import {
+  readCronRunHistoryPageForTests,
+  readCronRunRecordsForTests,
+} from "./run-history.test-support.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
-import { cronTaskRecordStoreKey, cronTaskRecordToRunLogEntry } from "./task-run-detail.js";
-import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
 
 const MINUTE = 60_000;
@@ -37,6 +40,8 @@ async function createHarness(input: Partial<CronJobCreate> = {}) {
     status: "ok",
   }));
   const deps: CronServiceDeps = {
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     storePath,
     cronEnabled: true,
     cronConfig: { triggers: { enabled: true } },
@@ -66,7 +71,7 @@ async function createHarness(input: Partial<CronJobCreate> = {}) {
 type Harness = Awaited<ReturnType<typeof createHarness>>;
 
 function readHistory(harness: Harness) {
-  return readCronTaskRunHistoryPage({
+  return readCronRunHistoryPageForTests({
     storeKey: cronStoreKey(harness.storePath),
     jobId: harness.job.id,
   }).entries;
@@ -74,16 +79,15 @@ function readHistory(harness: Harness) {
 
 function readTasks(harness: Harness) {
   const storeKey = cronStoreKey(harness.storePath);
-  return listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
-    runtime: "cron",
-    sourceId: harness.job.id,
-  }).filter((task) => cronTaskRecordStoreKey(task) === storeKey);
+  return readCronRunRecordsForTests(harness.job.id).filter(
+    (task) => cronRunRecordStoreKey(task) === storeKey,
+  );
 }
 
 function rejectCronRowWrite(jobId: string) {
   const database = openOpenClawStateDatabase().db;
   database.exec(`
-    CREATE TEMP TRIGGER reject_cadence_row
+    CREATE TRIGGER reject_cadence_row
     BEFORE UPDATE ON cron_jobs
     WHEN NEW.job_id = '${jobId.replaceAll("'", "''")}'
     BEGIN
@@ -99,7 +103,7 @@ async function finishWithPendingCronRow(
 ) {
   const atMs = options.atMs ?? RUN_AT;
   const result: RunResult = options.result ?? { status: "ok", summary: "Completed once." };
-  const previousTaskIds = new Set(readTasks(harness).map((task) => task.taskId));
+  const previousTaskIds = new Set(readTasks(harness).map((task) => task.id));
   const started = createDeferred();
   const completion = createDeferred<RunResult>();
   harness.runIsolatedAgentJob.mockImplementationOnce(async () => {
@@ -130,12 +134,7 @@ async function finishWithPendingCronRow(
     throw new Error("Expected the admitted run's receipt.");
   }
   expect(receipt.startedAtMs).toBe(atMs);
-  const admittedTasks = readTasks(harness).filter((task) => !previousTaskIds.has(task.taskId));
-  expect(admittedTasks).toHaveLength(1);
-  const taskId = admittedTasks[0]?.taskId;
-  if (!taskId) {
-    throw new Error("Expected the admitted run's task.");
-  }
+  expect(readTasks(harness).map((row) => row.id)).toEqual([...previousTaskIds]);
 
   const allowWrites = rejectCronRowWrite(harness.job.id);
   try {
@@ -147,8 +146,12 @@ async function finishWithPendingCronRow(
   }
 
   const history = readHistory(harness);
-  const finishedTask = readTasks(harness).find((task) => task.taskId === taskId);
-  const entry = finishedTask ? cronTaskRecordToRunLogEntry(finishedTask) : undefined;
+  const finishedTask = readTasks(harness).find(
+    (row) => row.runId === `cron:${harness.job.id}:${atMs}:${receipt.receiptId}`,
+  );
+  const recordId = finishedTask?.id;
+  expect(recordId).toEqual(expect.any(String));
+  const entry = finishedTask ? cronRunRecordToRunLogEntry(finishedTask) : undefined;
   if (!entry) {
     throw new Error("Expected the admitted task to retain its completed history entry.");
   }
@@ -166,7 +169,7 @@ async function finishWithPendingCronRow(
   ).toBe(receipt.receiptId);
   expect((await loadCronStore(harness.storePath)).jobs[0]?.state.runningAtMs).toBe(atMs);
   harness.cron.stop();
-  return { entry, history, receipt, taskId, runs: harness.runIsolatedAgentJob.mock.calls.length };
+  return { entry, history, receipt, recordId, runs: harness.runIsolatedAgentJob.mock.calls.length };
 }
 
 async function restartAndRecover(
@@ -380,7 +383,7 @@ describe("CronService schedule ownership during finalized-run recovery", () => {
 
       const second = await finishWithPendingCronRow(harness, { atMs, endedAtMs: atMs, mode });
       expect(second.receipt.receiptId).not.toBe(first.receipt.receiptId);
-      expect(second.taskId).not.toBe(first.taskId);
+      expect(second.recordId).not.toBe(first.recordId);
       expect(second.entry.nextRunAtMs).toBeUndefined();
       expect(second.history).toHaveLength(2);
       const completed = await restartAndRecover(harness, second);

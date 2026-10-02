@@ -48,6 +48,10 @@ type ListModelsParams = {
   cfg?: OpenClawConfig;
   discoveryModes?: Record<string, "refreshable" | "runtime" | "static">;
   catalogComplete?: boolean;
+  catalogDiagnostics?: Pick<
+    PreparedGatewayModelCatalogSnapshot,
+    "pendingProviders" | "providerOutcomes" | "refreshFailed"
+  >;
   preparedAuthModes?: PreparedAgentCredentialModes;
   metadataSnapshot?: PluginMetadataSnapshot;
   pluginRegistry?: PluginRegistry;
@@ -105,6 +109,7 @@ export function createModelsListTestContext(params: ListModelsParams) {
       routeVariants: entries,
       ...(params.staticEntries ? { staticEntries: params.staticEntries } : {}),
       authMaterializations: [],
+      ...params.catalogDiagnostics,
     }) satisfies PreparedGatewayModelCatalogSnapshot;
   let publishedEntries = params.publishedCatalog ?? params.catalog;
   const loadGatewayModelCatalogSnapshot = async (loadParams?: object) => {

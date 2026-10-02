@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import type {
+  OpenClawPluginApi,
   ProviderReplaySessionEntry,
   ProviderSanitizeReplayHistoryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
@@ -13,24 +14,28 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
-import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
+import { buildGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import googleProviderDiscovery from "./provider-discovery.js";
-import { registerGoogleProvider } from "./provider-registration.js";
+import { buildGoogleProvider } from "./provider-registration.js";
 
 const googleProviderPlugin = {
-  register(api: Parameters<typeof registerGoogleProvider>[0]) {
-    registerGoogleProvider(api);
-    registerGoogleGeminiCliProvider(api);
+  register(api: OpenClawPluginApi) {
+    api.registerProvider(buildGoogleProvider());
+    api.registerProvider(buildGoogleGeminiCliProvider());
   },
 };
 
+function registerGoogleProviders() {
+  return registerProviderPlugin({
+    plugin: googleProviderPlugin,
+    id: "google",
+    name: "Google Provider",
+  });
+}
+
 describe("google provider plugin hooks", () => {
   it("owns replay policy and reasoning mode for the direct Gemini provider", async () => {
-    const { providers } = await registerProviderPlugin({
-      plugin: googleProviderPlugin,
-      id: "google",
-      name: "Google Provider",
-    });
+    const { providers } = await registerGoogleProviders();
     const provider = requireRegisteredProvider(providers, "google");
     const customEntries: ProviderReplaySessionEntry[] = [];
 
@@ -106,11 +111,7 @@ describe("google provider plugin hooks", () => {
   });
 
   it("keeps google-gemini-cli on tagged reasoning mode", async () => {
-    const { providers } = await registerProviderPlugin({
-      plugin: googleProviderPlugin,
-      id: "google",
-      name: "Google Provider",
-    });
+    const { providers } = await registerGoogleProviders();
     const cliProvider = requireRegisteredProvider(providers, "google-gemini-cli");
     expect(
       cliProvider.resolveReasoningOutputMode?.({
@@ -122,11 +123,7 @@ describe("google provider plugin hooks", () => {
   });
 
   it("keeps the Gemini CLI runtime without OpenClaw-owned OAuth surfaces", async () => {
-    const { providers } = await registerProviderPlugin({
-      plugin: googleProviderPlugin,
-      id: "google",
-      name: "Google Provider",
-    });
+    const { providers } = await registerGoogleProviders();
     const cliProvider = requireRegisteredProvider(providers, "google-gemini-cli");
 
     expect(cliProvider.label).toBe("Gemini CLI runtime");
@@ -139,11 +136,7 @@ describe("google provider plugin hooks", () => {
   });
 
   it("keeps google-antigravity hook aliases on tagged reasoning mode", async () => {
-    const { providers } = await registerProviderPlugin({
-      plugin: googleProviderPlugin,
-      id: "google",
-      name: "Google Provider",
-    });
+    const { providers } = await registerGoogleProviders();
     const provider = requireRegisteredProvider(providers, "google-antigravity");
     expect(
       provider.resolveReasoningOutputMode?.({
@@ -155,11 +148,7 @@ describe("google provider plugin hooks", () => {
   });
 
   it("keeps google-vertex hook aliases on native reasoning mode", async () => {
-    const { providers } = await registerProviderPlugin({
-      plugin: googleProviderPlugin,
-      id: "google",
-      name: "Google Provider",
-    });
+    const { providers } = await registerGoogleProviders();
     const provider = requireRegisteredProvider(providers, "google-vertex");
     expect(
       provider.resolveReasoningOutputMode?.({
@@ -172,6 +161,18 @@ describe("google provider plugin hooks", () => {
       provider.resolveReasoningOutputMode?.({
         provider: "google-vertex",
         modelId: "gemini-3.1-pro-preview",
+      } as never),
+    ).toBe("native");
+  });
+
+  it("keeps google-interactions hook aliases on native reasoning mode", async () => {
+    const { providers } = await registerGoogleProviders();
+    const provider = requireRegisteredProvider(providers, "google-interactions");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google-interactions",
+        modelApi: "google-interactions",
+        modelId: "gemini-3.8-flash",
       } as never),
     ).toBe("native");
   });
@@ -189,11 +190,7 @@ describe("google provider plugin hooks", () => {
       }),
       "utf8",
     );
-    const { providers } = await registerProviderPlugin({
-      plugin: googleProviderPlugin,
-      id: "google",
-      name: "Google Provider",
-    });
+    const { providers } = await registerGoogleProviders();
     const provider = requireRegisteredProvider(providers, "google-vertex");
 
     expect(
@@ -255,11 +252,7 @@ describe("google provider plugin hooks", () => {
       ),
       writeFile(homeCredentialsPath, JSON.stringify({ type: "unsupported" }), "utf8"),
     ]);
-    const { providers } = await registerProviderPlugin({
-      plugin: googleProviderPlugin,
-      id: "google",
-      name: "Google Provider",
-    });
+    const { providers } = await registerGoogleProviders();
     const provider = requireRegisteredProvider(providers, "google-vertex");
     const env = {
       CLOUDSDK_CONFIG: cloudSdkDir,
@@ -310,11 +303,7 @@ describe("google provider plugin hooks", () => {
   });
 
   it("owns Gemini tool schema normalization for direct and CLI providers", async () => {
-    const { providers } = await registerProviderPlugin({
-      plugin: googleProviderPlugin,
-      id: "google",
-      name: "Google Provider",
-    });
+    const { providers } = await registerGoogleProviders();
     const providerIds = ["google", "google-gemini-cli"] as const;
 
     for (const providerId of providerIds) {
@@ -361,11 +350,7 @@ describe("google provider plugin hooks", () => {
   });
 
   it("wires google-thinking stream hooks for direct and Gemini CLI providers", async () => {
-    const { providers } = await registerProviderPlugin({
-      plugin: googleProviderPlugin,
-      id: "google",
-      name: "Google Provider",
-    });
+    const { providers } = await registerGoogleProviders();
     const googleProvider = requireRegisteredProvider(providers, "google");
     const cliProvider = requireRegisteredProvider(providers, "google-gemini-cli");
     const capturedStream = createCapturedThinkingConfigStream();
@@ -407,11 +392,7 @@ describe("google provider plugin hooks", () => {
   });
 
   it("wires Vertex transport before request-time metadata ADC detection", async () => {
-    const { providers } = await registerProviderPlugin({
-      plugin: googleProviderPlugin,
-      id: "google",
-      name: "Google Provider",
-    });
+    const { providers } = await registerGoogleProviders();
     const provider = requireRegisteredProvider(providers, "google");
 
     expect(
@@ -426,11 +407,7 @@ describe("google provider plugin hooks", () => {
   });
 
   it("advertises adaptive thinking for Gemini dynamic thinking", async () => {
-    const { providers } = await registerProviderPlugin({
-      plugin: googleProviderPlugin,
-      id: "google",
-      name: "Google Provider",
-    });
+    const { providers } = await registerGoogleProviders();
     const provider = requireRegisteredProvider(providers, "google");
     if (!provider.resolveThinkingProfile) {
       throw new Error("expected Google provider thinking profile resolver");
@@ -459,18 +436,5 @@ describe("google provider plugin hooks", () => {
       { id: "adaptive" },
       { id: "high" },
     ]);
-  });
-
-  it("shares Gemini replay and stream hooks across Google provider variants", async () => {
-    const { providers } = await registerProviderPlugin({
-      plugin: googleProviderPlugin,
-      id: "google",
-      name: "Google Provider",
-    });
-    const googleProvider = requireRegisteredProvider(providers, "google");
-    const cliProvider = requireRegisteredProvider(providers, "google-gemini-cli");
-
-    expect(googleProvider.buildReplayPolicy).toBe(cliProvider.buildReplayPolicy);
-    expect(googleProvider.wrapStreamFn).toBe(cliProvider.wrapStreamFn);
   });
 });

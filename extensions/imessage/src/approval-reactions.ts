@@ -222,7 +222,9 @@ export async function registerIMessageApprovalReactionTarget(params: {
     !accountId ||
     !messageId ||
     !approvalId ||
-    (params.approvalKind !== "exec" && params.approvalKind !== "plugin") ||
+    (params.approvalKind !== "exec" &&
+      params.approvalKind !== "plugin" &&
+      params.approvalKind !== "system-agent") ||
     allowedDecisions.length === 0
   ) {
     return null;

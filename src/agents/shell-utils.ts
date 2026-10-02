@@ -14,7 +14,8 @@ import { getBinDir } from "./config.js";
 type ShellConfig = {
   shell: string;
   args: string[];
-} & ({ commandTransport: "argv" } | { commandTransport: "stdin" });
+  commandTransport: "argv" | "stdin";
+};
 
 type ShellCommandInvocation =
   | { argv: [string, ...string[]]; input?: undefined; stdin: "ignore" }
@@ -204,13 +205,9 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
   const shellName = envShell ? path.basename(envShell) : "";
   // Fish rejects common bashisms used by tools, so prefer bash when detected.
   if (shellName === "fish") {
-    const bash = resolveShellFromPath("bash");
-    if (bash) {
-      return createArgvShellConfig(bash, getPosixShellArgs(bash));
-    }
-    const sh = resolveShellFromPath("sh");
-    if (sh) {
-      return createArgvShellConfig(sh, getPosixShellArgs(sh));
+    const shell = resolveShellFromPath("bash") ?? resolveShellFromPath("sh");
+    if (shell) {
+      return createArgvShellConfig(shell, getPosixShellArgs(shell));
     }
   }
   if (envShell) {
@@ -362,9 +359,6 @@ export function createStreamingBinaryOutputSanitizer(
 
 function sanitizeStrippedBinaryOutput(text: string): string {
   const scrubbed = text.replace(/[\p{Format}\p{Surrogate}]/gu, "");
-  if (!scrubbed) {
-    return scrubbed;
-  }
   return scrubbed.replace(/\p{Cc}/gu, (control) =>
     control === "\t" || control === "\n" || control === "\r"
       ? control

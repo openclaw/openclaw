@@ -30,6 +30,15 @@ shared `message` tool. Your plugin owns:
 - **Threading** - how replies are threaded
 - **Heartbeat typing** - optional typing/busy signals for heartbeat delivery
   targets
+- **Formatting contract** - optional `agentPrompt.inboundFormattingHints`,
+  resolved per delivering account. Despite its name, core gives it to every
+  OpenClaw agent turn whose visible text reaches the channel: replies,
+  heartbeats, cron announces, subagent announces, and cron runs without a
+  reply route that can send with the `message` tool (for example
+  `delivery.mode: "none"`). Such a run uses the message tool's default
+  channel: its current channel, or the only configured channel. A `message`
+  tool send to another channel does not get that channel's rules, and external
+  ACP agents do not receive it. Keep all formatting rules in this one hook.
 
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch. For configured agent group
@@ -121,6 +130,11 @@ raw callback string. Actor and source-message checks remain channel-owned.
     the minimum - `id`, `config`, and `setup` - and add adapters as you need
     them. `createChatChannelPlugin` defaults omitted capabilities to direct
     messages; declare `capabilities.chatTypes` when the channel supports more.
+    Set `capabilities.reactions` when the channel supports reactions. Channels
+    limited to one bot reaction per message set `capabilities.reactionSlots` to
+    `"single"`; `"multiple"` or omission means independent emoji. When a Control UI
+    reaction is removed from a single-slot channel, the mirror restores the newest
+    remaining emoji or clears the slot when none remain.
 
     `config.inspectAccount` is synchronous and returns metadata
     for read-only diagnostics, including disabled or configured-but-unavailable
@@ -136,6 +150,21 @@ raw callback string. Actor and source-message checks remain channel-owned.
     Selection before secret redemption also reads this metadata directly. Directory
     auto-selection requires `configured: true`; callers can still select the channel
     explicitly when configuration status is unknown.
+
+    Operational account reads can be asynchronous. Define
+    `config.resolveAccountAsync(cfg, accountId)` when account resolution reads
+    durable credentials, and `config.hasConfiguredStateAsync({ cfg, env })` for
+    the matching operational configured-state check. These optional callbacks
+    return a Promise of the same result as their synchronous counterparts.
+    Core awaits them when present; a rejection stays an error and never retries
+    the synchronous callback. Keep synchronous counterparts for older hosts and
+    external consumers of the existing contract.
+
+    Prepare current credentials for each operation, and revalidate live authority
+    after awaited preparation before any side effect. Account objects and registry
+    generations are not credential caches. Read-only `inspectAccount` and
+    config-only bootstrap activation remain separate; persisted credentials alone
+    do not enable a channel.
 
     Create `src/channel.ts`:
 
@@ -245,6 +274,12 @@ raw callback string. Actor and source-message checks remain channel-owned.
 
     For channels that accept both canonical top-level DM keys and legacy nested keys, use the helpers from `plugin-sdk/channel-config-helpers`: `resolveChannelDmAccess`, `resolveChannelDmPolicy`, `resolveChannelDmAllowFrom`, and `normalizeChannelDmPolicy` keep account-local values ahead of inherited root values. Pair the same resolver with doctor repair through `normalizeLegacyDmAliases` so runtime and migration read the same contract.
 
+    For channel-specific secret activation, `createChannelSecretContract` from
+    `openclaw/plugin-sdk/channel-secret-basic-runtime` combines `channelKey`,
+    `account`/`channel` registry specs, and a `collect` callback. The callback receives
+    `config`, `defaults`, `context`, `channelKey`, `channel`, and the resolved account
+    `surface`; it runs only when the channel record exists. Keep activation rules in the callback.
+
     Config-backed logout handlers can use `clearAccountFieldsFromConfigSection`
     from `openclaw/plugin-sdk/channel-config-helpers`. Pass `cfg`, `sectionKey`,
     `accountId`, and the plugin-owned `fields` to remove. It returns
@@ -347,6 +382,14 @@ raw callback string. Actor and source-message checks remain channel-owned.
       Channel turn adapters can forward the same plan through
       `deliverPreparedWithProviderMessageSending`, and durable inbound delivery uses
       `deliverStructuredInboundReplyWithMessageSendContext({ ...context, plan })`.
+      Both durable inbound helpers accept an optional synchronous
+      `prepareRuntimeHandoff(cfg)` callback for final replies after an unrelated
+      plugin reload. The channel must reject a changed admitted sender and return
+      a config that pins the verified credential for all parts of that delivery.
+      Core requires the exact retained channel registration and unchanged channel,
+      shared-default, and owning-plugin settings; channels without this callback
+      cannot transfer a final reply to a successor registry. The callback must not
+      persist credentials or change unrelated settings.
       Existing raw callbacks remain supported. An older adapter receives the
       payload through its original callback; it must adopt the prepared operation
       to avoid reparsing literal text in its own normalization code.

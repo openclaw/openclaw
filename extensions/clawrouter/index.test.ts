@@ -1,4 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -30,6 +31,43 @@ const LIVE_CATALOG = {
     },
   ],
 };
+
+function streamModel(overrides: Partial<Parameters<StreamFn>[0]> = {}): Parameters<StreamFn>[0] {
+  return {
+    provider: "clawrouter",
+    api: "openai-responses",
+    id: "openai/gpt-5.5",
+    name: "Test model",
+    baseUrl: "https://clawrouter.example/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    maxTokens: 1024,
+    ...overrides,
+  };
+}
+
+function createStreamCapture() {
+  const calls: Array<Parameters<StreamFn>[0]> = [];
+  const streamFn = vi.fn<StreamFn>((model) => {
+    calls.push(model);
+    return createAssistantMessageEventStream();
+  });
+  return { calls, streamFn };
+}
+
+function dynamicModelContext() {
+  return {
+    config: { models: {} },
+    agentDir: "/agent",
+    workspaceDir: "/workspace",
+    provider: "clawrouter",
+    modelId: "openai/gpt-5.5",
+    modelRegistry: { find: vi.fn(() => null) },
+    authProfileId: "clawrouter-profile",
+    authProfileMode: "api_key",
+  };
+}
 
 describe("ClawRouter plugin", () => {
   beforeEach(() => {
@@ -86,26 +124,11 @@ describe("ClawRouter plugin", () => {
         } as never)
         ?.levels.map((level) => level.id);
 
-    expect(resolveLevels("openclaw")).toEqual([
-      "off",
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max",
-      "ultra",
-    ]);
-    expect(resolveLevels("auto")).toEqual([
-      "off",
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max",
-      "ultra",
-    ]);
-    expect(resolveLevels("codex")).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
-    expect(resolveLevels(undefined)).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
+    const catalogLevels = ["off", "low", "medium", "high", "xhigh", "max"];
+    expect(resolveLevels("openclaw")).toEqual([...catalogLevels, "ultra"]);
+    expect(resolveLevels("auto")).toEqual([...catalogLevels, "ultra"]);
+    expect(resolveLevels("codex")).toEqual(catalogLevels);
+    expect(resolveLevels(undefined)).toEqual(catalogLevels);
     expect(
       provider?.resolveThinkingProfile?.({
         provider: "clawrouter",
@@ -140,20 +163,15 @@ describe("ClawRouter plugin", () => {
 
   it("attaches the proxy key and native upstream id only at request dispatch", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
-    const calls: Array<Parameters<StreamFn>[0]> = [];
-    const baseStreamFn: StreamFn = (model) => {
-      calls.push(model);
-      return {} as ReturnType<StreamFn>;
-    };
+    const { calls, streamFn } = createStreamCapture();
     const wrapped = provider?.wrapStreamFn?.({
       provider: "clawrouter",
       modelId: "anthropic/claude-sonnet-4-6",
-      streamFn: baseStreamFn,
-    } as never);
+      streamFn,
+    });
 
     void wrapped?.(
-      {
-        provider: "clawrouter",
+      streamModel({
         api: "anthropic-messages",
         id: "anthropic/claude-sonnet-4-6",
         headers: { "x-request-id": "request-1" },
@@ -164,9 +182,9 @@ describe("ClawRouter plugin", () => {
             upstreamModel: "claude-sonnet-4-6",
           },
         },
-      } as never,
-      {} as never,
-      { apiKey: "runtime-proxy-key", requestId: "automatic-call-id" } as never,
+      }),
+      { messages: [] },
+      { apiKey: "runtime-proxy-key", requestId: "automatic-call-id" },
     );
 
     expect(calls[0]?.headers).toEqual({
@@ -179,57 +197,42 @@ describe("ClawRouter plugin", () => {
   });
 
   it("attaches bounded attribution without overriding configured metadata", () => {
-    const calls: Array<Parameters<StreamFn>[0]> = [];
-    const baseStreamFn: StreamFn = (model) => {
-      calls.push(model);
-      return {} as ReturnType<StreamFn>;
-    };
+    const { calls, streamFn } = createStreamCapture();
     const wrapped = wrapClawRouterProviderStream({
       provider: "clawrouter",
       modelId: "openai/gpt-5.5",
       agentId: "main",
-      streamFn: baseStreamFn,
-    } as never);
+      streamFn,
+    });
 
     const longRunId = `run-${"r".repeat(300)}`;
     void wrapped?.(
-      {
-        provider: "clawrouter",
-        api: "openai-responses",
-        id: "openai/gpt-5.5",
+      streamModel({
         headers: {
           "x-clawrouter-client": "managed-openclaw",
           "X-ClawRouter-Project-Id": "fakeco",
         },
-      } as never,
-      {} as never,
+      }),
+      { messages: [] },
       {
         apiKey: "runtime-proxy-key",
         requestId: `${longRunId}:model:1`,
         sessionId: `session-${"x".repeat(300)}`,
-      } as never,
+      },
     );
     void wrapped?.(
-      {
-        provider: "clawrouter",
-        api: "openai-responses",
-        id: "openai/gpt-5.5",
-      } as never,
-      {} as never,
+      streamModel(),
+      { messages: [] },
       {
         requestId: `${longRunId}:model:2`,
-      } as never,
+      },
     );
     void wrapped?.(
-      {
-        provider: "clawrouter",
-        api: "openai-responses",
-        id: "openai/gpt-5.5",
-      } as never,
-      {} as never,
+      streamModel(),
+      { messages: [] },
       {
         requestId: "turn-😀:model:3",
-      } as never,
+      },
     );
 
     expect(calls[0]?.headers).toMatchObject({
@@ -249,9 +252,9 @@ describe("ClawRouter plugin", () => {
 
   it("sanitizes Unicode attribution to distinct printable ASCII ByteStrings", () => {
     const captured: Array<Record<string, string>> = [];
-    const baseStreamFn: StreamFn = (model) => {
+    const streamFn: StreamFn = (model) => {
       captured.push(model.headers ?? {});
-      return {} as ReturnType<StreamFn>;
+      return createAssistantMessageEventStream();
     };
 
     for (const [agentId, sessionId] of [
@@ -262,18 +265,10 @@ describe("ClawRouter plugin", () => {
         provider: "clawrouter",
         modelId: "openai/gpt-5.5",
         agentId,
-        streamFn: baseStreamFn,
-      } as never);
+        streamFn,
+      });
 
-      void wrapped?.(
-        {
-          provider: "clawrouter",
-          api: "openai-responses",
-          id: "openai/gpt-5.5",
-        } as never,
-        {} as never,
-        { sessionId } as never,
-      );
+      void wrapped?.(streamModel(), { messages: [] }, { sessionId });
     }
 
     expect(captured).toHaveLength(2);
@@ -297,18 +292,10 @@ describe("ClawRouter plugin", () => {
         agentId,
         streamFn: ((model) => {
           captured.push(model.headers?.["X-ClawRouter-Agent-Id"] ?? "");
-          return {} as ReturnType<StreamFn>;
+          return createAssistantMessageEventStream();
         }) satisfies StreamFn,
-      } as never);
-      void wrapped?.(
-        {
-          provider: "clawrouter",
-          api: "openai-responses",
-          id: "openai/gpt-5.5",
-        } as never,
-        {} as never,
-        {} as never,
-      );
+      });
+      void wrapped?.(streamModel(), { messages: [] });
     };
 
     captureAgentId("agent-😀");
@@ -326,62 +313,43 @@ describe("ClawRouter plugin", () => {
   });
 
   it("keeps an explicit per-request header ahead of the automatic model-call id", () => {
-    const calls: Array<{
-      model: Parameters<StreamFn>[0];
-      options: Parameters<StreamFn>[2];
-    }> = [];
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      calls.push({ model, options });
-      return {} as ReturnType<StreamFn>;
-    };
+    const { calls, streamFn } = createStreamCapture();
     const wrapped = wrapClawRouterProviderStream({
       provider: "clawrouter",
       modelId: "openai/gpt-5.5",
-      streamFn: baseStreamFn,
-    } as never);
+      streamFn,
+    });
 
     void wrapped?.(
-      {
-        provider: "clawrouter",
-        api: "openai-responses",
-        id: "openai/gpt-5.5",
-      } as never,
-      {} as never,
+      streamModel(),
+      { messages: [] },
       {
         headers: { "x-request-id": "operator-request" },
         requestId: "automatic-call-id",
-      } as never,
+      },
     );
 
-    expect(calls[0]?.model.headers).not.toHaveProperty("X-Request-ID");
-    expect(calls[0]?.options?.headers).toEqual({ "x-request-id": "operator-request" });
+    expect(calls[0]?.headers).not.toHaveProperty("X-Request-ID");
+    expect(streamFn.mock.calls[0]?.[2]?.headers).toEqual({ "x-request-id": "operator-request" });
   });
 
   it("omits unsafe attribution header values", () => {
-    const calls: Array<Parameters<StreamFn>[0]> = [];
-    const baseStreamFn: StreamFn = (model) => {
-      calls.push(model);
-      return {} as ReturnType<StreamFn>;
-    };
+    const { calls, streamFn } = createStreamCapture();
     const wrapped = wrapClawRouterProviderStream({
       provider: "clawrouter",
       modelId: "openai/gpt-5.5",
       agentId: "bad\nagent",
-      streamFn: baseStreamFn,
-    } as never);
+      streamFn,
+    });
 
     void wrapped?.(
-      {
-        provider: "clawrouter",
-        api: "openai-responses",
-        id: "openai/gpt-5.5",
-      } as never,
-      {} as never,
+      streamModel(),
+      { messages: [] },
       {
         apiKey: "runtime-proxy-key",
         requestId: "bad\nrequest",
         sessionId: "bad\rsession",
-      } as never,
+      },
     );
 
     expect(calls[0]?.headers).toEqual({
@@ -473,16 +441,7 @@ describe("ClawRouter plugin", () => {
       vi.fn(async () => Response.json(LIVE_CATALOG)),
     );
     const provider = await registerSingleProviderPlugin(plugin);
-    const context = {
-      config: { models: {} },
-      agentDir: "/agent",
-      workspaceDir: "/workspace",
-      provider: "clawrouter",
-      modelId: "openai/gpt-5.5",
-      modelRegistry: { find: vi.fn(() => null) },
-      authProfileId: "clawrouter-profile",
-      authProfileMode: "api_key",
-    };
+    const context = dynamicModelContext();
 
     expect(provider?.resolveDynamicModel?.(context as never)).toBeUndefined();
     expect(provider?.preferRuntimeResolvedModel?.(context as never)).toBe(false);
@@ -534,16 +493,7 @@ describe("ClawRouter plugin", () => {
     );
     const first = await registerSingleProviderPlugin(plugin);
     const second = await registerSingleProviderPlugin(plugin);
-    const context = {
-      config: { models: {} },
-      agentDir: "/agent",
-      workspaceDir: "/workspace",
-      provider: "clawrouter",
-      modelId: "openai/gpt-5.5",
-      modelRegistry: { find: vi.fn(() => null) },
-      authProfileId: "clawrouter-profile",
-      authProfileMode: "api_key",
-    };
+    const context = dynamicModelContext();
 
     await first.prepareDynamicModel?.(context as never);
 
@@ -568,16 +518,7 @@ describe("ClawRouter plugin", () => {
       .mockReturnValueOnce(refreshResponse);
     vi.stubGlobal("fetch", fetchMock);
     const provider = await registerSingleProviderPlugin(plugin);
-    const context = {
-      config: { models: {} },
-      agentDir: "/agent",
-      workspaceDir: "/workspace",
-      provider: "clawrouter",
-      modelId: "openai/gpt-5.5",
-      modelRegistry: { find: vi.fn(() => null) },
-      authProfileId: "clawrouter-profile",
-      authProfileMode: "api_key",
-    };
+    const context = dynamicModelContext();
 
     await provider?.prepareDynamicModel?.(context as never);
     const refresh = provider?.prepareDynamicModel?.(context as never);
@@ -604,16 +545,7 @@ describe("ClawRouter plugin", () => {
         .mockRejectedValueOnce(new Error("catalog unavailable")),
     );
     const provider = await registerSingleProviderPlugin(plugin);
-    const context = {
-      config: { models: {} },
-      agentDir: "/agent",
-      workspaceDir: "/workspace",
-      provider: "clawrouter",
-      modelId: "openai/gpt-5.5",
-      modelRegistry: { find: vi.fn(() => null) },
-      authProfileId: "clawrouter-profile",
-      authProfileMode: "api_key",
-    };
+    const context = dynamicModelContext();
 
     await provider?.prepareDynamicModel?.(context as never);
     await expect(provider?.prepareDynamicModel?.(context as never)).rejects.toThrow(

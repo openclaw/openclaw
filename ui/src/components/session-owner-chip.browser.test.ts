@@ -84,13 +84,16 @@ async function applyTheme(theme: ThemeName, mode: "light" | "dark") {
   document.documentElement.dataset.themeMode = mode;
   const typefaces = resolveTypefaces(theme);
   syncTypefaceStylesheets(typefaces);
-  await expect
-    .poll(
-      () =>
-        document.querySelector<HTMLLinkElement>(`#openclaw-typeface-${typefaces.ui}`)?.sheet !=
-        null,
-    )
-    .toBe(true);
+  const stylesheet = document.querySelector<HTMLLinkElement>(`#openclaw-typeface-${typefaces.ui}`)!;
+  if (!stylesheet.sheet) {
+    await new Promise<void>((resolve, reject) => {
+      stylesheet.addEventListener("load", () => resolve(), { once: true });
+      stylesheet.addEventListener("error", () => reject(new Error("Typeface stylesheet failed")), {
+        once: true,
+      });
+    });
+  }
+  expect(stylesheet.sheet).not.toBeNull();
   await document.fonts.load(`700 9px ${TYPEFACES[typefaces.ui].stack}`, "AB+241");
 }
 
@@ -285,10 +288,11 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
         ownerCount === 2 ? "Owned by Ada · with Bob" : `Owned by Ada · +${ownerCount - 1} more`,
       );
       for (const state of ["idle", "hover", "active", "selected"]) {
+        // Rendering and fonts are ready; check real pointer state below without another stability wait.
         if (state === "hover") {
-          await userEvent.hover(row);
+          await userEvent.hover(row, { force: true });
         } else if (state === "idle" || state === "active") {
-          await userEvent.unhover(row);
+          await userEvent.unhover(row, { force: true });
         }
         row.classList.toggle("sidebar-recent-session--active", state === "active");
         row.classList.toggle("sidebar-recent-session--selected", state === "selected");

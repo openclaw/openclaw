@@ -1,4 +1,3 @@
-// Web search runtime resolves configured search providers and executes searches.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -93,16 +92,7 @@ function hasEntryCredential(
 }
 
 function hasImplicitProviderSelectionSignal(
-  provider: Pick<
-    PluginWebSearchProviderEntry,
-    | "credentialPath"
-    | "id"
-    | "authProviderId"
-    | "envVars"
-    | "getConfiguredCredentialValue"
-    | "getConfiguredCredentialFallback"
-    | "requiresCredential"
-  >,
+  provider: Parameters<typeof hasEntryCredential>[0],
   config: OpenClawConfig | undefined,
   search: WebSearchConfig | undefined,
   agentDir?: string,
@@ -205,7 +195,6 @@ export function resolveWebSearchProviderId(params: {
       );
       return provider.id;
     }
-    return "";
   }
 
   return "";
@@ -361,13 +350,12 @@ function resolveWebSearchCandidates(
         hasImplicitProviderSelectionSignal(provider, config, search, options?.agentDir),
       );
 
-  const orderedProviders = [
+  return [
     ...preferredIds
       .map((id) => providers.find((entry) => entry.id === id))
       .filter((entry): entry is PluginWebSearchProviderEntry => Boolean(entry)),
     ...fallbackProviders.filter((entry) => !preferredIds.includes(entry.id)),
   ];
-  return orderedProviders;
 }
 
 /** Reports whether web_search can use the prepared selection or resolve an agent-scoped provider. */

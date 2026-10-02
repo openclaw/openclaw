@@ -6,6 +6,7 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contra
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   autoMigrateLegacyStateDir,
@@ -144,6 +145,8 @@ function writeStateSchemaVersion(version: number): void {
 }
 
 function writeNewerAgentSchema(): void {
+  // Establish a fresh installation before adding the incompatible agent database.
+  openOpenClawStateDatabase();
   const agentPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
   writeSchemaVersion(agentPath, OPENCLAW_AGENT_SCHEMA_VERSION + 1);
   registerOpenClawAgentDatabase({ agentId: "main", path: agentPath });

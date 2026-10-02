@@ -26,8 +26,8 @@ import {
   NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES,
 } from "./skill-resource-transfer.test-support.js";
 import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
+import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { WORKER_ATTACHMENT_DIRECTORY_PREFIX } from "./workspace-path-exclusions.js";
-import { readActualWorkspaceManifest } from "./workspace-reconcile.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const tunnel: Pick<WorkerWorkspaceTunnelHandle, "runWorkspaceCommand"> = {
@@ -568,7 +568,7 @@ describe("remote-exec skill resources", () => {
       expect(remote.startsWith(carrier.workspace)).toBe(true);
       expect(await fs.readFile(path.join(remote, "data.bin"))).toEqual(binary);
       expect(await fs.readFile(path.join(outside, "SKILL.md"), "utf8")).toBe("project marker");
-      const manifest = await readActualWorkspaceManifest({
+      const manifest = await captureWorkspaceManifest({
         root: carrier.workspace,
         baseCommit: null,
       });

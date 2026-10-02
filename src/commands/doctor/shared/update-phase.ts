@@ -3,6 +3,8 @@ import { isTruthyEnvValue } from "../../../infra/env.js";
 import { VERSION } from "../../../version.js";
 
 export const UPDATE_IN_PROGRESS_ENV = "OPENCLAW_UPDATE_IN_PROGRESS";
+/** Managed updaters must opt in to NOCOW rewrites, which change physical store identities. */
+export const DOCTOR_SQLITE_NOCOW_REPAIR_ENV = "OPENCLAW_DOCTOR_SQLITE_NOCOW_REPAIR";
 export const UPDATE_POST_CORE_CONVERGENCE_ENV = "OPENCLAW_UPDATE_POST_CORE_CONVERGENCE";
 export const UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV =
   "OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR";

@@ -9,18 +9,23 @@ import { cleanupRetainedPluginInstallGenerations } from "../../../gateway/server
 import * as temporaryState from "../../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../../infra/update-run-ledger.js";
 import { commitPluginInstallRecordsWithConfig } from "../../../plugins/install-record-commit.js";
-import { readPersistedInstalledPluginIndexRowSync } from "../../../plugins/installed-plugin-index-record-state.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   readPersistedInstalledPluginIndexInstallRecords,
 } from "../../../plugins/installed-plugin-index-records.js";
 import { resolveRetainedManagedNpmInstallMarkerPath } from "../../../plugins/managed-npm-retention.js";
 import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
-import { seedInstalledPluginIndex } from "../../../plugins/test-helpers/installed-plugin-index.js";
+import {
+  readPersistedInstalledPluginIndexRowSync,
+  seedInstalledPluginIndex,
+} from "../../../plugins/test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "../../../plugins/test-helpers/managed-npm-plugin.js";
 import { runPluginUpdateAttempt } from "../../../plugins/update-attempt.js";
 import * as pluginUpdates from "../../../plugins/update.js";
-import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../../test-utils/openclaw-test-state.js";
 import { repairMissingConfiguredPluginInstalls } from "./missing-configured-plugin-install.js";
 import { runPostCorePluginConvergence } from "./post-core-plugin-convergence.js";
 
@@ -28,6 +33,25 @@ afterEach(() => {
   vi.restoreAllMocks();
   syncBuiltinESMExports();
 });
+
+function createPeerPlugin(state: OpenClawTestState, layout: "managed" | "registered" = "managed") {
+  const packageDir =
+    layout === "managed"
+      ? state.statePath("npm", "node_modules", "peer-plugin")
+      : state.statePath("extensions", "peer-plugin");
+  const nodeModules = path.join(packageDir, "node_modules");
+  const linkPath = path.join(nodeModules, "openclaw");
+  fs.mkdirSync(packageDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(packageDir, "package.json"),
+    JSON.stringify({ name: "peer-plugin", version: "1.0.0", peerDependencies: { openclaw: "*" } }),
+  );
+  const baselineInstallRecords: Record<string, PluginInstallRecord> =
+    layout === "managed"
+      ? {}
+      : { "peer-plugin": { source: "npm", spec: "peer-plugin@1.0.0", installPath: packageDir } };
+  return { nodeModules, linkPath, baselineInstallRecords };
+}
 
 describe("post-core plugin persistence cancellation", () => {
   it.each(["managed", "registered"] as const)(
@@ -39,32 +63,9 @@ describe("post-core plugin persistence cancellation", () => {
         const control = state.path("control");
         fs.mkdirSync(control);
         vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
-        const packageDir =
-          layout === "managed"
-            ? state.statePath("npm", "node_modules", "peer-plugin")
-            : state.statePath("extensions", "peer-plugin");
-        const nodeModules = path.join(packageDir, "node_modules");
-        const linkPath = path.join(nodeModules, "openclaw");
-        fs.mkdirSync(nodeModules, { recursive: true });
-        fs.writeFileSync(
-          path.join(packageDir, "package.json"),
-          JSON.stringify({
-            name: "peer-plugin",
-            version: "1.0.0",
-            peerDependencies: { openclaw: "*" },
-          }),
-        );
+        const { nodeModules, linkPath, baselineInstallRecords } = createPeerPlugin(state, layout);
+        fs.mkdirSync(nodeModules);
         fs.symlinkSync(state.root, linkPath, "junction");
-        const baselineInstallRecords: Record<string, PluginInstallRecord> =
-          layout === "managed"
-            ? {}
-            : {
-                "peer-plugin": {
-                  source: "npm",
-                  spec: "peer-plugin@1.0.0",
-                  installPath: packageDir,
-                },
-              };
         const configBefore = fs.readFileSync(state.configPath, "utf8");
         const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
         await withUpdateCommandExecutor(run.runId, async (executor) => {
@@ -241,7 +242,7 @@ describe("post-core plugin persistence cancellation", () => {
     });
   });
 
-  it.each([false, true])("preserves the repair index when cancelled=%s", async (cancelled) => {
+  it("preserves the repair index when cancelled", async () => {
     await withOpenClawTestState({ label: "plugin-repair-cancellation" }, async (state) => {
       const cfg = { plugins: { enabled: false } };
       const previous: Record<string, PluginInstallRecord> = { previous: { source: "archive" } };
@@ -260,16 +261,10 @@ describe("post-core plugin persistence cancellation", () => {
           beforePersistentEffect: () => controller.signal.throwIfAborted(),
         };
         const repair = repairMissingConfiguredPluginInstalls(params);
-        if (cancelled) {
-          controller.abort(refusal);
-          await expect(repair).rejects.toBe(refusal);
-        } else {
-          await repair;
-        }
+        controller.abort(refusal);
+        await expect(repair).rejects.toBe(refusal);
       });
-      expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(
-        cancelled ? previous : next,
-      );
+      expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(previous);
     });
   });
 
@@ -331,14 +326,7 @@ describe("post-core plugin persistence cancellation", () => {
     "submits real host-link effects in the synchronous admission turn: %s",
     async (layout) => {
       await withOpenClawTestState({ label: `plugin-sync-admission-${layout}` }, async (state) => {
-        const packageDir = state.statePath("npm", "node_modules", "peer-plugin");
-        const nodeModules = path.join(packageDir, "node_modules");
-        const linkPath = path.join(nodeModules, "openclaw");
-        fs.mkdirSync(packageDir, { recursive: true });
-        fs.writeFileSync(
-          path.join(packageDir, "package.json"),
-          JSON.stringify({ name: "peer-plugin", peerDependencies: { openclaw: "*" } }),
-        );
+        const { nodeModules, linkPath } = createPeerPlugin(state);
         if (layout !== "missing-modules") {
           fs.mkdirSync(nodeModules);
           if (layout === "stale-link") {
@@ -402,50 +390,23 @@ describe("post-core plugin persistence cancellation", () => {
     },
   );
 
-  it.each([
-    ["managed", "mkdir"],
-    ["managed", "unlink"],
-    ["managed", "rm"],
-    ["managed", "symlink"],
-    ["registered", "unlink"],
-  ] as const)(
-    "keeps refusal blocking before the actual %s host-link %s effect",
-    async (layout, effect) => {
-      await withOpenClawTestState({ label: `plugin-host-${effect}` }, async (state) => {
+  it.each(["managed", "registered"] as const)(
+    "keeps refusal blocking during %s host-link replacement",
+    async (layout) => {
+      await withOpenClawTestState({ label: `plugin-host-${layout}` }, async (state) => {
         const cfg = { plugins: { enabled: false } };
-        const packageDir =
-          layout === "managed"
-            ? state.statePath("npm", "node_modules", "peer-plugin")
-            : state.statePath("extensions", "peer-plugin");
-        const nodeModules = path.join(packageDir, "node_modules");
-        const linkPath = path.join(nodeModules, "openclaw");
-        fs.mkdirSync(packageDir, { recursive: true });
-        fs.writeFileSync(
-          path.join(packageDir, "package.json"),
-          JSON.stringify({
-            name: "peer-plugin",
-            version: "1.0.0",
-            peerDependencies: { openclaw: "*" },
-          }),
-        );
-        if (effect !== "mkdir") {
-          fs.mkdirSync(nodeModules, { recursive: true });
-          if (effect === "rm") {
-            fs.mkdirSync(linkPath);
-            fs.writeFileSync(path.join(linkPath, "package.json"), '{"name":"openclaw"}');
-          } else {
-            fs.symlinkSync(state.root, linkPath, "junction");
-          }
-        }
+        const { nodeModules, linkPath, baselineInstallRecords } = createPeerPlugin(state, layout);
+        fs.mkdirSync(nodeModules);
+        fs.symlinkSync(state.root, linkPath, "junction");
         const controller = new AbortController();
         const refusal = new Error("initiating operation revoked after host-link probe");
-        if (effect !== "symlink") {
+        if (layout === "registered") {
           const lstat = fs.promises.lstat.bind(fs.promises);
           vi.spyOn(fs.promises, "lstat").mockImplementation(async (...args) => {
             try {
               return await lstat(...args);
             } finally {
-              if (args[0] === (effect === "mkdir" ? nodeModules : linkPath)) {
+              if (args[0] === linkPath) {
                 controller.abort(refusal);
               }
             }
@@ -460,16 +421,6 @@ describe("post-core plugin persistence cancellation", () => {
           });
           syncBuiltinESMExports();
         }
-        const baselineInstallRecords: Record<string, PluginInstallRecord> =
-          layout === "managed"
-            ? {}
-            : {
-                "peer-plugin": {
-                  source: "npm",
-                  spec: "peer-plugin@1.0.0",
-                  installPath: packageDir,
-                },
-              };
         let refused = false;
         const params = {
           cfg,
@@ -483,15 +434,8 @@ describe("post-core plugin persistence cancellation", () => {
           },
         };
         await expect(runPostCorePluginConvergence(params)).rejects.toBe(refusal);
-        if (effect === "mkdir") {
-          expect(fs.existsSync(nodeModules)).toBe(false);
-        } else if (effect === "symlink") {
+        if (layout === "managed") {
           expect(fs.existsSync(linkPath)).toBe(false);
-        } else if (effect === "rm") {
-          expect(fs.readFileSync(path.join(linkPath, "package.json"), "utf8")).toBe(
-            '{"name":"openclaw"}',
-          );
-          expect(fs.lstatSync(linkPath).isDirectory()).toBe(true);
         } else {
           expect(fs.readlinkSync(linkPath)).toBe(state.root);
         }

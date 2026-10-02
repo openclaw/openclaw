@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { render, type ReactiveControllerHost } from "lit";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ChatStateController } from "../chat-state-controller.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import {
@@ -58,33 +59,33 @@ describe("completed-work duration", () => {
         rerender();
         transcript.hostConnected();
         await flushDeferredRowPrune();
-        const duration = () => container.querySelector(".chat-activity-group__duration");
-        expect(duration()?.textContent).toBe("27m 35s");
+        const duration = () => container.querySelector(".chat-activity-group__label");
+        expect(duration()?.textContent).toBe("Worked for 27m 35s");
         props.selectedSession.runtimeMs = 1_660_000;
         rerender();
-        expect(duration()?.textContent).toBe("27m 40s");
+        expect(duration()?.textContent).toBe("Worked for 27m 40s");
         props.messages = messages.slice(1);
         rerender();
-        expect(duration()?.textContent).toBe("27m 40s");
+        expect(duration()?.textContent).toBe("Worked for 27m 40s");
         props.messages = messages;
         props.selectedSession.lastRunId = "unrelated-run";
         rerender();
-        expect(duration()).toBeNull();
+        expect(duration()?.textContent).toBe("Worked");
         expect(container.querySelector(".chat-work-group")).not.toBeNull();
         props.selectedSession.lastRunId = runId;
         props.selectedSession.status = "running";
         rerender();
-        expect(duration()).toBeNull();
+        expect(duration()?.textContent).toBe("Worked");
         props.selectedSession.status = status;
         for (const runtimeMs of [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
           props.selectedSession.runtimeMs = runtimeMs;
           rerender();
-          expect(duration()).toBeNull();
+          expect(duration()?.textContent).toBe("Worked");
         }
         props.selectedSession.runtimeMs = 1_655_000;
         props.selectedSession.key = "agent:main:dashboard:other";
         rerender();
-        expect(duration()).toBeNull();
+        expect(duration()?.textContent).toBe("Worked");
         expect(messages[2]?.timestamp).toBe(508_000);
       } finally {
         transcript.hostDisconnected();
@@ -92,6 +93,69 @@ describe("completed-work duration", () => {
       }
     },
   );
+
+  it("refreshes the work disclosure callback when its render lifecycle is replaced", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(60_000);
+    const runId = "restored-work";
+    const props = threadProps("pane-redraw-owner", "agent:main:dashboard:redraw-owner", [
+      {
+        role: "user",
+        content: "Inspect",
+        timestamp: 1_000,
+        __openclaw: { idempotencyKey: `${runId}:user` },
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "read-owner",
+        content: "Read complete",
+        timestamp: 2_000,
+        runId,
+      },
+      { role: "assistant", content: "Inspection complete", timestamp: 3_000, runId },
+    ]);
+    props.showToolCalls = true;
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    const host: ReactiveControllerHost = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: rerender,
+      updateComplete: Promise.resolve(true),
+    };
+    const controller = new ChatStateController(host);
+    controller.hostConnected();
+    const original = controller.createRenderLifecycle();
+    props.onRequestUpdate = () => original.invalidate();
+    try {
+      rerender();
+      transcript.hostConnected();
+      await vi.advanceTimersByTimeAsync(0);
+      const replacement = controller.createRenderLifecycle();
+      props.onRequestUpdate = () => replacement.invalidate();
+      rerender();
+      const disclosure = container.querySelector<HTMLButtonElement>(".chat-work-group > button");
+      expect(disclosure).not.toBeNull();
+      expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
+      disclosure?.click();
+      expect(disclosure?.getAttribute("aria-expanded")).toBe("true");
+      expect(container.textContent).toContain("read");
+      disclosure?.click();
+      expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
+      expect(container.textContent).not.toContain("read");
+      expect(container.textContent).toContain("Inspection complete");
+    } finally {
+      controller.hostDisconnected();
+      transcript.hostDisconnected();
+      container.remove();
+      vi.useRealTimers();
+    }
+  });
 
   it.each([false, true])(
     "preserves independent and steered run ownership (steer=%s)",
@@ -150,10 +214,104 @@ describe("completed-work duration", () => {
         expect(summaries).toHaveLength(2);
         expect(
           summaries.map(
-            (summary) =>
-              summary.querySelector(".chat-activity-group__duration")?.textContent ?? null,
+            (summary) => summary.querySelector(".chat-activity-group__label")?.textContent ?? null,
           ),
-        ).toEqual(steer ? ["20s", "20s"] : [null, "20s"]);
+        ).toEqual(steer ? ["Worked for 20s", "Worked for 20s"] : ["Worked", "Worked for 20s"]);
+      } finally {
+        transcript.hostDisconnected();
+        container.remove();
+      }
+    },
+  );
+});
+
+describe("live progress placement", () => {
+  beforeEach(installTranscriptDomMocks);
+  afterEach(resetTranscriptTestDom);
+
+  it.each([false, true])(
+    "keeps progress after the latest persisted steer output (older stream boundary=%s)",
+    (hasOlderBoundary) => {
+      const runId = "active-run";
+      const prompt = (id: string, seq: number, target?: string) => ({
+        role: "user",
+        content: id,
+        timestamp: seq * 1_000,
+        __openclaw: {
+          id,
+          seq,
+          idempotencyKey: `${id}:user`,
+          ...(target ? { steerTargetRunId: target } : {}),
+        },
+      });
+      const props = threadProps("pane-live-steer-progress", "agent:main:dashboard:progress", [
+        prompt(runId, 1),
+        prompt("earlier-steer", 2, runId),
+        prompt("latest-steer", 3, runId),
+        {
+          role: "assistant",
+          content: "Latest assistant update",
+          timestamp: 4_000,
+          __openclaw: { id: "latest-answer", seq: 4, runId },
+        },
+        {
+          role: "toolResult",
+          toolName: "read",
+          toolCallId: "latest-read",
+          content: "Report read",
+          timestamp: 5_000,
+          runId,
+          __openclaw: { id: "latest-tool", seq: 5 },
+        },
+      ]);
+      props.showToolCalls = true;
+      props.runId = runId;
+      props.runActive = true;
+      props.runWorking = true;
+      props.streamStartedAt = 1_000;
+      props.runUsageById = new Map([[runId, { outputTokens: 5_600, seq: 1 }]]);
+      props.streamSegments = hasOlderBoundary
+        ? [{ text: "", ts: 2_000, runId, boundaryRunId: "earlier-steer", boundaryMarker: true }]
+        : [];
+      props.pendingInputs = [
+        {
+          id: "future-input",
+          runId: "future-run",
+          state: "queued",
+          acceptedAt: 6_000,
+          message: {
+            role: "user",
+            content: "Next queued task",
+            timestamp: 6_000,
+            __openclaw: { id: "pending:future-input" },
+          },
+        },
+      ];
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      try {
+        render(renderChatThread(props, transcript), container);
+        transcript.hostConnected();
+        transcript.hostUpdated();
+        const progress = container.querySelector(".chat-working-indicator")!;
+        const answer = container.querySelector('[data-entry-id="latest-answer"]')!;
+        const activity = container.querySelector('[data-entry-id="latest-tool"]')!;
+        const future = [...container.querySelectorAll(".chat-bubble")].find((bubble) =>
+          bubble.textContent?.includes("Next queued task"),
+        )!;
+
+        expect(container.querySelectorAll(".chat-working-indicator")).toHaveLength(1);
+        expect(progress.textContent).toContain("5.6k output tokens");
+        expect(progress.querySelector("openclaw-elapsed-time")).toMatchObject({ startMs: 1_000 });
+        expect(answer.compareDocumentPosition(progress) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+          Node.DOCUMENT_POSITION_FOLLOWING,
+        );
+        expect(activity.compareDocumentPosition(progress) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+          Node.DOCUMENT_POSITION_FOLLOWING,
+        );
+        expect(progress.compareDocumentPosition(future) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+          Node.DOCUMENT_POSITION_FOLLOWING,
+        );
       } finally {
         transcript.hostDisconnected();
         container.remove();

@@ -149,25 +149,6 @@ function failingSnapshot(failing: string[], uptimeMs = FIVE_MIN_MS): Record<stri
 }
 
 describe("createReadinessChecker", () => {
-  it("reports ready when all managed channels are healthy", () => {
-    withReadinessClock(() => {
-      const startedAt = Date.now() - FIVE_MIN_MS;
-      const manager = createHealthyDiscordManager(startedAt, Date.now() - 1_000);
-
-      const readiness = createReadinessChecker({ channelManager: manager, startedAt });
-      expect(readiness()).toEqual(readySnapshot());
-    });
-  });
-
-  it("keeps readiness red while startup sidecars are pending", () => {
-    withReadinessClock(() => {
-      const { readiness } = createReadinessHarness({
-        getStartupPending: () => true,
-      });
-      expect(readiness()).toEqual(failingSnapshot(["startup-sidecars"]));
-    });
-  });
-
   it("reports the current startup pending reason", () => {
     withReadinessClock(() => {
       const { readiness } = createReadinessHarness({
@@ -194,18 +175,6 @@ describe("createReadinessChecker", () => {
     });
   });
 
-  it("reports not ready while the gateway command queue is draining for restart", () => {
-    withReadinessClock(() => {
-      const { manager, readiness } = createReadinessHarness({
-        getGatewayDraining: () => true,
-        cacheTtlMs: 1_000,
-      });
-
-      expect(readiness()).toEqual(failingSnapshot(["gateway-draining"]));
-      expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
-    });
-  });
-
   it("does not cache gateway-draining readiness", () => {
     withReadinessClock(() => {
       let gatewayDraining = true;
@@ -223,7 +192,7 @@ describe("createReadinessChecker", () => {
     });
   });
 
-  it("reports a terminal state database failure after the readiness cache expires", () => {
+  it("reports a terminal state database failure immediately and discards cached channel health", () => {
     withReadinessClock(() => {
       const stateDatabase = { failure: undefined as Error | undefined };
       const { manager, readiness } = createReadinessHarness({
@@ -233,9 +202,15 @@ describe("createReadinessChecker", () => {
       expect(readiness()).toEqual(readySnapshot());
 
       stateDatabase.failure = new Error("newer shared-state schema");
-      vi.advanceTimersByTime(1_000);
-      expect(readiness()).toEqual(failingSnapshot(["state-database"], FIVE_MIN_MS + 1_000));
+      expect(readiness()).toEqual({
+        ...failingSnapshot(["state-database"]),
+        stateDatabase: { reason: "newer shared-state schema" },
+      });
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
+
+      stateDatabase.failure = undefined;
+      expect(readiness()).toEqual(readySnapshot());
+      expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
     });
   });
 

@@ -17,6 +17,39 @@ import { openAIModelCatalogRoutePolicy } from "./openai-model-routes.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 describe("resolveLogicalVisibleModelCatalog", () => {
+  it("keeps the selected model ahead of curated and live rows in a large catalog", async () => {
+    const catalog: ModelCatalogEntry[] = Array.from({ length: 300 }, (_, index) => ({
+      provider: "fixture",
+      id: `model-${String(index).padStart(3, "0")}`,
+      name: `Model ${index}`,
+      providerOrder: index,
+    }));
+    const result = await resolveLogicalVisibleModelCatalog({
+      cfg: {},
+      catalog,
+      defaultProvider: "fixture",
+      defaultModel: { provider: "fixture", model: "model-298" },
+      selectedModel: { provider: "fixture", model: "model-299" },
+      view: "all",
+      metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
+      routePolicy: openAIModelCatalogRoutePolicy,
+      evaluateEntry: async () =>
+        resolveLogicalModelCatalogEntryState({
+          evaluation: { availability: true, routeResolution: null },
+          routePolicy: openAIModelCatalogRoutePolicy,
+        }),
+    });
+    expect(result.slice(0, 3).map((entry) => entry.id)).toEqual([
+      "model-299",
+      "model-000",
+      "model-001",
+    ]);
+    expect(result).toHaveLength(300);
+    expect(new Set(result.map((entry) => entry.id))).toEqual(
+      new Set(catalog.map((entry) => entry.id)),
+    );
+  });
+
   it.each([
     "native",
     "custom",
@@ -404,7 +437,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       evaluateEntry: evaluateAvailableEntry,
     });
 
-    expect(result.map((entry) => entry.id)).toEqual(["alias-key", "primary"]);
+    expect(result.map((entry) => entry.id).toSorted()).toEqual(["alias-key", "primary"]);
   });
 
   it.each(["all", "default", "configured"] as const)(

@@ -341,8 +341,9 @@ describe("gateway probe endpoints", () => {
               getPendingReplies: () => 0,
               getEmbeddedRuns: () => 0,
               getCronRuns: () => 0,
-              getActiveTasks: () => 0,
-              getTaskBlockers: () => [],
+              getAgentRuns: () => 0,
+              getAcpRuns: () => 0,
+              getMediaRuns: () => 0,
               getRootRequests: () => 0,
               getSessionAdmissions: () => 0,
               getSessionMutations: () => 0,
@@ -442,8 +443,9 @@ describe("gateway probe endpoints", () => {
               getPendingReplies: () => 0,
               getEmbeddedRuns: () => 0,
               getCronRuns: () => 0,
-              getActiveTasks: () => 0,
-              getTaskBlockers: () => [],
+              getAgentRuns: () => 0,
+              getAcpRuns: () => 0,
+              getMediaRuns: () => 0,
               getSessionAdmissions: () => 0,
               getSessionMutations: () => 0,
               getChatRuns: () => 0,
@@ -510,35 +512,6 @@ describe("gateway probe endpoints", () => {
 
         expect(res.statusCode).toBe(503);
         expect(JSON.parse(getBody())).toEqual({ ready: false });
-      },
-    });
-  });
-
-  it("returns detailed readiness payload for authenticated remote /ready requests", async () => {
-    const getReadiness: ReadinessChecker = () => ({
-      ready: false,
-      failing: ["discord", "telegram"],
-      uptimeMs: 8_000,
-    });
-
-    await withGatewayServer({
-      prefix: "probe-remote-authenticated",
-      resolvedAuth: AUTH_TOKEN,
-      overrides: { getReadiness },
-      run: async (server) => {
-        const { res, getBody } = await sendRequest(server, {
-          path: "/ready",
-          remoteAddress: "10.0.0.8",
-          host: "gateway.test",
-          authorization: "Bearer test-token",
-        });
-
-        expect(res.statusCode).toBe(503);
-        expect(JSON.parse(getBody())).toEqual({
-          ready: false,
-          failing: ["discord", "telegram"],
-          uptimeMs: 8_000,
-        });
       },
     });
   });

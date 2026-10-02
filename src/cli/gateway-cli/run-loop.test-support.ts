@@ -11,6 +11,18 @@ import type { GatewayRestartSnapshot } from "../daemon-cli/restart-health.js";
 type ManagedUpdateOwner = NonNullable<GatewayRestartIntent["successorOwner"]>;
 type GatewayStart = Parameters<typeof import("./run-loop.js").runGatewayLoop>[0]["start"];
 type ExitRuntime = { log: Mock; error: Mock; exit: Mock<(code: number) => void> };
+
+export function createGatewayLogger() {
+  return {
+    isEnabled: vi.fn(() => false),
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  };
+}
+
 export type UpdateRespawnFixtures = {
   spawnProcess: Mock<typeof import("node:child_process").spawn>;
   hostedStopPrepare: Mock<typeof import("../../daemon/hosted-stop.js").prepareHostedGatewayStop>;
@@ -113,7 +125,9 @@ export const createActiveWorkSnapshot = (
     embeddedRuns: 0,
     backgroundExecSessions: 0,
     cronRuns: 0,
-    activeTasks: 0,
+    agentRuns: 0,
+    acpRuns: 0,
+    mediaRuns: 0,
     rootRequests: 0,
     sessionAdmissions: 0,
     sessionMutations: 0,
@@ -559,7 +573,7 @@ export function registerGatewayRestartOwnershipTests({
           expect(runtime.exit).not.toHaveBeenCalled();
           await vi.advanceTimersByTimeAsync(outcome === "completed" ? 1_000 : 80_001);
           await expect(exited).resolves.toBe(outcome === "completed" ? 0 : 1);
-          expect(cleanupDeadline).toBe(55_000);
+          expect(cleanupDeadline).toBe(85_000);
           expect(start).toHaveBeenCalledOnce();
         } finally {
           clock.mockRestore();

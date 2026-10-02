@@ -1,4 +1,3 @@
-// Dispatches final reply payloads through visible senders and message tools.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
@@ -13,6 +12,7 @@ import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-comple
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { sleep } from "../../utils.js";
@@ -133,12 +133,10 @@ export function captureReplyDispatchDeliveryOutcome(payload: ReplyPayload): {
   // it so a later send of the same payload owns a separate settlement.
   let tracker = deliveryOutcomeTrackers.get(payload);
   if (!tracker) {
-    let resolveOutcome!: (outcome: ReplyDispatchDeliveryOutcome) => void;
+    const { promise, resolve } = createDeferredCore<ReplyDispatchDeliveryOutcome>();
     tracker = {
-      promise: new Promise((resolve) => {
-        resolveOutcome = resolve;
-      }),
-      resolve: (outcome) => resolveOutcome(outcome),
+      promise,
+      resolve,
       tracked: false,
       pending: false,
     };
@@ -292,8 +290,6 @@ export function createReplyDispatcher(
     void drained.then(() => drained === sendChain && pendingFinalizations > 0 && notifyIdle());
     return delivery;
   };
-  const enqueueSettlement = (settle: () => Promise<void>) =>
-    (settlementChain = settlementChain.then(settle));
   const waitForIdle = async () => {
     let sent: Promise<void>;
     let settled: Promise<void>;
@@ -317,6 +313,16 @@ export function createReplyDispatcher(
   });
 
   const unregister = registerDispatcher(() => pending);
+  const releasePending = () => {
+    pending -= 1;
+    if (pending === 1 && completeCalled) {
+      pending -= 1;
+    }
+    if (pending === 0) {
+      unregister();
+      notifyIdle();
+    }
+  };
 
   const reportObserverError = (err: unknown, info: ReplyDispatchRuntimeInfo) => {
     invokeReplyDispatcherObserver(() => options.onError?.(err, info));
@@ -566,7 +572,6 @@ export function createReplyDispatcher(
       deliveryOutcomeTracker.tracked = true;
     }
 
-    // Determine if we should add human-like delay (only for block replies after the first).
     const shouldDelay = kind === "block" && sentFirstBlock;
     if (kind === "block") {
       sentFirstBlock = true;
@@ -577,7 +582,7 @@ export function createReplyDispatcher(
       kind,
     );
     const delivery = startSerializedDelivery(normalizedInput, dispatchInfo, shouldDelay);
-    void enqueueSettlement(async () => {
+    settlementChain = settlementChain.then(async () => {
       let attempt: Awaited<typeof delivery> | undefined;
       try {
         attempt = await delivery;
@@ -606,18 +611,15 @@ export function createReplyDispatcher(
           deliveryOutcomeTracker.resolve(deliveryOutcome);
         }
         try {
-          options.onDeliverySettled?.(dispatchInfo);
+          if (options.onDeliverySettled) {
+            void Promise.resolve(options.onDeliverySettled(dispatchInfo)).catch((err: unknown) => {
+              reportObserverError(err, dispatchInfo);
+            });
+          }
         } catch (err: unknown) {
           reportObserverError(err, dispatchInfo);
         }
-        pending -= 1;
-        if (pending === 1 && completeCalled) {
-          pending -= 1;
-        }
-        if (pending === 0) {
-          unregister();
-          notifyIdle();
-        }
+        releasePending();
       }
     });
     return true;
@@ -632,13 +634,8 @@ export function createReplyDispatcher(
     // schedule clearing the reservation after current microtasks complete.
     // This gives any in-flight enqueue() calls a chance to increment pending.
     void Promise.resolve().then(() => {
-      if (pending === 1 && completeCalled) {
-        // Still just the reservation, no replies were enqueued
-        pending -= 1;
-        if (pending === 0) {
-          unregister();
-          notifyIdle();
-        }
+      if (pending === 1) {
+        releasePending();
       }
     });
   };

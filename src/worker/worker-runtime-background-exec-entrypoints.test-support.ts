@@ -12,6 +12,26 @@ export const workerBackgroundExecEntrypoints = {
     sourceWorkerName: "../node-host/node-worker-supervisor",
     distWorkerPath: "node-host/node-worker-supervisor.js",
   },
+  turnStore: {
+    currentModuleUrl,
+    sourceWorkerName: "../node-host/node-worker-turn-store",
+    distWorkerPath: "node-host/node-worker-turn-store.js",
+  },
+  launchStore: {
+    currentModuleUrl,
+    sourceWorkerName: "../node-host/node-worker-launch-store",
+    distWorkerPath: "node-host/node-worker-launch-store.js",
+  },
+  journalWorker: {
+    currentModuleUrl,
+    sourceWorkerName: "../node-host/node-worker-journal-worker",
+    distWorkerPath: "node-host/node-worker-journal-worker.js",
+  },
+  processIdentity: {
+    currentModuleUrl,
+    sourceWorkerName: "../node-host/node-worker-process-identity",
+    distWorkerPath: "node-host/node-worker-process-identity.js",
+  },
   providerModelMetadata: {
     currentModuleUrl,
     sourceWorkerName: "../plugin-sdk/provider-model-metadata",

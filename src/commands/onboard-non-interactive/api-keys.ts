@@ -1,9 +1,3 @@
-/**
- * API-key resolution for non-interactive onboarding.
- *
- * The resolver keeps flag, environment, and auth-profile precedence consistent
- * across provider setup paths while preserving secret-ref mode constraints.
- */
 import {
   ensureAuthProfileStore,
   resolveApiKeyForProfile,
@@ -13,13 +7,11 @@ import { isMalformedApiKeyInput } from "../../agents/auth-profiles/credential-st
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderNonInteractiveApiKeyResult } from "../../plugins/provider-authentication.types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
 import { rejectOnboardingOption } from "../onboard-options.js";
 import type { SecretInputMode } from "../onboard-types.js";
-
-/** Source that supplied a non-interactive provider API key. */
-type NonInteractiveApiKeySource = "flag" | "env" | "profile";
 
 function parseEnvVarNameFromSourceLabel(source: string | undefined): string | undefined {
   if (!source) {
@@ -75,14 +67,13 @@ export async function resolveNonInteractiveApiKey(params: {
   required?: boolean;
   secretInputMode?: SecretInputMode;
   json?: boolean;
-}): Promise<{ key: string; source: NonInteractiveApiKeySource; envVarName?: string } | null> {
+}): Promise<ProviderNonInteractiveApiKeyResult | null> {
   const reject = (message: string): null => {
     rejectOnboardingOption(params, params.runtime, message);
     return null;
   };
   const flagKey = normalizeOptionalSecretInput(params.flagValue);
   const explicitEnvVar = params.envVarName?.trim() || params.envVar.trim();
-  const resolveExplicitEnvKey = () => normalizeOptionalSecretInput(process.env[explicitEnvVar]);
   const resolveEnvKey = () => {
     const envResolved = resolveEnvApiKey(params.provider, process.env, {
       config: params.cfg,
@@ -106,7 +97,7 @@ export async function resolveNonInteractiveApiKey(params: {
 
   const useSecretRefMode = params.secretInputMode === "ref"; // pragma: allowlist secret
   if (useSecretRefMode && flagKey) {
-    const explicitEnvKey = resolveExplicitEnvKey();
+    const explicitEnvKey = normalizeOptionalSecretInput(process.env[explicitEnvVar]);
     if (explicitEnvKey) {
       return returnOperatorKey(explicitEnvKey, "env", explicitEnvVar);
     }

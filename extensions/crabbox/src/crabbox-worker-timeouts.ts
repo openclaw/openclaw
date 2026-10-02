@@ -15,7 +15,14 @@ export const CRABBOX_WARMUP_TIMEOUT_MS =
 export const CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS =
   CRABBOX_WARMUP_ATTEMPTS *
   (CRABBOX_ACQUISITION_ENVELOPE_MS + CRABBOX_DESKTOP_BOOTSTRAP_TIMEOUT_MS);
-export const CRABBOX_LIFECYCLE_TIMEOUT_MS = 60_000;
+// Crabbox internal/cli/coordinator_read_retry.go: coordinatorReadBudget = time.Minute.
+const CRABBOX_COORDINATOR_READ_BUDGET_MS = 60_000;
+// Allow a loaded host one minute for process/config/auth startup and exit handoff.
+const CRABBOX_LIFECYCLE_MARGIN_MS = 60_000;
+export const CRABBOX_LIFECYCLE_TIMEOUT_MS =
+  CRABBOX_COORDINATOR_READ_BUDGET_MS + CRABBOX_LIFECYCLE_MARGIN_MS;
+// `config show` reads local configuration without contacting the coordinator.
+export const CRABBOX_CONFIG_TIMEOUT_MS = 60_000;
 // Crabbox stop resolves twice (10s each), cleans the guest (35s), retries release
 // (five 60s attempts + 20s backoff per normal/admin client), then observes cleanup for 5m.
 // Reserve all phases plus 10s exit grace; SDK child settlement stays separate.
@@ -58,13 +65,18 @@ export function resolveCrabboxWarmImageCaptureTimeoutMs(provider: string): numbe
   );
 }
 
-// Fixed-lease inspection can follow warmup's final read; allow four one-minute retries.
-const CRABBOX_MACHINE0_LIFECYCLE_TIMEOUT_MS = 5 * 60_000;
+// Fixed-lease readiness can follow warmup's final read; retain four read windows plus margin.
+const CRABBOX_MACHINE0_LIFECYCLE_TIMEOUT_MS =
+  4 * CRABBOX_COORDINATOR_READ_BUDGET_MS + CRABBOX_LIFECYCLE_MARGIN_MS;
 // Setup gets its own budget on top of provision so a slow warmup cannot starve it.
 // Setup may install an exact candidate CLI and official plugins on a minimal cloud image.
 export const CRABBOX_SETUP_TIMEOUT_MS = 15 * 60_000;
-export const CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS = 15 * 60_000;
+const CRABBOX_NODE_ENROLLMENT_TIMEOUT_FLOOR_MS = 15 * 60_000;
 export const CRABBOX_NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS = 60_000;
+
+export function resolveCrabboxNodeEnrollmentTimeoutMs(bootstrapTimeoutMs?: number): number {
+  return Math.max(CRABBOX_NODE_ENROLLMENT_TIMEOUT_FLOOR_MS, bootstrapTimeoutMs ?? 0);
+}
 
 // Leave one minute inside the lifecycle cap for process startup and cleanup handoff.
 export const CRABBOX_MACHINE0_READY_WAIT_TIMEOUT = "4m";
@@ -97,11 +109,12 @@ export function countCrabboxProvisionSetupPhases(profile: CrabboxProvisionTimeou
 
 export function resolveCrabboxProvisionCallTimeoutMs(
   profile: CrabboxProvisionTimeoutProfile,
+  nodeBootstrapTimeoutMs?: number,
 ): number {
   return (
     resolveCrabboxProvisionBaseTimeoutMs(profile) +
     countCrabboxProvisionSetupPhases(profile) * CRABBOX_SETUP_TIMEOUT_MS +
-    CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS +
+    resolveCrabboxNodeEnrollmentTimeoutMs(nodeBootstrapTimeoutMs) +
     CRABBOX_NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS +
     CRABBOX_STOP_TIMEOUT_MS +
     // Diagnostics, heartbeat cancellation, and stop retain child/tree settlement.

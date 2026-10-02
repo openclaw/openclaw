@@ -170,19 +170,6 @@ describe("downloadLineMedia", () => {
     expect(content.cancel).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["audio/x-m4a", "video/mp4"])(
-    "uses the media store content type %s",
-    async (contentType) => {
-      storedContentType = contentType;
-      fetchMock.mockResolvedValueOnce(responseWithChunks(200, [Buffer.from("media")]));
-
-      const result = await downloadLineMedia("mid", "token");
-
-      expect(result.contentType).toBe(contentType);
-      expect(saveMediaStreamCall()[2]).toBe("inbound");
-    },
-  );
-
   it("passes original filenames to the media store for extension fallback", async () => {
     fetchMock.mockResolvedValueOnce(responseWithChunks(200, [Buffer.from("unknown-audio-bytes")]));
 
@@ -242,13 +229,12 @@ describe("downloadLineMedia", () => {
     }
 
     const err = expectMediaFetchError(
-      await downloadLineMedia("mid-stuck", "token").catch((e: unknown) => e),
+      await downloadLineMedia("mid-stuck", "token").catch((error: unknown) => error),
     );
-
     expect(err.message).toMatch(/still preparing/i);
-    expect(err.code).toBe("http_error");
-    expect(err.status).toBe(202);
+    expect(err).toMatchObject({ code: "http_error", status: 202 });
     expect(isRetryableLineInboundMediaError(err)).toBe(true);
+
     expect(fetchMock).toHaveBeenCalledTimes(6);
     expect(delayMock).toHaveBeenCalledTimes(5);
     expect(delayMock.mock.calls.map((call) => call[0])).toEqual([500, 1000, 2000, 4000, 4000]);
@@ -263,13 +249,12 @@ describe("downloadLineMedia", () => {
     fetchMock.mockResolvedValueOnce(response.response);
 
     const err = expectMediaFetchError(
-      await downloadLineMedia("mid-missing", "token").catch((e: unknown) => e),
+      await downloadLineMedia("mid-missing", "token").catch((error: unknown) => error),
     );
-
     expect(err.message).toMatch(/HTTP 404/i);
-    expect(err.code).toBe("http_error");
-    expect(err.status).toBe(404);
+    expect(err).toMatchObject({ code: "http_error", status: 404 });
     expect(isRetryableLineInboundMediaError(err)).toBe(false);
+
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(response.cancel).toHaveBeenCalledTimes(1);
     expect(saveMediaStreamMock).not.toHaveBeenCalled();

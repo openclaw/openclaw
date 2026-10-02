@@ -1,5 +1,6 @@
 // Branch replacement keeps the live manager and durable identity on the same commit edge.
 import path from "node:path";
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
@@ -206,6 +207,17 @@ describe("SessionManager branch replacement", () => {
       expect.objectContaining({ id: user.messageId, type: "message" }),
       expect.objectContaining({ id: assistant.messageId, type: "message" }),
     ]);
+    expect(() => sessionManager.prepareTranscriptRewrite()).not.toThrow();
+    expect(sessionManager.removeTrailingEntries((entry) => entry.id === assistant.messageId)).toBe(
+      1,
+    );
+    expect(() => sessionManager.prepareTranscriptRewrite()).not.toThrow();
+    await expect(loadTranscriptEvents({ ...scope, sessionId: branchedSessionId })).resolves.toEqual(
+      [
+        expect.objectContaining({ id: branchedSessionId, type: "session" }),
+        expect.objectContaining({ id: user.messageId, type: "message" }),
+      ],
+    );
   });
 
   it("does not publish a branch identity when transcript persistence fails", async () => {
@@ -341,7 +353,11 @@ describe("SessionManager branch replacement", () => {
       await ownerChange;
       if (change === "lifecycle") {
         await expect(branch).rejects.toMatchObject({
-          cause: { code: "session-rebound", expectedSessionId: sessionId, sessionKey },
+          cause: {
+            code: "session-rebound",
+            expectedSessionIdHash: redactIdentifier(sessionId),
+            sessionKeyHash: redactIdentifier(sessionKey),
+          },
         });
         expect(loadSessionEntry(scope)).toMatchObject({
           lifecycleRevision: "branch-replacement-revision",

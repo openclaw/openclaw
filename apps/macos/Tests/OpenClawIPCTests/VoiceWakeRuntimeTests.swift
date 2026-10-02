@@ -3,88 +3,77 @@ import Testing
 @testable import OpenClaw
 
 struct VoiceWakeRuntimeTests {
-    @Test func `cancelled runtime delay does not continue`() async {
-        let task = Task {
-            await VoiceWakeRuntimeTaskSupport.wait(nanoseconds: 60_000_000_000)
-        }
-
-        await Task.yield()
-        task.cancel()
-
-        #expect(await task.value == false)
-    }
-
     @Test func `trims after trigger keeps post speech`() {
         let triggers = ["claude", "openclaw"]
         let text = "hey Claude how are you"
-        #expect(VoiceWakeRuntime._testTrimmedAfterTrigger(text, triggers: triggers) == "how are you")
+        #expect(VoiceWakeRuntime.trimmedAfterTrigger(text, triggers: triggers) == "how are you")
     }
 
     @Test func `trims after trigger returns original when no trigger`() {
         let triggers = ["claude"]
         let text = "good morning friend"
-        #expect(VoiceWakeRuntime._testTrimmedAfterTrigger(text, triggers: triggers) == text)
+        #expect(VoiceWakeRuntime.trimmedAfterTrigger(text, triggers: triggers) == text)
     }
 
     @Test func `trims after first matching trigger`() {
         let triggers = ["buddy", "claude"]
         let text = "hello buddy this is after trigger claude also here"
         #expect(VoiceWakeRuntime
-            ._testTrimmedAfterTrigger(text, triggers: triggers) == "this is after trigger claude also here")
+            .trimmedAfterTrigger(text, triggers: triggers) == "this is after trigger claude also here")
     }
 
     @Test func `has content after trigger false when only trigger`() {
         let triggers = ["openclaw"]
         let text = "hey openclaw"
-        #expect(!VoiceWakeRuntime._testHasContentAfterTrigger(text, triggers: triggers))
+        #expect(VoiceWakeRuntime.trimmedAfterTrigger(text, triggers: triggers).isEmpty)
     }
 
     @Test func `has content after trigger true when speech continues`() {
         let triggers = ["claude"]
         let text = "claude write a note"
-        #expect(VoiceWakeRuntime._testHasContentAfterTrigger(text, triggers: triggers))
+        #expect(!VoiceWakeRuntime.trimmedAfterTrigger(text, triggers: triggers).isEmpty)
     }
 
     @Test func `trigger only allows filler before trigger`() {
         let triggers = ["openclaw"]
         let text = "uh openclaw"
-        #expect(VoiceWakeRuntime._testIsTriggerOnly(text, triggers: triggers))
+        #expect(VoiceWakeRuntime.isTriggerOnlyText(transcript: text, triggers: triggers))
     }
 
     @Test func `trigger only rejects trailing wake word mentions in ordinary speech`() {
         let triggers = ["openclaw"]
         let text = "tell me about openclaw"
-        #expect(!VoiceWakeRuntime._testIsTriggerOnly(text, triggers: triggers))
+        #expect(!VoiceWakeRuntime.isTriggerOnlyText(transcript: text, triggers: triggers))
     }
 
     @Test func `matched trigger finds trigger not at transcript start`() {
         let triggers = ["openclaw"]
         let text = "uh openclaw"
-        #expect(VoiceWakeRuntime._testMatchedTriggerWord(text, triggers: triggers) == "openclaw")
+        #expect(VoiceWakeTextUtils.matchedTriggerWord(transcript: text, triggers: triggers) == "openclaw")
     }
 
     @Test func `matched trigger rejects larger word suffix matches`() {
         let triggers = ["computer"]
         let text = "uh computers"
-        #expect(VoiceWakeRuntime._testMatchedTriggerWord(text, triggers: triggers) == nil)
+        #expect(VoiceWakeTextUtils.matchedTriggerWord(transcript: text, triggers: triggers) == nil)
     }
 
     @Test func `matched trigger prefers most specific overlapping phrase`() {
         let triggers = ["openclaw", "hey openclaw"]
         let text = "hey openclaw"
-        #expect(VoiceWakeRuntime._testMatchedTriggerWord(text, triggers: triggers) == "hey openclaw")
+        #expect(VoiceWakeTextUtils.matchedTriggerWord(transcript: text, triggers: triggers) == "hey openclaw")
     }
 
     @Test func `matched trigger handles width insensitive forms without whitespace tokens`() {
         let triggers = ["openclaw"]
         let text = "ＯｐｅｎＣｌａｗ"
-        #expect(VoiceWakeRuntime._testMatchedTriggerWord(text, triggers: triggers) == "openclaw")
+        #expect(VoiceWakeTextUtils.matchedTriggerWord(transcript: text, triggers: triggers) == "openclaw")
     }
 
     @Test func `matched trigger handles chinese forms without whitespace tokens`() {
         let triggers = ["小爪"]
         let text = "嘿小爪"
-        #expect(VoiceWakeRuntime._testMatchedTriggerWord(text, triggers: triggers) == "小爪")
+        #expect(VoiceWakeTextUtils.matchedTriggerWord(transcript: text, triggers: triggers) == "小爪")
     }
 
     @Test func `text only fallback populates matched trigger`() {
@@ -94,7 +83,7 @@ struct VoiceWakeRuntimeTests {
             transcript: transcript,
             triggers: ["openclaw"],
             config: config,
-            trimWake: VoiceWakeRuntime._testTrimmedAfterTrigger)
+            trimWake: VoiceWakeRuntime.trimmedAfterTrigger)
         #expect(match?.trigger == "openclaw")
     }
 
@@ -105,7 +94,7 @@ struct VoiceWakeRuntimeTests {
             transcript: transcript,
             triggers: ["openclaw", "computer"],
             config: config,
-            trimWake: VoiceWakeRuntime._testTrimmedAfterTrigger)
+            trimWake: VoiceWakeRuntime.trimmedAfterTrigger)
         #expect(match?.trigger == "openclaw")
     }
 
@@ -116,19 +105,19 @@ struct VoiceWakeRuntimeTests {
             transcript: transcript,
             triggers: ["computer"],
             config: config,
-            trimWake: VoiceWakeRuntime._testTrimmedAfterTrigger)
+            trimWake: VoiceWakeRuntime.trimmedAfterTrigger)
         #expect(match == nil)
     }
 
     @Test func `trims after chinese trigger keeps post speech`() {
         let triggers = ["小爪", "openclaw"]
         let text = "嘿 小爪 帮我打开设置"
-        #expect(VoiceWakeRuntime._testTrimmedAfterTrigger(text, triggers: triggers) == "帮我打开设置")
+        #expect(VoiceWakeRuntime.trimmedAfterTrigger(text, triggers: triggers) == "帮我打开设置")
     }
 
     @Test func `trims after trigger handles width insensitive forms`() {
         let triggers = ["openclaw"]
         let text = "ＯｐｅｎＣｌａｗ 请帮我"
-        #expect(VoiceWakeRuntime._testTrimmedAfterTrigger(text, triggers: triggers) == "请帮我")
+        #expect(VoiceWakeRuntime.trimmedAfterTrigger(text, triggers: triggers) == "请帮我")
     }
 }

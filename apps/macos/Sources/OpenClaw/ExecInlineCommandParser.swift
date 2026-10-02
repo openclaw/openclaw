@@ -31,46 +31,27 @@ enum ExecInlineCommandParser {
         _ argv: [String],
         flags: Set<String>) -> Bool
     {
-        var idx = 1
-        var sawInteractiveMode = false
-        while idx < argv.count {
-            let token = argv[idx].trimmingCharacters(in: .whitespacesAndNewlines)
-            if token.isEmpty {
-                idx += 1
-                continue
-            }
-            if token == "--" {
-                return false
-            }
-            if self.isPosixInteractiveModeOption(token) {
-                sawInteractiveMode = true
-            }
-            if flags.contains(token) || self.isCombinedCommandFlag(token) {
-                return sawInteractiveMode
-            }
-            if !token.hasPrefix("-"), !token.hasPrefix("+") {
-                return false
-            }
-            let combinedValueCount = self.combinedSeparateValueOptionCount(token)
-            if combinedValueCount > 0 {
-                idx += 1 + combinedValueCount
-                continue
-            }
-            if self.consumesSeparateValue(token) {
-                idx += 2
-                continue
-            }
-            idx += 1
+        self.hasPosixStartupBeforeInlineCommand(argv, flags: flags) {
+            $0 == "--interactive" || self.isPosixShortOption($0, containing: "i")
         }
-        return false
     }
 
     static func hasPosixLoginStartupBeforeInlineCommand(
         _ argv: [String],
         flags: Set<String>) -> Bool
     {
+        self.hasPosixStartupBeforeInlineCommand(argv, flags: flags) {
+            $0 == "--login" || self.isPosixShortOption($0, containing: "l")
+        }
+    }
+
+    private static func hasPosixStartupBeforeInlineCommand(
+        _ argv: [String],
+        flags: Set<String>,
+        matchesStartupOption: (String) -> Bool) -> Bool
+    {
         var idx = 1
-        var sawLoginMode = false
+        var sawStartupOption = false
         while idx < argv.count {
             let token = argv[idx].trimmingCharacters(in: .whitespacesAndNewlines)
             if token.isEmpty {
@@ -80,11 +61,11 @@ enum ExecInlineCommandParser {
             if token == "--" {
                 return false
             }
-            if token == "--login" || self.isPosixShortOption(token, containing: "l") {
-                sawLoginMode = true
+            if matchesStartupOption(token) {
+                sawStartupOption = true
             }
-            if flags.contains(token) || self.isCombinedCommandFlag(token) {
-                return sawLoginMode
+            if flags.contains(token) || self.parseCombinedCommandFlag(token) != nil {
+                return sawStartupOption
             }
             if !token.hasPrefix("-"), !token.hasPrefix("+") {
                 return false
@@ -94,7 +75,7 @@ enum ExecInlineCommandParser {
                 idx += 1 + combinedValueCount
                 continue
             }
-            if self.consumesSeparateValue(token) {
+            if self.posixShellOptionsWithSeparateValues.contains(token) {
                 idx += 2
                 continue
             }
@@ -104,51 +85,22 @@ enum ExecInlineCommandParser {
     }
 
     static func hasFishInitCommandOption(_ argv: [String]) -> Bool {
-        var idx = 1
-        while idx < argv.count {
-            let token = argv[idx].trimmingCharacters(in: .whitespacesAndNewlines)
-            if token.isEmpty {
-                idx += 1
-                continue
-            }
-            if token == "--" {
-                return false
-            }
-            if token == "-C" || token == "--init-command" {
-                return true
-            }
-            if token.hasPrefix("-C"), token != "-C" {
-                return true
-            }
-            if token.hasPrefix("--init-command=") {
-                return true
-            }
-            if !token.hasPrefix("-"), !token.hasPrefix("+") {
-                return false
-            }
-            idx += 1
+        self.hasFishOption(argv) {
+            $0.hasPrefix("-C") || $0 == "--init-command" || $0.hasPrefix("--init-command=")
         }
-        return false
     }
 
     static func hasFishAttachedCommandOption(_ argv: [String]) -> Bool {
-        var idx = 1
-        while idx < argv.count {
-            let token = argv[idx].trimmingCharacters(in: .whitespacesAndNewlines)
-            if token.isEmpty {
-                idx += 1
-                continue
-            }
-            if token == "--" {
-                return false
-            }
-            if token.hasPrefix("-c"), token != "-c" {
-                return true
-            }
-            if !token.hasPrefix("-"), !token.hasPrefix("+") {
-                return false
-            }
-            idx += 1
+        self.hasFishOption(argv) { $0.hasPrefix("-c") && $0 != "-c" }
+    }
+
+    private static func hasFishOption(_ argv: [String], matching matches: (String) -> Bool) -> Bool {
+        for argument in argv.dropFirst() {
+            let token = argument.trimmingCharacters(in: .whitespacesAndNewlines)
+            if token.isEmpty { continue }
+            if token == "--" { return false }
+            if matches(token) { return true }
+            if !token.hasPrefix("-"), !token.hasPrefix("+") { return false }
         }
         return false
     }
@@ -187,7 +139,7 @@ enum ExecInlineCommandParser {
                 idx += 1 + combinedValueCount
                 continue
             }
-            if allowCombinedC, self.consumesSeparateValue(token) {
+            if allowCombinedC, self.posixShellOptionsWithSeparateValues.contains(token) {
                 idx += 2
                 continue
             }
@@ -212,10 +164,6 @@ enum ExecInlineCommandParser {
             ? argv[nextIndex]
             : ""
         return payload.isEmpty ? nil : payload
-    }
-
-    private static func isCombinedCommandFlag(_ token: String) -> Bool {
-        self.parseCombinedCommandFlag(token) != nil
     }
 
     private static func parseCombinedCommandFlag(_ token: String) -> CombinedCommandFlag? {
@@ -253,14 +201,6 @@ enum ExecInlineCommandParser {
         return chars.dropFirst().reduce(0) { count, char in
             count + ((char == "o" || char == "O") ? 1 : 0)
         }
-    }
-
-    private static func consumesSeparateValue(_ token: String) -> Bool {
-        self.posixShellOptionsWithSeparateValues.contains(token)
-    }
-
-    private static func isPosixInteractiveModeOption(_ token: String) -> Bool {
-        token == "--interactive" || self.isPosixShortOption(token, containing: "i")
     }
 
     private static func isPosixShortOption(_ token: String, containing option: Character) -> Bool {

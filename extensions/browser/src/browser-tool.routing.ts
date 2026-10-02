@@ -1,4 +1,3 @@
-/** Browser tool host, sandbox, and node target resolution. */
 import { resolveBrowserNodeTarget } from "./browser-node-routing.js";
 import {
   getRuntimeConfig,
@@ -9,13 +8,6 @@ import {
   getBrowserProfileCapabilities,
 } from "./browser-tool.runtime.js";
 
-export type BrowserNodeTarget = {
-  nodeId: string;
-  label?: string;
-  commands: string[];
-  pendingDeclaredCommands: string[];
-};
-
 export async function resolveBrowserToolNodeTarget(params: {
   requestedNode?: string;
   profile?: string;
@@ -23,7 +15,7 @@ export async function resolveBrowserToolNodeTarget(params: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   signal?: AbortSignal;
-}): Promise<BrowserNodeTarget | null> {
+}) {
   if (params.allowHostControl === false) {
     if (params.target === "node" || params.requestedNode) {
       throw new Error("Node browser control is disabled by sandbox policy.");
