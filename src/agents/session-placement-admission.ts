@@ -8,7 +8,11 @@ import {
 } from "../infra/agent-events.js";
 import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
 import { retainQueuedAgentRunContext } from "../infra/agent-run-registry.js";
-import { enqueueCommandInLane, isCommandLaneTaskMarkerCurrent } from "../process/command-queue.js";
+import {
+  enqueueCommandInLane,
+  getCommandLaneSnapshot,
+  isCommandLaneTaskMarkerCurrent,
+} from "../process/command-queue.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveAdmittedRunActiveAssertion } from "./admitted-run-context.js";
 import { resolveSessionLane } from "./embedded-agent-runner/lanes.js";
@@ -209,6 +213,7 @@ export async function withLocalSessionPlacementTurnSettlement(
     | "admittedRunContext"
     | "preparedRunAdmission"
     | "isFinalFallbackAttempt"
+    | "onLaneWait"
   > = {},
 ): Promise<EmbeddedAgentRunResult> {
   const provider = state.provider;
@@ -239,9 +244,10 @@ export async function withLocalSessionPlacementTurnSettlement(
       : undefined;
   const releaseQueuedContext = retainQueuedAgentRunContext(claim.runId, lifecycleGeneration);
   let releaseCapacityWait: (() => void) | undefined;
+  const lane = resolveSessionLane(claim.sessionKey?.trim() || claim.sessionId);
   try {
     return await enqueueCommandInLane(
-      resolveSessionLane(claim.sessionKey?.trim() || claim.sessionId),
+      lane,
       async (taskMarker) => {
         assertCurrent();
         const runLocal = async () => {
@@ -262,6 +268,7 @@ export async function withLocalSessionPlacementTurnSettlement(
             assertSettlementCurrent();
             releaseCapacityWait?.();
             releaseQueuedContext?.("admitted");
+            options.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
             return await task(assertSettlementCurrent);
           } finally {
             open = false;
@@ -292,8 +299,17 @@ export async function withLocalSessionPlacementTurnSettlement(
         sessionTarget: claim,
         priority: resolveEmbeddedRunSessionLanePolicy(options.trigger, options.inputProvenance)
           .priority,
+        // A lane wait pauses setup watchdogs, so the owner must be able to cancel the queued entry.
+        abortSignal: options.abortSignal,
         onQueued: () => {
           releaseCapacityWait = registerAgentRunCapacityWait(claim.runId, lifecycleGeneration);
+          // Setup watchdogs (cron) must not spend their deadline behind a busy session turn.
+          const snapshot = getCommandLaneSnapshot(lane);
+          options.onLaneWait?.({
+            waitMs: 0,
+            queuedAhead: Math.max(0, snapshot.queuedCount - 1) + snapshot.activeCount,
+            waiting: true,
+          });
         },
       },
     );

@@ -264,6 +264,75 @@ describe("local turn placement admission", () => {
     }
   });
 
+  it("reports session-lane waits for a queued CLI turn so setup watchdogs can pause", async () => {
+    const gate = createDeferredCore();
+    const started = createDeferredCore();
+    const blocker = enqueueCommandInLane("session:agent:main:lane-wait", async () => {
+      started.resolve();
+      await gate.promise;
+    });
+    await started.promise;
+    const events: string[] = [];
+    const run = withLocalSessionPlacementTurnSettlement(
+      { sessionId: "lane-wait", sessionKey: "agent:main:lane-wait", runId: "lane-wait-run" },
+      async () => {
+        events.push("task");
+        return { meta: { durationMs: 1 } };
+      },
+      {
+        onLaneWait: ({ waiting }) => events.push(waiting ? "waiting" : "admitted"),
+      },
+    );
+    try {
+      expect(events).toEqual(["waiting"]);
+      gate.resolve();
+      await run;
+      expect(events).toEqual(["waiting", "admitted", "task"]);
+    } finally {
+      gate.resolve();
+      await Promise.allSettled([blocker, run]);
+    }
+  });
+
+  it("settles a queued CLI turn when its owner aborts while the session stays busy", async () => {
+    const gate = createDeferredCore();
+    const started = createDeferredCore();
+    const blocker = enqueueCommandInLane("session:agent:main:abort-queued", async () => {
+      started.resolve();
+      await gate.promise;
+    });
+    await started.promise;
+    const abort = new AbortController();
+    const task = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+    const run = withLocalSessionPlacementTurnSettlement(
+      {
+        sessionId: "abort-queued",
+        sessionKey: "agent:main:abort-queued",
+        runId: "abort-queued-run",
+      },
+      task,
+      { abortSignal: abort.signal },
+    );
+    let settled: unknown = "pending";
+    void run.then(
+      () => (settled = "resolved"),
+      (error: unknown) => (settled = error),
+    );
+    const cancelled = new Error("cron run cancelled while queued");
+    try {
+      abort.abort(cancelled);
+      // Flush the abort handling without releasing the predecessor, which may never finish.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(cancelled);
+      expect(task).not.toHaveBeenCalled();
+    } finally {
+      gate.resolve();
+      await Promise.allSettled([blocker, run]);
+    }
+  });
+
   it("delegates the final turn decision to the installed provider", async () => {
     await withTestRunAdmission(turnParams, async (admittedRunContext) => {
       const activeParams = { ...turnParams, admittedRunContext };

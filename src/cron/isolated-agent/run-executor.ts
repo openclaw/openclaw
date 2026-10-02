@@ -473,7 +473,6 @@ function createCronPromptExecutor(
             abortSignal: params.abortSignal,
           });
           try {
-            const cliAbortSignal = deferredLifecycle.signal;
             const result = await withLocalSessionPlacementTurnSettlement(
               {
                 sessionId: params.cronSession.sessionEntry.sessionId,
@@ -535,7 +534,7 @@ function createCronPromptExecutor(
                     params.agentPayload?.toolsAllow,
                     params.agentPayload?.toolsAllowIsDefault,
                   ),
-                  abortSignal: cliAbortSignal,
+                  abortSignal: deferredLifecycle.signal,
                 });
                 const classification = runOptions.classifyResult(candidateResult);
                 // Cleanup can seal this run after rejection. Publish the candidate
@@ -543,7 +542,7 @@ function createCronPromptExecutor(
                 const settledEntry = { ...params.cronSession.sessionEntry };
                 if (
                   (candidateResult.meta.agentMeta?.clearCliSessionBinding === true ||
-                    (!cliAbortSignal.aborted && !classification)) &&
+                    (!deferredLifecycle.signal.aborted && !classification)) &&
                   applyCliSessionBindingResult(
                     settledEntry,
                     executionProvider,
@@ -554,7 +553,7 @@ function createCronPromptExecutor(
                     assertCliSessionBindingResultCommitAllowed(
                       candidateResult.meta.agentMeta,
                       assertSettlementCurrent,
-                      cliAbortSignal,
+                      deferredLifecycle.signal,
                     );
                   return await settleCliSessionResult(candidateResult, async () => {
                     await params.persistSessionEntry(assertCommitAllowed, settledEntry);
@@ -565,9 +564,10 @@ function createCronPromptExecutor(
               },
               {
                 preparedRunAdmission,
-                abortSignal: cliAbortSignal,
+                abortSignal: deferredLifecycle.signal,
                 trigger: "cron",
                 isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
+                onLaneWait: params.onLaneWait,
               },
             );
             bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
