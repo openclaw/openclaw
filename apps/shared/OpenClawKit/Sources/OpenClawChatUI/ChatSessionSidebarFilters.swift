@@ -74,8 +74,11 @@ struct ChatSidebarOwnership {
     }
 
     func attribution(
-        for row: OpenClawChatSessionEntry, options: ChatSessionSidebarModel.ViewOptions,
-        isChild: Bool, decorated: Bool, viewingProfileIDs: Set<String>) -> Attribution?
+        for row: OpenClawChatSessionEntry,
+        options: ChatSessionSidebarModel.ViewOptions,
+        isChild: Bool,
+        decorated: Bool,
+        viewingProfileIDs: Set<String>) -> Attribution?
     {
         guard self.showsAvatars, !isChild, !decorated,
               let actor = options.status == .archived ? row.archivedBy : row.owner?.actor,

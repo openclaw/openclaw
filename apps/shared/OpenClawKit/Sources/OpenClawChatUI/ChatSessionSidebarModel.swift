@@ -207,7 +207,8 @@ public enum ChatSessionSidebarModel {
                 groups: groups,
                 options: viewOptions,
                 peopleAvailable: owners.map { $0.count >= 2 } ?? true,
-                selfOwnerID: selfOwnerID, sectionOrder: sectionOrder)
+                selfOwnerID: selfOwnerID,
+                sectionOrder: sectionOrder)
         }
         // Pin state owns first placement. Group sections then preserve the
         // same tree builder, so grouped parent/child rosters still nest.

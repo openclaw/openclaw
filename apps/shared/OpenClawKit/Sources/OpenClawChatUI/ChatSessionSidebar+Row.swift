@@ -453,8 +453,9 @@ private struct ChatSidebarOwnerAvatar: View {
 
     var body: some View {
         Group {
-            if let image { Image(nsImage: image).resizable().scaledToFill() }
-            else {
+            if let image {
+                Image(nsImage: image).resizable().scaledToFill()
+            } else {
                 let name = self.actor.label ?? self.actor.id ?? ""
                 let initials = name.components(separatedBy: "@").first?.components(separatedBy:
                     CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "._-")))

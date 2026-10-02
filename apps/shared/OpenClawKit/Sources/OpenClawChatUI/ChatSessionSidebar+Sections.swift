@@ -81,7 +81,9 @@ extension ChatSessionSidebar {
     }
 
     @ViewBuilder func sessionSection(
-        _ section: ChatSessionSidebarModel.Section, now: Date, ownership: ChatSidebarOwnership,
+        _ section: ChatSessionSidebarModel.Section,
+        now: Date,
+        ownership: ChatSidebarOwnership,
         previewRequest: ChatSessionSidebarPreviews.Request) -> some View
     {
         if section.id.hasPrefix("group:"), let title = section.title {

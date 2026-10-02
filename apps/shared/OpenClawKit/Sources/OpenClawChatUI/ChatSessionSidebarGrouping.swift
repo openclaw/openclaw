@@ -3,8 +3,12 @@ import OpenClawProtocol
 
 extension ChatSessionSidebarModel {
     static func groupedSections(
-        _ rows: [OpenClawChatSessionEntry], groups: [OpenClawChatSessionGroup], options: ViewOptions,
-        peopleAvailable: Bool, selfOwnerID: String?, sectionOrder: [String]) -> [Section]
+        _ rows: [OpenClawChatSessionEntry],
+        groups: [OpenClawChatSessionGroup],
+        options: ViewOptions,
+        peopleAvailable: Bool,
+        selfOwnerID: String?,
+        sectionOrder: [String]) -> [Section]
     {
         let grouping = options.effectiveGrouping(peopleAvailable: peopleAvailable)
         let known = groups.sorted { $0.position == $1.position ? $0.name < $1.name : $0.position < $1.position }
@@ -40,9 +44,11 @@ extension ChatSessionSidebarModel {
             let row = node.session
             let id: String
             let category = ChatPayloadDecoding.trimmedNonEmptyString(row.category)
-            if row.pinned == true { id = "pinned" }
-            else if grouping == .none { id = "recent" }
-            else if grouping == .project, let path = self.projectPath(row) {
+            if row.pinned == true {
+                id = "pinned"
+            } else if grouping == .none {
+                id = "recent"
+            } else if grouping == .project, let path = self.projectPath(row) {
                 id = "project:\(path)"
                 projects[id] = path
                 titles[id] = path.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? path
@@ -61,10 +67,15 @@ extension ChatSessionSidebarModel {
                 titles[id] = category
                 if !categories.contains(category) { categories.append(category) }
                 returnToGroups = returnToGroups || row.kind == "group"
-            } else if row.kind == "group" { id = "groups" }
-            else if row.worktree != nil || row.repository != nil || row.execNode != nil ||
-                self.isCodingSessionKey(row.key) { id = "work" }
-            else { id = "recent" }
+            } else if row.kind == "group" {
+                id = "groups"
+            } else if row.worktree != nil || row.repository != nil || row.execNode != nil ||
+                self.isCodingSessionKey(row.key)
+            {
+                id = "work"
+            } else {
+                id = "recent"
+            }
             buckets[id, default: []].append(node)
         }
         // ui/src/lib/sessions/grouping.ts:348,373: self, humans, agents; projects by basename then full path.
@@ -186,6 +197,6 @@ extension ChatSessionSidebarModel {
            let id = self.identityField(identity, "id") { return "\(type):\(id)" }
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
-        return (try? encoder.encode(identity)).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        return (try? encoder.encode(identity)).flatMap { String(bytes: $0, encoding: .utf8) } ?? ""
     }
 }
