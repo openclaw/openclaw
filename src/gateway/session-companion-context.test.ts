@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   appendTranscriptEvent,
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import * as activeTranscriptEvents from "../config/sessions/session-accessor.sqlite-active-events.js";
 import * as redact from "../logging/redact.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -13,6 +13,7 @@ import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { createSessionCompanion } from "./session-companion.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
+import * as transcriptReaders from "./session-transcript-readers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -344,7 +345,14 @@ describe("session companion context", () => {
       touchSessionEntry: true,
     });
 
-    await expect(defaultSessionCompanionContextReader.read(scope)).resolves.toEqual({
+    const hostSql = observeHostDataSql();
+    const result = await defaultSessionCompanionContextReader
+      .read(scope)
+      .finally(() => hostSql.restore());
+    expect(
+      hostSql.queries.filter((query) => query.includes("session_transcript_active_events")),
+    ).toEqual([]);
+    expect(result).toEqual({
       kind: "ready",
       context: {
         empty: false,
@@ -361,8 +369,8 @@ describe("session companion context", () => {
     const scope = createScope("companion-context-snapshot-fence");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const page = vi
-      .spyOn(activeTranscriptEvents, "readSessionTranscriptBoundedMessageTailPage")
-      .mockReturnValueOnce({
+      .spyOn(transcriptReaders, "readSessionTranscriptBoundedMessageTailPageAsync")
+      .mockResolvedValueOnce({
         activeLeafEntryId: "leaf-1",
         events: [
           {
@@ -382,7 +390,7 @@ describe("session companion context", () => {
         snapshot: { generation: "generation-1", indexedSeq: 1 },
         totalMessages: 1,
       })
-      .mockReturnValueOnce({
+      .mockResolvedValueOnce({
         activeLeafEntryId: "leaf-1",
         events: [],
         newestContiguousEventCount: 0,

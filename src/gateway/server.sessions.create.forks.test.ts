@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, test } from "vitest";
+import { expect, onTestFinished, test } from "vitest";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { getContextWindowCaches } from "../agents/context-cache.js";
 import {
   applyDiscoveredContextWindows,
@@ -25,6 +26,17 @@ import {
   directSessionReq,
   seedSessionTranscript,
 } from "./test/server-sessions.test-helpers.js";
+
+const forkableClaudeCliBackend = {
+  id: "claude-cli",
+  pluginId: "anthropic",
+  modelProvider: "anthropic",
+  config: { command: "claude", forkArg: "--fork-session", resumeAtArg: "--resume-session-at" },
+  bundleMcp: false,
+  ownsNativeCompaction: false,
+} satisfies ReturnType<
+  (typeof import("../plugins/cli-backends.runtime.js"))["resolveRuntimeCliBackends"]
+>[number];
 
 const { createSessionStoreDir } = setupSessionCreateTestHarness();
 
@@ -220,6 +232,11 @@ test("sessions.create rejects unknown parentSessionKey", async () => {
 });
 
 test("sessions.create forks the parent transcript into the new session", async () => {
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [forkableClaudeCliBackend],
+    resolvePluginSetupCliBackend: () => undefined,
+  });
+  onTestFinished(() => cliBackendsTesting.resetDepsForTest());
   const { dir, storePath } = await createSessionStoreDir();
   testState.sessionConfig = { scope: "per-sender" };
   const parent = await createCompactedSessionFixture(dir);
@@ -235,6 +252,9 @@ test("sessions.create forks the parent transcript into the new session", async (
         totalTokens: 123,
         totalTokensFresh: true,
         totalTokensVersion: 1,
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "native-parent", resumeCheckpointId: "parent-checkpoint" },
+        },
       }),
     },
   });
@@ -315,6 +335,13 @@ test("sessions.create forks the parent transcript into the new session", async (
     spawnedCwd: projectRoot,
     sessionRoot: projectRoot,
     sessionId: created.payload?.sessionId,
+    cliSessionBindings: {
+      "claude-cli": {
+        sessionId: "native-parent",
+        resumeCheckpointId: "parent-checkpoint",
+        forkNextResume: true,
+      },
+    },
     forkSource: {
       sessionKey: "agent:main:main",
       sessionId: parent.sessionId,

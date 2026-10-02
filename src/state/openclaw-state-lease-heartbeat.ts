@@ -19,6 +19,7 @@ import {
   leaseHeartbeatState as state,
   leaseHeartbeatStartupPhase,
   LEASE_HEARTBEAT_START_TIMEOUT_MS,
+  type LeaseHeartbeatLoss,
   type LeaseHeartbeatRenewalFailure,
   type LeaseHeartbeatReply,
   type LeaseHeartbeatRequest,
@@ -190,6 +191,9 @@ export function startOpenClawStateLeaseHeartbeat(
     }
   };
   let lossReported = false;
+  let workerLoss: LeaseHeartbeatLoss | undefined;
+  const lossDetail = () =>
+    workerLoss ? ` (lossPath=${workerLoss.path}, lossOutcome=${workerLoss.outcome})` : "";
   const fail = (error: Error) => {
     if (lossReported || Atomics.load(shared, state.status) === state.closed) {
       return;
@@ -417,7 +421,7 @@ export function startOpenClawStateLeaseHeartbeat(
         ? ": lease expired or ownership lost"
         : "";
     return new Error(
-      `state lease heartbeat exited${detail} (exitCode=${exitCode ?? "unknown"}, acquiredAt=${params.acquiredAt}, lastRenewedAt=${lastRenewedAt || "never"})`,
+      `state lease heartbeat exited${detail} (exitCode=${exitCode ?? "unknown"}, acquiredAt=${params.acquiredAt}, lastRenewedAt=${lastRenewedAt || "never"})${lossDetail()}`,
       renewalFailure
         ? { cause: Object.assign(new Error(renewalFailure.message), renewalFailure) }
         : undefined,
@@ -432,6 +436,11 @@ export function startOpenClawStateLeaseHeartbeat(
   worker.on("message", (reply: LeaseHeartbeatReply | null) => {
     if (reply === null) {
       settleStartup("message");
+      return;
+    }
+    if ("loss" in reply) {
+      // Diagnostic delivery never changes readiness, authority, or failure timing.
+      workerLoss ??= reply.loss;
       return;
     }
     if ("attempt" in reply) {
@@ -464,7 +473,9 @@ export function startOpenClawStateLeaseHeartbeat(
       if (reply.payload) {
         retainOpenClawStateWorkerErrorPayload(error, reply.payload);
       }
-      deferred.reject(hydrateOpenClawStateWorkerError(error));
+      const hydrated = hydrateOpenClawStateWorkerError(error);
+      hydrated.message += lossDetail();
+      deferred.reject(hydrated);
       return;
     }
     try {

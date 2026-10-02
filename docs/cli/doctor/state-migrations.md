@@ -23,12 +23,17 @@ warning. This cleanup failure does not block an update.
 Retired `subagents/runs.json` files are also ignored and left untouched;
 transient runs are never restored from them.
 
+The pre-July plugin install index at `plugins/installs.json` is no longer imported
+or archived. Doctor preserves it and stops with the same intermediate-upgrade
+guidance. July-era SQLite plugin install records remain supported.
+
 ## Legacy state migration
 
 When Doctor selects a legacy home such as `~/.clawdbot`, it drains open database
 work before moving that directory to `~/.openclaw`. It retains exclusive source
 ownership through the move and legacy alias creation, then acquires ownership at
-the resulting path before importing plugin metadata or upgrading SQLite schemas.
+the resulting path before upgrading SQLite schemas. A retired JSON plugin install
+index blocks relocation until the intermediate release has migrated it.
 An explicit `OPENCLAW_STATE_DIR` keeps its selected location. If alias creation
 fails and the move rolls back, repair continues under ownership of the original
 location and reports the rollback.

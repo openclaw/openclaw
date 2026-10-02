@@ -3,9 +3,15 @@ import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transactio
 import type { TranscriptAnchorPageOptions } from "../../sessions/transcript-anchor-page.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import type { SessionTranscriptMessageAnchorPage } from "./session-accessor.sqlite-active-events.js";
+import {
+  withRecentSessionTranscriptActiveEventsInSnapshot,
+  type SessionTranscriptMessageAnchorPage,
+} from "./session-accessor.sqlite-active-events.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
-import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
+import type {
+  SessionTranscriptReadScope,
+  TranscriptEvent,
+} from "./session-accessor.sqlite-contract.js";
 import { resolveVisibleHistoryEventCount } from "./session-accessor.sqlite-history-projection.js";
 import {
   readSessionTranscriptHistoryEventsFromProjection,
@@ -14,6 +20,21 @@ import {
   type SessionTranscriptMessageByIdOptions,
 } from "./session-accessor.sqlite-history-query.js";
 import type { SessionTranscriptMessageEvent } from "./session-accessor.sqlite-projection-read.js";
+import { readVisibleTranscriptStats } from "./session-accessor.sqlite-reset-window.js";
+
+export function readActiveTranscriptStats(scope: SessionTranscriptReadScope) {
+  return withCurrentProjectionSnapshot(scope, readVisibleTranscriptStats);
+}
+
+export function withRecentActiveTranscriptEvents<T>(
+  scope: SessionTranscriptReadScope,
+  maxEvents: number,
+  read: (visit: (visitor: (event: TranscriptEvent) => void) => void) => T,
+): T {
+  return withCurrentProjectionSnapshot(scope, (projection) =>
+    withRecentSessionTranscriptActiveEventsInSnapshot(projection, maxEvents, read),
+  );
+}
 
 export function useHistoryEventScope() {
   const env: NodeJS.ProcessEnv = {};
