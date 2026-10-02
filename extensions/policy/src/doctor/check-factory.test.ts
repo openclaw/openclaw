@@ -1,6 +1,7 @@
 import type {
   HealthCheckContext,
   HealthFinding,
+  HealthRepairContext,
   HealthRepairResult,
 } from "openclaw/plugin-sdk/health";
 import { describe, expect, it, vi } from "vitest";
@@ -12,7 +13,7 @@ describe("policy scoped health checks", () => {
   const evaluation = {} as PolicyEvaluation;
   const context = {} as HealthCheckContext;
 
-  it("preserves registration order, descriptions, metadata, and repair capability", () => {
+  it("preserves registration order, descriptions, metadata, and repair capability", async () => {
     const repair = vi.fn(async (): Promise<HealthRepairResult> => ({ changes: [] }));
     const checks = createPolicyScopedChecks(
       {
@@ -43,7 +44,14 @@ describe("policy scoped health checks", () => {
     ]);
     expect(Object.hasOwn(checks[0]!, "repair")).toBe(false);
     expect(Object.hasOwn(checks[1]!, "repair")).toBe(true);
-    expect(checks[1]).toMatchObject({ repair });
+    const repairContext = {} as HealthRepairContext;
+    const findings: HealthFinding[] = [];
+    await checks[1]!.repair!(repairContext, findings);
+    expect(repair).toHaveBeenCalledExactlyOnceWith(
+      repairContext,
+      findings,
+      CHECK_IDS.policyDeniedChannelProvider,
+    );
   });
 
   it("awaits the policy evaluation before selecting findings for the same check", async () => {

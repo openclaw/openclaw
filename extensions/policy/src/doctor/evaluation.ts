@@ -32,18 +32,7 @@ import {
   requiredToolMetadata,
   type PolicySettings,
 } from "./policy-runtime.js";
-import {
-  policyHasAgentWorkspaceRules,
-  policyHasAuthProfileRules,
-  policyHasDataHandlingRules,
-  policyHasExecApprovalsRules,
-  policyHasGatewayRules,
-  policyHasIngressRules,
-  policyHasRoutingRules,
-  policyHasSandboxPostureRules,
-  policyHasSecretRules,
-  policyHasToolPostureRules,
-} from "./policy-scope.js";
+import { policyHasRules } from "./policy-scope.js";
 import { policyContainerShapeFindings } from "./policy-shape.js";
 import { routingFindings } from "./routing-findings.js";
 import { routingPolicyShapeFinding } from "./routing-shapes.js";
@@ -171,17 +160,17 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
   );
   const requiredMetadata =
     metadataRequirementFindings.length === 0 ? requiredToolMetadata(policy) : new Set<string>();
-  const includeSecrets = policyHasSecretRules(policy);
-  const includeAuthProfiles = policyHasAuthProfileRules(policy);
-  const includeIngress = policyHasIngressRules(policy);
-  const includeGatewayExposure = policyHasGatewayRules(policy);
-  const includeAgentWorkspace = policyHasAgentWorkspaceRules(policy);
-  const includeDataHandling = policyHasDataHandlingRules(policy);
-  const includeSandboxPosture = policyHasSandboxPostureRules(policy);
-  const includeExecApprovals = policyHasExecApprovalsRules(policy);
+  const includeSecrets = policyHasRules(policy, "secrets");
+  const includeAuthProfiles = policyHasRules(policy, "auth");
+  const includeIngress = policyHasRules(policy, "ingress");
+  const includeGatewayExposure = policyHasRules(policy, "gateway");
+  const includeAgentWorkspace = policyHasRules(policy, "agents");
+  const includeDataHandling = policyHasRules(policy, "dataHandling");
+  const includeSandboxPosture = policyHasRules(policy, "sandbox");
+  const includeExecApprovals = policyHasRules(policy, "execApprovals");
   const routing =
-    policyHasRoutingRules(policy) &&
     isRecord(policy) &&
+    isRecord(policy.routing) &&
     routingPolicyShapeFinding(policy.routing, {
       policyDocName: policyFile.ocDocName,
       policyPath: policyFile.displayName,
@@ -194,7 +183,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     includeGatewayExposure,
     includeAgentWorkspace,
     includeDataHandling,
-    includeToolPosture: policyHasToolPostureRules(policy),
+    includeToolPosture: policyHasRules(policy, "tools"),
     includeSandboxPosture,
     includeSecrets,
     includeAuthProfiles,
