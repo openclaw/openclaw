@@ -26,6 +26,7 @@ import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-qu
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import * as archiveWorkers from "./session-accessor.sqlite-archive.js";
+import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { readSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history.test-support.js";
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
 import {
@@ -295,18 +296,22 @@ describe("cold transcript storage workers", () => {
     let clock = 0;
     vi.spyOn(performance, "now").mockImplementation(() => clock);
     const originalWorker = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
+    const archiveDiagnostics: SqliteSessionReclamationDiagnostics[] = [];
     vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
       (params) => {
         if (params.expectedMessageType !== "reclaimed") {
           return originalWorker(params);
+        }
+        if (params.diagnostics) {
+          archiveDiagnostics.push(params.diagnostics);
         }
         const withWriteAdmission = params.withWriteAdmission;
         let admissions = 0;
         return originalWorker({
           ...params,
           withWriteAdmission: async (...args) => {
-            // Measure waiting between actual Worker admissions without delaying native work.
-            if (++admissions === 2) {
+            // Measure time waiting for actual Worker admission without delaying native work.
+            if (++admissions === 1) {
               clock += 1_500;
             }
             return withWriteAdmission(...args);
@@ -314,8 +319,8 @@ describe("cold transcript storage workers", () => {
         });
       },
     );
-    const workers: Worker[] = [];
-    const observeWorker = (worker: Worker) => workers.push(worker);
+    const workers = new Map<number, Worker>();
+    const observeWorker = (worker: Worker) => workers.set(worker.threadId, worker);
     process.on("worker", observeWorker);
     try {
       closeOpenClawAgentDatabasesForTest();
@@ -357,8 +362,10 @@ describe("cold transcript storage workers", () => {
           exitCode: 0,
         })),
       );
-      expect(workers.length).toBeGreaterThan(0);
-      expect(workers.every((worker) => worker.threadId === -1)).toBe(true);
+      expect(archiveDiagnostics).toHaveLength(3);
+      for (const diagnostics of archiveDiagnostics) {
+        expect(workers.get(diagnostics.workerThreadId!)?.threadId).toBe(-1);
+      }
     } finally {
       process.off("worker", observeWorker);
       vi.restoreAllMocks();
@@ -485,13 +492,14 @@ describe("cold transcript storage workers", () => {
     ).toBeUndefined();
   });
 
-  it.each(["authority", "retained claim"])(
+  it.each(["authority", "database owner"])(
     "rolls back every candidate when maintenance %s is revoked at commit",
     async (revocation) => {
       const fixture = await createBatchFixture();
       await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
       fixture.database();
       const originalWorker = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
+      const archiveDiagnostics: SqliteSessionReclamationDiagnostics[] = [];
       let prepared = false;
       let revoked = false;
       let closeElapsedMs = 0;
@@ -507,12 +515,15 @@ describe("cold transcript storage workers", () => {
             return result;
           }
           if (prepared && params.expectedMessageType === "reclaimed") {
+            if (params.diagnostics) {
+              archiveDiagnostics.push(params.diagnostics);
+            }
             return originalWorker({
               ...params,
               onCommitRequest: () => {
                 const started = performance.now();
                 revoked =
-                  revocation === "retained claim"
+                  revocation === "database owner"
                     ? closeOpenClawAgentDatabaseByPath(fixture.options.path)
                     : true;
                 closeElapsedMs = performance.now() - started;
@@ -523,8 +534,8 @@ describe("cold transcript storage workers", () => {
           return originalWorker(params);
         },
       );
-      const workers: Worker[] = [];
-      const observeWorker = (worker: Worker) => workers.push(worker);
+      const workers = new Map<number, Worker>();
+      const observeWorker = (worker: Worker) => workers.set(worker.threadId, worker);
       process.on("worker", observeWorker);
       try {
         await expect(
@@ -539,10 +550,10 @@ describe("cold transcript storage workers", () => {
         ).rejects.toThrow(
           revocation === "authority"
             ? "Test maintenance authority was revoked"
-            : "claim is no longer current",
+            : "Agent database execution admission is closed",
         );
-        expect(workers.length).toBeGreaterThan(0);
-        expect(workers.every((worker) => worker.threadId === -1)).toBe(true);
+        expect(archiveDiagnostics).toHaveLength(1);
+        expect(workers.get(archiveDiagnostics[0]!.workerThreadId!)?.threadId).toBe(-1);
       } finally {
         process.off("worker", observeWorker);
       }
