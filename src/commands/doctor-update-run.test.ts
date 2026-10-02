@@ -125,7 +125,7 @@ it.each([
 
   expect(note).toHaveBeenCalledOnce();
   expect(note).toHaveBeenCalledWith(
-    expect.stringContaining(`OpenClaw update failed: ${failure.reason}`),
+    expect.stringContaining(`Reason code: ${failure.reason}`),
     "Update history",
   );
   expect(reconcileInterruptedUpdateRuns).toHaveBeenCalledWith({ candidate: latest });
