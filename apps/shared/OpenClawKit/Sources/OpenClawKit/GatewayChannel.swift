@@ -1303,8 +1303,7 @@ extension GatewayChannelActor {
         guard let authError = error as? GatewayConnectAuthError else {
             return false
         }
-        return authError.canRetryWithDeviceToken ||
-            authError.detail == .authTokenMismatch
+        return authError.canRetryWithDeviceToken
     }
 
     private func shouldPauseReconnectAfterAuthFailure(_ error: Error) -> Bool {
