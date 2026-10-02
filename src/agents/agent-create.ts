@@ -347,7 +347,9 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
   let identityPublished = false;
   let held: HeldAgentDatabase[] = [];
   const readCurrentHolds = () =>
-    withExistingOpenClawStateDatabaseCurrentReadOnly(readAgentDeletionRecoveryHolds) ?? [];
+    withExistingOpenClawStateDatabaseCurrentReadOnly(readAgentDeletionRecoveryHolds, {
+      allowNativeRead: true,
+    }) ?? [];
   const recoveryPathMatcher = createOpenClawAgentDatabasePathMatcher();
   const recoveryHoldPredicate = () => ({ agentId, held, applies: creating || !automaticBootstrap });
   const assertRecoveryPathCurrent = () => {
@@ -361,8 +363,9 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
     assertRecoveryPathCurrent();
     const predicate = recoveryHoldPredicate();
     if (predicate.applies) {
-      withExistingOpenClawStateDatabaseCurrentReadOnly((database) =>
-        assertAgentDeletionRecoveryHoldPredicate(database, predicate),
+      withExistingOpenClawStateDatabaseCurrentReadOnly(
+        (database) => assertAgentDeletionRecoveryHoldPredicate(database, predicate),
+        { allowNativeRead: true },
       );
     }
   };

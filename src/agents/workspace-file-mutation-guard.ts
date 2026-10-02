@@ -14,8 +14,9 @@ export function createWorkspaceFileMutationGuard(
     guard.beforeLegacyApply?.();
     const predicate = guard.recoveryHoldPredicate;
     if (predicate?.applies) {
-      withExistingOpenClawStateDatabaseCurrentReadOnly((database) =>
-        assertAgentDeletionRecoveryHoldPredicate(database, predicate),
+      withExistingOpenClawStateDatabaseCurrentReadOnly(
+        (database) => assertAgentDeletionRecoveryHoldPredicate(database, predicate),
+        { allowNativeRead: true },
       );
     }
   };

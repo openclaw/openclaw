@@ -8,13 +8,11 @@ import * as snapshots from "../infra/sqlite-readonly-worker.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
 import { readAgentProvenance } from "../state/agent-provenance.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createAgent } from "./agent-create.js";
+import * as workspace from "./workspace.js";
 import {
   DEFAULT_IDENTITY_FILENAME,
   ensureAgentWorkspace,
@@ -109,21 +107,33 @@ it("records operator and agent creation provenance after roster commits", async 
     label: "agent-creation-provenance",
   });
   const admission = workerAdmission.createSqliteWorkerOperationAdmission;
+  const ensureWorkspace = ensureAgentWorkspace;
+  const preparation = vi
+    .spyOn(workspace, "ensureAgentWorkspace")
+    .mockImplementation(async (params) => {
+      const snapshot = vi.spyOn(snapshots, "runSqliteReadOnlyWorkerSync").mockImplementation(() => {
+        throw new Error("Workspace creation must not spawn synchronous SQLite snapshots");
+      });
+      try {
+        const result = await ensureWorkspace(params);
+        expect(snapshot).not.toHaveBeenCalled();
+        return result;
+      } finally {
+        snapshot.mockRestore();
+      }
+    });
   let grants = 0;
   const spy = vi
     .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
     .mockImplementation((admit, attachment) =>
       admission((request, grant) => {
         const sql = observeMainThreadSql();
-        const snapshot = vi.spyOn(snapshots, "runSqliteReadOnlyWorkerSync");
         try {
           admit(request, grant);
           sql.expectIdle();
-          expect(snapshot).not.toHaveBeenCalled();
           grants++;
         } finally {
           sql.restore();
-          snapshot.mockRestore();
         }
       }, attachment),
     );
@@ -135,6 +145,7 @@ it("records operator and agent creation provenance after roster commits", async 
       provenance: { createdVia: "agent", creatorAgentId: "main" },
     });
 
+    expect(preparation).toHaveBeenCalled();
     expect(grants).toBeGreaterThan(0);
     expect(readAgentProvenance("operator-child", { env: state.env })).toMatchObject({
       agentId: "operator-child",
@@ -150,7 +161,7 @@ it("records operator and agent creation provenance after roster commits", async 
     });
   } finally {
     spy.mockRestore();
-    closeOpenClawStateDatabaseForTest();
+    preparation.mockRestore();
     await state.cleanup();
   }
 });
@@ -193,7 +204,6 @@ it("preserves env references from guided staging when preparation changes the en
     } else {
       process.env.GUIDED_STAGE_TOKEN = oldToken;
     }
-    closeOpenClawStateDatabaseForTest();
     await state.cleanup();
   }
 });
@@ -222,7 +232,6 @@ it("keeps a fresh named workspace pending through the first run setup", async ()
       await fs.readFile(path.join(workspace, DEFAULT_IDENTITY_FILENAME), "utf8"),
     ).not.toContain("Researcher");
   } finally {
-    closeOpenClawStateDatabaseForTest();
     await state.cleanup();
   }
 });

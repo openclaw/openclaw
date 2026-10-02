@@ -506,6 +506,10 @@ error. Creation guards never recursively read that database from a host grant.
 Host filesystem mutations retain a separate recovery-aware callback after awaited
 preparation and immediately before each effect. It uses the same recovery kernel
 through the existing current read-only connection, outside all worker grants.
+These host guards explicitly allow a native read when the worker owns the cached
+writer, avoiding a snapshot subprocess per file mutation. Artifact-preserving
+scopes and schema-admission reads still select private snapshots; current guards
+never reuse an inherited discovery snapshot.
 Expiry rereads current setup and attestation rows, preserving the 24-hour and
 future-timestamp protections. Native commit receipts retire the stored workspace's
 file cache even if ordinary result delivery fails; uncertain writes are never
