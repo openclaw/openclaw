@@ -6251,11 +6251,15 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                     modelKey,
                     message: strictReply
                       ? "OpenClaw live tool probe (local, safe): " +
-                        "Follow the advertised tool interface; if tools are behind Code Mode, invoke them through Code Mode. " +
+                        "Follow the advertised tool interface. If only `exec` and `wait` are directly visible, `exec` is Code Mode: pass it JavaScript (not shell syntax) equivalent to " +
+                        `const result = await read({ path: ${JSON.stringify(toolProbePath)} }); text(result.content); ` +
+                        "Otherwise use the direct file-reading tool. " +
                         `read the local file ${JSON.stringify(toolProbePath)} using the available file-reading tool. ` +
                         "Then reply with exactly the two test marker values from that file, separated by one space. No extra text."
                       : "OpenClaw live tool probe (local, safe): " +
-                        "Follow the advertised tool interface; if tools are behind Code Mode, invoke them through Code Mode. " +
+                        "Follow the advertised tool interface. If only `exec` and `wait` are directly visible, `exec` is Code Mode: pass it JavaScript (not shell syntax) equivalent to " +
+                        `const result = await read({ path: ${JSON.stringify(toolProbePath)} }); text(result.content); ` +
+                        "Otherwise use the direct file-reading tool. " +
                         `read the local file ${JSON.stringify(toolProbePath)} using the available file-reading tool. ` +
                         "Then reply with the two test marker values you read (include both).",
                     thinkingLevel,
