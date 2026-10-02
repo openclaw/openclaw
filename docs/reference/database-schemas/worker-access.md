@@ -1021,6 +1021,16 @@ guards reuse committed in-memory facts for process-held incognito sessions witho
 adding native SQL reads. Stored formats, schemas, retention, and update behavior
 are unchanged.
 
+Sharing management retains the original session and physical source before
+membership preparation yields. Member add/remove grants and list disclosure
+recompute manager access from current prepared profile, role, and sharing facts.
+Dirty membership refuses authorization even when an older membership value is
+still resident. Member evidence and public-share details use the existing reader
+worker; visibility and public-share mutations use the same prepared authority
+through their existing entry-patch owner. Participant and category writes retain
+their existing collaboration worker, and incognito retains its native owner.
+This changes no schema, permission, retention, or update contract.
+
 For writes, shared-state domain operations registered by
 `src/state/openclaw-state-worker-runtime.ts` reuse the broker and publish results
 through their original store/projection owner.
