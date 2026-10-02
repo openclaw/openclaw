@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   materializeNativeCompiler,
   overrideNativeFixtureExecutable,
+  resolveInstalledNativeCompiler,
   writeNativeFixtureFile,
 } from "./native-boundary-fixture.js";
 
@@ -77,13 +78,17 @@ function createLinkedCheckoutFixture() {
   return { primary, root, git };
 }
 
-function installCheckoutTools(root: string) {
-  const native = materializeNativeCompiler(root);
+function linkCheckoutTools(root: string) {
   for (const name of ["tsx", "@openclaw/fs-safe"]) {
     const target = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.symlinkSync(path.join(sourceRoot, "node_modules", name), target, "junction");
   }
+}
+
+function installCheckoutTools(root: string) {
+  const native = materializeNativeCompiler(root, { javaScriptApi: false });
+  linkCheckoutTools(root);
   return native;
 }
 
@@ -105,7 +110,8 @@ describe("run-tsgo linked worktree entry", () => {
   it("selects its own root compiler from src while preserving relative project semantics", () => {
     const { primary, root } = createLinkedCheckoutFixture();
     installCheckoutTools(primary);
-    const native = installCheckoutTools(root);
+    linkCheckoutTools(root);
+    const native = resolveInstalledNativeCompiler();
     const write = (file: string, text: string) => writeNativeFixtureFile(root, file, text);
     const compilerOptions = {
       module: "NodeNext",
@@ -134,7 +140,7 @@ process.exitCode = result.status ?? 1;
     );
     fs.chmodSync(path.join(root, "native-compiler.mjs"), 0o755);
     const launcher = path.join(root, "node_modules/.bin/tsgo");
-    fs.unlinkSync(launcher);
+    fs.mkdirSync(path.dirname(launcher), { recursive: true });
     fs.symlinkSync("../../native-compiler.mjs", launcher, "file");
     if (process.platform === "win32") {
       write("node_modules/.bin/tsgo.cmd", '@node "%~dp0tsgo" %*\r\n');
