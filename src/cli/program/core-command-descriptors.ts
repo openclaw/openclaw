@@ -1,5 +1,4 @@
 // Core root-command descriptor catalog used for help placeholders and lazy registration.
-import { isExperimentalClawsEnabled } from "../../claws/experimental.js";
 import { isConfigMachineOutput } from "../config-output-mode.js";
 import { isDoctorMachineOutput } from "../doctor-output-mode.js";
 import { hasMachineOutputOption } from "../machine-output-argv.js";
@@ -36,7 +35,7 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
   },
   {
     name: "claws",
-    description: "Inspect and add experimental OpenClaw Claws",
+    description: "Manage experimental OpenClaw Claws",
     hasSubcommands: true,
     parentDefaultHelp: true,
   },
@@ -139,9 +138,7 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
 ] as const satisfies ReadonlyArray<NamedCommandDescriptor>;
 
 export function getCoreCliCommandDescriptors(): ReadonlyArray<NamedCommandDescriptor> {
-  return isExperimentalClawsEnabled()
-    ? CORE_CLI_COMMAND_DESCRIPTORS
-    : CORE_CLI_COMMAND_DESCRIPTORS.filter((descriptor) => descriptor.name !== "claws");
+  return CORE_CLI_COMMAND_DESCRIPTORS;
 }
 
 export function getCoreCliCommandNamesCore(): string[] {

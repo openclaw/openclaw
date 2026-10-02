@@ -58,7 +58,6 @@ afterEach(() => {
 
 async function installedFixture(
   options: {
-    agentProfile?: Pick<ClawOpenClawProfile["agent"], "model" | "subagents">;
     avatar?: string;
     extraWorkspaceFileContent?: Buffer;
     extraWorkspaceFiles?: string[];
@@ -118,7 +117,6 @@ async function installedFixture(
   const openClawProfile: ClawOpenClawProfile = {
     schemaVersion: 1,
     agent: {
-      ...options.agentProfile,
       tools: {
         profile: "minimal",
         alsoAllow: ["cron"],
@@ -296,12 +294,15 @@ describe("exportClawAgent", () => {
   });
 
   it("writes a grouped package from one installed agent", async () => {
-    const agentProfile: ClawOpenClawProfile["agent"] = {
-      model: { primary: "acme/primary", fallbacks: ["acme/fallback"] },
-      subagents: { allowAgents: ["researcher", "reviewer"], delegationMode: "prefer" },
+    const fixture = await installedFixture({ withPackage: true });
+    fixture.config.agents!.entries!.worker!.model = {
+      primary: "acme/operator",
+      fallbacks: ["acme/fallback"],
     };
-    const fixture = await installedFixture({ withPackage: true, agentProfile });
-    expect(fixture.config.agents?.entries?.worker).toMatchObject(agentProfile);
+    fixture.config.agents!.entries!.worker!.subagents = {
+      allowAgents: ["researcher", "reviewer"],
+      delegationMode: "prefer",
+    };
     expect(fixture.plan.agent.config.memory?.search).toEqual({
       enabled: true,
       rememberAcrossConversations: true,
@@ -366,7 +367,6 @@ describe("exportClawAgent", () => {
       openClawProfile: {
         schemaVersion: 1,
         agent: {
-          ...agentProfile,
           tools: {
             ...fixture.plan.agent.config.tools,
           },
@@ -380,6 +380,8 @@ describe("exportClawAgent", () => {
         },
       },
     });
+    expect(result.openClawProfile?.agent).not.toHaveProperty("model");
+    expect(result.openClawProfile?.agent).not.toHaveProperty("subagents");
     const packageJson = JSON.parse(await readFile(join(out, "package.json"), "utf8"));
     expect(packageJson).toMatchObject({
       name: "openclaw-claw-worker",
@@ -398,8 +400,10 @@ describe("exportClawAgent", () => {
     expect(exported.manifest.metadata).toEqual({});
     expect(exported.openClawProfile).toMatchObject({
       schemaVersion: 1,
-      agent: { ...agentProfile, tools: fixture.plan.agent.config.tools },
+      agent: { tools: fixture.plan.agent.config.tools },
     });
+    expect(exported.openClawProfile?.agent).not.toHaveProperty("model");
+    expect(exported.openClawProfile?.agent).not.toHaveProperty("subagents");
     expect(exported.openClawProfile?.agent.tools).not.toHaveProperty("alsoAllow");
     expect(exported.manifest.workspace.bootstrapFiles).not.toHaveProperty("SOUL.md");
     await expect(readFile(join(out, "profiles", "openclaw.yml"), "utf8")).resolves.toContain(
@@ -418,7 +422,8 @@ describe("exportClawAgent", () => {
       },
     });
     expect(replanned.blockers).toEqual([]);
-    expect(replanned.agent.config).toMatchObject(agentProfile);
+    expect(replanned.agent.config).not.toHaveProperty("model");
+    expect(replanned.agent.config).not.toHaveProperty("subagents");
   });
 
   it.each([
@@ -428,9 +433,10 @@ describe("exportClawAgent", () => {
       subagents: { allowAgents: [], delegationMode: "suggest" as const },
     },
   ])(
-    "preserves explicit empty selections without exporting inherited defaults: %j",
-    async (agentProfile) => {
-      const fixture = await installedFixture({ agentProfile });
+    "omits explicit and inherited operator model/delegation settings: %j",
+    async (operatorSettings) => {
+      const fixture = await installedFixture();
+      Object.assign(fixture.config.agents!.entries!.worker!, operatorSettings);
       fixture.config.agents!.defaults = {
         model: { primary: "acme/inherited", fallbacks: ["acme/inherited-fallback"] },
         subagents: { allowAgents: ["inherited-worker"], delegationMode: "prefer" },
@@ -441,8 +447,8 @@ describe("exportClawAgent", () => {
       if (!exported.ok) {
         throw new Error(JSON.stringify(exported.diagnostics));
       }
-      expect(exported.openClawProfile?.agent.model).toEqual(agentProfile.model);
-      expect(exported.openClawProfile?.agent.subagents).toEqual(agentProfile.subagents);
+      expect(exported.openClawProfile?.agent).not.toHaveProperty("model");
+      expect(exported.openClawProfile?.agent).not.toHaveProperty("subagents");
     },
   );
 

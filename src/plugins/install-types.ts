@@ -89,21 +89,26 @@ export type PluginInstallArtifactConsentHandler = (
   request: PluginInstallArtifactConsentRequest,
 ) => Promise<void>;
 
-export type PackageInstallCommonParams = InstallSafetyOverrides & {
-  extensionsDir?: string;
-  npmDir?: string;
-  timeoutMs?: number;
-  workTimeoutMs?: number | null;
-  logger?: PluginInstallLogger;
-  mode?: "install" | "update";
-  dryRun?: boolean;
-  expectedPluginId?: string;
-  requirePluginManifest?: boolean;
-  allowSourceTypeScriptEntries?: boolean;
-  installPolicyRequest?: PluginInstallPolicyRequest;
+export type PluginInstallArtifactCallbacks = {
+  onPluginArtifactInspect?: PluginInstallArtifactConsentHandler;
   onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   beforePersistentApply?: () => void;
 };
+
+export type PackageInstallCommonParams = InstallSafetyOverrides &
+  PluginInstallArtifactCallbacks & {
+    extensionsDir?: string;
+    npmDir?: string;
+    timeoutMs?: number;
+    workTimeoutMs?: number | null;
+    logger?: PluginInstallLogger;
+    mode?: "install" | "update";
+    dryRun?: boolean;
+    expectedPluginId?: string;
+    requirePluginManifest?: boolean;
+    allowSourceTypeScriptEntries?: boolean;
+    installPolicyRequest?: PluginInstallPolicyRequest;
+  };
 
 export type InternalPackageInstallCommonParams = PackageInstallCommonParams & {
   onEffectiveMode?: (mode: "install" | "update") => void;

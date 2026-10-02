@@ -1,6 +1,5 @@
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
-import { assertExperimentalClawsEnabled } from "../claws/experimental.js";
 import { buildClawAddPlan } from "../claws/lifecycle.js";
 import {
   CLAW_BUILD_RESULT_SCHEMA_VERSION,
@@ -127,7 +126,6 @@ export async function runClawsCreateCommand(
   opts: ClawsCreateOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  assertExperimentalClawsEnabled();
   try {
     const result = await createClawProject(projectPath, {
       ...(opts.name ? { name: opts.name } : {}),
@@ -161,7 +159,6 @@ export async function runClawsValidateCommand(
   opts: ClawsValidateOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  assertExperimentalClawsEnabled();
   const result = await validateClawProject(projectPath);
   if (!result.ok) {
     emitClawFailure(runtime, opts.json, formatClawDiagnostics(result.diagnostics), {
@@ -200,7 +197,6 @@ export async function runClawsBuildCommand(
   opts: ClawsBuildOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  assertExperimentalClawsEnabled();
   try {
     const result = await buildClawProject(projectPath, opts.out);
     if (opts.json) {
@@ -228,7 +224,6 @@ export async function runClawsDevCommand(
   opts: ClawsDevOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  assertExperimentalClawsEnabled();
   let prepared: PreparedDev;
   try {
     prepared = await prepareDev(projectPath, opts);

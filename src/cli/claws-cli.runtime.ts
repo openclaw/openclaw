@@ -14,7 +14,6 @@ import {
   findClawExtensionPackageCollisions,
   planClawExtensions,
 } from "../claws/application-plan.js";
-import { assertExperimentalClawsEnabled } from "../claws/experimental.js";
 import {
   CLAW_EXPORT_RESULT_SCHEMA_VERSION,
   ClawExportError,
@@ -56,6 +55,7 @@ import {
 } from "../cron/store.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { authorizeLegacyV1Resume } from "./claws-cli-legacy-resume.js";
 import {
   emitClawFailure,
@@ -73,6 +73,7 @@ import type {
 } from "./claws-cli.js";
 import { clawMonitorCleanupGateway } from "./claws-cli.monitor-cleanup.js";
 import { clawPackageRemovalGateway } from "./claws-cli.package-removal.js";
+import { resolveClawPluginInstallConsent } from "./claws-cli.plugin-consent.js";
 import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { resolvePluginBatchReload } from "./plugins-lifecycle-client.js";
@@ -167,7 +168,6 @@ export async function runClawsInspectCommand(
   opts: ClawsInspectOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  assertExperimentalClawsEnabled();
   const result = await readClawManifestFile(sourcePath);
   if (!result.ok) {
     emitClawFailure(runtime, opts.json, formatClawDiagnostics(result.diagnostics), {
@@ -179,10 +179,11 @@ export async function runClawsInspectCommand(
     return;
   }
 
+  const config = getRuntimeConfig();
   const extensionPlan = await planClawExtensions({
     extensions: result.openClawProfile?.extensions ?? [],
     workspace: result.source.packageRoot,
-    packagePreflight: preflightClawPackage,
+    packagePreflight: (pkg, workspace) => preflightClawPackage(pkg, workspace, { config }),
   });
   const extensionCollisions = findClawExtensionPackageCollisions({
     packages: result.manifest.packages,
@@ -234,7 +235,6 @@ export async function runClawsAddCommand(
   opts: ClawsAddOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  assertExperimentalClawsEnabled();
   if (requireClawPlanConsent("add", opts, runtime)) {
     return;
   }
@@ -275,7 +275,8 @@ export async function runClawsAddCommand(
     existingWorkspacePaths,
     existingMcpServers: listedMcpServers.mcpServers,
     existingCronJobIds: cronStore.store.jobs.map((job) => job.id),
-    packagePreflight: preflightClawPackage,
+    packagePreflight: (pkg: Parameters<typeof preflightClawPackage>[0], workspace: string) =>
+      preflightClawPackage(pkg, workspace, { config }),
   };
   const planInput = {
     manifest: result.manifest,
@@ -319,7 +320,7 @@ export async function runClawsAddCommand(
       pkg: Parameters<typeof preflightClawPackage>[0],
       workspace: string,
     ) => {
-      const preflight = await preflightClawPackage(pkg, workspace);
+      const preflight = await preflightClawPackage(pkg, workspace, { config });
       return findResumableIntroducedPluginRequirement({
         agentId: resumeRecord.agentId,
         pkg,
@@ -433,19 +434,35 @@ export async function runClawsAddCommand(
     logClawExperimentalWarning(runtime);
   }
   try {
-    addResult = await applyClawAddPlan(plan, {
-      reloadPlugins: await resolvePluginBatchReload(),
-      consentPlanIntegrity: opts.planIntegrity,
-      resumeRecord: resumableInstallRecord,
-      resumePlan: legacyResumePlan,
-      runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
-      cronGateway: {
-        add: async (input) => await callGatewayFromCli("cron.add", {}, input),
-        list: async (agentId) =>
-          await listCronJobsFromGateway({}, { agentId, includeDisabled: true }),
-        waitUntilAgentAvailable: waitUntilGatewayAgentAvailable,
+    addResult = await withOpenClawStateLease(
+      {
+        scope: "core:agent-deletion",
+        key: plan.agent.finalId,
+        database: { scope: "shared", options: {} },
+        leaseMs: 60_000,
+        waitMs: 5_000,
+        heartbeat: "worker",
+        leaseLabel: "Claw add",
+        operationLabel: "claw.add.lease",
       },
-    });
+      async (lease) =>
+        await applyClawAddPlan(plan, {
+          config,
+          assertCurrent: () => lease.assertOwned(),
+          pluginConsent: resolveClawPluginInstallConsent(runtime),
+          reloadPlugins: await resolvePluginBatchReload(),
+          consentPlanIntegrity: opts.planIntegrity,
+          resumeRecord: resumableInstallRecord,
+          resumePlan: legacyResumePlan,
+          runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
+          cronGateway: {
+            add: async (input) => await callGatewayFromCli("cron.add", {}, input),
+            list: async (agentId) =>
+              await listCronJobsFromGateway({}, { agentId, includeDisabled: true }),
+            waitUntilAgentAvailable: waitUntilGatewayAgentAvailable,
+          },
+        }),
+    );
   } catch (error) {
     const code = error instanceof ClawAddMutationError ? error.code : "add_failed";
     const message = (error as Error).message;
@@ -478,7 +495,6 @@ export async function runClawsStatusCommand(
   opts: ClawsStatusOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  assertExperimentalClawsEnabled();
   const status = await readClawStatus(target);
   if (opts.json) {
     writeRuntimeJson(runtime, status);
@@ -504,7 +520,6 @@ export async function runClawsRemoveCommand(
   opts: ClawsRemoveOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  assertExperimentalClawsEnabled();
   if (requireClawPlanConsent("remove", opts, runtime)) {
     return;
   }
@@ -613,7 +628,6 @@ export async function runClawsExportCommand(
   opts: ClawsExportOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  assertExperimentalClawsEnabled();
   try {
     const listedMcpServers = await listConfiguredMcpServers();
     if (!listedMcpServers.ok) {

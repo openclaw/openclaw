@@ -60,6 +60,7 @@ function pickPackageInstallCommonParams(
     requirePluginManifest: params.requirePluginManifest,
     allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
     installPolicyRequest: params.installPolicyRequest,
+    onPluginArtifactInspect: params.onPluginArtifactInspect,
     onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
     beforePersistentApply: params.beforePersistentApply,
     onEffectiveMode: params.onEffectiveMode,
@@ -197,6 +198,7 @@ async function installBundleFromSourceDir(
       copyErrorPrefix: "failed to copy plugin bundle",
       hasDeps: false,
       depsLogMessage: "",
+      onPluginArtifactInspect: params.onPluginArtifactInspect,
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
       beforePersistentApply: params.beforePersistentApply,
     }),
@@ -317,6 +319,7 @@ async function installPluginFromPackageDir(
       sourceHardlinks: shouldInstallRuntimeDeps ? "package-manager" : "reject",
       depsLogMessage: "Installing plugin dependencies…",
       nameEncoder: encodePluginInstallDirName,
+      onPluginArtifactInspect: params.onPluginArtifactInspect,
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
       beforePersistentApply: params.beforePersistentApply,
       afterInstall: async (installedDir) => {
@@ -390,6 +393,7 @@ export async function installPluginFromArchive<
           trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
           requirePluginManifest: true,
           installPolicyRequest,
+          onPluginArtifactInspect: params.onPluginArtifactInspect,
           onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
           beforePersistentApply: params.beforePersistentApply,
           onEffectiveMode: (resolvedMode) => {

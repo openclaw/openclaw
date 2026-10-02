@@ -131,7 +131,6 @@ describe("CORE_HEALTH_CHECKS", () => {
   it.each([false, true])(
     "reads cron pages only from one stable inventory (changed=%s)",
     async (changed) => {
-      vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
       const jobs = [{ id: "job-1" }, { id: "job-2" }];
       for (const [offset, job] of jobs.entries()) {
         mocks.callGateway.mockResolvedValueOnce({
@@ -173,6 +172,13 @@ describe("CORE_HEALTH_CHECKS", () => {
       }
     },
   );
+
+  it("offers Claw state diagnostics without a process opt-in", () => {
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
+    expect(createCoreHealthChecks(createDeps()).map((check) => check.id)).toContain(
+      "core/doctor/claws-state",
+    );
+  });
 
   it("converts unavailable skills into scoped repair-capable findings", async () => {
     const detectUnavailableSkills = vi.fn(async () => [createSkill()]);

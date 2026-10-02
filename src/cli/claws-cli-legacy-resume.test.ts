@@ -52,7 +52,6 @@ const { runClawsAddCommand } = await import("./claws-cli.runtime.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(() => {
-  vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
   mocks.logs.length = 0;
   mocks.loadConfig.mockReset();
   mocks.listConfiguredMcpServers.mockResolvedValue({ ok: true, path: "config", mcpServers: {} });
@@ -108,10 +107,13 @@ describe("claws add legacy v1 resume", () => {
         .prepare("UPDATE claw_installs SET schema_version = ? WHERE agent_id = ?")
         .run("openclaw.clawInstallRecord.v1", "demo-agent");
       await mkdir(workspace);
-      let config = { agents: { list: [legacyPlan.agent.config] } };
+      let config = {
+        gateway: { controlUi: { experimental: { claws: true } } },
+        agents: { list: [legacyPlan.agent.config] },
+      };
       mocks.loadConfig.mockImplementation(() => config);
       mocks.applyClawAddPlan.mockImplementationOnce(async (boundedPlan) => {
-        config = { agents: { list: [boundedPlan.agent.config] } };
+        config = { ...config, agents: { list: [boundedPlan.agent.config] } };
         return {
           schemaVersion: "openclaw.clawAddResult.v1",
           stability: "experimental",

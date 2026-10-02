@@ -1,7 +1,6 @@
 import { realpath } from "node:fs/promises";
 import { withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { digestClawValue } from "../claws/digest.js";
-import { assertExperimentalClawsEnabled } from "../claws/experimental.js";
 import { withAuthoredAgentRoster } from "../claws/migrate-validation.js";
 import {
   applyClawMigrationPlan,
@@ -85,7 +84,6 @@ export async function runClawsMigrateCommand(
   opts: ClawsMigrateOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  assertExperimentalClawsEnabled();
   if (!opts.dryRun && opts.yes && !opts.planIntegrity) {
     emitMigrationFailure(
       runtime,

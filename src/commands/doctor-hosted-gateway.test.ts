@@ -127,7 +127,6 @@ describe("Doctor hosted Gateway reads", () => {
   });
 
   it("keeps paginated cron inventory bound to the original hosted Gateway", async () => {
-    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
     let reads = 0;
     let current: GatewayRequestContext | undefined = contextFor({
       "cron.list": ({ params, respond }) => {

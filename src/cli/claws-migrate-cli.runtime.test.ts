@@ -68,7 +68,7 @@ async function fixture() {
 
 describe("claws migrate interactive consent", () => {
   beforeEach(() => {
-    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
     mocks.confirm.mockReset();
     mocks.isCancel.mockClear();
   });

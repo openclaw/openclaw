@@ -33,6 +33,7 @@ const JSON_NOT_APPLICABLE = {
     reason: "command group only; reporting subcommands declare JSON output individually",
     commands: [
       "agents team",
+      "claws",
       "backup",
       "backup git",
       "backup sqlite",
@@ -326,7 +327,7 @@ describe("root command descriptions", () => {
   });
 
   it("keeps startup policy catalog paths registered or explicitly reserved", async () => {
-    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
     const program = await registerAllBuiltInCommands();
 
     // Private QA is a lazy source-checkout command. Its root placeholder proves

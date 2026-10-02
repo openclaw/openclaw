@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { setConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { withClawMcpLifecycleLease } from "../agents/mcp-lifecycle-lease.js";
@@ -14,6 +15,12 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import {
+  persistClawMcpPendingRefForAdd,
+  readClawMcpServerRefsByNameForAdd,
+  updateClawMcpRefForAdd,
+  type ClawAddStateOptions,
+} from "./add-state-write.js";
 import { digestClawValue } from "./digest.js";
 import {
   CLAW_MCP_REF_SCHEMA_VERSION,
@@ -50,7 +57,7 @@ export function digestClawMcpServer(server: Record<string, unknown>): string {
   return digestClawValue(canonicalizeConfiguredMcpServer(server));
 }
 
-function persistPendingRef(
+export function persistClawMcpPendingRef(
   plan: ClawAddPlan,
   name: string,
   server: ClawMcpServer,
@@ -109,7 +116,7 @@ function persistPendingRef(
   return ref;
 }
 
-function updateRef(
+export function updateClawMcpRef(
   ref: PersistedClawMcpServerRef,
   update: { status: PersistedClawMcpServerRef["status"]; error?: string },
   options: OpenClawStateDatabaseOptions & { nowMs?: number },
@@ -134,7 +141,7 @@ function updateRef(
 
 export async function installClawMcpServers(
   plan: ClawAddPlan,
-  options: OpenClawStateDatabaseOptions & {
+  options: ClawAddStateOptions & {
     setMcpServer?: (params: {
       name: string;
       server: ClawMcpServer;
@@ -148,7 +155,12 @@ export async function installClawMcpServers(
   const listMcpServers = options.listMcpServers ?? listConfiguredMcpServers;
   const refs: PersistedClawMcpServerRef[] = [];
   for (const action of plan.actions.filter((candidate) => candidate.kind === "mcpServer")) {
-    await withClawMcpLifecycleLease(action.id, options, async () => {
+    await withClawMcpLifecycleLease(action.id, options, async (assertOwned) => {
+      const assertCurrent = () => {
+        assertOwned();
+        options.assertCurrent?.();
+      };
+      const stateOptions = { ...options, assertCurrent };
       const server = action.details ? mcpServerFromActionDetails(action.details) : undefined;
       if (!server) {
         throw new ClawMcpInstallError(
@@ -158,6 +170,7 @@ export async function installClawMcpServers(
         );
       }
       const listed = await listMcpServers();
+      assertCurrent();
       if (!listed.ok) {
         throw new ClawMcpInstallError("mcp_preflight_failed", listed.error, refs);
       }
@@ -170,7 +183,7 @@ export async function installClawMcpServers(
           refs,
         );
       }
-      const existingRefs = readClawMcpServerRefsByName(action.id, options);
+      const existingRefs = await readClawMcpServerRefsByNameForAdd(action.id, stateOptions);
       const inheritsClawOrigin =
         existingRefs.length > 0 &&
         existingRefs.every(
@@ -187,15 +200,21 @@ export async function installClawMcpServers(
             origin: "claw-introduced" as const,
             independentOwner: false,
           };
-      let pending = persistPendingRef(plan, action.id, server, ownership, options);
+      let pending = await persistClawMcpPendingRefForAdd(
+        plan,
+        action.id,
+        server,
+        ownership,
+        stateOptions,
+      );
       refs.push(pending);
       if (pending.status === "complete") {
         if (configured) {
           return;
         }
-        const hasSiblingOwner = readClawMcpServerRefsByName(action.id, options).some(
-          (candidate) => candidate.agentId !== plan.agent.finalId,
-        );
+        const hasSiblingOwner = (
+          await readClawMcpServerRefsByNameForAdd(action.id, stateOptions)
+        ).some((candidate) => candidate.agentId !== plan.agent.finalId);
         if (
           pending.relationship !== "managed" ||
           pending.origin !== "claw-introduced" ||
@@ -208,11 +227,15 @@ export async function installClawMcpServers(
             refs,
           );
         }
-        pending = updateRef(pending, { status: "pending" }, options);
+        pending = await updateClawMcpRefForAdd(pending, { status: "pending" }, stateOptions);
         refs[refs.length - 1] = pending;
       }
       if (configured) {
-        refs[refs.length - 1] = updateRef(pending, { status: "complete" }, options);
+        refs[refs.length - 1] = await updateClawMcpRefForAdd(
+          pending,
+          { status: "complete" },
+          stateOptions,
+        );
         return;
       }
       let result: Awaited<ReturnType<typeof setConfiguredMcpServer>>;
@@ -222,21 +245,26 @@ export async function installClawMcpServers(
           server,
           createOnly: true,
           recordIndependentOwner: false,
+          assertCurrent,
         });
       } catch (error) {
         const message = coerceErrorMessage(error);
         throw new ClawMcpInstallError("mcp_install_uncertain", message, refs);
       }
       if (!result.ok) {
-        refs[refs.length - 1] = updateRef(
+        refs[refs.length - 1] = await updateClawMcpRefForAdd(
           pending,
           { status: "failed", error: result.error },
-          options,
+          stateOptions,
         );
         throw new ClawMcpInstallError("mcp_install_failed", result.error, refs);
       }
       try {
-        refs[refs.length - 1] = updateRef(pending, { status: "complete" }, options);
+        refs[refs.length - 1] = await updateClawMcpRefForAdd(
+          pending,
+          { status: "complete" },
+          stateOptions,
+        );
       } catch (error) {
         const message = coerceErrorMessage(error);
         throw new ClawMcpInstallError(
@@ -338,9 +366,10 @@ type ClawMcpServerRemovalDecision = {
 export function planClawMcpServerRemoval(
   ref: PersistedClawMcpServerRef,
   options: OpenClawStateDatabaseOptions & { referencedCleanup?: ClawReferencedCleanup } = {},
+  allRefs?: readonly PersistedClawMcpServerRef[],
 ): ClawMcpServerRemovalDecision {
-  const otherRefs = readClawMcpServerRefsByName(ref.name, options).filter(
-    (candidate) => candidate.agentId !== ref.agentId,
+  const otherRefs = (allRefs ?? readClawMcpServerRefsByName(ref.name, options)).filter(
+    (candidate) => candidate.name === ref.name && candidate.agentId !== ref.agentId,
   );
   const affectedClawAgentIds = otherRefs.map((candidate) => candidate.agentId).toSorted();
   const cleanup = options.referencedCleanup ?? { mode: "retain" };

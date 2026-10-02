@@ -485,6 +485,104 @@ describe("plugin capability consent", () => {
     },
   );
 
+  it("requires Claw-owner review even when an update has current plugin acceptance", async () => {
+    const rootDir = createArtifactFixture({
+      "package.json": { openclaw: { extensions: ["./index.js"] } },
+      "index.js": "export {};",
+      "openclaw.plugin.json": {
+        id: "plugin",
+        contracts: { tools: ["read"] },
+        configSchema: { type: "object" },
+      },
+    });
+    const acceptedSurface = resolvePluginArtifactDeclaredSurface(rootDir);
+    const previousRecords = {
+      plugin: {
+        source: "npm" as const,
+        installPath: rootDir,
+        integrity: "sha512-current",
+        acceptedSurface,
+        acceptedSurfaceHash: computeDeclaredSurfaceHash(acceptedSurface),
+        acceptedSurfaceIntegrity: "sha512-current",
+      },
+    };
+    const artifact = { pluginId: "plugin", stagedArtifactDir: rootDir, mode: "update" as const };
+
+    await expect(
+      createManagedPluginArtifactConsentHandler({
+        config: {},
+        source: "npm",
+        previousRecords,
+        requireCapabilityConsent: true,
+      }).onBeforePluginArtifactCommit(artifact),
+    ).rejects.toMatchObject({ capabilityConsent: { pluginId: "plugin" } });
+
+    const reviewed: string[] = [];
+    await createManagedPluginArtifactConsentHandler({
+      config: {},
+      source: "npm",
+      previousRecords,
+      requireCapabilityConsent: true,
+      onCapabilityConsent: async (review) => {
+        reviewed.push(review.reviewToken);
+        return { reviewToken: review.reviewToken };
+      },
+    }).onBeforePluginArtifactCommit(artifact);
+    expect(reviewed).toEqual([computeDeclaredSurfaceHash(acceptedSurface)]);
+  });
+
+  it("does not apply the official-plugin exemption to a Claw-managed install", async () => {
+    const rootDir = createArtifactFixture({
+      "package.json": {
+        name: "@openclaw/acpx",
+        openclaw: { extensions: ["./index.js"] },
+      },
+      "index.js": "export {};",
+      "openclaw.plugin.json": {
+        id: "acpx",
+        contracts: { tools: ["acpx.run"] },
+        configSchema: { type: "object" },
+      },
+    });
+    const sourceRecord: PluginInstallRecord = {
+      source: "clawhub",
+      spec: "clawhub:@openclaw/acpx",
+      clawhubPackage: "@openclaw/acpx",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubChannel: "official",
+    };
+    const artifact = {
+      pluginId: "acpx",
+      stagedArtifactDir: rootDir,
+      sourceRecord,
+      mode: "install" as const,
+    };
+    const params = {
+      config: {},
+      source: "clawhub" as const,
+      spec: sourceRecord.spec,
+    };
+
+    await createManagedPluginArtifactConsentHandler(params).onBeforePluginArtifactCommit(artifact);
+    await expect(
+      createManagedPluginArtifactConsentHandler({
+        ...params,
+        requireCapabilityConsent: true,
+      }).onBeforePluginArtifactCommit(artifact),
+    ).rejects.toMatchObject({ capabilityConsent: { pluginId: "acpx" } });
+
+    const reviewed: string[][] = [];
+    await createManagedPluginArtifactConsentHandler({
+      ...params,
+      requireCapabilityConsent: true,
+      onCapabilityConsent: async (review) => {
+        reviewed.push(review.declared.tools);
+        return { reviewToken: review.reviewToken };
+      },
+    }).onBeforePluginArtifactCommit(artifact);
+    expect(reviewed).toEqual([["acpx.run"]]);
+  });
+
   it("rejects reinstall without capability consent even when the plugin is disabled", async () => {
     const rootDir = createArtifactFixture({
       "package.json": { openclaw: { extensions: ["./index.js"] } },

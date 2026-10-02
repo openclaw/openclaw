@@ -64,6 +64,7 @@ export type ClawHubInstallParams = ClawHubSkillRef & {
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   /** True when a Claw lifecycle caller already owns package coordination. */
   clawManaged?: boolean;
+  beforePersistentApply?: () => void;
   expectedClawHubState?: ClawHubSkillFileState | null;
 };
 
@@ -300,6 +301,7 @@ async function installDownloadedResolution(
           ? path.join(rootDir, ...normalizeGitHubSourcePath(github.path).split("/"))
           : rootDir,
         mode: params.force ? "update" : "install",
+        beforePersistentApply: params.beforePersistentApply,
         logger: params.logger,
         expectedClawHubState: params.expectedClawHubState,
         policy: {
@@ -569,6 +571,7 @@ export async function performClawHubSkillInstall(
           installedVersion: version,
         },
         verification,
+        beforePersistentApply: params.beforePersistentApply,
       });
       if (!params.clawManaged) {
         markClawPackageIndependentlyOwned({

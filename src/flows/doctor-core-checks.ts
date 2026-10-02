@@ -1,6 +1,5 @@
 import path from "node:path";
 import { listAgentIds, tryResolveSoleAgentId } from "../agents/agent-scope.js";
-import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import {
   detectLegacyClawdBrowserProfileResidue,
   maybeArchiveLegacyClawdBrowserProfileResidue,
@@ -1148,32 +1147,25 @@ export function createCoreHealthChecks(
     createWorkspaceSuggestionsCheck(deps),
     skillWorkshopToolPolicyCheck,
     skillWorkshopRelocationCheck,
-    ...(isExperimentalClawsEnabled()
-      ? [
-          {
-            id: "core/doctor/claws-state",
-            kind: "core" as const,
-            description: "Claw lifecycle ownership and managed resources are consistent.",
-            defaultEnabled: false as const,
-            source: "doctor",
-            async detect(ctx: HealthCheckContext) {
-              const [{ collectClawStateHealthFindings }, { listConfiguredMcpServers }] =
-                await Promise.all([
-                  import("../claws/doctor.js"),
-                  import("../config/mcp-config.js"),
-                ]);
-              return await collectClawStateHealthFindings({
-                cfg: ctx.cfg,
-                env: process.env,
-                listMcpServers: listConfiguredMcpServers,
-                cronGateway: {
-                  list: async () => await deps.listGatewayCronJobs(ctx),
-                },
-              });
-            },
+    {
+      id: "core/doctor/claws-state",
+      kind: "core" as const,
+      description: "Claw lifecycle ownership and managed resources are consistent.",
+      defaultEnabled: false as const,
+      source: "doctor",
+      async detect(ctx: HealthCheckContext) {
+        const [{ collectClawStateHealthFindings }, { listConfiguredMcpServers }] =
+          await Promise.all([import("../claws/doctor.js"), import("../config/mcp-config.js")]);
+        return await collectClawStateHealthFindings({
+          cfg: ctx.cfg,
+          env: process.env,
+          listMcpServers: listConfiguredMcpServers,
+          cronGateway: {
+            list: async () => await deps.listGatewayCronJobs(ctx),
           },
-        ]
-      : []),
+        });
+      },
+    },
     commandOwnerCheck,
     createSkillsReadinessCheck(deps),
     browserClawdProfileResidueCheck,

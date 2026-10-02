@@ -16,11 +16,11 @@ package profile. Adding a Claw creates a separate agent; `claws migrate` can
 enroll an existing agent without replacing it or moving its workspace.
 
 Claws are experimental. Their schema, command output, and lifecycle may change.
-Enable the command surface explicitly:
-
-```bash
-export OPENCLAW_EXPERIMENTAL_CLAWS=1
-```
+The CLI commands are available without a process flag or Labs setting. Enable
+**Claws** in **Settings → Labs** to show ClawHub discovery and Add in the Control
+UI. Turning it off hides those UI affordances; installed agents keep running and
+all CLI and Gateway Claw lifecycle methods remain available. On a headless
+installation, no Labs setting is needed for the CLI.
 
 For human-readable `claws add`, OpenClaw prints the experimental warning before
 changing state. JSON mode keeps stdout machine-readable and identifies the
@@ -38,7 +38,7 @@ sources at `docs/reference/templates/roles/<role>` in a source checkout, with no
 or `openclaw claws add docs/reference/templates/roles/<role>` through the
 [preview and consent flow](/cli/claws#inspect-and-preview).
 [`agents team create`](/cli/agents#agents-team-create) owns delegation wiring;
-the role Claws will carry those settings once separate Claw profile support lands.
+Claw packages do not name delegate agents.
 
 ## Create a Claw package
 
@@ -93,14 +93,8 @@ conflict.
 ```yaml
 schemaVersion: 1
 agent:
-  model:
-    primary: acme/primary
-    fallbacks: [acme/fallback]
-  subagents:
-    allowAgents: [researcher, writer]
-    delegationMode: prefer
   tools:
-    allow: [read, write, cron]
+    allow: [read, write, cron, sessions_spawn]
     deny: [exec]
     fs:
       workspaceOnly: true
@@ -116,22 +110,12 @@ while inspecting, adding, updating, and exporting that Claw; it is not copied
 to the user's normal OpenClaw configuration path. Other harnesses consume the
 portable manifest and interpret only their own conventional profile.
 
-`agent.model` selects a required `primary` reference and optional ordered
-`fallbacks`. Every reference must use non-empty `provider/model` form; the
-`acme` references above are examples to replace with your configured models.
-`agent.subagents.allowAgents` lists delegation target agent IDs using the same
-lowercase ID rules as the Claw agent. An empty list explicitly grants no
-delegation targets. Optional `delegationMode` accepts `suggest` or `prefer`.
-Both objects are optional and reject unknown keys.
-
-Add and update plans disclose the model and delegation configuration. Models
-absent from the local catalog and targets absent from the local agent roster
-produce notices, not blockers. The exact plan consent applies these values as
-declared, so a team can be installed one Claw at a time. Configure unavailable
-models and install missing targets before using them. `claws dev` checks the
-local catalog offline. Status detects changes to either field through agent
-configuration drift, and export preserves explicit agent settings without
-copying inherited defaults.
+The package profile cannot set a model, provider, or named delegate agents.
+OpenClaw uses the operator's model and delegation settings for the new agent;
+later operator changes to those settings do not count as Claw drift and are
+preserved by Claw updates. Export does not copy them into a package.
+`sessions_spawn` remains an ordinary tool grant subject to the reviewed tool
+policy and host controls; it does not name a delegate agent.
 
 The same strict version 1 schema continues to accept grouped JSON manifests.
 Grouped JSON discovers the same conventional profile rather than embedding a

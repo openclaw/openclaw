@@ -14,7 +14,6 @@ import {
 } from "../state/openclaw-state-db.js";
 import { clawCronGatewayInput } from "./cron.js";
 import { digestClawValue } from "./digest.js";
-import { isExperimentalClawsEnabled } from "./experimental.js";
 import { readClawStatus, type ClawStatusRecord } from "./lifecycle-state.js";
 
 const CLAW_STATE_CHECK_ID = "core/doctor/claws-state";
@@ -309,9 +308,6 @@ function orphanedReferenceFinding(agentId: string): HealthFinding {
 export async function collectClawStateHealthFindings(
   options: ClawDoctorOptions = {},
 ): Promise<readonly HealthFinding[]> {
-  if (!isExperimentalClawsEnabled(options.env ?? process.env)) {
-    return [];
-  }
   let database: OpenClawStateDatabase | undefined;
   try {
     database = await openExistingOpenClawStateDatabaseReadOnly(options);

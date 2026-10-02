@@ -81,7 +81,6 @@ async function fixture(
   });
   const env = {
     OPENCLAW_STATE_DIR: join(root, "state"),
-    OPENCLAW_EXPERIMENTAL_CLAWS: "1",
   };
   return { root, plan, env };
 }
@@ -280,14 +279,18 @@ describe("collectClawStateHealthFindings", () => {
     expect(afterMetadata.journal).toEqual(beforeMetadata.journal);
   });
 
-  it("stays hidden when the experimental Claws surface is disabled", async () => {
-    const current = await fixture();
-    await expect(
-      collectClawStateHealthFindings({
-        env: { ...current.env, OPENCLAW_EXPERIMENTAL_CLAWS: "" },
-        cfg: {},
-      }),
-    ).resolves.toEqual([]);
+  it("diagnoses installed Claws without a process opt-in", async () => {
+    const current = await installFixture({ withFile: true });
+    await writeFile(join(current.plan.agent.workspace, "SOUL.md"), "local edit\n", "utf8");
+
+    const findings = await collectClawStateHealthFindings({
+      env: { ...current.env, OPENCLAW_EXPERIMENTAL_CLAWS: "" },
+      cfg: current.getConfig(),
+      sourceMcpServers: {},
+    });
+    expect(findings).toContainEqual(
+      expect.objectContaining({ path: "claws.worker.workspace.SOUL.md" }),
+    );
   });
 
   it("reports no findings for a complete unchanged install", async () => {

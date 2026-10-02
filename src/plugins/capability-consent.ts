@@ -247,6 +247,7 @@ async function resolvePluginArtifactCapabilityConsent(params: {
   env?: NodeJS.ProcessEnv;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  requireCapabilityConsent?: boolean;
   beforePersistentEffect?: () => void | Promise<void>;
   previousDeclared?: PluginAcceptedDeclaredSurface;
   previousRecord?: PluginInstallRecord;
@@ -291,8 +292,9 @@ async function resolvePluginArtifactCapabilityConsent(params: {
     // Reinstalls preserve authored disablement; required consent still precedes commit.
     // Only update-only flows defer it in preparePluginUpdateCapabilityConsent.
   }
-  const acknowledgment =
-    official || !params.enabled || acceptanceCurrent
+  const acknowledgment = params.requireCapabilityConsent
+    ? await params.onCapabilityConsent?.(review)
+    : official || !params.enabled || acceptanceCurrent
       ? { reviewToken: review.reviewToken }
       : (params.acknowledgeCapabilities ?? (await params.onCapabilityConsent?.(review)));
   // Review and staged-package rollback remain cancellable. Lock only when
@@ -334,6 +336,7 @@ export function createManagedPluginArtifactConsentHandler(params: {
   expectedIntegrity?: string;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  requireCapabilityConsent?: boolean;
   beforePersistentEffect?: () => void | Promise<void>;
   previousRecords?: Record<string, PluginInstallRecord>;
   previousPluginOwners?: ReadonlyMap<string, string>;
@@ -399,6 +402,7 @@ export function createManagedPluginArtifactConsentHandler(params: {
         sourceRecord: artifact.sourceRecord,
         acknowledgeCapabilities: params.acknowledgeCapabilities,
         onCapabilityConsent: params.onCapabilityConsent,
+        requireCapabilityConsent: params.requireCapabilityConsent,
         beforePersistentEffect: params.beforePersistentEffect,
         ...(previousRecord ? { previousRecord } : {}),
         ...(previousDeclared ? { previousDeclared } : {}),

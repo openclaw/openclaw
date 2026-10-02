@@ -21,7 +21,6 @@ async function runOpenClaw(
     HOME: stateDir,
     USERPROFILE: stateDir,
     OPENCLAW_CONFIG_PATH: join(stateDir, "openclaw.json"),
-    OPENCLAW_EXPERIMENTAL_CLAWS: "1",
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
     OPENCLAW_HOME: stateDir,
     OPENCLAW_STATE_DIR: stateDir,
@@ -315,9 +314,9 @@ describe("claws lifecycle cli e2e", () => {
   it("reports and removes a Claw-created agent through plan-first lifecycle commands", async () => {
     const instance = await createOpenClawTestInstance({
       name: "claws-lifecycle-remove",
+      config: { gateway: { controlUi: { experimental: { claws: true } } } },
       env: {
         OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        OPENCLAW_EXPERIMENTAL_CLAWS: "1",
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       },
     });
@@ -393,7 +392,14 @@ describe("claws lifecycle cli e2e", () => {
 
   it("exports an installed agent as a self-contained grouped package", async () => {
     const source = "src/claws/fixtures/workspace-agent.claw.json";
-    const addPreview = await runOpenClaw(["claws", "add", source, "--dry-run", "--json"]);
+    const stateDir = tempDirs.make("openclaw-claws-export-e2e-");
+    await writeFile(
+      join(stateDir, "openclaw.json"),
+      JSON.stringify({ gateway: { controlUi: { experimental: { claws: true } } } }),
+    );
+    const addPreview = await runOpenClaw(["claws", "add", source, "--dry-run", "--json"], {
+      stateDir,
+    });
     const addPlan = parseJson(addPreview.stdout) as { planIntegrity: string };
     const added = await runOpenClaw(
       ["claws", "add", source, "--yes", "--plan-integrity", addPlan.planIntegrity, "--json"],
@@ -441,13 +447,15 @@ describe("claws lifecycle cli e2e", () => {
       source: { kind: "package" },
       manifest: { agent: { id: "workspace-agent" } },
     });
-    const roundTripPreview = await runOpenClaw([
-      "claws",
-      "add",
-      outputDirectory,
-      "--dry-run",
-      "--json",
-    ]);
+    const roundTripStateDir = tempDirs.make("openclaw-claws-round-trip-e2e-");
+    await writeFile(
+      join(roundTripStateDir, "openclaw.json"),
+      JSON.stringify({ gateway: { controlUi: { experimental: { claws: true } } } }),
+    );
+    const roundTripPreview = await runOpenClaw(
+      ["claws", "add", outputDirectory, "--dry-run", "--json"],
+      { stateDir: roundTripStateDir },
+    );
     const roundTripPlan = parseJson(roundTripPreview.stdout) as { planIntegrity: string };
     const roundTrip = await runOpenClaw(
       [

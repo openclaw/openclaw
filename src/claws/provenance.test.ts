@@ -10,6 +10,7 @@ import { applyClawAddPlan, ClawAddMutationError } from "./add.js";
 import { ClawCronInstallError } from "./cron.js";
 import { replaceClawPackageRefExpected } from "./package-update-provenance.js";
 import { ClawPackageInstallError } from "./packages.js";
+import { emptyPluginCapabilityEvidence } from "./packages.test-support.js";
 import {
   clawInstallRecordMatchesPlan,
   persistClawInstallRecord,
@@ -52,7 +53,13 @@ async function makePackagePlan(packages: ClawPackage[] = [pluginPackage]) {
         ok: true,
         action: "install",
         integrity: `sha256:${(pkg.kind === "plugin" ? "a" : "b").repeat(64)}`,
-        ...(pkg.kind === "plugin" ? { installId: "audit" } : {}),
+        ...(pkg.kind === "plugin"
+          ? {
+              installId: "audit",
+              declaredCapabilities: emptyPluginCapabilityEvidence.declared,
+              capabilityGrants: emptyPluginCapabilityEvidence.grants,
+            }
+          : {}),
       }),
     },
   );

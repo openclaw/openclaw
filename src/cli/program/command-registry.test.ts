@@ -85,12 +85,8 @@ describe("command-registry", () => {
     expect(names).not.toContain("tasks");
   });
 
-  it("only exposes Claws after an explicit process opt-in", () => {
+  it("exposes Claws without a process opt-in", () => {
     vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
-    expect(getCoreCliCommandNamesCore()).not.toContain("claws");
-    expect(getCoreCliCommandsWithSubcommands()).not.toContain("claws");
-
-    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
     expect(getCoreCliCommandNamesCore()).toContain("claws");
     expect(getCoreCliCommandsWithSubcommands()).toContain("claws");
 

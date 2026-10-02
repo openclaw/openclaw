@@ -55,7 +55,7 @@ import {
 } from "./clawhub-presentation.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
-import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
+import type { PluginInstallArtifactCallbacks } from "./install-types.js";
 import {
   installPluginFromArchive,
   PLUGIN_INSTALL_ERROR_CODE,
@@ -869,7 +869,8 @@ function validateClawHubPluginPackage(params: {
 
 export async function installPluginFromClawHub(
   params: InstallSafetyOverrides &
-    TimedInstallModeOptions<PluginInstallLogger> & {
+    TimedInstallModeOptions<PluginInstallLogger> &
+    PluginInstallArtifactCallbacks & {
       spec: string;
       baseUrl?: string;
       token?: string;
@@ -878,8 +879,6 @@ export async function installPluginFromClawHub(
       expectedIntegrity?: string;
       env?: RuntimeVersionEnv;
       confirmInstall?: () => boolean | Promise<boolean>;
-      onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
-      beforePersistentApply?: () => void;
     },
 ): Promise<
   | ({
@@ -1150,6 +1149,7 @@ export async function installPluginFromClawHub(
         dryRun: params.dryRun,
         expectedPluginId: runtimeIdResolution.expectedPluginId,
         beforePersistentApply: params.beforePersistentApply,
+        onPluginArtifactInspect: params.onPluginArtifactInspect,
         onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit
           ? (artifact) =>
               params.onBeforePluginArtifactCommit!({

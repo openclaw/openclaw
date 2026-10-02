@@ -2,15 +2,22 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { emptyPluginCapabilityEvidence } from "../claws/packages.test-support.js";
 import type { ClawPackage } from "../claws/types.js";
 
 const mocks = vi.hoisted(() => ({
   preflightClawPackage: vi.fn(),
+  config: { plugins: { load: { paths: ["/configured/plugin"] } } },
 }));
 
 vi.mock("../claws/packages.js", async () => ({
   ...(await vi.importActual<typeof import("../claws/packages.js")>("../claws/packages.js")),
   preflightClawPackage: mocks.preflightClawPackage,
+}));
+
+vi.mock("../config/config.js", async () => ({
+  ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
+  getRuntimeConfig: () => mocks.config,
 }));
 
 const { runClawsInspectCommand } = await import("./claws-cli.runtime.js");
@@ -66,7 +73,6 @@ async function createInspectFixture(format: "claude" | "openclaw", packages: Cla
 
 describe("claws inspect extensions", () => {
   beforeEach(() => {
-    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
     mocks.preflightClawPackage.mockReset();
   });
 
@@ -81,6 +87,8 @@ describe("claws inspect extensions", () => {
       mapped: ["commands", "skills"],
       unavailable: ["agents"],
       adapterIdentity: "openclaw/test",
+      declaredCapabilities: emptyPluginCapabilityEvidence.declared,
+      capabilityGrants: emptyPluginCapabilityEvidence.grants,
     });
     await runClawsInspectCommand(root, { json: true }, runtime);
 
@@ -99,6 +107,7 @@ describe("claws inspect extensions", () => {
     expect(mocks.preflightClawPackage).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "plugin", ref: "@owner/audit" }),
       root,
+      { config: mocks.config },
     );
     expect(runtime.exit).not.toHaveBeenCalled();
   });
@@ -116,6 +125,8 @@ describe("claws inspect extensions", () => {
       mapped: ["skills"],
       unavailable: [],
       adapterIdentity: "openclaw/test",
+      declaredCapabilities: emptyPluginCapabilityEvidence.declared,
+      capabilityGrants: emptyPluginCapabilityEvidence.grants,
     });
     await runClawsInspectCommand(root, { json: true }, runtime);
 

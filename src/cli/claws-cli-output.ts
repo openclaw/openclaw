@@ -37,15 +37,6 @@ function logClawPlanNotices(diagnostics: ClawDiagnostic[], runtime: RuntimeEnv):
 }
 
 export function logClawAgentConfiguration(plan: ClawAddPlan, runtime: RuntimeEnv): void {
-  const { model, subagents } = plan.agent.config;
-  if (model !== undefined) {
-    runtime.log(`Model: ${JSON.stringify(model)}`);
-  }
-  if (subagents) {
-    const targets =
-      subagents.allowAgents?.join(", ") || (subagents.allowAgents ? "none" : "inherited");
-    runtime.log(`Delegation: ${targets}; mode: ${subagents.delegationMode ?? "inherited"}`);
-  }
   logClawPlanNotices(plan.diagnostics, runtime);
 }
 

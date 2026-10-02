@@ -107,21 +107,6 @@ export function portableOpenClawProfile(
     }
   }
   const settings = {
-    ...(agent.model !== undefined
-      ? { model: typeof agent.model === "string" ? { primary: agent.model } : agent.model }
-      : {}),
-    ...(agent.subagents
-      ? {
-          subagents: {
-            ...(agent.subagents.allowAgents !== undefined
-              ? { allowAgents: agent.subagents.allowAgents }
-              : {}),
-            ...(agent.subagents.delegationMode !== undefined
-              ? { delegationMode: agent.subagents.delegationMode }
-              : {}),
-          },
-        }
-      : {}),
     ...(agent.groupChat?.mentionPatterns?.length
       ? { groupChat: { mentionPatterns: agent.groupChat.mentionPatterns } }
       : {}),

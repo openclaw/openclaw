@@ -263,7 +263,9 @@ export async function readClawHubSkillsLockfile(
 async function writeClawHubSkillsLockfile(
   workspaceDir: string,
   lockfile: ClawHubSkillsLockfile,
+  beforePersistentApply?: () => void,
 ): Promise<void> {
+  beforePersistentApply?.();
   await writeJson(path.join(workspaceDir, DOT_DIR, "lock.json"), lockfile, {
     trailingNewline: true,
   });
@@ -366,7 +368,9 @@ export async function readClawHubSkillOriginStrict(
 async function writeClawHubSkillOrigin(
   skillDir: string,
   origin: ClawHubSkillOrigin,
+  beforePersistentApply?: () => void,
 ): Promise<void> {
+  beforePersistentApply?.();
   await writeJson(path.join(skillDir, DOT_DIR, "origin.json"), origin, { trailingNewline: true });
 }
 
@@ -389,7 +393,7 @@ export async function recordClawHubSkillInstall(
   params: Parameters<WorkspaceSkillLifecycle["recordClawHubSkillInstall"]>[0],
 ): Promise<void> {
   const { origin, verification } = params;
-  await writeClawHubSkillOrigin(params.skillDir, origin);
+  await writeClawHubSkillOrigin(params.skillDir, origin, params.beforePersistentApply);
   const lock = await readClawHubSkillsLockfile(params.workspaceDir);
   lock.skills[origin.slug] = {
     version: origin.installedVersion,
@@ -404,7 +408,7 @@ export async function recordClawHubSkillInstall(
     ...(origin.fileTreeSha256 ? { fileTreeSha256: origin.fileTreeSha256 } : {}),
     ...(verification ? { verification } : {}),
   };
-  await writeClawHubSkillsLockfile(params.workspaceDir, lock);
+  await writeClawHubSkillsLockfile(params.workspaceDir, lock, params.beforePersistentApply);
 }
 
 export function resolveWorkspaceClawHubSkills(workspaceDir: string) {

@@ -5,8 +5,14 @@ import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { describe, expect, it, vi } from "vitest";
 import type { installPluginFromClawHub } from "../plugins/clawhub.js";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
-import { installClawPackages, preflightClawPackage } from "./packages.js";
-import { packageInstallPlan as plan } from "./packages.test-support.js";
+import {
+  installClawPackages as installClawPackagesCore,
+  preflightClawPackage,
+} from "./packages.js";
+import {
+  emptyPluginCapabilityEvidence,
+  packageInstallPlan as plan,
+} from "./packages.test-support.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
 
 vi.mock("@openclaw/fs-safe/temp", async (importOriginal) => {
@@ -70,10 +76,46 @@ function pluginProbe(overrides: Partial<PluginProbe> = {}): PluginProbe {
     ...overrides,
   };
 }
+function withStagedInspection(probe: typeof installPluginFromClawHub) {
+  return async (request: Parameters<typeof installPluginFromClawHub>[0]) => {
+    const result = await probe(request);
+    if (result.ok) {
+      await request.onPluginArtifactInspect?.({
+        pluginId: result.pluginId,
+        stagedArtifactDir: "/tmp/staged-audit",
+        mode: "install",
+      });
+    }
+    return result;
+  };
+}
+const inspectPluginCapabilities = vi.fn(() => emptyPluginCapabilityEvidence);
+const pluginConsent = {
+  onCapabilityConsent: vi.fn(async (review: { reviewToken: string }) => ({
+    reviewToken: review.reviewToken,
+  })),
+  confirmInstall: vi.fn(async () => true),
+};
+async function installClawPackages(
+  packagePlan: Parameters<typeof installClawPackagesCore>[0],
+  options: Parameters<typeof installClawPackagesCore>[1] = {},
+) {
+  return await installClawPackagesCore(packagePlan, {
+    ...options,
+    pluginConsent,
+    deps: { inspectPluginCapabilities, ...options.deps },
+  });
+}
 const acquirePackageLease = vi.fn(() => ({ heartbeat: vi.fn(), release: vi.fn() }));
-const probePlugin = vi.fn(async ({ spec }: { spec: string }) => {
+const probePlugin = vi.fn(async (request: Parameters<typeof installPluginFromClawHub>[0]) => {
+  const { spec } = request;
   const pluginId = spec.slice(spec.lastIndexOf("/") + 1).split("@")[0]!;
   const packageName = spec.replace(/^clawhub:/, "").replace(/@[^@]+$/, "");
+  await request.onPluginArtifactInspect?.({
+    pluginId,
+    stagedArtifactDir: "/tmp/staged-audit",
+    mode: "install",
+  });
   return {
     ok: true as const,
     pluginId,
@@ -114,7 +156,11 @@ describe("preflightClawPackage plugin setup requirements", () => {
     await expect(
       preflightClawPackage(pluginPackage, "/tmp/workspace", {
         env: {},
-        deps: { preflightPlugin, probePlugin: probePluginSetup },
+        deps: {
+          preflightPlugin,
+          probePlugin: withStagedInspection(probePluginSetup),
+          inspectPluginCapabilities,
+        },
       }),
     ).resolves.toEqual(
       expect.objectContaining({
@@ -148,7 +194,11 @@ describe("preflightClawPackage plugin setup requirements", () => {
     await expect(
       preflightClawPackage(pluginPackage, "/tmp/workspace", {
         env: { SECOND_TOKEN: "configured" },
-        deps: { preflightPlugin, probePlugin: probePluginSetup },
+        deps: {
+          preflightPlugin,
+          probePlugin: withStagedInspection(probePluginSetup),
+          inspectPluginCapabilities,
+        },
       }),
     ).resolves.not.toHaveProperty("requirements");
   });
@@ -167,7 +217,11 @@ describe("preflightClawPackage plugin setup requirements", () => {
     await expect(
       preflightClawPackage(pluginPackage, "/tmp/workspace", {
         env: {},
-        deps: { preflightPlugin, probePlugin: probePluginSetup },
+        deps: {
+          preflightPlugin,
+          probePlugin: withStagedInspection(probePluginSetup),
+          inspectPluginCapabilities,
+        },
       }),
     ).resolves.not.toHaveProperty("requirements");
   });
@@ -205,7 +259,11 @@ describe("preflightClawPackage plugin setup requirements", () => {
             EVIDENCE_CREDENTIALS: credentialsPath,
             EVIDENCE_PROJECT: "project",
           },
-          deps: { preflightPlugin, probePlugin: probePluginSetup },
+          deps: {
+            preflightPlugin,
+            probePlugin: withStagedInspection(probePluginSetup),
+            inspectPluginCapabilities,
+          },
         }),
       ).resolves.not.toHaveProperty("requirements");
     } finally {
@@ -235,7 +293,8 @@ describe("preflightClawPackage isolated plugin inspection", () => {
             action: "install" as const,
             request: {} as never,
           })),
-          probePlugin: probeAgentBundle,
+          probePlugin: withStagedInspection(probeAgentBundle),
+          inspectPluginCapabilities,
         },
       }),
     ).resolves.toEqual({
@@ -260,7 +319,8 @@ describe("preflightClawPackage isolated plugin inspection", () => {
             action: "install" as const,
             request: {} as never,
           })),
-          probePlugin: liveProbe,
+          probePlugin: withStagedInspection(liveProbe),
+          inspectPluginCapabilities,
         },
       }),
     ).resolves.toMatchObject({
@@ -295,7 +355,8 @@ describe("preflightClawPackage isolated plugin inspection", () => {
             expectedVersion: pluginPackage.version,
             request: {} as never,
           })),
-          probePlugin: probePluginConflict,
+          probePlugin: withStagedInspection(probePluginConflict),
+          inspectPluginCapabilities,
         },
       }),
     ).resolves.toMatchObject({
@@ -362,7 +423,8 @@ describe("preflightClawPackage isolated plugin inspection", () => {
             installedIntegrity: integrity,
             installedAt: "2026-08-06T00:00:00.000Z",
           })),
-          probePlugin: isolatedProbe,
+          probePlugin: withStagedInspection(isolatedProbe),
+          inspectPluginCapabilities,
         },
       }),
     ).resolves.toMatchObject({
@@ -438,6 +500,7 @@ describe("installClawPackages", () => {
         version: "1.2.3",
         expectedIntegrity: skillIntegrity,
         clawManaged: true,
+        beforePersistentApply: expect.any(Function),
       }),
     );
     expect(persistPackageRef).toHaveBeenCalledWith(
@@ -569,7 +632,7 @@ describe("installClawPackages", () => {
     await installClawPackages(plan([{ ...pluginPackage, extension }], "reuse"), {
       deps: {
         installPlugin,
-        probePlugin: probePluginForExtension,
+        probePlugin: withStagedInspection(probePluginForExtension),
         preflightPlugin,
         persistPackageRef,
         completePackageRef,
@@ -604,14 +667,16 @@ describe("installClawPackages", () => {
       installClawPackages(plan([{ ...pluginPackage, extension }], "reuse"), {
         deps: {
           installPlugin: vi.fn(),
-          probePlugin: vi.fn().mockResolvedValue(
-            pluginProbe({
-              artifactInspection: {
-                format: "claude",
-                mapped: ["skills", "commands"],
-                unavailable: ["agents"],
-              },
-            }),
+          probePlugin: withStagedInspection(
+            vi.fn().mockResolvedValue(
+              pluginProbe({
+                artifactInspection: {
+                  format: "claude",
+                  mapped: ["skills", "commands"],
+                  unavailable: ["agents"],
+                },
+              }),
+            ),
           ),
           preflightPlugin: vi.fn().mockResolvedValue({
             ok: true,
@@ -947,12 +1012,14 @@ describe("installClawPackages", () => {
     await expect(
       installClawPackages(planned, {
         deps: {
-          probePlugin: vi.fn().mockResolvedValue({
-            ok: true,
-            pluginId: "audit",
-            warning: "review warning two",
-            clawhub: { integrity },
-          }),
+          probePlugin: withStagedInspection(
+            vi.fn().mockResolvedValue({
+              ok: true,
+              pluginId: "audit",
+              warning: "review warning two",
+              clawhub: { integrity },
+            }),
+          ),
           acquirePackageLease,
         },
       }),

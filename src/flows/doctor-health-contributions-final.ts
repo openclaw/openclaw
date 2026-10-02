@@ -1,4 +1,3 @@
-import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "../commands/doctor/shared/update-phase.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { runCoreHealthFindingNote } from "./doctor-health-contribution-core.js";
@@ -246,16 +245,12 @@ export function resolveFinalDoctorHealthContributions(params: {
       },
       run: runWorkspaceStatusHealth,
     }),
-    ...(isExperimentalClawsEnabled()
-      ? [
-          createDoctorHealthContribution({
-            id: "doctor:claws-state",
-            label: "Claws state",
-            healthCheckIds: ["core/doctor/claws-state"],
-            run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/claws-state"),
-          }),
-        ]
-      : []),
+    createDoctorHealthContribution({
+      id: "doctor:claws-state",
+      label: "Claws state",
+      healthCheckIds: ["core/doctor/claws-state"],
+      run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/claws-state"),
+    }),
     createDoctorHealthContribution({
       id: "doctor:workspace-alias",
       label: "Workspace alias",

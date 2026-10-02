@@ -1,0 +1,607 @@
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import * as memorySearch from "../agents/memory-search.js";
+import {
+  SecretSurfaceUnavailableError,
+  setActiveDegradedSecretOwners,
+} from "../secrets/runtime-degraded-state.js";
+import { runtimeMemorySecretOwnerId } from "../secrets/runtime-memory-secret-owner.js";
+import { digestClawValue } from "./digest.js";
+import {
+  bindClawLifecycleTrust,
+  projectClawAddPlan,
+  projectClawRemovePlan,
+  projectClawUpdatePlan,
+  plansMatchAcrossSourceRoots,
+} from "./gateway-plan-projection.js";
+import type { ClawRemovePlan } from "./lifecycle-remove-contract.js";
+import type { ClawAddPlan } from "./types.js";
+import { makeEmptyClawUpdatePlan } from "./update-plan-empty.js";
+
+const config = { agents: { list: [] } };
+
+function addPlan(sourceRoot: string, integrity = "sha256:artifact-a"): ClawAddPlan {
+  return {
+    schemaVersion: "openclaw.clawAddPlan.v1",
+    manifestSchemaVersion: 1,
+    stability: "experimental",
+    dryRun: true,
+    mutationAllowed: false,
+    planIntegrity: `sha256:root-specific-${sourceRoot}`,
+    claw: {
+      kind: "package",
+      name: "@openclaw/workflow-operator",
+      version: "1.0.0",
+      packageRoot: sourceRoot,
+      manifestPath: path.join(sourceRoot, "CLAW.md"),
+      integrityKind: "artifact",
+      integrity,
+      byteLength: 123,
+    },
+    agent: {
+      requestedId: "workflow-operator",
+      finalId: "workflow-operator",
+      workspace: "/operator/workspace-workflow-operator",
+      config: { id: "workflow-operator", workspace: "/operator/workspace-workflow-operator" },
+    },
+    summary: {
+      totalActions: 1,
+      agentActions: 0,
+      workspaceActions: 1,
+      packageActions: 0,
+      mcpServerActions: 0,
+      cronJobActions: 0,
+      blockedActions: 0,
+      capabilityEscalations: 0,
+    },
+    actions: [
+      {
+        kind: "workspaceFile",
+        id: "SOUL.md",
+        action: "write",
+        target: "/operator/workspace-workflow-operator/SOUL.md",
+        source: path.join(sourceRoot, "SOUL.md"),
+        blocked: false,
+      },
+    ],
+    capabilityChanges: [],
+    readiness: { ready: true, requirements: [] },
+    blockers: [],
+    diagnostics: [],
+  };
+}
+
+describe("Claw Gateway plan consent", () => {
+  it("accepts the same archive across extraction roots but refuses changed artifact bytes", () => {
+    const previewRoot = "/tmp/claw-preview";
+    const applyRoot = "/tmp/claw-apply";
+    const preview = addPlan(previewRoot);
+    const applied = addPlan(applyRoot);
+
+    expect(projectClawAddPlan(preview, previewRoot, [], config).planIntegrity).toBe(
+      projectClawAddPlan(applied, applyRoot, [], config).planIntegrity,
+    );
+    expect(
+      plansMatchAcrossSourceRoots({
+        preview,
+        previewRoot,
+        persisted: applied,
+        persistedRoot: applyRoot,
+      }),
+    ).toBe(true);
+    expect(
+      projectClawAddPlan(addPlan(applyRoot, "sha256:artifact-b"), applyRoot, [], config)
+        .planIntegrity,
+    ).not.toBe(projectClawAddPlan(preview, previewRoot, [], config).planIntegrity);
+  });
+
+  it("exposes only review facts and binds a trust warning into consent", () => {
+    const root = "/tmp/private-claw-source";
+    const plan = addPlan(root);
+    plan.diagnostics.push({
+      level: "warning",
+      code: "example",
+      phase: "plan",
+      path: "source",
+      message: "secret setup answer",
+    });
+
+    const projected = projectClawAddPlan(plan, root, [], config);
+    expect(JSON.stringify(projected)).not.toContain(root);
+    expect(JSON.stringify(projected)).not.toContain("secret setup answer");
+    expect(projected.actions).toEqual([
+      { kind: "workspaceFile", id: "SOUL.md", action: "write", blocked: false },
+    ]);
+
+    const warned = bindClawLifecycleTrust(projected, {
+      trustWarning: "ClawHub risk review required.",
+      riskAcknowledgementRequired: true,
+    });
+    expect(warned.planIntegrity).not.toBe(projected.planIntegrity);
+    expect(warned.riskAcknowledgementRequired).toBe(true);
+  });
+
+  it("does not project an installable plugin without its capability review", () => {
+    const root = "/tmp/private-claw-source";
+    const plan = addPlan(root);
+    plan.actions.push({
+      kind: "package",
+      id: "plugin:lobster",
+      action: "install",
+      target: "lobster",
+      source: "clawhub:lobster@1.0.0",
+      blocked: false,
+      details: { kind: "plugin" },
+    } as ClawAddPlan["actions"][number]);
+    expect(() => projectClawAddPlan(plan, root, [], config)).toThrow(
+      "plugin capability review is incomplete",
+    );
+  });
+
+  it("discloses configured spawn targets inherited from the host", () => {
+    const root = "/tmp/private-claw-source";
+    const projected = projectClawAddPlan(addPlan(root), root, [], {
+      agents: {
+        defaults: { subagents: { allowAgents: ["reviewer", "missing"], requireAgentId: true } },
+        list: [{ id: "reviewer" }],
+      },
+    });
+
+    expect(projected.configuredAccess?.desired?.subagentTargets).toEqual({
+      allowedAgentIds: ["reviewer"],
+      allowAnyConfiguredAgent: false,
+      implicitSelfAllowed: false,
+      requireAgentId: true,
+    });
+    expect(projected.configuredAccess?.unresolved).toContain("subagent-runtime");
+    expect(JSON.stringify(projected)).not.toContain("missing");
+    const changed = projectClawAddPlan(addPlan(root), root, [], {
+      agents: {
+        defaults: { subagents: { allowAgents: [], requireAgentId: true } },
+        list: [{ id: "reviewer" }],
+      },
+    });
+    expect(changed.planIntegrity).not.toBe(projected.planIntegrity);
+  });
+
+  it("keeps Add review available when this agent's memory secret owner is degraded", () => {
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: runtimeMemorySecretOwnerId("workflow-operator"),
+        state: "unavailable",
+        paths: ["/private/memory-provider"],
+        refKeys: ["private-memory-ref"],
+        reason: "private-provider-failure",
+      },
+    ]);
+    try {
+      const root = "/tmp/private-claw-source";
+      const projected = projectClawAddPlan(addPlan(root), root, [], config);
+
+      expect(projected.configuredAccess?.desired?.memorySearch).toEqual({ state: "unresolved" });
+      expect(projected.blockers).toEqual([]);
+      expect(JSON.stringify(projected)).not.toMatch(
+        /private-memory|private-provider|SecretSurface/u,
+      );
+    } finally {
+      setActiveDegradedSecretOwners([]);
+    }
+  });
+
+  it("does not hide forged or different-owner memory failures", () => {
+    const forged = new Error("unrelated failure");
+    forged.name = "SecretSurfaceUnavailableError";
+    const otherOwner = new SecretSurfaceUnavailableError({
+      ownerKind: "capability",
+      ownerId: runtimeMemorySecretOwnerId("another-agent"),
+      state: "unavailable",
+      paths: [],
+      refKeys: [],
+      reason: "unavailable",
+    });
+    const root = "/tmp/private-claw-source";
+    for (const error of [forged, otherOwner]) {
+      const spy = vi
+        .spyOn(memorySearch, "resolveMemorySearchIndexConfig")
+        .mockImplementationOnce(() => {
+          throw error;
+        });
+      try {
+        expect(() => projectClawAddPlan(addPlan(root), root, [], config)).toThrow(error);
+      } finally {
+        spy.mockRestore();
+      }
+    }
+  });
+
+  it("shows unresolved current memory and disabled target memory on Update", () => {
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: runtimeMemorySecretOwnerId("workflow-operator"),
+        state: "unavailable",
+        paths: ["/private/memory-provider"],
+        refKeys: ["private-memory-ref"],
+        reason: "private-provider-failure",
+      },
+    ]);
+    try {
+      const root = "/tmp/private-update-source";
+      const plan = makeEmptyClawUpdatePlan({
+        agentId: "workflow-operator",
+        source: addPlan(root).claw,
+        found: true,
+        blockers: [],
+      });
+      const projected = projectClawUpdatePlan(plan, root, {
+        config: { agents: { list: [{ id: "workflow-operator" }] } },
+        desiredAgent: { id: "workflow-operator", memory: { search: { enabled: false } } },
+        currentJobs: [],
+        targetJobs: [],
+      });
+
+      expect(projected.configuredAccess?.current?.memorySearch).toEqual({ state: "unresolved" });
+      expect(projected.configuredAccess?.desired?.memorySearch).toEqual({ state: "disabled" });
+      expect(projected.blockers).toEqual([]);
+      expect(JSON.stringify(projected)).not.toMatch(/private-memory|private-provider/u);
+    } finally {
+      setActiveDegradedSecretOwners([]);
+    }
+  });
+
+  it("preserves operator-owned spawn policy in the Update preview", () => {
+    const root = "/tmp/private-update-source";
+    const plan = makeEmptyClawUpdatePlan({
+      agentId: "workflow-operator",
+      source: addPlan(root).claw,
+      found: true,
+      blockers: [],
+    });
+    const projected = projectClawUpdatePlan(plan, root, {
+      config: {
+        agents: {
+          defaults: { subagents: { allowAgents: ["reviewer"], requireAgentId: true } },
+          list: [
+            {
+              id: "workflow-operator",
+              subagents: { allowAgents: ["*"], requireAgentId: false },
+            },
+            { id: "reviewer" },
+          ],
+        },
+      },
+      desiredAgent: { id: "workflow-operator" },
+      currentJobs: [],
+      targetJobs: [],
+    });
+
+    const expected = {
+      allowedAgentIds: ["reviewer", "workflow-operator"],
+      allowAnyConfiguredAgent: true,
+      implicitSelfAllowed: true,
+      requireAgentId: false,
+    };
+    expect(projected.configuredAccess?.current?.subagentTargets).toEqual(expected);
+    expect(projected.configuredAccess?.desired?.subagentTargets).toEqual(expected);
+  });
+
+  it("redacts update diagnostics and requires capability review for plugin changes", () => {
+    const root = "/tmp/private-update-source";
+    const source = addPlan(root).claw;
+    const plan = makeEmptyClawUpdatePlan({
+      agentId: "workflow-operator",
+      source,
+      found: true,
+      blockers: [
+        {
+          level: "error",
+          code: "mcp_config_unavailable",
+          phase: "plan",
+          path: "$.mcpServers",
+          message: "secret config value",
+        },
+      ],
+    });
+    plan.actions.push({
+      kind: "package",
+      id: "plugin:workflow-operator",
+      action: "change",
+      target: `${root}/plugin-token`,
+      blocked: false,
+      reason: "secret plugin preflight",
+    });
+
+    const projected = projectClawUpdatePlan(plan, root, {
+      config: { agents: { list: [{ id: "workflow-operator" }] } },
+      desiredAgent: { id: "workflow-operator" },
+      currentJobs: [],
+      targetJobs: [],
+    });
+    expect(projected.operation).toBe("update");
+    expect(projected.pluginReviews).toEqual([]);
+    expect(projected.blockers.map((blocker) => blocker.code)).toEqual([
+      "mcp_config_unavailable",
+      "plugin_consent_unavailable",
+    ]);
+    expect(JSON.stringify(projected)).not.toContain(root);
+    expect(JSON.stringify(projected)).not.toContain("secret config value");
+    expect(JSON.stringify(projected)).not.toContain("secret plugin preflight");
+
+    const pluginReview = {
+      actionId: "plugin:workflow-operator",
+      pluginId: "workflow-operator",
+      ref: "@openclaw/workflow-operator-plugin",
+      version: "1.2.0",
+      ownerAction: "install" as const,
+      declaredCapabilities: {
+        channels: [],
+        providers: [],
+        tools: ["workflow.run"],
+        contracts: [],
+        hooks: [],
+        mcpServers: [],
+        cliCommands: [],
+        cliBackends: [],
+        skills: [],
+        dangerousConfigFlags: [],
+      },
+      capabilityGrants: {
+        hooks: {
+          allowPromptInjection: { effective: false },
+          allowConversationAccess: { effective: false },
+        },
+      },
+      reviewToken: "sha256:reviewed-plugin",
+    };
+    const reviewed = projectClawUpdatePlan(plan, root, {
+      config: { agents: { list: [{ id: "workflow-operator" }] } },
+      desiredAgent: { id: "workflow-operator" },
+      targetJobs: [],
+      pluginReviews: [pluginReview],
+    });
+    expect(reviewed.pluginReviews).toEqual([pluginReview]);
+    expect(reviewed.blockers.map((blocker) => blocker.code)).toEqual(["mcp_config_unavailable"]);
+    expect(reviewed.planIntegrity).not.toBe(projected.planIntegrity);
+  });
+
+  it("seals redacted access and schedule facts into Update consent", () => {
+    const root = "/tmp/private-update-source";
+    const source = addPlan(root).claw;
+    const installedConfig = {
+      agents: { list: [{ id: "workflow-operator", tools: { allow: ["read"] } }] },
+    };
+    const desiredAgent = { id: "workflow-operator", tools: { allow: ["read", "web_fetch"] } };
+    const targetJob = {
+      id: "daily-brief",
+      schedule: { cron: "0 8 * * *", timezone: "UTC" },
+      session: "isolated" as const,
+      message: "SECRET: include private incident details",
+      delivery: { mode: "announce" as const, channel: "last" as const },
+    };
+    const plan = makeEmptyClawUpdatePlan({
+      agentId: "workflow-operator",
+      source,
+      found: true,
+      blockers: [],
+    });
+    plan.actions.push({
+      kind: "cronJob",
+      id: targetJob.id,
+      action: "add",
+      target: `${root}/secret-scheduler-id`,
+      blocked: false,
+      reason: "private schedule details",
+      desiredDigest: digestClawValue(targetJob),
+    });
+
+    const projected = projectClawUpdatePlan(plan, root, {
+      config: installedConfig,
+      desiredAgent,
+      currentJobs: [],
+      targetJobs: [targetJob],
+    });
+    expect(projected.configuredAccess).toMatchObject({
+      coverage: "configuration-only",
+      current: { tools: { allowed: expect.arrayContaining(["read"]) } },
+      desired: { tools: { allowed: expect.arrayContaining(["read", "web_fetch"]) } },
+    });
+    expect(projected.scheduledJobs).toEqual({
+      coverage: "package-declarations",
+      jobs: [
+        {
+          id: "daily-brief",
+          action: "add",
+          blocked: false,
+          proposed: {
+            schedule: { cron: "0 8 * * *", timezone: "UTC" },
+            session: "isolated",
+            delivery: "last-channel",
+          },
+        },
+      ],
+    });
+    expect(JSON.stringify(projected)).not.toContain("SECRET");
+    expect(JSON.stringify(projected)).not.toContain("secret-scheduler-id");
+
+    const changed = projectClawUpdatePlan(plan, root, {
+      config: { ...installedConfig, tools: { deny: ["web_fetch"] } },
+      desiredAgent,
+      currentJobs: [],
+      targetJobs: [targetJob],
+    });
+    expect(changed.planIntegrity).not.toBe(projected.planIntegrity);
+
+    const scheduleAction = plan.actions[0];
+    if (!scheduleAction) {
+      throw new Error("Expected a scheduled Update action.");
+    }
+    scheduleAction.desiredDigest = "sha256:wrong";
+    const mismatched = projectClawUpdatePlan(plan, root, {
+      config: installedConfig,
+      desiredAgent,
+      currentJobs: [],
+      targetJobs: [targetJob],
+    });
+    expect(mismatched.scheduledJobs).toBeUndefined();
+    expect(mismatched.blockers).toContainEqual(
+      expect.objectContaining({ code: "configured_access_unavailable" }),
+    );
+  });
+
+  it("shows nonsecret current and proposed schedule metadata for changes and removals", () => {
+    const root = "/tmp/private-update-source";
+    const source = addPlan(root).claw;
+    const currentChange = {
+      id: "daily-brief",
+      schedule: { cron: "0 8 * * *", timezone: "UTC" },
+      session: "main" as const,
+      message: "SECRET: old task text",
+      delivery: { mode: "none" as const },
+    };
+    const targetChange = {
+      ...currentChange,
+      schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
+      session: "isolated" as const,
+      message: "SECRET: new task text",
+      delivery: { mode: "announce" as const, channel: "last" as const },
+    };
+    const currentRemove = {
+      ...currentChange,
+      id: "weekly-review",
+      schedule: { cron: "0 10 * * 1", timezone: "UTC" },
+    };
+    const plan = makeEmptyClawUpdatePlan({
+      agentId: "workflow-operator",
+      source,
+      found: true,
+      blockers: [],
+    });
+    plan.actions.push(
+      {
+        kind: "cronJob",
+        id: currentChange.id,
+        action: "change",
+        target: "secret-scheduler-id",
+        blocked: false,
+        reason: "Schedule changes",
+        currentDigest: digestClawValue(currentChange),
+        desiredDigest: digestClawValue(targetChange),
+      },
+      {
+        kind: "cronJob",
+        id: currentRemove.id,
+        action: "remove",
+        target: "secret-scheduler-id-2",
+        blocked: false,
+        reason: "Schedule removed",
+        currentDigest: digestClawValue(currentRemove),
+      },
+    );
+    const review = {
+      config: { agents: { list: [{ id: "workflow-operator" }] } },
+      desiredAgent: { id: "workflow-operator" },
+      currentJobs: [currentChange, currentRemove],
+      targetJobs: [targetChange],
+    };
+    const projected = projectClawUpdatePlan(plan, root, review);
+    expect(projected.scheduledJobs).toEqual({
+      coverage: "package-declarations",
+      jobs: [
+        {
+          id: "daily-brief",
+          action: "change",
+          blocked: false,
+          current: {
+            schedule: currentChange.schedule,
+            session: "main",
+            delivery: "none",
+          },
+          proposed: {
+            schedule: targetChange.schedule,
+            session: "isolated",
+            delivery: "last-channel",
+          },
+        },
+        {
+          id: "weekly-review",
+          action: "remove",
+          blocked: false,
+          current: {
+            schedule: currentRemove.schedule,
+            session: "main",
+            delivery: "none",
+          },
+        },
+      ],
+    });
+    expect(JSON.stringify(projected)).not.toContain("SECRET");
+    expect(JSON.stringify(projected)).not.toContain("secret-scheduler-id");
+
+    const stale = projectClawUpdatePlan(plan, root, {
+      ...review,
+      currentJobs: [
+        { ...currentChange, schedule: { cron: "0 7 * * *", timezone: "UTC" } },
+        currentRemove,
+      ],
+    });
+    expect(stale.scheduledJobs).toBeUndefined();
+    expect(stale.blockers).toContainEqual(
+      expect.objectContaining({ code: "configured_access_unavailable" }),
+    );
+  });
+
+  it("blocks an Update if its desired access was not available for review", () => {
+    const root = "/tmp/private-update-source";
+    const plan = makeEmptyClawUpdatePlan({
+      agentId: "workflow-operator",
+      source: addPlan(root).claw,
+      found: true,
+      blockers: [],
+    });
+    const projected = projectClawUpdatePlan(plan, root, {
+      config: { agents: { list: [{ id: "workflow-operator" }] } },
+      currentJobs: [],
+      targetJobs: [],
+    });
+    expect(projected.configuredAccess).toBeUndefined();
+    expect(projected.blockers).toContainEqual(
+      expect.objectContaining({ code: "configured_access_unavailable" }),
+    );
+  });
+
+  it("redacts removal targets, reasons, and blocker details", () => {
+    const plan: ClawRemovePlan = {
+      schemaVersion: "openclaw.clawRemovePlan.v1",
+      stability: "experimental",
+      dryRun: true,
+      mutationAllowed: false,
+      planIntegrity: "sha256:canonical",
+      target: "workflow-operator",
+      agentId: "workflow-operator",
+      actions: [
+        {
+          kind: "workspace",
+          id: "workflow-operator",
+          action: "trash",
+          target: "/private/secret/workspace",
+          blocked: false,
+          details: { token: "secret" },
+        },
+      ],
+      blockers: [{ code: "shared_session_store_owner", message: "secret owner" }],
+    };
+    const projected = projectClawRemovePlan(plan, {
+      name: "@openclaw/workflow-operator",
+      version: "1.0.0",
+    });
+    expect(projected.target).toMatchObject({
+      agentId: "workflow-operator",
+      currentVersion: "1.0.0",
+    });
+    expect(projected.actions).toEqual([
+      { kind: "workspace", id: "workflow-operator", action: "trash", blocked: false },
+    ]);
+    expect(JSON.stringify(projected)).not.toContain("secret");
+  });
+});

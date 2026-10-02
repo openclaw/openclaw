@@ -1,4 +1,3 @@
-import { assertExperimentalClawsEnabled } from "../claws/experimental.js";
 import { readClawStatus } from "../claws/lifecycle-state.js";
 import { withAuthoredAgentRoster } from "../claws/migrate-validation.js";
 import { preflightClawPackage } from "../claws/packages.js";
@@ -29,7 +28,6 @@ export async function runClawsUpdateCommand(
   opts: ClawsUpdateOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  assertExperimentalClawsEnabled();
   if (!opts.dryRun && (!opts.yes || !opts.planIntegrity)) {
     const message =
       "Claw update requires explicit consent; pass --dry-run to preview or --yes with --plan-integrity to apply supported actions.";
@@ -151,7 +149,7 @@ export async function runClawsUpdateCommand(
     targetSource: loaded.source,
     config,
     sourceMcpServers: listedMcpServers.mcpServers,
-    packagePreflight: preflightClawPackage,
+    packagePreflight: (pkg, workspace) => preflightClawPackage(pkg, workspace, { config }),
     diagnostics: loaded.diagnostics,
   });
   if (opts.dryRun || plan.blockers.length > 0 || plan.actions.some((action) => action.blocked)) {
@@ -185,7 +183,7 @@ export async function runClawsUpdateCommand(
         reloadPlugins: await resolvePluginBatchReload(),
         sourceMcpServers: listedMcpServers.mcpServers,
         consentPlanIntegrity: opts.planIntegrity,
-        packagePreflight: preflightClawPackage,
+        packagePreflight: (pkg, workspace) => preflightClawPackage(pkg, workspace, { config }),
         runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
         cronGateway: {
           waitUntilAgentAvailable: waitUntilGatewayAgentAvailable,

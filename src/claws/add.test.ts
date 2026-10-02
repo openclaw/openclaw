@@ -7,15 +7,12 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { applyClawAddPlan } from "./add.js";
+import { applyClawAddPlan, ClawAddMutationError } from "./add.js";
 import { readClawStatus } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { persistClawInstallRecord, readClawInstallRecord } from "./provenance.js";
 import { makeProvenancePlan, stateEnv } from "./provenance.test-helpers.js";
-import type { ClawOpenClawProfile } from "./types.js";
-import { applyClawUpdatePlan } from "./update-apply.js";
-import { consent, manifest, source } from "./update-apply.test-helpers.js";
-import { buildClawUpdatePlan } from "./update-plan.js";
+import { manifest, source } from "./update-apply.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -24,21 +21,25 @@ afterEach(() => {
 });
 
 describe("Claw add lifecycle", () => {
-  it("applies, tracks drift, updates, and removes profile model and delegation settings", async () => {
+  it("leaves operator model and delegation settings alone on add", async () => {
     const root = tempDirs.make("openclaw-claw-update-profile-");
     const env = { OPENCLAW_STATE_DIR: join(root, "state") };
     const localSource = { ...source, packageRoot: root };
-    const agentProfile: ClawOpenClawProfile["agent"] = {
-      model: { primary: "acme/primary", fallbacks: ["acme/fallback"] },
-      subagents: { allowAgents: ["researcher"], delegationMode: "prefer" },
-    };
     const initial = await buildClawAddPlan({
       manifest,
       source: localSource,
-      openClawProfile: { schemaVersion: 1, agent: agentProfile },
+      openClawProfile: { schemaVersion: 1, agent: {} },
       context: { workspace: join(root, "workspace") },
     });
-    let config: OpenClawConfig = {};
+    let config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "acme/default" },
+          subagents: { allowAgents: ["researcher"] },
+        },
+        entries: { researcher: {} },
+      },
+    };
     const commitConfig = async (transform: (current: OpenClawConfig) => OpenClawConfig) => {
       config = transform(config);
     };
@@ -47,65 +48,18 @@ describe("Claw add lifecycle", () => {
       commitConfig,
       consentPlanIntegrity: initial.planIntegrity,
     });
-    expect(config.agents?.entries?.worker).toMatchObject(agentProfile);
+    expect(config.agents?.defaults?.model).toEqual({ primary: "acme/default" });
+    expect(config.agents?.defaults?.subagents).toEqual({ allowAgents: ["researcher"] });
+    expect(config.agents?.entries?.researcher).toEqual({});
+    expect(config.agents?.entries?.worker).not.toHaveProperty("model");
+    expect(config.agents?.entries?.worker).not.toHaveProperty("subagents");
+
+    const worker = config.agents!.entries!.worker!;
+    worker.model = { primary: "acme/operator" };
+    worker.subagents = { allowAgents: ["researcher"], delegationMode: "prefer" };
     await expect(readClawStatus("worker", { env, config })).resolves.toMatchObject({
       records: [{ agentState: "present" }],
     });
-    for (const change of [
-      { model: { primary: "acme/operator" } },
-      { subagents: { allowAgents: [] } },
-    ]) {
-      const modified = structuredClone(config);
-      Object.assign(modified.agents!.entries!.worker!, change);
-      await expect(readClawStatus("worker", { env, config: modified })).resolves.toMatchObject({
-        records: [{ agentState: "modified" }],
-      });
-    }
-    const targetProfiles: ClawOpenClawProfile["agent"][] = [
-      {
-        model: { primary: "acme/replacement", fallbacks: [] },
-        subagents: { allowAgents: [], delegationMode: "suggest" },
-      },
-      {},
-    ];
-    for (const agent of targetProfiles) {
-      const target = {
-        targetManifest: manifest,
-        targetSource: localSource,
-        targetOpenClawProfile: { schemaVersion: 1 as const, agent },
-      };
-      const update = await buildClawUpdatePlan({
-        ...target,
-        agentId: "worker",
-        config,
-        sourceMcpServers: {},
-        stateOptions: { env },
-      });
-      expect(update.blockers).toEqual([]);
-      expect(update.actions).toContainEqual(
-        expect.objectContaining({ kind: "agent", action: "change" }),
-      );
-      expect(update.capabilityChanges.map((change) => change.path)).toEqual(
-        expect.arrayContaining([
-          "agent.model",
-          "agent.subagents.allowAgents",
-          "agent.subagents.delegationMode",
-        ]),
-      );
-      await expect(
-        applyClawUpdatePlan(update, target, {
-          env,
-          config,
-          commitConfig,
-          ...consent(update),
-        }),
-      ).resolves.toMatchObject({ status: "complete" });
-      expect(config.agents?.entries?.worker?.model).toEqual(agent.model);
-      expect(config.agents?.entries?.worker?.subagents).toEqual(agent.subagents);
-      await expect(readClawStatus("worker", { env, config })).resolves.toMatchObject({
-        records: [{ agentState: "present" }],
-      });
-    }
   });
 
   it("records a failed config commit only after persistence resolves", async () => {
@@ -133,6 +87,45 @@ describe("Claw add lifecycle", () => {
       error: { code: "config_commit_failed", message: "config unavailable after transform" },
     });
     await expect(access(plan.agent.workspace)).rejects.toThrow();
+    expect(readClawInstallRecord("worker", { env })?.status).toBe("partial");
+  });
+
+  it("checks the reviewed access against the config read for the final commit", async () => {
+    const root = tempDirs.make("openclaw-claw-add-access-drift-");
+    const env = stateEnv(root);
+    const { plan } = await makeProvenancePlan(root, {
+      schemaVersion: 1,
+      agent: { id: "worker" },
+    });
+    let diskConfig: OpenClawConfig = {};
+    const assertReviewedConfig = vi.fn((current: OpenClawConfig) => {
+      if (current.tools?.deny?.includes("web_fetch")) {
+        throw new ClawAddMutationError(
+          "reviewed_access_changed",
+          "The effective Claw access changed since review. Preview it again.",
+        );
+      }
+    });
+
+    const result = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env,
+      seedPackageBootstrap: async () => {
+        diskConfig = { tools: { deny: ["web_fetch"] } };
+      },
+      commitConfig: async (transform) => {
+        diskConfig = transform(diskConfig);
+      },
+      assertReviewedConfig,
+    });
+
+    expect(assertReviewedConfig).toHaveBeenCalledWith({ tools: { deny: ["web_fetch"] } });
+    expect(result).toMatchObject({
+      status: "partial",
+      configCommitted: false,
+      error: { code: "reviewed_access_changed" },
+    });
+    expect(diskConfig.agents?.entries?.worker).toBeUndefined();
     expect(readClawInstallRecord("worker", { env })?.status).toBe("partial");
   });
 
