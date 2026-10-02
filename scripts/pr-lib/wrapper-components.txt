@@ -304,6 +304,7 @@ src/channels/plugins/legacy-state-migration-preview.ts
 src/channels/plugins/merge-plugin-section.ts
 src/channels/plugins/meta-normalization.ts
 src/channels/plugins/module-loader.ts
+src/channels/plugins/optional-public-artifact.ts
 src/channels/plugins/package-state-probes.ts
 src/channels/plugins/persisted-auth-state.ts
 src/channels/plugins/registry-loaded.ts
