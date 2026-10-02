@@ -20,6 +20,83 @@ describe("agent activity events", () => {
     resetAgentEventsForTest();
   });
 
+  test("projects Tool Search names for live and history activity without changing outcomes or pairing", () => {
+    const args = { id: "openclaw:core:exec", args: { command: "check-release" } };
+    const tool = { toolCallId: "release-check", name: "tool_call", args };
+    expect(projectAgentToolActivity({ ...tool, phase: "start" })).toMatchObject({
+      name: "exec",
+      toolCallId: tool.toolCallId,
+      status: "running",
+      commandBearing: true,
+    });
+    const result = {
+      role: "toolResult",
+      toolCallId: tool.toolCallId,
+      toolName: tool.name,
+      details: { status: "completed", exitCode: 2 },
+      isError: false,
+    };
+    // Presentation must not reinterpret the dispatcher's result as a native exec result.
+    expect(
+      projectAgentToolActivity({ ...tool, phase: "result", result, isError: false }),
+    ).toMatchObject({ name: "exec", status: "completed" });
+
+    const skipped = {
+      ...result,
+      details: { status: "skipped", deniedReason: "steering" },
+      isError: true,
+    };
+    const history = projectAgentHistoryActivity([
+      {
+        messageId: "call",
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", id: tool.toolCallId, name: tool.name, arguments: args }],
+        },
+      },
+      { messageId: "result", message: skipped },
+    ]);
+    for (const entry of history) {
+      expect(entry.items).toEqual([
+        expect.objectContaining({
+          name: "exec",
+          title: "Exec",
+          toolCallId: tool.toolCallId,
+          status: "skipped",
+          commandBearing: true,
+        }),
+      ]);
+      expect(entry.items[0]?.meta).toBeUndefined();
+    }
+    expect(skipped.toolName).toBe("tool_call");
+    expect(skipped.isError).toBe(true);
+  });
+
+  test("derives historical Tool Search metadata from the executed inner input", () => {
+    const projected = projectAgentHistoryActivity([
+      {
+        messageId: "child",
+        message: createNestedToolActivity({
+          runId: "run",
+          scopeId: "scope",
+          afterEntryId: "wrapper",
+          startOrder: 1,
+          toolCallId: "search-read",
+          toolName: "tool_call",
+          input: { id: "read", args: { path: "notes/release.md" } },
+          result: { content: [{ type: "text", text: "Release notes" }] },
+          isError: false,
+          startedAt: 1,
+          timestamp: 2,
+        }),
+      },
+    ]);
+    expect(projected[0]?.items).toEqual([
+      expect.objectContaining({ name: "read", toolCallId: "search-read" }),
+    ]);
+    expect(projected[0]?.items[0]?.meta).toContain("release.md");
+  });
+
   test.each([
     { details: { status: "skipped", deniedReason: "steering" }, status: "skipped" },
     { details: { status: "skipped", deniedReason: "other" }, status: "blocked" },

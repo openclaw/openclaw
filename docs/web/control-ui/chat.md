@@ -16,6 +16,8 @@ Tool activity shows a tool-specific icon beside its purpose or details instead o
 repeating the tool name. Hover the icon to see the exact tool name; screen readers
 retain that identity. Expanding an activity group keeps the individual tool details
 and outcomes available. Completed group summaries retain their operation counts.
+Tool Search calls use the called tool's name, icon, and input details in tool rows
+and activity summaries.
 
 When your role or session policy blocks messages, the composer is disabled and
 shows the reason before you try to send. This includes sandbox requirements,

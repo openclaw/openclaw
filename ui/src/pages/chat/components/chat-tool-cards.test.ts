@@ -618,6 +618,10 @@ describe("tool-card outcomes", () => {
   it.each([
     { name: "write", args: { path: "/workspace/operation.json", content: "{}" } },
     { name: "progress_card", args: { markdown: "Preparing release" } },
+    {
+      name: "tool_call",
+      args: { id: "web_search", args: { query: "OpenClaw release notes" } },
+    },
   ])("shows skipped $name calls without claiming failure or success", ({ name, args }) => {
     const container = document.createElement("div");
     const card: ToolCard = {
@@ -631,11 +635,58 @@ describe("tool-card outcomes", () => {
     };
     for (const expanded of [false, true]) {
       mountCard(card, { expanded }, container);
+      if (name === "tool_call") {
+        expect(textOf(container, ".chat-tool-msg-summary")).toContain("OpenClaw release notes");
+      }
       expect(container.textContent?.toLowerCase()).toContain("skipped");
       expect(container.textContent).not.toMatch(/failed|Completed|updated|Tool error/);
       expect(container.querySelector(".chat-tool-card--error")).toBeNull();
     }
   });
+
+  it.each([
+    {
+      name: "web_search",
+      args: { query: "OpenClaw release notes" },
+      text: "OpenClaw release notes",
+    },
+    { name: "read", args: { path: "/workspace/CHANGELOG.md" }, text: "CHANGELOG.md" },
+    {
+      name: "exec",
+      args: { command: "check-release", title: "Check the release" },
+      text: "Check the release",
+    },
+  ])(
+    "renders a Tool Search $name like a direct call and retains the sidebar identity",
+    ({ name, args, text }) => {
+      const input = { id: name, args };
+      const card: ToolCard = {
+        id: "search-release",
+        callId: "search-release",
+        name: "tool_call",
+        args: input,
+        inputText: JSON.stringify(input, null, 2),
+        outputText: "Found the release notes.",
+        completed: true,
+      };
+      const onOpenSidebar = vi.fn();
+      for (const expanded of [false, true]) {
+        const container = mountCard(card, { expanded, onOpenSidebar });
+        expect(textOf(container, ".chat-tool-msg-summary")).toContain(text);
+        const direct = mountCard(
+          { ...card, name, args, inputText: JSON.stringify(args, null, 2) },
+          { expanded, onOpenSidebar },
+        );
+        expect(container.innerHTML).toBe(direct.innerHTML);
+        if (expanded) {
+          container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn")?.click();
+          expect(onOpenSidebar.mock.calls[0]?.[0].card).toBe(card);
+        }
+      }
+      expect(card.name).toBe("tool_call");
+      expect(card.args).toEqual({ id: name, args });
+    },
+  );
 
   it("keeps command progress neutral across the row, expanded body, and sidebar until completion", () => {
     const name = "exec";
