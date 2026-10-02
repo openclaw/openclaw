@@ -3668,7 +3668,9 @@ jobs:
               process.exit(Object.hasOwn(scripts, process.argv[1]) ? 0 : 1);
             ' "$1"
           }
-          if [ -n "${NARROW_CHECK_PATHS_JSON:-}" ] && { [ "$TASK" = "test-types" ] || [ "$TASK" = "prod-types" ]; }; then
+          if [ -n "${NARROW_CHECK_PATHS_JSON:-}" ] &&
+            { [ -n "${CI_CORE_TYPE_GRAPHS_JSON:-}" ] || [ -n "${CI_TYPE_GRAPHS_JSON:-}" ]; } &&
+            { [ "$TASK" = "test-types" ] || [ "$TASK" = "prod-types" ]; }; then
             source .ci-harness/scripts/ci-static-step.sh tsgo
             if [ -n "${CI_CORE_TYPE_GRAPHS_JSON:-}" ] && [ "$CI_CORE_TYPE_GRAPHS_JSON" != "[]" ]; then
               core_type_command=(node scripts/run-tsgo-core-test-shards.mjs)
