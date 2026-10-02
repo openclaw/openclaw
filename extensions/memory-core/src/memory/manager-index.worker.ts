@@ -13,7 +13,7 @@ serveWorkerTasks<MemoryIndexTaskResult>((input) => {
     return {
       kind: "transcript-stats",
       stats: readTranscriptStatsBatchReadOnlySync(
-        task.scopes.map((scope) => ({ ...scope, env: task.env })),
+        task.scopes.map((scope) => Object.assign({}, scope, { env: task.env })),
       ),
     };
   }
