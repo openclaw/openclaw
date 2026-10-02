@@ -4,4 +4,4 @@
 # The internal Node-version check no longer contributes a false OPENCLAW_* name.
 # The next-turn runtime-context preface constant no longer exists as an OPENCLAW_* name.
 # OPENCLAW_PACKAGE_BUN_LAUNCHER (#159431) is the updater-to-preinstall handoff for Bun-only installs.
-473
+471

@@ -9,6 +9,7 @@ import type { HookMappingConfig, HooksConfig, HookSessionMode } from "../config/
 import { resolveGmailHookMaxBytes } from "../hooks/gmail.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { HookMessageChannel } from "./hooks.types.js";
 
 export type HookMappingResolved = {
@@ -353,7 +354,7 @@ function normalizeForEachKey(raw: string | undefined): string | undefined {
   }
   // Fan-out replaces one top-level payload key with a single-item array per
   // dispatch; nested paths would require rebuilding arbitrary object graphs.
-  if (/[.[\]]/.test(key) || BLOCKED_PATH_KEYS.has(key)) {
+  if (/[.[\]]/.test(key) || isBlockedObjectKey(key)) {
     throw new Error(`Hook mapping forEach must be a top-level payload key: ${raw}`);
   }
   return key;
@@ -660,11 +661,6 @@ function resolveTemplateExpr(expr: string, ctx: HookMappingContext) {
   return getByPath(ctx.payload, expr);
 }
 
-// Block traversal into prototype-chain properties on attacker-controlled
-// webhook payloads.  Mirrors the same blocklist used by config-paths.ts
-// for config path traversal.
-const BLOCKED_PATH_KEYS = new Set(["__proto__", "prototype", "constructor"]);
-
 function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
   if (!pathExpr) {
     return undefined;
@@ -689,7 +685,7 @@ function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
       current = current[part] as unknown;
       continue;
     }
-    if (BLOCKED_PATH_KEYS.has(part)) {
+    if (isBlockedObjectKey(part)) {
       return undefined;
     }
     if (typeof current !== "object") {

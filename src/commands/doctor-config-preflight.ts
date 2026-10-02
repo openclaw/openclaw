@@ -1,8 +1,6 @@
 /** Config preflight for Doctor: legacy migration, recovery, and snapshot loading. */
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveStateDir } from "../config/paths.js";
-import { inspectShippedPluginInstallConfigRecords } from "../config/plugin-install-config-migration.js";
-import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { throwIfDoctorStateMigrationRefused } from "../infra/state-migrations.messages.js";
 import type {
@@ -38,20 +36,13 @@ import { withDoctorConfigPreflightWorkerScope } from "./doctor-config-preflight-
 import * as cronMigration from "./doctor-config-preflight.cron.js";
 import { noteStaleUpdateRuns } from "./doctor-update-run.js";
 import type { CronCodexRuntimePolicyTarget } from "./doctor/cron/store-migration.js";
-import {
-  commitAutomaticConfigRepair,
-  importAutomaticConfigRepairInstallRecords,
-} from "./doctor/shared/automatic-config-repair.js";
+import { commitAutomaticConfigRepair } from "./doctor/shared/automatic-config-repair.js";
 import type {
   DoctorConfigPreflightOptions,
   DoctorConfigPreflightResult,
 } from "./doctor/shared/config-migration-result.js";
 import { resolveStateMigrationConfigInput } from "./doctor/shared/legacy-config-state-migration-input.js";
 import { createDoctorPluginMetadataSnapshotScope } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
-import {
-  assertShippedPluginInstallConfigImportCurrent,
-  type ShippedPluginInstallConfigImport,
-} from "./doctor/shared/plugin-registry-migration.js";
 import { shouldSkipLegacyUpdateDoctorConfigWrite } from "./doctor/shared/update-phase.js";
 
 const loadState = createLazyRuntimeModule(() => import("../infra/state-migrations.state-dir.js"));
@@ -90,7 +81,6 @@ async function runDoctorConfigPreflightOperation(
   let postSessionPluginMigrationPlanBound = false;
   let doctorMediaPersistenceAttempted = false;
   let configSnapshotRead: ConfigPreflightSnapshotRead | undefined;
-  let pluginInstallConfigImport: ShippedPluginInstallConfigImport | undefined;
   const pluginMigrations = createDoctorPluginMigrationPreparation({
     enabled: stateMigrationsRequested,
     env: () => process.env,
@@ -100,9 +90,6 @@ async function runDoctorConfigPreflightOperation(
     runWithPluginMetadataSnapshot: (scope, run) => pluginMetadata.run(scope, run),
     doctorOnlyStateMigrations: options.doctorOnlyStateMigrations === true,
   });
-  const hasPendingPluginInstallConfig = (snapshot: ConfigFileSnapshot) =>
-    !skipLegacyParentConfigWrite &&
-    inspectShippedPluginInstallConfigRecords(snapshot.sourceConfig).status === "valid";
   const pluginMetadata = createDoctorPluginMetadataSnapshotScope({
     getBaseSnapshot: () => configSnapshotRead?.pluginMetadataSnapshot,
     env: process.env,
@@ -119,7 +106,6 @@ async function runDoctorConfigPreflightOperation(
     options,
     stateMigrationsRequested,
     skipLegacyParentConfigWrite,
-    hasImportedPluginConfig: () => pluginInstallConfigImport !== undefined,
     runWithPluginMetadataSnapshot: pluginMetadata.run,
   });
   const readConfigSnapshotForPreflight = async (allowCurrentPluginMetadata = true) =>
@@ -183,15 +169,24 @@ async function runDoctorConfigPreflightOperation(
       throwIfDoctorStateMigrationRefused(stateMigrationStepReceipts);
     }
   }
-  if (automaticConfigRepair && hasPendingPluginInstallConfig(snapshot)) {
-    pluginInstallConfigImport = await importAutomaticConfigRepairInstallRecords(snapshot);
-    configSnapshotRead = await readConfigSnapshotForPreflight(false);
-    snapshot = configSnapshotRead.snapshot;
-    assertShippedPluginInstallConfigImportCurrent(snapshot, pluginInstallConfigImport);
-    baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
-    automaticConfigRepair = planAdmittedConfigRepair(snapshot);
-    if (!automaticConfigRepair) {
-      throw new Error("Config changed after plugin install migration; rerun Doctor.");
+  if (options.invocationPurpose === "doctor" || options.doctorOnlyStateMigrations === true) {
+    // Plugin and legacy-state repairs can inspect sessions during config preflight.
+    const { repairLegacySessionEntryStates } = await import("./doctor-session-delivery-state.js");
+    const repair = options.doctorOnlyStateMigrations === true && stateDirMigrations !== undefined;
+    const entryState = await measurePreflightStep("session-entry-state", () =>
+      repairLegacySessionEntryStates({
+        apply: repair,
+        cfg: automaticConfigRepair?.config ?? baseConfig,
+        env: process.env,
+        deferSchemaRepair: repair,
+      }),
+    );
+    if (!repair && entryState.found > 0) {
+      const { SessionStoreMigrationRequiredError } =
+        await import("../config/sessions/migration-required.js");
+      throw new SessionStoreMigrationRequiredError(
+        `Found ${entryState.found} session rows with legacy entry state. Run openclaw doctor --fix before further session inspection; no rows were changed.`,
+      );
     }
   }
   let postConvergenceStateConfig: OpenClawConfig | undefined;
@@ -316,6 +311,12 @@ async function runDoctorConfigPreflightOperation(
         migrateLegacyMediaPersistence({ env: process.env }),
       ),
     );
+    const { repairLegacySessionEntryStates } = await import("./doctor-session-delivery-state.js");
+    await repairLegacySessionEntryStates({
+      apply: true,
+      cfg: automaticConfigRepair?.config ?? baseConfig,
+      env: process.env,
+    });
   }
   // Import retired locators before removing them from the authored config.
   if (await pluginMigrations.complete()) {
@@ -328,11 +329,9 @@ async function runDoctorConfigPreflightOperation(
     modelBillingRouteMigrationSource ??=
       snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
     await measurePreflightStep("automatic-config-repair", () =>
-      pluginInstallConfigImport
-        ? commitAutomaticConfigRepair(automaticConfigRepair, snapshot, pluginInstallConfigImport)
-        : pluginMetadata.run({ config: automaticConfigRepair.config }, () =>
-            commitAutomaticConfigRepair(automaticConfigRepair, snapshot),
-          ),
+      pluginMetadata.run({ config: automaticConfigRepair.config }, () =>
+        commitAutomaticConfigRepair(automaticConfigRepair, snapshot),
+      ),
     );
     note(
       `Migrated legacy config keys in the active openclaw.json:\n${automaticConfigRepair.changes.map((entry) => `- ${entry}`).join("\n")}`,

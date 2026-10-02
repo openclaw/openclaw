@@ -41,8 +41,8 @@ import {
 } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
+import { getSessionColdStorageStatus } from "./session-cold-storage-status.js";
 import {
-  getSessionColdStorageStatus,
   restoreSessionColdTranscript,
   runSessionColdStorageMaintenance,
 } from "./session-cold-storage.js";
@@ -337,6 +337,7 @@ describe("cold transcript storage workers", () => {
       clearOpenClawAgentIntegrityVerification(fixture.options.path);
       await restoreSessionColdTranscript(fixture.secondScope);
       expect(fixture.snapshot()).toEqual(fixture.original);
+      await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
       await flushLogger();
       const summaries = (await fs.readFile(file, "utf8"))
         .split("\n")
@@ -803,6 +804,7 @@ describe("cold transcript storage workers", () => {
       db.prepare("UPDATE schema_meta SET schema_version = ? WHERE meta_key = 'primary'").run(
         version,
       );
+      await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
       closeOpenClawAgentDatabasesForTest();
       const before = createHash("sha256")
         .update(await fs.readFile(fixture.scope.storePath))

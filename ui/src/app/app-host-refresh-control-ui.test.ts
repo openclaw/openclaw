@@ -1,10 +1,14 @@
 /* @vitest-environment jsdom */
 
+import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
-import { sessionRosterCacheGeneration } from "../lib/sessions/session-roster-cache.ts";
+import {
+  sessionRosterGeneration,
+  sessionRosterScope,
+} from "../lib/sessions/session-roster-cache.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import {
   createGatewayStoreTestStore,
@@ -75,11 +79,20 @@ describe("OpenClaw shell Control UI refresh", () => {
   });
 
   it("retires cached roster admission before publishing a replacement connection", () => {
-    const generation = sessionRosterCacheGeneration;
+    store.current().opts.onHello?.({
+      type: "hello-ok",
+      protocol: 1,
+      auth: { role: "operator", scopes: [], recoveryScope: "admitted-account" },
+    });
+    const scope = sessionRosterScope(
+      gatewayCredentialScope(store.gateway.connection.gatewayUrl),
+      "admitted-account",
+    );
+    const generation = sessionRosterGeneration(scope);
     const observed: number[] = [];
     const unsubscribe = store.gateway.subscribe((snapshot) => {
-      if (snapshot.phase === "connecting") {
-        observed.push(sessionRosterCacheGeneration);
+      if (snapshot.phase === "reconnecting") {
+        observed.push(sessionRosterGeneration(scope));
       }
     });
     try {

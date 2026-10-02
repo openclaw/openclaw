@@ -76,11 +76,11 @@ const { runDoctorConfigPreflight } = await import("./doctor-config-preflight.js"
 
 const options = { migrateLegacyConfig: false, invalidConfigNote: false } as const;
 const memory = {
-  search: { store: { path: "/custom/memory-{agentId}.sqlite", vector: { enabled: false } } },
+  search: { provider: "auto", store: { vector: { enabled: false } } },
 };
 const memoryIssue = {
-  path: "memory.search.store.path",
-  message: "memory.search.store.path is legacy; memory indexes now live in each agent database.",
+  path: "memory.search.provider",
+  message: 'memory.search.provider = "auto" is legacy; use "openai" explicitly.',
 };
 function useInvalidConfig(
   config: Record<string, unknown>,
@@ -188,7 +188,10 @@ describe("runDoctorConfigPreflight state migration input", () => {
 
     const migratedConfig = {
       memory: expect.objectContaining({
-        search: expect.objectContaining({ store: { vector: { enabled: false } } }),
+        search: expect.objectContaining({
+          provider: "openai",
+          store: { vector: { enabled: false } },
+        }),
       }),
       agents: expect.objectContaining({
         defaults: expect.objectContaining({}),

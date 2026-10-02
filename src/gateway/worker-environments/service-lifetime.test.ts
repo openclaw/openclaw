@@ -492,7 +492,7 @@ describe("worker environment service", () => {
       readWorkerTurnLiveAckCursor: vi.fn(() => 0),
       validateWorkerTurn: vi.fn(() => false),
       isWorkerTurnToolAuthorized: vi.fn(() => false),
-      updateAckCursors: vi.fn(),
+      updateAckCursors: vi.fn(async () => {}),
       prepareWorkspaceResultOwnerRevocation: vi.fn(),
       registerTurnClaimClosedHandler: vi.fn(() => unsubscribeTurnClaimClosed),
     };

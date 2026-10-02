@@ -464,8 +464,8 @@ vi.mock("../utils.js", async (importOriginal) => {
 
 vi.mock("../plugins/official-external-install-records.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/official-external-install-records.js")>()),
-  resolveTrustedSourceLinkedOfficialClawHubSpec: vi.fn(() => undefined),
-  resolveTrustedSourceLinkedOfficialNpmSpec: vi.fn(() => undefined),
+  resolveTrustedSourceLinkedOfficialClawHubInstall: vi.fn(() => undefined),
+  resolveTrustedSourceLinkedOfficialNpmInstall: vi.fn(() => undefined),
 }));
 
 vi.mock("../plugins/update.js", async (importOriginal) => {

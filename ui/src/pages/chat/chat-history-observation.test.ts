@@ -48,6 +48,7 @@ import {
   applyChatCacheSnapshot,
   cacheChatSessionSnapshot,
   observeChatCache,
+  resolveChatSnapshotKey,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import type { ChatRouteData } from "./session-route-data.ts";
@@ -668,7 +669,8 @@ it("keeps an authoritative empty startup committed when its cache entry is evict
   expect(getChatHistoryLoadState(state).phase).toBe("committed");
   expect(state.chatMessages).toEqual([]);
   expect(state.currentSessionId).toBeNull();
-  expect(await store.read(state.sessionKey)).toBeNull();
+  const snapshotKey = resolveChatSnapshotKey(state, { sessionKey: state.sessionKey });
+  expect(await store.read(snapshotKey)).toBeNull();
   const eviction = expectDefined(
     broadcasts.mock.calls.findLast(
       ([name]) => name === "openclaw.control.chatSnapshots.invalidate.v1",
@@ -682,7 +684,7 @@ it("keeps an authoritative empty startup committed when its cache entry is evict
     }),
   );
   expect(getChatHistoryLoadState(state).phase).toBe("committed");
-  await store.delete(state.sessionKey);
+  await store.delete(snapshotKey);
   expect(getChatHistoryLoadState(state).phase).toBe("idle");
 });
 

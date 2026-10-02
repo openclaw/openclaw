@@ -13,6 +13,7 @@ import { readNativeTypeScriptConfig } from "./native-typescript-config.mts";
 type CompilerInputPolicy = {
   toolchainFiles: string[];
   generatorInputs: string[];
+  runtimeVersion?: string;
   isGeneratorInput?: (file: string) => boolean;
   assertInput?: (file: string) => string;
 };
@@ -502,7 +503,7 @@ export class CompilerInputSnapshot {
   private toolchain() {
     this.tools ??= digest(
       JSON.stringify([
-        process.versions.node,
+        this.policy.runtimeVersion ?? process.versions.node,
         process.platform,
         process.arch,
         ...this.toolInputs().map((file) => this.hash(file)),

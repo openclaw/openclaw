@@ -287,44 +287,6 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     notes:
       "Pre-June configs must pass through OpenClaw 2026.9.5 Doctor before upgrading; current Doctor no longer migrates this key.",
   }),
-  compatRecord("doctor-agent-runtime-embedded-harness", "deprecated", {
-    owner: "agent-runtime",
-    introduced: "2026-04-25",
-    deprecated: "2026-04-26",
-    warningStarts: "2026-04-26",
-    previousRemoveAfter: "2026-07-26",
-    source: "agents.defaults.embeddedHarness; agents.list[].embeddedHarness",
-    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.agent-policy.ts",
-    replacement: "models.providers.<provider>.agentRuntime or model-scoped agentRuntime",
-    docsPath: "/plugins/sdk-agent-harness",
-    tests: ["src/commands/doctor/shared/legacy-config-migrate.validation.test.ts"],
-    notes:
-      "Supported releases through 2026.5.27 can write embeddedHarness. Doctor removes this ignored setting; separate agentRuntime pins retain their provider/model policy migration.",
-  }),
-  compatRecord("doctor-agent-embedded-pi-config", "deprecated", {
-    owner: "agent-runtime",
-    introduced: "2026-05-21",
-    previousRemoveAfter: "2026-07-26",
-    source: "agents.defaults.embeddedPi; agents.list[].embeddedPi",
-    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.agent-policy.ts",
-    replacement: "agents.defaults.embeddedAgent; agents.list[].embeddedAgent",
-    docsPath: "/gateway/config-agents",
-    tests: ["src/commands/doctor/shared/legacy-config-migrate.validation.test.ts"],
-    notes:
-      "Supported releases through 2026.5.27 can write embeddedPi. Doctor fills missing embeddedAgent fields while preserving explicit canonical values.",
-  }),
-  compatRecord("doctor-agent-sandbox-persession", "deprecated", {
-    owner: "agent-runtime",
-    introduced: "2026-04-26",
-    previousRemoveAfter: "2026-07-26",
-    source: "agents.defaults.sandbox.perSession; agents.list[].sandbox.perSession",
-    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts",
-    replacement: "agents.*.sandbox.scope",
-    docsPath: "/cli/doctor",
-    tests: ["src/commands/doctor/shared/legacy-config-migrate.validation.test.ts"],
-    notes:
-      "Supported releases through 2026.4.2 can write perSession. Doctor maps booleans to scope while preserving authored canonical scope precedence.",
-  }),
   compatRecord("doctor-memory-search-owner-consolidation", "deprecated", {
     previousRemoveAfter: "2026-09-18",
     owner: "config",
@@ -392,15 +354,6 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "threadBindings.idleHours",
     docsPath: "/channels/channel-routing",
   }),
-  compatRecord("doctor-message-queue-steering-modes", "removal-pending", {
-    owner: "config",
-    introduced: "2026-05-04",
-    previousRemoveAfter: "2026-07-26",
-    source: "messages.queue.mode and messages.queue.byChannel retired queue modes",
-    migration: "src/commands/doctor/shared/legacy-config-migrations.queue.ts",
-    replacement: "steer, followup, collect, or interrupt queue modes",
-    docsPath: "/concepts/queue",
-  }),
   compatRecord("doctor-channel-dm-aliases", "removal-pending", {
     owner: "channel",
     introduced: "2026-04-26",
@@ -435,20 +388,6 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     docsPath: "/web/webchat",
     notes:
       "WebChat is an internal control surface, not a configurable outbound channel. Doctor refuses this retired key with an intermediate-upgrade path.",
-  }),
-  compatRecord("doctor-webchat-gateway-config", "deprecated", {
-    owner: "gateway",
-    introduced: "2026-04-01",
-    deprecated: "2026-05-31",
-    warningStarts: "2026-05-31",
-    previousRemoveAfter: "2026-08-31",
-    source: "gateway.webchat",
-    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.gateway.ts",
-    replacement: "chat.history maxChars per-request override when a custom client needs it",
-    docsPath: "/web/webchat",
-    tests: ["src/commands/doctor/shared/legacy-config-migrate.validation.test.ts"],
-    notes:
-      "Supported releases through 2026.5.31-alpha.1 can write gateway.webchat. Doctor removes this ignored setting while preserving other Gateway config; retirement follows the six-month writer-based retention policy.",
   }),
   compatRecord("doctor-tts-top-level-owner", "deprecated", {
     previousRemoveAfter: "2026-09-18",
@@ -490,21 +429,6 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "speakerVoice and speakerVoiceId",
     docsPath: "/tools/tts",
     tests: ["src/commands/doctor/shared/legacy-config-migrate.provider-shapes.test.ts"],
-  }),
-  compatRecord("doctor-plugin-install-config-ledger", "removal-pending", {
-    owner: "plugin",
-    introduced: "2026-04-25",
-    deprecated: "2026-04-26",
-    warningStarts: "2026-04-26",
-    previousRemoveAfter: "2026-07-26",
-    source: "plugins.installs in authored config",
-    migration: "src/config/plugin-install-config-migration.ts",
-    replacement: "shared SQLite config_machine_state plugins.installedIndex install ledger",
-    docsPath: "/cli/plugins#registry",
-    tests: [
-      "src/config/io.write-config.test.ts",
-      "src/commands/doctor/shared/plugin-registry-migration.test.ts",
-    ],
   }),
   compatRecord("doctor-bundled-plugin-load-paths", "removal-pending", {
     owner: "plugin",

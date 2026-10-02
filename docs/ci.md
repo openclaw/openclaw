@@ -47,7 +47,7 @@ allows 160 minutes for the npm-serialized lanes plus setup; see
 
 For the published-upgrade regression gate, see [selection and routing](/ci/scope-and-routing#scope-and-routing), [runner budgets](/ci/capacity#runner-registration-budget), and [Package Acceptance baselines](/ci/release-validation#suite-profiles). Weekly validation is listed under [Update Migration](/ci/scheduled-workflows#update-migration).
 
-Updater, state-lease, SQLite identity, native-plugin, startup-trace, and updater-tooling PRs also require the [published-driver update cell](/ci/scope-and-routing/selection#published-driver-update-cell). One GitHub-hosted Linux job runs the latest stable npm updater against the candidate package with two synthetic agents. Its ten-minute budget and result are included in `openclaw/ci-gate`; the broader main/release Docker survivor remains separate.
+Updater, state-lease, SQLite identity, native-plugin, startup-trace, and updater-tooling PRs also require the [published-driver update cell](/ci/scope-and-routing/selection#published-driver-update-cell). One GitHub-hosted Linux job runs the latest stable npm updater against the candidate package with two synthetic agents. Its twenty-minute budget and result are included in `openclaw/ci-gate`; the broader main/release Docker survivor remains separate.
 
 Full `main` CI and cache warming are [hourly by default](/ci/scheduled-workflows#hourly-main-ci); `OPENCLAW_CI_ON_PUSH=true` restores their existing per-push admission. CodeQL, Workflow Sanity, and CI's `security-fast` keep their existing main-push scopes. Docs-only `main` pushes still skip the CI workflow and push-triggered cache warming. The cache warmer publishes dependencies independently of long builds and maintains a bounded hosted seed in hybrid mode. Every admitted canonical `main` run exercises one published-driver × candidate Docker upgrade; ordinary manual/release validation adds the other five Docker seed lanes. QA Smoke, real-Gateway browser checks, and named process proofs retain their selected `main` coverage and manual/release validation. Pull requests and exact-head PR fallback dispatches run static correctness gates, owner-bounded tests, transitive import consumers, protected regressions, and a six-file runtime smoke set. Node rows target at most 150 estimated test seconds. Single files and indivisible canonical groups can exceed that target; setup, builds, and queues are separate from test time. Node shards selecting sandbox container E2E cases prepare the Docker sandbox image when the runner does not already have it. Missing or unbounded runtime selection fails preflight instead of falling back to every test. Windows, browser, Docker, QA Smoke, packaging, contract, and extension families opt in through their existing owners; individual built-process proofs have independent owner flags. Full static fallback does not widen them. The [PR-exempt integration tier](/ci/scope-and-routing/node-test-lanes) retains measured slow tests in hourly `main` and Full Release Validation, with PR opt-in when their tests or subjects change. The existing Plugin Prerelease workflow owns complete extension runtime coverage hourly and in Full Release Validation; normal CI selects affected extension owners on PRs. Windows retains its complete inventory across five measured file shards on hourly main and ordinary manual/release validation; Windows-owner PRs retain that complete inventory.
 
@@ -133,9 +133,11 @@ Transform keys also include each project's dependency optimizer directory. This
 prevents cached UI imports from mixing separate projects' Lit instances when a
 focused run and a full run share the persistent cache.
 
-Linux PR tests use Bun for the measured compatible unit lanes and Control UI
-Vitest job. Full Release Validation keeps their Node coverage and runs them on Bun
-too; see [test runtime selection](/ci/pipeline#test-runtime-selection).
+Linux PR tests use Bun for compatible unit lanes and Control UI Vitest selections.
+Audited synchronous unit-fast tests can use Bun's native runner; changed test or
+setup bytes return to Vitest. Full Release Validation retains complete Node
+coverage plus qualified Bun coverage; see
+[test runtime selection](/ci/pipeline#test-runtime-selection).
 Both runtimes group uncached, non-isolated UI files by environment in batches
 to reduce worker restarts while retaining native shard ownership and worker budgets.
 

@@ -162,7 +162,7 @@ extension OpenClawChatViewModel {
             if ok { self.loadWebConversationChrome()
                 self.refreshAgentsIfRequested()
             }
-        case .routeChanged, .seqGap:
+        case .routeChanged, .reconnected, .seqGap:
             self.invalidateSessionMetadataReadiness()
             self.invalidateOutboxBranchReconciliation()
             self.invalidateModelChoices()

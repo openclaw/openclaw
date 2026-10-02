@@ -42,7 +42,7 @@ import {
 } from "../session-sharing.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readSessionPreviewItemsFromTranscriptAsync } from "../session-transcript-preview.js";
-import type { GatewaySessionStoreDiscoveryCache } from "../session-utils-store-lookup.js";
+import type { GatewaySessionStoreDiscoveryCache } from "../session-utils-store-candidates.js";
 import {
   listProjectedSessions,
   type SessionsPreviewEntry,

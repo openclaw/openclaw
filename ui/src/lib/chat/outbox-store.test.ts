@@ -1,7 +1,13 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { captureChatOutboxRecoveryDestination, readChatOutboxRecovery } from "./outbox-recovery.ts";
+import type { ChatQueueItem } from "./chat-types.ts";
+import { outboxStorageScope } from "./outbox-payload-store.runtime.ts";
+import {
+  captureChatOutboxRecoveryDestination,
+  readChatOutboxRecovery,
+  restoreChatOutboxRecovery,
+} from "./outbox-recovery.ts";
 import { createStoredChatOutboxReader, listStoredChatOutboxes } from "./outbox-store-projection.ts";
 import { retireStoredComposerDrafts } from "./outbox-store-retirement.ts";
 import {
@@ -12,6 +18,21 @@ import {
   subscribeStoredChatOutboxChanges,
   writeStoredOutboxStore,
 } from "./outbox-store.ts";
+
+function ownedState(gatewayUrl: string) {
+  return {
+    settings: { gatewayUrl },
+    client: { recoveryScope: "summary-owner", recoveryScopeReady: true },
+    connected: true,
+  };
+}
+
+function ownedQueue(gatewayUrl: string, queue: ChatQueueItem[]): ChatQueueItem[] {
+  return queue.map((item) => ({
+    ...item,
+    storageScope: outboxStorageScope(ownedState(gatewayUrl)),
+  }));
+}
 
 beforeEach(() => {
   vi.stubGlobal("sessionStorage", createStorageMock());
@@ -336,14 +357,7 @@ describe("stored outbox summaries", () => {
       storageKey,
       JSON.stringify({ version: 4, recovery: {}, gatewayOwner: gatewayUrl, sessions: {} }),
     );
-    const target = {
-      gatewayOwner: gatewayUrl,
-      key: storageKey,
-      legacyKey: "unused",
-      previousKey: "unused-v2",
-      blobKey: "unused-v3",
-      legacyOwnerIsUnambiguous: true,
-    };
+    const target = storageTargetForGateway(gatewayUrl);
     const first = readProjectedOutboxStore(sessionStorage, target);
     expect(readProjectedOutboxStore(sessionStorage, target)).toBe(first);
     const summary = reader.read(state);
@@ -401,15 +415,20 @@ describe("stored outbox summaries", () => {
       }
       write(key, value);
     });
-    const state = { settings: { gatewayUrl }, client: null, connected: false };
-    expect(createStoredChatOutboxReader().read(state).total).toBe(1);
+    const target = storageTargetForGateway(gatewayUrl);
+    const retainedCount = () =>
+      Object.values(readProjectedOutboxStore(sessionStorage, target).sessions).flatMap(
+        (session) => session.queue ?? [],
+      ).length;
+    expect(retainedCount()).toBe(1);
+    expect(createStoredChatOutboxReader().read(ownedState(gatewayUrl)).total).toBe(0);
 
     sessionStorage.setItem(legacyKey, stored(["first", "second"]));
     const storageEvent = new StorageEvent("storage", { key: legacyKey });
     Object.defineProperty(storageEvent, "storageArea", { value: sessionStorage });
     window.dispatchEvent(storageEvent);
 
-    const refreshedTotal = createStoredChatOutboxReader().read(state).total;
+    const refreshedTotal = retainedCount();
     unsubscribe();
     expect(refreshedTotal).toBe(2);
   });
@@ -454,26 +473,20 @@ describe("stored outbox summaries", () => {
     const gatewayUrls = ["ws://first.test/control", "ws://second.test/control"];
     for (const gatewayUrl of gatewayUrls) {
       sessionStorage.setItem(
-        `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayUrl)}`,
+        storageTargetForGateway(gatewayUrl, "summary-owner").key,
         JSON.stringify({
           version: 4,
           recovery: {},
           gatewayOwner: gatewayUrl,
           sessions: {
             "thread\u0000agent:main": {
-              queue: [{ id: gatewayUrl, text: gatewayUrl, createdAt: 1 }],
+              queue: ownedQueue(gatewayUrl, [{ id: gatewayUrl, text: gatewayUrl, createdAt: 1 }]),
               updatedAt: 1,
             },
           },
         }),
       );
-      expect(
-        createStoredChatOutboxReader().read({
-          settings: { gatewayUrl },
-          client: null,
-          connected: false,
-        }).total,
-      ).toBe(1);
+      expect(createStoredChatOutboxReader().read(ownedState(gatewayUrl)).total).toBe(1);
     }
 
     sessionStorage.clear();
@@ -483,13 +496,7 @@ describe("stored outbox summaries", () => {
     unsubscribe();
 
     for (const gatewayUrl of gatewayUrls) {
-      expect(
-        createStoredChatOutboxReader().read({
-          settings: { gatewayUrl },
-          client: null,
-          connected: false,
-        }).total,
-      ).toBe(0);
+      expect(createStoredChatOutboxReader().read(ownedState(gatewayUrl)).total).toBe(0);
     }
     expect(listener).toHaveBeenCalledOnce();
   });
@@ -681,7 +688,7 @@ describe("stored outbox summaries", () => {
   ])("queries draft and attention snapshots for $name", ({ state, storedKey, present, absent }) => {
     const gatewayUrl = "ws://gateway.test/control";
     sessionStorage.setItem(
-      `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayUrl)}`,
+      storageTargetForGateway(gatewayUrl, "summary-owner").key,
       JSON.stringify({
         version: 4,
         recovery: {},
@@ -690,25 +697,20 @@ describe("stored outbox summaries", () => {
           [storedKey]: {
             draft: "finish this message",
             draftRevision: 3,
-            queue: [
+            queue: ownedQueue(gatewayUrl, [
               { id: "failed", text: "retry this message", createdAt: 3, sendState: "failed" },
-            ],
+            ]),
             updatedAt: 3,
           },
           "thread-empty\u0000agent:main": { draftRevision: 2, updatedAt: 2 },
           "thread-queue\u0000agent:main": {
-            queue: [{ id: "queued", text: "queued", createdAt: 1 }],
+            queue: ownedQueue(gatewayUrl, [{ id: "queued", text: "queued", createdAt: 1 }]),
             updatedAt: 1,
           },
         },
       }),
     );
-    const summary = createStoredChatOutboxReader().read({
-      ...state,
-      settings: { gatewayUrl },
-      client: null,
-      connected: false,
-    });
+    const summary = createStoredChatOutboxReader().read({ ...state, ...ownedState(gatewayUrl) });
     const read = vi.spyOn(sessionStorage, "getItem");
     sessionStorage.clear();
 
@@ -828,14 +830,14 @@ describe("stored outbox summaries", () => {
       "waiting-reconnect",
     ] as const;
     sessionStorage.setItem(
-      `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayUrl)}`,
+      storageTargetForGateway(gatewayUrl, "summary-owner").key,
       JSON.stringify({
         version: 4,
         recovery: {},
         gatewayOwner: gatewayUrl,
         sessions: {
           "thread-a\u0000agent:main": {
-            queue: [
+            queue: ownedQueue(gatewayUrl, [
               ...restoredSendStates.map((sendState, index) => ({
                 id: `healthy-${index}`,
                 text: `healthy ${index}`,
@@ -863,29 +865,25 @@ describe("stored outbox summaries", () => {
                 sendState: "failed",
                 attachmentPayload: { key: "bundle", recoveryScope: "other-owner", tabId: "tab" },
               },
-            ],
+            ]),
             updatedAt: 13,
           },
           "thread-b\u0000agent:main": {
-            queue: [
+            queue: ownedQueue(gatewayUrl, [
               {
                 id: "unconfirmed",
                 text: "other scope",
                 createdAt: 14,
                 sendState: "unconfirmed",
               },
-            ],
+            ]),
             updatedAt: 14,
           },
         },
       }),
     );
 
-    const summary = createStoredChatOutboxReader().read({
-      settings: { gatewayUrl },
-      client: null,
-      connected: false,
-    });
+    const summary = createStoredChatOutboxReader().read(ownedState(gatewayUrl));
     expect(summary.total).toBe(8);
     expect(summary.attentionCountForSession("thread-a")).toBe(3);
     expect(summary.attentionCountForSession("thread-b")).toBe(1);
@@ -916,13 +914,21 @@ describe("stored outbox summaries", () => {
       }),
     );
     const state = {
-      client: null,
-      connected: false,
-      settings: { gatewayUrl },
+      ...ownedState(gatewayUrl),
       assistantAgentId: "work",
       agentsList: { defaultId: "work", mainKey: "main" },
     };
 
+    // Legacy migration retains unowned bytes; explicit review admits the selected row.
+    expect(createStoredChatOutboxReader().read(state).total).toBe(0);
+    const entry = readChatOutboxRecovery(state).entries.find(
+      (candidate) => candidate.sourceScopeKey === "global\u0000agent:work",
+    )!;
+    const destination = captureChatOutboxRecoveryDestination(state, {
+      sessionKey: "global",
+      agentId: "work",
+    })!;
+    expect(restoreChatOutboxRecovery(state, entry, destination)).toBe("restored");
     const summary = createStoredChatOutboxReader().read(state);
     const outboxes = listStoredChatOutboxes(state);
 
@@ -934,6 +940,10 @@ describe("stored outbox summaries", () => {
         createdAt: 3,
         sessionKey: "global",
         agentId: "work",
+        storageScope: outboxStorageScope(state),
+        sendState: "failed",
+        sendError:
+          "Recovered message. Review this destination and retry only if it did not arrive.",
       },
     ]);
     expect(sessionStorage.getItem(legacyKey)).toBeNull();

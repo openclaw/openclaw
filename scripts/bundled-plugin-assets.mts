@@ -19,7 +19,6 @@ type AssetOptions = {
   phase?: AssetPhase;
   plugins?: string[];
   rootDir?: string;
-  timeoutMs?: number;
   deferIsolated?: boolean;
 };
 
@@ -96,12 +95,19 @@ export async function readBundledPluginAssetHooks(options: AssetOptions = {}) {
   }
 
   const pluginFilters = new Set((options.plugins ?? []).filter(Boolean));
+  const generatedSources = new Set(
+    options.deferIsolated ? listGeneratedExtensionAssetSources({ rootDir: repoRoot }) : [],
+  );
   // Their package builders generate and validate assets after compiling the
-  // isolated graph. Keep all other hooks, including untracked source packages.
+  // isolated graph. Manifest writers must finish before compilation and input
+  // capture; keep those hooks early, along with untracked source packages.
   const deferredPluginIds = new Set(
     options.deferIsolated
       ? collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot })
-          .filter(({ isolated }) => isolated)
+          .filter(
+            ({ id, isolated }) =>
+              isolated && !generatedSources.has(`extensions/${id}/openclaw.plugin.json`),
+          )
           .map(({ id }) => id)
       : [],
   );
@@ -170,7 +176,6 @@ export async function runBundledPluginAssetHooks(options: AssetOptions = {}) {
       cwd: hook.pluginDir,
       pluginId: hook.pluginId,
       phase: hook.phase,
-      timeoutMs: options.timeoutMs,
     });
     if (status !== 0) {
       process.exit(status);

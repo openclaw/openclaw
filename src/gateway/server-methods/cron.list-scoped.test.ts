@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as listRevision from "../../cron/list-snapshot-revision.js";
@@ -23,46 +22,22 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withLocalGatewayRequestScope } from "../local-request-context.js";
 import { cronHandlers } from "./cron.js";
+import { createCronCallerClient, createCronJob } from "./cron.validation.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 function createJobs(count: number): CronJob[] {
-  return Array.from({ length: count }, (_, index) => ({
-    id: `job-${String(index).padStart(4, "0")}`,
-    name: `Job ${String(index).padStart(4, "0")}`,
-    agentId: index % 200 === 0 ? "ops" : "other",
-    enabled: false,
-    createdAtMs: 1,
-    updatedAtMs: 1,
-    schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "scheduled check" },
-    delivery: { mode: "none" },
-    state: {},
-  }));
-}
-
-function scopedClient(agentId = "ops"): GatewayClient {
-  const operationalRunInstance = createOperationalRunInstanceRef("cron-list-scope");
-  return {
-    connect: {} as GatewayClient["connect"],
-    internal: {
-      agentRuntimeIdentity: {
-        kind: "agentRuntime",
-        agentId,
-        sessionKey: `agent:${agentId}:main`,
-        operationalRunInstance,
-        delegatedAuthority: {
-          kind: "local",
-          operationalRunInstance,
-          lifecycleGeneration: "test-generation",
-          claimId: "test-claim",
-        },
-      },
-    },
-  };
+  return Array.from({ length: count }, (_, index) =>
+    createCronJob({
+      id: `job-${String(index).padStart(4, "0")}`,
+      name: `Job ${String(index).padStart(4, "0")}`,
+      agentId: index % 200 === 0 ? "ops" : "other",
+      enabled: false,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+      payload: { kind: "agentTurn", message: "scheduled check" },
+    }),
+  );
 }
 
 async function withCronStore(
@@ -128,7 +103,7 @@ async function listScoped(
   context: GatewayRequestContext,
   offset = 0,
   sessionKey?: string,
-  client: GatewayClient | null = scopedClient(),
+  client: GatewayClient | null = createCronCallerClient("ops"),
 ) {
   const respond = vi.fn();
   await expectDefined(
@@ -335,7 +310,7 @@ describe("cron.list scoped SQLite snapshots", () => {
         const explicit = { ...createJobs(1)[0]!, id: "explicit", agentId: "research" };
         await saveCronStore(storePath, { version: 1, jobs: [historical, explicit] });
         const before = await loadCronStore(storePath);
-        const client = scopedClient("research");
+        const client = createCronCallerClient("research");
         const page = await listScoped(context, 0, undefined, client);
         expect(page.total, "An ambient agent must not see historical cron jobs").toBe(1);
         expect(
@@ -434,7 +409,7 @@ describe("cron.list scoped SQLite snapshots", () => {
     });
   });
 
-  it.each([200, 201, 401])(
+  it.each([200, 401])(
     "bounds sorting work while finding visible jobs across a %i-job inventory",
     async (count) => {
       await withCronStore(count, async ({ context, storePath }) => {

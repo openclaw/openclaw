@@ -29,6 +29,7 @@ import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { parseUpgradeSurvivorScenarios } from "../../scripts/lib/upgrade-survivor-policy.mjs";
 import { createReleaseWorkflowMatrixPlan } from "../../scripts/plan-release-workflow-matrix.mjs";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
   fullReleaseCandidateArtifact,
@@ -398,12 +399,10 @@ function frozenWorkflowFixture(
     const installedParser = createRequire(import.meta.url).resolve("typescript/package.json");
     const nativeName = `@typescript/typescript-${process.platform}-${process.arch}`;
     const installedNative = createRequire(installedParser).resolve(`${nativeName}/package.json`);
-    cpSync(dirname(installedParser), join(tooling, "node_modules/typescript"), {
-      recursive: true,
+    copyTreeCloseOnExec(dirname(installedParser), join(tooling, "node_modules/typescript"), {
       dereference: true,
     });
-    cpSync(dirname(installedNative), join(tooling, "node_modules", nativeName), {
-      recursive: true,
+    copyTreeCloseOnExec(dirname(installedNative), join(tooling, "node_modules", nativeName), {
       dereference: true,
     });
   }

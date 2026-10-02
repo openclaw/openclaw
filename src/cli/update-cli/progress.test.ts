@@ -676,7 +676,7 @@ describe("update progress", () => {
 
     const output = log.mock.calls.flat().join("\n");
     expect(output).toContain("OpenClaw updated to 2026.9.5");
-    expect(output).toContain("Recovery: verified serving 2026.9.5.");
+    expect(output).toContain("Recorded recovery: verified serving 2026.9.5.");
     expect(output).not.toContain("stale-readiness-failure");
     expect(output).not.toContain("state-migration-started");
     await printResult(stale, { json: true, run: context }, { record: captured });

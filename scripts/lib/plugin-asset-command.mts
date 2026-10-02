@@ -8,9 +8,7 @@ export async function runPluginAssetCommand(params: {
   cwd: string;
   pluginId: string;
   phase: "build" | "copy";
-  timeoutMs?: number;
 }): Promise<number> {
-  const timeoutMs = params.timeoutMs ?? PLUGIN_ASSET_HOOK_TIMEOUT_MS;
   try {
     return await runManagedCommand({
       bin: params.command,
@@ -18,14 +16,14 @@ export async function runPluginAssetCommand(params: {
       env: process.env,
       shell: true,
       stdio: "inherit",
-      timeoutMs,
+      timeoutMs: PLUGIN_ASSET_HOOK_TIMEOUT_MS,
       requireProcessTreeExit: process.platform !== "win32",
     });
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ETIMEDOUT") {
       throw Object.assign(
         new Error(
-          `Plugin asset ${params.phase} hook timed out after ${timeoutMs}ms: ${params.pluginId}`,
+          `Plugin asset ${params.phase} hook timed out after ${PLUGIN_ASSET_HOOK_TIMEOUT_MS}ms: ${params.pluginId}`,
           { cause: error },
         ),
         { code: "ETIMEDOUT" },

@@ -5,6 +5,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { parseSqliteSessionEntryRecord } from "../config/sessions/session-entry-json.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { buildConversationRef, normalizeConversationPeerId } from "../routing/conversation-ref.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
@@ -28,26 +29,16 @@ export function dropLegacySessionTranscriptSearchSchema(db: DatabaseSync): void 
   }
 }
 
-export function dropLegacyRuntimeJournalSchemas(db: DatabaseSync): void {
+export function assertSupportedRuntimeJournalSchemas(db: DatabaseSync, pathname: string): void {
   const acpParentStreamColumns = readSqliteTableColumns(db, "acp_parent_stream_events");
-  if (acpParentStreamColumns && !acpParentStreamColumns.has("session_id")) {
-    // The reverted f91de52 journal keyed events only by run_id. It is derived runtime
-    // state, so discard that incompatible shape and let the canonical schema recreate it.
-    db.exec(`
-      DROP INDEX IF EXISTS idx_agent_acp_parent_stream_events_created;
-      DROP TABLE acp_parent_stream_events;
-    `);
-  }
-
   const trajectoryColumns = readSqliteTableColumns(db, "trajectory_runtime_events");
-  if (trajectoryColumns?.has("event_id")) {
-    // The reverted f91de52 journal used event_id instead of the canonical session/seq key.
-    // Trajectory runtime events are derived, so rebuild rather than preserving stale rows.
-    db.exec(`
-      DROP INDEX IF EXISTS idx_agent_trajectory_runtime_events_session;
-      DROP INDEX IF EXISTS idx_agent_trajectory_runtime_events_run;
-      DROP TABLE trajectory_runtime_events;
-    `);
+  if (
+    (acpParentStreamColumns && !acpParentStreamColumns.has("session_id")) ||
+    trajectoryColumns?.has("event_id")
+  ) {
+    throw new SqliteSchemaMismatchError(
+      `OpenClaw agent database ${pathname} has an unsupported runtime journal schema. Upgrades from pre-July-2026 state are no longer migrated; restore a backup produced by a July 2026 or newer release before retrying.`,
+    );
   }
 }
 
@@ -56,7 +47,6 @@ export function migrateSessionTranscriptGenerations(
   db: DatabaseSync,
   previousVersion: number,
 ): void {
-  // Remove after 2026-10-01: drop the generation backfill once the minimum supported agent schema is 13.
   if (previousVersion >= 13) {
     return;
   }

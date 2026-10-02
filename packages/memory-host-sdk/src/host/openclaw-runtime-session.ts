@@ -53,11 +53,7 @@ export {
   SILENT_REPLY_TOKEN,
   isSilentReplyPayloadText,
 } from "../../../../src/auto-reply/tokens.js";
-export {
-  getRuntimeConfig,
-  /** @deprecated Use getRuntimeConfig(), or pass the already loaded config through the call path. */
-  loadConfig,
-} from "../../../../src/config/config.js";
+export { getRuntimeConfig } from "../../../../src/config/config.js";
 export {
   isCompactionCheckpointTranscriptFileName,
   isSessionArchiveArtifactName,

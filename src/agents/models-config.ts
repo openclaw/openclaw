@@ -33,6 +33,11 @@ import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { MODELS_JSON_STATE, type ModelsJsonReadyResult } from "./models-config-state.js";
 import { planOpenClawModelsJson, type PreparedModelsConfigContext } from "./models-config.plan.js";
+import {
+  capturePluginModelCatalogAuth,
+  withPluginModelCatalogAuthObservations,
+  type PluginModelCatalogAuthSnapshot,
+} from "./plugin-model-catalog-auth.js";
 import { repairPluginModelCatalogTransportMetadata } from "./plugin-model-catalog-repair.js";
 import {
   decodePluginModelCatalogRelativePathPluginId,
@@ -162,16 +167,20 @@ function materializePlannedPluginCatalogs(
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
 }
 
-function writePluginCatalogsForModelsJson(params: {
+async function writePluginCatalogsForModelsJson(params: {
   agentDir: string;
   pluginCatalogWrites?: Record<string, string>;
-}): boolean {
+  authSnapshot: PluginModelCatalogAuthSnapshot;
+  env: NodeJS.ProcessEnv;
+}): Promise<boolean> {
   if (!params.pluginCatalogWrites) {
     return false;
   }
   return replacePersistedPluginModelCatalogs({
     agentDir: params.agentDir,
     pluginCatalogWrites: params.pluginCatalogWrites,
+    authSnapshot: params.authSnapshot,
+    env: params.env,
   });
 }
 
@@ -296,17 +305,22 @@ export async function ensureOpenClawModelsJson(
 
   const pending = MODELS_JSON_STATE.writeQueue.enqueue(targetPath, async () => {
     const existingModelsFile = await readExistingModelsFile(targetPath);
-    const plan = await planOpenClawModelsJson({
-      context,
-      existingRaw: existingModelsFile.raw,
-      existingParsed: existingModelsFile.parsed,
-      pluginCatalogs: loadPersistedPluginModelCatalogsReadOnly(agentDir),
-    });
+    const authSnapshot = await capturePluginModelCatalogAuth(agentDir, context.env);
+    const plan = await withPluginModelCatalogAuthObservations(authSnapshot, () =>
+      planOpenClawModelsJson({
+        context,
+        existingRaw: existingModelsFile.raw,
+        existingParsed: existingModelsFile.parsed,
+        pluginCatalogs: loadPersistedPluginModelCatalogsReadOnly(agentDir),
+      }),
+    );
 
     if (plan.action !== "write") {
-      const wrotePluginCatalog = writePluginCatalogsForModelsJson({
+      const wrotePluginCatalog = await writePluginCatalogsForModelsJson({
         agentDir,
         pluginCatalogWrites: plan.pluginCatalogWrites,
+        authSnapshot,
+        env: context.env,
       });
       if (plan.action === "noop") {
         await ensureModelsFileModeForModelsJson(targetPath);
@@ -322,9 +336,11 @@ export async function ensureOpenClawModelsJson(
       MODELS_JSON_STATE.costCache.delete(agentDir);
     }
     await ensureModelsFileModeForModelsJson(targetPath);
-    const wrotePluginCatalog = writePluginCatalogsForModelsJson({
+    const wrotePluginCatalog = await writePluginCatalogsForModelsJson({
       agentDir,
       pluginCatalogWrites: plan.pluginCatalogWrites,
+      authSnapshot,
+      env: context.env,
     });
     return { agentDir, wrote: wroteRoot || wrotePluginCatalog };
   });

@@ -14,8 +14,8 @@ import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 /** Runtime consumers retain capabilities, never the concrete loader implementation. */
 export interface PluginInstanceHandle extends PluginInvocationInstance, PluginInstanceExecution {
   readonly disposing: boolean;
-  readonly hasActiveCall: boolean;
   readonly acceptingCalls: boolean;
+  readonly replacementPending: boolean;
   readonly hasRetainedConsumers: boolean;
   readonly owner?: PluginInstanceOwner;
   toolRegistrationComplete: boolean;
@@ -49,6 +49,8 @@ export type PluginInvocationBinding = {
 };
 
 export type PluginInvocationContext = {
+  /** Retained consumers in this context are joined by a pending reload drain. */
+  readonly holdsPendingReplacement?: boolean;
   assertCurrent?: (instance: PluginInstanceHandle) => void;
   lookup: (instance: PluginInstanceHandle) => PluginInvocationBinding | undefined;
 };
@@ -72,6 +74,16 @@ export const pluginInvocationContext = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginInvocationContext"),
   () => new AsyncLocalStorage<PluginInvocationContext>(),
 );
+
+/** Current work that a pending reload drain is joining, through nested calls or retained scopes. */
+export function currentPluginWorkHoldsPendingReplacement(): boolean {
+  for (let call = pluginInstanceInvocation.getStore(); call; call = call.parent) {
+    if (call.instance.holdsPendingReplacement(call.token)) {
+      return true;
+    }
+  }
+  return pluginInvocationContext.getStore()?.holdsPendingReplacement === true;
+}
 
 export function resolvePluginInstanceOwner(record: PluginRecord, registry: PluginRegistry) {
   let owner = pluginInstanceState.records.get(record);

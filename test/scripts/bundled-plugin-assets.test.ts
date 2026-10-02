@@ -10,12 +10,14 @@ import {
   readBundledPluginAssetHooks,
   runBundledPluginAssetHooks,
 } from "../../scripts/bundled-plugin-assets.mts";
+import * as managedCommands from "../../scripts/lib/managed-child-process.mts";
 import { listGeneratedExtensionAssetSources } from "../../scripts/lib/static-extension-assets.mts";
 import {
   createRunNodePathClassifier,
   isBuildRelevantRunNodePath,
   isRestartRelevantRunNodePath,
 } from "../../scripts/run-node-watch-paths.mts";
+import { awaitGateBeforeSettlement, createDeferred } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -72,16 +74,18 @@ describe("bundled plugin assets", () => {
     );
   });
 
-  it("discovers the Discord Embedded App SDK build hook", async () => {
+  it("keeps the Discord manifest-writing hook in root asset preparation", async () => {
     const hooks = await readBundledPluginAssetHooks({
       phase: "build",
       plugins: ["discord"],
       rootDir: process.cwd(),
+      deferIsolated: true,
     });
 
     expect(hooks).toMatchObject([
       {
-        command: "node --import tsx ../../scripts/build-discord-activity-sdk.mts",
+        command:
+          "node --import ../../scripts/tsx.mjs ../../scripts/build-discord-activity-sdk.mts && cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/discord",
         packageName: "@openclaw/discord",
         phase: "build",
         pluginId: "discord",
@@ -226,62 +230,53 @@ describe("bundled plugin assets", () => {
     });
   });
 
-  it("bounds stalled asset hooks and reports the affected plugin safely", async () => {
+  it("awaits bounded asset execution and reports joined timeouts safely", async () => {
     await withPluginAssetFixture(async (rootDir) => {
       const pluginDir = path.join(rootDir, "extensions", "canvas");
       const packagePath = path.join(pluginDir, "package.json");
       const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8")) as {
         openclaw: { assetScripts: { build: string } };
       };
-      packageJson.openclaw.assetScripts.build = "node scripts/launch-stall.mjs";
+      packageJson.openclaw.assetScripts.build = "node scripts/private-asset-command.mjs";
       fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2));
-      fs.mkdirSync(path.join(pluginDir, "scripts"));
-      const pidFile = path.join(pluginDir, "stall.pid");
-      const readyFile = path.join(pluginDir, "stall.ready");
-      fs.writeFileSync(
-        path.join(pluginDir, "scripts", "stall.mjs"),
-        [
-          'import { writeFileSync } from "node:fs";',
-          'process.on("SIGTERM", () => {});',
-          `writeFileSync(${JSON.stringify(readyFile)}, String(process.pid));`,
-          "setInterval(() => {}, 100);",
-          "",
-        ].join("\n"),
-      );
-      fs.writeFileSync(
-        path.join(pluginDir, "scripts", "launch-stall.mjs"),
-        [
-          'import { spawn } from "node:child_process";',
-          'import { writeFileSync } from "node:fs";',
-          'process.on("SIGTERM", () => {});',
-          'const child = spawn(process.execPath, ["scripts/stall.mjs"], { stdio: "ignore" });',
-          `writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));`,
-          "setInterval(() => {}, 100);",
-          "",
-        ].join("\n"),
-      );
-
-      let thrown: unknown;
-      let childPid = 0;
-      try {
-        await runBundledPluginAssetHooks({ phase: "build", rootDir, timeoutMs: 500 });
-      } catch (error) {
-        thrown = error;
-      }
-      try {
-        childPid = Number(fs.readFileSync(pidFile, "utf8"));
-        // Timeout rejection must join cleanup, not leave the caller to poll for it.
-        expect(isProcessAlive(childPid)).toBe(false);
-        expect(fs.readFileSync(readyFile, "utf8")).toBe(String(childPid));
-        expect(thrown).toMatchObject({
-          code: "ETIMEDOUT",
-          message: "Plugin asset build hook timed out after 500ms: canvas",
+      const started = createDeferred<Parameters<typeof managedCommands.runManagedCommand>[0]>();
+      const command = createDeferred<number>();
+      const runner = vi
+        .spyOn(managedCommands, "runManagedCommand")
+        .mockImplementationOnce((options) => {
+          started.resolve(options);
+          return command.promise;
         });
-        expect((thrown as Error).message).not.toContain("launch-stall.mjs");
+      const running = runBundledPluginAssetHooks({ phase: "build", rootDir });
+      const outcome = running.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        const options = await awaitGateBeforeSettlement(
+          started.promise,
+          running,
+          "Asset hooks completed before managed execution settled",
+        );
+        expect(options).toMatchObject({
+          bin: packageJson.openclaw.assetScripts.build,
+          cwd: pluginDir,
+          timeoutMs: 600_000,
+          requireProcessTreeExit: process.platform !== "win32",
+        });
+        const failure = Object.assign(new Error("Asset command cleanup completed"), {
+          code: "ETIMEDOUT",
+        });
+        command.reject(failure);
+        expect(await outcome).toMatchObject({
+          code: "ETIMEDOUT",
+          message: "Plugin asset build hook timed out after 600000ms: canvas",
+          cause: failure,
+        });
       } finally {
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
+        command.resolve(0);
+        await outcome;
+        runner.mockRestore();
       }
     });
   });
@@ -365,21 +360,3 @@ describe("bundled plugin assets", () => {
     });
   });
 });
-
-function isProcessAlive(pid: number) {
-  try {
-    process.kill(pid, 0);
-  } catch {
-    return false;
-  }
-  if (process.platform !== "linux") {
-    return true;
-  }
-  try {
-    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-    // kill(pid, 0) also succeeds for a terminated process awaiting reaping.
-    return stat.charAt(stat.lastIndexOf(")") + 2) !== "Z";
-  } catch {
-    return false;
-  }
-}

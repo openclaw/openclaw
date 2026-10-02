@@ -39,6 +39,18 @@ afterEach(() => vi.restoreAllMocks());
 const unavailableMessage =
   "Session access facts are unavailable; retry after session storage is ready.";
 
+function expectWithoutHostSql(action: () => void) {
+  const sql = observeHostDataSql();
+  try {
+    action();
+    for (const call of sql.calls) {
+      expect(call).not.toHaveBeenCalled();
+    }
+  } finally {
+    sql.restore();
+  }
+}
+
 it.each([false, true])(
   "retains missing incognito identity across first birth and rollback (warm: %s)",
   async (warm) => {
@@ -57,17 +69,6 @@ it.each([false, true])(
         agentId: "main",
         allowMissing: true,
       }).finally(sql.restore);
-      const assertWithoutSql = (action: () => void) => {
-        const observation = observeHostDataSql();
-        try {
-          action();
-          for (const call of observation.calls) {
-            expect(call).not.toHaveBeenCalled();
-          }
-        } finally {
-          observation.restore();
-        }
-      };
       try {
         expect(read.readCurrent(cfg).target).toBeNull();
         expect(read.storageTarget).toEqual({
@@ -80,7 +81,7 @@ it.each([false, true])(
           expect(call).not.toHaveBeenCalled();
         }
         openOpenClawAgentDatabase(options);
-        assertWithoutSql(() => expect(read.readCurrent(cfg).target).toBeNull());
+        expectWithoutHostSql(() => expect(read.readCurrent(cfg).target).toBeNull());
         const entry: SessionEntry = {
           sessionId: "incognito-created",
           lifecycleRevision: "created",
@@ -91,13 +92,15 @@ it.each([false, true])(
         expect(() =>
           runOpenClawAgentWriteTransaction((database) => {
             writeSessionEntry(database, sessionKey, entry);
-            assertWithoutSql(() => expect(() => read.readCurrent(cfg)).toThrow(unavailableMessage));
+            expectWithoutHostSql(() =>
+              expect(() => read.readCurrent(cfg)).toThrow(unavailableMessage),
+            );
             throw rollback;
           }, options),
         ).toThrow(rollback);
-        assertWithoutSql(() => expect(read.readCurrent(cfg).target).toBeNull());
+        expectWithoutHostSql(() => expect(read.readCurrent(cfg).target).toBeNull());
         replaceSessionEntrySync({ agentId: "main", sessionKey, storePath }, entry);
-        assertWithoutSql(() => expect(() => read.readCurrent(cfg)).toThrow(unavailableMessage));
+        expectWithoutHostSql(() => expect(() => read.readCurrent(cfg)).toThrow(unavailableMessage));
       } finally {
         read.release();
         read.release();
@@ -348,17 +351,8 @@ it.each(["durable", "incognito"] as const)(
           preparationSql.restore();
         }
         const read = prepared;
-        const assertWithoutSql = (allowed: boolean) => {
-          const sql = observeHostDataSql();
-          try {
-            expect(authorize(read) === null).toBe(allowed);
-            for (const call of sql.calls) {
-              expect(call).not.toHaveBeenCalled();
-            }
-          } finally {
-            sql.restore();
-          }
-        };
+        const assertWithoutSql = (allowed: boolean) =>
+          expectWithoutHostSql(() => expect(authorize(read) === null).toBe(allowed));
         assertWithoutSql(true);
         sessionChanges.emit({ all: true, scope: "subagent-runs" });
         assertWithoutSql(true);
@@ -542,8 +536,7 @@ it.each([
     } else {
       const read = await pending;
       try {
-        const sql = observeHostDataSql();
-        try {
+        expectWithoutHostSql(() => {
           const facts = read.readCurrent(cfg);
           expect(facts.target.entry.updatedAt).toBe(
             change === "membership" || change === "rollback" ? 1 : 2,
@@ -562,12 +555,7 @@ it.each([
               { policy, aliases: new Set(["requester"]) },
             ) === null,
           ).toBe(change === "metadata" || change === "worker-metadata" || change === "rollback");
-          for (const call of sql.calls) {
-            expect(call).not.toHaveBeenCalled();
-          }
-        } finally {
-          sql.restore();
-        }
+        });
       } finally {
         read.release();
       }

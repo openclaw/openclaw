@@ -287,7 +287,7 @@ flow:
             message:
               expr: "`wildcard policy did not persist the wildcard cap: ${JSON.stringify(wildcardJob?.payload)}`"
         - assert:
-            expr: "JSON.stringify(overbroadJob.payload.toolsAllow) === JSON.stringify(['read'])"
+            expr: "(() => { const stored = overbroadJob.payload.toolsAllow; const expected = ['read', 'skills_read']; return Array.isArray(stored) && stored.length === expected.length && expected.every((tool) => stored.includes(tool)); })()"
             message:
               expr: "`overbroad policy was not intersected: ${JSON.stringify(overbroadJob?.payload)}`"
         - assert:
