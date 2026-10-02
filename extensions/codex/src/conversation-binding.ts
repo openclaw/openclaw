@@ -259,6 +259,7 @@ async function runBoundTurn(params: {
               cwd: response.thread.cwd ?? workspaceDir,
               authProfileId: binding.authProfileId,
               model: response.model ?? modelSelection?.model ?? binding.model,
+              reasoningEffort: response.reasoningEffort,
               modelProvider: normalizeCodexAppServerBindingModelProvider({
                 authProfileId: binding.authProfileId,
                 modelProvider:
@@ -337,6 +338,7 @@ async function runBoundTurn(params: {
               clientId: client.getInstanceId(),
               cwd: response.thread.cwd ?? binding.cwd,
               model: response.model ?? modelSelection?.model ?? binding.model,
+              reasoningEffort: response.reasoningEffort,
               modelProvider: normalizeCodexAppServerBindingModelProvider({
                 authProfileId: binding.authProfileId,
                 modelProvider:

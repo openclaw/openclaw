@@ -323,6 +323,7 @@ export async function materializePendingSupervisionBranch(
             ...params.bindingPatch,
             model: nativeModel,
             modelProvider: bindingModelProvider,
+            reasoningEffort: startResponse.reasoningEffort,
             historyCoveredThrough,
           },
         },
@@ -385,6 +386,7 @@ export async function materializePendingSupervisionBranch(
       pendingSupervisionBranch: undefined,
       model: nativeModel,
       modelProvider: bindingModelProvider,
+      reasoningEffort: startResponse.reasoningEffort,
       historyCoveredThrough,
       lifecycle: { action: "forked" },
     };

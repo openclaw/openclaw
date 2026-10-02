@@ -698,11 +698,10 @@ function recordCodexAttemptIdentity(params: {
   expect(turnStarting?.data).toMatchObject({ model: expectedModel });
   const actualEffort = turnStarting?.data?.effort;
   const actualCollaborationEffort = turnStarting?.data?.collaborationEffort;
-  const expectedEffort = params.preserveNativeTurnSettings
-    ? null
-    : resolveCodexHarnessExpectedAppServerEffort(expectedModel);
+  const expectedEffort = resolveCodexHarnessExpectedAppServerEffort(expectedModel);
   expect(actualEffort ?? null).toBe(expectedEffort);
-  expect(actualCollaborationEffort ?? null).toBe(actualEffort ?? null);
+  const expectedCollaborationEffort = params.preserveNativeTurnSettings ? null : expectedEffort;
+  expect(actualCollaborationEffort ?? null).toBe(expectedCollaborationEffort);
   if (CODEX_HARNESS_FULL_CONTEXT) {
     expect(turnStarting?.data?.serviceTier).toBe("priority");
   }

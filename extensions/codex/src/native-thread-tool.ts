@@ -489,6 +489,10 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
                           ? forkThread.cwd
                           : (options.context.workspaceDir ?? ""),
                       model: typeof value.model === "string" ? value.model : undefined,
+                      reasoningEffort:
+                        typeof value.reasoningEffort === "string" || value.reasoningEffort === null
+                          ? value.reasoningEffort
+                          : undefined,
                       modelProvider:
                         typeof value.modelProvider === "string" ? value.modelProvider : undefined,
                       historyCoveredThrough: new Date().toISOString(),

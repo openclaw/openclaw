@@ -429,6 +429,8 @@ let workspaceDir: string;
 const sourceThreadId = "thread-source";
 const probeThreadId = "thread-probe";
 const finalThreadId = "thread-final";
+const nativeResponse = (threadId: string) =>
+  nativeThreadResult(threadId, "native-effective", "native-provider");
 
 function installLifecycleHooks() {
   beforeEach(async () => {
@@ -2026,10 +2028,10 @@ describe("Codex app-server supervised branch lifecycle", () => {
         };
       }
       if (method === "thread/fork") {
-        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
+        return nativeResponse(probeThreadId);
       }
       if (method === "thread/start" || method === "thread/resume") {
-        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
+        return { ...nativeResponse(finalThreadId), reasoningEffort: "high" };
       }
       if (method === "thread/inject_items" || method === "thread/unsubscribe") {
         return {};
@@ -2088,10 +2090,9 @@ describe("Codex app-server supervised branch lifecycle", () => {
         },
       },
     });
-    expect(forkParams).not.toHaveProperty("model");
-    expect(forkParams).not.toHaveProperty("modelProvider");
-    expect(forkParams).not.toHaveProperty("dynamicTools");
-    expect(forkParams).not.toHaveProperty("environments");
+    for (const key of ["model", "modelProvider", "dynamicTools", "environments"]) {
+      expect(forkParams).not.toHaveProperty(key);
+    }
     const startParams = request.mock.calls.find(
       ([method]) => method === "thread/start",
     )?.[1] as Record<string, unknown>;
@@ -2110,7 +2111,6 @@ describe("Codex app-server supervised branch lifecycle", () => {
         },
       },
     });
-    expect(startParams.model).not.toBe(attempt.modelId);
     expect(request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1]).toEqual({
       threadId: finalThreadId,
       items: [
@@ -2129,15 +2129,13 @@ describe("Codex app-server supervised branch lifecycle", () => {
     });
     expect(
       JSON.stringify(request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1]),
-    ).not.toContain("Private reasoning");
-    expect(
-      JSON.stringify(request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1]),
-    ).not.toContain("secret-tool");
+    ).not.toMatch(/Private reasoning|secret-tool/);
     expect(request.mock.calls[4]?.[1]).toEqual({ threadId: probeThreadId });
     expect(materialized).toMatchObject({
       threadId: finalThreadId,
       model: "native-effective",
       modelProvider: "native-provider",
+      reasoningEffort: "high",
       preserveNativeModel: true,
       agentWorkspaceDeveloperInstructions,
       conversationSourceTransferComplete: true,
@@ -2188,11 +2186,13 @@ describe("Codex app-server supervised branch lifecycle", () => {
     });
     expect(resumed).toMatchObject({
       threadId: finalThreadId,
+      reasoningEffort: "high",
       preserveNativeModel: true,
       conversationSourceTransferComplete: true,
       lifecycle: { action: "resumed" },
     });
     expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
+      reasoningEffort: "high",
       appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
         commonParams.appServer,
         attempt.agentDir,

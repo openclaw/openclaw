@@ -206,6 +206,7 @@ export type CodexThreadStartResponse = {
   thread: CodexThread;
   model: string;
   modelProvider?: string | null;
+  reasoningEffort: string | null;
 };
 
 export type CodexThreadForkParams = JsonObject & {
@@ -332,6 +333,7 @@ export type CodexThreadResumeResponse = {
   model: string;
   cwd: string;
   modelProvider?: string | null;
+  reasoningEffort: string | null;
   initialTurnsPage?: CodexInitialTurnsPage | null;
 };
 

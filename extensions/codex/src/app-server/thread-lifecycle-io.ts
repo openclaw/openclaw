@@ -279,6 +279,7 @@ export async function resumeExistingCodexThread(
         response.modelProvider ?? requestModelProvider ?? startModelProvider,
       ),
       ...buildCodexThreadBindingPolicy(params, context),
+      reasoningEffort: response.reasoningEffort,
       webSearchThreadConfigFingerprint,
       mcpServersFingerprint:
         params.mcpServersFingerprintEvaluated === true
@@ -570,6 +571,7 @@ export async function startFreshCodexThread(
     model: response.model ?? startParams.model ?? params.params.modelId,
     modelProvider: bindingModelProvider,
     ...buildCodexThreadBindingPolicy(params, context),
+    reasoningEffort: response.reasoningEffort,
     mcpServersFingerprint: nextMcpServersFingerprint,
     ringZeroConfigFingerprint,
     ringZeroClientInstanceId,
