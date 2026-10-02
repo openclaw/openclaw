@@ -1,7 +1,7 @@
 import { chromium } from "playwright-core";
 import { afterEach, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
-import * as pwAi from "./pw-ai.js";
+import { pwAi } from "./pw-ai.js";
 import { markPageRefBlocked, markTargetBlocked } from "./pw-session-connection.js";
 
 const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({

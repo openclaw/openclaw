@@ -8,7 +8,7 @@ import * as chromeModule from "./chrome.js";
 import { BrowserTabNotFoundError } from "./errors.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import * as navigationGuardModule from "./navigation-guard.js";
-import * as pwAi from "./pw-ai.js";
+import { pwAi } from "./pw-ai.js";
 import {
   assertPageNavigationCompletedSafely,
   gotoPageWithNavigationGuard,

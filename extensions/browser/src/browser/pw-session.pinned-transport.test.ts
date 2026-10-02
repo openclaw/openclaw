@@ -5,7 +5,7 @@ import { type WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-r
 import { type Browser, type ConnectOverCDPTransport, chromium } from "playwright-core";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
-import * as pwAi from "./pw-ai.js";
+import { pwAi } from "./pw-ai.js";
 import { connectOverCdpTransport } from "./pw-session-cdp-transport.js";
 
 const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({

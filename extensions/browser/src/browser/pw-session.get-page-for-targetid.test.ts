@@ -3,7 +3,7 @@ import { chromium } from "playwright-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
 import { BrowserTabNotFoundError } from "./errors.js";
-import * as pwAi from "./pw-ai.js";
+import { pwAi } from "./pw-ai.js";
 import { closeConnectionScopedPageBrowser, markTargetBlocked } from "./pw-session-connection.js";
 
 const {
