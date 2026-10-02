@@ -15,7 +15,7 @@ import {
   loadControlUiTranslationMemory,
   materializeControlUiLocaleCatalog,
 } from "./lib/control-ui-i18n-catalog-values.ts";
-import { CONTROL_UI_LOCALE_ENTRIES, controlUiLanguageLabel } from "./lib/control-ui-i18n-config.ts";
+import { CONTROL_UI_LOCALE_REFRESH_ENTRIES, controlUiLanguageLabel } from "./lib/control-ui-i18n-config.ts";
 import {
   compareStringArrays,
   createControlUiLocaleSyncPlan,
@@ -81,7 +81,7 @@ const TRANSLATION_PROVIDER_DEFAULTS: Record<TranslationProvider, Omit<Model, "id
   },
 };
 
-const LOCALE_ENTRIES: readonly LocaleEntry[] = CONTROL_UI_LOCALE_ENTRIES;
+const LOCALE_ENTRIES: readonly LocaleEntry[] = CONTROL_UI_LOCALE_REFRESH_ENTRIES;
 
 const DEFAULT_GLOSSARY: readonly GlossaryEntry[] = [
   { source: "OpenClaw", target: "OpenClaw" },
