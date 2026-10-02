@@ -14,7 +14,7 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { ProviderModelAuthSourceClassification } from "../provider-model-auth-source-plan.js";
 import type { AgentTool } from "../runtime/index.js";
-import type { TranscriptPolicy } from "../transcript-policy.js";
+import type { TranscriptPolicy } from "../transcript-policy.types.js";
 
 /** Runtime transport selected for one model attempt. */
 export type AgentRuntimeTransport = "sse" | "websocket" | "websocket-cached" | "auto";

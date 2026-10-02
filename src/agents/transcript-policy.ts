@@ -16,33 +16,7 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import type { ProviderReplayPolicy } from "../plugins/types.js";
 import { isAnthropicApi } from "./embedded-agent-helpers/anthropic-api.js";
 import { isGoogleModelApi } from "./embedded-agent-helpers/google.js";
-import type { ToolCallIdMode } from "./tool-call-id.js";
-
-/** Scope of transcript content sanitization before provider replay. */
-type TranscriptSanitizeMode = "full" | "images-only";
-
-/** Effective replay policy applied before sending transcript history to a provider. */
-export type TranscriptPolicy = {
-  sanitizeMode: TranscriptSanitizeMode;
-  sanitizeToolCallIds: boolean;
-  toolCallIdMode?: ToolCallIdMode;
-  duplicateToolCallIdStyle?: "openai";
-  preserveNativeAnthropicToolUseIds: boolean;
-  repairToolUseResultPairing: boolean;
-  preserveSignatures: boolean;
-  appendOnlyRuntimeContext?: boolean;
-  inHistorySystemUpdates?: boolean;
-  sanitizeThoughtSignatures?: {
-    allowBase64Only?: boolean;
-    includeCamelCase?: boolean;
-  };
-  dropThinkingBlocks: boolean;
-  dropReasoningFromHistory?: boolean;
-  applyGoogleTurnOrdering: boolean;
-  validateGeminiTurns: boolean;
-  validateAnthropicTurns: boolean;
-  allowSyntheticToolResults: boolean;
-};
+import type { TranscriptPolicy } from "./transcript-policy.types.js";
 
 const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   sanitizeMode: "images-only",

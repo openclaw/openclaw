@@ -7,10 +7,13 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { AssistantMessage, Message, Tool } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { deleteTestEnvValue, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
+import {
+  buildEmbeddedRunnerConfig,
+  normalizeLiveUsage,
+} from "./embedded-agent-runner.cache.test-support.js";
 import { runEmbeddedAgent } from "./embedded-agent-runner.js";
 import { compactEmbeddedAgentSessionOnDemand } from "./embedded-agent-runner/compact.runtime.js";
 import type { beginPromptCacheObservation } from "./embedded-agent-runner/prompt-cache-observability.js";
@@ -21,11 +24,11 @@ import {
   completeSimpleWithLiveTimeout,
   computeCacheHitRate,
   LIVE_CACHE_TEST_ENABLED,
+  type LiveResolvedModel,
   logLiveCache,
   resolveLiveDirectModel,
   withLiveCacheHeartbeat,
 } from "./live-cache-test-support.js";
-import { buildUsageWithNoCost } from "./stream-message-shared.js";
 
 const describeCacheLive = LIVE_CACHE_TEST_ENABLED ? describe : describe.skip;
 
@@ -65,7 +68,6 @@ type CacheTraceEvent = {
     changes?: Array<{ code?: string; detail?: string }>;
   };
 };
-type LiveResolvedModel = Awaited<ReturnType<typeof resolveLiveDirectModel>>;
 
 const NOOP_TOOL: Tool = {
   name: "noop",
@@ -128,11 +130,6 @@ function buildRunnerSessionPaths(sessionId: string) {
   };
 }
 
-function resolveProviderBaseUrl(model: LiveResolvedModel["model"]): string | undefined {
-  const candidate = (model as { baseUrl?: unknown }).baseUrl;
-  return typeof candidate === "string" && candidate.trim().length > 0 ? candidate : undefined;
-}
-
 async function readCacheTraceEvents(sessionId: string): Promise<CacheTraceEvent[]> {
   // Trace events are JSONL so live assertions can inspect cache state transitions
   // after the provider call completes.
@@ -162,136 +159,6 @@ async function expectCacheTraceStages(
   for (const stage of requiredStages) {
     expect(stages.has(stage)).toBe(true);
   }
-}
-
-function resolveDefaultProviderBaseUrl(model: LiveResolvedModel["model"]): string {
-  if (model.provider === "anthropic") {
-    return "https://api.anthropic.com/v1";
-  }
-  if (model.provider === "openai") {
-    return "https://api.openai.com/v1";
-  }
-  return "https://example.invalid/v1";
-}
-
-function buildEmbeddedModelDefinition(model: LiveResolvedModel["model"]) {
-  // Live model discovery can return partial metadata; embedded runner tests need
-  // a complete config model definition.
-  const contextWindowCandidate = (model as { contextWindow?: unknown }).contextWindow;
-  const maxTokensCandidate = (model as { maxTokens?: unknown }).maxTokens;
-  const reasoningCandidate = (model as { reasoning?: unknown }).reasoning;
-  const inputCandidate = (model as { input?: unknown }).input;
-  const contextWindow =
-    typeof contextWindowCandidate === "number" && Number.isFinite(contextWindowCandidate)
-      ? Math.max(1, Math.trunc(contextWindowCandidate))
-      : 128_000;
-  const maxTokens =
-    typeof maxTokensCandidate === "number" && Number.isFinite(maxTokensCandidate)
-      ? Math.max(1, Math.trunc(maxTokensCandidate))
-      : 8_192;
-  const input =
-    Array.isArray(inputCandidate) &&
-    inputCandidate.every((value) => value === "text" || value === "image")
-      ? [...inputCandidate]
-      : (["text", "image"] as Array<"text" | "image">);
-  return {
-    id: model.id,
-    name: model.id,
-    api: resolveEmbeddedModelApi(model),
-    reasoning: typeof reasoningCandidate === "boolean" ? reasoningCandidate : false,
-    input,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow,
-    maxTokens,
-  };
-}
-
-function resolveEmbeddedModelApi(
-  model: LiveResolvedModel["model"],
-): "anthropic-messages" | "openai-responses" {
-  return model.provider === "anthropic" ? "anthropic-messages" : "openai-responses";
-}
-
-function normalizeLiveUsage(
-  usage:
-    | AssistantMessage["usage"]
-    | {
-        input?: number;
-        output?: number;
-        cacheRead?: number;
-        cacheWrite?: number;
-        total?: number;
-      }
-    | undefined,
-): AssistantMessage["usage"] {
-  if (!usage) {
-    return buildUsageWithNoCost({});
-  }
-  const input = usage.input ?? 0;
-  const output = usage.output ?? 0;
-  const cacheRead = usage.cacheRead ?? 0;
-  const cacheWrite = usage.cacheWrite ?? 0;
-  const totalTokens =
-    "totalTokens" in usage && typeof usage.totalTokens === "number"
-      ? usage.totalTokens
-      : "total" in usage && typeof usage.total === "number"
-        ? usage.total
-        : input + output;
-  const cost =
-    "cost" in usage && usage.cost
-      ? usage.cost
-      : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
-  return {
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    totalTokens,
-    cost,
-  };
-}
-
-function buildEmbeddedRunnerConfig(
-  params: LiveResolvedModel & {
-    agentDir: string;
-    cacheRetention: "none" | "short" | "long";
-    compactionModel?: string;
-    modelAlias?: string;
-    transport?: "sse" | "websocket";
-  },
-): OpenClawConfig {
-  const provider = params.model.provider;
-  const modelKey = `${provider}/${params.model.id}`;
-  const providerBaseUrl =
-    resolveProviderBaseUrl(params.model) ?? resolveDefaultProviderBaseUrl(params.model);
-  return {
-    models: {
-      providers: {
-        [provider]: {
-          api: resolveEmbeddedModelApi(params.model),
-          auth: "api-key",
-          apiKey: params.apiKey,
-          baseUrl: providerBaseUrl,
-          models: [buildEmbeddedModelDefinition(params.model)],
-        },
-      },
-    },
-    agents: {
-      entries: { main: { agentDir: params.agentDir } },
-      defaults: {
-        models: {
-          [modelKey]: {
-            ...(params.modelAlias ? { alias: params.modelAlias } : {}),
-            params: {
-              cacheRetention: params.cacheRetention,
-              ...(params.transport ? { transport: params.transport } : {}),
-            },
-          },
-        },
-        ...(params.compactionModel ? { compaction: { model: params.compactionModel } } : {}),
-      },
-    },
-  };
 }
 
 function buildEmbeddedCachePrompt(suffix: string, sections = 48): string {

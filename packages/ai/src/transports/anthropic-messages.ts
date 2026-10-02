@@ -563,7 +563,7 @@ export async function buildAnthropicRequest(
   const params: MessageCreateParamsStreaming = {
     model:
       managed && isDirectAnthropicModel(model) ? model.id.replace(/^anthropic\//i, "") : model.id,
-    // The API also accepts in-history system messages and compaction blocks absent from the SDK.
+    // SAFETY: the API accepts in-history system messages and compaction blocks absent from the SDK union.
     messages: messages as MessageParam[],
     max_tokens: maxTokens ?? model.maxTokens,
     stream: true,

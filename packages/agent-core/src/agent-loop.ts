@@ -1,6 +1,5 @@
 import type { AssistantMessage, ToolResultMessage } from "@openclaw/llm-core";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   streamAgentResponse,
   type AgentEventSink,
@@ -36,6 +35,12 @@ import {
   createFailureMessage,
   isTurnHandoffAbort,
 } from "./turn-interruption.js";
+import {
+  isActiveTurnTainted,
+  toolResultTaintsTurn,
+  withAssistantTurnTaint,
+  withToolResultContentSource,
+} from "./turn-taint.js";
 import type {
   ToolResultContentSource,
   AgentContext,
@@ -1495,66 +1500,6 @@ async function emitToolResultMessage(
   await emit({ type: "message_start", message });
   await emit({ type: "message_end", message });
   return message;
-}
-
-type TurnTaintMetadata = {
-  resultContentSource?: ToolResultContentSource;
-  turnTainted?: true;
-};
-
-function readTurnTaintMetadata(message: AgentMessage): TurnTaintMetadata | undefined {
-  const metadata = Reflect.get(message, "__openclaw");
-  const record = asOptionalRecord(metadata);
-  if (!record) {
-    return undefined;
-  }
-  return {
-    ...(record.resultContentSource === "network"
-      ? { resultContentSource: record.resultContentSource }
-      : {}),
-    ...(record.turnTainted === true ? { turnTainted: true } : {}),
-  };
-}
-
-function toolResultTaintsTurn(message: ToolResultMessage): boolean {
-  return readTurnTaintMetadata(message)?.resultContentSource === "network";
-}
-
-function isActiveTurnTainted(messages: readonly AgentMessage[]): boolean {
-  for (const message of messages.toReversed()) {
-    if (message.role === "user") {
-      return false;
-    }
-    const metadata = readTurnTaintMetadata(message);
-    if (metadata?.turnTainted === true || metadata?.resultContentSource === "network") {
-      return true;
-    }
-  }
-  return false;
-}
-
-function withAssistantTurnTaint(message: AssistantMessage, tainted: boolean): AssistantMessage {
-  if (!tainted) {
-    return message;
-  }
-  const taintedMessage = {
-    ...message,
-    __openclaw: { ...readTurnTaintMetadata(message), turnTainted: true },
-  } satisfies AssistantMessage & { __openclaw: TurnTaintMetadata };
-  return taintedMessage;
-}
-
-function withToolResultContentSource(
-  message: ToolResultMessage,
-  source: ToolResultContentSource | undefined,
-): ToolResultMessage {
-  if (!source) {
-    return message;
-  }
-  return {
-    ...message,
-    __openclaw: { ...readTurnTaintMetadata(message), resultContentSource: source },
-  } as ToolResultMessage;
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

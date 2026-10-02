@@ -159,6 +159,7 @@ export async function compareSessionProviderReview(
           agentId: capturedTarget.agentId,
           storePath: execution.path,
           sessionKey,
+          facts: { kind: "unchanged" },
         });
         return entry;
       } finally {

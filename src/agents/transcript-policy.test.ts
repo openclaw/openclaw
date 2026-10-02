@@ -89,7 +89,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
                     repairToolUseResultPairing: true,
                     validateAnthropicTurns: true,
                     allowSyntheticToolResults: true,
-                    ...(replayHelpers.shouldDropClaudeThinkingBlocks(modelId)
+                    ...(replayHelpers.buildAnthropicReplayPolicyForModel(modelId).dropThinkingBlocks
                       ? { dropThinkingBlocks: true }
                       : {}),
                   };

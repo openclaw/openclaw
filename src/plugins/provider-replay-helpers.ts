@@ -94,8 +94,7 @@ export function buildStrictAnthropicReplayPolicy(
   };
 }
 
-/** @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks. */
-export function shouldDropClaudeThinkingBlocks(
+function shouldDropClaudeThinkingBlocks(
   modelId?: string,
   model?: Pick<ProviderRuntimeModel, "params">,
 ): boolean {

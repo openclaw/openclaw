@@ -10,6 +10,7 @@ packages/acp-core/src/structured-auth-redaction.ts
 packages/agent-core/package.json
 packages/agent-core/src/harness/env/kill-tree.ts
 packages/agent-core/src/harness/session/tool-result-pairing.ts
+packages/agent-core/src/operator-messages.ts
 packages/gateway-client/package.json
 packages/gateway-client/src/timeouts.ts
 packages/gateway-protocol/package.json

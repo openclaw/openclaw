@@ -173,10 +173,11 @@ export async function submitEmbeddedAttemptPrompt(input: {
       options?.signal?.throwIfAborted();
       assertSteeringCurrent();
       input.assertHostActive?.();
+      await input.persistToolResultProjections();
+      options?.signal?.throwIfAborted();
+      assertSteeringCurrent();
+      input.assertHostActive?.();
       let requestContext = context;
-      let readFinalContext:
-        | (() => Pick<Parameters<StreamFn>[1], "tools" | "systemPrompt">)
-        | undefined;
       const foregroundRequest = captureCurrentPromptForModel && !activeSession.isCompacting;
       const preparation = foregroundRequest ? input.preparePrimaryModelRequest?.() : undefined;
       if (preparation) {
@@ -207,15 +208,14 @@ export async function submitEmbeddedAttemptPrompt(input: {
         options?.signal?.throwIfAborted();
         assertSteeringCurrent();
         input.assertHostActive?.();
-        projection?.commit();
-        readFinalContext = readRestoredContext;
-      }
-      await input.persistToolResultProjections();
-      options?.signal?.throwIfAborted();
-      assertSteeringCurrent();
-      input.assertHostActive?.();
-      if (readFinalContext) {
-        const { tools, systemPrompt } = readFinalContext();
+        if (projection) {
+          projection.commit();
+          await input.persistToolResultProjections();
+          options?.signal?.throwIfAborted();
+          assertSteeringCurrent();
+          input.assertHostActive?.();
+        }
+        const { tools, systemPrompt } = readRestoredContext();
         requestContext = { ...requestContext, tools, systemPrompt };
       }
       if (foregroundRequest && !primaryRequestObserved) {

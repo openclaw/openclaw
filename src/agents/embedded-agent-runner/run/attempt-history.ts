@@ -10,7 +10,8 @@ import {
 } from "../../../sessions/input-provenance.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { resolveTranscriptPolicy, type TranscriptPolicy } from "../../transcript-policy.js";
+import { resolveTranscriptPolicy } from "../../transcript-policy.js";
+import type { TranscriptPolicy } from "../../transcript-policy.types.js";
 import { isRunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
 
 export type UserTranscriptContext = {
