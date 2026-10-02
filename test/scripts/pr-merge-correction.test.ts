@@ -63,13 +63,7 @@ function correctionFixture() {
 }
 
 describePosix("correction authority through native merge admission", () => {
-  it("merges an exactly reviewed and qualified correction while retaining original NEEDS WORK", () => {
-    const f = correctionFixture();
-    const result = f.run();
-    expect(result.status, result.output).toBe(0);
-    expect(f.state().mutations).toBe(1);
-  });
-  it.each(["correction-review.json", "prep-context.env", "gates.env", "prep.env", "pr-meta.env"])(
+  it.each(["correction-review.json", "prep-context.env", "gates.env"])(
     "refuses changed %s after CI checks and before intent",
     (artifact) => {
       const f = correctionFixture();

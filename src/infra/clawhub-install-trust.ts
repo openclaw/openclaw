@@ -114,7 +114,7 @@ function isBlockingClawHubTrust(trust: ClawHubPackageSecurityTrust): boolean {
   });
 }
 
-function assessClawHubTrust(trust: ClawHubPackageSecurityTrust): ClawHubTrustDisposition {
+export function assessClawHubTrust(trust: ClawHubPackageSecurityTrust): ClawHubTrustDisposition {
   const hasRiskReasons = hasClawHubRiskReasons(trust);
   if (!hasRiskReasons && !trust.pending && !trust.stale) {
     return "clean";
