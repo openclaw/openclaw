@@ -53,6 +53,19 @@ export function createRuntimeConfigCapability(gateway: RuntimeConfigGateway) {
       method === "config.schema" ? "operator.read" : "operator.admin",
       options,
     );
+  const canLoadConfig = () =>
+    canCallGatewayMethod(
+      {
+        client: gateway.snapshot.client,
+        phase: gateway.snapshot.phase,
+        hello: gateway.snapshot.hello ?? null,
+      },
+      "config.get",
+      "operator.read",
+      {
+        requireAdvertisement: false,
+      },
+    );
   const publish = () => {
     if (disposed) {
       return;
@@ -98,6 +111,7 @@ export function createRuntimeConfigCapability(gateway: RuntimeConfigGateway) {
     shouldRefresh: () =>
       !disposed &&
       state.connected &&
+      canLoadConfig() &&
       state.configNeedsApply &&
       state.configSnapshot?.appliedConfigHash !== undefined,
     refresh: (isCurrent) =>
@@ -109,6 +123,9 @@ export function createRuntimeConfigCapability(gateway: RuntimeConfigGateway) {
     beforeApplySnapshot?: () => void,
     preservePendingChanges = false,
   ) => {
+    if (state.connected && !canLoadConfig()) {
+      return Promise.resolve(false);
+    }
     const config = run(
       () =>
         loadConfig(state, {
@@ -145,6 +162,9 @@ export function createRuntimeConfigCapability(gateway: RuntimeConfigGateway) {
   });
 
   const ensureLoaded = async () => {
+    if (state.connected && !canLoadConfig()) {
+      return;
+    }
     if (!state.configSnapshot) {
       await loadOnce("config", () => loadConfig(state, { draftWrites: writes }));
     }
@@ -187,6 +207,9 @@ export function createRuntimeConfigCapability(gateway: RuntimeConfigGateway) {
     ensureLoaded,
     ensureSchemaLoaded,
     refresh: async (options?: { background?: boolean }) => {
+      if (state.connected && !canLoadConfig()) {
+        return;
+      }
       appliedRefresh.cancel();
       try {
         await run(() => loadConfig(state, { ...options, draftWrites: writes }), "config");

@@ -53,6 +53,22 @@ function scenario(recentSessionLabel = recentLabel) {
       },
     ],
     methodResponses: {
+      "users.list": {
+        profiles: [
+          {
+            id: "alice",
+            displayName: "Alice",
+            role: "guest",
+            avatarMime: null,
+            hasAvatar: false,
+            githubIdentity: null,
+            mergedInto: null,
+            createdAt: 1,
+            updatedAt: 2,
+            emails: [],
+          },
+        ],
+      },
       "sessions.list": chatSessionListResponse([
         { key: "agent:main:main", kind: "direct", label: "", updatedAt: now - 90_000 },
         { key: selected, kind: "direct", label: "Selected session", updatedAt: now },
@@ -122,6 +138,169 @@ async function capturePeopleCard(page: Page, filename: string) {
 }
 
 suite.define(() => {
+  it("refreshes an open person's assigned role after canonical profile invalidation", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const data = scenario();
+      const gateway = await installMockGateway(page, data);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
+      await page.locator('[data-online-user-id="alice"]').hover();
+      const card = page.getByRole("dialog", { name: "Activity for Alice" });
+      await card.getByText("Assigned role: guest", { exact: true }).waitFor();
+      await gateway.setMethodResponse("users.list", {
+        profiles: data.methodResponses["users.list"].profiles.map((person) =>
+          Object.assign({}, person, { role: "maintainer" }),
+        ),
+      });
+      await gateway.emitGatewayEvent("sessions.changed", { reason: "profile-identity" });
+      await card.getByText("Assigned role: maintainer", { exact: true }).waitFor();
+      expect(await card.getByText("Assigned role: guest", { exact: true }).count()).toBe(0);
+      expect(await gateway.getRequests("users.list")).toHaveLength(2);
+    });
+  });
+
+  it("opens read-only permissions below activity without treating a role as live grants", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, colorScheme: "dark" },
+      async ({ page }) => {
+        const data = scenario();
+        const directory = {
+          profiles: [
+            ...data.methodResponses["users.list"].profiles,
+            {
+              ...data.methodResponses["users.list"].profiles[0],
+              id: "bob",
+              displayName: "Bob",
+              role: "maintainer",
+            },
+            {
+              ...data.methodResponses["users.list"].profiles[0],
+              id: "charlie",
+              displayName: "Charlie",
+              role: undefined,
+            },
+          ],
+        };
+        const gateway = await installMockGateway(page, {
+          ...data,
+          methodResponses: {
+            ...data.methodResponses,
+            "users.list": directory,
+            "config.get": {
+              exists: true,
+              valid: true,
+              config: {},
+              sourceConfig: {},
+              runtimeConfig: {
+                gateway: {
+                  roles: {
+                    default: "guest",
+                    definitions: {
+                      guest: {
+                        sessions: { others: "view" },
+                        agents: ["main"],
+                        sandbox: "required",
+                        scopes: ["operator.sessions.read", "operator.sessions.write"],
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
+        await page.locator('[data-online-user-id="alice"]').hover();
+        const card = page.getByRole("dialog", { name: "Activity for Alice" });
+        await card.getByText("Assigned role: guest", { exact: true }).waitFor();
+        const links = card.locator("footer a");
+        expect(await links.allTextContents()).toEqual([
+          expect.stringContaining("View activity"),
+          expect.stringContaining("View permissions"),
+        ]);
+        await gateway.deferNext("users.list");
+        await card.getByRole("link", { name: "View permissions", exact: true }).click();
+        await page.getByRole("heading", { name: "People & permissions", exact: true }).waitFor();
+        const policy = page.locator("openclaw-people-page");
+        await policy.locator(".settings-loading-skeleton").first().waitFor();
+        if (captureUiProofEnabled) {
+          await page.screenshot({
+            path: path.join(proofDirectory, "people-permissions-loading.png"),
+            animations: "disabled",
+          });
+        }
+        await gateway.resolveDeferred("users.list", directory);
+        await policy.getByText("Configured role limits", { exact: true }).waitFor();
+        await policy.getByText("Required", { exact: true }).waitFor();
+        expect(page.url()).toContain("/settings/people?person=alice");
+        expect(await policy.textContent()).toContain("Maximums, not live permissions.");
+        expect(await policy.getByRole("searchbox", { name: "Search people" }).count()).toBe(1);
+        expect(await policy.locator('input:not([type="search"]), select, textarea').count()).toBe(
+          0,
+        );
+        expect(await gateway.getRequests("users.setRole")).toHaveLength(0);
+        if (captureUiProofEnabled) {
+          await page.screenshot({
+            path: path.join(proofDirectory, "people-permissions-desktop.png"),
+            animations: "disabled",
+          });
+        }
+        await page.setViewportSize({ width: 390, height: 844 });
+        await policy.getByText("Required", { exact: true }).waitFor();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+          390,
+        );
+        if (captureUiProofEnabled) {
+          await page.screenshot({
+            path: path.join(proofDirectory, "people-permissions-phone.png"),
+            fullPage: true,
+            animations: "disabled",
+          });
+        }
+      },
+    );
+  });
+
+  it("denies other-person permissions to a guest without broad reads", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        ...scenario(),
+        presenceUsers: [
+          {
+            id: "visitor-self",
+            identity: { type: "profile", id: "visitor-self" },
+            name: "Jamie",
+            self: true,
+          },
+        ],
+        operatorScopes: ["operator.sessions.read", "operator.sessions.write"],
+      });
+      await page.goto(`${suite.server.baseUrl}settings/people?person=alice`);
+      const policy = page.locator("openclaw-people-page");
+      await policy
+        .getByText("This profile is unavailable or cannot be read with your current access.", {
+          exact: true,
+        })
+        .waitFor();
+      expect(await gateway.getRequests("users.list")).toHaveLength(0);
+      expect(await gateway.getRequests("config.get")).toHaveLength(0);
+      expect(await gateway.getRequests("users.listAuthLinks")).toHaveLength(0);
+      expect(await gateway.getRequests("visitor.list")).toHaveLength(0);
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          path: path.join(proofDirectory, "people-permissions-denied.png"),
+          animations: "disabled",
+        });
+      }
+      await policy
+        .getByRole("button", { name: "This connection's permissions", exact: true })
+        .click();
+      await policy
+        .getByText("You have permission to work in your own sessions.", { exact: true })
+        .waitFor();
+      expect(await gateway.getRequests("config.get")).toHaveLength(0);
+    });
+  });
+
   it("reports native browser interaction but not automatic reconnection", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, scenario());
@@ -613,6 +792,10 @@ suite.define(() => {
         expect(
           await rawCard.getByRole("link", { name: "View activity", exact: true }).count(),
         ).toBe(0);
+        expect(
+          await rawCard.getByRole("link", { name: "View permissions", exact: true }).count(),
+        ).toBe(0);
+        expect(await gateway.getRequests("users.list")).toHaveLength(0);
         const headerFaces = page.locator(".chat-pane__presence [data-viewer-id]");
         await expect.poll(() => headerFaces.getAttribute("aria-label")).toBe(raw.name);
         if (captureUiProofEnabled) {

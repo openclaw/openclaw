@@ -1,11 +1,12 @@
 import { ContextConsumer } from "@lit/context";
 import { html, nothing, render, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
-import type { UsersListResult } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { buildControlUiUserAvatarPath } from "../../../src/gateway/control-ui-user-avatar-route.js";
+import { pathForRoute } from "../app-route-paths.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import { applicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { observePersonProfile } from "../lib/person-profile.ts";
 import {
   presenceMatchesProfile,
   projectPresencePayload,
@@ -55,7 +56,24 @@ class PersonReference extends OpenClawLightDomContentsElement {
   });
   private readonly portal = new PortaledHovercardController(() => this.close());
   private stopRoute: (() => void) | undefined;
-  private person: PresenceViewer | null | undefined;
+  private stopGateway: (() => void) | undefined;
+  private profileRead: ReturnType<typeof observePersonProfile> | undefined;
+  private get person(): PresenceViewer | null | undefined {
+    const profile = this.profileRead?.profile;
+    if (!profile) {
+      return profile;
+    }
+    return {
+      id: profile.id,
+      identity: { type: "profile", id: profile.id },
+      name:
+        profile.displayName?.trim() || profile.githubIdentity?.login || t("presence.card.person"),
+      avatarUrl: profile.hasAvatar
+        ? buildControlUiUserAvatarPath(profile.id, profile.updatedAt)
+        : undefined,
+      watchedSessions: [],
+    };
+  }
   private activity: ReturnType<typeof observePersonActivityData> | undefined;
   private readonly activityExpiry = createPresenceActivityController(
     this,
@@ -108,11 +126,14 @@ class PersonReference extends OpenClawLightDomContentsElement {
     this.activityExpiry.sync();
     this.stopRoute?.();
     this.stopRoute = undefined;
+    this.stopGateway?.();
+    this.stopGateway = undefined;
     document.removeEventListener("pointerdown", this.outside, true);
     document.removeEventListener("focusin", this.outside, true);
     document.removeEventListener("keydown", this.escape, true);
     this.portal.reset();
-    this.person = undefined;
+    this.profileRead?.dispose();
+    this.profileRead = undefined;
     this.trigger?.setAttribute("aria-expanded", "false");
     this.trigger?.setAttribute("aria-haspopup", "dialog");
   };
@@ -161,57 +182,26 @@ class PersonReference extends OpenClawLightDomContentsElement {
     const context = this.context.value;
     this.stopRoute = context?.router.subscribe(() => this.close());
     if (context) {
+      const hello = context.gateway.snapshot.hello;
+      const revision = context.gateway.connectionRevision;
+      const selfId = context.gateway.snapshot.selfUser?.identity?.id;
+      this.stopGateway = context.gateway.subscribe((snapshot) => {
+        if (
+          snapshot.phase !== "connected" ||
+          snapshot.hello !== hello ||
+          context.gateway.connectionRevision !== revision ||
+          snapshot.selfUser?.identity?.id !== selfId
+        ) {
+          this.close();
+        }
+      });
       this.activity = observePersonActivityData(context, () => this.renderCard());
     }
-    this.person = this.connection.capture() ? undefined : null;
-    this.renderCard();
-    void this.loadPerson(card);
-  }
-
-  private async loadPerson(card: HTMLDivElement) {
-    const scope = this.connection.capture();
-    const context = this.context.value;
-    const profileId = this.profileId;
-    if (!scope || !context) {
-      return;
+    if (context) {
+      this.profileRead = observePersonProfile(context.gateway, this.profileId, () =>
+        this.renderCard(),
+      );
     }
-    let person: PresenceViewer | null = null;
-    try {
-      const { profiles } = await scope.client.request<UsersListResult>("users.list", {});
-      // Follow only canonical merge edges returned by the authorized directory.
-      const byId = new Map(profiles.map((profile) => [profile.id, profile]));
-      const visited = new Set<string>();
-      let profile = byId.get(profileId);
-      while (profile?.mergedInto && !visited.has(profile.id)) {
-        visited.add(profile.id);
-        profile = byId.get(profile.mergedInto);
-      }
-      if (profile && !profile.mergedInto) {
-        person = {
-          id: profile.id,
-          identity: { type: "profile", id: profile.id },
-          name:
-            profile.displayName?.trim() ||
-            profile.githubIdentity?.login ||
-            t("presence.card.person"),
-          avatarUrl: profile.hasAvatar
-            ? buildControlUiUserAvatarPath(profile.id, profile.updatedAt)
-            : undefined,
-          watchedSessions: [],
-        };
-      }
-    } catch {
-      // An unavailable or unauthorized profile remains an explicit, unresolved reference.
-    }
-    if (
-      this.portal.card !== card ||
-      this.profileId !== profileId ||
-      this.context.value !== context ||
-      !this.connection.isCurrent(scope)
-    ) {
-      return;
-    }
-    this.person = person;
     this.renderCard();
   }
 
@@ -248,6 +238,16 @@ class PersonReference extends OpenClawLightDomContentsElement {
         user && context
           ? renderPersonActivityCard({
               user,
+              gateway: context.gateway,
+              profileRead: this.profileRead,
+              profileChanged: () => this.renderCard(),
+              openPermissions: (profileId) => {
+                this.close();
+                context.navigate("people", {
+                  pathname: pathForRoute("people", context.basePath),
+                  search: `?person=${encodeURIComponent(profileId)}`,
+                });
+              },
               sessionData: data,
               watchAgentId: resolveUiDefaultAgentId(defaults),
               mainKey: resolveUiConfiguredMainKey(defaults),

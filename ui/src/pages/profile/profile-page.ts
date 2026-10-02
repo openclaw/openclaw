@@ -23,6 +23,7 @@ import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { invalidateUserPreferences, saveUserPreferences } from "../../app/user-prefs-cache.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { resolveCurrentSelfUser } from "../../app/user-profile.ts";
+import { renderConnectionAccess } from "../../components/connection-access.ts";
 import {
   renderLearnMoreLink,
   renderSettingsEmpty,
@@ -30,9 +31,7 @@ import {
   renderSettingsLoadingSkeleton,
   renderSettingsNavRow,
   renderSettingsPage,
-  renderSettingsRow,
   renderSettingsSection,
-  renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
@@ -373,63 +372,12 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private renderConnectionAccess() {
-    const scopes = this.connectionScopes;
-    const summary =
-      scopes === null
-        ? "unknown"
-        : scopes.length === 0
-          ? "none"
-          : ((
-              [
-                ["operator.admin", "admin"],
-                ["operator.write", "write"],
-                ["operator.sessions.write", "sessionWrite"],
-                ["operator.read", "read"],
-                ["operator.sessions.read", "sessionRead"],
-              ] as const
-            ).find(([scope]) => scopes.includes(scope))?.[1] ?? "limited");
-    return html`<div id="settings-profile-access">
-      ${renderSettingsSection(
-        { title: t("profilePage.access.title") },
-        html`
-          ${renderSettingsRow({
-            title: t(`profilePage.access.${summary}`),
-            description: t("profilePage.access.limits"),
-          })}
-          ${renderSettingsRow({
-            title: t("profilePage.access.help"),
-            description: t("profilePage.access.nextStep"),
-            stackedOnNarrow: true,
-            control: html`<button
-              type="button"
-              class="btn"
-              ?disabled=${this.identityBusy !== null}
-              @click=${() => this.context.gateway.connect()}
-            >
-              ${t("profilePage.access.reconnect")}
-            </button>`,
-          })}
-          <details class="settings-row settings-row--stacked">
-            <summary>${t("profilePage.access.details")}</summary>
-            ${renderSettingsRow({
-              title: t("profilePage.access.scopes"),
-              description: t("profilePage.access.description"),
-              stacked: true,
-              control: renderSettingsValue(
-                scopes === null
-                  ? t("profilePage.access.unknown")
-                  : scopes.length === 0
-                    ? t("profilePage.access.none")
-                    : scopes.join(", "),
-                { mono: scopes !== null && scopes.length > 0 },
-              ),
-            })}
-          </details>
-        `,
-      )}
-    </div>`;
+    return renderConnectionAccess({
+      scopes: this.connectionScopes,
+      busy: this.identityBusy !== null,
+      reconnect: () => this.context.gateway.connect(),
+    });
   }
-
   private renderModelAccounts() {
     return html`<openclaw-model-accounts
       .identityId=${this.selfUser?.id ?? null}

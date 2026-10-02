@@ -493,6 +493,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "mcp",
       "memory",
       "automation",
+      "people",
       "security",
       "secrets",
       "approvals",

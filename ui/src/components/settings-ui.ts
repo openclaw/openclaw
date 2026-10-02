@@ -262,10 +262,18 @@ export function renderSettingsRow(
 
 /** Clickable drill-in row with a trailing chevron. */
 export function renderSettingsNavRow(
-  props: Omit<SettingsRowProps, "stacked" | "stackedOnNarrow"> & { onClick: () => void },
+  props: Omit<SettingsRowProps, "stacked" | "stackedOnNarrow"> & {
+    onClick: () => void;
+    selected?: boolean;
+  },
 ): TemplateResult {
   return html`
-    <button type="button" class="settings-row settings-row--nav" @click=${props.onClick}>
+    <button
+      type="button"
+      class="settings-row settings-row--nav"
+      aria-current=${props.selected ? "true" : nothing}
+      @click=${props.onClick}
+    >
       ${renderSettingsRowText(props.title, props.description)}
       <div class="settings-row__control">
         ${props.control ?? nothing}

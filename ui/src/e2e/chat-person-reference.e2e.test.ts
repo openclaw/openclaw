@@ -42,6 +42,61 @@ const directory: UsersListResult = {
 };
 
 suite.define(() => {
+  it("retires a transcript profile reply captured before canonical profile invalidation", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const old = {
+        profiles: directory.profiles.map((person) => Object.assign({}, person, { role: "guest" })),
+      };
+      const current = {
+        profiles: old.profiles.map((person) => Object.assign({}, person, { role: "maintainer" })),
+      };
+      const gateway = await installMockGateway(page, {
+        historyMessages,
+        deferredMethods: ["users.list"],
+        methodResponses: { "users.list": current },
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      await page.locator(".markdown-person-reference").first().hover();
+      await gateway.waitForRequest("users.list");
+      await gateway.emitGatewayEvent("sessions.changed", { reason: "profile-identity" });
+      const card = page.locator(".person-activity-hovercard[role=dialog]");
+      await card.getByText("Assigned role: maintainer", { exact: true }).waitFor();
+      await gateway.resolveDeferred("users.list", old);
+      expect(await card.getByText("Assigned role: guest", { exact: true }).count()).toBe(0);
+      expect(await card.getByText("Assigned role: maintainer", { exact: true }).count()).toBe(1);
+      expect(await gateway.getRequests("users.list")).toHaveLength(2);
+    });
+  });
+
+  it("refreshes a transcript person's seeded role on canonical profile invalidation", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const initial = {
+        profiles: directory.profiles.map((person) => Object.assign({}, person, { role: "guest" })),
+      };
+      const gateway = await installMockGateway(page, {
+        historyMessages,
+        methodResponses: { "users.list": initial },
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      await page.locator(".markdown-person-reference").first().hover();
+      const card = page.locator(".person-activity-hovercard[role=dialog]");
+      await card.getByText("Assigned role: guest", { exact: true }).waitFor();
+      expect(await gateway.getRequests("users.list")).toHaveLength(1);
+      await gateway.setMethodResponse("users.list", {
+        profiles: initial.profiles.map((person) =>
+          Object.assign({}, person, { role: "maintainer" }),
+        ),
+      });
+      await gateway.emitGatewayEvent("sessions.changed", { reason: "profile-identity" });
+      await card.getByText("Assigned role: maintainer", { exact: true }).waitFor();
+      expect(await gateway.getRequests("users.list")).toHaveLength(2);
+      await page.keyboard.press("Escape");
+      await card.waitFor({ state: "detached" });
+      await gateway.emitGatewayEvent("sessions.changed", { reason: "profile-identity" });
+      expect(await gateway.getRequests("users.list")).toHaveLength(2);
+    });
+  });
+
   it.each([
     { width: 1280, colorScheme: "light" as const, scale: 1, font: "var(--font-body)" },
     { width: 390, colorScheme: "dark" as const, scale: 1.5, font: "Georgia, serif" },

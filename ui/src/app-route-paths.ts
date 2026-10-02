@@ -54,6 +54,7 @@ const APP_ROUTE_DEFINITIONS = {
   connection: { path: "/settings/connection" },
   config: { path: "/settings/general", aliases: ["/config"] },
   profile: { path: "/settings/profile", aliases: ["/profile"] },
+  people: { path: "/settings/people" },
   communications: { path: "/settings/communications", aliases: ["/communications"] },
   appearance: { path: "/settings/appearance", aliases: ["/appearance"] },
   lobsterdex: { path: "/settings/lobsterdex", aliases: ["/lobsterdex"] },

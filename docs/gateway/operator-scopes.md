@@ -148,6 +148,22 @@ an access policy supplied by a plugin.
 }
 ```
 
+In the Control UI, **Settings → People & permissions** is a read-only overview
+with complementary **People** and **Roles** views. People shows saved assignments
+and role ceilings; Roles lists configured definitions, their ceilings, explicitly
+assigned people, and people using the configured default fallback. Named profile
+roles are Gateway configuration, not a fixed built-in role list. The built-in
+`operator` and `node` connection types are a separate concept.
+The person popover shows the saved role assignment and links to that person
+through **View permissions**. Directory and role-policy reads require broad
+operator read access. Session-only guests can inspect their own connection
+grants, but cannot read other people’s profiles or role configuration.
+
+The overview distinguishes configured role ceilings from the authenticated
+viewer’s negotiated connection scopes. A role does not prove another person’s
+live permissions, invitation eligibility, access-policy approval, or the sandbox
+state of an existing session. It does not edit roles or grant access.
+
 Use the administrator-scoped `users.setRole` Gateway method with
 `{ profileId, role }` to assign a configured role. Set `role: null` to clear an
 assignment. Assignment changes immediately invalidate and close that profile's
