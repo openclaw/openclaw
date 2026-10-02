@@ -325,9 +325,18 @@ A person whose role requires sandboxing cannot start a run in an existing
 host-execution session, even when explicitly invited. Required sessions
 fail if their sandbox backend is unavailable or provisioning fails. They never
 fall back to the Gateway or a node. `/elevated`, `exec` host overrides, and
-configured host targets cannot bypass this restriction. The agent's managed
-GitHub identity is not injected into sandboxed execution: `GH_CONFIG_DIR` is
-absent, and `GH_TOKEN` and `GITHUB_TOKEN` are blanked.
+configured host targets cannot bypass this restriction.
+
+By default, the agent's managed GitHub identity is not injected into sandboxed
+execution: `GH_CONFIG_DIR` is absent, and `GH_TOKEN` and `GITHUB_TOKEN` are blanked.
+An administrator can set `agents.entries.<id>.tools.github.allowInSandbox: true`
+to expose that agent's managed identity to its own Docker or Podman sandbox,
+including role-required sandboxes isolated per creator. The profile is mounted
+read-only at `/openclaw/github`; sandboxed commands receive the managed token and
+Git author. Effective `"shared"` scope refuses this injection and logs a warning
+naming the agent. `openclaw security audit` warns for each opted-in agent. See
+[GitHub identity](/gateway/config-tools/github-identity#sandbox-opt-in) for the
+credential boundary and backend requirements.
 
 The role's `scopes` list caps scopes granted through connection auth, identity
 grants, pairing, scope upgrades, and authenticated trusted-proxy HTTP requests.

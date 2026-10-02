@@ -1,10 +1,15 @@
+import { spawn } from "node:child_process";
 // Docker backend manager tests cover runtime image matching and removal error
 // handling for sandbox and browser containers.
 import fs from "node:fs";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { managedGitHubIdentityEnvironment } from "../github-tool-identity.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const dockerMocks = vi.hoisted(() => ({
   containerState: vi.fn(),
@@ -583,6 +588,127 @@ describe("docker sandbox backend manager", () => {
     expect(fs.existsSync(envFile!)).toBe(false);
     await expect(backend.finalizeExec?.(finalization)).resolves.toBeUndefined();
   });
+
+  it.skipIf(process.platform === "win32").each(["docker", "podman"] as const)(
+    "%s binds the current managed identity at launch without staging its token",
+    async (engine) => {
+      const root = tempDirs.make("github-sandbox-launch-");
+      const profile = path.join(root, "profile");
+      fs.mkdirSync(profile, { mode: 0o700 });
+      const hosts = path.join(profile, "hosts.yml");
+      fs.writeFileSync(hosts, "github.com:\n  oauth_token: synthetic-before-launch\n", {
+        mode: 0o600,
+      });
+      fs.writeFileSync(
+        path.join(root, engine),
+        `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+process.stdout.write(JSON.stringify({
+  args,
+  selected: process.env.GH_TOKEN === "synthetic-after-preparation",
+  cleared: !process.env.GITHUB_TOKEN,
+  staged: fs.readFileSync(args[args.indexOf("--env-file") + 1], "utf8"),
+}));
+`,
+        { mode: 0o700 },
+      );
+      dockerMocks.ensureSandboxContainer.mockResolvedValueOnce({
+        containerName: "sandbox-github",
+        containerId: "a".repeat(64),
+      });
+      const cfg = resolveSandboxConfigForAgent(createConfig());
+      cfg.browser.enabled = false;
+      const createBackend =
+        engine === "docker" ? createDockerSandboxBackend : createPodmanSandboxBackend;
+      const backend = await createBackend(
+        {
+          sessionKey: "agent:release:main",
+          scopeKey: "agent:release:main",
+          workspaceDir: root,
+          agentWorkspaceDir: root,
+          cfg,
+        },
+        undefined,
+        {
+          managedLocalIdentity: true,
+          credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "", PREVIEW_TOKEN: "" },
+          localIdentityEnv: managedGitHubIdentityEnvironment({
+            profileDir: profile,
+            gitAuthor: { name: "Release Agent", email: "release@example.test" },
+          }),
+          excludedStoreNames: [],
+        },
+      );
+      const spec = await backend.buildExecSpec({
+        command: "printf ready",
+        env: {
+          GH_CONFIG_DIR: "/untrusted/profile",
+          GH_TOKEN: "synthetic-request-token",
+          GITHUB_TOKEN: "synthetic-request-fallback",
+          GIT_AUTHOR_NAME: "Untrusted Author",
+          PREVIEW_TOKEN: "synthetic-preview-token",
+        },
+        usePty: false,
+      });
+      const execute = async () => {
+        const child = spawn(spec.argv[0]!, spec.argv.slice(1), {
+          cwd: root,
+          env: { ...spec.env, PATH: `${root}${path.delimiter}${process.env.PATH}` },
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        let stdout = "";
+        let stderr = "";
+        child.stdout.on("data", (chunk) => {
+          stdout += String(chunk);
+        });
+        child.stderr.on("data", (chunk) => {
+          stderr += String(chunk);
+        });
+        const code = await new Promise<number | null>((resolve, reject) => {
+          child.once("error", reject);
+          child.once("close", resolve);
+        });
+        return { code, stdout, stderr };
+      };
+      try {
+        fs.writeFileSync(hosts, "github.com:\n  oauth_token: synthetic-after-preparation\n");
+        const result = await execute();
+        expect(result.code).toBe(0);
+        expect(result.stderr).toBe("");
+        const delivered = JSON.parse(result.stdout);
+        expect(delivered.selected).toBe(true);
+        expect(delivered.cleared).toBe(true);
+        expect(delivered.args.slice(delivered.args.indexOf("--env-file") + 2, -4)).toEqual([
+          "--env",
+          "GH_TOKEN",
+          "--env",
+          "GITHUB_TOKEN",
+        ]);
+        expect(delivered.staged).toContain("GH_CONFIG_DIR=/openclaw/github\n");
+        expect(delivered.staged).toContain("GIT_AUTHOR_NAME=Release Agent\n");
+        expect(delivered.staged).toContain("GIT_AUTHOR_EMAIL=release@example.test\n");
+        expect(delivered.staged).toContain("GH_TOKEN=\n");
+        expect(delivered.staged).toContain("GITHUB_TOKEN=\n");
+        expect(delivered.staged).toContain("PREVIEW_TOKEN=\n");
+        expect(JSON.stringify({ argv: spec.argv, staged: delivered.staged })).not.toContain(
+          "synthetic-",
+        );
+        fs.unlinkSync(hosts);
+        const refused = await execute();
+        expect(refused.code).toBe(1);
+        expect(refused.stdout).toBe("");
+        expect(refused.stderr).toContain("GitHub Identity credential is unavailable or insecure");
+      } finally {
+        await backend.finalizeExec?.({
+          status: "completed",
+          exitCode: 0,
+          timedOut: false,
+          token: spec.finalizeToken,
+        });
+      }
+    },
+  );
 
   it.each([
     {
