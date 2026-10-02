@@ -174,6 +174,7 @@ describe("canary teardown evidence", () => {
             entered.resolve();
             return receipt.promise;
           }
+          return undefined;
         },
       });
       try {

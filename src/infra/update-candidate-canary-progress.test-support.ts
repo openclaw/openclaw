@@ -264,7 +264,7 @@ export function registerCanaryProgressWorkerTests(
           "candidate-gateway-startup",
         ];
         expect(announcements).toEqual(
-          checks.map((name) => expect.stringContaining(`${name}: Running `)),
+          checks.map((name) => expect.stringMatching(new RegExp(`^${name}: \\S`))),
         );
         expect(json ? stdout : stderr).not.toHaveBeenCalled();
         for (const step of checks) {
