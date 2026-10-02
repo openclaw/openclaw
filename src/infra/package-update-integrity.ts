@@ -447,8 +447,11 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
           return;
         }
         pendingFiles++;
-        // Admission precedes either the worker or fallback read, so coarse ctime
-        // clocks cannot make this guard looser than checking at read start.
+        // Userspace cannot set ctime, but coarse filesystem clocks can hide same-tick
+        // writes, so reuse only bytes read well after the last change; admission
+        // precedes the worker or fallback read. Like the final sweep, this observes
+        // rather than excludes writers: a store to an already dirty shared mapping
+        // need not update timestamps.
         const admittedAtNs = BigInt(Date.now()) * 1_000_000n;
         const reusable = stat.ctimeNs + SETTLED_CTIME_MARGIN_NS <= admittedAtNs;
         pending.push({

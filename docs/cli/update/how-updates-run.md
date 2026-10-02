@@ -162,12 +162,11 @@ stopped during an update.
 
 Future installed updaters hash package files in short-lived worker threads with
 synchronous reads, at most four files at a time. The sealed recovery helper uses
-the same path; if worker threads are unavailable, hashing runs in-process. Each
-file whose digest is reused under the rule above is not re-read; every other file
-is read afresh in the workers. The
-asynchronous directory walk, serial final metadata recheck, entry and byte limits,
-deadlines, and refusal order are unchanged. Older installed updaters keep their
-own scanning behavior.
+the same path; if worker threads are unavailable, hashing runs in-process. A file
+whose digest is reused under the rule above is not re-read; every other file is
+read afresh in the workers. The asynchronous directory walk, serial final
+metadata recheck, entry and byte limits, deadlines, and refusal order are
+unchanged. Older installed updaters keep their own scanning behavior.
 
 An older installed updater that stops with `Package rollback verification byte
 limit exceeded` cannot obtain this repair from its staged candidate. Use the
