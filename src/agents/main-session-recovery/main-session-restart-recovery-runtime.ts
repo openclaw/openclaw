@@ -27,7 +27,13 @@ import {
   recoverStore,
 } from "./main-session-restart-recovery-store.js";
 
-type RecoveryCounts = { started: number; settled: number; failed: number; skipped: number };
+type RecoveryCounts = {
+  started: number;
+  settled: number;
+  failed: number;
+  skipped: number;
+  capacityDeferred?: number;
+};
 const STARTUP_RECOVERY_MAX_ACTIVE_RUNS = 1;
 
 async function runRecoveryRetries(params: {
@@ -36,18 +42,29 @@ async function runRecoveryRetries(params: {
   retryDelayMs?: number;
   shouldContinue: () => boolean;
   signal?: AbortSignal;
-  attempt: (finalAttempt: boolean) => Promise<boolean>;
+  attempt: (finalAttempt: boolean) => Promise<boolean | "skip">;
   onError: (error: unknown, finalAttempt: boolean) => void | Promise<void>;
 }): Promise<void> {
   let delayMs = params.initialDelayMs;
-  for (let attempt = 1; attempt <= params.maxRetries && params.shouldContinue(); attempt += 1) {
+  let attempt = 1;
+  while (attempt <= params.maxRetries && params.shouldContinue()) {
     const finalAttempt = attempt === params.maxRetries;
+    let skipped = false;
     try {
       if (delayMs > 0) {
         await sleepWithAbort(delayMs, params.signal, { ref: false });
       }
-      if (!params.shouldContinue() || (await params.attempt(finalAttempt))) {
+      if (!params.shouldContinue()) {
         return;
+      }
+      const outcome = await params.attempt(finalAttempt);
+      if (outcome === true) {
+        return;
+      }
+      if (outcome === "skip") {
+        skipped = true;
+      } else {
+        attempt += 1;
       }
     } catch (error) {
       if (!params.shouldContinue()) {
@@ -57,11 +74,16 @@ async function runRecoveryRetries(params: {
       if (finalAttempt) {
         return;
       }
+      attempt += 1;
     }
-    delayMs =
-      delayMs > 0
-        ? delayMs * RETRY_BACKOFF_MULTIPLIER
-        : (params.retryDelayMs ?? DEFAULT_RECOVERY_DELAY_MS);
+    if (skipped) {
+      delayMs = params.retryDelayMs ?? DEFAULT_RECOVERY_DELAY_MS;
+    } else {
+      delayMs =
+        delayMs > 0
+          ? delayMs * RETRY_BACKOFF_MULTIPLIER
+          : (params.retryDelayMs ?? DEFAULT_RECOVERY_DELAY_MS);
+    }
   }
 }
 
@@ -78,7 +100,7 @@ export async function recoverRestartAbortedMainSessions(params: {
   gatewayRuntime: GatewayRecoveryRuntime;
   recoveryCapacity?: ReturnType<typeof createMainSessionRecoveryCapacity>;
 }): Promise<RecoveryCounts> {
-  const result = { started: 0, settled: 0, failed: 0, skipped: 0 };
+  const result: RecoveryCounts = { started: 0, settled: 0, failed: 0, skipped: 0 };
   const handledSessionKeys = params.handledSessionKeys ?? new Set<string>();
 
   for (const target of await discoverRestartRecoveryStoreTargets({
@@ -102,6 +124,12 @@ export async function recoverRestartAbortedMainSessions(params: {
     result.settled += storeResult.settled;
     result.failed += storeResult.failed;
     result.skipped += storeResult.skipped;
+    // Only carry the deferral count when a store actually reported one, so
+    // ordinary scans keep the four-field result shape that existing toEqual
+    // assertions expect.
+    if (storeResult.capacityDeferred) {
+      result.capacityDeferred = (result.capacityDeferred ?? 0) + storeResult.capacityDeferred;
+    }
   }
 
   if (result.started > 0 || result.settled > 0 || result.failed > 0) {
@@ -343,8 +371,19 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
       attempt: async (finalAttempt) => {
         exhaustedTargets = new Map();
         const result = await runRecoveryAttempt(exhaustedTargets);
-        if (result.failed === 0) {
+        const capacityDeferred = result.capacityDeferred ?? 0;
+        if (result.failed === 0 && result.skipped === 0 && capacityDeferred === 0) {
           return true;
+        }
+        // A capacity deferral means the sole recovery slot was occupied, so
+        // the waiting session could not dispatch this sweep. Retry without
+        // consuming an attempt so it dispatches when capacity frees. Other
+        // skips (ineligible, already handled, deferred delivery) are terminal
+        // for their rows; when no deferral is present they fall through to
+        // the false return and consume the bounded retry budget instead of
+        // being re-scanned for the Gateway lifetime.
+        if (result.failed === 0 && capacityDeferred > 0) {
+          return "skip";
         }
         if (finalAttempt && exhaustedTargets.size > 0) {
           await reconcileExhaustedTargets(exhaustedTargets.values());

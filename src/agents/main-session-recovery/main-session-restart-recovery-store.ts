@@ -184,8 +184,20 @@ export async function recoverStore(params: {
   recoveryCapacity?: MainSessionRecoveryCapacity;
   shouldContinue?: () => boolean;
   gatewayRuntime: GatewayRecoveryRuntime;
-}): Promise<{ started: number; settled: number; failed: number; skipped: number }> {
-  const result = { started: 0, settled: 0, failed: 0, skipped: 0 };
+}): Promise<{
+  started: number;
+  settled: number;
+  failed: number;
+  skipped: number;
+  capacityDeferred?: number;
+}> {
+  const result: {
+    started: number;
+    settled: number;
+    failed: number;
+    skipped: number;
+    capacityDeferred?: number;
+  } = { started: 0, settled: 0, failed: 0, skipped: 0 };
   const shouldContinue = () => params.shouldContinue?.() !== false;
   const stopped = () => {
     if (shouldContinue()) {
@@ -320,7 +332,11 @@ export async function recoverStore(params: {
       continue;
     }
     const recordResumeResult = (resumeResult: Awaited<ReturnType<typeof resumeMainSession>>) => {
-      result[resumeResult]++;
+      if (resumeResult === "capacity-deferred") {
+        result.capacityDeferred = (result.capacityDeferred ?? 0) + 1;
+      } else {
+        result[resumeResult]++;
+      }
       if (resumeResult === "started" || resumeResult === "settled") {
         params.handledSessionKeys.add(resumeDedupeKey);
       } else if (resumeResult === "failed") {
