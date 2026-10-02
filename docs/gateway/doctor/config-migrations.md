@@ -48,6 +48,12 @@ the package with `openclaw plugins install npm:<package>` and update any explici
 stub repair, run `openclaw doctor --fix` on `2026.9.7` before upgrading. Current
 `openclaw.plugin.json` manifests and npm package installation remain supported.
 
+Discord `voice.tts.<provider>` blocks and guild-channel `allow` and `agentId`
+settings are also retired, including account overrides. Doctor preserves the
+original config and names the affected path. Install `2026.9.7`, run
+`openclaw doctor --fix`, then upgrade again. The repaired forms are
+`voice.tts.providers.<provider>`, guild-channel `enabled`, and top-level `bindings`.
+
 OpenClaw `v2026.9.7` can still write ownerless and mode-less cron jobs, and its
 migration/import writers can preserve null, `deliver`, or mixed-case delivery
 modes. Those cron repairs remain supported. JSON quarantine files also remain supported:
@@ -591,7 +597,7 @@ against the current SQLite owners before the import can rename profiles.
     | `meta.lastTouchedAt`, hook installs, cron store, bundled discovery, global TTS prefs path            | shared SQLite state                                                       |
     | TTS speaker fields `voice`/`voiceName`/`voiceId`                                                 | `speakerVoice`/`speakerVoiceId`                                              |
     | `channels.<id>.tts.<provider>` / `channels.<id>.accounts.<accountId>.tts.<provider>` (all channels except Discord)                                          | `...tts.providers.<provider>`                                                |
-    | `channels.<id>.voice.tts.<provider>` / `channels.<id>.accounts.<accountId>.voice.tts.<provider>` (all channels, including Discord)                          | `...voice.tts.providers.<provider>`                                          |
+    | `channels.<id>.voice.tts.<provider>` / `channels.<id>.accounts.<accountId>.voice.tts.<provider>` (all channels except Discord)                          | `...voice.tts.providers.<provider>`                                          |
     | `plugins.entries.voice-call.config.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`)     | `plugins.entries.voice-call.config.tts.providers.<provider>`                |
     | `plugins.entries.voice-call.config.tts.provider: "edge"` / `...tts.providers.edge`                | `provider: "microsoft"` / `...tts.providers.microsoft`                      |
     | `plugins.entries.voice-call.config.provider: "log"`                                              | `"mock"`                                                                      |
