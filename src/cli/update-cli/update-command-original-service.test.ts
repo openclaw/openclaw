@@ -35,6 +35,7 @@ import { registerCurrentF3Controls } from "./update-command-original-service-cur
 import { observeOriginalManagedServiceRuntime } from "./update-command-original-service.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
+import { getNodeRuntimeFixture } from "./update-command-runtime-recovery.test-support.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
@@ -103,11 +104,14 @@ let state: OpenClawTestState;
 let serviceState: GatewayServiceState;
 let rootA: string;
 let rootB: string;
+let serviceNodeRunner: string;
 let before: PreManagedServiceStop;
 let stopped = false;
 const schemas = { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: OPENCLAW_AGENT_SCHEMA_VERSION };
 beforeEach(async () => {
   vi.clearAllMocks();
+  // Service selection must not change the runtime of real schema and state workers.
+  serviceNodeRunner = getNodeRuntimeFixture().execPath;
   state = await createOpenClawTestState({
     label: "original-service",
     env: {
@@ -150,11 +154,11 @@ beforeEach(async () => {
   }
   // The selected runner must execute with its original dynamic-library search paths.
   if (process.platform === "win32") {
-    await fs.copyFile(process.execPath, state.path("selected-B-node"));
+    await fs.copyFile(serviceNodeRunner, state.path("selected-B-node"));
   } else {
     await fs.writeFile(
       state.path("selected-B-node"),
-      `#!/bin/sh\nexec ${quoteCliArg(process.execPath)} "$@"\n`,
+      `#!/bin/sh\nexec ${quoteCliArg(serviceNodeRunner)} "$@"\n`,
       { mode: 0o755 },
     );
   }
@@ -169,7 +173,7 @@ beforeEach(async () => {
     env: state.env,
     loadState: { status: "loaded" },
     command: {
-      programArguments: [process.execPath, path.join(rootA, "dist", "index.js"), "gateway"],
+      programArguments: [serviceNodeRunner, path.join(rootA, "dist", "index.js"), "gateway"],
       environment: Object.fromEntries(
         Object.entries(state.env).filter(
           (entry): entry is [string, string] => entry[1] !== undefined,
@@ -190,7 +194,7 @@ beforeEach(async () => {
     running: true,
     servicePid: serviceState.runtime?.pid,
     serviceEnv: state.env,
-    serviceNodeRunner: process.execPath,
+    serviceNodeRunner,
     serviceManagerUid: process.getuid?.() ?? 501,
     serviceUpdateVerdict: await revalidateManagedGatewayServiceAfterUpdate({
       state: serviceState,
@@ -250,7 +254,7 @@ beforeEach(async () => {
     expect(action).toBe("restart");
     expect(preserve).toBe(true);
     expect(params.result.root).toBe(rootA);
-    expect(params.nodeRunner).toBe(process.execPath);
+    expect(params.nodeRunner).toBe(serviceNodeRunner);
     if (mocks.windows) {
       expect(mocks.resume).toHaveBeenCalledTimes(1);
     }
@@ -811,7 +815,15 @@ it.each([
   expect(await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!)).toEqual(configBefore);
 });
 
-registerCurrentF3Controls(() => ({ state, rootA, rootB, before, serviceState, mocks }));
+registerCurrentF3Controls(() => ({
+  state,
+  rootA,
+  rootB,
+  serviceNodeRunner,
+  before,
+  serviceState,
+  mocks,
+}));
 
 it.each([false, true])(
   "handles restored receipt fingerprints with actual mutation=%s",

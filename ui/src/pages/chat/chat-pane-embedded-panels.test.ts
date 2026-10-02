@@ -616,6 +616,36 @@ describe("chat pane embedded panels", () => {
     expect(discussionSlots(true)).toContain("discussion");
   });
 
+  it("builds default Review content only once a Review tab exists", () => {
+    const state = {
+      client: { request: vi.fn() },
+      connected: true,
+      connectionEpoch: 1,
+      hello: { features: { methods: ["sessions.diff"] } },
+      sessionKey: "agent:main:review",
+      sidebarContent: null,
+      sidebarLayout: openSlot({ columns: [] }, "workspace"),
+      settings: loadSettings(),
+    } as unknown as ChatPageHost;
+    const renderDetail = vi.fn((_content: SidebarContent) => html`<div>Review</div>`);
+    const reviewTemplate = () =>
+      sidebarPanelDefinitions({
+        state,
+        renderDetail: (content: SidebarContent) => renderDetail(content),
+        workspace: html`<div>Files</div>`,
+      } as Parameters<typeof sidebarPanelDefinitions>[0]).find(
+        (definition) => definition.slot === "detail",
+      )?.content;
+
+    // Rendering Review starts its lazy panel import; a diff-capable chat must not pay for it unopened.
+    expect(reviewTemplate()).toBeNull();
+    expect(renderDetail).not.toHaveBeenCalled();
+
+    state.sidebarLayout = openSlot(state.sidebarLayout, "detail");
+    expect(reviewTemplate()).not.toBeNull();
+    expect(renderDetail).toHaveBeenCalledOnce();
+  });
+
   it("retains default Review content and collapsed files while switching tabs, focusing Chat, and minimizing", async () => {
     const request = vi.fn().mockResolvedValue({
       sessionKey: "agent:main:review",

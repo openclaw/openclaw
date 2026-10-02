@@ -130,10 +130,12 @@ host-qualified `GH_REPO=github.com/openclaw/openclaw` also avoids discovery whil
 preserving the subsequent authoritative API checks.
 
 Immediate REST squash uses `gh api --method PUT repos/OWNER/REPO/pulls/NUMBER/merge
---input -` with JSON containing the full prepared 40-hex `sha`,
+--input <absolute-file>` with JSON containing the full prepared 40-hex `sha`,
 `merge_method: "squash"`, and the inspected `commit_message`; an optional
-`commit_title` is accepted. Keep the explicit SHA even when newer Octopool can
-resolve a missing one. Auto-merge needs Octopool's protected auto-merge support
+`commit_title` is accepted. The shared GitHub subprocess owner stages internal
+`--input -` payload bytes in a private temporary file, keeps child stdin empty,
+and removes the file after synchronous completion. Keep the explicit SHA even
+when newer Octopool can resolve a missing one. Auto-merge needs Octopool's protected auto-merge support
 (openclaw/octopool#179), a numeric PR, `--squash --auto --match-head-commit SHA`,
 an explicit `--subject`, and `--body-file`. The wrapper supplies GitHub's
 current-head `viewerMergeHeadlineText` preview so repository title defaults stay

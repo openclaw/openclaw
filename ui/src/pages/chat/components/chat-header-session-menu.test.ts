@@ -176,7 +176,7 @@ describe("chat header session menu", () => {
       let current = true;
       const settled = vi.fn();
       const opening = openNativeSessionMenu({
-        menu,
+        pane: menu.parentElement!,
         signal: abort.signal,
         isCurrent: () => current,
       });
@@ -184,6 +184,7 @@ describe("chat header session menu", () => {
       await menu.updateComplete;
       await Promise.resolve();
       const dropdown = menu.querySelector("wa-dropdown")!;
+      await dropdown.updateComplete;
       expect(dropdown.open).toBe(true);
       expect(settled).not.toHaveBeenCalled();
       if (outcome === "selected") {
