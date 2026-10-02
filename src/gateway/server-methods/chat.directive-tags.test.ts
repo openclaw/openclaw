@@ -3667,7 +3667,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       });
       // Admission already owns a dedupe entry; observe the first terminal write, not key presence.
       await waitForAssertion(() => {
-        expect(["ok", "error"]).toContain(context.dedupe.get(`chat:${runId}`)?.payload?.status);
+        expect(["ok", "error"]).toContain(
+          asOptionalRecord(context.dedupe.get(`chat:${runId}`)?.payload)?.status,
+        );
       });
       const dedupe = context.dedupe.get(`chat:${runId}`);
       expect(dedupe?.ok).toBe(!failed);
