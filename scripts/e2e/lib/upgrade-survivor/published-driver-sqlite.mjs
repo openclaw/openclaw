@@ -32,7 +32,10 @@ function searchContent(matches) {
 }
 
 function rowMapIdentity(database) {
-  const columns = database.prepare("PRAGMA table_info(session_transcript_fts_rows)").all();
+  const columns = database
+    .prepare("PRAGMA table_info(session_transcript_fts_rows)")
+    .all()
+    .map((row) => Object.assign({}, row));
   const names = columns.map((column) => column.name);
   if (names.includes("id") && names.includes("message_id")) {
     return { columns, id: "id", current: true };
@@ -170,7 +173,8 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
         .prepare(
           "SELECT id,value,hex(CAST(value AS BLOB)) AS bytes FROM published_driver_retained ORDER BY id",
         )
-        .all();
+        .all()
+        .map((row) => Object.assign({}, row));
       const discarded = database
         .prepare("SELECT id FROM published_driver_discarded ORDER BY id")
         .all();
@@ -190,7 +194,10 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
         importedSession = inspectImportedSession(database, target.agentId);
         const identity = rowMapIdentity(database);
         schema = {
-          transcriptColumns: database.prepare("PRAGMA table_info(transcript_events)").all(),
+          transcriptColumns: database
+            .prepare("PRAGMA table_info(transcript_events)")
+            .all()
+            .map((row) => Object.assign({}, row)),
           rowMapColumns: identity.columns,
         };
         sessions = database
