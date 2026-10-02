@@ -228,10 +228,13 @@ function resolveAttachmentMaxBytes(params: {
   channel: ChannelId;
   accountId?: string | null;
 }): number | undefined {
-  // Priority: account-specific > channel-level > global default
+  // Priority: account-specific > channel-level > global default. A non-positive cap cannot bound a
+  // transfer, so treat it as unset here too, as the channel extensions already do at their own links.
   const limitMb =
     resolveChannelAccountMediaMaxMb(params) ?? params.cfg.agents?.defaults?.mediaMaxMb;
-  return typeof limitMb === "number" ? limitMb * 1024 * 1024 : undefined;
+  return typeof limitMb === "number" && Number.isFinite(limitMb) && limitMb > 0
+    ? limitMb * 1024 * 1024
+    : undefined;
 }
 
 function inferAttachmentFilename(params: {
