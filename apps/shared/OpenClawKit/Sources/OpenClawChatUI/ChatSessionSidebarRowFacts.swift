@@ -139,7 +139,8 @@ struct ChatSessionSidebarRowFacts {
                         String(
                             format: String(localized: "%lld messages need attention"),
                             webFacts.outboxAttentionCount),
-                    tone: .warning, count: webFacts.outboxAttentionCount))
+                    tone: .warning,
+                    count: webFacts.outboxAttentionCount))
             }
             if webFacts.hasComposerDraft {
                 badges.append(Badge(glyph: .symbol("pencil"), label: String(localized: "Unsent draft")))
