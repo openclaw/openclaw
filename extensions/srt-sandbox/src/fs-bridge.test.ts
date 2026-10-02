@@ -15,7 +15,15 @@ import { spawn } from "node:child_process";
 //      and fd counts returning to baseline (no leak on any path).
 // The owner here is spawned without the sandbox wrap; end-to-end kernel
 // enforcement is proven in backend.bridge.test.ts.
-import { mkdtempSync, mkdirSync, readFileSync, existsSync, renameSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { SandboxBackendHandle } from "openclaw/plugin-sdk/sandbox";
@@ -93,10 +101,11 @@ describe("srt fs bridge — contract surface", () => {
       filePath: "a/b/new.txt",
       action: "write",
     });
-    const expected = path.join(f.ws, "a", "b", "new.txt");
+    const policyPath = path.join(f.ws, "a", "b", "new.txt");
+    const canonicalPath = path.join(realpathSync(f.ws), "a", "b", "new.txt");
     // Pure canonical path: exactly the on-disk location, nothing else encoded.
-    expect(target.pinnedPath).toBe(expected);
-    expect(target.policyPath).toBe(expected);
+    expect(target.pinnedPath).toBe(canonicalPath);
+    expect(target.policyPath).toBe(policyPath);
   });
 
   it("rejects a pinnedPath whose basename differs from the requested entry", async () => {

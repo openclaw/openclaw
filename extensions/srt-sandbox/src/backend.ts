@@ -88,9 +88,9 @@ export async function disposeAllSrtScopeBackends(): Promise<void> {
 
 /** Reap every scope and release SRT's process-global proxy/runtime resources. */
 export async function shutdownSrtSandboxRuntime(): Promise<void> {
-  // Claim reset ownership before the first await so a concurrent factory must
-  // fail closed for the entire scope-disposal + SRT reset interval.
-  await shutdownSrtRuntime(disposeAllSrtScopeBackends, liveScopeBackends.size > 0);
+  // Claim teardown ownership before the first await so a concurrent factory
+  // fails closed for the entire scope-disposal and any owned reset interval.
+  await shutdownSrtRuntime(disposeAllSrtScopeBackends);
 }
 
 /** Dispose the live SRT scope backends for one scope (manager.removeRuntime). */

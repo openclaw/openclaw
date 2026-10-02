@@ -82,12 +82,52 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await shutdownSrtSandboxRuntime();
   srt.config = undefined;
   srt.proxyPort = undefined;
 });
 
 describe("process-global SRT runtime lifecycle", () => {
+  it("disposes a Windows-only scope without resetting an external manager owner", async () => {
+    srt.config = {} as SandboxRuntimeConfig;
+    srt.proxyPort = 49999;
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    await factory(makeParams("windows-external-owner"));
+    await Promise.all([shutdownSrtSandboxRuntime(), shutdownSrtSandboxRuntime()]);
+
+    expect(srt.reset).not.toHaveBeenCalled();
+    expect(srt.config).toBeDefined();
+    expect(srt.proxyPort).toBe(49999);
+
+    // Plugin stop retired the Windows scope, so a later plugin cycle can admit
+    // the one supported Windows scope without disturbing the external owner.
+    await factory(makeParams("windows-after-restart"));
+    await shutdownSrtSandboxRuntime();
+    expect(srt.reset).not.toHaveBeenCalled();
+    expect(srt.proxyPort).toBe(49999);
+    platform.mockRestore();
+  });
+
+  it("disposes mixed Windows and manager-backed scopes and resets the final manager owner", async () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    await factory(makeParams("windows-mixed"));
+    platform.mockReturnValue("darwin");
+    await factory(makeParams("manager-mixed"));
+
+    await Promise.all([shutdownSrtSandboxRuntime(), shutdownSrtSandboxRuntime()]);
+
+    expect(srt.reset).toHaveBeenCalledTimes(1);
+    expect(srt.proxyPort).toBeUndefined();
+
+    platform.mockReturnValue("win32");
+    await factory(makeParams("windows-after-mixed-stop"));
+    await shutdownSrtSandboxRuntime();
+    expect(srt.reset).toHaveBeenCalledTimes(1);
+    platform.mockRestore();
+  });
+
   it("rejects admission throughout an in-flight shutdown", async () => {
     await factory(makeParams("first"));
     const resetStarted = Promise.withResolvers<void>();

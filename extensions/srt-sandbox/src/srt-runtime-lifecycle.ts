@@ -88,6 +88,7 @@ function beginInitialization(config: SandboxRuntimeConfig): InitializingState {
 function beginReset(
   initialization?: Promise<void>,
   beforeReset?: () => Promise<void>,
+  resetRuntime = true,
 ): Promise<void> {
   if (state.phase === "resetting") {
     return state.promise;
@@ -98,7 +99,9 @@ function beginReset(
     await beforeReset?.();
     owners.clear();
     await initialization?.catch(() => undefined);
-    await SandboxManager.reset();
+    if (resetRuntime) {
+      await SandboxManager.reset();
+    }
   })().then(
     () => {
       if (state === resetting) {
@@ -183,19 +186,18 @@ export async function releaseSrtRuntime(owner: RuntimeOwner): Promise<void> {
 }
 
 /**
- * Claim teardown ownership immediately, rejecting admissions until reset has
- * completely settled. Concurrent callers share the same reset operation.
+ * Claim teardown ownership immediately, rejecting admissions until scope
+ * disposal and any owned reset have settled. Concurrent callers coalesce.
  */
-export function shutdownSrtRuntime(
-  disposeOwners: () => Promise<void>,
-  forceReset = false,
-): Promise<void> {
+export function shutdownSrtRuntime(disposeOwners: () => Promise<void>): Promise<void> {
   if (state.phase === "resetting") {
     return state.promise;
   }
-  if (state.phase === "idle" && owners.size === 0 && !forceReset) {
-    return Promise.resolve();
-  }
+  // A plugin-wide stop must always dispose scope-local resources, including
+  // the Windows CLI backend, while reset eligibility comes only from this
+  // coordinator's state. Generic backend liveness cannot prove ownership of
+  // SandboxManager's process-global runtime.
+  const resetRuntime = state.phase !== "idle" || owners.size > 0;
   const initialization = state.phase === "initializing" ? state.promise : undefined;
-  return beginReset(initialization, disposeOwners);
+  return beginReset(initialization, disposeOwners, resetRuntime);
 }
