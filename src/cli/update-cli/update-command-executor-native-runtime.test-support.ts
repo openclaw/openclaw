@@ -57,6 +57,16 @@ export const updateExecutorNativeEntrypoints = {
     sourceWorkerName: "../../infra/update-doctor-result",
     distWorkerPath: "infra/update-doctor-result.js",
   },
+  doctorCustody: {
+    currentModuleUrl,
+    sourceWorkerName: "../../infra/update-doctor-process-custody",
+    distWorkerPath: "infra/update-doctor-process-custody.js",
+  },
+  processSpawn: {
+    currentModuleUrl,
+    sourceWorkerName: "../../process/exec-spawn",
+    distWorkerPath: "process/exec-spawn.js",
+  },
   processExec: {
     currentModuleUrl,
     sourceWorkerName: "../../process/exec",
