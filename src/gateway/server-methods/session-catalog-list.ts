@@ -250,6 +250,7 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     config,
     catalogRegistrations,
     context.requestEntryLifetime?.signal,
+    client,
   );
   const pending = operations.pending.get(listKey);
   if (pending) {
