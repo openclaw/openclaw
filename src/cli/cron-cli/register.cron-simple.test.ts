@@ -308,6 +308,50 @@ describe("cron runs", () => {
       limit: 50,
     });
   });
+  it("forwards plural status filters as arrays", async () => {
+    await run([
+      "runs",
+      "job-1",
+      "--statuses",
+      "ok",
+      "error",
+      "--delivery-statuses",
+      "delivered",
+      "unknown",
+    ]);
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.runs", expect.anything(), {
+      id: "job-1",
+      statuses: ["ok", "error"],
+      deliveryStatuses: ["delivered", "unknown"],
+      limit: 50,
+    });
+  });
+  it("forwards plural and singular filters together", async () => {
+    await run(["runs", "job-1", "--status", "error", "--statuses", "ok"]);
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.runs", expect.anything(), {
+      id: "job-1",
+      status: "error",
+      statuses: ["ok"],
+      limit: 50,
+    });
+  });
+  it.each([
+    ["--statuses", "failed"],
+    ["--delivery-statuses", "failed"],
+  ])("rejects an invalid plural enum %s=%s before RPC", async (flag, value) => {
+    await expect(run(["runs", "job-1", flag, value])).rejects.toMatchObject({
+      message: expect.stringContaining(
+        `option '${flag} <status...>' argument '${value}' is invalid.`,
+      ),
+    });
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+  });
+  it("rejects a plural status flag with no value before RPC", async () => {
+    await expect(run(["runs", "job-1", "--statuses"])).rejects.toMatchObject({
+      message: expect.stringContaining("argument missing"),
+    });
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+  });
   it("rejects invalid offsets before RPC", async () => {
     await expect(run(["runs", "job-1", "--offset", "-1"])).rejects.toThrow("exit 1");
     expect(defaultRuntime.error).toHaveBeenCalledWith(
