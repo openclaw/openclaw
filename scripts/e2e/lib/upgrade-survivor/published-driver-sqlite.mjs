@@ -23,6 +23,7 @@ const bootstrapHeader = {
   timestamp: "2026-09-01T00:00:00.000Z",
   cwd: "/home/appuser",
 };
+const reclamationHeader = JSON.stringify({ ...bootstrapHeader, id: sessionId });
 
 // Gateway reconcile may reallocate derived FTS row IDs. Compare searchable
 // content across maintenance and verify FTS/row-map identity at each observation.
@@ -129,6 +130,10 @@ export function seedPublishedDriverLegacySqlite(state) {
           .run(sessionId, key, seededAt, seededAt);
         database
           .prepare(`INSERT INTO transcript_events(rowid,session_id,seq,event_json,created_at)
+          VALUES(40,?,0,?,?)`)
+          .run(sessionId, reclamationHeader, seededAt);
+        database
+          .prepare(`INSERT INTO transcript_events(rowid,session_id,seq,event_json,created_at)
           VALUES(41,?,7,?,?)`)
           .run(sessionId, event, seededAt);
         database
@@ -211,7 +216,10 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
           seq: row.seq,
           event: readSqliteTranscriptPayload(row),
         }));
-        assert.deepEqual(transcript, [{ rowid: 41, seq: 7, event }]);
+        assert.deepEqual(transcript, [
+          { rowid: 40, seq: 0, event: reclamationHeader },
+          { rowid: 41, seq: 7, event },
+        ]);
         matches = database
           .prepare(`SELECT rowid,text,session_id,message_id FROM session_transcript_fts
           WHERE session_transcript_fts MATCH 'saffronquasar' AND session_id=? ORDER BY rowid`)
