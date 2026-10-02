@@ -35,7 +35,9 @@ const isolatedCompletionMocks = vi.hoisted(() => ({
     () => { config: { command: string; modelAliases?: Record<string, string> } } | undefined
   >(() => ({ config: { command: "test-cli" } })),
   resolveCliRuntimeExecutionProvider: vi.fn<() => string | undefined>(() => undefined),
-  resolveEmbeddedCliBackendDispatchEligibility: vi.fn(() => undefined),
+  resolveEmbeddedCliBackendDispatchEligibility: vi.fn<() => { provider: string } | undefined>(
+    () => undefined,
+  ),
   runCliAgent: vi.fn<(params: IsolatedCliRunParams) => Promise<unknown>>(),
 }));
 

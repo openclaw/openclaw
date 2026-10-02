@@ -353,6 +353,7 @@ export async function withCodexAppServerJsonClient<T>(
           const acquireClient = params.isolated
             ? createIsolatedCodexAppServerClient
             : getLeasedSharedCodexAppServerClient;
+          const acquireObservation = timeoutDiagnostics?.beginAttempt(attempt + 1);
           const acquireOptions = {
             startOptions: params.startOptions,
             pluginConfig: params.pluginConfig,
@@ -366,10 +367,10 @@ export async function withCodexAppServerJsonClient<T>(
             config: params.config,
             abandonSignal: timeoutController.signal,
             assertCurrent: params.assertCurrent,
+            ...acquireObservation,
           };
           activePhase = "acquire-client";
           observeControlPhase(params.controlObservation, activePhase);
-          timeoutDiagnostics?.beginAttempt(attempt + 1);
           const client = await acquireClient(acquireOptions);
           timeoutDiagnostics?.acquired(client);
           let scopeActive = true;

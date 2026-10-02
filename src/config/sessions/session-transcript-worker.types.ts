@@ -253,6 +253,12 @@ export type SessionColdMetadataWorkerResult = {
   archive: Omit<SessionColdArchive, "archive_blob"> | undefined;
 };
 
+type SessionColdStorageInventoryWorkerInput = {
+  kind: "cold-storage-inventory";
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
+};
+
 export type SessionRowPresenceWorkerInput = {
   kind: "session-row-presence";
   database: { agentId: string; path: string };
@@ -502,6 +508,7 @@ export type SessionHistoryWorkerInput =
   | SessionPendingArchivesWorkerInput
   | SessionArchivePresenceWorkerInput
   | SessionColdMetadataWorkerInput
+  | SessionColdStorageInventoryWorkerInput
   | SessionTranscriptHydrationWorkerInput
   | SessionTranscriptCurrentTurnEntryWorkerInput
   | SessionTranscriptHistoryWorkerInput
@@ -560,6 +567,12 @@ export type SessionTranscriptWorkerValues = {
   "transcript-search": { kind: "transcript-search"; result: SessionTranscriptSearchResult };
   "transcript-match": { kind: "transcript-match"; result: { event: TranscriptEvent } | undefined };
   "cold-metadata": SessionColdMetadataWorkerResult;
+  "cold-storage-inventory": {
+    kind: "cold-storage-inventory";
+    hotTranscripts: number;
+    coldTranscripts: number;
+    embeddedArchiveBytes: number;
+  };
   "transcript-hydration": SessionTranscriptHydrationWorkerResult;
   "current-turn-entry": SessionTranscriptCurrentTurnEntryRead;
   "sqlite-target": { target: ResolvedSqliteStoreTarget };
@@ -671,6 +684,7 @@ export type SessionHistoryWorkerDatabase = {
     PublishedSessionTranscriptArchive | null
   >;
   readColdMetadata: SessionHistoryReader<SessionColdMetadataWorkerInput>;
+  readColdStorageInventory: SessionHistoryReader<SessionColdStorageInventoryWorkerInput>;
   searchTranscripts: (
     params: SessionTranscriptSearchWorkerInput["params"],
   ) => Promise<SessionTranscriptSearchResult>;

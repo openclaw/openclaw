@@ -7,7 +7,6 @@ import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
-import { assertAgentDatabaseTerminalOpenAllowed } from "./openclaw-agent-db-lifecycle.js";
 import {
   classifyOpenClawAgentDatabaseReadError,
   recordOpenClawAgentDatabaseReadOpenFailure,
@@ -18,6 +17,7 @@ import {
   assertSupportedAgentSchemaVersion,
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-read.js";
+import { assertAgentDatabaseTerminalOpenAllowed } from "./openclaw-agent-db-terminal.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,

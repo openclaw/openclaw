@@ -405,7 +405,7 @@ test("logs a native reclamation Worker throw with its cause, first frame and has
               error: expect.stringContaining(
                 `synthetic reclamation crash for ${redactIdentifier(scope.sessionId)} | synthetic disk failure`,
               ),
-              errorFrame: expect.stringContaining("at MessagePort.failReclamation"),
+              errorFrame: expect.stringMatching(/^at (?:MessagePort\.)?failReclamation \(/u),
             }),
           }),
           expect.objectContaining({

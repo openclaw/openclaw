@@ -148,10 +148,14 @@ export async function runPreparedEmbeddedLoop(
     } = preparedRuntime.snapshot());
   };
   const traceAttempts: TraceAttempt[] = [];
+  // Same-model retry diagnostics inform exhaustion, not model-routing authority.
   const resolveRuntimeFallbackReason = (): string | null =>
     traceAttempts.findLast(
       (attempt) => attempt.result === "fallback_model" && typeof attempt.reason === "string",
-    )?.reason ?? lastRetryFailoverReason;
+    )?.reason ??
+    (params.modelRoutingProvenance?.stage === "fallback"
+      ? (params.modelRoutingProvenance.fallbackReason ?? null)
+      : null);
   const { sessionKey, config, agentId } = params;
   const { sessionAgentId } = resolveSessionAgentIds({ sessionKey, config, agentId });
   const strictAgenticActive = isStrictAgenticExecutionContractActive({

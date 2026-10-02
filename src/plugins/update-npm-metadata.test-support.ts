@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { assert, expect, it, vi, type Mock } from "vitest";
 import type { runCommandWithTimeout } from "../process/exec.js";
+import { npmCommandArgs } from "../test-utils/npm-command.js";
 import {
   expectIntegrityDriftRejected,
   mockNpmViewMetadataResult,
@@ -86,9 +87,9 @@ export function registerNpmUpdateMetadataTests({
     });
     expect(
       runCommandWithTimeoutMock.mock.calls
-        .map(([argv]) => argv)
-        .filter((argv) => argv[1] === "view")
-        .map((argv) => expectDefined(argv[2], "npm view package spec"))
+        .map(([argv]) => npmCommandArgs(argv))
+        .filter((args): args is string[] => args?.[0] === "view")
+        .map((args) => expectDefined(args[1], "npm view package spec"))
         .toSorted((left, right) => left.localeCompare(right)),
     ).toEqual([`${packageName}@beta`, `${packageName}@latest`]);
   });
@@ -156,9 +157,9 @@ export function registerNpmUpdateMetadataTests({
         JSON.parse(fs.readFileSync(path.join(record.installPath, "package.json"), "utf8")),
       ).toMatchObject({ name: packageName, version: "2.0.0" });
       const metadataCommands = runCommandWithTimeoutMock.mock.calls
-        .map(([argv]) => argv)
-        .filter((argv) => argv[1] === "view")
-        .map((argv) => expectDefined(argv[2], "npm view package spec"));
+        .map(([argv]) => npmCommandArgs(argv))
+        .filter((args): args is string[] => args?.[0] === "view")
+        .map((args) => expectDefined(args[1], "npm view package spec"));
       expect(metadataCommands.toSorted((left, right) => left.localeCompare(right))).toEqual(
         channel === "beta" ? [`${packageName}@beta`, `${packageName}@latest`] : [packageName],
       );

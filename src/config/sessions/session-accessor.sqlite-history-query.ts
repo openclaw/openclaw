@@ -13,10 +13,6 @@ import {
 import type { TranscriptReadWindowOptions } from "../../sessions/transcript-read-window.js";
 import { isVisibleTranscriptRecord } from "../../sessions/transcript-visible-record.js";
 import type {
-  SessionTranscriptMessageAnchorPage,
-  SessionTranscriptMessageEventPage,
-} from "./session-accessor.sqlite-active-events.js";
-import type {
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptRawDeltaResult,
   TranscriptEvent,
@@ -40,6 +36,8 @@ import {
 } from "./session-accessor.sqlite-history-projection.js";
 import {
   getActiveTranscriptKysely,
+  type SessionTranscriptMessageAnchorPage,
+  type SessionTranscriptMessageEventPage,
   type CurrentTranscriptProjection,
   type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-projection-read.js";

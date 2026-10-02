@@ -108,8 +108,9 @@ backoff schedule; abandoning a request releases its probe without recording a ne
 host failure. Background hydration keeps its separate grouped attempt and can
 walk the home to completion without consuming a foreground request's budget.
 
-Explicit homes hydrate in the background when the plugin activates. An implicit
-process home waits for an authorized catalog request. A home without a valid,
+Homes hydrate on the first authorized catalog request, including explicitly
+configured homes. Plugin activation does not start catalog-only app-servers for
+the configured agent fleet. A home without a valid,
 complete saved snapshot walks native `thread/list` pages once, yielding between
 pages. Progressive lists serve resident rows immediately. If a local home is still
 loading after 250 ms, the list returns that host as pending, preserving previously

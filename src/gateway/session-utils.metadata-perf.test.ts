@@ -8,11 +8,9 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js"
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
-import type {
-  ProviderThinkingProfile,
-  ProviderThinkingRegistry,
-} from "../plugins/provider-thinking.types.js";
+import type { ProviderThinkingProfile } from "../plugins/provider-thinking.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
@@ -44,8 +42,15 @@ function createRowThinkingFixture() {
       defaultLevel: "low",
     };
   };
-  const pluginRegistry: ProviderThinkingRegistry = {
-    providers: [{ provider: { id: provider, resolveThinkingProfile: policy } }],
+  const pluginRegistry: PluginRegistry = {
+    ...createEmptyPluginRegistry(),
+    providers: [
+      {
+        pluginId: provider,
+        source: "test",
+        provider: { id: provider, label: provider, auth: [], resolveThinkingProfile: policy },
+      },
+    ],
   };
   const catalog: ModelCatalogSnapshot = {
     entries: [{ provider, id: "reasoner", name: "Reasoner", reasoning: true }],
@@ -53,7 +58,7 @@ function createRowThinkingFixture() {
   };
   prepareModelCatalogThinkingPolicies({
     catalog,
-    providers: pluginRegistry.providers,
+    pluginRegistry,
     metadataSnapshot: createPluginMetadataSnapshotFixture(),
   });
   const modelCatalog = new Map([
@@ -195,11 +200,16 @@ test("keeps stored thinking levels and defaults scoped to the prepared agent, mo
       },
     };
     const prepare = (preferLow: boolean) => {
-      const pluginRegistry: ProviderThinkingRegistry = {
+      const pluginRegistry: PluginRegistry = {
+        ...createEmptyPluginRegistry(),
         providers: [
           {
+            pluginId: provider,
+            source: "test",
             provider: {
               id: provider,
+              label: provider,
+              auth: [],
               resolveThinkingProfile: ({ modelId, agentRuntime }) => {
                 const low = preferLow || modelId === "alternate" || agentRuntime === "codex";
                 return {
@@ -226,7 +236,7 @@ test("keeps stored thinking levels and defaults scoped to the prepared agent, mo
       };
       prepareModelCatalogThinkingPolicies({
         catalog,
-        providers: pluginRegistry.providers,
+        pluginRegistry,
         metadataSnapshot: createPluginMetadataSnapshotFixture(),
       });
       return createPreparedGatewayModelCatalog({ ...catalog, pluginRegistry });
@@ -327,7 +337,7 @@ test("rebuilds resident thinking facts on config and catalog publication", async
       };
       prepareModelCatalogThinkingPolicies({
         catalog: next,
-        providers: fixture.pluginRegistry.providers,
+        pluginRegistry: fixture.pluginRegistry,
         metadataSnapshot: createPluginMetadataSnapshotFixture(),
       });
       catalog = new Map([

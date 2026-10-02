@@ -92,7 +92,7 @@ async function runSchedulingFixture(
           if (index < 2) {
             entry.schedule = { kind: "at", at: new Date(now + 86_400_000).toISOString() };
           } else {
-            entry.payload.toolsAllow = index === 2 ? ["read"] : [];
+            entry.payload.toolsAllow = index === 2 ? ["read", "skills_read"] : [];
           }
           return entry;
         })
@@ -276,6 +276,19 @@ describe("scheduling YAML canonical tool proof", () => {
     },
   );
 
+  it("accepts read-derived skill authority without admitting unrelated tools", async () => {
+    const { result, restarted, removed } = await runSchedulingFixture("authority", "nested", {
+      mutateJobs: (jobs) => {
+        const overbroad = jobs[2];
+        assert.ok(overbroad);
+        overbroad.payload.toolsAllow = ["skills_read", "read"];
+      },
+    });
+    expect(result.status).toBe("pass");
+    expect(restarted).toBe(true);
+    expect(removed).toEqual(["job-0", "job-1", "job-2", "job-3"]);
+  });
+
   it.each(["direct", "nested"] as const)(
     "accepts one-shot/recurring evidence alongside other owners in %s history",
     async (shape) => {
@@ -372,7 +385,10 @@ describe("scheduling YAML canonical tool proof", () => {
   it.each([
     ["omitted", 0, ["automations", "read"], /omitted policy/],
     ["wildcard", 1, ["automations", "read"], /wildcard policy/],
-    ["overbroad", 2, ["read", "exec"], /overbroad policy/],
+    ["overbroad", 2, ["read", "skills_read", "exec"], /overbroad policy/],
+    ["overbroad wildcard", 2, ["read", "skills_read", "*"], /overbroad policy/],
+    ["overbroad unrelated", 2, ["read", "skills_read", "browser"], /overbroad policy/],
+    ["overbroad duplicate", 2, ["read", "skills_read", "skills_read"], /overbroad policy/],
     ["empty", 3, ["read"], /empty policy/],
   ] as const)("rejects incorrect persisted %s authority", async (_label, index, tools, message) => {
     await expect(

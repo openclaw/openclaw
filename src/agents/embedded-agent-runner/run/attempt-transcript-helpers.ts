@@ -2,10 +2,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   hasSessionTranscriptMessage,
-  loadSessionEntry,
   resolveSessionTranscriptRuntimeTarget,
-  updateSessionEntry,
+  patchSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
+import { readSessionEntryInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions/store-maintenance.js";
 import type { SessionEntry as ConfigSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -84,16 +84,12 @@ export function normalizeCompactionRecoveryTranscriptTail(params: {
 }
 
 // Applies quota-resume TTL maintenance to only the active attempt session.
-export async function loadAttemptSessionEntryAfterQuotaMaintenance(params: {
-  agentId: string;
-  storePath: string;
-  sessionKey: string;
-}): Promise<ConfigSessionEntry | undefined> {
-  const entry = loadSessionEntry({
-    agentId: params.agentId,
-    storePath: params.storePath,
-    sessionKey: params.sessionKey,
-  });
+export async function loadAttemptSessionEntryAfterQuotaMaintenance(
+  params: { agentId: string; storePath: string; sessionKey: string },
+  assertCurrent: () => void,
+): Promise<ConfigSessionEntry | undefined> {
+  const entry = await readSessionEntryInWorker(params, assertCurrent);
+  assertCurrent();
   if (!entry?.quotaSuspension) {
     return entry;
   }
@@ -102,12 +98,8 @@ export async function loadAttemptSessionEntryAfterQuotaMaintenance(params: {
   if (!maintenance.patch) {
     return entry;
   }
-  const updated = await updateSessionEntry(
-    {
-      agentId: params.agentId,
-      storePath: params.storePath,
-      sessionKey: params.sessionKey,
-    },
+  const updated = await patchSessionEntryCore(
+    params,
     (currentEntry) =>
       resolveQuotaSuspensionEntryMaintenance({
         entry: currentEntry,
@@ -116,8 +108,10 @@ export async function loadAttemptSessionEntryAfterQuotaMaintenance(params: {
     {
       skipMaintenance: true,
       takeCacheOwnership: true,
+      assertCommitAllowed: assertCurrent,
     },
   );
+  assertCurrent();
   return updated ?? entry;
 }
 

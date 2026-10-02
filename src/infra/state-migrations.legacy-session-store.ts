@@ -23,8 +23,8 @@ import {
   type ResolvedSessionMaintenanceConfig,
   type SessionMaintenanceWarning,
 } from "../config/sessions/store-maintenance.js";
-import { applySessionStoreMigrations } from "../config/sessions/store-migrations.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
+import { assertSupportedSessionStoreEntry } from "../config/sessions/supported-session-store.js";
 import {
   normalizeSessionRuntimeModelFields,
   type SessionEntry,
@@ -208,8 +208,8 @@ function normalizePluginExtensionSlotKeys(entry: SessionEntry): SessionEntry {
 }
 
 function normalizeLegacySessionStore(store: Record<string, SessionEntry>): void {
-  applySessionStoreMigrations(store);
   for (const [key, entry] of Object.entries(store)) {
+    assertSupportedSessionStoreEntry(entry);
     const modelSelectionLocked = isRecord(entry) && entry.modelSelectionLocked === true;
     const shaped = normalizePersistedSessionEntryShape(entry, { sessionKey: key });
     if (!shaped) {

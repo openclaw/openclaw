@@ -211,11 +211,12 @@ async function runWithRetainedUpdateRuntime<T>(
           const inventoryMs = Math.round(performance.now() - inventoryStartedAt);
           const materializationStartedAt = performance.now();
           const counts = await withUpdateCandidateIoBudget(
-            { directory: privateRoot, bytes: plan.bytes, timeoutMs },
-            async (signal) =>
+            { directory: privateRoot, bytes: plan.bytes, timeoutMs, progress: "reported" },
+            async (signal, reportProgress) =>
               await linkUpdateCandidatePluginTrees(plan, {
                 targetStateDir: privateRoot,
                 candidateRoot,
+                onMaterialized: reportProgress,
                 onProgress: () => {
                   signal.throwIfAborted();
                 },

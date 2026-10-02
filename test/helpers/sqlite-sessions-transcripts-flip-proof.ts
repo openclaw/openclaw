@@ -683,7 +683,7 @@ async function seedLegacySessionStore(context: ProofContext): Promise<void> {
     main: legacyEntry(context.legacySessionId, now - 4_000),
     "+15551234567": legacyEntry("sqlite-old-direct", now - 5_000),
     "group:legacy-room": legacyEntry("sqlite-old-group", now - 6_000, {
-      room: "legacy-room",
+      groupChannel: "legacy-room",
     }),
     "partial-direct": legacyEntry("sqlite-partial-import", now - 7_000),
   };
@@ -777,12 +777,12 @@ function scaleSessionId(index: number): string {
 function legacyEntry(
   sessionId: string,
   updatedAt: number,
-  options: { room?: string; sessionFile?: string } = {},
-): SessionEntry & { channel: string; chatType: string; room?: string } {
+  options: { groupChannel?: string; sessionFile?: string } = {},
+): SessionEntry & { channel: string; chatType: string } {
   return {
     channel: "cli",
     chatType: "direct",
-    ...(options.room ? { room: options.room } : {}),
+    ...(options.groupChannel ? { groupChannel: options.groupChannel } : {}),
     sessionFile: options.sessionFile ?? `${sessionId}.jsonl`,
     sessionId,
     sessionStartedAt: updatedAt - 500,

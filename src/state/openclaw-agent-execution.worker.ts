@@ -55,6 +55,7 @@ import {
 import {
   loadAgentTranscriptOperations,
   loadAgentReplacementOperations,
+  loadAgentRestartRecoveryOperations,
   loadAgentEntryReadOperations,
   loadAgentTrajectoryOperations,
   loadAgentArchiveOperations,
@@ -354,6 +355,7 @@ function openAgentDatabaseBackend(
     "session.archives.recordPublication": loadAgentArchiveOperations,
     "session.transcript.initialize": loadAgentTranscriptOperations,
     "session.entries.replace": loadAgentReplacementOperations,
+    "session.restart.recover": loadAgentRestartRecoveryOperations,
     "session.entry.acp": loadAgentAcpOperations,
     "session.providerReview.compare": loadAgentProviderReviewOperations,
     "session.reaction.set": loadAgentReactionOperations,

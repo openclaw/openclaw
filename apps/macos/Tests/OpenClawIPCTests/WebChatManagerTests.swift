@@ -73,6 +73,9 @@ extension WebChatManagerTests {
                 case "users.self": #"{"profile":{"id":"me","emails":[]}}"#
                 case "users.list": #"{"profiles":[{"id":"me","emails":[]},{"id":"ada","emails":[],"displayName":"Ada"}]}"#
                 case "worktrees.list": #"{"worktrees":[{"id":"copy","name":"copy","repoFingerprint":"repo","repoRoot":"/work/repo","path":"/work/copy","branch":"launch","baseRef":"main","ownerKind":"session","createdAt":1,"lastActiveAt":2}]}"#
+                case "sessions.groups.defaults": #"{"defaults":[{"name":"Research","cwd":"/work/repo","worktree":true}]}"#
+                case "worktrees.branches": #"{"branches":[],"repositoryStatus":"git"}"#
+                case "fs.listDir": #"{"path":"/work","home":"/work","entries":[]}"#
                 case "chat.history": #"{"sessionId":"launch-id","messages":[{"role":"user","content":[{"type":"text","text":"Ready to launch"}]}]}"#
                 default: #"{"ok":true}"#
                 }
@@ -86,6 +89,8 @@ extension WebChatManagerTests {
                         "sessions.patch",
                         "sessions.assignOwner",
                         "chat.history",
+                        "sessions.groups.defaults",
+                        "sessions.groups.update",
                         "sessions.groups.rename",
                         "sessions.groups.put",
                         "sessions.groups.delete",
@@ -160,9 +165,18 @@ extension WebChatManagerTests {
             let group = NSHostingMenu(rootView: sidebar.groupMenu("Research"))
             group.update()
             let groupItems = group.items.filter { !$0.isSeparatorItem }
-            #expect(groupItems.map(\.title) == ["Rename…", "New group…", "Delete…"])
+            #expect(groupItems.map(\.title) == ["Group defaults…", "Rename…", "New group…", "Delete…"])
             let groupEnabled = groupItems.allSatisfy(\.isEnabled)
             #expect(groupEnabled)
+            let defaultsModel = ChatSessionGroupDefaultsModel(
+                name: "Research", connection: connection, agentWorkspace: nil)
+            await defaultsModel.load()
+            #expect(defaultsModel.canSave)
+            #expect(defaultsModel.worktree)
+            await defaultsModel.navigate(nil)
+            #expect(defaultsModel.listing?.path == "/work")
+            #expect(await defaultsModel.save())
+            #expect(methods.value.contains("sessions.groups.update"))
             #expect(connection.link(row, false)?
                 .absoluteString == "https://menu.example.test/control/chat/research/~key/launch")
             #expect(connection.link(row, true)?

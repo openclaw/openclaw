@@ -209,6 +209,54 @@ describe("cron run diagnostics", () => {
     });
   });
 
+  it("warns on an unresolved exec call even when the assistant replied normally", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [{ text: "RESULT: the command did not run" }],
+        meta: {
+          toolSummary: {
+            calls: 1,
+            tools: ["exec"],
+            failures: 1,
+            unresolvedError: { toolName: "exec" },
+          },
+        },
+      },
+      { nowMs: () => 123, finalStatus: "ok" },
+    );
+
+    expect(diagnostics).toEqual({
+      summary: "exec tool failed",
+      entries: [
+        {
+          ts: 123,
+          source: "exec",
+          severity: "warn",
+          message: "exec tool failed",
+          toolName: "exec",
+        },
+      ],
+    });
+  });
+
+  it("does not duplicate a recorded exec error or report unrelated tools", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [{ text: "exec parameter invalid", isError: true, toolName: "exec" }],
+        meta: {
+          toolSummary: { unresolvedError: { toolName: "exec" } },
+        },
+      },
+      { nowMs: () => 123, finalStatus: "ok" },
+    );
+    expect(diagnostics?.entries).toHaveLength(1);
+    expect(
+      createCronRunDiagnosticsFromAgentResult({
+        meta: { toolSummary: { unresolvedError: { toolName: "read" } } },
+      }),
+    ).toBeUndefined();
+  });
+
   it("prefers a terminal tool failure over a generic failed-tool payload", () => {
     const diagnostics = createCronRunDiagnosticsFromAgentResult(
       {

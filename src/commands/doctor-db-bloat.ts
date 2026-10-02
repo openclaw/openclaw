@@ -17,7 +17,7 @@ function describeBloat(label: string, stats: SqliteBloatStats): string | null {
   if (isBloated) {
     const remedy = stats.incrementalAutoVacuum
       ? "incremental vacuum will release it gradually"
-      : "run `VACUUM` offline (gateway stopped) to reclaim it";
+      : "use offline Doctor SQLite compaction to reclaim it and enable incremental vacuum (gateway stopped; see https://docs.openclaw.ai/cli/doctor/sqlite-maintenance)";
     return `${label}: ${formatBytes(stats.fileBytes)} on disk with ${formatBytes(stats.freeBytes)} reclaimable free pages; ${remedy}.`;
   }
   if (stats.fileBytes >= LARGE_DB_WARN_BYTES) {

@@ -90,6 +90,8 @@ function pluginDependencyNames(manifest: Record<string, unknown> | undefined): S
 type PluginNativeDependencyScope = { prepareDependencies?: () => void };
 
 export type PluginModuleCapture = {
+  staticImports?: ReadonlySet<string>;
+  isRequireReference: (specifier: string) => boolean;
   prepareDependency: ReturnType<typeof createPluginDependencyLookup>;
   nativeScope: PluginNativeDependencyScope;
   capture: (

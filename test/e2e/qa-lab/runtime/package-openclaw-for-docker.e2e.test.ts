@@ -5,6 +5,7 @@ import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import * as tar from "tar";
@@ -40,7 +41,7 @@ import { resolveInstalledPluginIndexStorePath } from "../../../../src/plugins/in
 import { writePersistedInstalledPluginIndex } from "../../../../src/plugins/installed-plugin-index-store-write.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../../../src/state/openclaw-state-db.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
-import { createDeferred } from "../../../helpers/promise.js";
+import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const skipBundledAiRuntime = async (): Promise<() => Promise<void>> => async () => {};
@@ -222,7 +223,22 @@ async function expectCommandTimeoutAfterReady(
   }
 }
 
-async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
+// Product termination joins its direct child and gives the group a bounded reap allowance,
+// but descendants have no retained handle here. Observe extinction until the test is aborted.
+async function waitForDead(pid: number, signal: AbortSignal): Promise<void> {
+  await withinTest(
+    (async () => {
+      while (isProcessAlive(pid)) {
+        await waitForProcessTick(5, undefined, { signal });
+      }
+    })(),
+    signal,
+  ).catch((cause: unknown) => {
+    throw new Error(`process still alive: ${pid}`, { cause });
+  });
+}
+
+async function waitForWindowsChildDeath(pid: number, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (!isProcessAlive(pid)) {
@@ -512,7 +528,7 @@ describe("package-openclaw-for-docker", () => {
             expect(Number.isSafeInteger(childPid) && childPid > 0).toBe(true);
           },
         );
-        await waitForDead(childPid, 2_000);
+        await waitForWindowsChildDeath(childPid, 2_000);
       } finally {
         readiness.close();
         if (childPid && isProcessAlive(childPid)) {
@@ -2144,7 +2160,7 @@ describe("package-openclaw-for-docker", () => {
     ).resolves.toBe("");
   });
 
-  it("kills timed-out child process groups", async () => {
+  it("kills timed-out child process groups", async ({ signal }) => {
     if (process.platform === "win32") {
       return;
     }
@@ -2177,7 +2193,7 @@ describe("package-openclaw-for-docker", () => {
           childPid = await readPid(childPidPath, 2000);
         },
       );
-      await waitForDead(childPid, 2000);
+      await waitForDead(childPid, signal);
     } finally {
       if (childPid && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");
@@ -2224,7 +2240,9 @@ describe("package-openclaw-for-docker", () => {
     }
   });
 
-  it("keeps fallback SIGKILL armed for descendants after the direct child exits", async () => {
+  it("keeps fallback SIGKILL armed for descendants after the direct child exits", async ({
+    signal,
+  }) => {
     if (process.platform === "win32") {
       return;
     }
@@ -2256,7 +2274,7 @@ describe("package-openclaw-for-docker", () => {
           childPid = await readPid(childPidPath, 2000);
         },
       );
-      await waitForDead(childPid, 2000);
+      await waitForDead(childPid, signal);
     } finally {
       if (childPid && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");
@@ -2371,7 +2389,7 @@ try {
     expect(fs.readFileSync(markerPath, "utf8")).toBe("done");
   });
 
-  it("forwards external termination to active child process groups", async () => {
+  it("forwards external termination to active child process groups", async ({ signal }) => {
     if (process.platform === "win32") {
       return;
     }
@@ -2406,7 +2424,7 @@ try {
       const result = await waitForExit(runner, 5000);
 
       expect(result).toEqual({ signal: null, status: 143 });
-      await waitForDead(childPid, 2000);
+      await waitForDead(childPid, signal);
     } finally {
       if (runnerPid && isProcessAlive(runnerPid)) {
         process.kill(runnerPid, "SIGKILL");
