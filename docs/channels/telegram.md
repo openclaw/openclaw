@@ -31,7 +31,7 @@ Telegram is production-ready for bot DMs and groups via grammY. Long polling is 
 - [Telegram media and attachments](/channels/telegram/media) — photo albums, voice and video notes, locations, venues, and stickers.
 - [Telegram events and operations](/channels/telegram/events) — reaction notifications, config writes, and error reply policy.
 - [Telegram transports](/channels/telegram/transports) — long polling and webhook mode compared.
-- [Telegram Dashboard Mini App](/channels/telegram/mini-app) — open the Control UI inside Telegram with `/dashboard`.
+- [Telegram Dashboard Mini App](/channels/telegram/mini-app) — open the Control UI inside Telegram with `/open_dashboard`.
 - [Telegram troubleshooting](/channels/telegram/troubleshooting) — silent groups, missing commands, rejected tokens, and unstable polling.
 
 ## Where each section moved

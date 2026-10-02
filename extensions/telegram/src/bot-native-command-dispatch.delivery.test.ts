@@ -10,7 +10,12 @@ import type {
   OpenClawPluginCommandDefinition,
   PluginCommandResult,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { matchPluginCommand, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  executePluginCommand,
+  matchPluginCommand,
+  registerPluginCommand,
+} from "openclaw/plugin-sdk/plugin-runtime";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   addTestHook,
   createEmptyPluginRegistry,
@@ -41,6 +46,8 @@ import {
   harness,
   photo,
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
+import { registerTelegramMiniAppCommand } from "./miniapp/command.js";
+import { createTelegramMiniAppLaunchTickets } from "./miniapp/launch-ticket.js";
 import { resetTelegramClientOptionsCacheForTests } from "./send.js";
 
 const { loadPreparedModelCatalog } = vi.hoisted(() => ({
@@ -49,6 +56,14 @@ const { loadPreparedModelCatalog } = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof AgentRuntime>()),
   loadPreparedModelCatalog,
+}));
+
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runCommandWithTimeout: async (argv: string[]) => {
+    expect(argv).toEqual(["tailscale", "status", "--json"]);
+    return { code: 0, stdout: JSON.stringify({ Self: { DNSName: "gateway.example.ts.net." } }) };
+  },
 }));
 
 function commandConfig(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
@@ -172,6 +187,127 @@ describe("Telegram typed command delivery", () => {
       }
     }
   });
+});
+
+describe("Telegram Mini App command ownership", () => {
+  it.each([true, false])(
+    "opens the Mini App without taking the core dashboard command (native=%s)",
+    async (native) => {
+      const cfg: OpenClawConfig = {
+        commands: { native },
+        gateway: { tailscale: { mode: "serve" } },
+        channels: {
+          telegram: {
+            dmPolicy: "allowlist",
+            allowFrom: [String(from.id)],
+            streaming: { mode: "off" },
+            replyToMode: "first",
+          },
+        },
+      };
+      const tickets = createTelegramMiniAppLaunchTickets();
+      registerTelegramMiniAppCommand(
+        createTestPluginApi({
+          config: cfg,
+          registerCommand: (command) => {
+            expect(registerPluginCommand("telegram", command)).toEqual({ ok: true });
+          },
+        }),
+        tickets,
+      );
+      const bot = await createBot(native, true, cfg);
+      await bot.handleUpdate({ update_id: 3401, message: commandMessage("/open_dashboard") });
+
+      const launchReply = apiCalls.mock.calls.find(
+        ([method, payload]) =>
+          method === "sendMessage" &&
+          (payload as { text?: string }).text === "Open OpenClaw dashboard.",
+      )?.[1] as
+        | { reply_markup: { inline_keyboard: Array<Array<{ web_app: { url: string } }>> } }
+        | undefined;
+      expect(launchReply).toBeDefined();
+      const launchUrl = new URL(launchReply!.reply_markup.inline_keyboard[0]![0]!.web_app.url);
+      expect(launchUrl.origin + launchUrl.pathname).toBe(
+        "https://gateway.example.ts.net/__openclaw_tg_miniapp/",
+      );
+      expect(launchUrl.searchParams.get("accountId")).toBe("default");
+      expect(
+        tickets.consume({
+          ticket: new URLSearchParams(launchUrl.hash.slice(1)).get("launchTicket")!,
+          accountId: "default",
+          userId: String(from.id),
+        }),
+      ).toBe(true);
+      expect(harness.replySpy).not.toHaveBeenCalled();
+
+      if (native) {
+        await bot.handleUpdate({ update_id: 3400, message: commandMessage("/dashboard") });
+        expect(harness.replySpy).toHaveBeenCalledOnce();
+        expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+          CommandSource: "native",
+          CommandTurn: { kind: "native", body: "/dashboard" },
+        });
+        expect(harness.replySpy.mock.calls[0]?.[1]).toMatchObject({
+          [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" },
+        });
+        harness.replySpy.mockClear();
+      }
+      apiCalls.mockClear();
+      const body = "/dashboard compare env|prod with `literal`";
+      const message = commandMessage(body);
+      harness.replySpy.mockResolvedValue({
+        text: "Session dashboard response",
+        replyToId: String(message.message_id),
+      });
+      await bot.handleUpdate({
+        update_id: 3402,
+        message: {
+          ...message,
+          reply_to_message: {
+            message_id: 100,
+            date: 1736380790,
+            chat,
+            from,
+            text: "Compare these sessions",
+            reply_to_message: undefined,
+          },
+          quote: { text: "these sessions", position: 8 },
+        },
+      });
+      expect(harness.replySpy).toHaveBeenCalledOnce();
+      expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+        BodyForCommands: body,
+        ReplyToId: "100",
+        ReplyToBody: "these sessions",
+      });
+      expect(apiCalls).toHaveBeenCalledWith(
+        "sendMessage",
+        expect.objectContaining({
+          text: "Session dashboard response",
+          reply_parameters: expect.objectContaining({ message_id: 100, quote: "these sessions" }),
+        }),
+      );
+      if (native) {
+        expect(harness.replySpy.mock.calls[0]?.[1]).toMatchObject({
+          [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" },
+        });
+      } else {
+        const match = matchPluginCommand("/dashboard", { channel: "telegram" });
+        expect(match?.command).toMatchObject({ name: "dashboard", pluginId: "telegram" });
+        expect(
+          await executePluginCommand({
+            command: match!.command,
+            commandBody: "/dashboard",
+            channel: "telegram",
+            isAuthorizedSender: true,
+            senderId: String(from.id),
+            from: `telegram:${chat.id}`,
+            config: cfg,
+          }),
+        ).toMatchObject({ text: "Open OpenClaw dashboard." });
+      }
+    },
+  );
 });
 
 describe("Telegram native argument menus", () => {

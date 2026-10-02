@@ -11,6 +11,8 @@ export function registerTelegramMiniAppCommand(
 ): void {
   api.registerCommand({
     name: "dashboard",
+    // Core owns native /dashboard; retain the Mini App's canonical text command.
+    nativeNames: { telegram: "open_dashboard" },
     description: "Open the OpenClaw dashboard",
     channels: ["telegram"],
     requireAuth: true,
